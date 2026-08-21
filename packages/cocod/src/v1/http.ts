@@ -5,10 +5,12 @@ import {
   MintOperationNotFoundError,
   MintOperationStateError,
   OperationInProgressError,
+  PaymentRequestError,
   ReceiveOperationNotFoundError,
   ReceiveOperationStateError,
   SendOperationNotFoundError,
   SendOperationStateError,
+  UnitValidationError,
   type BalanceQuery,
   type Mint,
   type MintOperation,
@@ -38,6 +40,7 @@ import {
   createMeltQuoteRequestSchema,
   createReceiveOperationRequestSchema,
   createSendOperationRequestSchema,
+  evaluatePaymentRequestRequestSchema,
   executeSendOperationResponseSchema,
   executeMeltOperationResponseSchema,
   healthSchema,
@@ -57,6 +60,7 @@ import {
   mintUrlRequestSchema,
   noSuccessResponseSchema,
   paymentMethodCapabilitiesSchema,
+  paymentRequestEvaluationSchema,
   noBodySchema,
   pendingMintQuotesSchema,
   pendingMeltQuotesSchema,
@@ -79,6 +83,7 @@ import {
   type CreateMeltQuoteRequest,
   type CreateReceiveOperationRequest,
   type CreateSendOperationRequest,
+  type EvaluatePaymentRequestRequest,
   type ExecuteSendOperationResponseDocument,
   type ExecuteMeltOperationResponseDocument,
   type HealthDocument,
@@ -97,6 +102,7 @@ import {
   type MeltQuoteDocument,
   type MintUrlRequest,
   type PaymentMethodCapabilitiesDocument,
+  type PaymentRequestEvaluationDocument,
   type PendingMintQuotesDocument,
   type PendingMeltQuotesDocument,
   type ProcessShutdownRequest,
@@ -126,6 +132,20 @@ const HEALTH_ROUTE = {
   idempotencyKey: null,
   responseCacheControl: null,
 } as const satisfies V1RouteMetadata<null, HealthDocument>;
+
+const EVALUATE_PAYMENT_REQUEST_ROUTE = {
+  method: 'POST',
+  path: '/v1/payment-requests/evaluate',
+  capability: 'wallet:read',
+  requestSchema: evaluatePaymentRequestRequestSchema,
+  responseSchema: paymentRequestEvaluationSchema,
+  successStatuses: [200],
+  idempotencyKey: null,
+  responseCacheControl: null,
+} as const satisfies V1RouteMetadata<
+  EvaluatePaymentRequestRequest,
+  PaymentRequestEvaluationDocument
+>;
 
 const STATUS_ROUTE = {
   method: 'GET',
@@ -663,6 +683,7 @@ export function createV1RouteMetadata(): Array<V1RouteMetadata> {
   return [
     HEALTH_ROUTE,
     STATUS_ROUTE,
+    EVALUATE_PAYMENT_REQUEST_ROUTE,
     BALANCES_ROUTE,
     LIST_MINTS_ROUTE,
     CREATE_MINT_ROUTE,
@@ -729,6 +750,17 @@ export function createV1RouteDefinitions(
   const health = defineV1Route({
     ...HEALTH_ROUTE,
     handler: () => ({ status: 'ok', interfaceVersion: '1' }),
+  });
+  const evaluatePaymentRequest = defineV1Route({
+    ...EVALUATE_PAYMENT_REQUEST_ROUTE,
+    handler: async (input) => {
+      const paymentRequests = requireRunningSession(runtime).manager.paymentRequests;
+      try {
+        return toPaymentRequestEvaluationDocument(await paymentRequests.parse(input.request));
+      } catch (error) {
+        throw paymentRequestCocoError('evaluate the Payment Request', error);
+      }
+    },
   });
   const status = defineV1Route({
     ...STATUS_ROUTE,
@@ -1257,14 +1289,21 @@ export function createV1RouteDefinitions(
           ? session.mintUrl
           : parseMintUrl(input.mintUrl, 'The Mint URL is invalid');
       try {
-        const operation = await session.manager.ops.send.prepare({
-          mintUrl,
-          amount: input.amount,
-          unit: input.unit,
-          ...(input.forceSwap !== undefined ? { forceSwap: input.forceSwap } : {}),
-        });
+        const operation =
+          'source' in input
+            ? await preparePaymentRequestSend(session, input, mintUrl)
+            : await session.manager.ops.send.prepare({
+                mintUrl,
+                amount: input.amount,
+                unit: input.unit,
+                ...(input.forceSwap !== undefined ? { forceSwap: input.forceSwap } : {}),
+              });
         return new V1HttpResponse(toSendOperationDocument(operation), 201);
       } catch (error) {
+        if (error instanceof V1HttpError) throw error;
+        if ('source' in input) {
+          throw paymentRequestCocoError('prepare the Payment Request', error);
+        }
         throw sendOperationCocoError('prepare the Send Operation', error);
       }
     },
@@ -1548,6 +1587,7 @@ export function createV1RouteDefinitions(
   return [
     health,
     status,
+    evaluatePaymentRequest,
     balances,
     listMints,
     createMint,
@@ -1600,10 +1640,89 @@ export function createV1RouteDefinitions(
   ];
 }
 
+function toPaymentRequestEvaluationDocument(request: {
+  amount?: { toString(): string };
+  unit: string;
+  transport: { type: 'inband' | 'http' | 'nostr' };
+  allowedMints: string[];
+  payableMints: string[];
+  spendingCondition?:
+    | { kind: 'P2PK' }
+    | { kind: 'unsupported'; nut10Kind: string }
+    | { kind: 'malformed'; nut10Kind: string };
+}): PaymentRequestEvaluationDocument {
+  const spendingCondition = request.spendingCondition;
+  return {
+    ...(request.amount !== undefined ? { amount: request.amount.toString() } : {}),
+    unit: request.unit,
+    transport: { type: request.transport.type },
+    allowedMints: [...request.allowedMints],
+    payableMints: [...request.payableMints],
+    ...(spendingCondition !== undefined
+      ? {
+          spendingCondition:
+            spendingCondition.kind === 'P2PK'
+              ? { kind: spendingCondition.kind }
+              : {
+                  kind: spendingCondition.kind,
+                  nut10Kind: spendingCondition.nut10Kind,
+                },
+        }
+      : {}),
+  };
+}
+
 type QuoteIdentityInput = { mintUrl: string; quoteId: string };
 type BuiltInQuoteMethod = 'bolt11' | 'bolt12' | 'onchain';
 type PaginatedQuote = { createdAt: number; mintUrl: string; quoteId: string; method: string };
 type RunningSession = NonNullable<ReturnType<V1Runtime['getRunningSession']>>;
+
+async function preparePaymentRequestSend(
+  session: RunningSession,
+  input: Extract<CreateSendOperationRequest, { source: unknown }>,
+  mintUrl: string,
+): Promise<SendOperation> {
+  const resolved = await session.manager.paymentRequests.parse(input.source.request);
+  if (resolved.transport.type !== 'inband') {
+    throw new V1HttpError({
+      status: 409,
+      code: 'unsupported_behavior',
+      message: 'Payment Request delivery is unsupported for this transport',
+      retryable: false,
+      details: { transport: resolved.transport.type },
+    });
+  }
+  const amount =
+    input.amount === undefined
+      ? undefined
+      : input.unit === undefined
+        ? input.amount
+        : { amount: input.amount, unit: input.unit };
+  const prepared = await session.manager.paymentRequests.prepare(resolved, {
+    mintUrl,
+    ...(amount !== undefined ? { amount } : {}),
+  });
+  return prepared.sendOperation;
+}
+
+function paymentRequestCocoError(action: string, cause: unknown): V1HttpError {
+  if (cause instanceof PaymentRequestError || cause instanceof UnitValidationError) {
+    return new V1HttpError({
+      status: 400,
+      code: 'invalid_request',
+      message: 'The Payment Request is invalid or cannot be paid',
+      retryable: false,
+      cause,
+    });
+  }
+  return new V1HttpError({
+    status: 500,
+    code: 'coco_error',
+    message: `Coco could not ${action}`,
+    retryable: false,
+    cause,
+  });
+}
 
 interface QuoteReadAdapter<TQuote> {
   get(identity: QuoteIdentityInput): Promise<TQuote | null>;

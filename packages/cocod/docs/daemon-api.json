@@ -30,35 +30,6 @@
   },
   "endpoints": [
     {
-      "path": "/x-cashu/parse",
-      "method": "POST",
-      "state": "cocoSession.running",
-      "body": {
-        "request": "string"
-      },
-      "notes": "Accepts creqA and creqB. NUT-10 spending conditions are resolved by Coco during parse.",
-      "responses": {
-        "200": "{ output: string }",
-        "400": "{ error: string }",
-        "500": "{ error: string }"
-      }
-    },
-    {
-      "path": "/x-cashu/handle",
-      "method": "POST",
-      "state": "cocoSession.running",
-      "body": {
-        "request": "string",
-        "mintUrl": "string (optional)"
-      },
-      "notes": "Accepts creqA and creqB. Coco enforces NUT-10 spending conditions: P2PK-locked requests are paid with locked outputs; unsupported or malformed conditions return 400 before proofs are prepared.",
-      "responses": {
-        "200": "{ output: string }",
-        "400": "{ error: string }",
-        "500": "{ error: string }"
-      }
-    },
-    {
       "path": "/history",
       "method": "GET",
       "state": "cocoSession.running",

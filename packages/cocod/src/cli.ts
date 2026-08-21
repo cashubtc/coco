@@ -6,11 +6,13 @@ import {
   handleDaemonCommand,
   callDaemonStream,
   formatBalances,
+  evaluatePaymentRequestForDisplay,
   handleV1Command,
   handleWalletV1Command,
   prepareAndExecuteCashuReceive,
   prepareAndExecuteBolt11Send,
   prepareAndExecuteCashuSend,
+  prepareAndExecutePaymentRequest,
   prepareBolt11Receive,
   registerAndTrustMint,
   waitForSessionTransition,
@@ -290,20 +292,20 @@ xCashuCmd
   .command('parse <request>')
   .description('Parse x-cashu request')
   .action(async (request: string) => {
-    await handleDaemonCommand('/x-cashu/parse', {
-      method: 'POST',
-      body: { request },
-    });
+    const output = await handleWalletV1Command((client) =>
+      evaluatePaymentRequestForDisplay(client, request),
+    );
+    console.log(output);
   });
 
 xCashuCmd
   .command('handle <request>')
   .description('Handle x-cashu request. Returns a X-Cashu header')
   .action(async (request: string) => {
-    await handleDaemonCommand('/x-cashu/handle', {
-      method: 'POST',
-      body: { request },
-    });
+    const output = await handleWalletV1Command((client) =>
+      prepareAndExecutePaymentRequest(client, request),
+    );
+    console.log(output);
   });
 
 // History - with pagination and watch options

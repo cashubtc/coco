@@ -1,21 +1,14 @@
 import { describe, expect, test } from 'bun:test';
-import { Database } from 'bun:sqlite';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { initializeCoco, toAmount, type Manager } from '@cashu/coco-core';
-import { SqliteRepositories } from '@cashu/coco-sqlite-bun';
+import type { Manager } from '@cashu/coco-core';
 
 import { AdministrativeCredential, loadClientCredential } from './credentials.js';
 import { buildFallbackHandler, buildRoutes, createRouteHandlers } from './routes';
 import { startTcpTestServer } from '../test/helpers/tcp.js';
 import type { AppLogger } from './utils/logger.js';
 import { type CocodRuntime, type CocodStatus, type RunningCocoSession } from './runtime';
-
-// A creqB (TLV + bech32m) payment request for 21 sat carrying a P2PK NUT-10
-// spending condition, generated once with the workspace @cashu/cashu-ts.
-const CREQB_P2PK_FIXTURE =
-  'CREQB1QYQQ2UN9WYKNZQSQPQQQQQQQQQQQQ9GRQQQSQPQQQYQQ2QQCDP68GURN8GHJ7MTFDE6ZUETCV9KHQMR99E3K7MGXQQX8GETNWSS8QCTED4JKUAQ8QQ0QZQQPQYPQQ9MGW368QUE69UHK27RPD4CXCEFWVDHK6TMSV9USSQZFQYQQZQQZQPPRQVNP89SKXCE3V56RSCEJX4JK2ETZ8YERSWTZX5CRXVTRVV6NWERP89NX2DEJVCEKVEFJ8QMRZEPJXC6XYERRXQMNGV3S893RZVPHVFSNYU24ZDV';
 
 function fakeRuntime(
   status: CocodStatus,
@@ -179,8 +172,8 @@ describe('routes', () => {
       const runtime = uninitializedRuntime();
       const routes = buildRoutes(createRouteHandlers(runtime), runtime, credentials);
 
-      const response = await routes['/x-cashu/handle']!.POST!(
-        new Request('http://localhost/x-cashu/handle', {
+      const response = await routes['/npc/username']!.POST!(
+        new Request('http://localhost/npc/username', {
           method: 'POST',
           headers: { Authorization: `Bearer ${plaintext}` },
           body: '{}',
@@ -254,109 +247,5 @@ describe('routes', () => {
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
-  });
-
-  test('/x-cashu/parse requires request field', async () => {
-    const runtime = runningRuntime();
-    const routes = createRouteHandlers(runtime);
-
-    const response = await routes['/x-cashu/parse']!.POST!(postJson('/x-cashu/parse', {}));
-
-    const body = (await response.json()) as { error?: string };
-    expect(response.status).toBe(400);
-    expect(body.error).toBe('Request is required');
-  });
-
-  test('/x-cashu/parse accepts a creqB request and keeps its P2PK lock intact', async () => {
-    // Real core against an in-memory database: proves the workspace decoder does not
-    // discard the NUT-10 condition and that core classifies it as an enforceable P2PK
-    // lock. This test gates the removal of cocod's former creqB/NUT-10 rejections.
-    const repo = new SqliteRepositories({ database: new Database(':memory:') });
-    const manager = await initializeCoco({
-      repo,
-      seedGetter: async () => new Uint8Array(64).fill(7),
-    });
-    try {
-      const parsed = await manager.paymentRequests.parse(CREQB_P2PK_FIXTURE);
-      expect(parsed.spendingCondition?.kind).toBe('P2PK');
-      expect(parsed.amount?.toNumber()).toBe(21);
-
-      const runtime = runningRuntime(manager);
-      const routes = createRouteHandlers(runtime);
-      const response = await routes['/x-cashu/parse']!.POST!(
-        postJson('/x-cashu/parse', { request: CREQB_P2PK_FIXTURE }),
-      );
-      const body = (await response.json()) as { output?: string };
-      expect(response.status).toBe(200);
-      expect(body.output).toContain('21 Sats');
-    } finally {
-      await manager.dispose();
-    }
-  });
-
-  test('/x-cashu/handle rejects unsupported spending conditions before preparing proofs', async () => {
-    let prepareCalled = false;
-    const manager = {
-      paymentRequests: {
-        parse: async () => ({
-          payableMints: ['https://mint.example.com'],
-          allowedMints: [],
-          transport: { type: 'inband' },
-          spendingCondition: { kind: 'unsupported', nut10Kind: 'HTLC' },
-        }),
-        prepare: async () => {
-          prepareCalled = true;
-          throw new Error('should not prepare');
-        },
-      },
-    };
-    const runtime = runningRuntime(manager);
-    const routes = createRouteHandlers(runtime);
-
-    const response = await routes['/x-cashu/handle']!.POST!(
-      postJson('/x-cashu/handle', { request: 'creqA-fake' }),
-    );
-
-    const body = (await response.json()) as { error?: string };
-    expect(response.status).toBe(400);
-    expect(body.error).toContain('NUT-10');
-    expect(body.error).toContain('HTLC');
-    expect(prepareCalled).toBe(false);
-  });
-
-  test('/x-cashu/handle settles an inband request into an X-Cashu header', async () => {
-    const token = {
-      mint: 'https://mint.example.com',
-      unit: 'sat',
-      proofs: [
-        {
-          id: '009a1f293253e41e',
-          amount: 21,
-          secret: 'test-secret',
-          C: '02a9acc1e48c25eeeb9289b5031cc57da9fe72f3fe2861d264bdc074209b107ba2',
-        },
-      ],
-    };
-    const manager = {
-      paymentRequests: {
-        parse: async () => ({
-          payableMints: ['https://mint.example.com'],
-          allowedMints: [],
-          transport: { type: 'inband' },
-        }),
-        prepare: async () => ({ id: 'prepared' }),
-        execute: async () => ({ type: 'inband', token }),
-      },
-    };
-    const runtime = runningRuntime(manager);
-    const routes = createRouteHandlers(runtime);
-
-    const response = await routes['/x-cashu/handle']!.POST!(
-      postJson('/x-cashu/handle', { request: 'creqA-fake' }),
-    );
-
-    const body = (await response.json()) as { output?: string };
-    expect(response.status).toBe(200);
-    expect(body.output).toStartWith('X-Cashu: cashu');
   });
 });

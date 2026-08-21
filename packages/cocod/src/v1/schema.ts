@@ -159,6 +159,27 @@ export interface PaymentMethodCapabilitiesDocument {
   items: PaymentMethodCapabilityDocument[];
 }
 
+/** Encoded outgoing Payment Request supplied for non-mutating evaluation. */
+export interface EvaluatePaymentRequestRequest {
+  request: string;
+}
+
+/** Safe spending-condition requirement exposed by outgoing Payment Request evaluation. */
+export type PaymentRequestSpendingConditionDocument =
+  | { kind: 'P2PK' }
+  | { kind: 'unsupported'; nut10Kind: string }
+  | { kind: 'malformed'; nut10Kind: string };
+
+/** Safe, non-durable evaluation of an outgoing Payment Request. */
+export interface PaymentRequestEvaluationDocument {
+  amount?: string;
+  unit: string;
+  transport: { type: 'inband' | 'http' | 'nostr' };
+  allowedMints: string[];
+  payableMints: string[];
+  spendingCondition?: PaymentRequestSpendingConditionDocument;
+}
+
 /** Method-specific Mint Quote creation input with lossless decimal amounts. */
 export type CreateMintQuoteRequest =
   | {
@@ -375,13 +396,24 @@ export interface ExecuteMeltOperationResponseDocument {
   result?: MeltResultDocument;
 }
 
-/** Cashu Send Operation preparation input with a lossless decimal amount. */
-export interface CreateSendOperationRequest {
-  mintUrl?: string;
-  amount: string;
-  unit: string;
-  forceSwap?: boolean;
-}
+/** Cashu Send Operation preparation input, optionally sourced from a Payment Request. */
+export type CreateSendOperationRequest =
+  | {
+      mintUrl?: string;
+      amount: string;
+      unit: string;
+      forceSwap?: boolean;
+    }
+  | ({
+      mintUrl?: string;
+      source: { type: 'payment-request'; request: string };
+    } & (
+      | { amount?: never; unit?: never }
+      | {
+          amount: string;
+          unit?: string;
+        }
+    ));
 
 interface SendOperationDocumentBase {
   id: string;
@@ -679,6 +711,34 @@ const paymentMethodCapabilityNode = objectNode(
 export const paymentMethodCapabilitiesSchema = namedSchema<PaymentMethodCapabilitiesDocument>(
   'PaymentMethodCapabilities',
   objectNode({ items: arrayNode(paymentMethodCapabilityNode) }),
+);
+
+/** Runtime and generated schema for outgoing Payment Request evaluation input. */
+export const evaluatePaymentRequestRequestSchema = namedSchema<EvaluatePaymentRequestRequest>(
+  'EvaluatePaymentRequestRequest',
+  objectNode({ request: stringNode({ pattern: '\\S', sensitive: true }) }),
+);
+
+const paymentRequestSpendingConditionNode = unionNode([
+  objectNode({ kind: literalNode('P2PK') }),
+  objectNode({ kind: literalNode('unsupported'), nut10Kind: stringNode() }),
+  objectNode({ kind: literalNode('malformed'), nut10Kind: stringNode() }),
+]);
+
+/** Runtime and generated schema for safe outgoing Payment Request evaluation. */
+export const paymentRequestEvaluationSchema = namedSchema<PaymentRequestEvaluationDocument>(
+  'PaymentRequestEvaluation',
+  objectNode(
+    {
+      amount: decimalAmountNode,
+      unit: stringNode({ pattern: '\\S' }),
+      transport: objectNode({ type: enumNode(['inband', 'http', 'nostr']) }),
+      allowedMints: arrayNode(stringNode()),
+      payableMints: arrayNode(stringNode()),
+      spendingCondition: paymentRequestSpendingConditionNode,
+    },
+    { optional: ['amount', 'spendingCondition'] },
+  ),
 );
 
 /** Runtime and generated schema for method-specific Mint Quote creation. */
@@ -991,17 +1051,40 @@ export const executeMeltOperationResponseSchema = namedSchema<ExecuteMeltOperati
 );
 
 /** Runtime and generated schema for Cashu Send Operation preparation. */
+const paymentRequestSendSourceNode = objectNode({
+  type: literalNode('payment-request'),
+  request: stringNode({ pattern: '\\S', sensitive: true }),
+});
+
 export const createSendOperationRequestSchema = namedSchema<CreateSendOperationRequest>(
   'CreateSendOperationRequest',
-  objectNode(
-    {
-      mintUrl: stringNode(),
-      amount: decimalAmountNode,
-      unit: stringNode({ pattern: '\\S' }),
-      forceSwap: booleanNode(),
-    },
-    { optional: ['mintUrl', 'forceSwap'] },
-  ),
+  unionNode([
+    objectNode(
+      {
+        mintUrl: stringNode(),
+        amount: decimalAmountNode,
+        unit: stringNode({ pattern: '\\S' }),
+        forceSwap: booleanNode(),
+      },
+      { optional: ['mintUrl', 'forceSwap'] },
+    ),
+    objectNode(
+      {
+        mintUrl: stringNode(),
+        source: paymentRequestSendSourceNode,
+      },
+      { optional: ['mintUrl'] },
+    ),
+    objectNode(
+      {
+        mintUrl: stringNode(),
+        source: paymentRequestSendSourceNode,
+        amount: decimalAmountNode,
+        unit: stringNode({ pattern: '\\S' }),
+      },
+      { optional: ['mintUrl', 'unit'] },
+    ),
+  ]),
 );
 
 const sendOperationBaseFields = {

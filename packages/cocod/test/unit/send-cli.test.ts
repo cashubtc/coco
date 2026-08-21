@@ -5,8 +5,10 @@ import { join } from 'node:path';
 
 import {
   createV1Client,
+  evaluatePaymentRequestForDisplay,
   prepareAndExecuteBolt11Send,
   prepareAndExecuteCashuSend,
+  prepareAndExecutePaymentRequest,
 } from '../../src/cli-shared.js';
 import { createRouteHandlers } from '../../src/routes.js';
 import type { CocodRuntime } from '../../src/runtime.js';
@@ -82,6 +84,117 @@ test('superseded Cashu-send route is not exposed', () => {
 
   expect(routes['/send/cashu']).toBeUndefined();
   expect(routes['/send/bolt11']).toBeUndefined();
+});
+
+test('x-cashu parse CLI flow evaluates through v1 and formats safe requirements', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'cocod-payment-request-cli-'));
+  directories.push(directory);
+  const credentialFile = join(directory, 'client');
+  await writeFile(credentialFile, 's'.repeat(43), { mode: 0o600 });
+  const requests: Array<{ path: string; method: string; body?: unknown }> = [];
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : input.toString());
+    requests.push({
+      path: url.pathname,
+      method: init?.method ?? 'GET',
+      ...(typeof init?.body === 'string' ? { body: JSON.parse(init.body) as unknown } : {}),
+    });
+    return Response.json({
+      amount: '21',
+      unit: 'sat',
+      transport: { type: 'inband' },
+      allowedMints: ['https://mint.example.com'],
+      payableMints: ['https://mint.example.com'],
+      spendingCondition: { kind: 'P2PK' },
+    });
+  }) as unknown as typeof fetch;
+  const client = createV1Client({ credentialFile, url: 'https://wallet.example.com' });
+
+  const output = await evaluatePaymentRequestForDisplay(client, 'creqBcli-input');
+
+  expect(output).toBe(
+    'Request requires payment of 21 sat from one of 1 Mints.\n' +
+      'Matching Mints:\nhttps://mint.example.com\n' +
+      'Transport: inband\nSpending condition: P2PK',
+  );
+  expect(requests).toEqual([
+    {
+      path: '/v1/payment-requests/evaluate',
+      method: 'POST',
+      body: { request: 'creqBcli-input' },
+    },
+  ]);
+});
+
+test('x-cashu handle CLI flow evaluates, prepares, and executes through v1', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'cocod-payment-request-handle-cli-'));
+  directories.push(directory);
+  const credentialFile = join(directory, 'client');
+  await writeFile(credentialFile, 's'.repeat(43), { mode: 0o600 });
+  const requests: Array<{ path: string; method: string; body?: unknown }> = [];
+  const operation = {
+    id: 'payment-request-send-cli',
+    type: 'send' as const,
+    state: 'prepared' as const,
+    mintUrl: 'https://mint.example.com',
+    unit: 'sat',
+    method: 'p2pk' as const,
+    requestedAmount: '21',
+    inputAmount: '22',
+    fee: '1',
+    needsSwap: true,
+    createdAt: '2026-08-16T00:00:00.000Z',
+    updatedAt: '2026-08-16T00:01:00.000Z',
+  };
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : input.toString());
+    requests.push({
+      path: url.pathname,
+      method: init?.method ?? 'GET',
+      ...(typeof init?.body === 'string' ? { body: JSON.parse(init.body) as unknown } : {}),
+    });
+    if (url.pathname === '/v1/payment-requests/evaluate') {
+      return Response.json({
+        amount: '21',
+        unit: 'sat',
+        transport: { type: 'inband' },
+        allowedMints: ['https://mint.example.com'],
+        payableMints: ['https://mint.example.com'],
+        spendingCondition: { kind: 'P2PK' },
+      });
+    }
+    if (url.pathname.endsWith('/execute')) {
+      return Response.json({
+        operation: { ...operation, state: 'pending' },
+        result: { token: 'cashuBpayment-request-output' },
+      });
+    }
+    return Response.json(operation, { status: 201 });
+  }) as unknown as typeof fetch;
+  const client = createV1Client({ credentialFile, url: 'https://wallet.example.com' });
+
+  const output = await prepareAndExecutePaymentRequest(client, 'creqBcli-input');
+
+  expect(output).toBe('X-Cashu: cashuBpayment-request-output');
+  expect(requests).toEqual([
+    {
+      path: '/v1/payment-requests/evaluate',
+      method: 'POST',
+      body: { request: 'creqBcli-input' },
+    },
+    {
+      path: '/v1/operations/send',
+      method: 'POST',
+      body: {
+        mintUrl: 'https://mint.example.com',
+        source: { type: 'payment-request', request: 'creqBcli-input' },
+      },
+    },
+    {
+      path: '/v1/operations/send/payment-request-send-cli/execute',
+      method: 'POST',
+    },
+  ]);
 });
 
 test('Lightning-send CLI flow creates a Quote, prepares a Melt Operation, and executes it', async () => {

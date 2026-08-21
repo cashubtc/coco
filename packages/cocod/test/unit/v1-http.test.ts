@@ -8,9 +8,11 @@ import {
   MeltOperationNotFoundError,
   MeltOperationStateError,
   OperationInProgressError,
+  PaymentRequestError,
   ReceiveOperationNotFoundError,
   ReceiveOperationStateError,
   SendOperationStateError,
+  UnitMismatchError,
   toAmount,
 } from '@cashu/coco-core';
 
@@ -43,6 +45,119 @@ afterEach(async () => {
 });
 
 describe('v1 HTTP route interface', () => {
+  test('evaluates an outgoing Payment Request as a safe non-durable document', async () => {
+    const credential = await createCredential();
+    const parse = mock(async () => ({
+      paymentRequest: { encoded: 'creqBmust-not-leak' },
+      amount: toAmount('9007199254740993'),
+      unit: 'sat',
+      transport: { type: 'http' as const, url: 'https://receiver.test/private' },
+      allowedMints: ['https://mint.example.com'],
+      payableMints: ['https://mint.example.com'],
+      spendingCondition: {
+        kind: 'P2PK' as const,
+        p2pk: {
+          kind: 'P2PK' as const,
+          options: { pubkey: '02must-not-leak' },
+          rawNut10: { kind: 'P2PK', data: ['02must-not-leak'] },
+        },
+      },
+    }));
+    const routes = createWalletTestRoutes({ paymentRequests: { parse } }, credential.credentials);
+
+    const response = await routes['/v1/payment-requests/evaluate']!.POST!(
+      authorizedJsonRequest('/v1/payment-requests/evaluate', credential.plaintext, {
+        request: 'creqBmust-not-leak',
+      }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toEqual({
+      amount: '9007199254740993',
+      unit: 'sat',
+      transport: { type: 'http' },
+      allowedMints: ['https://mint.example.com'],
+      payableMints: ['https://mint.example.com'],
+      spendingCondition: { kind: 'P2PK' },
+    });
+    expect(JSON.stringify(body)).not.toContain('must-not-leak');
+    expect(body).not.toHaveProperty('id');
+    expect(parse).toHaveBeenCalledWith('creqBmust-not-leak');
+  });
+
+  test('maps invalid and untyped Payment Request evaluation failures safely', async () => {
+    const credential = await createCredential();
+    const parse = mock()
+      .mockRejectedValueOnce(new PaymentRequestError('encoded request secret must-not-leak'))
+      .mockRejectedValueOnce(new Error('wallet diagnostic must-not-leak'));
+    const routes = createWalletTestRoutes({ paymentRequests: { parse } }, credential.credentials);
+    const request = () =>
+      authorizedJsonRequest('/v1/payment-requests/evaluate', credential.plaintext, {
+        request: 'creqBmust-not-leak',
+      });
+
+    const invalid = await routes['/v1/payment-requests/evaluate']!.POST!(request());
+    const failed = await routes['/v1/payment-requests/evaluate']!.POST!(request());
+    const invalidBody = await invalid.json();
+    const failedBody = await failed.json();
+
+    expect(invalid.status).toBe(400);
+    expect(invalidBody).toMatchObject({ error: { code: 'invalid_request', retryable: false } });
+    expect(failed.status).toBe(500);
+    expect(failedBody).toEqual({
+      error: {
+        code: 'coco_error',
+        message: 'Coco could not evaluate the Payment Request',
+        retryable: false,
+      },
+    });
+    expect(JSON.stringify([invalidBody, failedBody])).not.toContain('must-not-leak');
+  });
+
+  test('authenticates evaluation and redacts the encoded Payment Request from logs', async () => {
+    const credential = await createCredential();
+    const debug = mock(() => {});
+    const logger = createTestLogger({ debug });
+    const parse = mock(async () => ({
+      unit: 'sat',
+      transport: { type: 'inband' as const },
+      allowedMints: [],
+      payableMints: [],
+    }));
+    const definitions = createLifecycleTestRouteDefinitions(
+      {
+        ...lifecycleRuntime(() => configuredStatus('running')),
+        getRunningSession: () => ({ manager: { paymentRequests: { parse } } }) as never,
+      },
+      '0.0.17',
+      logger,
+    );
+    const routes = buildV1Routes(definitions, credential.credentials, logger);
+    const encoded = 'creqBmust-not-leak';
+
+    const unauthenticated = await routes['/v1/payment-requests/evaluate']!.POST!(
+      new Request('http://localhost/v1/payment-requests/evaluate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ request: encoded }),
+      }),
+    );
+    const evaluated = await routes['/v1/payment-requests/evaluate']!.POST!(
+      authorizedJsonRequest('/v1/payment-requests/evaluate', credential.plaintext, {
+        request: encoded,
+      }),
+    );
+
+    expect(unauthenticated.status).toBe(401);
+    expect(evaluated.status).toBe(200);
+    expect(parse).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(debug.mock.calls)).not.toContain(encoded);
+    expect(debug).toHaveBeenCalledWith('request.received', {
+      input: { request: '[REDACTED]' },
+    });
+  });
+
   test('prepares a safe Mint Operation from the canonical methodless Quote identity', async () => {
     const credential = await createCredential();
     const quote = mintQuoteFixture({ mintUrl: 'https://mint.example.com' });
@@ -703,6 +818,166 @@ describe('v1 HTTP route interface', () => {
       forceSwap: true,
     });
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  test('prepares an in-band Payment Request as the underlying Send Operation', async () => {
+    const credential = await createCredential();
+    const resolved = {
+      paymentRequest: { encoded: 'creqBinband' },
+      amount: toAmount(25),
+      unit: 'sat',
+      transport: { type: 'inband' as const },
+      allowedMints: ['https://mint.example.com'],
+      payableMints: ['https://mint.example.com'],
+    };
+    const parse = mock(async () => resolved);
+    const preparePaymentRequest = mock(async () => ({
+      request: resolved,
+      sendOperation: sendOperationFixture({ method: 'p2pk' as const }),
+    }));
+    const prepareSend = mock(async () => {
+      throw new Error('ordinary Send preparation was not expected');
+    });
+    const execute = mock(async () => {
+      throw new Error('execution was not expected');
+    });
+    const routes = createWalletTestRoutes(
+      {
+        paymentRequests: { parse, prepare: preparePaymentRequest },
+        ops: { send: { prepare: prepareSend, execute } },
+      },
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/operations/send']!.POST!(
+      authorizedJsonRequest('/v1/operations/send', credential.plaintext, {
+        mintUrl: 'https://mint.example.com/',
+        source: { type: 'payment-request', request: 'creqBinband' },
+      }),
+    );
+
+    expect(response.status).toBe(201);
+    expect(await response.json()).toMatchObject({
+      id: 'send-operation-1',
+      type: 'send',
+      state: 'prepared',
+      method: 'p2pk',
+      requestedAmount: '25',
+    });
+    expect(parse).toHaveBeenCalledWith('creqBinband');
+    expect(preparePaymentRequest).toHaveBeenCalledWith(resolved, {
+      mintUrl: 'https://mint.example.com',
+    });
+    expect(prepareSend).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  test('rejects HTTP and Nostr Payment Request delivery before preparing a Send Operation', async () => {
+    const credential = await createCredential();
+    const parse = mock()
+      .mockResolvedValueOnce({
+        unit: 'sat',
+        transport: { type: 'http', url: 'https://receiver.test/private' },
+        allowedMints: [],
+        payableMints: ['https://mint.example.com'],
+      })
+      .mockResolvedValueOnce({
+        unit: 'sat',
+        transport: { type: 'nostr', target: 'npub1must-not-leak' },
+        allowedMints: [],
+        payableMints: ['https://mint.example.com'],
+      });
+    const prepare = mock(async () => {
+      throw new Error('preparation was not expected');
+    });
+    const routes = createWalletTestRoutes(
+      { paymentRequests: { parse, prepare } },
+      credential.credentials,
+    );
+    const request = () =>
+      authorizedJsonRequest('/v1/operations/send', credential.plaintext, {
+        source: { type: 'payment-request', request: 'creqBtransport' },
+      });
+
+    const http = await routes['/v1/operations/send']!.POST!(request());
+    const nostr = await routes['/v1/operations/send']!.POST!(request());
+
+    for (const [response, transport] of [
+      [http, 'http'],
+      [nostr, 'nostr'],
+    ] as const) {
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        error: {
+          code: 'unsupported_behavior',
+          message: 'Payment Request delivery is unsupported for this transport',
+          retryable: false,
+          details: { transport },
+        },
+      });
+    }
+    expect(prepare).not.toHaveBeenCalled();
+  });
+
+  test('maps Payment Request amount and unit validation to invalid request', async () => {
+    const credential = await createCredential();
+    const resolved = {
+      unit: 'sat',
+      transport: { type: 'inband' as const },
+      allowedMints: [],
+      payableMints: ['https://mint.example.com'],
+    };
+    const parse = mock(async () => resolved);
+    const prepare = mock(async () => {
+      throw new UnitMismatchError('private unit diagnostic');
+    });
+    const routes = createWalletTestRoutes(
+      { paymentRequests: { parse, prepare } },
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/operations/send']!.POST!(
+      authorizedJsonRequest('/v1/operations/send', credential.plaintext, {
+        mintUrl: 'https://mint.example.com',
+        amount: '25',
+        unit: 'usd',
+        source: { type: 'payment-request', request: 'creqBunit-mismatch' },
+      }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body).toMatchObject({ error: { code: 'invalid_request', retryable: false } });
+    expect(JSON.stringify(body)).not.toContain('private unit diagnostic');
+    expect(prepare).toHaveBeenCalledWith(resolved, {
+      mintUrl: 'https://mint.example.com',
+      amount: { amount: '25', unit: 'usd' },
+    });
+  });
+
+  test('rejects a Payment Request unit override without an amount', async () => {
+    const credential = await createCredential();
+    const parse = mock(async () => {
+      throw new Error('parse was not expected');
+    });
+    const routes = createWalletTestRoutes({ paymentRequests: { parse } }, credential.credentials);
+
+    const response = await routes['/v1/operations/send']!.POST!(
+      authorizedJsonRequest('/v1/operations/send', credential.plaintext, {
+        source: { type: 'payment-request', request: 'creqBunit-only' },
+        unit: 'usd',
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: {
+        code: 'invalid_request',
+        message: 'The request does not match the expected schema',
+        retryable: false,
+      },
+    });
+    expect(parse).not.toHaveBeenCalled();
   });
 
   test('rejects a blank Send Operation unit as invalid request input', async () => {
@@ -2665,6 +2940,16 @@ describe('v1 HTTP route interface', () => {
         capability: 'wallet:read',
         requestSchema: 'NoBody',
         responseSchema: 'LifecycleStatus',
+        successStatuses: [200],
+        idempotencyKey: null,
+        responseCacheControl: null,
+      },
+      {
+        method: 'POST',
+        path: '/v1/payment-requests/evaluate',
+        capability: 'wallet:read',
+        requestSchema: 'EvaluatePaymentRequestRequest',
+        responseSchema: 'PaymentRequestEvaluation',
         successStatuses: [200],
         idempotencyKey: null,
         responseCacheControl: null,

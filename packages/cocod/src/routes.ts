@@ -1,4 +1,3 @@
-import { getEncodedToken, type PaymentRequestSpendingConditionRequirement } from '@cashu/coco-core';
 import { nip19 } from 'nostr-tools';
 
 import { type AdministrativeCredential, type ClientCapability } from './credentials.js';
@@ -74,83 +73,6 @@ export function createRouteHandlers(runtime: CocodRuntime): Record<string, Route
       }),
     },
 
-    '/x-cashu/parse': {
-      capability: 'wallet:read',
-      POST: requireRunning(runtime, async (req, state: RunningCocoSession) => {
-        try {
-          const { request } = (await req.json()) as { request?: string };
-          if (!request) {
-            return Response.json({ error: 'Request is required' }, { status: 400 });
-          }
-
-          const parsed = await state.manager.paymentRequests.parse(request);
-          const mintMsg =
-            parsed.allowedMints?.length > 0
-              ? `from one of ${parsed.allowedMints.length} mints`
-              : 'from any mint';
-          const matchingMints =
-            parsed.payableMints.length > 0 ? parsed.payableMints.join('\n') : 'No matching mint!';
-          const msg = `Request requires payment of ${parsed.amount?.toNumber() ?? 0} Sats ${mintMsg}.\nMatching mints:\n${matchingMints}`;
-          return Response.json({ output: msg });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          return Response.json(
-            { error: `Failed to parse X-Cashu request: ${message}` },
-            { status: 500 },
-          );
-        }
-      }),
-    },
-    '/x-cashu/handle': {
-      capability: 'wallet:admin',
-      POST: requireRunning(runtime, async (req, state: RunningCocoSession) => {
-        try {
-          const body = (await req.json()) as { request?: string; mintUrl?: string };
-          if (!body.request) {
-            return Response.json({ error: 'Request is required' }, { status: 400 });
-          }
-
-          const mintUrl = body.mintUrl || state.mintUrl;
-          const parsed = await state.manager.paymentRequests.parse(body.request);
-          const conditionError = spendingConditionError(parsed.spendingCondition);
-          if (conditionError) {
-            return Response.json({ error: conditionError }, { status: 400 });
-          }
-          if (!parsed.payableMints.includes(mintUrl)) {
-            return Response.json(
-              {
-                error: `Mint ${mintUrl} does not satisfy request (request specifies different mints, or mint balance is insufficient).`,
-              },
-              { status: 400 },
-            );
-          }
-          if (parsed.transport.type !== 'inband') {
-            return Response.json(
-              {
-                error: `Cocod can not handle payment requests that are not inband`,
-              },
-              { status: 400 },
-            );
-          }
-
-          const prepared = await state.manager.paymentRequests.prepare(parsed, { mintUrl });
-
-          const res = await state.manager.paymentRequests.execute(prepared);
-          if (res.type !== 'inband') {
-            return Response.json({ error: 'Failed to settle X-Cashu request' }, { status: 500 });
-          }
-          const xCashuHeader = `X-Cashu: ${getEncodedToken(res.token)}`;
-
-          return Response.json({ output: xCashuHeader });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          return Response.json(
-            { error: `Failed to handle X-Cashu request: ${message}` },
-            { status: 500 },
-          );
-        }
-      }),
-    },
     '/history': {
       capability: 'wallet:read',
       GET: requireRunning(runtime, async (req, state: RunningCocoSession) => {
@@ -220,21 +142,6 @@ export function createRouteHandlers(runtime: CocodRuntime): Record<string, Route
   };
 
   return routes;
-}
-
-/**
- * Coco resolves NUT-10 spending conditions at parse: P2PK is enforced upstream by
- * preparing locked outputs, while unsupported or malformed conditions make prepare
- * throw. Surface the latter as a 400 with a clear reason instead of a late 500.
- */
-function spendingConditionError(
-  spendingCondition: PaymentRequestSpendingConditionRequirement | undefined,
-): string | null {
-  if (!spendingCondition || spendingCondition.kind === 'P2PK') {
-    return null;
-  }
-  const label = spendingCondition.kind === 'malformed' ? 'a malformed' : 'an unsupported';
-  return `Request carries ${label} NUT-10 spending condition (${spendingCondition.nut10Kind}) that cannot be paid safely`;
 }
 
 function requireRunning(

@@ -9,6 +9,7 @@ import {
   createMeltQuoteRequestSchema,
   createReceiveOperationRequestSchema,
   createSendOperationRequestSchema,
+  evaluatePaymentRequestRequestSchema,
   executeSendOperationResponseSchema,
   executeMeltOperationResponseSchema,
   healthSchema,
@@ -22,6 +23,7 @@ import {
   meltOperationSchema,
   meltQuoteSchema,
   paymentMethodCapabilitiesSchema,
+  paymentRequestEvaluationSchema,
   processShutdownResponseSchema,
   receiveOperationSchema,
   sendOperationSchema,
@@ -48,6 +50,7 @@ import {
   type MeltOperationDocument,
   type MeltQuoteDocument,
   type PaymentMethodCapabilitiesDocument,
+  type PaymentRequestEvaluationDocument,
   type ProcessShutdownResponseDocument,
   type ReceiveOperationDocument,
   type RuntimeSchema,
@@ -108,6 +111,7 @@ export interface V1Client {
   trustMint(mintUrl: string): Promise<KnownMintDocument>;
   untrustMint(mintUrl: string): Promise<KnownMintDocument>;
   listPaymentMethodCapabilities(mintUrl: string): Promise<PaymentMethodCapabilitiesDocument>;
+  evaluatePaymentRequest(request: string): Promise<PaymentRequestEvaluationDocument>;
   createMintQuote(input: CreateMintQuoteRequest): Promise<MintQuoteDocument>;
   createMeltQuote(input: CreateMeltQuoteRequest): Promise<MeltQuoteDocument>;
   prepareMint(input: CreateMintOperationRequest): Promise<MintOperationDocument>;
@@ -202,6 +206,15 @@ export function createV1Client(options: ClientCredentialOptions = {}): V1Client 
         'GET',
         undefined,
         paymentMethodCapabilitiesSchema,
+        credentialFile,
+      ),
+    evaluatePaymentRequest: (request) =>
+      requestV1(
+        endpoint,
+        '/v1/payment-requests/evaluate',
+        'POST',
+        evaluatePaymentRequestRequestSchema.parse({ request }),
+        paymentRequestEvaluationSchema,
         credentialFile,
       ),
     createMintQuote: (input) =>
@@ -373,6 +386,46 @@ export async function prepareAndExecuteCashuSend(
     unit: 'sat',
   });
   return (await client.executeSend(operation.id)).result.token;
+}
+
+/** Preserves the human Payment Request parse output over non-mutating v1 evaluation. */
+export async function evaluatePaymentRequestForDisplay(
+  client: V1Client,
+  request: string,
+): Promise<string> {
+  const evaluation = await client.evaluatePaymentRequest(request);
+  const mintRequirement =
+    evaluation.allowedMints.length > 0
+      ? `from one of ${evaluation.allowedMints.length} Mints`
+      : 'from any Mint';
+  const matchingMints =
+    evaluation.payableMints.length > 0 ? evaluation.payableMints.join('\n') : 'No matching Mint!';
+  const spendingCondition = evaluation.spendingCondition
+    ? `\nSpending condition: ${evaluation.spendingCondition.kind}`
+    : '';
+  return (
+    `Request requires payment of ${evaluation.amount ?? 'an unspecified amount'} ` +
+    `${evaluation.unit} ${mintRequirement}.\nMatching Mints:\n${matchingMints}\n` +
+    `Transport: ${evaluation.transport.type}${spendingCondition}`
+  );
+}
+
+/** Preserves the human one-shot Payment Request flow over evaluation and Send Operations. */
+export async function prepareAndExecutePaymentRequest(
+  client: V1Client,
+  request: string,
+): Promise<string> {
+  const evaluation = await client.evaluatePaymentRequest(request);
+  const mintUrl = evaluation.payableMints[0];
+  if (!mintUrl) {
+    throw new Error('No payable Mint is available for the Payment Request');
+  }
+  const operation = await client.prepareSend({
+    mintUrl,
+    source: { type: 'payment-request', request },
+  });
+  const result = await client.executeSend(operation.id);
+  return `X-Cashu: ${result.result.token}`;
 }
 
 /** Preserves the human one-shot Lightning-send flow over the explicit v1 lifecycle. */

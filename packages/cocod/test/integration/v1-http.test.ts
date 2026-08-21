@@ -231,7 +231,7 @@ test('serves public health and authenticated structured status beside operationa
   stopCompletion.resolve();
 });
 
-test('serves Send prepare and sensitive execute results across the TCP interface', async () => {
+test('serves Payment Request evaluation and Send lifecycle results across the TCP interface', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'cocod-v1-send-listener-'));
   directories.push(directory);
   const credentialDirectory = join(directory, 'credentials');
@@ -257,6 +257,23 @@ test('serves Send prepare and sensitive execute results across the TCP interface
   const pending = { ...prepared, state: 'pending' as const, token };
   const prepare = mock(async () => prepared);
   const execute = mock(async () => ({ operation: pending, token }));
+  const resolvedPaymentRequest = {
+    paymentRequest: { encoded: 'creqBmust-not-cross-the-network' },
+    amount: toAmount(25),
+    unit: 'sat',
+    transport: { type: 'inband' as const },
+    allowedMints: [prepared.mintUrl],
+    payableMints: [prepared.mintUrl],
+    spendingCondition: {
+      kind: 'P2PK' as const,
+      p2pk: { options: { pubkey: '02must-not-cross' }, rawNut10: { kind: 'P2PK' } },
+    },
+  };
+  const parsePaymentRequest = mock(async () => resolvedPaymentRequest);
+  const preparePaymentRequest = mock(async () => ({
+    request: resolvedPaymentRequest,
+    sendOperation: { ...prepared, id: 'payment-request-send-network', method: 'p2pk' as const },
+  }));
   const runtime = {
     getStatus: () => ({
       wallet: {
@@ -274,6 +291,7 @@ test('serves Send prepare and sensitive execute results across the TCP interface
       mintUrl: prepared.mintUrl,
       manager: {
         ops: { send: { prepare, execute } },
+        paymentRequests: { parse: parsePaymentRequest, prepare: preparePaymentRequest },
         wallet: { encodeToken: () => 'cashuBnetwork-result' },
       },
     }),
@@ -299,6 +317,26 @@ test('serves Send prepare and sensitive execute results across the TCP interface
     plaintext,
     'POST',
   );
+  const evaluationResponse = await tcpFetch(
+    server,
+    '/v1/payment-requests/evaluate',
+    plaintext,
+    'POST',
+    JSON.stringify({ request: 'creqBmust-not-cross-the-network' }),
+    { 'Content-Type': 'application/json' },
+  );
+  const evaluationBody = await evaluationResponse.json();
+  const paymentRequestSendResponse = await tcpFetch(
+    server,
+    '/v1/operations/send',
+    plaintext,
+    'POST',
+    JSON.stringify({
+      mintUrl: prepared.mintUrl,
+      source: { type: 'payment-request', request: 'creqBmust-not-cross-the-network' },
+    }),
+    { 'Content-Type': 'application/json' },
+  );
 
   expect(prepareResponse.status).toBe(201);
   expect(JSON.stringify(prepareBody)).not.toContain('must-not-cross-the-network');
@@ -312,6 +350,25 @@ test('serves Send prepare and sensitive execute results across the TCP interface
   expect(await executeResponse.json()).toMatchObject({
     operation: { id: 'send-operation-network', state: 'pending' },
     result: { token: 'cashuBnetwork-result' },
+  });
+  expect(evaluationResponse.status).toBe(200);
+  expect(evaluationBody).toEqual({
+    amount: '25',
+    unit: 'sat',
+    transport: { type: 'inband' },
+    allowedMints: ['https://mint.example.com'],
+    payableMints: ['https://mint.example.com'],
+    spendingCondition: { kind: 'P2PK' },
+  });
+  expect(JSON.stringify(evaluationBody)).not.toContain('must-not-cross');
+  expect(paymentRequestSendResponse.status).toBe(201);
+  expect(await paymentRequestSendResponse.json()).toMatchObject({
+    id: 'payment-request-send-network',
+    state: 'prepared',
+    method: 'p2pk',
+  });
+  expect(preparePaymentRequest).toHaveBeenCalledWith(resolvedPaymentRequest, {
+    mintUrl: prepared.mintUrl,
   });
 });
 

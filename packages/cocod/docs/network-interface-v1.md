@@ -598,7 +598,7 @@ type-specific Coco behavior.
 
 ### Outgoing Payment Requests
 
-This resource is proposed.
+This resource is implemented.
 
 | Method | Path                            | Purpose                                                   |
 | ------ | ------------------------------- | --------------------------------------------------------- |
@@ -608,11 +608,24 @@ Evaluation is read-like but uses `POST` because the encoded request may be large
 is supplied in the body. It does not persist state or move value. The response exposes amount,
 unit, transport, allowed Mints, payable Mints, and safe spending-condition requirements.
 
+The request is `{ request }`. The response contains optional lossless `amount`, `unit`, a
+`transport` object exposing only `type`, `allowedMints`, `payableMints`, and an optional
+`spendingCondition`. The spending condition exposes only `kind`, plus `nut10Kind` for malformed or
+unsupported conditions. It omits the encoded request, transport target, raw NUT-10 data, and
+normalized P2PK options.
+
 Paying an evaluated in-band Payment Request uses `POST /v1/operations/send` with a source that
 contains the encoded request. The normal prepare, inspect, execute, and result lifecycle then
 applies. HTTP and Nostr transport execution return a typed unsupported error until Coco exposes a
 durable delivery interface. Cocod does not retain the transient prepared delivery context or add an
 incoming Payment Request interface that was not part of its legacy surface.
+
+The Payment Request Send source is
+`{ source: { type: "payment-request", request }, mintUrl?, amount?, unit? }`, where `unit` may
+only accompany an `amount` override. Cocod parses the
+request and rejects HTTP or Nostr with `409 Conflict` and `unsupported_behavior` before calling
+Coco preparation. In-band sources are prepared through Coco's Payment Request API and return the
+underlying safe Send Operation.
 
 ### History and event resources
 
@@ -679,19 +692,17 @@ MUST distinguish additive schema changes from changes that require a new interfa
 Legacy command routes remain only until the corresponding v1 resources and CLI calls land in the
 same delivery slice.
 
-| Legacy route           | V1 replacement                                                           |
-| ---------------------- | ------------------------------------------------------------------------ |
-| `GET /balance`         | `GET /v1/balances`                                                       |
-| `POST /mints/add`      | `POST /v1/mints`, then `POST /v1/mints/trust`.                           |
-| `GET /mints/list`      | `GET /v1/mints`                                                          |
-| `POST /mints/info`     | `GET /v1/mints/info?mintUrl={mintUrl}`                                   |
-| `POST /receive/bolt11` | Create a Mint Quote, then prepare a Mint Operation.                      |
-| `POST /send/bolt11`    | Create a Melt Quote, prepare a Melt Operation, then execute explicitly.  |
-| `POST /send/cashu`     | Prepare a Send Operation, then execute explicitly.                       |
-| `POST /x-cashu/parse`  | Evaluate the Payment Request.                                            |
-| `POST /x-cashu/handle` | Evaluate the request, prepare a Send Operation, then execute explicitly. |
-| `GET /history`         | `GET /v1/history`                                                        |
-| `GET /events`          | `GET /v1/events`                                                         |
+| Legacy route           | V1 replacement                                                          |
+| ---------------------- | ----------------------------------------------------------------------- |
+| `GET /balance`         | `GET /v1/balances`                                                      |
+| `POST /mints/add`      | `POST /v1/mints`, then `POST /v1/mints/trust`.                          |
+| `GET /mints/list`      | `GET /v1/mints`                                                         |
+| `POST /mints/info`     | `GET /v1/mints/info?mintUrl={mintUrl}`                                  |
+| `POST /receive/bolt11` | Create a Mint Quote, then prepare a Mint Operation.                     |
+| `POST /send/bolt11`    | Create a Melt Quote, prepare a Melt Operation, then execute explicitly. |
+| `POST /send/cashu`     | Prepare a Send Operation, then execute explicitly.                      |
+| `GET /history`         | `GET /v1/history`                                                       |
+| `GET /events`          | `GET /v1/events`                                                        |
 
 The authenticated legacy NPC routes remain available but are outside the current v1 migration
 scope.

@@ -52,8 +52,9 @@ Use the implicit `http://127.0.0.1:62626` endpoint for local auto-start. The glo
 
 ### X-Cashu / NUT-24
 
-- `x-cashu parse <request>` - Parse an encoded payment request
-- `x-cashu handle <request>` - Settle request and return `X-Cashu: cashuB...` header value
+- `x-cashu parse <request>` - Evaluate an encoded Payment Request through v1
+- `x-cashu handle <request>` - Evaluate, prepare, and execute an in-band Send Operation, then
+  return an `X-Cashu: cashuB...` header value
 
 Both `creqA` and `creqB` encodings are accepted. NUT-10 spending conditions are enforced
 by Coco: P2PK-locked requests are paid with locked outputs; unsupported or malformed
@@ -143,6 +144,7 @@ no-store`, `Retry-After`, `WWW-Authenticate`, `X-Request-ID`, and `Allow`. These
 - `POST /v1/operations/melt/{operationId}/cancel`
 - `POST /v1/operations/melt/{operationId}/refresh`
 - `POST /v1/operations/melt/{operationId}/reclaim`
+- `POST /v1/payment-requests/evaluate`
 - `POST /v1/operations/send`
 - `GET /v1/operations/send/prepared?offset={offset}&limit={limit}`
 - `GET /v1/operations/send/in-flight?offset={offset}&limit={limit}`
@@ -160,8 +162,6 @@ no-store`, `Retry-After`, `WWW-Authenticate`, `X-Request-ID`, and `Allow`. These
 - `GET /v1/operations/receive/{operationId}/result`
 - `POST /v1/operations/receive/{operationId}/cancel`
 - `POST /v1/operations/receive/{operationId}/refresh`
-- `POST /x-cashu/parse`
-- `POST /x-cashu/handle`
 - `GET /history`
 - `GET /events` (SSE stream)
 - `GET /npc/address`
@@ -268,9 +268,13 @@ a Melt Operation, and executing it through these v1 resources.
 ### Send Operation resources
 
 `POST /v1/operations/send` prepares a Cashu Send Operation without executing it. Its body is
-`{ amount, unit, mintUrl?, forceSwap? }`, where `amount` is a lossless decimal string. When
-`mintUrl` is omitted, cocod uses the Wallet's configured default Mint. Preparation returns
-`201 Created` with the safe Operation directly and no `Location` header.
+either `{ amount, unit, mintUrl?, forceSwap? }` or
+`{ source: { type: "payment-request", request }, mintUrl?, amount?, unit? }`, where `unit` may
+only accompany an `amount` override and amounts are
+lossless decimal strings. When `mintUrl` is omitted, cocod uses the Wallet's configured default
+Mint. A Payment Request source is parsed and prepared through Coco, so its Mint, amount, unit, and
+spending-condition requirements apply. Preparation returns `201 Created` with the underlying safe
+Send Operation directly and no `Location` header.
 
 The safe Send Operation document contains `id`, `type`, `state`, normalized `mintUrl`, `unit`,
 `method`, `requestedAmount`, `createdAt`, and `updatedAt`. Every state after `init` also contains
@@ -298,6 +302,22 @@ the current state.
 
 The human `send cashu` command preserves its one-shot behavior by preparing and then executing
 through these v1 resources and printing the encoded token.
+
+### Outgoing Payment Request evaluation
+
+`POST /v1/payment-requests/evaluate` accepts `{ request }` and returns a non-durable safe
+evaluation containing optional lossless `amount`, `unit`, the transport type, `allowedMints`,
+`payableMints`, and an optional safe spending-condition requirement. It does not return an ID,
+the encoded request, a delivery target, raw NUT-10 data, or normalized spending-condition options.
+It does not reserve value or create an Operation.
+
+Only an `inband` evaluation can currently be supplied as a Send Operation source. `http` and
+`nostr` sources return `409 Conflict` with `unsupported_behavior` before Coco prepares or reserves
+a Send Operation. Execution and result recovery then use the ordinary Send Operation endpoints;
+cocod retains no prepared Payment Request, delivery context, job, or second result store.
+
+The human `x-cashu parse` and `x-cashu handle` commands compose these v1 resources. The superseded
+unversioned X-Cashu HTTP endpoints have been removed.
 
 ### Receive Operation resources
 

@@ -191,6 +191,54 @@
         }
       ]
     },
+    "PaymentRequestEvaluation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unit", "transport", "allowedMints", "payableMints"],
+      "properties": {
+        "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+        "unit": { "type": "string", "pattern": "\\S" },
+        "transport": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type"],
+          "properties": { "type": { "enum": ["inband", "http", "nostr"] } }
+        },
+        "allowedMints": { "type": "array", "items": { "type": "string" } },
+        "payableMints": { "type": "array", "items": { "type": "string" } },
+        "spendingCondition": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind"],
+              "properties": { "kind": { "const": "P2PK" } }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "nut10Kind"],
+              "properties": {
+                "kind": { "const": "unsupported" },
+                "nut10Kind": { "type": "string" }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "nut10Kind"],
+              "properties": { "kind": { "const": "malformed" }, "nut10Kind": { "type": "string" } }
+            }
+          ]
+        }
+      }
+    },
+    "EvaluatePaymentRequestRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["request"],
+      "properties": { "request": { "type": "string", "pattern": "\\S", "x-sensitive": true } }
+    },
     "Balances": {
       "type": "object",
       "additionalProperties": false,
@@ -1638,15 +1686,55 @@
       ]
     },
     "CreateSendOperationRequest": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["amount", "unit"],
-      "properties": {
-        "mintUrl": { "type": "string" },
-        "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-        "unit": { "type": "string", "pattern": "\\S" },
-        "forceSwap": { "type": "boolean" }
-      }
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["amount", "unit"],
+          "properties": {
+            "mintUrl": { "type": "string" },
+            "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+            "unit": { "type": "string", "pattern": "\\S" },
+            "forceSwap": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source"],
+          "properties": {
+            "mintUrl": { "type": "string" },
+            "source": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["type", "request"],
+              "properties": {
+                "type": { "const": "payment-request" },
+                "request": { "type": "string", "pattern": "\\S", "x-sensitive": true }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "amount"],
+          "properties": {
+            "mintUrl": { "type": "string" },
+            "source": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["type", "request"],
+              "properties": {
+                "type": { "const": "payment-request" },
+                "request": { "type": "string", "pattern": "\\S", "x-sensitive": true }
+              }
+            },
+            "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+            "unit": { "type": "string", "pattern": "\\S" }
+          }
+        }
+      ]
     },
     "SendOperations": {
       "type": "object",
@@ -2213,6 +2301,17 @@
       "capability": "wallet:read",
       "requestSchema": null,
       "responseSchema": "LifecycleStatus",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": null,
+      "responseCacheControl": null
+    },
+    {
+      "method": "POST",
+      "path": "/v1/payment-requests/evaluate",
+      "capability": "wallet:read",
+      "requestSchema": "EvaluatePaymentRequestRequest",
+      "responseSchema": "PaymentRequestEvaluation",
       "errorSchema": "Error",
       "successStatuses": [200],
       "idempotencyKey": null,
