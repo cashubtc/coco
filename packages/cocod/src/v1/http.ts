@@ -1741,9 +1741,12 @@ function toHistoryDocument(entry: HistoryEntry): HistoryDocument {
 
   switch (entry.type) {
     case 'mint':
-      return { ...base, type: entry.type, quoteId: entry.quoteId };
     case 'melt':
-      return { ...base, type: entry.type, quoteId: entry.quoteId };
+      return {
+        ...base,
+        type: entry.type,
+        ...(entry.quoteId.trim() ? { quoteId: entry.quoteId } : {}),
+      };
     case 'send':
       return { ...base, type: entry.type };
     case 'receive':

@@ -282,8 +282,7 @@
                   "amount",
                   "createdAt",
                   "updatedAt",
-                  "type",
-                  "quoteId"
+                  "type"
                 ],
                 "properties": {
                   "id": { "type": "string", "pattern": "\\S" },
@@ -319,8 +318,7 @@
                   "amount",
                   "createdAt",
                   "updatedAt",
-                  "type",
-                  "quoteId"
+                  "type"
                 ],
                 "properties": {
                   "id": { "type": "string", "pattern": "\\S" },
@@ -435,8 +433,7 @@
             "amount",
             "createdAt",
             "updatedAt",
-            "type",
-            "quoteId"
+            "type"
           ],
           "properties": {
             "id": { "type": "string", "pattern": "\\S" },
@@ -472,8 +469,7 @@
             "amount",
             "createdAt",
             "updatedAt",
-            "type",
-            "quoteId"
+            "type"
           ],
           "properties": {
             "id": { "type": "string", "pattern": "\\S" },

@@ -112,6 +112,20 @@ describe('v1 HTTP route interface', () => {
           proofs: [{ secret: 'must-not-leak', C: 'must-not-leak', amount: 8, id: 'keyset' }],
         },
       },
+      {
+        id: 'legacy:7',
+        source: 'legacy' as const,
+        legacyHistoryId: '7',
+        type: 'mint' as const,
+        paymentRequest: 'lnbc1must-not-leak',
+        quoteId: '',
+        state: 'UNPAID',
+        mintUrl: 'https://mint.example.com/',
+        unit: 'sat',
+        amount: toAmount(5),
+        createdAt: 1_786_838_200_000,
+        updatedAt: 1_786_838_200_000,
+      },
     ];
     const getPaginatedHistory = mock(async () => entries);
     const getHistoryEntryById = mock(async () => entries[0]);
@@ -121,7 +135,7 @@ describe('v1 HTTP route interface', () => {
     );
 
     const listed = await routes['/v1/history']!.GET!(
-      authorizedRequest('/v1/history?offset=2&limit=4', credential.plaintext),
+      authorizedRequest('/v1/history?offset=2&limit=5', credential.plaintext),
     );
     const inspected = await routes['/v1/history/:historyEntryId']!.GET!(
       authorizedRequest('/v1/history/mint%3Amint-operation-1', credential.plaintext),
@@ -182,13 +196,24 @@ describe('v1 HTTP route interface', () => {
           createdAt: '2026-08-15T23:58:20.000Z',
           updatedAt: '2026-08-15T23:59:20.000Z',
         },
+        {
+          id: 'legacy:7',
+          source: 'legacy',
+          type: 'mint',
+          state: 'UNPAID',
+          mintUrl: 'https://mint.example.com',
+          unit: 'sat',
+          amount: '5',
+          createdAt: '2026-08-15T23:56:40.000Z',
+          updatedAt: '2026-08-15T23:56:40.000Z',
+        },
       ],
       offset: 2,
-      limit: 4,
+      limit: 5,
     });
     expect(detailBody).toEqual(listBody.items[0]);
     expect(JSON.stringify([listBody, detailBody])).not.toContain('must-not-leak');
-    expect(getPaginatedHistory).toHaveBeenCalledWith(2, 4);
+    expect(getPaginatedHistory).toHaveBeenCalledWith(2, 5);
     expect(getHistoryEntryById).toHaveBeenCalledWith('mint:mint-operation-1');
   });
 

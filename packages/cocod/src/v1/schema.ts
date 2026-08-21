@@ -132,8 +132,8 @@ interface HistoryDocumentBase {
 
 /** Explicit safe projection of one Coco history entry. */
 export type HistoryDocument =
-  | (HistoryDocumentBase & { type: 'mint'; quoteId: string })
-  | (HistoryDocumentBase & { type: 'melt'; quoteId: string })
+  | (HistoryDocumentBase & { type: 'mint'; quoteId?: string })
+  | (HistoryDocumentBase & { type: 'melt'; quoteId?: string })
   | (HistoryDocumentBase & { type: 'send' })
   | (HistoryDocumentBase & { type: 'receive' });
 
@@ -703,11 +703,11 @@ const historyBaseFields = {
 const historyDocumentNode = unionNode([
   objectNode(
     { ...historyBaseFields, type: literalNode('mint'), quoteId: stringNode({ pattern: '\\S' }) },
-    { optional: ['operationId'] },
+    { optional: ['operationId', 'quoteId'] },
   ),
   objectNode(
     { ...historyBaseFields, type: literalNode('melt'), quoteId: stringNode({ pattern: '\\S' }) },
-    { optional: ['operationId'] },
+    { optional: ['operationId', 'quoteId'] },
   ),
   objectNode({ ...historyBaseFields, type: literalNode('send') }, { optional: ['operationId'] }),
   objectNode({ ...historyBaseFields, type: literalNode('receive') }, { optional: ['operationId'] }),

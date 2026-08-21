@@ -653,7 +653,8 @@ History Entry identity such as `send:{operationId}` or a legacy identity such as
 Both routes return the same discriminated safe History document. Every document contains `id`,
 `source`, `type`, real `state`, normalized `mintUrl`, `unit`, lossless decimal-string `amount`, and
 RFC 3339 `createdAt` and `updatedAt`. `operationId` is present when Coco supplies one. Mint and Melt
-documents also contain their canonical `quoteId`.
+documents also contain their canonical `quoteId` when the source entry has one; older legacy
+entries without a Quote identity omit it.
 
 ```json
 {

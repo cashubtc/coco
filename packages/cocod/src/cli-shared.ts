@@ -105,6 +105,7 @@ export interface KnownMintFilters {
   trustedOnly?: boolean;
 }
 
+/** Offset and limit requested from the safe Wallet history collection. */
 export interface HistoryPagination {
   offset?: number;
   limit?: number;
@@ -114,7 +115,9 @@ export interface V1Client {
   health(): Promise<HealthDocument>;
   status(): Promise<LifecycleStatusDocument>;
   balances(filters?: BalanceFilters): Promise<BalancesDocument>;
+  /** Lists a safe page of Wallet history through Coco. */
   listHistory(pagination?: HistoryPagination): Promise<HistoryPageDocument>;
+  /** Returns one safe Wallet history entry by its direct Coco identity. */
   getHistory(historyEntryId: string): Promise<HistoryDocument>;
   listMints(filters?: KnownMintFilters): Promise<KnownMintsDocument>;
   registerMint(mintUrl: string): Promise<KnownMintDocument>;
