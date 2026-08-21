@@ -2,10 +2,10 @@
 
 Status: accepted and implemented for the authenticated TCP transport, Wallet and Coco Session
 lifecycle, Wallet Recovery Material, Cocod Process shutdown, balance, Known Mint, Quote, Send,
-Receive, Mint, and Melt Operation resources, plus the legacy compatibility described here. The
-complete v1 resource surface is accepted as the target design; Payment
-Request, history, event, and machine-description resources remain proposed until their individual
-contracts and implementations land.
+Receive, Mint and Melt Operation, Payment Request evaluation, and safe history resources, plus the
+legacy compatibility described here. The complete v1 resource surface is accepted as the target
+design; event and machine-description resources remain proposed until their individual contracts
+and implementations land.
 
 This document specifies cocod's machine-oriented network interface. It distinguishes implemented
 resources from the accepted target surface so resources can land incrementally without inventing
@@ -275,10 +275,9 @@ NOT expose the shared administrative credential to browser storage or browser ap
 ## Legacy command compatibility
 
 The remaining unversioned command routes use the same TCP listener as `/v1`. They retain their
-current request and response shapes temporarily so the CLI's history, NPC, and X-Cashu commands
-remain usable while their v1 resources are implemented. Balance, Known Mint, Lightning Receive,
-Lightning Send, Cashu Send, and Cashu Receive commands already use v1 resources and their legacy
-routes have been removed.
+current request and response shapes temporarily for the NPC extension and event stream. Balance,
+Known Mint, Lightning Receive, Lightning Send, Cashu Send, Cashu Receive, Payment Request, and
+history commands already use v1 resources and their superseded legacy routes have been removed.
 
 Every remaining unversioned route requires the same administrative Client Credential. Cocod does
 not run a Unix listener or a second compatibility transport. Later interface revisions replace
@@ -629,7 +628,7 @@ underlying safe Send Operation.
 
 ### History and event resources
 
-These resources are proposed.
+The history resources are implemented. The event resource remains proposed.
 
 | Method | Path                           | Purpose                                         |
 | ------ | ------------------------------ | ----------------------------------------------- |
@@ -638,7 +637,41 @@ These resources are proposed.
 | `GET`  | `/v1/events`                   | Stream safe resource invalidations through SSE. |
 
 History documents MUST omit tokens, proofs, proof secrets, serialized output data, and raw
-third-party responses. Events use this envelope:
+third-party responses. They also omit encoded payment requests, receive-source metadata, free-form
+metadata, and raw error text.
+
+`GET /v1/history` accepts only `offset` and `limit`, defaults to `offset=0` and `limit=20`, and has a
+maximum limit of `100`. Cocod delegates the page directly to
+`manager.history.getPaginatedHistory(offset, limit)`, preserving Coco's newest-first ordering and
+direct History Entry identities. Cocod does not implement transport-local filters.
+
+`GET /v1/history/{historyEntryId}` delegates lookup to
+`manager.history.getHistoryEntryById(historyEntryId)`. The identity MUST be a valid Coco operation
+History Entry identity such as `send:{operationId}` or a legacy identity such as
+`legacy:{legacyHistoryId}`. Missing entries return the common `not_found` error.
+
+Both routes return the same discriminated safe History document. Every document contains `id`,
+`source`, `type`, real `state`, normalized `mintUrl`, `unit`, lossless decimal-string `amount`, and
+RFC 3339 `createdAt` and `updatedAt`. `operationId` is present when Coco supplies one. Mint and Melt
+documents also contain their canonical `quoteId`.
+
+```json
+{
+  "id": "melt:melt-operation-1",
+  "source": "operation",
+  "type": "melt",
+  "operationId": "melt-operation-1",
+  "quoteId": "melt-quote-1",
+  "state": "finalized",
+  "mintUrl": "https://mint.example.com",
+  "unit": "sat",
+  "amount": "25",
+  "createdAt": "2026-08-19T12:00:00.000Z",
+  "updatedAt": "2026-08-19T12:01:00.000Z"
+}
+```
+
+Events use this envelope:
 
 ```json
 {

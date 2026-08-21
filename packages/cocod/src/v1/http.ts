@@ -1,5 +1,6 @@
 import {
   normalizeMintUrl,
+  parseHistoryEntryId,
   MeltOperationNotFoundError,
   MeltOperationStateError,
   MintOperationNotFoundError,
@@ -12,6 +13,7 @@ import {
   SendOperationStateError,
   UnitValidationError,
   type BalanceQuery,
+  type HistoryEntry,
   type Mint,
   type MintOperation,
   type MintQuote,
@@ -44,6 +46,8 @@ import {
   executeSendOperationResponseSchema,
   executeMeltOperationResponseSchema,
   healthSchema,
+  historyPageSchema,
+  historySchema,
   initializeWalletRequestSchema,
   initializeWalletResponseSchema,
   knownMintSchema,
@@ -87,6 +91,8 @@ import {
   type ExecuteSendOperationResponseDocument,
   type ExecuteMeltOperationResponseDocument,
   type HealthDocument,
+  type HistoryDocument,
+  type HistoryPageDocument,
   type InitializeWalletRequest,
   type InitializeWalletResponseDocument,
   type KnownMintDocument,
@@ -168,6 +174,28 @@ const BALANCES_ROUTE = {
   idempotencyKey: null,
   responseCacheControl: null,
 } as const satisfies V1RouteMetadata<null, BalancesDocument>;
+
+const LIST_HISTORY_ROUTE = {
+  method: 'GET',
+  path: '/v1/history',
+  capability: 'wallet:read',
+  requestSchema: noBodySchema,
+  responseSchema: historyPageSchema,
+  successStatuses: [200],
+  idempotencyKey: null,
+  responseCacheControl: null,
+} as const satisfies V1RouteMetadata<null, HistoryPageDocument>;
+
+const GET_HISTORY_ROUTE = {
+  method: 'GET',
+  path: '/v1/history/{historyEntryId}',
+  capability: 'wallet:read',
+  requestSchema: noBodySchema,
+  responseSchema: historySchema,
+  successStatuses: [200],
+  idempotencyKey: null,
+  responseCacheControl: null,
+} as const satisfies V1RouteMetadata<null, HistoryDocument>;
 
 const CREATE_MINT_ROUTE = {
   method: 'POST',
@@ -685,6 +713,8 @@ export function createV1RouteMetadata(): Array<V1RouteMetadata> {
     STATUS_ROUTE,
     EVALUATE_PAYMENT_REQUEST_ROUTE,
     BALANCES_ROUTE,
+    LIST_HISTORY_ROUTE,
+    GET_HISTORY_ROUTE,
     LIST_MINTS_ROUTE,
     CREATE_MINT_ROUTE,
     TRUST_MINT_ROUTE,
@@ -793,6 +823,34 @@ export function createV1RouteDefinitions(
           retryable: false,
           cause: error,
         });
+      }
+    },
+  });
+  const listHistory = defineV1Route({
+    ...LIST_HISTORY_ROUTE,
+    handler: async (_input, request) => {
+      const history = requireRunningSession(runtime).manager.history;
+      const { offset, limit } = parseHistoryPageQuery(request);
+      try {
+        const entries = await history.getPaginatedHistory(offset, limit);
+        return { items: entries.map(toHistoryDocument), offset, limit };
+      } catch (error) {
+        throw historyCocoError('list Wallet history', error);
+      }
+    },
+  });
+  const getHistory = defineV1Route({
+    ...GET_HISTORY_ROUTE,
+    handler: async (_input, request) => {
+      const history = requireRunningSession(runtime).manager.history;
+      const historyEntryId = parseHistoryEntryIdPath(request);
+      try {
+        const entry = await history.getHistoryEntryById(historyEntryId);
+        if (!entry) throw historyNotFound();
+        return toHistoryDocument(entry);
+      } catch (error) {
+        if (error instanceof V1HttpError) throw error;
+        throw historyCocoError('return the Wallet history entry', error);
       }
     },
   });
@@ -1589,6 +1647,8 @@ export function createV1RouteDefinitions(
     status,
     evaluatePaymentRequest,
     balances,
+    listHistory,
+    getHistory,
     listMints,
     createMint,
     trustMint,
@@ -1638,6 +1698,76 @@ export function createV1RouteDefinitions(
     stopSession,
     stopProcess,
   ];
+}
+
+const DEFAULT_HISTORY_PAGE_LIMIT = 20;
+const MAX_HISTORY_PAGE_LIMIT = 100;
+
+function parseHistoryPageQuery(request: Request): { offset: number; limit: number } {
+  const message = 'The Wallet history pagination is invalid';
+  const query = parseQuery(request, ['offset', 'limit'], message);
+  return {
+    offset: parsePageInteger(query.getAll('offset'), 0, Number.MAX_SAFE_INTEGER, 0, message),
+    limit: parsePageInteger(
+      query.getAll('limit'),
+      1,
+      MAX_HISTORY_PAGE_LIMIT,
+      DEFAULT_HISTORY_PAGE_LIMIT,
+      message,
+    ),
+  };
+}
+
+function parseHistoryEntryIdPath(request: Request): string {
+  const message = 'The Wallet history entry identity is invalid';
+  parseQuery(request, [], message);
+  const id = parsePathIdentity(request, '/v1/history/', '', message);
+  if (!parseHistoryEntryId(id)) throw invalidQuery(message);
+  return id;
+}
+
+function toHistoryDocument(entry: HistoryEntry): HistoryDocument {
+  const base = {
+    id: entry.id,
+    source: entry.source,
+    ...(entry.operationId ? { operationId: entry.operationId } : {}),
+    state: entry.state,
+    mintUrl: normalizeMintUrl(entry.mintUrl),
+    unit: entry.unit,
+    amount: entry.amount.toString(),
+    createdAt: new Date(entry.createdAt).toISOString(),
+    updatedAt: new Date(entry.updatedAt).toISOString(),
+  };
+
+  switch (entry.type) {
+    case 'mint':
+      return { ...base, type: entry.type, quoteId: entry.quoteId };
+    case 'melt':
+      return { ...base, type: entry.type, quoteId: entry.quoteId };
+    case 'send':
+      return { ...base, type: entry.type };
+    case 'receive':
+      return { ...base, type: entry.type };
+  }
+}
+
+function historyCocoError(action: string, cause: unknown): V1HttpError {
+  return new V1HttpError({
+    status: 500,
+    code: 'coco_error',
+    message: `Coco could not ${action}`,
+    retryable: false,
+    cause,
+  });
+}
+
+function historyNotFound(): V1HttpError {
+  return new V1HttpError({
+    status: 404,
+    code: 'not_found',
+    message: 'The Wallet history entry does not exist',
+    retryable: false,
+  });
 }
 
 function toPaymentRequestEvaluationDocument(request: {

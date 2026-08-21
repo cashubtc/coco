@@ -99,7 +99,7 @@ describe('routes', () => {
       const runtime = uninitializedRuntime();
       const routes = buildRoutes(createRouteHandlers(runtime), runtime, credentials);
 
-      const response = await routes['/history']!.GET!(new Request('http://localhost/history'));
+      const response = await routes['/events']!.GET!(new Request('http://localhost/events'));
 
       expect(response.status).toBe(401);
       expect(await response.json()).toEqual({ error: 'Unauthorized' });
@@ -108,7 +108,7 @@ describe('routes', () => {
     }
   });
 
-  test('serves authenticated normal and streaming legacy routes on one TCP listener', async () => {
+  test('serves the authenticated legacy event stream on the TCP listener', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'cocod-tcp-stream-'));
     let server: ReturnType<typeof Bun.serve> | undefined;
     try {
@@ -128,9 +128,6 @@ describe('routes', () => {
         fetch: buildFallbackHandler(runtime, credentials),
       });
 
-      const normal = await fetch(new URL('/history', server.url), {
-        headers: { Authorization: `Bearer ${plaintext}` },
-      });
       const unauthorizedStream = await fetch(new URL('/events', server.url));
       const abort = new AbortController();
       const streamResponse = fetch(new URL('/events', server.url), {
@@ -138,8 +135,6 @@ describe('routes', () => {
         signal: abort.signal,
       });
 
-      expect(normal.status).toBe(200);
-      expect(await normal.json()).toEqual({ output: [] });
       expect(unauthorizedStream.status).toBe(401);
       for (let attempt = 0; attempt < 20 && !publishHistory; attempt++) {
         await Bun.sleep(5);
@@ -208,8 +203,8 @@ describe('routes', () => {
       const routes = buildRoutes(createRouteHandlers(runtime), runtime, credentials, logger);
       const presentedCredential = 'z'.repeat(43);
 
-      const response = await routes['/history']!.GET!(
-        new Request('http://localhost/history', {
+      const response = await routes['/events']!.GET!(
+        new Request('http://localhost/events', {
           headers: { Authorization: `Bearer ${presentedCredential}` },
         }),
       );
@@ -235,8 +230,8 @@ describe('routes', () => {
         isAcceptingWork: () => false,
       });
 
-      const response = await routes['/history']!.GET!(
-        new Request('http://localhost/history', {
+      const response = await routes['/npc/address']!.GET!(
+        new Request('http://localhost/npc/address', {
           headers: { Authorization: `Bearer ${plaintext}` },
         }),
       );

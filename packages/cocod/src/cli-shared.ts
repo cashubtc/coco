@@ -13,6 +13,8 @@ import {
   executeSendOperationResponseSchema,
   executeMeltOperationResponseSchema,
   healthSchema,
+  historyPageSchema,
+  historySchema,
   initializeWalletResponseSchema,
   knownMintSchema,
   knownMintsSchema,
@@ -39,6 +41,8 @@ import {
   type ExecuteSendOperationResponseDocument,
   type ExecuteMeltOperationResponseDocument,
   type HealthDocument,
+  type HistoryDocument,
+  type HistoryPageDocument,
   type InitializeWalletRequest,
   type InitializeWalletResponseDocument,
   type KnownMintDocument,
@@ -101,10 +105,17 @@ export interface KnownMintFilters {
   trustedOnly?: boolean;
 }
 
+export interface HistoryPagination {
+  offset?: number;
+  limit?: number;
+}
+
 export interface V1Client {
   health(): Promise<HealthDocument>;
   status(): Promise<LifecycleStatusDocument>;
   balances(filters?: BalanceFilters): Promise<BalancesDocument>;
+  listHistory(pagination?: HistoryPagination): Promise<HistoryPageDocument>;
+  getHistory(historyEntryId: string): Promise<HistoryDocument>;
   listMints(filters?: KnownMintFilters): Promise<KnownMintsDocument>;
   registerMint(mintUrl: string): Promise<KnownMintDocument>;
   getMintInfo(mintUrl: string): Promise<MintInformationDocument>;
@@ -168,6 +179,24 @@ export function createV1Client(options: ClientCredentialOptions = {}): V1Client 
       requestV1(endpoint, '/v1/status', 'GET', undefined, lifecycleStatusSchema, credentialFile),
     balances: (filters = {}) =>
       requestV1(endpoint, balancePath(filters), 'GET', undefined, balancesSchema, credentialFile),
+    listHistory: (pagination = {}) =>
+      requestV1(
+        endpoint,
+        historyPath(pagination),
+        'GET',
+        undefined,
+        historyPageSchema,
+        credentialFile,
+      ),
+    getHistory: (historyEntryId) =>
+      requestV1(
+        endpoint,
+        `/v1/history/${encodeURIComponent(historyEntryId)}`,
+        'GET',
+        undefined,
+        historySchema,
+        credentialFile,
+      ),
     listMints: (filters = {}) =>
       requestV1(
         endpoint,
@@ -508,6 +537,19 @@ export function formatBalances(document: BalancesDocument): string {
     );
   }
   return lines.join('\n');
+}
+
+/** Formats safe Wallet history entries for the human-oriented CLI. */
+export function formatHistory(document: HistoryPageDocument): string {
+  return document.items.length === 0 ? 'No history.' : JSON.stringify(document.items, null, 2);
+}
+
+function historyPath({ offset, limit }: HistoryPagination): string {
+  const query = new URLSearchParams();
+  if (offset !== undefined) query.set('offset', offset.toString());
+  if (limit !== undefined) query.set('limit', limit.toString());
+  const serialized = query.toString();
+  return serialized.length > 0 ? `/v1/history?${serialized}` : '/v1/history';
 }
 
 async function callDaemon(path: string, options: DaemonCallOptions = {}): Promise<CommandResponse> {

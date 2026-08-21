@@ -30,19 +30,6 @@
   },
   "endpoints": [
     {
-      "path": "/history",
-      "method": "GET",
-      "state": "cocoSession.running",
-      "query": {
-        "offset": "number (optional, default 0)",
-        "limit": "number (optional, default 20, max 100)"
-      },
-      "responses": {
-        "200": "{ output: unknown[] }",
-        "400": "{ error: string }"
-      }
-    },
-    {
       "path": "/events",
       "method": "GET",
       "state": "cocoSession.running",

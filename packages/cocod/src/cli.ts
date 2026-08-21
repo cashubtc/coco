@@ -6,6 +6,7 @@ import {
   handleDaemonCommand,
   callDaemonStream,
   formatBalances,
+  formatHistory,
   evaluatePaymentRequestForDisplay,
   handleV1Command,
   handleWalletV1Command,
@@ -339,13 +340,8 @@ program
       process.exit(1);
     }
 
-    // Fetch paginated history first (pass params as query string, not body)
-    const queryParams = new URLSearchParams();
-    queryParams.set('offset', offset.toString());
-    queryParams.set('limit', limit.toString());
-    const path = `/history?${queryParams.toString()}`;
-
-    await handleDaemonCommand(path);
+    const history = await handleWalletV1Command((client) => client.listHistory({ offset, limit }));
+    console.log(formatHistory(history));
 
     // If watch is enabled, continue streaming after initial fetch
     if (options.watch) {

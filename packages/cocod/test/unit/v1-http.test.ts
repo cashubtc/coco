@@ -45,6 +45,222 @@ afterEach(async () => {
 });
 
 describe('v1 HTTP route interface', () => {
+  test('lists and inspects safe history documents through Coco ordering and identities', async () => {
+    const credential = await createCredential();
+    const entries = [
+      {
+        id: 'mint:mint-operation-1',
+        source: 'operation' as const,
+        type: 'mint' as const,
+        operationId: 'mint-operation-1',
+        quoteId: 'mint-quote-1',
+        paymentRequest: 'lnbc250n1must-not-leak',
+        state: 'finalized' as const,
+        mintUrl: 'https://mint.example.com/',
+        unit: 'sat',
+        amount: toAmount('9007199254740993'),
+        createdAt: 1_786_838_600_000,
+        updatedAt: 1_786_838_660_000,
+        metadata: { private: 'must-not-leak' },
+        error: 'raw failure must-not-leak',
+      },
+      {
+        id: 'legacy:42',
+        source: 'legacy' as const,
+        legacyHistoryId: '42',
+        type: 'send' as const,
+        operationId: 'legacy-operation-1',
+        state: 'pending',
+        mintUrl: 'https://mint.example.com/',
+        unit: 'sat',
+        amount: toAmount(21),
+        createdAt: 1_786_838_500_000,
+        updatedAt: 1_786_838_500_000,
+        token: {
+          mint: 'https://mint.example.com',
+          proofs: [{ secret: 'must-not-leak', C: 'must-not-leak', amount: 21, id: 'keyset' }],
+        },
+      },
+      {
+        id: 'melt:melt-operation-1',
+        source: 'operation' as const,
+        type: 'melt' as const,
+        operationId: 'melt-operation-1',
+        quoteId: 'melt-quote-1',
+        state: 'pending' as const,
+        mintUrl: 'https://mint.example.com/',
+        unit: 'sat',
+        amount: toAmount(13),
+        createdAt: 1_786_838_400_000,
+        updatedAt: 1_786_838_460_000,
+        error: 'raw melt failure must-not-leak',
+      },
+      {
+        id: 'receive:receive-operation-1',
+        source: 'operation' as const,
+        type: 'receive' as const,
+        operationId: 'receive-operation-1',
+        state: 'finalized' as const,
+        mintUrl: 'https://mint.example.com/',
+        unit: 'sat',
+        amount: toAmount(8),
+        createdAt: 1_786_838_300_000,
+        updatedAt: 1_786_838_360_000,
+        metadata: { memo: 'private receive source must-not-leak' },
+        token: {
+          mint: 'https://mint.example.com',
+          proofs: [{ secret: 'must-not-leak', C: 'must-not-leak', amount: 8, id: 'keyset' }],
+        },
+      },
+    ];
+    const getPaginatedHistory = mock(async () => entries);
+    const getHistoryEntryById = mock(async () => entries[0]);
+    const routes = createWalletTestRoutes(
+      { history: { getPaginatedHistory, getHistoryEntryById } },
+      credential.credentials,
+    );
+
+    const listed = await routes['/v1/history']!.GET!(
+      authorizedRequest('/v1/history?offset=2&limit=4', credential.plaintext),
+    );
+    const inspected = await routes['/v1/history/:historyEntryId']!.GET!(
+      authorizedRequest('/v1/history/mint%3Amint-operation-1', credential.plaintext),
+    );
+    const listBody = (await listed.json()) as { items: unknown[]; offset: number; limit: number };
+    const detailBody = await inspected.json();
+
+    expect(listed.status).toBe(200);
+    expect(listBody).toEqual({
+      items: [
+        {
+          id: 'mint:mint-operation-1',
+          source: 'operation',
+          type: 'mint',
+          operationId: 'mint-operation-1',
+          quoteId: 'mint-quote-1',
+          state: 'finalized',
+          mintUrl: 'https://mint.example.com',
+          unit: 'sat',
+          amount: '9007199254740993',
+          createdAt: '2026-08-16T00:03:20.000Z',
+          updatedAt: '2026-08-16T00:04:20.000Z',
+        },
+        {
+          id: 'legacy:42',
+          source: 'legacy',
+          type: 'send',
+          operationId: 'legacy-operation-1',
+          state: 'pending',
+          mintUrl: 'https://mint.example.com',
+          unit: 'sat',
+          amount: '21',
+          createdAt: '2026-08-16T00:01:40.000Z',
+          updatedAt: '2026-08-16T00:01:40.000Z',
+        },
+        {
+          id: 'melt:melt-operation-1',
+          source: 'operation',
+          type: 'melt',
+          operationId: 'melt-operation-1',
+          quoteId: 'melt-quote-1',
+          state: 'pending',
+          mintUrl: 'https://mint.example.com',
+          unit: 'sat',
+          amount: '13',
+          createdAt: '2026-08-16T00:00:00.000Z',
+          updatedAt: '2026-08-16T00:01:00.000Z',
+        },
+        {
+          id: 'receive:receive-operation-1',
+          source: 'operation',
+          type: 'receive',
+          operationId: 'receive-operation-1',
+          state: 'finalized',
+          mintUrl: 'https://mint.example.com',
+          unit: 'sat',
+          amount: '8',
+          createdAt: '2026-08-15T23:58:20.000Z',
+          updatedAt: '2026-08-15T23:59:20.000Z',
+        },
+      ],
+      offset: 2,
+      limit: 4,
+    });
+    expect(detailBody).toEqual(listBody.items[0]);
+    expect(JSON.stringify([listBody, detailBody])).not.toContain('must-not-leak');
+    expect(getPaginatedHistory).toHaveBeenCalledWith(2, 4);
+    expect(getHistoryEntryById).toHaveBeenCalledWith('mint:mint-operation-1');
+  });
+
+  test('validates history requests before Coco and safely maps lookup failures', async () => {
+    const credential = await createCredential();
+    const getPaginatedHistory = mock(async () => {
+      throw new Error('repository diagnostic must-not-leak');
+    });
+    const getHistoryEntryById = mock(async (id: string) => {
+      if (id === 'send:missing') return null;
+      throw new Error('repository diagnostic must-not-leak');
+    });
+    const routes = createWalletTestRoutes(
+      { history: { getPaginatedHistory, getHistoryEntryById } },
+      credential.credentials,
+    );
+
+    const unauthenticated = await routes['/v1/history']!.GET!(
+      new Request('http://localhost/v1/history'),
+    );
+    const malformedPage = await routes['/v1/history']!.GET!(
+      authorizedRequest('/v1/history?offset=0&limit=101', credential.plaintext),
+    );
+    const unknownFilter = await routes['/v1/history']!.GET!(
+      authorizedRequest('/v1/history?type=mint', credential.plaintext),
+    );
+    const malformedId = await routes['/v1/history/:historyEntryId']!.GET!(
+      authorizedRequest('/v1/history/not-an-id', credential.plaintext),
+    );
+    const missing = await routes['/v1/history/:historyEntryId']!.GET!(
+      authorizedRequest('/v1/history/send%3Amissing', credential.plaintext),
+    );
+    const listFailure = await routes['/v1/history']!.GET!(
+      authorizedRequest('/v1/history', credential.plaintext),
+    );
+    const detailFailure = await routes['/v1/history/:historyEntryId']!.GET!(
+      authorizedRequest('/v1/history/send%3Afailure', credential.plaintext),
+    );
+
+    expect(unauthenticated.status).toBe(401);
+    expect(await unauthenticated.json()).toMatchObject({ error: { code: 'unauthenticated' } });
+    for (const response of [malformedPage, unknownFilter, malformedId]) {
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error: { code: 'invalid_request' } });
+    }
+    expect(missing.status).toBe(404);
+    expect(await missing.json()).toMatchObject({ error: { code: 'not_found' } });
+    expect(listFailure.status).toBe(500);
+    expect(detailFailure.status).toBe(500);
+    const failureBodies = [await listFailure.json(), await detailFailure.json()];
+    expect(failureBodies).toEqual([
+      {
+        error: {
+          code: 'coco_error',
+          message: 'Coco could not list Wallet history',
+          retryable: false,
+        },
+      },
+      {
+        error: {
+          code: 'coco_error',
+          message: 'Coco could not return the Wallet history entry',
+          retryable: false,
+        },
+      },
+    ]);
+    expect(JSON.stringify(failureBodies)).not.toContain('must-not-leak');
+    expect(getPaginatedHistory).toHaveBeenCalledTimes(1);
+    expect(getPaginatedHistory).toHaveBeenCalledWith(0, 20);
+    expect(getHistoryEntryById).toHaveBeenCalledTimes(2);
+  });
+
   test('evaluates an outgoing Payment Request as a safe non-durable document', async () => {
     const credential = await createCredential();
     const parse = mock(async () => ({
@@ -2960,6 +3176,26 @@ describe('v1 HTTP route interface', () => {
         capability: 'wallet:read',
         requestSchema: 'NoBody',
         responseSchema: 'Balances',
+        successStatuses: [200],
+        idempotencyKey: null,
+        responseCacheControl: null,
+      },
+      {
+        method: 'GET',
+        path: '/v1/history',
+        capability: 'wallet:read',
+        requestSchema: 'NoBody',
+        responseSchema: 'HistoryPage',
+        successStatuses: [200],
+        idempotencyKey: null,
+        responseCacheControl: null,
+      },
+      {
+        method: 'GET',
+        path: '/v1/history/{historyEntryId}',
+        capability: 'wallet:read',
+        requestSchema: 'NoBody',
+        responseSchema: 'History',
         successStatuses: [200],
         idempotencyKey: null,
         responseCacheControl: null,

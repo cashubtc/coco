@@ -118,6 +118,32 @@ export interface BalancesDocument {
   items: BalanceDocument[];
 }
 
+interface HistoryDocumentBase {
+  id: string;
+  source: 'operation' | 'legacy';
+  operationId?: string;
+  state: string;
+  mintUrl: string;
+  unit: string;
+  amount: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Explicit safe projection of one Coco history entry. */
+export type HistoryDocument =
+  | (HistoryDocumentBase & { type: 'mint'; quoteId: string })
+  | (HistoryDocumentBase & { type: 'melt'; quoteId: string })
+  | (HistoryDocumentBase & { type: 'send' })
+  | (HistoryDocumentBase & { type: 'receive' });
+
+/** Offset-paginated safe Wallet history. */
+export interface HistoryPageDocument {
+  items: HistoryDocument[];
+  offset: number;
+  limit: number;
+}
+
 /** Body used by Known Mint registration and trust commands. */
 export interface MintUrlRequest {
   mintUrl: string;
@@ -659,6 +685,44 @@ export const balancesSchema = namedSchema<BalancesDocument>(
         total: decimalAmountNode,
       }),
     ),
+  }),
+);
+
+const historyBaseFields = {
+  id: stringNode({ pattern: '\\S' }),
+  source: enumNode(['operation', 'legacy']),
+  operationId: stringNode({ pattern: '\\S' }),
+  state: stringNode({ pattern: '\\S' }),
+  mintUrl: stringNode({ pattern: '\\S' }),
+  unit: stringNode({ pattern: '\\S' }),
+  amount: decimalAmountNode,
+  createdAt: rfc3339UtcSchema,
+  updatedAt: rfc3339UtcSchema,
+};
+
+const historyDocumentNode = unionNode([
+  objectNode(
+    { ...historyBaseFields, type: literalNode('mint'), quoteId: stringNode({ pattern: '\\S' }) },
+    { optional: ['operationId'] },
+  ),
+  objectNode(
+    { ...historyBaseFields, type: literalNode('melt'), quoteId: stringNode({ pattern: '\\S' }) },
+    { optional: ['operationId'] },
+  ),
+  objectNode({ ...historyBaseFields, type: literalNode('send') }, { optional: ['operationId'] }),
+  objectNode({ ...historyBaseFields, type: literalNode('receive') }, { optional: ['operationId'] }),
+]);
+
+/** Runtime and generated schema for one safe Wallet history entry. */
+export const historySchema = namedSchema<HistoryDocument>('History', historyDocumentNode);
+
+/** Runtime and generated schema for offset-paginated safe Wallet history. */
+export const historyPageSchema = namedSchema<HistoryPageDocument>(
+  'HistoryPage',
+  objectNode({
+    items: arrayNode(historyDocumentNode),
+    offset: integerNode({ minimum: 0 }),
+    limit: integerNode({ minimum: 1, maximum: 100 }),
   }),
 );
 

@@ -681,6 +681,78 @@ test('serves the Quote-to-Melt-Operation flow with recoverable settlement result
   expect(await resultResponse.json()).toEqual({ preimage: 'network-preimage' });
 });
 
+test('serves safe paginated history list and detail resources across TCP', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'cocod-v1-history-listener-'));
+  directories.push(directory);
+  const credentialDirectory = join(directory, 'credentials');
+  const credentials = await AdministrativeCredential.loadOrBootstrap({ credentialDirectory });
+  const plaintext = await loadClientCredential(join(credentialDirectory, 'current', 'client'));
+  const entry = {
+    id: 'send:send-operation-network',
+    source: 'operation' as const,
+    type: 'send' as const,
+    operationId: 'send-operation-network',
+    state: 'pending' as const,
+    mintUrl: 'https://mint.example.com/',
+    unit: 'sat',
+    amount: toAmount(25),
+    createdAt: 1_786_838_400_000,
+    updatedAt: 1_786_838_460_000,
+    token: {
+      mint: 'https://mint.example.com',
+      proofs: [{ secret: 'must-not-cross-the-network', C: 'point', amount: 25, id: 'keyset' }],
+    },
+    metadata: { private: 'must-not-cross-the-network' },
+    error: 'must-not-cross-the-network',
+  };
+  const getPaginatedHistory = mock(async () => [entry]);
+  const getHistoryEntryById = mock(async () => entry);
+  const runtime = {
+    getStatus: () => ({
+      wallet: { configuredAt: '2026-08-16T00:00:00.000Z', mintUrl: entry.mintUrl },
+      seedAccess: { state: 'available' as const, requiresPassphrase: false },
+      cocoSession: {
+        state: 'running' as const,
+        startedAt: '2026-08-16T00:00:00.000Z',
+        lastFailure: null,
+      },
+    }),
+    getRunningSession: () => ({
+      mintUrl: entry.mintUrl,
+      manager: { history: { getPaginatedHistory, getHistoryEntryById } },
+    }),
+  } as unknown as V1Runtime;
+
+  server = startTcpTestServer({
+    routes: buildV1Routes(createLifecycleTestRouteDefinitions(runtime, '0.0.17'), credentials),
+    fetch: buildV1FallbackHandler(credentials, async () => new Response(null, { status: 404 })),
+  });
+
+  const listed = await tcpFetch(server, '/v1/history?offset=3&limit=1', plaintext);
+  const detail = await tcpFetch(server, '/v1/history/send%3Asend-operation-network', plaintext);
+  const listBody = await listed.json();
+  const detailBody = await detail.json();
+
+  expect(listed.status).toBe(200);
+  expect(detail.status).toBe(200);
+  expect(listBody).toEqual({ items: [detailBody], offset: 3, limit: 1 });
+  expect(detailBody).toEqual({
+    id: entry.id,
+    source: 'operation',
+    type: 'send',
+    operationId: entry.operationId,
+    state: 'pending',
+    mintUrl: 'https://mint.example.com',
+    unit: 'sat',
+    amount: '25',
+    createdAt: '2026-08-16T00:00:00.000Z',
+    updatedAt: '2026-08-16T00:01:00.000Z',
+  });
+  expect(JSON.stringify([listBody, detailBody])).not.toContain('must-not-cross-the-network');
+  expect(getPaginatedHistory).toHaveBeenCalledWith(3, 1);
+  expect(getHistoryEntryById).toHaveBeenCalledWith(entry.id);
+});
+
 test('commits accepted process shutdown before graceful listener closure completes', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'cocod-v1-process-stop-'));
   directories.push(directory);

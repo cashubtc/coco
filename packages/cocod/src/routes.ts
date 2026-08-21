@@ -73,31 +73,6 @@ export function createRouteHandlers(runtime: CocodRuntime): Record<string, Route
       }),
     },
 
-    '/history': {
-      capability: 'wallet:read',
-      GET: requireRunning(runtime, async (req, state: RunningCocoSession) => {
-        const url = new URL(req.url);
-        const offsetParam = url.searchParams.get('offset');
-        const limitParam = url.searchParams.get('limit');
-
-        const offset = offsetParam ? parseInt(offsetParam, 10) : 0;
-        const limit = limitParam ? parseInt(limitParam, 10) : 20;
-
-        if (isNaN(offset) || offset < 0) {
-          return Response.json({ error: 'Invalid offset parameter' }, { status: 400 });
-        }
-
-        if (isNaN(limit) || limit < 1 || limit > 100) {
-          return Response.json(
-            { error: 'Invalid limit parameter (must be 1-100)' },
-            { status: 400 },
-          );
-        }
-
-        const entries = await state.manager.history.getPaginatedHistory(offset, limit);
-        return Response.json({ output: entries });
-      }),
-    },
     '/events': {
       capability: 'wallet:read',
       GET: requireRunning(runtime, async (req, state: RunningCocoSession) => {

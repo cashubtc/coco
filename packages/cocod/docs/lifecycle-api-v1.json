@@ -261,6 +261,314 @@
         }
       }
     },
+    "HistoryPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["items", "offset", "limit"],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "source",
+                  "state",
+                  "mintUrl",
+                  "unit",
+                  "amount",
+                  "createdAt",
+                  "updatedAt",
+                  "type",
+                  "quoteId"
+                ],
+                "properties": {
+                  "id": { "type": "string", "pattern": "\\S" },
+                  "source": { "enum": ["operation", "legacy"] },
+                  "operationId": { "type": "string", "pattern": "\\S" },
+                  "state": { "type": "string", "pattern": "\\S" },
+                  "mintUrl": { "type": "string", "pattern": "\\S" },
+                  "unit": { "type": "string", "pattern": "\\S" },
+                  "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                  "createdAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  },
+                  "updatedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  },
+                  "type": { "const": "mint" },
+                  "quoteId": { "type": "string", "pattern": "\\S" }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "source",
+                  "state",
+                  "mintUrl",
+                  "unit",
+                  "amount",
+                  "createdAt",
+                  "updatedAt",
+                  "type",
+                  "quoteId"
+                ],
+                "properties": {
+                  "id": { "type": "string", "pattern": "\\S" },
+                  "source": { "enum": ["operation", "legacy"] },
+                  "operationId": { "type": "string", "pattern": "\\S" },
+                  "state": { "type": "string", "pattern": "\\S" },
+                  "mintUrl": { "type": "string", "pattern": "\\S" },
+                  "unit": { "type": "string", "pattern": "\\S" },
+                  "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                  "createdAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  },
+                  "updatedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  },
+                  "type": { "const": "melt" },
+                  "quoteId": { "type": "string", "pattern": "\\S" }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "source",
+                  "state",
+                  "mintUrl",
+                  "unit",
+                  "amount",
+                  "createdAt",
+                  "updatedAt",
+                  "type"
+                ],
+                "properties": {
+                  "id": { "type": "string", "pattern": "\\S" },
+                  "source": { "enum": ["operation", "legacy"] },
+                  "operationId": { "type": "string", "pattern": "\\S" },
+                  "state": { "type": "string", "pattern": "\\S" },
+                  "mintUrl": { "type": "string", "pattern": "\\S" },
+                  "unit": { "type": "string", "pattern": "\\S" },
+                  "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                  "createdAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  },
+                  "updatedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  },
+                  "type": { "const": "send" }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "source",
+                  "state",
+                  "mintUrl",
+                  "unit",
+                  "amount",
+                  "createdAt",
+                  "updatedAt",
+                  "type"
+                ],
+                "properties": {
+                  "id": { "type": "string", "pattern": "\\S" },
+                  "source": { "enum": ["operation", "legacy"] },
+                  "operationId": { "type": "string", "pattern": "\\S" },
+                  "state": { "type": "string", "pattern": "\\S" },
+                  "mintUrl": { "type": "string", "pattern": "\\S" },
+                  "unit": { "type": "string", "pattern": "\\S" },
+                  "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                  "createdAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  },
+                  "updatedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  },
+                  "type": { "const": "receive" }
+                }
+              }
+            ]
+          }
+        },
+        "offset": { "type": "integer", "minimum": 0 },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 100 }
+      }
+    },
+    "History": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "source",
+            "state",
+            "mintUrl",
+            "unit",
+            "amount",
+            "createdAt",
+            "updatedAt",
+            "type",
+            "quoteId"
+          ],
+          "properties": {
+            "id": { "type": "string", "pattern": "\\S" },
+            "source": { "enum": ["operation", "legacy"] },
+            "operationId": { "type": "string", "pattern": "\\S" },
+            "state": { "type": "string", "pattern": "\\S" },
+            "mintUrl": { "type": "string", "pattern": "\\S" },
+            "unit": { "type": "string", "pattern": "\\S" },
+            "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+            "createdAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            },
+            "updatedAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            },
+            "type": { "const": "mint" },
+            "quoteId": { "type": "string", "pattern": "\\S" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "source",
+            "state",
+            "mintUrl",
+            "unit",
+            "amount",
+            "createdAt",
+            "updatedAt",
+            "type",
+            "quoteId"
+          ],
+          "properties": {
+            "id": { "type": "string", "pattern": "\\S" },
+            "source": { "enum": ["operation", "legacy"] },
+            "operationId": { "type": "string", "pattern": "\\S" },
+            "state": { "type": "string", "pattern": "\\S" },
+            "mintUrl": { "type": "string", "pattern": "\\S" },
+            "unit": { "type": "string", "pattern": "\\S" },
+            "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+            "createdAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            },
+            "updatedAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            },
+            "type": { "const": "melt" },
+            "quoteId": { "type": "string", "pattern": "\\S" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "source",
+            "state",
+            "mintUrl",
+            "unit",
+            "amount",
+            "createdAt",
+            "updatedAt",
+            "type"
+          ],
+          "properties": {
+            "id": { "type": "string", "pattern": "\\S" },
+            "source": { "enum": ["operation", "legacy"] },
+            "operationId": { "type": "string", "pattern": "\\S" },
+            "state": { "type": "string", "pattern": "\\S" },
+            "mintUrl": { "type": "string", "pattern": "\\S" },
+            "unit": { "type": "string", "pattern": "\\S" },
+            "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+            "createdAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            },
+            "updatedAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            },
+            "type": { "const": "send" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "source",
+            "state",
+            "mintUrl",
+            "unit",
+            "amount",
+            "createdAt",
+            "updatedAt",
+            "type"
+          ],
+          "properties": {
+            "id": { "type": "string", "pattern": "\\S" },
+            "source": { "enum": ["operation", "legacy"] },
+            "operationId": { "type": "string", "pattern": "\\S" },
+            "state": { "type": "string", "pattern": "\\S" },
+            "mintUrl": { "type": "string", "pattern": "\\S" },
+            "unit": { "type": "string", "pattern": "\\S" },
+            "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+            "createdAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            },
+            "updatedAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            },
+            "type": { "const": "receive" }
+          }
+        }
+      ]
+    },
     "KnownMints": {
       "type": "object",
       "additionalProperties": false,
@@ -2323,6 +2631,28 @@
       "capability": "wallet:read",
       "requestSchema": null,
       "responseSchema": "Balances",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": null,
+      "responseCacheControl": null
+    },
+    {
+      "method": "GET",
+      "path": "/v1/history",
+      "capability": "wallet:read",
+      "requestSchema": null,
+      "responseSchema": "HistoryPage",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": null,
+      "responseCacheControl": null
+    },
+    {
+      "method": "GET",
+      "path": "/v1/history/{historyEntryId}",
+      "capability": "wallet:read",
+      "requestSchema": null,
+      "responseSchema": "History",
       "errorSchema": "Error",
       "successStatuses": [200],
       "idempotencyKey": null,

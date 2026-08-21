@@ -114,6 +114,8 @@ no-store`, `Retry-After`, `WWW-Authenticate`, `X-Request-ID`, and `Allow`. These
 - `POST /v1/admin/session/stop`
 - `POST /v1/admin/process/stop`
 - `GET /v1/balances`
+- `GET /v1/history?offset={offset}&limit={limit}`
+- `GET /v1/history/{historyEntryId}`
 - `GET /v1/mints`
 - `POST /v1/mints`
 - `GET /v1/mints/info?mintUrl={mintUrl}`
@@ -162,7 +164,6 @@ no-store`, `Retry-After`, `WWW-Authenticate`, `X-Request-ID`, and `Allow`. These
 - `GET /v1/operations/receive/{operationId}/result`
 - `POST /v1/operations/receive/{operationId}/cancel`
 - `POST /v1/operations/receive/{operationId}/refresh`
-- `GET /history`
 - `GET /events` (SSE stream)
 - `GET /npc/address`
 - `POST /npc/username`
