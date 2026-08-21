@@ -3,17 +3,20 @@ import { v1ErrorSchema, type RuntimeSchema } from './schema.js';
 
 type JsonSchema = Readonly<Record<string, unknown>>;
 
+/** One OpenAPI response or request-body media type backed by a runtime schema. */
 export interface OpenApiMediaType {
   schema: JsonSchema;
   'x-sse-event-schema'?: { $ref: string };
 }
 
+/** OpenAPI response metadata emitted for one v1 status code. */
 export interface OpenApiResponse {
   description: string;
   headers?: Record<string, { schema: JsonSchema }>;
   content?: Record<string, OpenApiMediaType>;
 }
 
+/** OpenAPI operation generated from one implemented v1 route. */
 export interface OpenApiOperation {
   operationId: string;
   security: Array<{ bearerAuth: never[] }>;
@@ -26,6 +29,7 @@ export interface OpenApiOperation {
   responses: Record<string, OpenApiResponse>;
 }
 
+/** Complete OpenAPI 3.1 document generated for cocod's implemented v1 surface. */
 export interface V1OpenApiDocument {
   openapi: '3.1.0';
   jsonSchemaDialect: 'https://json-schema.org/draft/2020-12/schema';

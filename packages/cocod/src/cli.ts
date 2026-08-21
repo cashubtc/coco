@@ -127,7 +127,7 @@ receiveCmd
 receiveCmd
   .command('bolt11 <amount>')
   .description('Create Lightning invoice to receive tokens')
-  .option('--mint-url <url>', 'Mint URL to use (defaults to the first trusted Mint)')
+  .option('--mint-url <url>', 'Mint URL to use (defaults to the configured Mint)')
   .action(async (amount: string, options: { mintUrl?: string }) => {
     const invoice = await handleWalletV1Command((client) =>
       prepareBolt11Receive(client, { amount, mintUrl: options.mintUrl }),
@@ -152,7 +152,7 @@ sendCmd
 sendCmd
   .command('bolt11 <invoice>')
   .description('Pay Lightning invoice')
-  .option('--mint-url <url>', 'Mint URL to use (defaults to the first trusted Mint)')
+  .option('--mint-url <url>', 'Mint URL to use (defaults to the configured Mint)')
   .action(async (invoice: string, options: { mintUrl?: string }) => {
     const output = await handleWalletV1Command((client) =>
       prepareAndExecuteBolt11Send(client, { invoice, mintUrl: options.mintUrl }),

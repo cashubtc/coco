@@ -251,7 +251,8 @@ invalidates every copied credential.
 - Cocod does not terminate TLS in v1. Remote deployments MUST use a trusted TLS proxy such as Caddy.
 - A TLS proxy supplies transport security only. Cocod MUST ignore forwarded client-identity headers
   and authenticate the Client Credential itself.
-- `GET /health` MUST NOT require a Client Credential and MUST NOT reveal Wallet state.
+- `GET /health` MUST NOT require a Client Credential and MUST NOT reveal Wallet configuration or
+  Wallet Seed Access.
 - Every `/v1/*` request MUST be authenticated.
 - Lifecycle mutation requires a client credential with the `wallet:admin` capability.
 - Lifecycle status requires at least the `wallet:read` capability.
@@ -525,6 +526,11 @@ amounts are decimal strings. Mint documents expose canonical `amountPaid` and `a
 BOLT11 Mint documents also expose their fixed amount and state. Melt documents expose either a
 single `feeReserve` or on-chain `feeOptions`. Quote documents omit owned public keys, payment
 preimages, outpoints, blinded change, and any additional Coco model fields.
+
+BOLT11 Quote creation accepts an optional `mintUrl`. When omitted, cocod uses the Wallet's
+configured default Mint. Clients MUST carry the normalized `mintUrl` from the returned Quote
+document into subsequent Quote identity and Operation preparation requests rather than inferring
+it from Known Mint collection ordering.
 
 ### Operation resources
 
@@ -873,7 +879,8 @@ Behavior:
 - When a passphrase is configured, cocod validates it and acquires Wallet Seed Access before
   accepting the transition. Otherwise no unlocking material is required.
 - A valid request transitions the session to `starting` and returns `202 Accepted` with status.
-- Clients observe completion through `GET /v1/status` or the event stream.
+- Clients observe completion by polling `GET /v1/status`; the running-session event stream does not
+  carry Coco Session lifecycle transitions.
 - Calling start while the session is `running` is idempotent and returns `200 OK` with status.
 - Calling start while the session is `starting` returns `202 Accepted` with status.
 - Calling start while the session is `stopping` returns `session_transition_in_progress`.

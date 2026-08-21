@@ -1915,7 +1915,7 @@ describe('v1 HTTP route interface', () => {
     expect(debug).toHaveBeenCalledWith('request.received', { input: { token: '[REDACTED]' } });
   });
 
-  test('creates a BOLT11 Mint Quote without preparing an Operation', async () => {
+  test('creates a BOLT11 Mint Quote with the configured default Mint', async () => {
     const credential = await createCredential();
     const quote = mintQuoteFixture({
       blindedSignatures: [{ C_: 'must-not-leak' }],
@@ -1925,7 +1925,6 @@ describe('v1 HTTP route interface', () => {
 
     const response = await routes['/v1/quotes/mint']!.POST!(
       authorizedJsonRequest('/v1/quotes/mint', credential.plaintext, {
-        mintUrl: 'https://mint.example.com/',
         method: 'bolt11',
         amount: '25',
         unit: 'sat',
@@ -2079,7 +2078,7 @@ describe('v1 HTTP route interface', () => {
     });
   });
 
-  test('creates a BOLT11 Melt Quote without exposing settlement or blinded fields', async () => {
+  test('creates a BOLT11 Melt Quote with the configured default Mint', async () => {
     const credential = await createCredential();
     const quote = meltQuoteFixture({
       payment_preimage: 'must-not-leak',
@@ -2092,7 +2091,6 @@ describe('v1 HTTP route interface', () => {
 
     const response = await routes['/v1/quotes/melt']!.POST!(
       authorizedJsonRequest('/v1/quotes/melt', credential.plaintext, {
-        mintUrl: 'https://mint.example.com/',
         method: 'bolt11',
         invoice: 'lnbc250n1pay',
         amount: '25',
@@ -4821,7 +4819,7 @@ function receiveOperationFixture(overrides: Record<string, unknown> = {}) {
 function createWalletTestRoutes(manager: unknown, credential: AdministrativeCredential) {
   const runtime = {
     ...lifecycleRuntime(() => configuredStatus('running')),
-    getRunningSession: () => ({ manager }),
+    getRunningSession: () => ({ manager, mintUrl: 'https://mint.example.com' }),
   } as unknown as V1Runtime;
   return buildV1Routes(createLifecycleTestRouteDefinitions(runtime, '0.0.17'), credential);
 }

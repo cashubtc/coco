@@ -68,7 +68,7 @@ test('Cashu-receive CLI flow prepares and executes through v1 while reporting th
   ]);
 });
 
-test('Lightning-receive CLI flow creates a Quote and prepares a pending Mint Operation', async () => {
+test('Lightning-receive CLI preserves the configured default Mint across Quote preparation', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'cocod-mint-cli-'));
   directories.push(directory);
   const credentialFile = join(directory, 'client');
@@ -86,7 +86,7 @@ test('Lightning-receive CLI flow creates a Quote and prepares a pending Mint Ope
         {
           type: 'mint',
           method: 'bolt11',
-          mintUrl: 'https://mint.example.com',
+          mintUrl: 'https://configured.example.com',
           quoteId: 'mint-quote-cli',
           request: 'lnbc250n1cli-invoice',
           unit: 'sat',
@@ -107,11 +107,11 @@ test('Lightning-receive CLI flow creates a Quote and prepares a pending Mint Ope
         id: 'mint-operation-cli',
         type: 'mint',
         state: 'pending',
-        mintUrl: 'https://mint.example.com',
+        mintUrl: 'https://configured.example.com',
         unit: 'sat',
         method: 'bolt11',
         amount: '25',
-        quote: { mintUrl: 'https://mint.example.com', quoteId: 'mint-quote-cli' },
+        quote: { mintUrl: 'https://configured.example.com', quoteId: 'mint-quote-cli' },
         expiry: '2026-08-16T00:05:00.000Z',
         createdAt: '2026-08-16T00:00:00.000Z',
         updatedAt: '2026-08-16T00:01:00.000Z',
@@ -123,7 +123,6 @@ test('Lightning-receive CLI flow creates a Quote and prepares a pending Mint Ope
 
   const invoice = await prepareBolt11Receive(client, {
     amount: '25',
-    mintUrl: 'https://mint.example.com',
   });
 
   expect(invoice).toBe('lnbc250n1cli-invoice');
@@ -132,7 +131,6 @@ test('Lightning-receive CLI flow creates a Quote and prepares a pending Mint Ope
       path: '/v1/quotes/mint',
       method: 'POST',
       body: {
-        mintUrl: 'https://mint.example.com',
         method: 'bolt11',
         amount: '25',
         unit: 'sat',
@@ -142,7 +140,7 @@ test('Lightning-receive CLI flow creates a Quote and prepares a pending Mint Ope
       path: '/v1/operations/mint',
       method: 'POST',
       body: {
-        mintUrl: 'https://mint.example.com',
+        mintUrl: 'https://configured.example.com',
         quoteId: 'mint-quote-cli',
         amount: '25',
       },

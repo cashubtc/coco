@@ -29,14 +29,14 @@ Use the implicit `http://127.0.0.1:62626` endpoint for local auto-start. The glo
 
 - `receive cashu <token>` - Receive a Cashu token
 - `receive bolt11 <amount>` - Create a Lightning invoice
-  - `--mint-url <url>` choose a trusted Mint; otherwise the first trusted Mint is used
+  - `--mint-url <url>` overrides the Wallet's configured default Mint
 
 ### Send
 
 - `send cashu <amount>` - Create a Cashu token to send
   - `--mint-url <url>` override default mint
 - `send bolt11 <invoice>` - Pay a Lightning invoice
-  - `--mint-url <url>` choose a trusted Mint; otherwise the first trusted Mint is used
+  - `--mint-url <url>` overrides the Wallet's configured default Mint
 
 ### Mints
 
@@ -101,7 +101,7 @@ browser CORS.
   or add lookup routes solely for resource discovery.
 - Responses use ordinary protocol headers where applicable: `Content-Type`, `Cache-Control:
 no-store`, `Retry-After`, `WWW-Authenticate`, `X-Request-ID`, and `Allow`. These headers do not
-  carry Wallet state or resource identity.
+  carry Wallet configuration, Wallet Seed Access, or resource identity.
 - Cocod does not use cookies, CORS, forwarded identity headers, `ETag`, or `Last-Event-ID`.
 
 ### Endpoint list
@@ -186,15 +186,18 @@ namespace, normalized `mintUrl`, and Coco `quoteId`. Reconciliation commands hav
 
 Mint Quote creation bodies use one of these method-specific shapes:
 
-- `bolt11`: `{ mintUrl, method, amount, unit, locked? }`
+- `bolt11`: `{ mintUrl?, method, amount, unit, locked? }`
 - `bolt12`: `{ mintUrl, method, unit, amount?, description? }`
 - `onchain`: `{ mintUrl, method, unit }`
 
 Melt Quote creation bodies use one of these shapes:
 
-- `bolt11`: `{ mintUrl, method, invoice, amount?, unit? }`
+- `bolt11`: `{ mintUrl?, method, invoice, amount?, unit? }`
 - `bolt12`: `{ mintUrl, method, offer, amount?, unit? }`
 - `onchain`: `{ mintUrl, method, address, amount, unit? }`
+
+When BOLT11 Quote creation omits `mintUrl`, cocod uses the Wallet's configured default Mint. Clients
+use the normalized `mintUrl` returned by the Quote document for later Quote and Operation requests.
 
 Every amount is a lossless decimal string. Ordinary Quote documents contain explicit safe fields
 only. They omit public-key derivation data, payment preimages, outpoints, blinded signatures,
@@ -264,8 +267,9 @@ payments can return `{ outpoint }`. The authenticated `/result` resource recover
 from Coco-owned Operation state. Execute and result responses use `Cache-Control: no-store`, and an
 unavailable result returns `409 Conflict` with `operation_result_not_available`.
 
-The human `send bolt11` command preserves its one-shot behavior by creating a Melt Quote, preparing
-a Melt Operation, and executing it through these v1 resources.
+The human `send bolt11` command creates a Melt Quote, prepares a Melt Operation, and executes it
+through these v1 resources. It reports payment only for a finalized Operation and otherwise reports
+that settlement remains pending and recoverable.
 
 ### Send Operation resources
 

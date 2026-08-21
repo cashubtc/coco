@@ -42,6 +42,7 @@ export type KeyRingDerivationContractOptions<TRepositories extends Repositories 
   }>;
 };
 
+/** Registers the shared creation, trust-preservation, and typed-absence Mint repository contract. */
 export function runMintRepositoryContract(options: ContractOptions, runner: ContractRunner): void {
   const { describe, it, expect } = runner;
 

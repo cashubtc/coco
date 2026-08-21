@@ -48,7 +48,7 @@ export interface V1ErrorDocument {
   };
 }
 
-/** Public process-liveness document that contains no Wallet state. */
+/** Public process-liveness document that reveals no Wallet configuration or Wallet Seed Access. */
 export interface HealthDocument {
   status: 'ok';
   interfaceVersion: '1';
@@ -241,7 +241,7 @@ export interface PaymentRequestEvaluationDocument {
 /** Method-specific Mint Quote creation input with lossless decimal amounts. */
 export type CreateMintQuoteRequest =
   | {
-      mintUrl: string;
+      mintUrl?: string;
       method: 'bolt11';
       amount: string;
       unit: string;
@@ -295,7 +295,7 @@ export interface PendingMintQuotesDocument {
 /** Method-specific Melt Quote creation input with lossless decimal amounts. */
 export type CreateMeltQuoteRequest =
   | {
-      mintUrl: string;
+      mintUrl?: string;
       method: 'bolt11';
       invoice: string;
       amount?: string;
@@ -917,7 +917,7 @@ export const createMintQuoteRequestSchema = namedSchema<CreateMintQuoteRequest>(
         unit: stringNode(),
         locked: booleanNode(),
       },
-      { optional: ['locked'] },
+      { optional: ['mintUrl', 'locked'] },
     ),
     objectNode({
       mintUrl: stringNode(),
@@ -999,7 +999,7 @@ export const createMeltQuoteRequestSchema = namedSchema<CreateMeltQuoteRequest>(
         amount: decimalAmountNode,
         unit: stringNode(),
       },
-      { optional: ['amount', 'unit'] },
+      { optional: ['mintUrl', 'amount', 'unit'] },
     ),
     objectNode(
       {
@@ -1214,12 +1214,12 @@ export const executeMeltOperationResponseSchema = namedSchema<ExecuteMeltOperati
   objectNode({ operation: meltOperationNode, result: meltResultNode }, { optional: ['result'] }),
 );
 
-/** Runtime and generated schema for Cashu Send Operation preparation. */
 const paymentRequestSendSourceNode = objectNode({
   type: literalNode('payment-request'),
   request: stringNode({ pattern: '\\S', sensitive: true }),
 });
 
+/** Runtime and generated schema for Cashu Send Operation preparation. */
 export const createSendOperationRequestSchema = namedSchema<CreateSendOperationRequest>(
   'CreateSendOperationRequest',
   unionNode([

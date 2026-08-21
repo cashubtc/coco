@@ -3607,7 +3607,7 @@
           {
             "type": "object",
             "additionalProperties": false,
-            "required": ["mintUrl", "method", "amount", "unit"],
+            "required": ["method", "amount", "unit"],
             "properties": {
               "mintUrl": { "type": "string" },
               "method": { "const": "bolt11" },
@@ -3961,7 +3961,7 @@
           {
             "type": "object",
             "additionalProperties": false,
-            "required": ["mintUrl", "method", "invoice"],
+            "required": ["method", "invoice"],
             "properties": {
               "mintUrl": { "type": "string" },
               "method": { "const": "bolt11" },

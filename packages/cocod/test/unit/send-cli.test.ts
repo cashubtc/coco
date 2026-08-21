@@ -197,7 +197,7 @@ test('x-cashu handle CLI flow evaluates, prepares, and executes through v1', asy
   ]);
 });
 
-test('Lightning-send CLI flow creates a Quote, prepares a Melt Operation, and executes it', async () => {
+test('Lightning-send CLI preserves the configured default Mint across Quote execution', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'cocod-melt-cli-'));
   directories.push(directory);
   const credentialFile = join(directory, 'client');
@@ -216,7 +216,7 @@ test('Lightning-send CLI flow creates a Quote, prepares a Melt Operation, and ex
         {
           type: 'melt',
           method: 'bolt11',
-          mintUrl: 'https://mint.example.com',
+          mintUrl: 'https://configured.example.com',
           quoteId: 'melt-quote-cli',
           request: 'lnbc1cli',
           unit: 'sat',
@@ -233,12 +233,12 @@ test('Lightning-send CLI flow creates a Quote, prepares a Melt Operation, and ex
     const operation = {
       id: 'melt-operation-cli',
       type: 'melt' as const,
-      state: url.pathname.endsWith('/execute') ? ('pending' as const) : ('prepared' as const),
-      mintUrl: 'https://mint.example.com',
+      state: url.pathname.endsWith('/execute') ? ('finalized' as const) : ('prepared' as const),
+      mintUrl: 'https://configured.example.com',
       unit: 'sat',
       method: 'bolt11' as const,
       amount: '25',
-      quote: { mintUrl: 'https://mint.example.com', quoteId: 'melt-quote-cli' },
+      quote: { mintUrl: 'https://configured.example.com', quoteId: 'melt-quote-cli' },
       feeReserve: '2',
       swapFee: '0',
       inputAmount: '27',
@@ -255,7 +255,6 @@ test('Lightning-send CLI flow creates a Quote, prepares a Melt Operation, and ex
 
   const output = await prepareAndExecuteBolt11Send(client, {
     invoice: 'lnbc1cli',
-    mintUrl: 'https://mint.example.com',
   });
 
   expect(output).toBe('Paid invoice: lnbc1cli');
@@ -264,7 +263,6 @@ test('Lightning-send CLI flow creates a Quote, prepares a Melt Operation, and ex
       path: '/v1/quotes/melt',
       method: 'POST',
       body: {
-        mintUrl: 'https://mint.example.com',
         method: 'bolt11',
         invoice: 'lnbc1cli',
       },
@@ -272,11 +270,52 @@ test('Lightning-send CLI flow creates a Quote, prepares a Melt Operation, and ex
     {
       path: '/v1/operations/melt',
       method: 'POST',
-      body: { mintUrl: 'https://mint.example.com', quoteId: 'melt-quote-cli' },
+      body: { mintUrl: 'https://configured.example.com', quoteId: 'melt-quote-cli' },
     },
     {
       path: '/v1/operations/melt/melt-operation-cli/execute',
       method: 'POST',
     },
   ]);
+});
+
+test('Lightning-send CLI reports a recoverable pending Melt Operation without claiming payment', async () => {
+  const operation = {
+    id: 'melt-operation-pending',
+    type: 'melt' as const,
+    state: 'pending' as const,
+    mintUrl: 'https://configured.example.com',
+    unit: 'sat',
+    method: 'bolt11' as const,
+    amount: '25',
+    quote: { mintUrl: 'https://configured.example.com', quoteId: 'melt-quote-pending' },
+    feeReserve: '2',
+    swapFee: '0',
+    inputAmount: '27',
+    needsSwap: false,
+    createdAt: '2026-08-16T00:00:00.000Z',
+    updatedAt: '2026-08-16T00:01:00.000Z',
+  };
+  const client = {
+    createMeltQuote: mock(async () => ({
+      type: 'melt' as const,
+      method: 'bolt11' as const,
+      mintUrl: 'https://configured.example.com',
+      quoteId: 'melt-quote-pending',
+      request: 'lnbc1pending',
+      unit: 'sat',
+      amount: '25',
+      state: 'UNPAID' as const,
+      feeReserve: '2',
+      expiry: '2026-08-16T00:05:00.000Z',
+      createdAt: '2026-08-16T00:00:00.000Z',
+      updatedAt: '2026-08-16T00:01:00.000Z',
+    })),
+    prepareMelt: mock(async () => ({ ...operation, state: 'prepared' as const })),
+    executeMelt: mock(async () => ({ operation })),
+  } as unknown as Parameters<typeof prepareAndExecuteBolt11Send>[0];
+
+  const output = await prepareAndExecuteBolt11Send(client, { invoice: 'lnbc1pending' });
+
+  expect(output).toBe('Payment pending for invoice: lnbc1pending');
 });

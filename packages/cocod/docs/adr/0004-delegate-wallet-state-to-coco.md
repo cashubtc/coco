@@ -2,7 +2,7 @@
 status: accepted
 ---
 
-# Delegate Wallet state and lifecycle to Coco
+# Delegate Wallet resource lifecycles to Coco
 
 Cocod is an authenticated network and CLI interface over one Wallet hosted through Coco, not a
 second wallet framework. It delegates durable Mint, Quote, Operation, proof, history, recovery, and

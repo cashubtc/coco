@@ -26,8 +26,8 @@ When acting as an AGENT with this skill:
 - Always ask for explicit user permission before running any command/flow that can spend wallet funds, unless the user has already clearly instructed you to execute that spend action.
 - Prefer preview/inspection commands before execution whenever available. For example, run `cocod x-cashu parse <request>` to inspect costs and requirements before `cocod x-cashu handle <request>`.
 - Treat `~/.cocod` as sensitive. Never log, print, or expose its contents (including config,
-  credentials, mnemonic material, Wallet state, database files, and process metadata) unless the
-  user explicitly requests a specific safe subset.
+  credentials, mnemonic material, Wallet configuration, Wallet Seed Access data, database files,
+  and process metadata) unless the user explicitly requests a specific safe subset.
 - Always surface issues and errors encountered while using the CLI or this skill. Do not hide failures behind partial success messaging.
 - Do not manually work around CLI issues, missing behavior, or unexpected command failures without explicit user permission.
 

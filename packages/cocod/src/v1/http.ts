@@ -1147,7 +1147,10 @@ export function createV1RouteDefinitions(
     ...CREATE_MINT_QUOTE_ROUTE,
     handler: async (input) => {
       const session = requireRunningSession(runtime);
-      const mintUrl = parseMintUrl(input.mintUrl, 'The Mint URL is invalid');
+      const mintUrl =
+        input.mintUrl === undefined
+          ? session.mintUrl
+          : parseMintUrl(input.mintUrl, 'The Mint URL is invalid');
       try {
         const quote = await session.manager.quotes.mint.create(
           input.method === 'bolt11'
@@ -1194,7 +1197,10 @@ export function createV1RouteDefinitions(
     ...CREATE_MELT_QUOTE_ROUTE,
     handler: async (input) => {
       const session = requireRunningSession(runtime);
-      const mintUrl = parseMintUrl(input.mintUrl, 'The Mint URL is invalid');
+      const mintUrl =
+        input.mintUrl === undefined
+          ? session.mintUrl
+          : parseMintUrl(input.mintUrl, 'The Mint URL is invalid');
       try {
         const methodData =
           input.method === 'bolt11'

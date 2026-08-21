@@ -96,12 +96,14 @@ export interface SessionTransitionWaitOptions {
   pollIntervalMs?: number;
 }
 
+/** Optional filters accepted by the safe balance collection. */
 export interface BalanceFilters {
   mintUrls?: string[];
   units?: string[];
   trustedOnly?: boolean;
 }
 
+/** Optional filters accepted by the Known Mint collection. */
 export interface KnownMintFilters {
   trustedOnly?: boolean;
 }
@@ -393,9 +395,8 @@ export async function prepareBolt11Receive(
   client: V1Client,
   input: { amount: string; mintUrl?: string },
 ): Promise<string> {
-  const mintUrl = input.mintUrl ?? (await defaultTrustedMintUrl(client));
   const quote = await client.createMintQuote({
-    mintUrl,
+    ...(input.mintUrl !== undefined ? { mintUrl: input.mintUrl } : {}),
     method: 'bolt11',
     amount: input.amount,
     unit: 'sat',
@@ -466,9 +467,8 @@ export async function prepareAndExecuteBolt11Send(
   client: V1Client,
   input: { invoice: string; mintUrl?: string },
 ): Promise<string> {
-  const mintUrl = input.mintUrl ?? (await defaultTrustedMintUrl(client));
   const quote = await client.createMeltQuote({
-    mintUrl,
+    ...(input.mintUrl !== undefined ? { mintUrl: input.mintUrl } : {}),
     method: 'bolt11',
     invoice: input.invoice,
   });
@@ -476,8 +476,10 @@ export async function prepareAndExecuteBolt11Send(
     mintUrl: quote.mintUrl,
     quoteId: quote.quoteId,
   });
-  await client.executeMelt(operation.id);
-  return `Paid invoice: ${input.invoice}`;
+  const executed = await client.executeMelt(operation.id);
+  return executed.operation.state === 'finalized'
+    ? `Paid invoice: ${input.invoice}`
+    : `Payment pending for invoice: ${input.invoice}`;
 }
 
 /** Preserves the human one-shot Cashu-receive flow over the explicit v1 lifecycle. */
@@ -494,14 +496,6 @@ function mintListPath(filters: KnownMintFilters): string {
   return filters.trustedOnly === undefined
     ? '/v1/mints'
     : `/v1/mints?trustedOnly=${String(filters.trustedOnly)}`;
-}
-
-async function defaultTrustedMintUrl(client: V1Client): Promise<string> {
-  const mint = (await client.listMints({ trustedOnly: true })).items[0];
-  if (!mint) {
-    throw new Error('No trusted Mint is available; pass --mint-url or add a Mint first');
-  }
-  return mint.mintUrl;
 }
 
 function mintResourcePath(path: string, mintUrl: string): string {
