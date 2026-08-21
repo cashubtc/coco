@@ -1171,6 +1171,385 @@
       }
     },
     "Never": { "not": {} },
+    "MeltOperation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "type",
+            "mintUrl",
+            "unit",
+            "method",
+            "createdAt",
+            "updatedAt",
+            "state"
+          ],
+          "properties": {
+            "id": { "type": "string" },
+            "type": { "const": "melt" },
+            "mintUrl": { "type": "string" },
+            "unit": { "type": "string" },
+            "method": { "enum": ["bolt11", "bolt12", "onchain"] },
+            "createdAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            },
+            "updatedAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            },
+            "state": { "const": "init" },
+            "quote": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["mintUrl", "quoteId"],
+              "properties": { "mintUrl": { "type": "string" }, "quoteId": { "type": "string" } }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "type",
+            "mintUrl",
+            "unit",
+            "method",
+            "createdAt",
+            "updatedAt",
+            "state",
+            "amount",
+            "quote",
+            "feeReserve",
+            "swapFee",
+            "inputAmount",
+            "needsSwap"
+          ],
+          "properties": {
+            "id": { "type": "string" },
+            "type": { "const": "melt" },
+            "mintUrl": { "type": "string" },
+            "unit": { "type": "string" },
+            "method": { "enum": ["bolt11", "bolt12", "onchain"] },
+            "createdAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            },
+            "updatedAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            },
+            "state": {
+              "enum": [
+                "prepared",
+                "executing",
+                "pending",
+                "failed",
+                "finalized",
+                "rolling_back",
+                "rolled_back"
+              ]
+            },
+            "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+            "quote": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["mintUrl", "quoteId"],
+              "properties": { "mintUrl": { "type": "string" }, "quoteId": { "type": "string" } }
+            },
+            "feeReserve": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+            "swapFee": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+            "inputAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+            "needsSwap": { "type": "boolean" },
+            "feeIndex": { "type": "integer", "minimum": 0 },
+            "changeAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+            "effectiveFee": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" }
+          }
+        }
+      ]
+    },
+    "CreateMeltOperationRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mintUrl", "quoteId"],
+      "properties": {
+        "mintUrl": { "type": "string" },
+        "quoteId": { "type": "string", "pattern": "\\S" },
+        "feeIndex": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "MeltOperations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["items", "offset", "limit"],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "type",
+                  "mintUrl",
+                  "unit",
+                  "method",
+                  "createdAt",
+                  "updatedAt",
+                  "state"
+                ],
+                "properties": {
+                  "id": { "type": "string" },
+                  "type": { "const": "melt" },
+                  "mintUrl": { "type": "string" },
+                  "unit": { "type": "string" },
+                  "method": { "enum": ["bolt11", "bolt12", "onchain"] },
+                  "createdAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  },
+                  "updatedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  },
+                  "state": { "const": "init" },
+                  "quote": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["mintUrl", "quoteId"],
+                    "properties": {
+                      "mintUrl": { "type": "string" },
+                      "quoteId": { "type": "string" }
+                    }
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "type",
+                  "mintUrl",
+                  "unit",
+                  "method",
+                  "createdAt",
+                  "updatedAt",
+                  "state",
+                  "amount",
+                  "quote",
+                  "feeReserve",
+                  "swapFee",
+                  "inputAmount",
+                  "needsSwap"
+                ],
+                "properties": {
+                  "id": { "type": "string" },
+                  "type": { "const": "melt" },
+                  "mintUrl": { "type": "string" },
+                  "unit": { "type": "string" },
+                  "method": { "enum": ["bolt11", "bolt12", "onchain"] },
+                  "createdAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  },
+                  "updatedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  },
+                  "state": {
+                    "enum": [
+                      "prepared",
+                      "executing",
+                      "pending",
+                      "failed",
+                      "finalized",
+                      "rolling_back",
+                      "rolled_back"
+                    ]
+                  },
+                  "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                  "quote": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["mintUrl", "quoteId"],
+                    "properties": {
+                      "mintUrl": { "type": "string" },
+                      "quoteId": { "type": "string" }
+                    }
+                  },
+                  "feeReserve": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                  "swapFee": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                  "inputAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                  "needsSwap": { "type": "boolean" },
+                  "feeIndex": { "type": "integer", "minimum": 0 },
+                  "changeAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                  "effectiveFee": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" }
+                }
+              }
+            ]
+          }
+        },
+        "offset": { "type": "integer", "minimum": 0 },
+        "limit": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "ExecuteMeltOperationResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation"],
+      "properties": {
+        "operation": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "type",
+                "mintUrl",
+                "unit",
+                "method",
+                "createdAt",
+                "updatedAt",
+                "state"
+              ],
+              "properties": {
+                "id": { "type": "string" },
+                "type": { "const": "melt" },
+                "mintUrl": { "type": "string" },
+                "unit": { "type": "string" },
+                "method": { "enum": ["bolt11", "bolt12", "onchain"] },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                },
+                "updatedAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                },
+                "state": { "const": "init" },
+                "quote": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["mintUrl", "quoteId"],
+                  "properties": { "mintUrl": { "type": "string" }, "quoteId": { "type": "string" } }
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "type",
+                "mintUrl",
+                "unit",
+                "method",
+                "createdAt",
+                "updatedAt",
+                "state",
+                "amount",
+                "quote",
+                "feeReserve",
+                "swapFee",
+                "inputAmount",
+                "needsSwap"
+              ],
+              "properties": {
+                "id": { "type": "string" },
+                "type": { "const": "melt" },
+                "mintUrl": { "type": "string" },
+                "unit": { "type": "string" },
+                "method": { "enum": ["bolt11", "bolt12", "onchain"] },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                },
+                "updatedAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                },
+                "state": {
+                  "enum": [
+                    "prepared",
+                    "executing",
+                    "pending",
+                    "failed",
+                    "finalized",
+                    "rolling_back",
+                    "rolled_back"
+                  ]
+                },
+                "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                "quote": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["mintUrl", "quoteId"],
+                  "properties": { "mintUrl": { "type": "string" }, "quoteId": { "type": "string" } }
+                },
+                "feeReserve": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                "swapFee": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                "inputAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                "needsSwap": { "type": "boolean" },
+                "feeIndex": { "type": "integer", "minimum": 0 },
+                "changeAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                "effectiveFee": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" }
+              }
+            }
+          ]
+        },
+        "result": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["preimage"],
+              "properties": { "preimage": { "type": "string", "x-sensitive": true } }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["outpoint"],
+              "properties": { "outpoint": { "type": "string", "x-sensitive": true } }
+            }
+          ]
+        }
+      }
+    },
+    "MeltResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["preimage"],
+          "properties": { "preimage": { "type": "string", "x-sensitive": true } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["outpoint"],
+          "properties": { "outpoint": { "type": "string", "x-sensitive": true } }
+        }
+      ]
+    },
     "SendOperation": {
       "oneOf": [
         {
@@ -2076,6 +2455,105 @@
       "capability": "wallet:admin",
       "requestSchema": null,
       "responseSchema": "MintOperation",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": "optional",
+      "responseCacheControl": null
+    },
+    {
+      "method": "POST",
+      "path": "/v1/operations/melt",
+      "capability": "wallet:admin",
+      "requestSchema": "CreateMeltOperationRequest",
+      "responseSchema": "MeltOperation",
+      "errorSchema": "Error",
+      "successStatuses": [201],
+      "idempotencyKey": "optional",
+      "responseCacheControl": null
+    },
+    {
+      "method": "GET",
+      "path": "/v1/operations/melt/prepared",
+      "capability": "wallet:read",
+      "requestSchema": null,
+      "responseSchema": "MeltOperations",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": null,
+      "responseCacheControl": null
+    },
+    {
+      "method": "GET",
+      "path": "/v1/operations/melt/in-flight",
+      "capability": "wallet:read",
+      "requestSchema": null,
+      "responseSchema": "MeltOperations",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": null,
+      "responseCacheControl": null
+    },
+    {
+      "method": "GET",
+      "path": "/v1/operations/melt/{operationId}",
+      "capability": "wallet:read",
+      "requestSchema": null,
+      "responseSchema": "MeltOperation",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": null,
+      "responseCacheControl": null
+    },
+    {
+      "method": "POST",
+      "path": "/v1/operations/melt/{operationId}/execute",
+      "capability": "wallet:admin",
+      "requestSchema": null,
+      "responseSchema": "ExecuteMeltOperationResponse",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": "optional",
+      "responseCacheControl": "no-store"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/operations/melt/{operationId}/result",
+      "capability": "wallet:read",
+      "requestSchema": null,
+      "responseSchema": "MeltResult",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": null,
+      "responseCacheControl": "no-store"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/operations/melt/{operationId}/cancel",
+      "capability": "wallet:admin",
+      "requestSchema": null,
+      "responseSchema": "MeltOperation",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": "optional",
+      "responseCacheControl": null
+    },
+    {
+      "method": "POST",
+      "path": "/v1/operations/melt/{operationId}/refresh",
+      "capability": "wallet:admin",
+      "requestSchema": null,
+      "responseSchema": "MeltOperation",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": "optional",
+      "responseCacheControl": null
+    },
+    {
+      "method": "POST",
+      "path": "/v1/operations/melt/{operationId}/reclaim",
+      "capability": "wallet:admin",
+      "requestSchema": null,
+      "responseSchema": "MeltOperation",
       "errorSchema": "Error",
       "successStatuses": [200],
       "idempotencyKey": "optional",

@@ -179,8 +179,8 @@ describe('routes', () => {
       const runtime = uninitializedRuntime();
       const routes = buildRoutes(createRouteHandlers(runtime), runtime, credentials);
 
-      const response = await routes['/send/bolt11']!.POST!(
-        new Request('http://localhost/send/bolt11', {
+      const response = await routes['/x-cashu/handle']!.POST!(
+        new Request('http://localhost/x-cashu/handle', {
           method: 'POST',
           headers: { Authorization: `Bearer ${plaintext}` },
           body: '{}',
@@ -322,51 +322,6 @@ describe('routes', () => {
     expect(body.error).toContain('NUT-10');
     expect(body.error).toContain('HTLC');
     expect(prepareCalled).toBe(false);
-  });
-
-  test('/send/bolt11 creates a canonical melt quote and executes the prepared melt', async () => {
-    const createdQuote = { quoteId: 'q2' };
-    let createInput: unknown;
-    let prepareInput: unknown;
-    let executed = false;
-    const manager = {
-      quotes: {
-        melt: {
-          create: async (input: unknown) => {
-            createInput = input;
-            return createdQuote;
-          },
-        },
-      },
-      ops: {
-        melt: {
-          prepare: async (input: unknown) => {
-            prepareInput = input;
-            return { id: 'op1' };
-          },
-          execute: async () => {
-            executed = true;
-          },
-        },
-      },
-    };
-    const runtime = runningRuntime(manager);
-    const routes = createRouteHandlers(runtime);
-
-    const response = await routes['/send/bolt11']!.POST!(
-      postJson('/send/bolt11', { invoice: 'lnbc210n1fake' }),
-    );
-
-    const body = (await response.json()) as { output?: string };
-    expect(response.status).toBe(200);
-    expect(body.output).toBe('Paid invoice: lnbc210n1fake');
-    expect(createInput).toEqual({
-      mintUrl: 'https://mint.example.com',
-      method: 'bolt11',
-      methodData: { invoice: 'lnbc210n1fake' },
-    });
-    expect(prepareInput).toEqual({ quote: createdQuote });
-    expect(executed).toBe(true);
   });
 
   test('/x-cashu/handle settles an inband request into an X-Cashu header', async () => {

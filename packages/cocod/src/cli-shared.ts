@@ -5,9 +5,12 @@ import {
   balancesSchema,
   createMintOperationRequestSchema,
   createMintQuoteRequestSchema,
+  createMeltOperationRequestSchema,
+  createMeltQuoteRequestSchema,
   createReceiveOperationRequestSchema,
   createSendOperationRequestSchema,
   executeSendOperationResponseSchema,
+  executeMeltOperationResponseSchema,
   healthSchema,
   initializeWalletResponseSchema,
   knownMintSchema,
@@ -16,6 +19,8 @@ import {
   mintInformationSchema,
   mintOperationSchema,
   mintQuoteSchema,
+  meltOperationSchema,
+  meltQuoteSchema,
   paymentMethodCapabilitiesSchema,
   processShutdownResponseSchema,
   receiveOperationSchema,
@@ -25,9 +30,12 @@ import {
   type BalancesDocument,
   type CreateMintOperationRequest,
   type CreateMintQuoteRequest,
+  type CreateMeltOperationRequest,
+  type CreateMeltQuoteRequest,
   type CreateReceiveOperationRequest,
   type CreateSendOperationRequest,
   type ExecuteSendOperationResponseDocument,
+  type ExecuteMeltOperationResponseDocument,
   type HealthDocument,
   type InitializeWalletRequest,
   type InitializeWalletResponseDocument,
@@ -37,6 +45,8 @@ import {
   type MintInformationDocument,
   type MintOperationDocument,
   type MintQuoteDocument,
+  type MeltOperationDocument,
+  type MeltQuoteDocument,
   type PaymentMethodCapabilitiesDocument,
   type ProcessShutdownResponseDocument,
   type ReceiveOperationDocument,
@@ -99,7 +109,10 @@ export interface V1Client {
   untrustMint(mintUrl: string): Promise<KnownMintDocument>;
   listPaymentMethodCapabilities(mintUrl: string): Promise<PaymentMethodCapabilitiesDocument>;
   createMintQuote(input: CreateMintQuoteRequest): Promise<MintQuoteDocument>;
+  createMeltQuote(input: CreateMeltQuoteRequest): Promise<MeltQuoteDocument>;
   prepareMint(input: CreateMintOperationRequest): Promise<MintOperationDocument>;
+  prepareMelt(input: CreateMeltOperationRequest): Promise<MeltOperationDocument>;
+  executeMelt(operationId: string): Promise<ExecuteMeltOperationResponseDocument>;
   prepareSend(input: CreateSendOperationRequest): Promise<SendOperationDocument>;
   executeSend(operationId: string): Promise<ExecuteSendOperationResponseDocument>;
   prepareReceive(input: CreateReceiveOperationRequest): Promise<ReceiveOperationDocument>;
@@ -200,6 +213,15 @@ export function createV1Client(options: ClientCredentialOptions = {}): V1Client 
         mintQuoteSchema,
         credentialFile,
       ),
+    createMeltQuote: (input) =>
+      requestV1(
+        endpoint,
+        '/v1/quotes/melt',
+        'POST',
+        createMeltQuoteRequestSchema.parse(input),
+        meltQuoteSchema,
+        credentialFile,
+      ),
     prepareMint: (input) =>
       requestV1(
         endpoint,
@@ -207,6 +229,24 @@ export function createV1Client(options: ClientCredentialOptions = {}): V1Client 
         'POST',
         createMintOperationRequestSchema.parse(input),
         mintOperationSchema,
+        credentialFile,
+      ),
+    prepareMelt: (input) =>
+      requestV1(
+        endpoint,
+        '/v1/operations/melt',
+        'POST',
+        createMeltOperationRequestSchema.parse(input),
+        meltOperationSchema,
+        credentialFile,
+      ),
+    executeMelt: (operationId) =>
+      requestV1(
+        endpoint,
+        `/v1/operations/melt/${encodeURIComponent(operationId)}/execute`,
+        'POST',
+        undefined,
+        executeMeltOperationResponseSchema,
         credentialFile,
       ),
     prepareSend: (input) =>
@@ -333,6 +373,25 @@ export async function prepareAndExecuteCashuSend(
     unit: 'sat',
   });
   return (await client.executeSend(operation.id)).result.token;
+}
+
+/** Preserves the human one-shot Lightning-send flow over the explicit v1 lifecycle. */
+export async function prepareAndExecuteBolt11Send(
+  client: V1Client,
+  input: { invoice: string; mintUrl?: string },
+): Promise<string> {
+  const mintUrl = input.mintUrl ?? (await defaultTrustedMintUrl(client));
+  const quote = await client.createMeltQuote({
+    mintUrl,
+    method: 'bolt11',
+    invoice: input.invoice,
+  });
+  const operation = await client.prepareMelt({
+    mintUrl: quote.mintUrl,
+    quoteId: quote.quoteId,
+  });
+  await client.executeMelt(operation.id);
+  return `Paid invoice: ${input.invoice}`;
 }
 
 /** Preserves the human one-shot Cashu-receive flow over the explicit v1 lifecycle. */

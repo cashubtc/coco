@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import {
   MintOperationNotFoundError,
   MintOperationStateError,
+  MeltOperationNotFoundError,
+  MeltOperationStateError,
   OperationInProgressError,
   ReceiveOperationNotFoundError,
   ReceiveOperationStateError,
@@ -310,6 +312,351 @@ describe('v1 HTTP route interface', () => {
     expect(replay.status).toBe(201);
     expect(getQuote).toHaveBeenCalledTimes(1);
     expect(prepare).toHaveBeenCalledTimes(1);
+  });
+
+  test('prepares a safe Melt Operation from the canonical methodless Quote identity', async () => {
+    const credential = await createCredential();
+    const quote = meltQuoteFixture({ mintUrl: 'https://mint.example.com' });
+    const operation = meltOperationFixture();
+    const getQuote = mock(async () => quote);
+    const prepare = mock(async () => operation);
+    const execute = mock(async () => {
+      throw new Error('execute was not expected');
+    });
+    const routes = createWalletTestRoutes(
+      { quotes: { melt: { get: getQuote } }, ops: { melt: { prepare, execute } } },
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/operations/melt']!.POST!(
+      authorizedJsonRequest('/v1/operations/melt', credential.plaintext, {
+        mintUrl: 'https://mint.example.com/',
+        quoteId: 'melt-quote-1',
+      }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(201);
+    expect(response.headers.get('location')).toBeNull();
+    expect(body).toEqual({
+      id: 'melt-operation-1',
+      type: 'melt',
+      state: 'prepared',
+      mintUrl: 'https://mint.example.com',
+      unit: 'sat',
+      method: 'bolt11',
+      amount: '25',
+      quote: { mintUrl: 'https://mint.example.com', quoteId: 'melt-quote-1' },
+      feeReserve: '2',
+      swapFee: '1',
+      inputAmount: '28',
+      needsSwap: true,
+      createdAt: '2026-08-16T00:00:00.000Z',
+      updatedAt: '2026-08-16T00:01:00.000Z',
+    });
+    expect(JSON.stringify(body)).not.toContain('must-not-leak');
+    expect(getQuote).toHaveBeenCalledWith({
+      mintUrl: 'https://mint.example.com',
+      quoteId: 'melt-quote-1',
+    });
+    expect(prepare).toHaveBeenCalledWith({ quote });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  test('inspects and paginates prepared and in-flight Melt Operations from Coco', async () => {
+    const credential = await createCredential();
+    const operation = (
+      id: string,
+      createdAt: number,
+      state: 'prepared' | 'executing' | 'pending' | 'rolling_back',
+    ) => meltOperationFixture({ id, createdAt, updatedAt: createdAt, state });
+    const get = mock(async () =>
+      meltOperationFixture({
+        state: 'finalized',
+        changeAmount: toAmount(1),
+        effectiveFee: toAmount(2),
+        finalizedData: { preimage: 'must-not-leak' },
+      }),
+    );
+    const listPrepared = mock(async () => [
+      operation('old', 1_786_838_400_000, 'prepared'),
+      operation('new-b', 1_786_838_600_000, 'prepared'),
+      operation('new-a', 1_786_838_600_000, 'prepared'),
+    ]);
+    const listInFlight = mock(async () => [
+      operation('executing', 1_786_838_500_000, 'executing'),
+      operation('pending', 1_786_838_480_000, 'pending'),
+      operation('rolling-back', 1_786_838_460_000, 'rolling_back'),
+    ]);
+    const routes = createWalletTestRoutes(
+      { ops: { melt: { get, listPrepared, listInFlight } } },
+      credential.credentials,
+    );
+
+    const fetched = await routes['/v1/operations/melt/:operationId']!.GET!(
+      authorizedRequest('/v1/operations/melt/melt-operation-1', credential.plaintext),
+    );
+    const prepared = await routes['/v1/operations/melt/prepared']!.GET!(
+      authorizedRequest('/v1/operations/melt/prepared?offset=1&limit=1', credential.plaintext),
+    );
+    const inFlight = await routes['/v1/operations/melt/in-flight']!.GET!(
+      authorizedRequest('/v1/operations/melt/in-flight', credential.plaintext),
+    );
+    const fetchedDocument = await fetched.json();
+
+    expect(fetchedDocument).toMatchObject({
+      id: 'melt-operation-1',
+      state: 'finalized',
+      changeAmount: '1',
+      effectiveFee: '2',
+    });
+    expect(JSON.stringify(fetchedDocument)).not.toContain('must-not-leak');
+    expect(await prepared.json()).toMatchObject({
+      items: [{ id: 'new-b', state: 'prepared' }],
+      offset: 1,
+      limit: 1,
+    });
+    expect(await inFlight.json()).toMatchObject({
+      items: [
+        { id: 'executing', state: 'executing' },
+        { id: 'pending', state: 'pending' },
+        { id: 'rolling-back', state: 'rolling_back' },
+      ],
+      offset: 0,
+      limit: 20,
+    });
+  });
+
+  test('executes a Melt Operation and recovers its payment result from Coco', async () => {
+    const credential = await createCredential();
+    const finalized = meltOperationFixture({
+      state: 'finalized',
+      finalizedData: { preimage: 'payment-preimage' },
+    });
+    const execute = mock(async () => finalized);
+    const get = mock(async () => finalized);
+    const routes = createWalletTestRoutes(
+      { ops: { melt: { execute, get } } },
+      credential.credentials,
+    );
+
+    const executed = await routes['/v1/operations/melt/:operationId/execute']!.POST!(
+      authorizedPostRequest('/v1/operations/melt/melt-operation-1/execute', credential.plaintext),
+    );
+    const recovered = await routes['/v1/operations/melt/:operationId/result']!.GET!(
+      authorizedRequest('/v1/operations/melt/melt-operation-1/result', credential.plaintext),
+    );
+
+    expect(executed.status).toBe(200);
+    expect(executed.headers.get('cache-control')).toBe('no-store');
+    expect(await executed.json()).toMatchObject({
+      operation: { id: 'melt-operation-1', state: 'finalized' },
+      result: { preimage: 'payment-preimage' },
+    });
+    expect(recovered.status).toBe(200);
+    expect(recovered.headers.get('cache-control')).toBe('no-store');
+    expect(await recovered.json()).toEqual({ preimage: 'payment-preimage' });
+    expect(execute).toHaveBeenCalledWith('melt-operation-1');
+    expect(get).toHaveBeenCalledWith('melt-operation-1');
+  });
+
+  test('keeps a pending Melt Operation recoverable when its result is not yet available', async () => {
+    const credential = await createCredential();
+    const pending = meltOperationFixture({ state: 'pending' });
+    const execute = mock(async () => pending);
+    const get = mock(async () => pending);
+    const routes = createWalletTestRoutes(
+      { ops: { melt: { execute, get } } },
+      credential.credentials,
+    );
+
+    const executed = await routes['/v1/operations/melt/:operationId/execute']!.POST!(
+      authorizedPostRequest('/v1/operations/melt/melt-operation-1/execute', credential.plaintext),
+    );
+    const recovered = await routes['/v1/operations/melt/:operationId/result']!.GET!(
+      authorizedRequest('/v1/operations/melt/melt-operation-1/result', credential.plaintext),
+    );
+
+    expect(await executed.json()).toEqual({
+      operation: expect.objectContaining({ id: 'melt-operation-1', state: 'pending' }),
+    });
+    expect(recovered.status).toBe(409);
+    expect(recovered.headers.get('cache-control')).toBe('no-store');
+    expect(await recovered.json()).toEqual({
+      error: {
+        code: 'operation_result_not_available',
+        message: 'The Melt Operation result is not available',
+        retryable: true,
+        details: { state: 'pending' },
+      },
+    });
+  });
+
+  test('cancels, refreshes, and reclaims Melt Operations through explicit commands', async () => {
+    const credential = await createCredential();
+    const rolledBack = meltOperationFixture({ state: 'rolled_back' });
+    const finalized = meltOperationFixture({ state: 'finalized' });
+    const cancel = mock(async () => {});
+    const refresh = mock(async () => finalized);
+    const reclaim = mock(async () => {});
+    const get = mock()
+      .mockResolvedValueOnce(rolledBack)
+      .mockResolvedValueOnce(finalized)
+      .mockResolvedValueOnce(rolledBack);
+    const routes = createWalletTestRoutes(
+      { ops: { melt: { cancel, refresh, reclaim, get } } },
+      credential.credentials,
+    );
+    const command = (name: 'cancel' | 'refresh' | 'reclaim') =>
+      routes[`/v1/operations/melt/:operationId/${name}`]!.POST!(
+        authorizedPostRequest(`/v1/operations/melt/melt-operation-1/${name}`, credential.plaintext),
+      );
+
+    const cancelled = await command('cancel');
+    const refreshed = await command('refresh');
+    const reclaimed = await command('reclaim');
+
+    expect(await cancelled.json()).toMatchObject({ state: 'rolled_back' });
+    expect(await refreshed.json()).toMatchObject({ state: 'finalized' });
+    expect(await reclaimed.json()).toMatchObject({ state: 'rolled_back' });
+    expect(cancel).toHaveBeenCalledWith('melt-operation-1');
+    expect(refresh).toHaveBeenCalledWith('melt-operation-1');
+    expect(reclaim).toHaveBeenCalledWith('melt-operation-1');
+  });
+
+  test('maps typed Melt lifecycle failures and preserves operation-in-progress retries', async () => {
+    const credential = await createCredential();
+    const execute = mock()
+      .mockRejectedValueOnce(
+        new MeltOperationStateError('melt-operation-1', 'pending', ['prepared']),
+      )
+      .mockRejectedValueOnce(new OperationInProgressError('melt-operation-1'));
+    const get = mock(async () => {
+      throw new MeltOperationNotFoundError('missing');
+    });
+    const routes = createWalletTestRoutes(
+      { ops: { melt: { execute, get } } },
+      credential.credentials,
+    );
+    const executeRequest = () =>
+      routes['/v1/operations/melt/:operationId/execute']!.POST!(
+        authorizedPostRequest('/v1/operations/melt/melt-operation-1/execute', credential.plaintext),
+      );
+
+    const invalid = await executeRequest();
+    const inProgress = await executeRequest();
+    const missing = await routes['/v1/operations/melt/:operationId']!.GET!(
+      authorizedRequest('/v1/operations/melt/missing', credential.plaintext),
+    );
+
+    expect(invalid.status).toBe(409);
+    expect(await invalid.json()).toMatchObject({
+      error: {
+        code: 'invalid_operation_state',
+        details: { type: 'melt', state: 'pending', expectedStates: ['prepared'] },
+      },
+    });
+    expect(inProgress.status).toBe(409);
+    expect(await inProgress.json()).toMatchObject({
+      error: { code: 'operation_in_progress', retryable: true },
+    });
+    expect(missing.status).toBe(404);
+    expect(await missing.json()).toMatchObject({ error: { code: 'not_found' } });
+  });
+
+  test('maps untyped Coco Melt failures without exposing recovery diagnostics', async () => {
+    const credential = await createCredential();
+    const execute = mock(async () => {
+      throw new Error('proof secret must-not-leak');
+    });
+    const routes = createWalletTestRoutes({ ops: { melt: { execute } } }, credential.credentials);
+
+    const response = await routes['/v1/operations/melt/:operationId/execute']!.POST!(
+      authorizedPostRequest('/v1/operations/melt/melt-operation-1/execute', credential.plaintext),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(body).toEqual({
+      error: {
+        code: 'coco_error',
+        message: 'Coco could not execute the Melt Operation',
+        retryable: false,
+      },
+    });
+    expect(JSON.stringify(body)).not.toContain('must-not-leak');
+  });
+
+  test('authenticates and deduplicates idempotent Melt Operation preparation', async () => {
+    const credential = await createCredential();
+    const quote = meltQuoteFixture();
+    const getQuote = mock(async () => quote);
+    const prepare = mock(async () => meltOperationFixture());
+    const routes = createWalletTestRoutes(
+      { quotes: { melt: { get: getQuote } }, ops: { melt: { prepare } } },
+      credential.credentials,
+    );
+    const unauthenticated = await routes['/v1/operations/melt']!.POST!(
+      new Request('http://localhost/v1/operations/melt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mintUrl: 'https://mint.example.com',
+          quoteId: 'melt-quote-1',
+        }),
+      }),
+    );
+    const request = () =>
+      authorizedJsonRequest(
+        '/v1/operations/melt',
+        credential.plaintext,
+        { mintUrl: 'https://mint.example.com', quoteId: 'melt-quote-1' },
+        undefined,
+        { 'Idempotency-Key': 'prepare-melt-1' },
+      );
+
+    const first = await routes['/v1/operations/melt']!.POST!(request());
+    const replay = await routes['/v1/operations/melt']!.POST!(request());
+
+    expect(unauthenticated.status).toBe(401);
+    expect(first.status).toBe(201);
+    expect(replay.status).toBe(201);
+    expect(getQuote).toHaveBeenCalledTimes(1);
+    expect(prepare).toHaveBeenCalledTimes(1);
+  });
+
+  test('requires and exposes the selected on-chain Melt fee option before execution', async () => {
+    const credential = await createCredential();
+    const quote = meltQuoteFixture({
+      method: 'onchain',
+      fee_options: [{ fee_index: 3, fee_reserve: toAmount(4), estimated_blocks: 6 }],
+    });
+    const prepare = mock(async () =>
+      meltOperationFixture({ method: 'onchain', methodData: { feeIndex: 3 } }),
+    );
+    const routes = createWalletTestRoutes(
+      { quotes: { melt: { get: async () => quote } }, ops: { melt: { prepare } } },
+      credential.credentials,
+    );
+
+    const missingFee = await routes['/v1/operations/melt']!.POST!(
+      authorizedJsonRequest('/v1/operations/melt', credential.plaintext, {
+        mintUrl: 'https://mint.example.com',
+        quoteId: 'melt-quote-1',
+      }),
+    );
+    const prepared = await routes['/v1/operations/melt']!.POST!(
+      authorizedJsonRequest('/v1/operations/melt', credential.plaintext, {
+        mintUrl: 'https://mint.example.com',
+        quoteId: 'melt-quote-1',
+        feeIndex: 3,
+      }),
+    );
+
+    expect(missingFee.status).toBe(400);
+    expect(await missingFee.json()).toMatchObject({ error: { code: 'invalid_request' } });
+    expect(await prepared.json()).toMatchObject({ method: 'onchain', feeIndex: 3 });
+    expect(prepare).toHaveBeenCalledWith({ quote, feeIndex: 3 });
   });
 
   test('prepares a safe Send Operation without executing it', async () => {
@@ -2544,6 +2891,96 @@ describe('v1 HTTP route interface', () => {
       },
       {
         method: 'POST',
+        path: '/v1/operations/melt',
+        capability: 'wallet:admin',
+        requestSchema: 'CreateMeltOperationRequest',
+        responseSchema: 'MeltOperation',
+        successStatuses: [201],
+        idempotencyKey: 'optional',
+        responseCacheControl: null,
+      },
+      {
+        method: 'GET',
+        path: '/v1/operations/melt/prepared',
+        capability: 'wallet:read',
+        requestSchema: 'NoBody',
+        responseSchema: 'MeltOperations',
+        successStatuses: [200],
+        idempotencyKey: null,
+        responseCacheControl: null,
+      },
+      {
+        method: 'GET',
+        path: '/v1/operations/melt/in-flight',
+        capability: 'wallet:read',
+        requestSchema: 'NoBody',
+        responseSchema: 'MeltOperations',
+        successStatuses: [200],
+        idempotencyKey: null,
+        responseCacheControl: null,
+      },
+      {
+        method: 'GET',
+        path: '/v1/operations/melt/{operationId}',
+        capability: 'wallet:read',
+        requestSchema: 'NoBody',
+        responseSchema: 'MeltOperation',
+        successStatuses: [200],
+        idempotencyKey: null,
+        responseCacheControl: null,
+      },
+      {
+        method: 'POST',
+        path: '/v1/operations/melt/{operationId}/execute',
+        capability: 'wallet:admin',
+        requestSchema: 'NoBody',
+        responseSchema: 'ExecuteMeltOperationResponse',
+        successStatuses: [200],
+        idempotencyKey: 'optional',
+        responseCacheControl: 'no-store',
+      },
+      {
+        method: 'GET',
+        path: '/v1/operations/melt/{operationId}/result',
+        capability: 'wallet:read',
+        requestSchema: 'NoBody',
+        responseSchema: 'MeltResult',
+        successStatuses: [200],
+        idempotencyKey: null,
+        responseCacheControl: 'no-store',
+      },
+      {
+        method: 'POST',
+        path: '/v1/operations/melt/{operationId}/cancel',
+        capability: 'wallet:admin',
+        requestSchema: 'NoBody',
+        responseSchema: 'MeltOperation',
+        successStatuses: [200],
+        idempotencyKey: 'optional',
+        responseCacheControl: null,
+      },
+      {
+        method: 'POST',
+        path: '/v1/operations/melt/{operationId}/refresh',
+        capability: 'wallet:admin',
+        requestSchema: 'NoBody',
+        responseSchema: 'MeltOperation',
+        successStatuses: [200],
+        idempotencyKey: 'optional',
+        responseCacheControl: null,
+      },
+      {
+        method: 'POST',
+        path: '/v1/operations/melt/{operationId}/reclaim',
+        capability: 'wallet:admin',
+        requestSchema: 'NoBody',
+        responseSchema: 'MeltOperation',
+        successStatuses: [200],
+        idempotencyKey: 'optional',
+        responseCacheControl: null,
+      },
+      {
+        method: 'POST',
         path: '/v1/operations/send',
         capability: 'wallet:admin',
         requestSchema: 'CreateSendOperationRequest',
@@ -3708,6 +4145,30 @@ function mintOperationFixture(overrides: Record<string, unknown> = {}) {
     createdAt: 1_786_838_400_000,
     updatedAt: 1_786_838_460_000,
     outputData: { keep: [{ secret: 'must-not-leak' }], send: [] },
+    error: 'must-not-leak',
+    ...overrides,
+  };
+}
+
+function meltOperationFixture(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'melt-operation-1',
+    state: 'prepared' as const,
+    mintUrl: 'https://mint.example.com',
+    amount: toAmount(25),
+    unit: 'sat',
+    method: 'bolt11' as const,
+    methodData: { invoice: 'lnbc250n1must-not-leak' },
+    quoteId: 'melt-quote-1',
+    createdAt: 1_786_838_400_000,
+    updatedAt: 1_786_838_460_000,
+    needsSwap: true,
+    fee_reserve: toAmount(2),
+    swap_fee: toAmount(1),
+    inputAmount: toAmount(28),
+    inputProofSecrets: ['must-not-leak'],
+    changeOutputData: { keep: [{ secret: 'must-not-leak' }], send: [] },
+    swapOutputData: { keep: [{ secret: 'must-not-leak' }], send: [] },
     error: 'must-not-leak',
     ...overrides,
   };

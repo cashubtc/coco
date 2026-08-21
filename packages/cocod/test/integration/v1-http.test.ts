@@ -502,6 +502,128 @@ test('serves the Quote-to-Mint-Operation flow while unpaid execution remains pen
   expect(await executeResponse.json()).toMatchObject({ state: 'pending' });
 });
 
+test('serves the Quote-to-Melt-Operation flow with recoverable settlement results', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'cocod-v1-melt-listener-'));
+  directories.push(directory);
+  const credentialDirectory = join(directory, 'credentials');
+  const credentials = await AdministrativeCredential.loadOrBootstrap({ credentialDirectory });
+  const plaintext = await loadClientCredential(join(credentialDirectory, 'current', 'client'));
+  const quote = {
+    mintUrl: 'https://mint.example.com',
+    method: 'bolt11' as const,
+    quoteId: 'melt-quote-network',
+    quote: 'melt-quote-network',
+    request: 'lnbc250n1network',
+    amount: toAmount(25),
+    unit: 'sat',
+    fee_reserve: toAmount(2),
+    expiry: 1_786_838_700,
+    state: 'UNPAID' as const,
+    createdAt: 1_786_838_400_000,
+    updatedAt: 1_786_838_460_000,
+  };
+  const prepared = {
+    id: 'melt-operation-network',
+    state: 'prepared' as const,
+    mintUrl: quote.mintUrl,
+    amount: quote.amount,
+    unit: quote.unit,
+    method: quote.method,
+    methodData: { invoice: 'must-not-cross-the-network' },
+    quoteId: quote.quoteId,
+    createdAt: 1_786_838_400_000,
+    updatedAt: 1_786_838_460_000,
+    needsSwap: true,
+    fee_reserve: quote.fee_reserve,
+    swap_fee: toAmount(1),
+    inputAmount: toAmount(28),
+    inputProofSecrets: ['must-not-cross-the-network'],
+    changeOutputData: { keep: [{ secret: 'must-not-cross-the-network' }], send: [] },
+  };
+  const finalized = {
+    ...prepared,
+    state: 'finalized' as const,
+    finalizedData: { preimage: 'network-preimage' },
+  };
+  const createQuote = mock(async () => quote);
+  const getQuote = mock(async () => quote);
+  const prepare = mock(async () => prepared);
+  const execute = mock(async () => finalized);
+  const get = mock(async () => finalized);
+  const runtime = {
+    getStatus: () => ({
+      wallet: { configuredAt: '2026-08-16T00:00:00.000Z', mintUrl: quote.mintUrl },
+      seedAccess: { state: 'available' as const, requiresPassphrase: false },
+      cocoSession: {
+        state: 'running' as const,
+        startedAt: '2026-08-16T00:00:00.000Z',
+        lastFailure: null,
+      },
+    }),
+    getRunningSession: () => ({
+      mintUrl: quote.mintUrl,
+      manager: {
+        quotes: { melt: { create: createQuote, get: getQuote } },
+        ops: { melt: { prepare, execute, get } },
+      },
+    }),
+  } as unknown as V1Runtime;
+
+  server = startTcpTestServer({
+    routes: buildV1Routes(createLifecycleTestRouteDefinitions(runtime, '0.0.17'), credentials),
+    fetch: buildV1FallbackHandler(credentials, async () => new Response(null, { status: 404 })),
+  });
+
+  const quoteResponse = await tcpFetch(
+    server,
+    '/v1/quotes/melt',
+    plaintext,
+    'POST',
+    JSON.stringify({ mintUrl: quote.mintUrl, method: 'bolt11', invoice: quote.request }),
+    { 'Content-Type': 'application/json' },
+  );
+  const operationResponse = await tcpFetch(
+    server,
+    '/v1/operations/melt',
+    plaintext,
+    'POST',
+    JSON.stringify({ mintUrl: quote.mintUrl, quoteId: quote.quoteId }),
+    { 'Content-Type': 'application/json' },
+  );
+  const operationBody = await operationResponse.json();
+  const executeResponse = await tcpFetch(
+    server,
+    '/v1/operations/melt/melt-operation-network/execute',
+    plaintext,
+    'POST',
+  );
+  const resultResponse = await tcpFetch(
+    server,
+    '/v1/operations/melt/melt-operation-network/result',
+    plaintext,
+  );
+
+  expect(quoteResponse.status).toBe(201);
+  expect(operationResponse.status).toBe(201);
+  expect(operationBody).toMatchObject({
+    id: 'melt-operation-network',
+    state: 'prepared',
+    amount: '25',
+    feeReserve: '2',
+    quote: { mintUrl: quote.mintUrl, quoteId: quote.quoteId },
+  });
+  expect(JSON.stringify(operationBody)).not.toContain('must-not-cross-the-network');
+  expect(getQuote).toHaveBeenCalledWith({ mintUrl: quote.mintUrl, quoteId: quote.quoteId });
+  expect(prepare).toHaveBeenCalledWith({ quote });
+  expect(executeResponse.headers.get('cache-control')).toBe('no-store');
+  expect(await executeResponse.json()).toMatchObject({
+    operation: { state: 'finalized' },
+    result: { preimage: 'network-preimage' },
+  });
+  expect(resultResponse.headers.get('cache-control')).toBe('no-store');
+  expect(await resultResponse.json()).toEqual({ preimage: 'network-preimage' });
+});
+
 test('commits accepted process shutdown before graceful listener closure completes', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'cocod-v1-process-stop-'));
   directories.push(directory);

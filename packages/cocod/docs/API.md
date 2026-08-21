@@ -36,7 +36,7 @@ Use the implicit `http://127.0.0.1:62626` endpoint for local auto-start. The glo
 - `send cashu <amount>` - Create a Cashu token to send
   - `--mint-url <url>` override default mint
 - `send bolt11 <invoice>` - Pay a Lightning invoice
-  - `--mint-url <url>` override default mint
+  - `--mint-url <url>` choose a trusted Mint; otherwise the first trusted Mint is used
 
 ### Mints
 
@@ -134,6 +134,15 @@ no-store`, `Retry-After`, `WWW-Authenticate`, `X-Request-ID`, and `Allow`. These
 - `POST /v1/operations/mint/{operationId}/execute`
 - `GET /v1/operations/mint/{operationId}/result`
 - `POST /v1/operations/mint/{operationId}/refresh`
+- `POST /v1/operations/melt`
+- `GET /v1/operations/melt/prepared?offset={offset}&limit={limit}`
+- `GET /v1/operations/melt/in-flight?offset={offset}&limit={limit}`
+- `GET /v1/operations/melt/{operationId}`
+- `POST /v1/operations/melt/{operationId}/execute`
+- `GET /v1/operations/melt/{operationId}/result`
+- `POST /v1/operations/melt/{operationId}/cancel`
+- `POST /v1/operations/melt/{operationId}/refresh`
+- `POST /v1/operations/melt/{operationId}/reclaim`
 - `POST /v1/operations/send`
 - `GET /v1/operations/send/prepared?offset={offset}&limit={limit}`
 - `GET /v1/operations/send/in-flight?offset={offset}&limit={limit}`
@@ -151,7 +160,6 @@ no-store`, `Retry-After`, `WWW-Authenticate`, `X-Request-ID`, and `Allow`. These
 - `GET /v1/operations/receive/{operationId}/result`
 - `POST /v1/operations/receive/{operationId}/cancel`
 - `POST /v1/operations/receive/{operationId}/refresh`
-- `POST /send/bolt11`
 - `POST /x-cashu/parse`
 - `POST /x-cashu/handle`
 - `GET /history`
@@ -224,6 +232,36 @@ returns `404 Not Found` with `Cache-Control: no-store`.
 
 The human `receive bolt11` command composes Mint Quote creation and Mint Operation preparation,
 prints the invoice, and does not execute before payment is available.
+
+### Melt Operation resources
+
+`POST /v1/operations/melt` accepts `{ mintUrl, quoteId, feeIndex? }`, resolves that methodless
+public Melt Quote identity through Coco, and prepares a durable Melt Operation without executing
+it. `feeIndex` is required for an on-chain Quote and records the selected fee option. Preparation
+returns `201 Created` with no `Location` header.
+
+The safe Melt Operation document contains `id`, `type`, `state`, normalized `mintUrl`, `unit`,
+`method`, and `createdAt`/`updatedAt`. Prepared and later states also contain lossless decimal
+`amount`, `feeReserve`, `swapFee`, and `inputAmount`, plus `needsSwap` and the methodless `quote`
+reference `{ mintUrl, quoteId }`. On-chain Operations include the selected `feeIndex`. Finalized
+Operations include `changeAmount` and `effectiveFee` when Coco retained them. The document omits
+`methodData`, invoices, addresses, input proof secrets, serialized output data, payment preimages,
+outpoints, raw errors, and all other recovery internals.
+
+Only Coco's `/prepared` and `/in-flight` Melt collections are exposed. They accept `offset` and
+`limit`, defaulting to `0` and `20` with a maximum of `100`, and sort the complete canonical Coco
+set by newest creation time and then Operation ID before selecting a page. The in-flight collection
+retains Coco's `executing`, `pending`, and `rolling_back` states.
+
+Execute, cancel, refresh, and reclaim are explicit `POST` commands with no request body. Commands
+await Coco rather than creating cocod jobs. Execute returns `{ operation, result? }`; pending work
+has no result yet, while finalized BOLT payments can return `{ preimage }` and finalized on-chain
+payments can return `{ outpoint }`. The authenticated `/result` resource recovers the same value
+from Coco-owned Operation state. Execute and result responses use `Cache-Control: no-store`, and an
+unavailable result returns `409 Conflict` with `operation_result_not_available`.
+
+The human `send bolt11` command preserves its one-shot behavior by creating a Melt Quote, preparing
+a Melt Operation, and executing it through these v1 resources.
 
 ### Send Operation resources
 

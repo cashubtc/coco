@@ -9,6 +9,7 @@ import {
   handleV1Command,
   handleWalletV1Command,
   prepareAndExecuteCashuReceive,
+  prepareAndExecuteBolt11Send,
   prepareAndExecuteCashuSend,
   prepareBolt11Receive,
   registerAndTrustMint,
@@ -147,12 +148,12 @@ sendCmd
 sendCmd
   .command('bolt11 <invoice>')
   .description('Pay Lightning invoice')
-  .option('--mint-url <url>', 'Mint URL to use (defaults to the mint URL configured during init)')
+  .option('--mint-url <url>', 'Mint URL to use (defaults to the first trusted Mint)')
   .action(async (invoice: string, options: { mintUrl?: string }) => {
-    await handleDaemonCommand('/send/bolt11', {
-      method: 'POST',
-      body: { invoice, mintUrl: options.mintUrl },
-    });
+    const output = await handleWalletV1Command((client) =>
+      prepareAndExecuteBolt11Send(client, { invoice, mintUrl: options.mintUrl }),
+    );
+    console.log(output);
   });
 
 program

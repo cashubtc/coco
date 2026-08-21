@@ -307,6 +307,74 @@ export interface MintOperationsDocument {
   limit: number;
 }
 
+/** Quote-backed Melt Operation preparation input. */
+export interface CreateMeltOperationRequest {
+  mintUrl: string;
+  quoteId: string;
+  feeIndex?: number;
+}
+
+interface MeltOperationDocumentBase {
+  id: string;
+  type: 'melt';
+  state:
+    | 'init'
+    | 'prepared'
+    | 'executing'
+    | 'pending'
+    | 'failed'
+    | 'finalized'
+    | 'rolling_back'
+    | 'rolled_back';
+  mintUrl: string;
+  unit: string;
+  method: 'bolt11' | 'bolt12' | 'onchain';
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Explicit safe projection of one Coco Melt Operation. */
+export type MeltOperationDocument =
+  | (MeltOperationDocumentBase & {
+      state: 'init';
+      quote?: { mintUrl: string; quoteId: string };
+    })
+  | (MeltOperationDocumentBase & {
+      state:
+        | 'prepared'
+        | 'executing'
+        | 'pending'
+        | 'failed'
+        | 'finalized'
+        | 'rolling_back'
+        | 'rolled_back';
+      amount: string;
+      quote: { mintUrl: string; quoteId: string };
+      feeReserve: string;
+      swapFee: string;
+      inputAmount: string;
+      needsSwap: boolean;
+      feeIndex?: number;
+      changeAmount?: string;
+      effectiveFee?: string;
+    });
+
+/** Offset-paginated safe Melt Operations. */
+export interface MeltOperationsDocument {
+  items: MeltOperationDocument[];
+  offset: number;
+  limit: number;
+}
+
+/** Sensitive settlement result retained by a finalized Melt Operation. */
+export type MeltResultDocument = { preimage: string } | { outpoint: string };
+
+/** Execute response pairing the safe Melt Operation with any available settlement result. */
+export interface ExecuteMeltOperationResponseDocument {
+  operation: MeltOperationDocument;
+  result?: MeltResultDocument;
+}
+
 /** Cashu Send Operation preparation input with a lossless decimal amount. */
 export interface CreateSendOperationRequest {
   mintUrl?: string;
@@ -831,6 +899,95 @@ export const mintOperationsSchema = namedSchema<MintOperationsDocument>(
     offset: integerNode({ minimum: 0 }),
     limit: integerNode({ minimum: 1 }),
   }),
+);
+
+/** Runtime and generated schema for quote-backed Melt Operation preparation. */
+export const createMeltOperationRequestSchema = namedSchema<CreateMeltOperationRequest>(
+  'CreateMeltOperationRequest',
+  objectNode(
+    {
+      mintUrl: stringNode(),
+      quoteId: stringNode({ pattern: '\\S' }),
+      feeIndex: integerNode({ minimum: 0 }),
+    },
+    { optional: ['feeIndex'] },
+  ),
+);
+
+const meltOperationBaseFields = {
+  id: stringNode(),
+  type: literalNode('melt'),
+  mintUrl: stringNode(),
+  unit: stringNode(),
+  method: enumNode(['bolt11', 'bolt12', 'onchain']),
+  createdAt: rfc3339UtcSchema,
+  updatedAt: rfc3339UtcSchema,
+};
+
+const meltOperationQuoteNode = objectNode({ mintUrl: stringNode(), quoteId: stringNode() });
+const meltOperationNode = unionNode([
+  objectNode(
+    {
+      ...meltOperationBaseFields,
+      state: literalNode('init'),
+      quote: meltOperationQuoteNode,
+    },
+    { optional: ['quote'] },
+  ),
+  objectNode(
+    {
+      ...meltOperationBaseFields,
+      state: enumNode([
+        'prepared',
+        'executing',
+        'pending',
+        'failed',
+        'finalized',
+        'rolling_back',
+        'rolled_back',
+      ]),
+      amount: decimalAmountNode,
+      quote: meltOperationQuoteNode,
+      feeReserve: decimalAmountNode,
+      swapFee: decimalAmountNode,
+      inputAmount: decimalAmountNode,
+      needsSwap: booleanNode(),
+      feeIndex: integerNode({ minimum: 0 }),
+      changeAmount: decimalAmountNode,
+      effectiveFee: decimalAmountNode,
+    },
+    { optional: ['feeIndex', 'changeAmount', 'effectiveFee'] },
+  ),
+]);
+
+/** Runtime and generated schema for one safe Melt Operation. */
+export const meltOperationSchema = namedSchema<MeltOperationDocument>(
+  'MeltOperation',
+  meltOperationNode,
+);
+
+/** Runtime and generated schema for paginated safe Melt Operations. */
+export const meltOperationsSchema = namedSchema<MeltOperationsDocument>(
+  'MeltOperations',
+  objectNode({
+    items: arrayNode(meltOperationNode),
+    offset: integerNode({ minimum: 0 }),
+    limit: integerNode({ minimum: 1 }),
+  }),
+);
+
+const meltResultNode = unionNode([
+  objectNode({ preimage: stringNode({ sensitive: true }) }),
+  objectNode({ outpoint: stringNode({ sensitive: true }) }),
+]);
+
+/** Runtime and generated schema for a sensitive Melt Operation settlement result. */
+export const meltResultSchema = namedSchema<MeltResultDocument>('MeltResult', meltResultNode);
+
+/** Runtime and generated schema for Melt Operation execution. */
+export const executeMeltOperationResponseSchema = namedSchema<ExecuteMeltOperationResponseDocument>(
+  'ExecuteMeltOperationResponse',
+  objectNode({ operation: meltOperationNode, result: meltResultNode }, { optional: ['result'] }),
 );
 
 /** Runtime and generated schema for Cashu Send Operation preparation. */

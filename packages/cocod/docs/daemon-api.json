@@ -30,19 +30,6 @@
   },
   "endpoints": [
     {
-      "path": "/send/bolt11",
-      "method": "POST",
-      "state": "cocoSession.running",
-      "body": {
-        "invoice": "string",
-        "mintUrl": "string (optional)"
-      },
-      "responses": {
-        "200": "{ output: string }",
-        "500": "{ error: string }"
-      }
-    },
-    {
       "path": "/x-cashu/parse",
       "method": "POST",
       "state": "cocoSession.running",
