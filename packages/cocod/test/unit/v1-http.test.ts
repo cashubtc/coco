@@ -69,7 +69,7 @@ describe('v1 HTTP route interface', () => {
         source: 'legacy' as const,
         legacyHistoryId: '42',
         type: 'send' as const,
-        operationId: 'legacy-operation-1',
+        operationId: ' legacy-operation-1 ',
         state: 'pending',
         mintUrl: 'https://mint.example.com/',
         unit: 'sat',
@@ -215,6 +215,46 @@ describe('v1 HTTP route interface', () => {
     expect(JSON.stringify([listBody, detailBody])).not.toContain('must-not-leak');
     expect(getPaginatedHistory).toHaveBeenCalledWith(2, 5);
     expect(getHistoryEntryById).toHaveBeenCalledWith('mint:mint-operation-1');
+  });
+
+  test('omits blank legacy operation identities from safe history documents', async () => {
+    const credential = await createCredential();
+    const entry = {
+      id: 'legacy:42',
+      source: 'legacy' as const,
+      legacyHistoryId: '42',
+      type: 'send' as const,
+      operationId: '   ',
+      state: 'pending',
+      mintUrl: 'https://mint.example.com/',
+      unit: 'sat',
+      amount: toAmount(21),
+      createdAt: 1_786_838_500_000,
+      updatedAt: 1_786_838_500_000,
+    };
+    const routes = createWalletTestRoutes(
+      {
+        history: {
+          getPaginatedHistory: mock(async () => [entry]),
+          getHistoryEntryById: mock(async () => entry),
+        },
+      },
+      credential.credentials,
+    );
+
+    const listed = await routes['/v1/history']!.GET!(
+      authorizedRequest('/v1/history', credential.plaintext),
+    );
+    const inspected = await routes['/v1/history/:historyEntryId']!.GET!(
+      authorizedRequest('/v1/history/legacy%3A42', credential.plaintext),
+    );
+    const listBody = (await listed.json()) as { items: Record<string, unknown>[] };
+    const detailBody = (await inspected.json()) as Record<string, unknown>;
+
+    expect(listed.status).toBe(200);
+    expect(inspected.status).toBe(200);
+    expect(listBody.items[0]).not.toHaveProperty('operationId');
+    expect(detailBody).not.toHaveProperty('operationId');
   });
 
   test('validates history requests before Coco and safely maps lookup failures', async () => {

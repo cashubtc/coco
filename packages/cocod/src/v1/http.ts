@@ -1727,10 +1727,11 @@ function parseHistoryEntryIdPath(request: Request): string {
 }
 
 function toHistoryDocument(entry: HistoryEntry): HistoryDocument {
+  const operationId = entry.operationId?.trim();
   const base = {
     id: entry.id,
     source: entry.source,
-    ...(entry.operationId ? { operationId: entry.operationId } : {}),
+    ...(operationId ? { operationId } : {}),
     state: entry.state,
     mintUrl: normalizeMintUrl(entry.mintUrl),
     unit: entry.unit,
