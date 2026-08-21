@@ -3217,6 +3217,16 @@ describe('v1 HTTP route interface', () => {
       },
       {
         method: 'GET',
+        path: '/v1/openapi.json',
+        capability: 'wallet:read',
+        requestSchema: 'NoBody',
+        responseSchema: 'OpenApiDocument',
+        successStatuses: [200],
+        idempotencyKey: null,
+        responseCacheControl: null,
+      },
+      {
+        method: 'GET',
         path: '/v1/status',
         capability: 'wallet:read',
         requestSchema: 'NoBody',

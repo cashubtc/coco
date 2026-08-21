@@ -12,8 +12,10 @@ import {
   buildV1FallbackHandler,
   buildV1Routes,
   createV1RouteDefinitions,
+  createV1RouteMetadata,
   type V1Runtime,
 } from '../../src/v1/http.js';
+import { generateV1OpenApiDocument } from '../../src/v1/interface-description.js';
 import { deferred } from '../helpers/deferred.js';
 import { createTestLogger } from '../helpers/logger.js';
 import { startTcpTestServer } from '../helpers/tcp.js';
@@ -119,6 +121,8 @@ test('serves public health and authenticated structured status beside operationa
   const health = await tcpFetch(server, '/health');
   const healthMethodNotAllowed = await tcpFetch(server, '/health', undefined, 'POST', '{not-json');
   const unauthenticated = await tcpFetch(server, '/v1/status');
+  const openApiUnauthenticated = await tcpFetch(server, '/v1/openapi.json');
+  const openApi = await tcpFetch(server, '/v1/openapi.json', plaintext);
   const status = await tcpFetch(server, '/v1/status', plaintext);
   const unknown = await tcpFetch(server, '/v1/unknown', plaintext);
   const unsupportedQuoteType = await tcpFetch(
@@ -143,6 +147,16 @@ test('serves public health and authenticated structured status beside operationa
   });
   expect(unauthenticated.status).toBe(401);
   expect(await unauthenticated.json()).toMatchObject({ error: { code: 'unauthenticated' } });
+  expect(openApiUnauthenticated.status).toBe(401);
+  expect(await openApiUnauthenticated.json()).toMatchObject({
+    error: { code: 'unauthenticated' },
+  });
+  expect(openApi.status).toBe(200);
+  expect(openApi.headers.get('content-type')).toContain('application/json');
+  expect(openApi.headers.get('location')).toBeNull();
+  expect(await openApi.json()).toEqual(
+    generateV1OpenApiDocument(createV1RouteMetadata(), '0.0.17'),
+  );
   expect(status.status).toBe(200);
   expect(await status.json()).toEqual({
     daemon: { version: '0.0.17', interfaceVersion: '1' },

@@ -77,7 +77,7 @@ daemon validates both settings and does not inherit a generic `PORT` variable.
 Listener overrides apply to an explicitly started `cocod daemon`. Auto-start always uses the local
 default; connect to a custom listener with `--url` or `COCOD_URL`, which never starts a process.
 
-`GET /health` is public. Every `/v1/*` request and every remaining legacy route requires
+`GET /health` is public. Every `/v1/*` request and every unversioned NPC route requires
 `Authorization: Bearer <credential>`. The local client reads the credential from
 `~/.cocod/credentials/current/client`. Remote TLS belongs at a trusted proxy such as Caddy; cocod
 still authenticates the credential itself, ignores forwarded identity headers, and does not enable
@@ -87,7 +87,7 @@ browser CORS.
 
 - The v1 resources return typed documents directly. Their errors use
   `{ "error": { "code": string, "message": string, "retryable": boolean, "details"?: object } }`.
-- The remaining operational legacy routes retain `{ "output": <value> }` success and
+- The unversioned NPC routes retain `{ "output": <value> }` success and
   `{ "error": "message" }` error envelopes.
 
 ### HTTP header policy
@@ -107,6 +107,7 @@ no-store`, `Retry-After`, `WWW-Authenticate`, `X-Request-ID`, and `Allow`. These
 ### Endpoint list
 
 - `GET /health` (public)
+- `GET /v1/openapi.json`
 - `GET /v1/status`
 - `POST /v1/admin/wallet/initialize`
 - `POST /v1/admin/wallet/recovery-material`
@@ -169,12 +170,12 @@ no-store`, `Retry-After`, `WWW-Authenticate`, `X-Request-ID`, and `Allow`. These
 - `POST /npc/username`
 
 The list above is the currently callable HTTP interface. See the
-[accepted network interface v1](network-interface-v1.md) for the complete target resource surface
-and legacy replacement map; resources marked as proposed there are not callable yet.
+[accepted network interface v1](network-interface-v1.md) for the complete resource surface and
+legacy replacement map.
 
-The [implemented v1 contract](lifecycle-api-v1.json) is generated from runtime schemas.
-The [remaining legacy operational contract](daemon-api.json) describes the unversioned routes that
-have not yet migrated to v1.
+The [OpenAPI v1 contract](openapi-v1.json) is generated from runtime route metadata and schemas and
+is also served by authenticated `GET /v1/openapi.json`. The [NPC extension contract](daemon-api.json)
+describes the only intentionally retained unversioned operational routes; NPC is outside v1.
 
 ### Quote resources
 

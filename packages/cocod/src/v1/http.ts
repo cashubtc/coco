@@ -35,7 +35,9 @@ import {
   type V1Runtime,
   type V1RouteDefinition,
   type V1RouteMetadata,
+  type V1RouteParameter,
 } from './contract.js';
+import { generateV1OpenApiDocument } from './interface-description.js';
 import {
   balancesSchema,
   createMintOperationRequestSchema,
@@ -68,6 +70,7 @@ import {
   paymentMethodCapabilitiesSchema,
   paymentRequestEvaluationSchema,
   noBodySchema,
+  openApiDocumentSchema,
   pendingMintQuotesSchema,
   pendingMeltQuotesSchema,
   processShutdownRequestSchema,
@@ -132,6 +135,72 @@ export * from './contract.js';
 export { buildV1FallbackHandler, buildV1Routes } from './runner.js';
 export * from './schema.js';
 
+const DEFAULT_PAGE_LIMIT = 20;
+const MAX_PAGE_LIMIT = 100;
+
+const pathParameter = (name: string): V1RouteParameter => ({
+  name,
+  in: 'path',
+  required: true,
+  schema: { type: 'string', minLength: 1 },
+});
+
+const OFFSET_PARAMETER = {
+  name: 'offset',
+  in: 'query',
+  required: false,
+  schema: { type: 'integer', minimum: 0, default: 0 },
+} as const satisfies V1RouteParameter;
+
+const LIMIT_PARAMETER = {
+  name: 'limit',
+  in: 'query',
+  required: false,
+  schema: { type: 'integer', minimum: 1, maximum: MAX_PAGE_LIMIT, default: DEFAULT_PAGE_LIMIT },
+} as const satisfies V1RouteParameter;
+
+const PAGE_PARAMETERS = [OFFSET_PARAMETER, LIMIT_PARAMETER] as const;
+const MINT_URL_QUERY_PARAMETER = {
+  name: 'mintUrl',
+  in: 'query',
+  required: true,
+  schema: { type: 'string', format: 'uri', pattern: '^https?://' },
+} as const satisfies V1RouteParameter;
+const TRUSTED_ONLY_QUERY_PARAMETER = {
+  name: 'trustedOnly',
+  in: 'query',
+  required: false,
+  schema: { type: 'boolean' },
+} as const satisfies V1RouteParameter;
+const QUOTE_METHOD_QUERY_PARAMETER = {
+  name: 'method',
+  in: 'query',
+  required: false,
+  schema: { type: 'string', enum: ['bolt11', 'bolt12', 'onchain'] },
+} as const satisfies V1RouteParameter;
+const BALANCE_PARAMETERS = [
+  {
+    name: 'mintUrl',
+    in: 'query',
+    required: false,
+    style: 'form',
+    explode: true,
+    schema: {
+      type: 'array',
+      items: { type: 'string', format: 'uri', pattern: '^https?://' },
+    },
+  },
+  {
+    name: 'unit',
+    in: 'query',
+    required: false,
+    style: 'form',
+    explode: true,
+    schema: { type: 'array', items: { type: 'string', minLength: 1 } },
+  },
+  TRUSTED_ONLY_QUERY_PARAMETER,
+] as const satisfies readonly V1RouteParameter[];
+
 const HEALTH_ROUTE = {
   method: 'GET',
   path: '/health',
@@ -142,6 +211,17 @@ const HEALTH_ROUTE = {
   idempotencyKey: null,
   responseCacheControl: null,
 } as const satisfies V1RouteMetadata<null, HealthDocument>;
+
+const OPENAPI_ROUTE = {
+  method: 'GET',
+  path: '/v1/openapi.json',
+  capability: 'wallet:read',
+  requestSchema: noBodySchema,
+  responseSchema: openApiDocumentSchema,
+  successStatuses: [200],
+  idempotencyKey: null,
+  responseCacheControl: null,
+} as const satisfies V1RouteMetadata<null, unknown>;
 
 const EVALUATE_PAYMENT_REQUEST_ROUTE = {
   method: 'POST',
@@ -177,6 +257,7 @@ const BALANCES_ROUTE = {
   successStatuses: [200],
   idempotencyKey: null,
   responseCacheControl: null,
+  parameters: BALANCE_PARAMETERS,
 } as const satisfies V1RouteMetadata<null, BalancesDocument>;
 
 const LIST_HISTORY_ROUTE = {
@@ -188,6 +269,7 @@ const LIST_HISTORY_ROUTE = {
   successStatuses: [200],
   idempotencyKey: null,
   responseCacheControl: null,
+  parameters: PAGE_PARAMETERS,
 } as const satisfies V1RouteMetadata<null, HistoryPageDocument>;
 
 const GET_HISTORY_ROUTE = {
@@ -199,6 +281,7 @@ const GET_HISTORY_ROUTE = {
   successStatuses: [200],
   idempotencyKey: null,
   responseCacheControl: null,
+  parameters: [pathParameter('historyEntryId')],
 } as const satisfies V1RouteMetadata<null, HistoryDocument>;
 
 const EVENTS_ROUTE = {
@@ -233,6 +316,7 @@ const LIST_MINTS_ROUTE = {
   successStatuses: [200],
   idempotencyKey: null,
   responseCacheControl: null,
+  parameters: [TRUSTED_ONLY_QUERY_PARAMETER],
 } as const satisfies V1RouteMetadata<null, KnownMintsDocument>;
 
 const TRUST_MINT_ROUTE = {
@@ -260,6 +344,7 @@ const MINT_INFO_ROUTE = {
   successStatuses: [200],
   idempotencyKey: null,
   responseCacheControl: null,
+  parameters: [MINT_URL_QUERY_PARAMETER],
 } as const satisfies V1RouteMetadata<null, MintInformationDocument>;
 
 const PAYMENT_METHOD_CAPABILITIES_ROUTE = {
@@ -271,6 +356,7 @@ const PAYMENT_METHOD_CAPABILITIES_ROUTE = {
   successStatuses: [200],
   idempotencyKey: null,
   responseCacheControl: null,
+  parameters: [MINT_URL_QUERY_PARAMETER],
 } as const satisfies V1RouteMetadata<null, PaymentMethodCapabilitiesDocument>;
 
 const CREATE_MINT_QUOTE_ROUTE = {
@@ -293,6 +379,7 @@ const GET_MINT_QUOTE_ROUTE = {
   successStatuses: [200],
   idempotencyKey: null,
   responseCacheControl: null,
+  parameters: [pathParameter('quoteId'), MINT_URL_QUERY_PARAMETER],
 } as const satisfies V1RouteMetadata<null, MintQuoteDocument>;
 
 const LIST_PENDING_MINT_QUOTES_ROUTE = {
@@ -304,6 +391,7 @@ const LIST_PENDING_MINT_QUOTES_ROUTE = {
   successStatuses: [200],
   idempotencyKey: null,
   responseCacheControl: null,
+  parameters: [QUOTE_METHOD_QUERY_PARAMETER, ...PAGE_PARAMETERS],
 } as const satisfies V1RouteMetadata<null, PendingMintQuotesDocument>;
 
 const REFRESH_MINT_QUOTE_ROUTE = {
@@ -315,6 +403,7 @@ const REFRESH_MINT_QUOTE_ROUTE = {
   successStatuses: [200],
   idempotencyKey: 'optional',
   responseCacheControl: null,
+  parameters: [pathParameter('quoteId'), MINT_URL_QUERY_PARAMETER],
 } as const satisfies V1RouteMetadata<null, MintQuoteDocument>;
 
 const CREATE_MELT_QUOTE_ROUTE = {
@@ -337,6 +426,7 @@ const GET_MELT_QUOTE_ROUTE = {
   successStatuses: [200],
   idempotencyKey: null,
   responseCacheControl: null,
+  parameters: [pathParameter('quoteId'), MINT_URL_QUERY_PARAMETER],
 } as const satisfies V1RouteMetadata<null, MeltQuoteDocument>;
 
 const LIST_PENDING_MELT_QUOTES_ROUTE = {
@@ -348,6 +438,7 @@ const LIST_PENDING_MELT_QUOTES_ROUTE = {
   successStatuses: [200],
   idempotencyKey: null,
   responseCacheControl: null,
+  parameters: [QUOTE_METHOD_QUERY_PARAMETER, ...PAGE_PARAMETERS],
 } as const satisfies V1RouteMetadata<null, PendingMeltQuotesDocument>;
 
 const REFRESH_MELT_QUOTE_ROUTE = {
@@ -359,6 +450,7 @@ const REFRESH_MELT_QUOTE_ROUTE = {
   successStatuses: [200],
   idempotencyKey: 'optional',
   responseCacheControl: null,
+  parameters: [pathParameter('quoteId'), MINT_URL_QUERY_PARAMETER],
 } as const satisfies V1RouteMetadata<null, MeltQuoteDocument>;
 
 const CREATE_MINT_OPERATION_ROUTE = {
@@ -381,6 +473,7 @@ const GET_MINT_OPERATION_ROUTE = {
   successStatuses: [200],
   idempotencyKey: null,
   responseCacheControl: null,
+  parameters: [pathParameter('operationId')],
 } as const satisfies V1RouteMetadata<null, MintOperationDocument>;
 
 const LIST_PENDING_MINT_OPERATIONS_ROUTE = {
@@ -392,6 +485,7 @@ const LIST_PENDING_MINT_OPERATIONS_ROUTE = {
   successStatuses: [200],
   idempotencyKey: null,
   responseCacheControl: null,
+  parameters: PAGE_PARAMETERS,
 } as const satisfies V1RouteMetadata<null, MintOperationsDocument>;
 
 const LIST_IN_FLIGHT_MINT_OPERATIONS_ROUTE = {
@@ -408,6 +502,7 @@ const EXECUTE_MINT_OPERATION_ROUTE = {
   successStatuses: [200],
   idempotencyKey: 'optional',
   responseCacheControl: null,
+  parameters: [pathParameter('operationId')],
 } as const satisfies V1RouteMetadata<null, MintOperationDocument>;
 
 const REFRESH_MINT_OPERATION_ROUTE = {
@@ -424,6 +519,7 @@ const GET_MINT_OPERATION_RESULT_ROUTE = {
   successStatuses: [],
   idempotencyKey: null,
   responseCacheControl: 'no-store',
+  parameters: [pathParameter('operationId')],
 } as const satisfies V1RouteMetadata<null, never>;
 
 const CREATE_MELT_OPERATION_ROUTE = {
@@ -446,6 +542,7 @@ const GET_MELT_OPERATION_ROUTE = {
   successStatuses: [200],
   idempotencyKey: null,
   responseCacheControl: null,
+  parameters: [pathParameter('operationId')],
 } as const satisfies V1RouteMetadata<null, MeltOperationDocument>;
 
 const LIST_PREPARED_MELT_OPERATIONS_ROUTE = {
@@ -457,6 +554,7 @@ const LIST_PREPARED_MELT_OPERATIONS_ROUTE = {
   successStatuses: [200],
   idempotencyKey: null,
   responseCacheControl: null,
+  parameters: PAGE_PARAMETERS,
 } as const satisfies V1RouteMetadata<null, MeltOperationsDocument>;
 
 const LIST_IN_FLIGHT_MELT_OPERATIONS_ROUTE = {
@@ -473,6 +571,7 @@ const EXECUTE_MELT_OPERATION_ROUTE = {
   successStatuses: [200],
   idempotencyKey: 'optional',
   responseCacheControl: 'no-store',
+  parameters: [pathParameter('operationId')],
 } as const satisfies V1RouteMetadata<null, ExecuteMeltOperationResponseDocument>;
 
 const GET_MELT_OPERATION_RESULT_ROUTE = {
@@ -484,6 +583,7 @@ const GET_MELT_OPERATION_RESULT_ROUTE = {
   successStatuses: [200],
   idempotencyKey: null,
   responseCacheControl: 'no-store',
+  parameters: [pathParameter('operationId')],
 } as const satisfies V1RouteMetadata<null, MeltResultDocument>;
 
 const CANCEL_MELT_OPERATION_ROUTE = {
@@ -495,6 +595,7 @@ const CANCEL_MELT_OPERATION_ROUTE = {
   successStatuses: [200],
   idempotencyKey: 'optional',
   responseCacheControl: null,
+  parameters: [pathParameter('operationId')],
 } as const satisfies V1RouteMetadata<null, MeltOperationDocument>;
 
 const REFRESH_MELT_OPERATION_ROUTE = {
@@ -527,6 +628,7 @@ const GET_SEND_OPERATION_ROUTE = {
   successStatuses: [200],
   idempotencyKey: null,
   responseCacheControl: null,
+  parameters: [pathParameter('operationId')],
 } as const satisfies V1RouteMetadata<null, SendOperationDocument>;
 
 const LIST_PREPARED_SEND_OPERATIONS_ROUTE = {
@@ -538,6 +640,7 @@ const LIST_PREPARED_SEND_OPERATIONS_ROUTE = {
   successStatuses: [200],
   idempotencyKey: null,
   responseCacheControl: null,
+  parameters: PAGE_PARAMETERS,
 } as const satisfies V1RouteMetadata<null, SendOperationsDocument>;
 
 const LIST_IN_FLIGHT_SEND_OPERATIONS_ROUTE = {
@@ -554,6 +657,7 @@ const EXECUTE_SEND_OPERATION_ROUTE = {
   successStatuses: [200],
   idempotencyKey: 'optional',
   responseCacheControl: 'no-store',
+  parameters: [pathParameter('operationId')],
 } as const satisfies V1RouteMetadata<null, ExecuteSendOperationResponseDocument>;
 
 const GET_SEND_OPERATION_RESULT_ROUTE = {
@@ -565,6 +669,7 @@ const GET_SEND_OPERATION_RESULT_ROUTE = {
   successStatuses: [200],
   idempotencyKey: null,
   responseCacheControl: 'no-store',
+  parameters: [pathParameter('operationId')],
 } as const satisfies V1RouteMetadata<null, SendResultDocument>;
 
 const CANCEL_SEND_OPERATION_ROUTE = {
@@ -576,6 +681,7 @@ const CANCEL_SEND_OPERATION_ROUTE = {
   successStatuses: [200],
   idempotencyKey: 'optional',
   responseCacheControl: null,
+  parameters: [pathParameter('operationId')],
 } as const satisfies V1RouteMetadata<null, SendOperationDocument>;
 
 const REFRESH_SEND_OPERATION_ROUTE = {
@@ -608,6 +714,7 @@ const GET_RECEIVE_OPERATION_ROUTE = {
   successStatuses: [200],
   idempotencyKey: null,
   responseCacheControl: null,
+  parameters: [pathParameter('operationId')],
 } as const satisfies V1RouteMetadata<null, ReceiveOperationDocument>;
 
 const LIST_PREPARED_RECEIVE_OPERATIONS_ROUTE = {
@@ -619,6 +726,7 @@ const LIST_PREPARED_RECEIVE_OPERATIONS_ROUTE = {
   successStatuses: [200],
   idempotencyKey: null,
   responseCacheControl: null,
+  parameters: PAGE_PARAMETERS,
 } as const satisfies V1RouteMetadata<null, ReceiveOperationsDocument>;
 
 const LIST_IN_FLIGHT_RECEIVE_OPERATIONS_ROUTE = {
@@ -635,6 +743,7 @@ const EXECUTE_RECEIVE_OPERATION_ROUTE = {
   successStatuses: [200],
   idempotencyKey: 'optional',
   responseCacheControl: null,
+  parameters: [pathParameter('operationId')],
 } as const satisfies V1RouteMetadata<null, ReceiveOperationDocument>;
 
 const GET_RECEIVE_OPERATION_RESULT_ROUTE = {
@@ -646,6 +755,7 @@ const GET_RECEIVE_OPERATION_RESULT_ROUTE = {
   successStatuses: [],
   idempotencyKey: null,
   responseCacheControl: 'no-store',
+  parameters: [pathParameter('operationId')],
 } as const satisfies V1RouteMetadata<null, never>;
 
 const CANCEL_RECEIVE_OPERATION_ROUTE = {
@@ -657,6 +767,7 @@ const CANCEL_RECEIVE_OPERATION_ROUTE = {
   successStatuses: [200],
   idempotencyKey: 'optional',
   responseCacheControl: null,
+  parameters: [pathParameter('operationId')],
 } as const satisfies V1RouteMetadata<null, ReceiveOperationDocument>;
 
 const REFRESH_RECEIVE_OPERATION_ROUTE = {
@@ -726,6 +837,7 @@ const STOP_PROCESS_ROUTE = {
 export function createV1RouteMetadata(): Array<V1RouteMetadata> {
   return [
     HEALTH_ROUTE,
+    OPENAPI_ROUTE,
     STATUS_ROUTE,
     EVALUATE_PAYMENT_REQUEST_ROUTE,
     BALANCES_ROUTE,
@@ -797,6 +909,10 @@ export function createV1RouteDefinitions(
   const health = defineV1Route({
     ...HEALTH_ROUTE,
     handler: () => ({ status: 'ok', interfaceVersion: '1' }),
+  });
+  const openApi = defineV1Route({
+    ...OPENAPI_ROUTE,
+    handler: () => generateV1OpenApiDocument(createV1RouteMetadata(), daemonVersion),
   });
   const evaluatePaymentRequest = defineV1Route({
     ...EVALUATE_PAYMENT_REQUEST_ROUTE,
@@ -1673,6 +1789,7 @@ export function createV1RouteDefinitions(
   });
   return [
     health,
+    openApi,
     status,
     evaluatePaymentRequest,
     balances,
@@ -1730,21 +1847,12 @@ export function createV1RouteDefinitions(
   ];
 }
 
-const DEFAULT_HISTORY_PAGE_LIMIT = 20;
-const MAX_HISTORY_PAGE_LIMIT = 100;
-
 function parseHistoryPageQuery(request: Request): { offset: number; limit: number } {
   const message = 'The Wallet history pagination is invalid';
-  const query = parseQuery(request, ['offset', 'limit'], message);
+  const query = parseQuery(request, queryParameterNames(LIST_HISTORY_ROUTE.parameters), message);
   return {
     offset: parsePageInteger(query.getAll('offset'), 0, Number.MAX_SAFE_INTEGER, 0, message),
-    limit: parsePageInteger(
-      query.getAll('limit'),
-      1,
-      MAX_HISTORY_PAGE_LIMIT,
-      DEFAULT_HISTORY_PAGE_LIMIT,
-      message,
-    ),
+    limit: parsePageInteger(query.getAll('limit'), 1, MAX_PAGE_LIMIT, DEFAULT_PAGE_LIMIT, message),
   };
 }
 
@@ -2129,7 +2237,7 @@ function quoteCocoError(action: string, cause: unknown): V1HttpError {
 }
 
 function parseSingleMintUrlQuery(request: Request, message: string): string {
-  const query = parseQuery(request, ['mintUrl'], message);
+  const query = parseQuery(request, [MINT_URL_QUERY_PARAMETER.name], message);
   const values = query.getAll('mintUrl');
   if (values.length !== 1) {
     throw invalidQuery(message);
@@ -2154,7 +2262,7 @@ async function findKnownMint(
 }
 
 function parseTrustedOnly(request: Request, message: string): boolean {
-  const query = parseQuery(request, ['trustedOnly'], message);
+  const query = parseQuery(request, [TRUSTED_ONLY_QUERY_PARAMETER.name], message);
   const values = query.getAll('trustedOnly');
   if (values.length > 1 || values.some((value) => value !== 'true' && value !== 'false')) {
     throw invalidQuery(message);
@@ -2162,15 +2270,16 @@ function parseTrustedOnly(request: Request, message: string): boolean {
   return values[0] === 'true';
 }
 
-const DEFAULT_QUOTE_PAGE_LIMIT = 20;
-const MAX_QUOTE_PAGE_LIMIT = 100;
-
 function parsePendingQuoteQuery(
   request: Request,
   type: 'mint' | 'melt',
 ): { method?: 'bolt11' | 'bolt12' | 'onchain'; offset: number; limit: number } {
   const message = `The pending ${type === 'mint' ? 'Mint' : 'Melt'} Quote filters are invalid`;
-  const query = parseQuery(request, ['method', 'offset', 'limit'], message);
+  const parameters =
+    type === 'mint'
+      ? LIST_PENDING_MINT_QUOTES_ROUTE.parameters
+      : LIST_PENDING_MELT_QUOTES_ROUTE.parameters;
+  const query = parseQuery(request, queryParameterNames(parameters), message);
   const methods = query.getAll('method');
   if (
     methods.length > 1 ||
@@ -2181,13 +2290,7 @@ function parsePendingQuoteQuery(
   return {
     ...(methods[0] ? { method: methods[0] as 'bolt11' | 'bolt12' | 'onchain' } : {}),
     offset: parsePageInteger(query.getAll('offset'), 0, Number.MAX_SAFE_INTEGER, 0, message),
-    limit: parsePageInteger(
-      query.getAll('limit'),
-      1,
-      MAX_QUOTE_PAGE_LIMIT,
-      DEFAULT_QUOTE_PAGE_LIMIT,
-      message,
-    ),
+    limit: parsePageInteger(query.getAll('limit'), 1, MAX_PAGE_LIMIT, DEFAULT_PAGE_LIMIT, message),
   };
 }
 
@@ -2360,10 +2463,12 @@ function parseMintOperationPageQuery(
   kind: 'pending' | 'in-flight',
 ): { offset: number; limit: number } {
   const message = `The ${kind} Mint Operation filters are invalid`;
-  const query = parseQuery(request, ['offset', 'limit'], message);
+  const route =
+    kind === 'pending' ? LIST_PENDING_MINT_OPERATIONS_ROUTE : LIST_IN_FLIGHT_MINT_OPERATIONS_ROUTE;
+  const query = parseQuery(request, queryParameterNames(route.parameters), message);
   return {
     offset: parsePageInteger(query.getAll('offset'), 0, Number.MAX_SAFE_INTEGER, 0, message),
-    limit: parsePageInteger(query.getAll('limit'), 1, 100, 20, message),
+    limit: parsePageInteger(query.getAll('limit'), 1, MAX_PAGE_LIMIT, DEFAULT_PAGE_LIMIT, message),
   };
 }
 
@@ -2524,10 +2629,14 @@ function parseMeltOperationPageQuery(
   kind: 'prepared' | 'in-flight',
 ): { offset: number; limit: number } {
   const message = `The ${kind} Melt Operation filters are invalid`;
-  const query = parseQuery(request, ['offset', 'limit'], message);
+  const route =
+    kind === 'prepared'
+      ? LIST_PREPARED_MELT_OPERATIONS_ROUTE
+      : LIST_IN_FLIGHT_MELT_OPERATIONS_ROUTE;
+  const query = parseQuery(request, queryParameterNames(route.parameters), message);
   return {
     offset: parsePageInteger(query.getAll('offset'), 0, Number.MAX_SAFE_INTEGER, 0, message),
-    limit: parsePageInteger(query.getAll('limit'), 1, 100, 20, message),
+    limit: parsePageInteger(query.getAll('limit'), 1, MAX_PAGE_LIMIT, DEFAULT_PAGE_LIMIT, message),
   };
 }
 
@@ -2569,10 +2678,14 @@ function parseSendOperationPageQuery(
   kind: 'prepared' | 'in-flight',
 ): { offset: number; limit: number } {
   const message = `The ${kind} Send Operation filters are invalid`;
-  const query = parseQuery(request, ['offset', 'limit'], message);
+  const route =
+    kind === 'prepared'
+      ? LIST_PREPARED_SEND_OPERATIONS_ROUTE
+      : LIST_IN_FLIGHT_SEND_OPERATIONS_ROUTE;
+  const query = parseQuery(request, queryParameterNames(route.parameters), message);
   return {
     offset: parsePageInteger(query.getAll('offset'), 0, Number.MAX_SAFE_INTEGER, 0, message),
-    limit: parsePageInteger(query.getAll('limit'), 1, 100, 20, message),
+    limit: parsePageInteger(query.getAll('limit'), 1, MAX_PAGE_LIMIT, DEFAULT_PAGE_LIMIT, message),
   };
 }
 
@@ -2656,10 +2769,14 @@ function parseReceiveOperationPageQuery(
   kind: 'prepared' | 'in-flight',
 ): { offset: number; limit: number } {
   const message = `The ${kind} Receive Operation filters are invalid`;
-  const query = parseQuery(request, ['offset', 'limit'], message);
+  const route =
+    kind === 'prepared'
+      ? LIST_PREPARED_RECEIVE_OPERATIONS_ROUTE
+      : LIST_IN_FLIGHT_RECEIVE_OPERATIONS_ROUTE;
+  const query = parseQuery(request, queryParameterNames(route.parameters), message);
   return {
     offset: parsePageInteger(query.getAll('offset'), 0, Number.MAX_SAFE_INTEGER, 0, message),
-    limit: parsePageInteger(query.getAll('limit'), 1, 100, 20, message),
+    limit: parsePageInteger(query.getAll('limit'), 1, MAX_PAGE_LIMIT, DEFAULT_PAGE_LIMIT, message),
   };
 }
 
@@ -2772,6 +2889,12 @@ function parseQuery(request: Request, allowedKeys: readonly string[], message: s
   return query;
 }
 
+function queryParameterNames(parameters: readonly V1RouteParameter[]): string[] {
+  return parameters
+    .filter((parameter) => parameter.in === 'query')
+    .map((parameter) => parameter.name);
+}
+
 function invalidQuery(message: string, cause?: unknown): V1HttpError {
   return new V1HttpError({
     status: 400,
@@ -2834,7 +2957,7 @@ function requireRunningSession(runtime: V1Runtime) {
 function parseBalanceScope(request: Request): BalanceQuery {
   const query = parseQuery(
     request,
-    ['mintUrl', 'unit', 'trustedOnly'],
+    queryParameterNames(BALANCES_ROUTE.parameters),
     'The balance filters are invalid',
   );
 

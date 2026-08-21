@@ -628,6 +628,30 @@ export const healthSchema = namedSchema<HealthDocument>(
   }),
 );
 
+/** Shallow runtime guard for the generated OpenAPI document returned by cocod. */
+export const openApiDocumentSchema: RuntimeSchema<unknown> = {
+  name: 'OpenApiDocument',
+  jsonSchema: {
+    type: 'object',
+    additionalProperties: true,
+    required: ['openapi', 'info', 'paths', 'components'],
+    properties: {
+      openapi: { const: '3.1.0' },
+      info: { type: 'object' },
+      paths: { type: 'object' },
+      components: { type: 'object' },
+    },
+  },
+  parse(value) {
+    const document = requireRecord(value, '$');
+    if (document.openapi !== '3.1.0') throw new Error('$.openapi must be 3.1.0');
+    requireRecord(document.info, '$.info');
+    requireRecord(document.paths, '$.paths');
+    requireRecord(document.components, '$.components');
+    return value;
+  },
+};
+
 /** Runtime and generated schema for the common v1 error document. */
 export const v1ErrorSchema = namedSchema<V1ErrorDocument>(
   'Error',

@@ -55,6 +55,7 @@ describe('routes', () => {
   test('does not expose superseded lifecycle command routes', () => {
     const routes = createRouteHandlers(uninitializedRuntime());
 
+    expect(Object.keys(routes).toSorted()).toEqual(['/npc/address', '/npc/username']);
     expect(routes['/balance']).toBeUndefined();
     expect(routes['/ping']).toBeUndefined();
     expect(routes['/status']).toBeUndefined();

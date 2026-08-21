@@ -1,15 +1,9 @@
 # Cocod Network Interface v1
 
-Status: accepted and implemented for the authenticated TCP transport, Wallet and Coco Session
-lifecycle, Wallet Recovery Material, Cocod Process shutdown, balance, Known Mint, Quote, Send,
-Receive, Mint and Melt Operation, Payment Request evaluation, and safe history resources, plus the
-legacy compatibility described here. The complete v1 resource surface is accepted as the target
-design; event and machine-description resources remain proposed until their individual contracts
-and implementations land.
+Status: accepted and implemented for the complete v1 resource surface and the legacy compatibility
+described here.
 
-This document specifies cocod's machine-oriented network interface. It distinguishes implemented
-resources from the accepted target surface so resources can land incrementally without inventing
-new protocol shapes in each implementation slice.
+This document specifies cocod's implemented machine-oriented network interface.
 
 Normative requirements use **MUST**, **MUST NOT**, **SHOULD**, and **MAY**.
 
@@ -275,13 +269,13 @@ NOT expose the shared administrative credential to browser storage or browser ap
 ## Legacy command compatibility
 
 The remaining unversioned command routes use the same TCP listener as `/v1`. They retain their
-current request and response shapes temporarily for the NPC extension and event stream. Balance,
-Known Mint, Lightning Receive, Lightning Send, Cashu Send, Cashu Receive, Payment Request, and
-history commands already use v1 resources and their superseded legacy routes have been removed.
+current request and response shapes for the NPC extension. Balance, Known Mint, Lightning Receive,
+Lightning Send, Cashu Send, Cashu Receive, Payment Request, history, and event commands use v1
+resources and their superseded legacy routes have been removed.
 
 Every remaining unversioned route requires the same administrative Client Credential. Cocod does
-not run a Unix listener or a second compatibility transport. Later interface revisions replace
-these routes incrementally and remove their CLI-oriented response envelopes.
+not run a Unix listener or a second compatibility transport. The NPC extension remains explicitly
+outside v1 and retains its CLI-oriented response envelopes.
 
 The legacy `/stop` route is not carried forward. The CLI uses the authenticated v1 process-shutdown
 resource instead.
@@ -711,15 +705,21 @@ first.
 
 ### Machine-readable description
 
-This resource is proposed.
+This resource is implemented and requires `wallet:read`.
 
 | Method | Path               | Purpose                                                  |
 | ------ | ------------------ | -------------------------------------------------------- |
 | `GET`  | `/v1/openapi.json` | Return generated OpenAPI for the implemented v1 surface. |
 
-The document is generated from the runtime request and response schemas. Proposed but unimplemented
-resources MUST NOT appear as callable operations in the generated document. Compatibility policy
-MUST distinguish additive schema changes from changes that require a new interface version.
+The document is generated from the same route metadata and runtime request and response schemas
+enforced by the server. Unsupported resources MUST NOT appear as callable operations in the
+generated document. The checked-in [OpenAPI artifact](openapi-v1.json) is generated from the same
+source and checked for drift.
+
+Within v1, new routes, optional response fields, and optional capabilities are additive changes.
+Removing or renaming a route or field, adding a required field, changing established semantics,
+narrowing an enum or numeric range, or changing identity, amount, or error behavior requires a new
+interface version.
 
 ## Legacy route replacement map
 
@@ -873,7 +873,7 @@ Behavior:
 - When a passphrase is configured, cocod validates it and acquires Wallet Seed Access before
   accepting the transition. Otherwise no unlocking material is required.
 - A valid request transitions the session to `starting` and returns `202 Accepted` with status.
-- Clients observe completion through `GET /v1/status` or the future event stream.
+- Clients observe completion through `GET /v1/status` or the event stream.
 - Calling start while the session is `running` is idempotent and returns `200 OK` with status.
 - Calling start while the session is `starting` returns `202 Accepted` with status.
 - Calling start while the session is `stopping` returns `session_transition_in_progress`.
@@ -1016,9 +1016,9 @@ restore proofs.
 
 ## Delivery order
 
-The accepted target surface lands as focused vertical slices. Each slice specifies request and
-response schemas, implements runtime routes, migrates the CLI, removes the superseded legacy route,
-and updates the generated interface description before it is complete.
+The accepted target surface landed as focused vertical slices. Each slice specified request and
+response schemas, implemented runtime routes, migrated the CLI, removed the superseded legacy
+route, and updated the generated interface description before completion.
 
 When a slice depends on a missing Coco capability, its upstream Coco interface and implementation
 land before the cocod adapter. The slice does not add cocod-local substitute behavior.

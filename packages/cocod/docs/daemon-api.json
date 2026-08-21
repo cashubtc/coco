@@ -13,10 +13,10 @@
     "scheme": "bearer",
     "publicPaths": ["/health"],
     "protectedPaths": "all legacy routes and every /v1 route",
-    "structuredLifecycleDescription": "lifecycle-api-v1.json"
+    "openApiDescription": "openapi-v1.json"
   },
   "responseContract": {
-    "scope": "remaining operational legacy routes",
+    "scope": "unversioned NPC extension routes",
     "success": {
       "shape": {
         "output": "unknown"

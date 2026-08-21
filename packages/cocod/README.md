@@ -127,8 +127,8 @@ upgrading and delete the copy once you're settled.
 
 - CLI: `src/cli.ts`
 - Daemon: `src/daemon.ts`
-- V1 lifecycle interface: `src/v1/`
-- Remaining legacy operational routes: `src/routes.ts`
+- V1 machine interface: `src/v1/`
+- Unversioned NPC extension routes: `src/routes.ts`
 - Transport: authenticated HTTP over one TCP listener
 
 Defaults:
@@ -190,8 +190,8 @@ bun test
 ## Docs
 
 - [API and command reference](docs/API.md)
-- [Implemented v1 contract](docs/lifecycle-api-v1.json)
-- [Remaining legacy operational contract](docs/daemon-api.json)
+- [OpenAPI v1 contract](docs/openapi-v1.json)
+- [Unversioned NPC extension contract](docs/daemon-api.json)
 - [Accepted network interface v1](docs/network-interface-v1.md)
 
 ## License
