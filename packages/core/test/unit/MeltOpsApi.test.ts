@@ -9,6 +9,7 @@ import type {
 } from '../../operations/melt/MeltOperation.ts';
 import type { MeltOperationService } from '../../operations/melt/MeltOperationService.ts';
 import { MeltOpsApi } from '../../api/MeltOpsApi.ts';
+import { MeltOperationNotFoundError, MeltOperationStateError } from '../../models/Error.ts';
 import type { MeltQuote } from '../../models/MeltQuote.ts';
 
 const mintUrl = 'https://mint.test';
@@ -284,5 +285,30 @@ describe('MeltOpsApi', () => {
       pendingOperation.id,
       'user requested',
     );
+  });
+
+  it('reports missing operations with a typed lifecycle error', async () => {
+    (meltOperationService.getOperation as unknown as ReturnType<typeof mock>).mockResolvedValueOnce(
+      null,
+    );
+
+    const error = await api.execute('missing').catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(MeltOperationNotFoundError);
+  });
+
+  it('reports unavailable commands with a typed lifecycle error', async () => {
+    (meltOperationService.getOperation as unknown as ReturnType<typeof mock>).mockResolvedValueOnce(
+      pendingOperation as MeltOperation,
+    );
+
+    const error = await api.execute(pendingOperation.id).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(MeltOperationStateError);
+    expect(error).toMatchObject({
+      operationId: pendingOperation.id,
+      state: 'pending',
+      expectedStates: ['prepared'],
+    });
   });
 });

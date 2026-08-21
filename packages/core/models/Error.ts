@@ -1,3 +1,4 @@
+import type { MeltOperationState } from '../operations/melt/MeltOperation.ts';
 import type { MintOperationState } from '../operations/mint/MintOperation.ts';
 import type { SendOperationState } from '../operations/send/SendOperation.ts';
 import type { ReceiveOperationState } from '../operations/receive/ReceiveOperation.ts';
@@ -148,6 +149,30 @@ export class MintOperationStateError extends Error {
     const expected = expectedStates.map((expectedState) => `'${expectedState}'`).join(' or ');
     super(`Cannot modify operation in state '${state}'. Expected ${expected}.`);
     this.name = 'MintOperationStateError';
+    this.expectedStates = [...expectedStates];
+  }
+}
+
+/** Raised when a requested Melt Operation does not exist. */
+export class MeltOperationNotFoundError extends Error {
+  constructor(readonly operationId: string) {
+    super(`Operation ${operationId} not found`);
+    this.name = 'MeltOperationNotFoundError';
+  }
+}
+
+/** Raised when a Melt lifecycle command is unavailable in the current state. */
+export class MeltOperationStateError extends Error {
+  readonly expectedStates: readonly MeltOperationState[];
+
+  constructor(
+    readonly operationId: string,
+    readonly state: MeltOperationState,
+    expectedStates: readonly MeltOperationState[],
+  ) {
+    const expected = expectedStates.map((expectedState) => `'${expectedState}'`).join(' or ');
+    super(`Cannot modify operation in state '${state}'. Expected ${expected}.`);
+    this.name = 'MeltOperationStateError';
     this.expectedStates = [...expectedStates];
   }
 }
