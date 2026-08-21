@@ -821,10 +821,7 @@ export class ReceiveOperationService {
         case 'executing':
         case 'finalized':
         case 'rolled_back':
-          throw new ReceiveOperationStateError(operation.id, operation.state, [
-            'init',
-            'prepared',
-          ]);
+          throw new ReceiveOperationStateError(operation.id, operation.state, ['init', 'prepared']);
 
         case 'init':
           await this.receiveOperationRepository.delete(operation.id);

@@ -603,7 +603,13 @@ export class MintService {
     try {
       return await this.mintRepo.getMintByUrl(mintUrl);
     } catch (error) {
-      if (error instanceof UnknownMintError) return null;
+      // Repository adapters may load their public error class from a separate package bundle.
+      if (
+        error instanceof UnknownMintError ||
+        (error instanceof Error && error.name === UnknownMintError.name)
+      ) {
+        return null;
+      }
       throw error;
     }
   }

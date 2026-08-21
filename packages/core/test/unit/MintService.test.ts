@@ -1043,6 +1043,19 @@ describe('MintService', () => {
   });
 
   describe('error handling', () => {
+    it('recognizes an unknown Mint error from a separately bundled repository adapter', async () => {
+      mintRepo.getMintByUrl = mock(async () => {
+        const error = new Error(`Mint not found: ${testMintUrl}`);
+        error.name = 'UnknownMintError';
+        throw error;
+      });
+
+      const result = await service.addMintByUrl(testMintUrl);
+
+      expect(result.created).toBe(true);
+      expect(result.mint.mintUrl).toBe(testMintUrl);
+    });
+
     it('propagates repository failures instead of treating them as an unknown Mint', async () => {
       mintRepo.getMintByUrl = mock(async () => {
         throw new Error('storage unavailable');
