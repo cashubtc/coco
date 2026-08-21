@@ -30,6 +30,7 @@ export type {
   PaymentRequestSpendingConditionRequirement,
   PaymentRequestUnsupportedSpendingCondition,
 } from './services/PaymentRequestService.ts';
+export type { AddMintResult } from './services/MintService.ts';
 export type {
   InitSendOperation,
   PreparedSendOperation,

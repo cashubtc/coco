@@ -10,6 +10,7 @@ import type {
 import type { ReceiveOperationService } from '../../operations/receive/ReceiveOperationService.ts';
 import type { SerializedOutputData } from '../../utils.ts';
 import { ReceiveOpsApi } from '../../api/ReceiveOpsApi.ts';
+import { ReceiveOperationNotFoundError, ReceiveOperationStateError } from '../../models/Error.ts';
 
 const mintUrl = 'https://mint.test';
 
@@ -129,8 +130,39 @@ describe('ReceiveOpsApi', () => {
       receiveOperationService.getOperation as unknown as ReturnType<typeof mock>
     ).mockResolvedValueOnce(finalizedOperation);
 
-    await expect(api.cancel(finalizedOperation.id)).rejects.toThrow(
-      "Expected 'init' or 'prepared'",
-    );
+    const error = await api.cancel(finalizedOperation.id).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(ReceiveOperationStateError);
+    expect(error).toMatchObject({
+      operationId: finalizedOperation.id,
+      state: 'finalized',
+      expectedStates: ['init', 'prepared'],
+    });
+  });
+
+  it('execute reports the typed current state when the operation is not prepared', async () => {
+    (
+      receiveOperationService.getOperation as unknown as ReturnType<typeof mock>
+    ).mockResolvedValueOnce(executingOperation);
+
+    const error = await api.execute(executingOperation.id).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(ReceiveOperationStateError);
+    expect(error).toMatchObject({
+      operationId: executingOperation.id,
+      state: 'executing',
+      expectedStates: ['prepared'],
+    });
+  });
+
+  it('reports a typed missing operation from lifecycle commands', async () => {
+    (
+      receiveOperationService.getOperation as unknown as ReturnType<typeof mock>
+    ).mockResolvedValueOnce(null);
+
+    const error = await api.refresh('missing-operation').catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(ReceiveOperationNotFoundError);
+    expect(error).toMatchObject({ operationId: 'missing-operation' });
   });
 });

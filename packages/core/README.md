@@ -296,7 +296,7 @@ those details are derived from canonical quote storage.
 
 ### MintApi
 
-- `addMint(mintUrl: string, options?: { trusted?: boolean }): Promise<{ mint: Mint; keysets: Keyset[] }>`
+- `addMint(mintUrl: string, options?: { trusted?: boolean }): Promise<AddMintResult>`
 - `getMintInfo(mintUrl: string): Promise<MintInfo>`
 - `isTrustedMint(mintUrl: string): Promise<boolean>`
 - `getAllMints(): Promise<Mint[]>`

@@ -19,6 +19,8 @@ import {
   MintOperationError,
   NetworkError,
   ProofValidationError,
+  ReceiveOperationNotFoundError,
+  ReceiveOperationStateError,
   UnknownMintError,
 } from '../../models/Error';
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
@@ -255,6 +257,37 @@ describe('ReceiveOperationService', () => {
     expect(lockedDuringEvent).toBe(true);
   });
 
+  it('execute reports a typed missing operation after its caller read stale state', async () => {
+    const token = { mint: mintUrl, proofs: [makeProof('p1')] } as Token;
+    const prepared = await service.prepare(await service.init(token));
+    await receiveOpRepo.delete(prepared.id);
+
+    const error = await service.execute(prepared).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(ReceiveOperationNotFoundError);
+    expect(error).toMatchObject({ operationId: prepared.id });
+  });
+
+  it('execute reports typed current state after a concurrent transition', async () => {
+    const token = { mint: mintUrl, proofs: [makeProof('p1')] } as Token;
+    const prepared = await service.prepare(await service.init(token));
+    const finalized: FinalizedReceiveOperation = {
+      ...prepared,
+      state: 'finalized',
+      updatedAt: Date.now(),
+    };
+    await receiveOpRepo.update(finalized);
+
+    const error = await service.execute(prepared).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(ReceiveOperationStateError);
+    expect(error).toMatchObject({
+      operationId: prepared.id,
+      state: 'finalized',
+      expectedStates: ['prepared'],
+    });
+  });
+
   it('emits receive-op:rolled-back after the rolled back state is persisted', async () => {
     const proofs = [makeProof('p1')];
     const token: Token = { mint: mintUrl, proofs } as Token;
@@ -291,6 +324,34 @@ describe('ReceiveOperationService', () => {
     const historyEntry = await historyRepo.getReceiveHistoryEntry(mintUrl, prepared.id);
     expect(historyEntry?.state).toBe('rolled_back');
   });
+
+  it('rollback reports a typed missing operation after its caller read stale state', async () => {
+    const error = await service.rollback('missing-operation').catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(ReceiveOperationNotFoundError);
+    expect(error).toMatchObject({ operationId: 'missing-operation' });
+  });
+
+  it('rollback reports typed current state after a concurrent transition', async () => {
+    const token = { mint: mintUrl, proofs: [makeProof('p1')] } as Token;
+    const prepared = await service.prepare(await service.init(token));
+    const finalized: FinalizedReceiveOperation = {
+      ...prepared,
+      state: 'finalized',
+      updatedAt: Date.now(),
+    };
+    await receiveOpRepo.update(finalized);
+
+    const error = await service.rollback(prepared.id).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(ReceiveOperationStateError);
+    expect(error).toMatchObject({
+      operationId: prepared.id,
+      state: 'finalized',
+      expectedStates: ['init', 'prepared'],
+    });
+  });
+
   it('init rejects untrusted mints', async () => {
     const proofs = [makeProof('p1')];
     const token: Token = { mint: mintUrl, proofs } as Token;
