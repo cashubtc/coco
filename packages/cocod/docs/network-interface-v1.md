@@ -628,7 +628,7 @@ underlying safe Send Operation.
 
 ### History and event resources
 
-The history resources are implemented. The event resource remains proposed.
+The history and event resources are implemented.
 
 | Method | Path                           | Purpose                                         |
 | ------ | ------------------------------ | ----------------------------------------------- |

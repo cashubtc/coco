@@ -7,6 +7,7 @@ import {
   defineV1Route,
   V1HttpError,
   V1HttpResponse,
+  V1HttpStreamResponse,
   type ResponseHeaders,
   type V1HttpErrorOptions,
   type V1RouteDefinition,
@@ -218,6 +219,28 @@ async function runV1Route(
       definition.idempotencyKey === 'optional'
         ? await executeIdempotent(definition, request, input, invokeHandler, options.idempotency)
         : await invokeHandler();
+    if (result instanceof V1HttpStreamResponse) {
+      if (definition.responseMediaType !== 'text/event-stream') {
+        throw new Error(`${definition.method} ${definition.path} returned an undocumented stream`);
+      }
+      if (!definition.successStatuses?.includes(result.status)) {
+        throw new Error(
+          `${definition.method} ${definition.path} returned undocumented status ${result.status}`,
+        );
+      }
+      const responseHeaders = new Headers(result.headers);
+      responseHeaders.set('Content-Type', definition.responseMediaType);
+      responseHeaders.set('X-Request-ID', requestId);
+      if (definition.responseCacheControl) {
+        responseHeaders.set('Cache-Control', definition.responseCacheControl);
+      }
+      const response = new Response(result.body, {
+        status: result.status,
+        headers: responseHeaders,
+      });
+      logCompleted(requestLogger, startedAt, response.status);
+      return response;
+    }
     const routeResponse = result instanceof V1HttpResponse ? result : new V1HttpResponse(result);
     if (!definition.successStatuses?.includes(routeResponse.status)) {
       throw new Error(

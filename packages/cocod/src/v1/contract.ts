@@ -15,7 +15,11 @@ export type ResponseHeaders = Headers | Record<string, string> | string[][];
 type V1RouteHandler<TRequest, TResponse> = (
   input: TRequest,
   request: Request,
-) => Promise<TResponse | V1HttpResponse<TResponse>> | TResponse | V1HttpResponse<TResponse>;
+) =>
+  | Promise<TResponse | V1HttpResponse<TResponse> | V1HttpStreamResponse>
+  | TResponse
+  | V1HttpResponse<TResponse>
+  | V1HttpStreamResponse;
 
 /** Declarative method, path, authorization, schema, and success contract for one v1 route. */
 export interface V1RouteMetadata<TRequest = unknown, TResponse = unknown> {
@@ -27,6 +31,7 @@ export interface V1RouteMetadata<TRequest = unknown, TResponse = unknown> {
   readonly successStatuses?: readonly number[];
   readonly idempotencyKey?: 'optional' | null;
   readonly responseCacheControl?: 'no-store' | null;
+  readonly responseMediaType?: 'text/event-stream';
 }
 
 /** Executable v1 route definition formed by binding a handler to route metadata. */
@@ -60,6 +65,15 @@ export class V1HttpError extends Error {
 export class V1HttpResponse<T> {
   constructor(
     readonly body: T,
+    readonly status = 200,
+    readonly headers?: ResponseHeaders,
+  ) {}
+}
+
+/** Carries a schema-validated stream through the common v1 authorization and error boundary. */
+export class V1HttpStreamResponse {
+  constructor(
+    readonly body: ReadableStream<Uint8Array>,
     readonly status = 200,
     readonly headers?: ResponseHeaders,
   ) {}

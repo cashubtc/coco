@@ -21,6 +21,7 @@ import {
   type MeltQuote,
   type ReceiveOperation,
   type SendOperation,
+  type CoreEvents,
 } from '@cashu/coco-core';
 
 import { CocodRuntimeError } from '../runtime-error.js';
@@ -30,6 +31,7 @@ import {
   defineV1Route,
   V1HttpError,
   V1HttpResponse,
+  V1HttpStreamResponse,
   type V1Runtime,
   type V1RouteDefinition,
   type V1RouteMetadata,
@@ -70,6 +72,7 @@ import {
   pendingMeltQuotesSchema,
   processShutdownRequestSchema,
   processShutdownResponseSchema,
+  resourceInvalidationEventSchema,
   receiveOperationSchema,
   receiveOperationsSchema,
   sendOperationSchema,
@@ -113,6 +116,7 @@ import {
   type PendingMeltQuotesDocument,
   type ProcessShutdownRequest,
   type ProcessShutdownResponseDocument,
+  type ResourceInvalidationEventDocument,
   type ReceiveOperationDocument,
   type ReceiveOperationsDocument,
   type SendOperationDocument,
@@ -196,6 +200,18 @@ const GET_HISTORY_ROUTE = {
   idempotencyKey: null,
   responseCacheControl: null,
 } as const satisfies V1RouteMetadata<null, HistoryDocument>;
+
+const EVENTS_ROUTE = {
+  method: 'GET',
+  path: '/v1/events',
+  capability: 'wallet:read',
+  requestSchema: noBodySchema,
+  responseSchema: resourceInvalidationEventSchema,
+  successStatuses: [200],
+  idempotencyKey: null,
+  responseCacheControl: 'no-store',
+  responseMediaType: 'text/event-stream',
+} as const satisfies V1RouteMetadata<null, ResourceInvalidationEventDocument>;
 
 const CREATE_MINT_ROUTE = {
   method: 'POST',
@@ -715,6 +731,7 @@ export function createV1RouteMetadata(): Array<V1RouteMetadata> {
     BALANCES_ROUTE,
     LIST_HISTORY_ROUTE,
     GET_HISTORY_ROUTE,
+    EVENTS_ROUTE,
     LIST_MINTS_ROUTE,
     CREATE_MINT_ROUTE,
     TRUST_MINT_ROUTE,
@@ -852,6 +869,18 @@ export function createV1RouteDefinitions(
         if (error instanceof V1HttpError) throw error;
         throw historyCocoError('return the Wallet history entry', error);
       }
+    },
+  });
+  const events = defineV1Route({
+    ...EVENTS_ROUTE,
+    handler: (_input, request) => {
+      parseQuery(request, [], 'The Event stream query is invalid');
+      const manager = requireRunningSession(runtime).manager;
+      return new V1HttpStreamResponse(
+        createResourceInvalidationStream(manager, request, logger),
+        200,
+        { Connection: 'keep-alive' },
+      );
     },
   });
   const createMint = defineV1Route({
@@ -1649,6 +1678,7 @@ export function createV1RouteDefinitions(
     balances,
     listHistory,
     getHistory,
+    events,
     listMints,
     createMint,
     trustMint,
@@ -1753,6 +1783,158 @@ function toHistoryDocument(entry: HistoryEntry): HistoryDocument {
     case 'receive':
       return { ...base, type: entry.type };
   }
+}
+
+type CocoPublicEventSource = {
+  on<E extends keyof CoreEvents>(
+    event: E,
+    handler: (payload: CoreEvents[E]) => void | Promise<void>,
+  ): () => void;
+};
+
+const EVENT_KEEP_ALIVE_INTERVAL_MS = 5_000;
+
+function createResourceInvalidationStream(
+  manager: CocoPublicEventSource,
+  request: Request,
+  logger?: AppLogger,
+): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  let cleanup = (_closeController: boolean) => {};
+
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      let closed = false;
+      const unsubscribes: Array<() => void> = [];
+      let keepAlive: ReturnType<typeof setInterval> | undefined;
+
+      const enqueue = (document: ResourceInvalidationEventDocument): void => {
+        if (closed) return;
+        try {
+          const event = resourceInvalidationEventSchema.parse(document);
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+        } catch (error) {
+          logger?.error('event.projection_failed', {
+            eventType: document.type,
+            error: { name: error instanceof Error ? error.name : 'UnknownError' },
+          });
+        }
+      };
+      const invalidate = <E extends keyof CoreEvents>(
+        event: E,
+        project: (payload: CoreEvents[E]) => ResourceInvalidationEventDocument,
+      ): void => {
+        unsubscribes.push(
+          manager.on(event, (payload) => {
+            try {
+              enqueue(project(payload));
+            } catch (error) {
+              logger?.error('event.projection_failed', {
+                coreEvent: event,
+                error: { name: error instanceof Error ? error.name : 'UnknownError' },
+              });
+            }
+          }),
+        );
+      };
+      const timestamp = (): string => new Date().toISOString();
+      const mintUpdated = (mintUrl: string): ResourceInvalidationEventDocument => ({
+        type: 'mint.updated',
+        timestamp: timestamp(),
+        data: { mintUrl: normalizeMintUrl(mintUrl) },
+      });
+      const balanceUpdated = (mintUrl: string): ResourceInvalidationEventDocument => ({
+        type: 'balance.updated',
+        timestamp: timestamp(),
+        data: { mintUrl: normalizeMintUrl(mintUrl) },
+      });
+      const operationUpdated = (
+        operationType: 'mint' | 'melt' | 'send' | 'receive',
+        payload: { mintUrl: string; operationId: string },
+      ): ResourceInvalidationEventDocument => ({
+        type: 'operation.updated',
+        timestamp: timestamp(),
+        data: {
+          operationType,
+          operationId: payload.operationId,
+          mintUrl: normalizeMintUrl(payload.mintUrl),
+        },
+      });
+
+      invalidate('history:updated', ({ entry }) => ({
+        type: 'history.updated',
+        timestamp: timestamp(),
+        data: toHistoryDocument(entry),
+      }));
+
+      invalidate('mint:added', ({ mint }) => mintUpdated(mint.mintUrl));
+      invalidate('mint:updated', ({ mint }) => mintUpdated(mint.mintUrl));
+      invalidate('mint:metadata-refreshed', ({ mintUrl }) => mintUpdated(mintUrl));
+      invalidate('mint:trusted', ({ mintUrl }) => mintUpdated(mintUrl));
+      invalidate('mint:untrusted', ({ mintUrl }) => mintUpdated(mintUrl));
+
+      invalidate('mint-quote:updated', ({ mintUrl, method, quoteId }) => ({
+        type: 'quote.updated',
+        timestamp: timestamp(),
+        data: { quoteType: 'mint', mintUrl: normalizeMintUrl(mintUrl), method, quoteId },
+      }));
+      invalidate('melt-quote:updated', ({ mintUrl, method, quoteId }) => ({
+        type: 'quote.updated',
+        timestamp: timestamp(),
+        data: { quoteType: 'melt', mintUrl: normalizeMintUrl(mintUrl), method, quoteId },
+      }));
+
+      invalidate('send:prepared', (payload) => operationUpdated('send', payload));
+      invalidate('send:pending', (payload) => operationUpdated('send', payload));
+      invalidate('send:finalized', (payload) => operationUpdated('send', payload));
+      invalidate('send:rolled-back', (payload) => operationUpdated('send', payload));
+      invalidate('receive-op:prepared', (payload) => operationUpdated('receive', payload));
+      invalidate('receive-op:finalized', (payload) => operationUpdated('receive', payload));
+      invalidate('receive-op:rolled-back', (payload) => operationUpdated('receive', payload));
+      invalidate('melt-op:prepared', (payload) => operationUpdated('melt', payload));
+      invalidate('melt-op:pending', (payload) => operationUpdated('melt', payload));
+      invalidate('melt-op:finalized', (payload) => operationUpdated('melt', payload));
+      invalidate('melt-op:rolled-back', (payload) => operationUpdated('melt', payload));
+      invalidate('mint-op:pending', (payload) => operationUpdated('mint', payload));
+      invalidate('mint-op:requeue', (payload) => operationUpdated('mint', payload));
+      invalidate('mint-op:executing', (payload) => operationUpdated('mint', payload));
+      invalidate('mint-op:finalized', (payload) => operationUpdated('mint', payload));
+      invalidate('mint-op:failed', (payload) => operationUpdated('mint', payload));
+
+      invalidate('proofs:saved', ({ mintUrl }) => balanceUpdated(mintUrl));
+      invalidate('proofs:state-changed', ({ mintUrl }) => balanceUpdated(mintUrl));
+      invalidate('proofs:deleted', ({ mintUrl }) => balanceUpdated(mintUrl));
+      invalidate('proofs:wiped', ({ mintUrl }) => balanceUpdated(mintUrl));
+      invalidate('proofs:reserved', ({ mintUrl }) => balanceUpdated(mintUrl));
+      invalidate('proofs:released', ({ mintUrl }) => balanceUpdated(mintUrl));
+
+      const onAbort = () => cleanup(true);
+      cleanup = (closeController: boolean): void => {
+        if (closed) return;
+        closed = true;
+        if (keepAlive) clearInterval(keepAlive);
+        request.signal.removeEventListener('abort', onAbort);
+        for (const unsubscribe of unsubscribes.splice(0)) unsubscribe();
+        if (closeController) {
+          try {
+            controller.close();
+          } catch {
+            // The consumer may have cancelled the body at the same time as the request aborted.
+          }
+        }
+      };
+
+      controller.enqueue(encoder.encode(': connected\n\n'));
+      keepAlive = setInterval(() => {
+        if (!closed) controller.enqueue(encoder.encode(': ping\n\n'));
+      }, EVENT_KEEP_ALIVE_INTERVAL_MS);
+      request.signal.addEventListener('abort', onAbort, { once: true });
+      if (request.signal.aborted) cleanup(true);
+    },
+    cancel() {
+      cleanup(false);
+    },
+  });
 }
 
 function historyCocoError(action: string, cause: unknown): V1HttpError {

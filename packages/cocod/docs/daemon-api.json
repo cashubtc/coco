@@ -30,14 +30,6 @@
   },
   "endpoints": [
     {
-      "path": "/events",
-      "method": "GET",
-      "state": "cocoSession.running",
-      "responses": {
-        "200": "text/event-stream"
-      }
-    },
-    {
       "path": "/npc/address",
       "method": "GET",
       "state": "cocoSession.running",

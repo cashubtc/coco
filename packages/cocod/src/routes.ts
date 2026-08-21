@@ -72,48 +72,6 @@ export function createRouteHandlers(runtime: CocodRuntime): Record<string, Route
         }
       }),
     },
-
-    '/events': {
-      capability: 'wallet:read',
-      GET: requireRunning(runtime, async (req, state: RunningCocoSession) => {
-        const KEEP_ALIVE_INTERVAL = 5000; // 5 seconds (prevent 8-10s idle timeout)
-
-        const stream = new ReadableStream({
-          start(controller) {
-            // Subscribe to history updates
-            const unsubscribe = state.manager.on('history:updated', (payload) => {
-              const eventData = JSON.stringify({
-                type: 'history:updated',
-                timestamp: new Date().toISOString(),
-                data: payload,
-              });
-              const sseData = `data: ${eventData}\n\n`;
-              controller.enqueue(new TextEncoder().encode(sseData));
-            });
-
-            // Send periodic keep-alive pings to prevent connection timeout
-            const keepAliveInterval = setInterval(() => {
-              controller.enqueue(new TextEncoder().encode(': ping\n\n'));
-            }, KEEP_ALIVE_INTERVAL);
-
-            // Cleanup on client disconnect
-            req.signal.addEventListener('abort', () => {
-              clearInterval(keepAliveInterval);
-              unsubscribe();
-              controller.close();
-            });
-          },
-        });
-
-        return new Response(stream, {
-          headers: {
-            'Content-Type': 'text/event-stream',
-            'Cache-Control': 'no-store',
-            Connection: 'keep-alive',
-          },
-        });
-      }),
-    },
   };
 
   return routes;

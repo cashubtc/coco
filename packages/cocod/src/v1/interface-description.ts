@@ -17,6 +17,7 @@ export interface V1InterfaceDescription {
     successStatuses: readonly number[];
     idempotencyKey: 'optional' | null;
     responseCacheControl: 'no-store' | null;
+    responseMediaType?: 'text/event-stream';
   }>;
 }
 
@@ -52,6 +53,7 @@ export function generateV1InterfaceDescription(
       successStatuses: definition.successStatuses ?? [200],
       idempotencyKey: definition.idempotencyKey ?? null,
       responseCacheControl: definition.responseCacheControl ?? null,
+      ...(definition.responseMediaType ? { responseMediaType: definition.responseMediaType } : {}),
     })),
   };
 }

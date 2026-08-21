@@ -227,7 +227,7 @@ test('streaming requests attach the file-backed bearer credential', async () => 
     const url = input instanceof Request ? input.url : input.toString();
     requestedUrls.push(url);
     const path = new URL(url).pathname;
-    if (path === '/events') {
+    if (path === '/v1/events') {
       streamAuthorizations.push(new Headers(init?.headers).get('authorization'));
       return new Response('data: {"type":"ready"}\n\n');
     }
@@ -237,7 +237,7 @@ test('streaming requests attach the file-backed bearer credential', async () => 
     return Response.json({ status: 'ok', interfaceVersion: '1' });
   }) as unknown as typeof fetch;
 
-  await callDaemonStream('/events', () => {}, {
+  await callDaemonStream('/v1/events', () => {}, {
     credentialFile,
     url: 'https://wallet.example.com',
   });
@@ -246,7 +246,7 @@ test('streaming requests attach the file-backed bearer credential', async () => 
   expect(requestedUrls).toEqual([
     'https://wallet.example.com/health',
     'https://wallet.example.com/v1/status',
-    'https://wallet.example.com/events',
+    'https://wallet.example.com/v1/events',
   ]);
 });
 

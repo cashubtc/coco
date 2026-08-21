@@ -3267,6 +3267,16 @@ describe('v1 HTTP route interface', () => {
       },
       {
         method: 'GET',
+        path: '/v1/events',
+        capability: 'wallet:read',
+        requestSchema: 'NoBody',
+        responseSchema: 'ResourceInvalidationEvent',
+        successStatuses: [200],
+        idempotencyKey: null,
+        responseCacheControl: 'no-store',
+      },
+      {
+        method: 'GET',
         path: '/v1/mints',
         capability: 'wallet:read',
         requestSchema: 'NoBody',

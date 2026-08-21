@@ -28,6 +28,7 @@ import {
   paymentRequestEvaluationSchema,
   processShutdownResponseSchema,
   receiveOperationSchema,
+  resourceInvalidationEventSchema,
   sendOperationSchema,
   v1ErrorSchema,
   walletRecoveryMaterialResponseSchema,
@@ -547,6 +548,25 @@ export function formatHistory(document: HistoryPageDocument): string {
   return document.items.length === 0 ? 'No history.' : JSON.stringify(document.items, null, 2);
 }
 
+/** Refetches canonical safe history whenever the v1 event stream invalidates it. */
+export async function watchHistoryUpdates(
+  client: V1Client,
+  pagination: Pick<HistoryPagination, 'limit'>,
+  onHistory: (history: HistoryPageDocument) => void | Promise<void>,
+  options: ClientCredentialOptions = {},
+): Promise<void> {
+  await callDaemonStream(
+    '/v1/events',
+    async (value) => {
+      const event = resourceInvalidationEventSchema.parse(value);
+      if (event.type !== 'history.updated') return;
+      const history = await client.listHistory({ offset: 0, limit: pagination.limit });
+      await onHistory(history);
+    },
+    options,
+  );
+}
+
 function historyPath({ offset, limit }: HistoryPagination): string {
   const query = new URLSearchParams();
   if (offset !== undefined) query.set('offset', offset.toString());
@@ -724,7 +744,7 @@ export async function handleDaemonCommand(
 
 export async function callDaemonStream(
   path: string,
-  onData: (data: unknown) => void,
+  onData: (data: unknown) => void | Promise<void>,
   options: ClientCredentialOptions = {},
 ): Promise<void> {
   await ensureDaemonRunning(options);
@@ -756,11 +776,14 @@ export async function callDaemonStream(
 
       for (const line of lines) {
         if (line.startsWith('data: ')) {
+          let data: unknown;
           try {
-            onData(JSON.parse(line.slice(6)));
+            data = JSON.parse(line.slice(6));
           } catch {
             // Ignore malformed event data and continue reading the stream.
+            continue;
           }
+          await onData(data);
         }
       }
     }

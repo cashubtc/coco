@@ -144,6 +144,38 @@ export interface HistoryPageDocument {
   limit: number;
 }
 
+/** Safe, non-replayable hint that one canonical v1 resource changed. */
+export type ResourceInvalidationEventDocument =
+  | {
+      type: 'history.updated';
+      timestamp: string;
+      data: HistoryDocument;
+    }
+  | {
+      type: 'operation.updated';
+      timestamp: string;
+      data: {
+        operationType: 'mint' | 'melt' | 'send' | 'receive';
+        operationId: string;
+        mintUrl: string;
+      };
+    }
+  | {
+      type: 'quote.updated';
+      timestamp: string;
+      data: {
+        quoteType: 'mint' | 'melt';
+        mintUrl: string;
+        method: string;
+        quoteId: string;
+      };
+    }
+  | {
+      type: 'mint.updated' | 'balance.updated';
+      timestamp: string;
+      data: { mintUrl: string };
+    };
+
 /** Body used by Known Mint registration and trust commands. */
 export interface MintUrlRequest {
   mintUrl: string;
@@ -724,6 +756,50 @@ export const historyPageSchema = namedSchema<HistoryPageDocument>(
     offset: integerNode({ minimum: 0 }),
     limit: integerNode({ minimum: 1, maximum: 100 }),
   }),
+);
+
+const invalidationTimestamp = rfc3339UtcSchema;
+const mintInvalidationDataNode = objectNode({ mintUrl: stringNode({ pattern: '\\S' }) });
+
+/** Runtime and generated schema for one SSE resource invalidation event. */
+export const resourceInvalidationEventSchema = namedSchema<ResourceInvalidationEventDocument>(
+  'ResourceInvalidationEvent',
+  unionNode([
+    objectNode({
+      type: literalNode('history.updated'),
+      timestamp: invalidationTimestamp,
+      data: historyDocumentNode,
+    }),
+    objectNode({
+      type: literalNode('operation.updated'),
+      timestamp: invalidationTimestamp,
+      data: objectNode({
+        operationType: enumNode(['mint', 'melt', 'send', 'receive']),
+        operationId: stringNode({ pattern: '\\S' }),
+        mintUrl: stringNode({ pattern: '\\S' }),
+      }),
+    }),
+    objectNode({
+      type: literalNode('quote.updated'),
+      timestamp: invalidationTimestamp,
+      data: objectNode({
+        quoteType: enumNode(['mint', 'melt']),
+        mintUrl: stringNode({ pattern: '\\S' }),
+        method: stringNode({ pattern: '\\S' }),
+        quoteId: stringNode({ pattern: '\\S' }),
+      }),
+    }),
+    objectNode({
+      type: literalNode('mint.updated'),
+      timestamp: invalidationTimestamp,
+      data: mintInvalidationDataNode,
+    }),
+    objectNode({
+      type: literalNode('balance.updated'),
+      timestamp: invalidationTimestamp,
+      data: mintInvalidationDataNode,
+    }),
+  ]),
 );
 
 const knownMintNode = objectNode({

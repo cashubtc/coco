@@ -23,7 +23,7 @@ Use the implicit `http://127.0.0.1:62626` endpoint for local auto-start. The glo
 - `history` - List history entries
   - `--offset <number>` default `0`
   - `--limit <number>` default `20`, max `100`
-  - `--watch` stream real-time updates after initial fetch
+  - `--watch` refetch canonical history when the v1 invalidation stream reports an update
 
 ### Receive
 
@@ -164,7 +164,7 @@ no-store`, `Retry-After`, `WWW-Authenticate`, `X-Request-ID`, and `Allow`. These
 - `GET /v1/operations/receive/{operationId}/result`
 - `POST /v1/operations/receive/{operationId}/cancel`
 - `POST /v1/operations/receive/{operationId}/refresh`
-- `GET /events` (SSE stream)
+- `GET /v1/events` (authenticated SSE resource-invalidations stream)
 - `GET /npc/address`
 - `POST /npc/username`
 

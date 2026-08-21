@@ -2,12 +2,8 @@ import { describe, expect, test } from 'bun:test';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Manager } from '@cashu/coco-core';
-
 import { AdministrativeCredential, loadClientCredential } from './credentials.js';
 import { buildFallbackHandler, buildRoutes, createRouteHandlers } from './routes';
-import { startTcpTestServer } from '../test/helpers/tcp.js';
-import type { AppLogger } from './utils/logger.js';
 import { type CocodRuntime, type CocodStatus, type RunningCocoSession } from './runtime';
 
 function fakeRuntime(
@@ -31,30 +27,6 @@ function uninitializedRuntime(overrides: Partial<CocodRuntime> = {}): CocodRunti
     },
     null,
     overrides,
-  );
-}
-
-function runningRuntime(manager?: unknown): CocodRuntime {
-  const fakeManager = (manager ?? {}) as Manager;
-  const fakeNpcAccount = {} as unknown as import('coco-cashu-plugin-npc').NPCAccountApi;
-  return fakeRuntime(
-    {
-      wallet: {
-        configuredAt: '2026-08-16T00:00:00.000Z',
-        mintUrl: 'https://mint.example.com',
-      },
-      seedAccess: { state: 'available', requiresPassphrase: false },
-      cocoSession: {
-        state: 'running',
-        startedAt: '2026-08-16T00:00:01.000Z',
-        lastFailure: null,
-      },
-    },
-    {
-      manager: fakeManager,
-      mintUrl: 'https://mint.example.com',
-      npcAccount: fakeNpcAccount,
-    },
   );
 }
 
@@ -88,69 +60,7 @@ describe('routes', () => {
     expect(routes['/status']).toBeUndefined();
     expect(routes['/init']).toBeUndefined();
     expect(routes['/unlock']).toBeUndefined();
-  });
-
-  test('rejects a protected route without a bearer credential', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'cocod-routes-auth-'));
-    try {
-      const credentials = await AdministrativeCredential.loadOrBootstrap(
-        credentialPaths(directory),
-      );
-      const runtime = uninitializedRuntime();
-      const routes = buildRoutes(createRouteHandlers(runtime), runtime, credentials);
-
-      const response = await routes['/events']!.GET!(new Request('http://localhost/events'));
-
-      expect(response.status).toBe(401);
-      expect(await response.json()).toEqual({ error: 'Unauthorized' });
-    } finally {
-      await rm(directory, { recursive: true, force: true });
-    }
-  });
-
-  test('serves the authenticated legacy event stream on the TCP listener', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'cocod-tcp-stream-'));
-    let server: ReturnType<typeof Bun.serve> | undefined;
-    try {
-      const paths = credentialPaths(directory);
-      const credentials = await AdministrativeCredential.loadOrBootstrap(paths);
-      const plaintext = await loadClientCredential(paths.clientCredentialFile);
-      let publishHistory: ((payload: unknown) => void) | undefined;
-      const runtime = runningRuntime({
-        history: { getPaginatedHistory: async () => [] },
-        on: (_event: string, listener: (payload: unknown) => void) => {
-          publishHistory = listener;
-          return () => {};
-        },
-      });
-      server = startTcpTestServer({
-        routes: buildRoutes(createRouteHandlers(runtime), runtime, credentials),
-        fetch: buildFallbackHandler(runtime, credentials),
-      });
-
-      const unauthorizedStream = await fetch(new URL('/events', server.url));
-      const abort = new AbortController();
-      const streamResponse = fetch(new URL('/events', server.url), {
-        headers: { Authorization: `Bearer ${plaintext}` },
-        signal: abort.signal,
-      });
-
-      expect(unauthorizedStream.status).toBe(401);
-      for (let attempt = 0; attempt < 20 && !publishHistory; attempt++) {
-        await Bun.sleep(5);
-      }
-      expect(publishHistory).toBeFunction();
-      publishHistory!({ id: 'history-1' });
-      const stream = await streamResponse;
-      expect(stream.status).toBe(200);
-      expect(stream.headers.get('content-type')).toBe('text/event-stream');
-      const chunk = await stream.body!.getReader().read();
-      expect(new TextDecoder().decode(chunk.value)).toContain('"id":"history-1"');
-      abort.abort();
-    } finally {
-      await server?.stop(true);
-      await rm(directory, { recursive: true, force: true });
-    }
+    expect(routes['/events']).toBeUndefined();
   });
 
   test('returns a generic forbidden response when a capability is missing', async () => {
@@ -177,42 +87,6 @@ describe('routes', () => {
 
       expect(response.status).toBe(403);
       expect(await response.json()).toEqual({ error: 'Forbidden' });
-    } finally {
-      await rm(directory, { recursive: true, force: true });
-    }
-  });
-
-  test('does not include bearer credentials or authorization headers in route logs', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'cocod-routes-redaction-'));
-    try {
-      const credentials = await AdministrativeCredential.loadOrBootstrap(
-        credentialPaths(directory),
-      );
-      const entries: unknown[] = [];
-      const logger = {
-        child: () => logger,
-        debug: (message: string, ...meta: unknown[]) => entries.push([message, ...meta]),
-        error: (message: string, ...meta: unknown[]) => entries.push([message, ...meta]),
-        info: (message: string, ...meta: unknown[]) => entries.push([message, ...meta]),
-        log: (_level: string, message: string, ...meta: unknown[]) =>
-          entries.push([message, ...meta]),
-        warn: (message: string, ...meta: unknown[]) => entries.push([message, ...meta]),
-        flush: async () => {},
-      } as AppLogger;
-      const runtime = uninitializedRuntime();
-      const routes = buildRoutes(createRouteHandlers(runtime), runtime, credentials, logger);
-      const presentedCredential = 'z'.repeat(43);
-
-      const response = await routes['/events']!.GET!(
-        new Request('http://localhost/events', {
-          headers: { Authorization: `Bearer ${presentedCredential}` },
-        }),
-      );
-
-      const logged = JSON.stringify(entries);
-      expect(response.status).toBe(401);
-      expect(logged).not.toContain(presentedCredential);
-      expect(logged.toLowerCase()).not.toContain('authorization');
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

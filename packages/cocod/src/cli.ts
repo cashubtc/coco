@@ -2,9 +2,9 @@ import { startDaemon } from './daemon';
 import { AdministrativeCredential } from './credentials.js';
 import {
   assertHostLocalOperation,
+  createV1Client,
   program,
   handleDaemonCommand,
-  callDaemonStream,
   formatBalances,
   formatHistory,
   evaluatePaymentRequestForDisplay,
@@ -17,6 +17,7 @@ import {
   prepareBolt11Receive,
   registerAndTrustMint,
   waitForSessionTransition,
+  watchHistoryUpdates,
 } from './cli-shared';
 import type { LifecycleStatusDocument } from './v1/http.js';
 import {
@@ -346,8 +347,9 @@ program
     // If watch is enabled, continue streaming after initial fetch
     if (options.watch) {
       try {
-        await callDaemonStream('/events', (data) => {
-          console.log(JSON.stringify(data));
+        const client = createV1Client();
+        await watchHistoryUpdates(client, { limit }, (updated) => {
+          console.log(formatHistory(updated));
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
