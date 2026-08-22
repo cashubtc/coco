@@ -1487,7 +1487,7 @@ describe('MeltBolt11Handler', () => {
   describe('parent-owned remote phases', () => {
     it('separates pre-swap network execution from transactional result application', async () => {
       const operation = makeExecutingOp('owned-pre-swap', {
-        parentSwapOperationId: 'mint-swap-parent',
+        parent: { kind: 'mint-swap', id: 'mint-swap-parent' },
         parentExecutionPhase: 'pre_swap_authorized',
         needsSwap: true,
         inputProofSecrets: ['input-1'],

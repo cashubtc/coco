@@ -85,21 +85,22 @@ export class MemoryMintOperationRepository implements MintOperationRepository {
 
   async delete(id: string): Promise<void> {
     const operation = this.operations.get(id);
-    if (operation?.parentSwapOperationId) {
+    if (operation?.parent) {
       throw new Error(`Cannot delete parent-owned MintOperation ${id}`);
     }
     this.operations.delete(id);
   }
 
   private assertUniqueParentOwnership(operation: MintOperation): void {
-    if (!operation.parentSwapOperationId) return;
+    if (!operation.parent) return;
     for (const existing of this.operations.values()) {
       if (
         existing.id !== operation.id &&
-        existing.parentSwapOperationId === operation.parentSwapOperationId
+        existing.parent?.kind === operation.parent.kind &&
+        existing.parent.id === operation.parent.id
       ) {
         throw new Error(
-          `Mint swap ${operation.parentSwapOperationId} already owns destination MintOperation ${existing.id}`,
+          `Mint swap ${operation.parent.id} already owns destination MintOperation ${existing.id}`,
         );
       }
     }

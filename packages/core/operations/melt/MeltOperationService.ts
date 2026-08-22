@@ -58,6 +58,7 @@ import {
   assertChildOperationAccess,
   assertParentOwnedMeltOperationInvariant,
 } from '../mintSwap/ChildOperationOwnership.ts';
+import { createMintSwapOperationParent } from '../MintSwapOperationParent.ts';
 
 export interface PrepareOwnedMeltOperationCommand {
   operationId: string;
@@ -324,7 +325,7 @@ export class MeltOperationService {
       quote.mintUrl,
       { method: 'bolt11', methodData: this.methodDataFromMeltQuote(quote) },
       quote.unit,
-      { quoteId: quote.quoteId, parentSwapOperationId },
+      { quoteId: quote.quoteId, parent: createMintSwapOperationParent(parentSwapOperationId) },
     );
     const planningProofService = {
       selectProofsToSend: this.proofService.selectProofsToSend.bind(this.proofService),
@@ -344,7 +345,7 @@ export class MeltOperationService {
     const preparedOperation: PreparedMeltOperation = {
       ...prepared,
       id: operationId,
-      parentSwapOperationId,
+      parent: createMintSwapOperationParent(parentSwapOperationId),
       state: 'prepared',
       updatedAt: Date.now(),
     };
@@ -361,7 +362,7 @@ export class MeltOperationService {
       quote.method !== 'bolt11' ||
       quote.unit !== 'sat' ||
       preparedOperation.id !== operationId ||
-      preparedOperation.parentSwapOperationId !== parentSwapOperationId ||
+      preparedOperation.parent?.id !== parentSwapOperationId ||
       preparedOperation.mintUrl !== quote.mintUrl ||
       preparedOperation.method !== 'bolt11' ||
       preparedOperation.quoteId !== quote.quoteId ||
@@ -1058,7 +1059,7 @@ export class MeltOperationService {
       // 1. Clean up failed init operations
       const initOps = await this.meltOperationRepository.getByState('init');
       for (const op of initOps) {
-        if (op.parentSwapOperationId) continue;
+        if (op.parent) continue;
         await this.recoverInitOperation(op as InitMeltOperation);
         initCount++;
       }
@@ -1066,7 +1067,7 @@ export class MeltOperationService {
       // 2. Log warnings for prepared operations (leave for user to decide)
       const preparedOps = await this.meltOperationRepository.getByState('prepared');
       for (const op of preparedOps) {
-        if (op.parentSwapOperationId) continue;
+        if (op.parent) continue;
         this.logger?.warn('Found stale prepared operation, user can rollback manually', {
           operationId: op.id,
         });
@@ -1075,7 +1076,7 @@ export class MeltOperationService {
       // 3. Recover executing operations
       const executingOps = await this.meltOperationRepository.getByState('executing');
       for (const op of executingOps) {
-        if (op.parentSwapOperationId) continue;
+        if (op.parent) continue;
         try {
           await this.recoverExecutingOperation(op as ExecutingMeltOperation);
           executingCount++;
@@ -1090,7 +1091,7 @@ export class MeltOperationService {
       // 4. Check pending operations
       const pendingOps = await this.meltOperationRepository.getByState('pending');
       for (const op of pendingOps) {
-        if (op.parentSwapOperationId) continue;
+        if (op.parent) continue;
         try {
           await this.checkPendingOperation(op.id);
           pendingCount++;
@@ -1105,7 +1106,7 @@ export class MeltOperationService {
       // 5. Warn about rolling_back operations (need manual intervention)
       const rollingBackOps = await this.meltOperationRepository.getByState('rolling_back');
       for (const op of rollingBackOps) {
-        if (op.parentSwapOperationId) continue;
+        if (op.parent) continue;
         this.logger?.warn(
           'Found operation stuck in rolling_back state. ' +
             'This indicates a crash during rollback. Manual recovery may be needed.',
@@ -1414,14 +1415,13 @@ export class MeltOperationService {
 
   async getPendingOperations(): Promise<MeltOperation[]> {
     const operations = await this.meltOperationRepository.getPending();
-    return operations.filter((operation) => operation.parentSwapOperationId === undefined);
+    return operations.filter((operation) => operation.parent === undefined);
   }
 
   async getPreparedOperations(): Promise<PreparedMeltOperation[]> {
     const ops = await this.meltOperationRepository.getByState('prepared');
     return ops.filter(
-      (op): op is PreparedMeltOperation =>
-        op.state === 'prepared' && op.parentSwapOperationId === undefined,
+      (op): op is PreparedMeltOperation => op.state === 'prepared' && op.parent === undefined,
     );
   }
 }

@@ -2692,6 +2692,29 @@ describe('MintOperationService', () => {
     expect(pendingStored?.state).toBe('finalized');
   });
 
+  it('leaves parent-owned children for Mint Swap recovery', async () => {
+    const ownedPending: PendingMintOperation = {
+      ...makePendingOp('owned-pending-recovery'),
+      parent: { kind: 'mint-swap', id: 'pending-parent' },
+      pubkey: destinationNut20PublicKey,
+    };
+    const ownedExecuting: ExecutingMintOperation = {
+      ...makeExecutingOp('owned-executing-recovery'),
+      parent: { kind: 'mint-swap', id: 'executing-parent' },
+      pubkey: destinationNut20PublicKey,
+    };
+    await operationRepo.create(ownedPending);
+    await operationRepo.create(ownedExecuting);
+
+    await service.recoverPendingOperations();
+
+    expect((await operationRepo.getById(ownedPending.id))?.state).toBe('pending');
+    expect((await operationRepo.getById(ownedExecuting.id))?.state).toBe('executing');
+    expect(await service.getPendingOperations()).toHaveLength(0);
+    expect(handler.checkPending).not.toHaveBeenCalled();
+    expect(handler.recoverExecuting).not.toHaveBeenCalled();
+  });
+
   it('observes pending operations without resolving a wallet instance', async () => {
     const pendingOp = makePendingOp('pending-without-wallet-instance');
     const getWalletWithActiveKeysetId = mock(async () => {
@@ -3238,10 +3261,11 @@ describe('MintOperationService', () => {
 
   describe('parent-owned orchestration commands', () => {
     const parentSwapOperationId = 'mint-swap-parent';
+    const parent = { kind: 'mint-swap', id: parentSwapOperationId } as const;
 
     const makeOwnedPending = (id: string, secret = 'owned-output'): PendingMintOperation => ({
       ...makePendingOp(id, secret),
-      parentSwapOperationId,
+      parent,
       pubkey: destinationNut20PublicKey,
     });
 
@@ -3291,7 +3315,7 @@ describe('MintOperationService', () => {
       );
 
       expect(prepared.pubkey).toBe(destinationNut20PublicKey);
-      expect(prepared.parentSwapOperationId).toBe(parentSwapOperationId);
+      expect(prepared.parent).toEqual(parent);
     });
 
     it('rejects a destination quote that is not locked to the parent NUT-20 key', async () => {
@@ -3398,7 +3422,7 @@ describe('MintOperationService', () => {
     it('requires an explicit repository-free seam from custom mint handlers', async () => {
       const operation = {
         ...makeExecutingOp('owned-custom-handler', 'owned-custom-output'),
-        parentSwapOperationId,
+        parent,
         pubkey: destinationNut20PublicKey,
       };
       const customHandler: MintMethodHandler<'bolt11'> = {
@@ -3421,7 +3445,7 @@ describe('MintOperationService', () => {
     it('restores already-issued deterministic outputs outside the transaction without saving', async () => {
       const operation = {
         ...makeExecutingOp('owned-restore-issued', 'restored-output'),
-        parentSwapOperationId,
+        parent,
         pubkey: destinationNut20PublicKey,
       };
       await operationRepo.create(operation);
@@ -3455,7 +3479,7 @@ describe('MintOperationService', () => {
       const repositories = new MemoryRepositories();
       const operation = {
         ...makeExecutingOp('owned-atomic-apply', 'atomic-output'),
-        parentSwapOperationId,
+        parent,
         pubkey: destinationNut20PublicKey,
       };
       await repositories.mintOperationRepository.create(operation);
@@ -3505,7 +3529,7 @@ describe('MintOperationService', () => {
       const repositories = new MemoryRepositories();
       const operation = {
         ...makeExecutingOp('owned-idempotent-apply', 'existing-output'),
-        parentSwapOperationId,
+        parent,
         pubkey: destinationNut20PublicKey,
       };
       await repositories.mintOperationRepository.create(operation);

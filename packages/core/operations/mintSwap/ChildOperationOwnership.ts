@@ -2,12 +2,16 @@ import { Amount } from '@cashu/cashu-ts';
 
 import { ParentOwnedOperationError } from '../../models/Error.ts';
 import { getSecretsFromSerializedOutputData } from '../../utils.ts';
+import {
+  assertMintSwapOperationParent,
+  type MintSwapOperationParent,
+} from '../MintSwapOperationParent.ts';
 import type { MeltOperation } from '../melt/MeltOperation.ts';
 import type { MintOperation } from '../mint/MintOperation.ts';
 
 export interface ParentOwnedChildOperation {
   id: string;
-  parentSwapOperationId?: string;
+  parent?: MintSwapOperationParent;
 }
 
 /**
@@ -20,8 +24,8 @@ export function assertChildOperationAccess(
   operation: ParentOwnedChildOperation,
   expectedParentSwapOperationId?: string,
 ): void {
-  const owner = operation.parentSwapOperationId;
-  if (!owner) {
+  const parent = operation.parent;
+  if (!parent) {
     if (expectedParentSwapOperationId) {
       throw new Error(
         `Operation ${operation.id} is not owned by mint swap ${expectedParentSwapOperationId}`,
@@ -30,21 +34,23 @@ export function assertChildOperationAccess(
     return;
   }
 
-  if (owner !== expectedParentSwapOperationId) {
-    throw new ParentOwnedOperationError(operation.id, owner);
+  assertMintSwapOperationParent(parent);
+  if (parent.id !== expectedParentSwapOperationId) {
+    throw new ParentOwnedOperationError(operation.id, parent.id);
   }
 }
 
 /** Validate the durable authorization phase carried by a parent-owned melt child. */
 export function assertParentOwnedMeltOperationInvariant(operation: MeltOperation): void {
-  const owner = operation.parentSwapOperationId;
+  const parent = operation.parent;
   const phase = operation.parentExecutionPhase;
-  if (!owner) {
+  if (!parent) {
     if (phase !== undefined) {
       throw new Error(`Standalone melt operation ${operation.id} cannot have a parent phase`);
     }
     return;
   }
+  assertMintSwapOperationParent(parent);
 
   if (operation.state === 'executing') {
     if (phase === undefined) {
@@ -136,7 +142,8 @@ export function assertParentOwnedMeltOperationInvariant(operation: MeltOperation
 
 /** Ensure a persisted parent-owned destination child is locked BOLT11/sat work. */
 export function assertParentOwnedMintOperationInvariant(operation: MintOperation): void {
-  if (!operation.parentSwapOperationId) return;
+  if (!operation.parent) return;
+  assertMintSwapOperationParent(operation.parent);
   if (
     operation.state === 'init' ||
     operation.method !== 'bolt11' ||
@@ -200,10 +207,10 @@ export function assertParentOwnedMintOperationUpdate(
   current: MintOperation,
   next: MintOperation,
 ): void {
-  if (current.parentSwapOperationId !== next.parentSwapOperationId) {
+  if (current.parent?.id !== next.parent?.id || current.parent?.kind !== next.parent?.kind) {
     throw new Error(`Parent-owned mint parent ownership is immutable`);
   }
-  if (!current.parentSwapOperationId) return;
+  if (!current.parent) return;
   assertParentOwnedMintOperationInvariant(next);
   assertOwnedBaseFields(current, next, 'mint');
   assertOwnedStateTransition(PARENT_MINT_TRANSITIONS, current, next, 'mint');
@@ -233,10 +240,10 @@ export function assertParentOwnedMeltOperationUpdate(
   current: MeltOperation,
   next: MeltOperation,
 ): void {
-  if (current.parentSwapOperationId !== next.parentSwapOperationId) {
+  if (current.parent?.id !== next.parent?.id || current.parent?.kind !== next.parent?.kind) {
     throw new Error(`Parent-owned melt parent ownership is immutable`);
   }
-  if (!current.parentSwapOperationId) return;
+  if (!current.parent) return;
   assertParentOwnedMeltOperationInvariant(next);
   assertOwnedBaseFields(current, next, 'melt');
   assertOwnedStateTransition(PARENT_MELT_TRANSITIONS, current, next, 'melt');
@@ -292,7 +299,8 @@ function assertOwnedBaseFields(
 ): void {
   for (const [left, right, name] of [
     [current.id, next.id, 'id'],
-    [current.parentSwapOperationId, next.parentSwapOperationId, 'parent ownership'],
+    [current.parent?.kind, next.parent?.kind, 'parent kind'],
+    [current.parent?.id, next.parent?.id, 'parent ownership'],
     [current.mintUrl, next.mintUrl, 'mint URL'],
     [current.unit, next.unit, 'unit'],
     [current.method, next.method, 'method'],

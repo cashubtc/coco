@@ -258,7 +258,7 @@ export interface MeltOperationRepository {
   /** Create a new melt operation */
   create(operation: MeltOperation): Promise<void>;
 
-  /** Update an existing melt operation */
+  /** Update an existing melt operation without changing its durable parent ownership. */
   update(operation: MeltOperation): Promise<void>;
 
   /** Get a melt operation by ID */
@@ -276,7 +276,7 @@ export interface MeltOperationRepository {
   /** Get all operations for a mint/quote pair */
   getByQuoteId(mintUrl: string, quoteId: string): Promise<MeltOperation[]>;
 
-  /** Delete a melt operation */
+  /** Delete a standalone melt operation; parent-owned children must be retained. */
   delete(id: string): Promise<void>;
 }
 export interface AuthSessionRepository {
@@ -293,7 +293,7 @@ export interface MintOperationRepository {
   /** Create a new mint operation */
   create(operation: MintOperation): Promise<void>;
 
-  /** Update an existing mint operation */
+  /** Update an existing mint operation without changing its durable parent ownership. */
   update(operation: MintOperation): Promise<void>;
 
   /** Get a mint operation by ID */
@@ -311,7 +311,7 @@ export interface MintOperationRepository {
   /** Get all operations for a mint/method/quote tuple */
   getByQuoteId(mintUrl: string, method: string, quoteId: string): Promise<MintOperation[]>;
 
-  /** Delete a mint operation */
+  /** Delete a standalone mint operation; parent-owned children must be retained. */
   delete(id: string): Promise<void>;
 }
 

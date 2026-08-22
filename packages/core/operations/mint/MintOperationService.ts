@@ -66,6 +66,7 @@ import {
   assertChildOperationAccess,
   assertParentOwnedMintOperationInvariant,
 } from '../mintSwap/ChildOperationOwnership.ts';
+import { createMintSwapOperationParent } from '../MintSwapOperationParent.ts';
 
 export interface PrepareOwnedMintOperationCommand {
   operationId: string;
@@ -316,7 +317,7 @@ export class MintOperationService {
       quote.mintUrl,
       { method: 'bolt11', methodData: {} },
       { amount, unit: quote.unit },
-      { quoteId: quote.quoteId, parentSwapOperationId },
+      { quoteId: quote.quoteId, parent: createMintSwapOperationParent(parentSwapOperationId) },
     );
     const pending = await handler.prepare({
       ...this.buildDeps(),
@@ -327,7 +328,7 @@ export class MintOperationService {
     const pendingOperation: PendingMintOperation = {
       ...pending,
       id: operationId,
-      parentSwapOperationId,
+      parent: createMintSwapOperationParent(parentSwapOperationId),
       state: 'pending',
       updatedAt: Date.now(),
     };
@@ -361,7 +362,7 @@ export class MintOperationService {
     }
     if (
       preparedOperation.id !== operationId ||
-      preparedOperation.parentSwapOperationId !== parentSwapOperationId ||
+      preparedOperation.parent?.id !== parentSwapOperationId ||
       preparedOperation.mintUrl !== quote.mintUrl ||
       preparedOperation.method !== 'bolt11' ||
       preparedOperation.quoteId !== quote.quoteId ||
@@ -841,7 +842,7 @@ export class MintOperationService {
 
       const initOps = await this.mintOperationRepository.getByState('init');
       for (const op of initOps) {
-        if (op.parentSwapOperationId) continue;
+        if (op.parent) continue;
         try {
           await this.recoverInitOperation(op as InitMintOperation);
           initCount++;
@@ -861,7 +862,7 @@ export class MintOperationService {
 
       const pendingOps = await this.mintOperationRepository.getByState('pending');
       for (const op of pendingOps) {
-        if (op.parentSwapOperationId) continue;
+        if (op.parent) continue;
         try {
           if (await this.mintService.isTrustedMint(op.mintUrl)) {
             await this.checkPendingOperation(op.id);
@@ -882,7 +883,7 @@ export class MintOperationService {
 
       const executingOps = await this.mintOperationRepository.getByState('executing');
       for (const op of executingOps) {
-        if (op.parentSwapOperationId) continue;
+        if (op.parent) continue;
         try {
           await this.recoverExecutingOperation(op as ExecutingMintOperation);
           executingCount++;
@@ -1098,7 +1099,7 @@ export class MintOperationService {
       const autoClaimRemaining = options.autoClaimRemaining ?? true;
 
       for (const operation of siblings) {
-        if (operation.state !== 'pending' || operation.parentSwapOperationId) {
+        if (operation.state !== 'pending' || operation.parent) {
           continue;
         }
 
@@ -1308,8 +1309,7 @@ export class MintOperationService {
   async getPendingOperations(): Promise<PendingMintOperation[]> {
     const ops = await this.mintOperationRepository.getByState('pending');
     return ops.filter(
-      (op): op is PendingMintOperation =>
-        op.state === 'pending' && op.parentSwapOperationId === undefined,
+      (op): op is PendingMintOperation => op.state === 'pending' && op.parent === undefined,
     );
   }
 

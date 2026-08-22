@@ -18,6 +18,10 @@ import type { SerializedOutputData } from '../../utils';
 import { getSecretsFromSerializedOutputData } from '../../utils';
 import type { MintMethod, MintMethodMeta } from './MintMethodHandler';
 import { normalizeUnit, type UnitAmount } from '../../amounts.ts';
+import {
+  assertMintSwapOperationParent,
+  type MintSwapOperationParent,
+} from '../MintSwapOperationParent.ts';
 
 interface MintOperationBase<M extends MintMethod = MintMethod> extends MintMethodMeta<M> {
   id: string;
@@ -26,8 +30,8 @@ interface MintOperationBase<M extends MintMethod = MintMethod> extends MintMetho
   updatedAt: number;
   error?: string;
   terminalFailure?: MintOperationFailure;
-  /** Owning parent swap. Parent-owned children may only be advanced by that coordinator. */
-  parentSwapOperationId?: string;
+  /** Durable Mint Swap ownership. Parent-owned children may only be advanced by that coordinator. */
+  parent?: MintSwapOperationParent;
 }
 
 export interface MintOperationFailure {
@@ -120,8 +124,9 @@ export function createMintOperation<M extends MintMethod>(
   mintUrl: string,
   meta: MintMethodMeta<M>,
   intent: UnitAmount,
-  options: { quoteId: string; parentSwapOperationId?: string },
+  options: { quoteId: string; parent?: MintSwapOperationParent },
 ): InitMintOperation<M> {
+  if (options.parent) assertMintSwapOperationParent(options.parent);
   const now = Date.now();
   return {
     ...meta,
@@ -129,9 +134,7 @@ export function createMintOperation<M extends MintMethod>(
     amount: intent.amount,
     unit: normalizeUnit(intent.unit),
     quoteId: options.quoteId,
-    ...(options.parentSwapOperationId
-      ? { parentSwapOperationId: options.parentSwapOperationId }
-      : {}),
+    ...(options.parent ? { parent: options.parent } : {}),
     id,
     state: 'init',
     mintUrl,

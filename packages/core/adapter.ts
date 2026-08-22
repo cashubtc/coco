@@ -70,6 +70,7 @@ export type {
   MintMethodRemoteState,
   MintOperation,
   MintOperationState,
+  MintSwapOperationParent,
   PaymentRequestReceiveAttempt,
   PaymentRequestReceiveAttemptState,
   PaymentRequestReceiveOperation,
@@ -82,6 +83,11 @@ export type {
   SendOperation,
   SendOperationState,
 } from './operations/index.ts';
+export {
+  assertMintSwapOperationParent,
+  createMintSwapOperationParent,
+  isMintSwapOperationParent,
+} from './operations/MintSwapOperationParent.ts';
 export type {
   MintSwapAttentionReason,
   MintSwapAttentionRecord,

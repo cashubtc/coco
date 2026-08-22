@@ -428,10 +428,11 @@ describe('MeltOperationService', () => {
 
   describe('parent-owned orchestration commands', () => {
     const parentSwapOperationId = 'mint-swap-parent';
+    const parent = { kind: 'mint-swap', id: parentSwapOperationId } as const;
 
     it('keeps standalone execution from advancing a parent-owned child', async () => {
       const operation = makePreparedOp('owned-direct-execute', {
-        parentSwapOperationId,
+        parent,
       });
       await meltOperationRepository.create(operation);
 
@@ -471,7 +472,7 @@ describe('MeltOperationService', () => {
         makePreparedOp(operation.id, {
           mintUrl,
           quoteId: quote.quoteId,
-          parentSwapOperationId,
+          parent,
           inputAmount: plannedInput.amount,
           inputProofSecrets: [plannedInput.secret],
         }),
@@ -510,7 +511,7 @@ describe('MeltOperationService', () => {
     it('persists each authorization checkpoint before starting its repository-free remote phase', async () => {
       const repositories = new MemoryRepositories();
       const operation = makePreparedOp('owned-pre-swap-checkpoint', {
-        parentSwapOperationId,
+        parent,
         needsSwap: true,
         inputProofSecrets: ['owned-input'],
         swapOutputData: {
@@ -659,7 +660,7 @@ describe('MeltOperationService', () => {
     it('persists the canonical source observation before advancing the owned child', async () => {
       const repositories = new MemoryRepositories();
       const operation = {
-        ...makePreparedOp('owned-canonical-observation', { parentSwapOperationId }),
+        ...makePreparedOp('owned-canonical-observation', { parent }),
         state: 'executing' as const,
         parentExecutionPhase: 'melt_authorized' as const,
       };
@@ -717,7 +718,7 @@ describe('MeltOperationService', () => {
     it('does not let a stale owned result downgrade a canonical paid quote', async () => {
       const repositories = new MemoryRepositories();
       const operation = {
-        ...makePreparedOp('owned-stale-observation', { parentSwapOperationId }),
+        ...makePreparedOp('owned-stale-observation', { parent }),
         state: 'executing' as const,
         parentExecutionPhase: 'melt_authorized' as const,
       };
@@ -775,7 +776,7 @@ describe('MeltOperationService', () => {
     it('rejects paid owned results that contradict canonical settlement evidence', async () => {
       const repositories = new MemoryRepositories();
       const operation = {
-        ...makePreparedOp('owned-conflicting-settlement', { parentSwapOperationId }),
+        ...makePreparedOp('owned-conflicting-settlement', { parent }),
         state: 'executing' as const,
         parentExecutionPhase: 'melt_authorized' as const,
       };
@@ -2232,6 +2233,42 @@ describe('MeltOperationService', () => {
       expect(handler.execute).not.toHaveBeenCalled();
       expect(handler.checkPending).not.toHaveBeenCalled();
       expect(handler.finalize).not.toHaveBeenCalled();
+      expect(handler.recoverExecuting).not.toHaveBeenCalled();
+    });
+
+    it('leaves parent-owned children for Mint Swap recovery', async () => {
+      const parent = (id: string) => ({ kind: 'mint-swap' as const, id });
+      const ownedInit = makeInitOp('owned-init-recovery', {
+        quoteId: 'owned-init-quote',
+        parent: parent('init-parent'),
+      });
+      const ownedPrepared = makePreparedOp('owned-prepared-recovery', {
+        quoteId: 'owned-prepared-quote',
+        parent: parent('prepared-parent'),
+      });
+      const ownedExecuting = makeExecutingOp('owned-executing-recovery', {
+        quoteId: 'owned-executing-quote',
+        parent: parent('executing-parent'),
+        parentExecutionPhase: 'melt_authorized',
+      });
+      const ownedPending = makePendingOp('owned-pending-recovery', {
+        quoteId: 'owned-pending-quote',
+        parent: parent('pending-parent'),
+        parentExecutionPhase: 'melt_authorized',
+      });
+      for (const operation of [ownedInit, ownedPrepared, ownedExecuting, ownedPending]) {
+        await meltOperationRepository.create(operation);
+      }
+
+      await service.recoverPendingOperations();
+
+      for (const operation of [ownedInit, ownedPrepared, ownedExecuting, ownedPending]) {
+        expect((await meltOperationRepository.getById(operation.id))?.state).toBe(operation.state);
+      }
+      expect(await service.getPendingOperations()).toHaveLength(0);
+      expect(await service.getPreparedOperations()).toHaveLength(0);
+      expect(proofService.releaseProofs).not.toHaveBeenCalled();
+      expect(handler.checkPending).not.toHaveBeenCalled();
       expect(handler.recoverExecuting).not.toHaveBeenCalled();
     });
   });

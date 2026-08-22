@@ -89,7 +89,7 @@ export class MemoryMeltOperationRepository implements MeltOperationRepository {
 
   async delete(id: string): Promise<void> {
     const operation = this.operations.get(id);
-    if (operation?.parentSwapOperationId) {
+    if (operation?.parent) {
       throw new Error(`Cannot delete parent-owned MeltOperation ${id}`);
     }
     this.operations.delete(id);
@@ -113,14 +113,15 @@ export class MemoryMeltOperationRepository implements MeltOperationRepository {
   }
 
   private assertUniqueParentOwnership(operation: MeltOperation): void {
-    if (!operation.parentSwapOperationId) return;
+    if (!operation.parent) return;
     for (const existing of this.operations.values()) {
       if (
         existing.id !== operation.id &&
-        existing.parentSwapOperationId === operation.parentSwapOperationId
+        existing.parent?.kind === operation.parent.kind &&
+        existing.parent.id === operation.parent.id
       ) {
         throw new Error(
-          `Mint swap ${operation.parentSwapOperationId} already owns source MeltOperation ${existing.id}`,
+          `Mint swap ${operation.parent.id} already owns source MeltOperation ${existing.id}`,
         );
       }
     }

@@ -1158,9 +1158,19 @@ export async function runMintSwapRepositoryContract(
         await repositories.mintOperationRepository.create(standaloneMint);
         await expectThrows(
           () =>
+            repositories.mintOperationRepository.create({
+              ...standaloneMint,
+              id: 'invalid-parent-mint',
+              quoteId: 'invalid-parent-mint-quote',
+              parent: { kind: 'mint-swap', id: '' },
+            }),
+          expect,
+        );
+        await expectThrows(
+          () =>
             repositories.mintOperationRepository.update({
               ...standaloneMint,
-              parentSwapOperationId: 'late-mint-parent',
+              parent: { kind: 'mint-swap', id: 'late-mint-parent' },
             }),
           expect,
         );
@@ -1171,16 +1181,26 @@ export async function runMintSwapRepositoryContract(
         await repositories.meltOperationRepository.create(standaloneMelt);
         await expectThrows(
           () =>
+            repositories.meltOperationRepository.create({
+              ...standaloneMelt,
+              id: 'invalid-parent-melt',
+              quoteId: 'invalid-parent-melt-quote',
+              parent: { kind: 'mint-swap', id: '' },
+            }),
+          expect,
+        );
+        await expectThrows(
+          () =>
             repositories.meltOperationRepository.update({
               ...standaloneMelt,
-              parentSwapOperationId: 'late-melt-parent',
+              parent: { kind: 'mint-swap', id: 'late-melt-parent' },
             }),
           expect,
         );
         const mintChild = createDummyMintOperation({
           id: 'owned-mint',
           quoteId: 'owned-mint-quote',
-          parentSwapOperationId: 'mint-parent',
+          parent: { kind: 'mint-swap', id: 'mint-parent' },
           pubkey: `02${'ab'.repeat(32)}`,
           outputData: {
             keep: [
@@ -1194,9 +1214,9 @@ export async function runMintSwapRepositoryContract(
           },
         });
         await repositories.mintOperationRepository.create(mintChild);
-        expect(
-          (await repositories.mintOperationRepository.getById(mintChild.id))?.parentSwapOperationId,
-        ).toBe('mint-parent');
+        expect((await repositories.mintOperationRepository.getById(mintChild.id))?.parent?.id).toBe(
+          'mint-parent',
+        );
         await expectThrows(
           () =>
             repositories.mintOperationRepository.update({
@@ -1214,16 +1234,19 @@ export async function runMintSwapRepositoryContract(
           blindingFactor: '01',
           secret: '61',
         });
+        fetchedMintChild.parent!.id = 'mutated-parent';
         const refetchedMintChild = await repositories.mintOperationRepository.getById(mintChild.id);
         if (!refetchedMintChild || refetchedMintChild.state === 'init') {
           throw new Error('Expected a persisted pending mint child');
         }
         expect(refetchedMintChild.outputData.keep.length).toBe(1);
+        expect(refetchedMintChild.parent?.kind).toBe('mint-swap');
+        expect(refetchedMintChild.parent?.id).toBe('mint-parent');
         await expectThrows(
           () =>
             repositories.mintOperationRepository.update({
               ...mintChild,
-              parentSwapOperationId: 'different-parent',
+              parent: { kind: 'mint-swap', id: 'different-parent' },
             }),
           expect,
         );
@@ -1233,7 +1256,7 @@ export async function runMintSwapRepositoryContract(
               createDummyMintOperation({
                 id: 'second-owned-mint',
                 quoteId: 'second-owned-mint-quote',
-                parentSwapOperationId: 'mint-parent',
+                parent: { kind: 'mint-swap', id: 'mint-parent' },
                 pubkey: `02${'ab'.repeat(32)}`,
                 outputData: {
                   keep: [
@@ -1254,17 +1277,25 @@ export async function runMintSwapRepositoryContract(
         const meltChild = createDummyMeltOperation({
           id: 'owned-melt',
           quoteId: 'owned-melt-quote',
-          parentSwapOperationId: 'melt-parent',
+          parent: { kind: 'mint-swap', id: 'melt-parent' },
         });
         await repositories.meltOperationRepository.create(meltChild);
-        expect(
-          (await repositories.meltOperationRepository.getById(meltChild.id))?.parentSwapOperationId,
-        ).toBe('melt-parent');
+        expect((await repositories.meltOperationRepository.getById(meltChild.id))?.parent?.id).toBe(
+          'melt-parent',
+        );
+        const fetchedMeltChild = await repositories.meltOperationRepository.getById(meltChild.id);
+        if (!fetchedMeltChild?.parent) {
+          throw new Error('Expected a persisted parent-owned melt child');
+        }
+        fetchedMeltChild.parent.id = 'mutated-melt-parent';
+        expect((await repositories.meltOperationRepository.getById(meltChild.id))?.parent?.id).toBe(
+          'melt-parent',
+        );
         await expectThrows(
           () =>
             repositories.meltOperationRepository.update({
               ...meltChild,
-              parentSwapOperationId: 'different-parent',
+              parent: { kind: 'mint-swap', id: 'different-parent' },
             }),
           expect,
         );
@@ -1282,7 +1313,7 @@ export async function runMintSwapRepositoryContract(
               createDummyMeltOperation({
                 id: 'second-owned-melt',
                 quoteId: 'second-owned-melt-quote',
-                parentSwapOperationId: 'melt-parent',
+                parent: { kind: 'mint-swap', id: 'melt-parent' },
               }),
             ),
           expect,
@@ -1308,7 +1339,7 @@ export async function runMintSwapRepositoryContract(
                 createDummyMintOperation({
                   id: 'rolled-back-child',
                   quoteId: 'rolled-back-child-quote',
-                  parentSwapOperationId: 'mint-swap-op',
+                  parent: { kind: 'mint-swap', id: 'mint-swap-op' },
                   pubkey: `02${'ab'.repeat(32)}`,
                 }),
               );
