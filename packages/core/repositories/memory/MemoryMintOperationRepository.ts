@@ -1,33 +1,44 @@
 import type { MintOperationRepository } from '..';
 import type { MintOperation, MintOperationState } from '../../operations/mint/MintOperation';
+import {
+  assertParentOwnedMintOperationInvariant,
+  assertParentOwnedMintOperationUpdate,
+} from '../../operations/mintSwap/ChildOperationOwnership.ts';
+import { cloneMemoryValue } from './clone.ts';
 
 export class MemoryMintOperationRepository implements MintOperationRepository {
   private readonly operations = new Map<string, MintOperation>();
 
   async create(operation: MintOperation): Promise<void> {
+    assertParentOwnedMintOperationInvariant(operation);
     if (this.operations.has(operation.id)) {
       throw new Error(`MintOperation with id ${operation.id} already exists`);
     }
-    this.operations.set(operation.id, { ...operation });
+    this.assertUniqueParentOwnership(operation);
+    this.operations.set(operation.id, cloneMemoryValue(operation));
   }
 
   async update(operation: MintOperation): Promise<void> {
-    if (!this.operations.has(operation.id)) {
+    assertParentOwnedMintOperationInvariant(operation);
+    const existing = this.operations.get(operation.id);
+    if (!existing) {
       throw new Error(`MintOperation with id ${operation.id} not found`);
     }
-    this.operations.set(operation.id, { ...operation, updatedAt: Date.now() });
+    assertParentOwnedMintOperationUpdate(existing, operation);
+    this.assertUniqueParentOwnership(operation);
+    this.operations.set(operation.id, cloneMemoryValue(operation));
   }
 
   async getById(id: string): Promise<MintOperation | null> {
     const operation = this.operations.get(id);
-    return operation ? { ...operation } : null;
+    return operation ? cloneMemoryValue(operation) : null;
   }
 
   async getByState(state: MintOperationState): Promise<MintOperation[]> {
     const results: MintOperation[] = [];
     for (const operation of this.operations.values()) {
       if (operation.state === state) {
-        results.push({ ...operation });
+        results.push(cloneMemoryValue(operation));
       }
     }
     return results;
@@ -37,7 +48,7 @@ export class MemoryMintOperationRepository implements MintOperationRepository {
     const results: MintOperation[] = [];
     for (const operation of this.operations.values()) {
       if (operation.state === 'pending' || operation.state === 'executing') {
-        results.push({ ...operation });
+        results.push(cloneMemoryValue(operation));
       }
     }
     return results;
@@ -47,7 +58,7 @@ export class MemoryMintOperationRepository implements MintOperationRepository {
     const results: MintOperation[] = [];
     for (const operation of this.operations.values()) {
       if (operation.mintUrl === mintUrl) {
-        results.push({ ...operation });
+        results.push(cloneMemoryValue(operation));
       }
     }
     return results;
@@ -62,17 +73,36 @@ export class MemoryMintOperationRepository implements MintOperationRepository {
         'quoteId' in operation &&
         operation.quoteId === quoteId
       ) {
-        results.push({ ...operation });
+        results.push(cloneMemoryValue(operation));
       }
     }
     return results.sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
   }
 
   async getAll(): Promise<MintOperation[]> {
-    return Array.from(this.operations.values(), (operation) => ({ ...operation }));
+    return Array.from(this.operations.values(), (operation) => cloneMemoryValue(operation));
   }
 
   async delete(id: string): Promise<void> {
+    const operation = this.operations.get(id);
+    if (operation?.parent) {
+      throw new Error(`Cannot delete parent-owned MintOperation ${id}`);
+    }
     this.operations.delete(id);
+  }
+
+  private assertUniqueParentOwnership(operation: MintOperation): void {
+    if (!operation.parent) return;
+    for (const existing of this.operations.values()) {
+      if (
+        existing.id !== operation.id &&
+        existing.parent?.kind === operation.parent.kind &&
+        existing.parent.id === operation.parent.id
+      ) {
+        throw new Error(
+          `Mint swap ${operation.parent.id} already owns destination MintOperation ${existing.id}`,
+        );
+      }
+    }
   }
 }

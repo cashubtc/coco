@@ -32,6 +32,10 @@ import type { Amount } from '@cashu/cashu-ts';
 import { getSecretsFromSerializedOutputData, type SerializedOutputData } from '../../utils';
 import type { MeltMethod, MeltMethodData, MeltMethodMeta } from './MeltMethodHandler';
 import { DEFAULT_UNIT, normalizeUnit } from '../../amounts.ts';
+import {
+  assertMintSwapOperationParent,
+  type MintSwapOperationParent,
+} from '../MintSwapOperationParent.ts';
 
 // ============================================================================
 // Base and Data Interfaces
@@ -58,6 +62,16 @@ interface MeltOperationBase extends MeltMethodMeta {
 
   /** Error message if the operation failed */
   error?: string;
+
+  /** Durable Mint Swap ownership. Parent-owned children may only be advanced by that coordinator. */
+  parent?: MintSwapOperationParent;
+
+  /**
+   * Durable authorization checkpoint for a parent-owned remote source step.
+   *
+   * A pre-swap response must be applied locally before this advances to `melt_authorized`.
+   */
+  parentExecutionPhase?: 'pre_swap_authorized' | 'melt_authorized';
 }
 
 /**
@@ -306,8 +320,9 @@ export function createMeltOperation(
   mintUrl: string,
   meta: MeltMethodMeta,
   unit = DEFAULT_UNIT,
-  options?: { quoteId?: string },
+  options?: { quoteId?: string; parent?: MintSwapOperationParent },
 ): InitMeltOperation {
+  if (options?.parent) assertMintSwapOperationParent(options.parent);
   const now = Date.now();
   return {
     ...meta,
@@ -316,6 +331,7 @@ export function createMeltOperation(
     mintUrl,
     unit: normalizeUnit(unit, { defaultUnit: DEFAULT_UNIT }),
     ...(options?.quoteId ? { quoteId: options.quoteId } : {}),
+    ...(options?.parent ? { parent: options.parent } : {}),
     createdAt: now,
     updatedAt: now,
   };

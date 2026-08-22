@@ -157,6 +157,12 @@ export interface ExecuteContext<M extends MintMethod = MintMethod> extends BaseH
   wallet: Wallet;
 }
 
+/** Repository-free context for a parent-authorized remote mint request. */
+export type OwnedMintRemoteContext<M extends MintMethod = MintMethod> = Pick<
+  ExecuteContext<M>,
+  'operation' | 'wallet' | 'mintAdapter' | 'logger'
+>;
+
 export interface RecoverExecutingContext<
   M extends MintMethod = MintMethod,
 > extends BaseHandlerDeps {
@@ -186,6 +192,8 @@ export type MintExecutionResult =
       status: 'FAILED';
       error?: string;
     };
+
+export type OwnedMintExecutionResult = MintExecutionResult & { operationId: string };
 
 export type RecoverExecutingResult =
   | { status: 'FINALIZED' }
@@ -227,6 +235,8 @@ export interface MintMethodHandler<M extends MintMethod = MintMethod> {
   validateQuoteForPrepare?(quote: MintQuote<M>): Promise<void> | void;
   prepare(ctx: PrepareContext<M>): Promise<PendingMintOperation<M>>;
   execute(ctx: ExecuteContext<M>): Promise<MintExecutionResult>;
+  /** Opt-in composition seam that cannot access repositories during remote I/O. */
+  executeOwnedRemote?(ctx: OwnedMintRemoteContext<M>): Promise<MintExecutionResult>;
   recoverExecuting(ctx: RecoverExecutingContext<M>): Promise<RecoverExecutingResult>;
   checkPending(ctx: PendingContext<M>): Promise<PendingMintObservationResult<M>>;
 }
