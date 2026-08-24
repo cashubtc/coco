@@ -138,6 +138,10 @@ export * from './schema.js';
 const DEFAULT_PAGE_LIMIT = 20;
 const MAX_PAGE_LIMIT = 100;
 
+export interface CreateV1RouteDefinitionsOptions {
+  eventAuthorizationRevalidationIntervalMs?: number;
+}
+
 const pathParameter = (name: string): V1RouteParameter => ({
   name,
   in: 'path',
@@ -905,6 +909,7 @@ export function createV1RouteDefinitions(
   daemonVersion: string,
   processShutdown: Pick<ProcessShutdownCoordinator, 'request'>,
   logger?: AppLogger,
+  options: CreateV1RouteDefinitionsOptions = {},
 ): Array<V1RouteDefinition> {
   const health = defineV1Route({
     ...HEALTH_ROUTE,
@@ -989,11 +994,17 @@ export function createV1RouteDefinitions(
   });
   const events = defineV1Route({
     ...EVENTS_ROUTE,
-    handler: (_input, request) => {
+    handler: (_input, request, { reauthorize }) => {
       parseQuery(request, [], 'The Event stream query is invalid');
       const manager = requireRunningSession(runtime).manager;
       return new V1HttpStreamResponse(
-        createResourceInvalidationStream(manager, request, logger),
+        createResourceInvalidationStream(
+          manager,
+          request,
+          reauthorize,
+          options.eventAuthorizationRevalidationIntervalMs ?? EVENT_KEEP_ALIVE_INTERVAL_MS,
+          logger,
+        ),
         200,
         { Connection: 'keep-alive' },
       );
@@ -1911,6 +1922,8 @@ const EVENT_KEEP_ALIVE_INTERVAL_MS = 5_000;
 function createResourceInvalidationStream(
   manager: CocoPublicEventSource,
   request: Request,
+  reauthorize: () => Promise<boolean>,
+  authorizationRevalidationIntervalMs: number,
   logger?: AppLogger,
 ): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
@@ -1921,12 +1934,19 @@ function createResourceInvalidationStream(
       let closed = false;
       const unsubscribes: Array<() => void> = [];
       let keepAlive: ReturnType<typeof setInterval> | undefined;
+      let authorizationCheckInFlight = false;
+
+      const enqueueChunk = (chunk: string): boolean => {
+        if (closed || controller.desiredSize === null || controller.desiredSize <= 0) return false;
+        controller.enqueue(encoder.encode(chunk));
+        return true;
+      };
 
       const enqueue = (document: ResourceInvalidationEventDocument): void => {
-        if (closed) return;
+        if (closed || controller.desiredSize === null || controller.desiredSize <= 0) return;
         try {
           const event = resourceInvalidationEventSchema.parse(document);
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+          enqueueChunk(`data: ${JSON.stringify(event)}\n\n`);
         } catch (error) {
           logger?.error('event.projection_failed', {
             eventType: document.type,
@@ -2038,10 +2058,35 @@ function createResourceInvalidationStream(
         }
       };
 
-      controller.enqueue(encoder.encode(': connected\n\n'));
+      const revalidateAuthorization = (): void => {
+        if (closed || authorizationCheckInFlight) return;
+        authorizationCheckInFlight = true;
+        void reauthorize()
+          .then(
+            (authorized) => {
+              if (closed) return;
+              if (!authorized) {
+                cleanup(true);
+                return;
+              }
+              enqueueChunk(': ping\n\n');
+            },
+            (error) => {
+              logger?.error('event.authorization_revalidation_failed', {
+                error: { name: error instanceof Error ? error.name : 'UnknownError' },
+              });
+              cleanup(true);
+            },
+          )
+          .finally(() => {
+            authorizationCheckInFlight = false;
+          });
+      };
+
+      enqueueChunk(': connected\n\n');
       keepAlive = setInterval(() => {
-        if (!closed) controller.enqueue(encoder.encode(': ping\n\n'));
-      }, EVENT_KEEP_ALIVE_INTERVAL_MS);
+        revalidateAuthorization();
+      }, authorizationRevalidationIntervalMs);
       request.signal.addEventListener('abort', onAbort, { once: true });
       if (request.signal.aborted) cleanup(true);
     },

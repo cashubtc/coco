@@ -25,11 +25,18 @@ export interface V1RouteParameter {
 type V1RouteHandler<TRequest, TResponse> = (
   input: TRequest,
   request: Request,
+  context: V1RouteHandlerContext,
 ) =>
   | Promise<TResponse | V1HttpResponse<TResponse> | V1HttpStreamResponse>
   | TResponse
   | V1HttpResponse<TResponse>
   | V1HttpStreamResponse;
+
+/** Per-request capabilities available to executable v1 route handlers. */
+export interface V1RouteHandlerContext {
+  /** Rechecks the request's original Client Credential against the active verifier. */
+  reauthorize(): Promise<boolean>;
+}
 
 /** Declarative method, path, authorization, schema, and success contract for one v1 route. */
 export interface V1RouteMetadata<TRequest = unknown, TResponse = unknown> {
@@ -110,6 +117,6 @@ export function defineV1Route<TRequest, TResponse>(
     idempotencyKey: definition.idempotencyKey ?? null,
     responseCacheControl: definition.responseCacheControl ?? null,
     parameters: definition.parameters ?? [],
-    handler: (input, request) => definition.handler(input as TRequest, request),
+    handler: (input, request, context) => definition.handler(input as TRequest, request, context),
   };
 }

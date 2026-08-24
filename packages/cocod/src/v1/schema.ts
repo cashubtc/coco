@@ -727,6 +727,7 @@ export const processShutdownResponseSchema = namedSchema<ProcessShutdownResponse
 );
 
 const decimalAmountNode = stringNode({ pattern: '^(0|[1-9]\\d*)$' });
+const positiveDecimalAmountNode = stringNode({ pattern: '^[1-9]\\d*$' });
 
 /** Runtime and generated schema for safe Wallet balances. */
 export const balancesSchema = namedSchema<BalancesDocument>(
@@ -913,7 +914,7 @@ export const createMintQuoteRequestSchema = namedSchema<CreateMintQuoteRequest>(
       {
         mintUrl: stringNode(),
         method: literalNode('bolt11'),
-        amount: decimalAmountNode,
+        amount: positiveDecimalAmountNode,
         unit: stringNode(),
         locked: booleanNode(),
       },
@@ -929,7 +930,7 @@ export const createMintQuoteRequestSchema = namedSchema<CreateMintQuoteRequest>(
         mintUrl: stringNode(),
         method: literalNode('bolt12'),
         unit: stringNode(),
-        amount: decimalAmountNode,
+        amount: positiveDecimalAmountNode,
         description: stringNode(),
       },
       { optional: ['amount', 'description'] },
@@ -996,7 +997,7 @@ export const createMeltQuoteRequestSchema = namedSchema<CreateMeltQuoteRequest>(
         mintUrl: stringNode(),
         method: literalNode('bolt11'),
         invoice: stringNode(),
-        amount: decimalAmountNode,
+        amount: positiveDecimalAmountNode,
         unit: stringNode(),
       },
       { optional: ['mintUrl', 'amount', 'unit'] },
@@ -1006,7 +1007,7 @@ export const createMeltQuoteRequestSchema = namedSchema<CreateMeltQuoteRequest>(
         mintUrl: stringNode(),
         method: literalNode('bolt12'),
         offer: stringNode(),
-        amount: decimalAmountNode,
+        amount: positiveDecimalAmountNode,
         unit: stringNode(),
       },
       { optional: ['amount', 'unit'] },
@@ -1016,7 +1017,7 @@ export const createMeltQuoteRequestSchema = namedSchema<CreateMeltQuoteRequest>(
         mintUrl: stringNode(),
         method: literalNode('onchain'),
         address: stringNode(),
-        amount: decimalAmountNode,
+        amount: positiveDecimalAmountNode,
         unit: stringNode(),
       },
       { optional: ['unit'] },
@@ -1077,7 +1078,7 @@ export const createMintOperationRequestSchema = namedSchema<CreateMintOperationR
   objectNode({
     mintUrl: stringNode(),
     quoteId: stringNode({ pattern: '\\S' }),
-    amount: decimalAmountNode,
+    amount: positiveDecimalAmountNode,
   }),
 );
 
@@ -1226,7 +1227,7 @@ export const createSendOperationRequestSchema = namedSchema<CreateSendOperationR
     objectNode(
       {
         mintUrl: stringNode(),
-        amount: decimalAmountNode,
+        amount: positiveDecimalAmountNode,
         unit: stringNode({ pattern: '\\S' }),
         forceSwap: booleanNode(),
       },
@@ -1243,7 +1244,7 @@ export const createSendOperationRequestSchema = namedSchema<CreateSendOperationR
       {
         mintUrl: stringNode(),
         source: paymentRequestSendSourceNode,
-        amount: decimalAmountNode,
+        amount: positiveDecimalAmountNode,
         unit: stringNode({ pattern: '\\S' }),
       },
       { optional: ['mintUrl', 'unit'] },

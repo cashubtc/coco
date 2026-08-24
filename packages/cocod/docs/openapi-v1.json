@@ -3611,7 +3611,7 @@
             "properties": {
               "mintUrl": { "type": "string" },
               "method": { "const": "bolt11" },
-              "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+              "amount": { "type": "string", "pattern": "^[1-9]\\d*$" },
               "unit": { "type": "string" },
               "locked": { "type": "boolean" }
             }
@@ -3634,7 +3634,7 @@
               "mintUrl": { "type": "string" },
               "method": { "const": "bolt12" },
               "unit": { "type": "string" },
-              "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+              "amount": { "type": "string", "pattern": "^[1-9]\\d*$" },
               "description": { "type": "string" }
             }
           }
@@ -3966,7 +3966,7 @@
               "mintUrl": { "type": "string" },
               "method": { "const": "bolt11" },
               "invoice": { "type": "string" },
-              "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+              "amount": { "type": "string", "pattern": "^[1-9]\\d*$" },
               "unit": { "type": "string" }
             }
           },
@@ -3978,7 +3978,7 @@
               "mintUrl": { "type": "string" },
               "method": { "const": "bolt12" },
               "offer": { "type": "string" },
-              "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+              "amount": { "type": "string", "pattern": "^[1-9]\\d*$" },
               "unit": { "type": "string" }
             }
           },
@@ -3990,7 +3990,7 @@
               "mintUrl": { "type": "string" },
               "method": { "const": "onchain" },
               "address": { "type": "string" },
-              "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+              "amount": { "type": "string", "pattern": "^[1-9]\\d*$" },
               "unit": { "type": "string" }
             }
           }
@@ -4229,7 +4229,7 @@
         "properties": {
           "mintUrl": { "type": "string" },
           "quoteId": { "type": "string", "pattern": "\\S" },
-          "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" }
+          "amount": { "type": "string", "pattern": "^[1-9]\\d*$" }
         }
       },
       "MintOperations": {
@@ -4791,7 +4791,7 @@
             "required": ["amount", "unit"],
             "properties": {
               "mintUrl": { "type": "string" },
-              "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+              "amount": { "type": "string", "pattern": "^[1-9]\\d*$" },
               "unit": { "type": "string", "pattern": "\\S" },
               "forceSwap": { "type": "boolean" }
             }
@@ -4828,7 +4828,7 @@
                   "request": { "type": "string", "pattern": "\\S", "x-sensitive": true }
                 }
               },
-              "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+              "amount": { "type": "string", "pattern": "^[1-9]\\d*$" },
               "unit": { "type": "string", "pattern": "\\S" }
             }
           }

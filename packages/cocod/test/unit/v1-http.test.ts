@@ -396,6 +396,79 @@ describe('v1 HTTP route interface', () => {
     expect(JSON.stringify([invalidBody, failedBody])).not.toContain('must-not-leak');
   });
 
+  test('rejects zero mutation amounts before calling Coco', async () => {
+    const credential = await createCredential();
+    const createMintQuote = mock(async () => mintQuoteFixture());
+    const createMeltQuote = mock(async () => meltQuoteFixture());
+    const prepareMint = mock(async () => mintOperationFixture());
+    const prepareSend = mock(async () => sendOperationFixture());
+    const parsePaymentRequest = mock(async () => ({
+      unit: 'sat',
+      transport: { type: 'inband' as const },
+      allowedMints: [],
+      payableMints: ['https://mint.example.com'],
+    }));
+    const routes = createWalletTestRoutes(
+      {
+        quotes: {
+          mint: { create: createMintQuote },
+          melt: { create: createMeltQuote },
+        },
+        ops: {
+          mint: { prepare: prepareMint },
+          send: { prepare: prepareSend },
+        },
+        paymentRequests: {
+          parse: parsePaymentRequest,
+          prepare: mock(async () => ({ sendOperation: sendOperationFixture() })),
+        },
+      },
+      credential.credentials,
+    );
+    const cases = [
+      ['/v1/quotes/mint', { method: 'bolt11', amount: '0', unit: 'sat' }],
+      [
+        '/v1/quotes/mint',
+        { mintUrl: 'https://mint.example.com', method: 'bolt12', amount: '0', unit: 'sat' },
+      ],
+      ['/v1/quotes/melt', { method: 'bolt11', invoice: 'lnbc1test', amount: '0' }],
+      [
+        '/v1/quotes/melt',
+        { mintUrl: 'https://mint.example.com', method: 'bolt12', offer: 'lno1test', amount: '0' },
+      ],
+      [
+        '/v1/quotes/melt',
+        { mintUrl: 'https://mint.example.com', method: 'onchain', address: 'bc1test', amount: '0' },
+      ],
+      [
+        '/v1/operations/mint',
+        { mintUrl: 'https://mint.example.com', quoteId: 'mint-quote-1', amount: '0' },
+      ],
+      ['/v1/operations/send', { amount: '0', unit: 'sat' }],
+      [
+        '/v1/operations/send',
+        {
+          source: { type: 'payment-request', request: 'creqBtest' },
+          amount: '0',
+          unit: 'sat',
+        },
+      ],
+    ] as const;
+
+    for (const [path, body] of cases) {
+      const response = await routes[path]!.POST!(
+        authorizedJsonRequest(path, credential.plaintext, body),
+      );
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error: { code: 'invalid_request' } });
+    }
+    expect(createMintQuote).not.toHaveBeenCalled();
+    expect(createMeltQuote).not.toHaveBeenCalled();
+    expect(prepareMint).not.toHaveBeenCalled();
+    expect(prepareSend).not.toHaveBeenCalled();
+    expect(parsePaymentRequest).not.toHaveBeenCalled();
+  });
+
   test('authenticates evaluation and redacts the encoded Payment Request from logs', async () => {
     const credential = await createCredential();
     const debug = mock(() => {});

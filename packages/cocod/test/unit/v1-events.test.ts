@@ -178,6 +178,63 @@ test('authenticates the event stream and removes every Coco listener on disconne
   await reader.cancel();
 });
 
+test('bounds queued invalidations when an event client stops reading', async () => {
+  const credential = await createCredential();
+  const manager = new FakeManager();
+  const routes = createRoutes(manager, credential.credentials);
+  const abort = new AbortController();
+  const response = await routes['/v1/events']!.GET!(
+    new Request('http://localhost/v1/events', {
+      headers: { Authorization: `Bearer ${credential.plaintext}` },
+      signal: abort.signal,
+    }),
+  );
+  const reader = response.body!.getReader();
+
+  await readSseBlock(reader); // connected comment
+  await manager.emit('mint:trusted', { mintUrl: 'https://first.example.com' });
+  await manager.emit('mint:trusted', { mintUrl: 'https://dropped.example.com' });
+
+  expect(await readSseEvent(reader)).toMatchObject({
+    type: 'mint.updated',
+    data: { mintUrl: 'https://first.example.com' },
+  });
+
+  await manager.emit('mint:trusted', { mintUrl: 'https://third.example.com' });
+  expect(await readSseEvent(reader)).toMatchObject({
+    type: 'mint.updated',
+    data: { mintUrl: 'https://third.example.com' },
+  });
+
+  abort.abort();
+  await reader.cancel();
+});
+
+test('closes an open event stream after its credential is rotated', async () => {
+  const credential = await createCredential();
+  const manager = new FakeManager();
+  const routes = createRoutes(manager, credential.credentials, {
+    eventAuthorizationRevalidationIntervalMs: 10,
+  });
+  const response = await routes['/v1/events']!.GET!(
+    new Request('http://localhost/v1/events', {
+      headers: { Authorization: `Bearer ${credential.plaintext}` },
+    }),
+  );
+  const reader = response.body!.getReader();
+
+  await readSseBlock(reader); // connected comment
+  await credential.credentials.rotate();
+
+  const result = await Promise.race([
+    reader.read(),
+    Bun.sleep(200).then(() => ({ done: false, timedOut: true as const })),
+  ]);
+  expect(result).toMatchObject({ done: true });
+  expect(result).not.toHaveProperty('timedOut');
+  expect(manager.listenerCount()).toBe(0);
+});
+
 class FakeManager {
   private readonly listeners = new Map<keyof CoreEvents, Set<(payload: unknown) => unknown>>();
 
@@ -208,6 +265,7 @@ class FakeManager {
 function createRoutes(
   manager: FakeManager,
   credentials: AdministrativeCredential,
+  options: { eventAuthorizationRevalidationIntervalMs?: number } = {},
 ): ReturnType<typeof buildV1Routes> {
   const status: CocodStatus = {
     wallet: {
@@ -230,7 +288,10 @@ function createRoutes(
     }),
   } as unknown as V1Runtime;
   const shutdown = { request: mock(() => Promise.resolve(0)) };
-  return buildV1Routes(createV1RouteDefinitions(runtime, '0.0.17', shutdown), credentials);
+  return buildV1Routes(
+    createV1RouteDefinitions(runtime, '0.0.17', shutdown, undefined, options),
+    credentials,
+  );
 }
 
 async function createCredential(): Promise<{

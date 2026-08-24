@@ -334,6 +334,9 @@ with its unit:
 }
 ```
 
+Mutation request amounts MUST be positive decimal integer strings. Accounting and resource
+response fields MAY contain `"0"`.
+
 Fields that compare several amounts, such as requested amount, input amount, fee reserve, swap fee,
 and effective fee, MUST declare their unit unambiguously. A record whose amount fields all share
 one unit MAY declare `unit` once and use decimal strings for each amount field.
@@ -699,6 +702,11 @@ Events are invalidation hints. Consumers fetch the canonical resource after an e
 current state. Cocod projects only events Coco already exposes and MUST NOT infer missing Operation
 transitions. `balance.updated` may be derived from Coco proof-change events, but cocod forwards only
 the Mint URL and never the proofs, secrets, counters, or raw event payload.
+
+Cocod keeps each stream queue bounded and MAY drop invalidations while its consumer is not ready;
+consumers already establish and refresh canonical state through the resource endpoints. Cocod also
+periodically revalidates the stream's original Client Credential and closes the stream when that
+credential is no longer authorized, including after host-local credential rotation.
 
 Because v1 deliberately has no singular Known Mint lookup route, `mint.updated` causes consumers to
 refetch `GET /v1/mints` and select the matching normalized `mintUrl`. Quote and Operation events may

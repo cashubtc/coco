@@ -480,12 +480,10 @@ export async function prepareAndExecutePaymentRequest(
   request: string,
 ): Promise<string> {
   const evaluation = await client.evaluatePaymentRequest(request);
-  const mintUrl = evaluation.payableMints[0];
-  if (!mintUrl) {
+  if (evaluation.payableMints.length === 0) {
     throw new Error('No payable Mint is available for the Payment Request');
   }
   const operation = await client.prepareSend({
-    mintUrl,
     source: { type: 'payment-request', request },
   });
   const result = await client.executeSend(operation.id);

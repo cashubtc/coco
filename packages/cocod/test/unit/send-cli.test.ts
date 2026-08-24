@@ -158,8 +158,8 @@ test('x-cashu handle CLI flow evaluates, prepares, and executes through v1', asy
         amount: '21',
         unit: 'sat',
         transport: { type: 'inband' },
-        allowedMints: ['https://mint.example.com'],
-        payableMints: ['https://mint.example.com'],
+        allowedMints: [],
+        payableMints: ['https://other.example.com', 'https://mint.example.com'],
         spendingCondition: { kind: 'P2PK' },
       });
     }
@@ -186,7 +186,6 @@ test('x-cashu handle CLI flow evaluates, prepares, and executes through v1', asy
       path: '/v1/operations/send',
       method: 'POST',
       body: {
-        mintUrl: 'https://mint.example.com',
         source: { type: 'payment-request', request: 'creqBcli-input' },
       },
     },

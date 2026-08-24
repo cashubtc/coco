@@ -170,15 +170,13 @@ async function runV1Route(
   const startedAt = performance.now();
   const requestId = crypto.randomUUID();
   const requestPath = options.requestPath ?? definition.path;
+  const authorizationHeader = request.headers.get('authorization');
   const requestLogger =
     logger?.child?.({ method: request.method, path: requestPath, requestId }) ?? logger;
 
   try {
     if (definition.capability) {
-      const authorization = await credentials.authorize(
-        request.headers.get('authorization'),
-        definition.capability,
-      );
+      const authorization = await credentials.authorize(authorizationHeader, definition.capability);
       if (authorization !== 'authorized') {
         const status = authorization === 'unauthenticated' ? 401 : 403;
         const code: V1ErrorCode = authorization;
@@ -214,7 +212,13 @@ async function runV1Route(
       ? null
       : await parseRequest(request, definition.requestSchema);
     requestLogger?.debug('request.received', { input: redactLogValue(input) });
-    const invokeHandler = () => definition.handler(input, request);
+    const invokeHandler = () =>
+      definition.handler(input, request, {
+        reauthorize: async () =>
+          definition.capability === null ||
+          (await credentials.authorize(authorizationHeader, definition.capability)) ===
+            'authorized',
+      });
     const result =
       definition.idempotencyKey === 'optional'
         ? await executeIdempotent(definition, request, input, invokeHandler, options.idempotency)

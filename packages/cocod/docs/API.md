@@ -177,6 +177,13 @@ The [OpenAPI v1 contract](openapi-v1.json) is generated from runtime route metad
 is also served by authenticated `GET /v1/openapi.json`. The [NPC extension contract](daemon-api.json)
 describes the only intentionally retained unversioned operational routes; NPC is outside v1.
 
+Mutation request amounts are positive decimal integer strings. Accounting and resource response
+fields may contain `"0"`.
+
+The event stream has a bounded queue and may drop invalidation hints for a slow consumer. It
+periodically revalidates the original Client Credential and closes after that credential is rotated
+or otherwise loses authorization.
+
 ### Quote resources
 
 Quote creation and the `/refresh` reconciliation commands use Coco's public Quote interface and
