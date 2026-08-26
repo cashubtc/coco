@@ -1510,7 +1510,7 @@ export function createV1RouteDefinitions(
           : parseMintUrl(input.mintUrl, 'The Mint URL is invalid');
       try {
         const operation =
-          'source' in input
+          input.source !== undefined
             ? await preparePaymentRequestSend(session, input, mintUrl)
             : await session.manager.ops.send.prepare({
                 mintUrl,
@@ -1521,7 +1521,7 @@ export function createV1RouteDefinitions(
         return new V1HttpResponse(toSendOperationDocument(operation), 201);
       } catch (error) {
         if (error instanceof V1HttpError) throw error;
-        if ('source' in input) {
+        if (input.source !== undefined) {
           throw paymentRequestCocoError('prepare the Payment Request', error);
         }
         throw sendOperationCocoError('prepare the Send Operation', error);
