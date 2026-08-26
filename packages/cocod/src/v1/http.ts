@@ -2168,7 +2168,7 @@ async function preparePaymentRequestSend(
     });
   }
   const amount =
-    input.amount === undefined
+    !('amount' in input) || input.amount === undefined
       ? undefined
       : input.unit === undefined
         ? input.amount

@@ -2526,15 +2526,12 @@
     "schemas": {
       "Error": {
         "type": "object",
-        "additionalProperties": false,
-        "required": ["error"],
         "properties": {
           "error": {
             "type": "object",
-            "additionalProperties": false,
-            "required": ["code", "message", "retryable"],
             "properties": {
               "code": {
+                "type": "string",
                 "enum": [
                   "unauthenticated",
                   "forbidden",
@@ -2563,178 +2560,184 @@
               },
               "message": { "type": "string" },
               "retryable": { "type": "boolean" },
-              "details": {
-                "type": "object",
-                "additionalProperties": true,
-                "required": [],
-                "properties": {}
-              }
-            }
+              "details": { "type": "object", "properties": {}, "additionalProperties": true }
+            },
+            "required": ["code", "message", "retryable"],
+            "additionalProperties": false
           }
-        }
+        },
+        "required": ["error"],
+        "additionalProperties": false
       },
       "Health": {
         "type": "object",
-        "additionalProperties": false,
+        "properties": {
+          "status": { "type": "string", "const": "ok" },
+          "interfaceVersion": { "type": "string", "const": "1" }
+        },
         "required": ["status", "interfaceVersion"],
-        "properties": { "status": { "const": "ok" }, "interfaceVersion": { "const": "1" } }
+        "additionalProperties": false
       },
       "OpenApiDocument": {
         "type": "object",
-        "additionalProperties": true,
-        "required": ["openapi", "info", "paths", "components"],
         "properties": {
-          "openapi": { "const": "3.1.0" },
-          "info": { "type": "object" },
-          "paths": { "type": "object" },
-          "components": { "type": "object" }
-        }
+          "openapi": { "type": "string", "const": "3.1.0" },
+          "info": { "type": "object", "properties": {}, "additionalProperties": true },
+          "paths": { "type": "object", "properties": {}, "additionalProperties": true },
+          "components": { "type": "object", "properties": {}, "additionalProperties": true }
+        },
+        "required": ["openapi", "info", "paths", "components"],
+        "additionalProperties": {}
       },
       "LifecycleStatus": {
         "oneOf": [
           {
             "type": "object",
-            "additionalProperties": false,
-            "required": ["daemon", "wallet", "seedAccess", "cocoSession"],
             "properties": {
               "daemon": {
                 "type": "object",
-                "additionalProperties": false,
-                "required": ["version", "interfaceVersion"],
                 "properties": {
                   "version": { "type": "string" },
-                  "interfaceVersion": { "const": "1" }
-                }
+                  "interfaceVersion": { "type": "string", "const": "1" }
+                },
+                "required": ["version", "interfaceVersion"],
+                "additionalProperties": false
               },
-              "wallet": { "type": "null" },
-              "seedAccess": { "type": "null" },
+              "wallet": { "type": "null", "const": null },
+              "seedAccess": { "type": "null", "const": null },
               "cocoSession": {
                 "type": "object",
-                "additionalProperties": false,
-                "required": ["state", "startedAt", "lastFailure"],
                 "properties": {
-                  "state": { "enum": ["stopped", "starting", "running", "stopping", "failed"] },
+                  "state": {
+                    "type": "string",
+                    "enum": ["stopped", "starting", "running", "stopping", "failed"]
+                  },
                   "startedAt": {
                     "anyOf": [
-                      { "type": "null" },
                       {
                         "type": "string",
-                        "format": "date-time",
-                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-                      }
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                        "format": "date-time"
+                      },
+                      { "type": "null" }
                     ]
                   },
                   "lastFailure": {
                     "anyOf": [
-                      { "type": "null" },
                       {
                         "type": "object",
-                        "additionalProperties": false,
-                        "required": ["code", "message", "occurredAt"],
                         "properties": {
                           "code": { "type": "string" },
                           "message": { "type": "string" },
                           "occurredAt": {
                             "type": "string",
-                            "format": "date-time",
-                            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                            "format": "date-time"
                           }
-                        }
-                      }
+                        },
+                        "required": ["code", "message", "occurredAt"],
+                        "additionalProperties": false
+                      },
+                      { "type": "null" }
                     ]
                   }
-                }
+                },
+                "required": ["state", "startedAt", "lastFailure"],
+                "additionalProperties": false
               }
-            }
+            },
+            "required": ["daemon", "wallet", "seedAccess", "cocoSession"],
+            "additionalProperties": false
           },
           {
             "type": "object",
-            "additionalProperties": false,
-            "required": ["daemon", "wallet", "seedAccess", "cocoSession"],
             "properties": {
               "daemon": {
                 "type": "object",
-                "additionalProperties": false,
-                "required": ["version", "interfaceVersion"],
                 "properties": {
                   "version": { "type": "string" },
-                  "interfaceVersion": { "const": "1" }
-                }
+                  "interfaceVersion": { "type": "string", "const": "1" }
+                },
+                "required": ["version", "interfaceVersion"],
+                "additionalProperties": false
               },
               "wallet": {
                 "type": "object",
-                "additionalProperties": false,
-                "required": ["configuredAt"],
                 "properties": {
                   "configuredAt": {
                     "type": "string",
-                    "format": "date-time",
-                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                    "format": "date-time"
                   }
-                }
+                },
+                "required": ["configuredAt"],
+                "additionalProperties": false
               },
               "seedAccess": {
                 "type": "object",
-                "additionalProperties": false,
-                "required": ["state", "requiresPassphrase"],
                 "properties": {
-                  "state": { "enum": ["locked", "available"] },
+                  "state": { "type": "string", "enum": ["locked", "available"] },
                   "requiresPassphrase": { "type": "boolean" }
-                }
+                },
+                "required": ["state", "requiresPassphrase"],
+                "additionalProperties": false
               },
               "cocoSession": {
                 "type": "object",
-                "additionalProperties": false,
-                "required": ["state", "startedAt", "lastFailure"],
                 "properties": {
-                  "state": { "enum": ["stopped", "starting", "running", "stopping", "failed"] },
+                  "state": {
+                    "type": "string",
+                    "enum": ["stopped", "starting", "running", "stopping", "failed"]
+                  },
                   "startedAt": {
                     "anyOf": [
-                      { "type": "null" },
                       {
                         "type": "string",
-                        "format": "date-time",
-                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-                      }
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                        "format": "date-time"
+                      },
+                      { "type": "null" }
                     ]
                   },
                   "lastFailure": {
                     "anyOf": [
-                      { "type": "null" },
                       {
                         "type": "object",
-                        "additionalProperties": false,
-                        "required": ["code", "message", "occurredAt"],
                         "properties": {
                           "code": { "type": "string" },
                           "message": { "type": "string" },
                           "occurredAt": {
                             "type": "string",
-                            "format": "date-time",
-                            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                            "format": "date-time"
                           }
-                        }
-                      }
+                        },
+                        "required": ["code", "message", "occurredAt"],
+                        "additionalProperties": false
+                      },
+                      { "type": "null" }
                     ]
                   }
-                }
+                },
+                "required": ["state", "startedAt", "lastFailure"],
+                "additionalProperties": false
               }
-            }
+            },
+            "required": ["daemon", "wallet", "seedAccess", "cocoSession"],
+            "additionalProperties": false
           }
         ]
       },
       "PaymentRequestEvaluation": {
         "type": "object",
-        "additionalProperties": false,
-        "required": ["unit", "transport", "allowedMints", "payableMints"],
         "properties": {
           "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
           "unit": { "type": "string", "pattern": "\\S" },
           "transport": {
             "type": "object",
-            "additionalProperties": false,
+            "properties": { "type": { "type": "string", "enum": ["inband", "http", "nostr"] } },
             "required": ["type"],
-            "properties": { "type": { "enum": ["inband", "http", "nostr"] } }
+            "additionalProperties": false
           },
           "allowedMints": { "type": "array", "items": { "type": "string" } },
           "payableMints": { "type": "array", "items": { "type": "string" } },
@@ -2742,64 +2745,64 @@
             "oneOf": [
               {
                 "type": "object",
-                "additionalProperties": false,
+                "properties": { "kind": { "type": "string", "const": "P2PK" } },
                 "required": ["kind"],
-                "properties": { "kind": { "const": "P2PK" } }
+                "additionalProperties": false
               },
               {
                 "type": "object",
-                "additionalProperties": false,
-                "required": ["kind", "nut10Kind"],
                 "properties": {
-                  "kind": { "const": "unsupported" },
+                  "kind": { "type": "string", "const": "unsupported" },
                   "nut10Kind": { "type": "string" }
-                }
+                },
+                "required": ["kind", "nut10Kind"],
+                "additionalProperties": false
               },
               {
                 "type": "object",
-                "additionalProperties": false,
-                "required": ["kind", "nut10Kind"],
                 "properties": {
-                  "kind": { "const": "malformed" },
+                  "kind": { "type": "string", "const": "malformed" },
                   "nut10Kind": { "type": "string" }
-                }
+                },
+                "required": ["kind", "nut10Kind"],
+                "additionalProperties": false
               }
             ]
           }
-        }
+        },
+        "required": ["unit", "transport", "allowedMints", "payableMints"],
+        "additionalProperties": false
       },
       "EvaluatePaymentRequestRequest": {
         "type": "object",
-        "additionalProperties": false,
+        "properties": { "request": { "type": "string", "pattern": "\\S", "x-sensitive": true } },
         "required": ["request"],
-        "properties": { "request": { "type": "string", "pattern": "\\S", "x-sensitive": true } }
+        "additionalProperties": false
       },
       "Balances": {
         "type": "object",
-        "additionalProperties": false,
-        "required": ["items"],
         "properties": {
           "items": {
             "type": "array",
             "items": {
               "type": "object",
-              "additionalProperties": false,
-              "required": ["mintUrl", "unit", "spendable", "reserved", "total"],
               "properties": {
                 "mintUrl": { "type": "string" },
                 "unit": { "type": "string" },
                 "spendable": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
                 "reserved": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
                 "total": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" }
-              }
+              },
+              "required": ["mintUrl", "unit", "spendable", "reserved", "total"],
+              "additionalProperties": false
             }
           }
-        }
+        },
+        "required": ["items"],
+        "additionalProperties": false
       },
       "HistoryPage": {
         "type": "object",
-        "additionalProperties": false,
-        "required": ["items", "offset", "limit"],
         "properties": {
           "items": {
             "type": "array",
@@ -2807,21 +2810,9 @@
               "oneOf": [
                 {
                   "type": "object",
-                  "additionalProperties": false,
-                  "required": [
-                    "id",
-                    "source",
-                    "state",
-                    "mintUrl",
-                    "unit",
-                    "amount",
-                    "createdAt",
-                    "updatedAt",
-                    "type"
-                  ],
                   "properties": {
                     "id": { "type": "string", "pattern": "\\S" },
-                    "source": { "enum": ["operation", "legacy"] },
+                    "source": { "type": "string", "enum": ["operation", "legacy"] },
                     "operationId": { "type": "string", "pattern": "\\S" },
                     "state": { "type": "string", "pattern": "\\S" },
                     "mintUrl": { "type": "string", "pattern": "\\S" },
@@ -2829,21 +2820,17 @@
                     "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
                     "createdAt": {
                       "type": "string",
-                      "format": "date-time",
-                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time"
                     },
                     "updatedAt": {
                       "type": "string",
-                      "format": "date-time",
-                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time"
                     },
-                    "type": { "const": "mint" },
+                    "type": { "type": "string", "const": "mint" },
                     "quoteId": { "type": "string", "pattern": "\\S" }
-                  }
-                },
-                {
-                  "type": "object",
-                  "additionalProperties": false,
+                  },
                   "required": [
                     "id",
                     "source",
@@ -2855,9 +2842,13 @@
                     "updatedAt",
                     "type"
                   ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
                   "properties": {
                     "id": { "type": "string", "pattern": "\\S" },
-                    "source": { "enum": ["operation", "legacy"] },
+                    "source": { "type": "string", "enum": ["operation", "legacy"] },
                     "operationId": { "type": "string", "pattern": "\\S" },
                     "state": { "type": "string", "pattern": "\\S" },
                     "mintUrl": { "type": "string", "pattern": "\\S" },
@@ -2865,21 +2856,17 @@
                     "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
                     "createdAt": {
                       "type": "string",
-                      "format": "date-time",
-                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time"
                     },
                     "updatedAt": {
                       "type": "string",
-                      "format": "date-time",
-                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time"
                     },
-                    "type": { "const": "melt" },
+                    "type": { "type": "string", "const": "melt" },
                     "quoteId": { "type": "string", "pattern": "\\S" }
-                  }
-                },
-                {
-                  "type": "object",
-                  "additionalProperties": false,
+                  },
                   "required": [
                     "id",
                     "source",
@@ -2891,9 +2878,13 @@
                     "updatedAt",
                     "type"
                   ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
                   "properties": {
                     "id": { "type": "string", "pattern": "\\S" },
-                    "source": { "enum": ["operation", "legacy"] },
+                    "source": { "type": "string", "enum": ["operation", "legacy"] },
                     "operationId": { "type": "string", "pattern": "\\S" },
                     "state": { "type": "string", "pattern": "\\S" },
                     "mintUrl": { "type": "string", "pattern": "\\S" },
@@ -2901,20 +2892,16 @@
                     "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
                     "createdAt": {
                       "type": "string",
-                      "format": "date-time",
-                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time"
                     },
                     "updatedAt": {
                       "type": "string",
-                      "format": "date-time",
-                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time"
                     },
-                    "type": { "const": "send" }
-                  }
-                },
-                {
-                  "type": "object",
-                  "additionalProperties": false,
+                    "type": { "type": "string", "const": "send" }
+                  },
                   "required": [
                     "id",
                     "source",
@@ -2926,9 +2913,13 @@
                     "updatedAt",
                     "type"
                   ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
                   "properties": {
                     "id": { "type": "string", "pattern": "\\S" },
-                    "source": { "enum": ["operation", "legacy"] },
+                    "source": { "type": "string", "enum": ["operation", "legacy"] },
                     "operationId": { "type": "string", "pattern": "\\S" },
                     "state": { "type": "string", "pattern": "\\S" },
                     "mintUrl": { "type": "string", "pattern": "\\S" },
@@ -2936,43 +2927,45 @@
                     "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
                     "createdAt": {
                       "type": "string",
-                      "format": "date-time",
-                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time"
                     },
                     "updatedAt": {
                       "type": "string",
-                      "format": "date-time",
-                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time"
                     },
-                    "type": { "const": "receive" }
-                  }
+                    "type": { "type": "string", "const": "receive" }
+                  },
+                  "required": [
+                    "id",
+                    "source",
+                    "state",
+                    "mintUrl",
+                    "unit",
+                    "amount",
+                    "createdAt",
+                    "updatedAt",
+                    "type"
+                  ],
+                  "additionalProperties": false
                 }
               ]
             }
           },
-          "offset": { "type": "integer", "minimum": 0 },
+          "offset": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
           "limit": { "type": "integer", "minimum": 1, "maximum": 100 }
-        }
+        },
+        "required": ["items", "offset", "limit"],
+        "additionalProperties": false
       },
       "History": {
         "oneOf": [
           {
             "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "id",
-              "source",
-              "state",
-              "mintUrl",
-              "unit",
-              "amount",
-              "createdAt",
-              "updatedAt",
-              "type"
-            ],
             "properties": {
               "id": { "type": "string", "pattern": "\\S" },
-              "source": { "enum": ["operation", "legacy"] },
+              "source": { "type": "string", "enum": ["operation", "legacy"] },
               "operationId": { "type": "string", "pattern": "\\S" },
               "state": { "type": "string", "pattern": "\\S" },
               "mintUrl": { "type": "string", "pattern": "\\S" },
@@ -2980,21 +2973,17 @@
               "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
               "createdAt": {
                 "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
               },
               "updatedAt": {
                 "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
               },
-              "type": { "const": "mint" },
+              "type": { "type": "string", "const": "mint" },
               "quoteId": { "type": "string", "pattern": "\\S" }
-            }
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
+            },
             "required": [
               "id",
               "source",
@@ -3006,9 +2995,13 @@
               "updatedAt",
               "type"
             ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
             "properties": {
               "id": { "type": "string", "pattern": "\\S" },
-              "source": { "enum": ["operation", "legacy"] },
+              "source": { "type": "string", "enum": ["operation", "legacy"] },
               "operationId": { "type": "string", "pattern": "\\S" },
               "state": { "type": "string", "pattern": "\\S" },
               "mintUrl": { "type": "string", "pattern": "\\S" },
@@ -3016,21 +3009,17 @@
               "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
               "createdAt": {
                 "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
               },
               "updatedAt": {
                 "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
               },
-              "type": { "const": "melt" },
+              "type": { "type": "string", "const": "melt" },
               "quoteId": { "type": "string", "pattern": "\\S" }
-            }
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
+            },
             "required": [
               "id",
               "source",
@@ -3042,9 +3031,13 @@
               "updatedAt",
               "type"
             ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
             "properties": {
               "id": { "type": "string", "pattern": "\\S" },
-              "source": { "enum": ["operation", "legacy"] },
+              "source": { "type": "string", "enum": ["operation", "legacy"] },
               "operationId": { "type": "string", "pattern": "\\S" },
               "state": { "type": "string", "pattern": "\\S" },
               "mintUrl": { "type": "string", "pattern": "\\S" },
@@ -3052,20 +3045,16 @@
               "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
               "createdAt": {
                 "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
               },
               "updatedAt": {
                 "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
               },
-              "type": { "const": "send" }
-            }
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
+              "type": { "type": "string", "const": "send" }
+            },
             "required": [
               "id",
               "source",
@@ -3077,9 +3066,13 @@
               "updatedAt",
               "type"
             ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
             "properties": {
               "id": { "type": "string", "pattern": "\\S" },
-              "source": { "enum": ["operation", "legacy"] },
+              "source": { "type": "string", "enum": ["operation", "legacy"] },
               "operationId": { "type": "string", "pattern": "\\S" },
               "state": { "type": "string", "pattern": "\\S" },
               "mintUrl": { "type": "string", "pattern": "\\S" },
@@ -3087,16 +3080,28 @@
               "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
               "createdAt": {
                 "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
               },
               "updatedAt": {
                 "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
               },
-              "type": { "const": "receive" }
-            }
+              "type": { "type": "string", "const": "receive" }
+            },
+            "required": [
+              "id",
+              "source",
+              "state",
+              "mintUrl",
+              "unit",
+              "amount",
+              "createdAt",
+              "updatedAt",
+              "type"
+            ],
+            "additionalProperties": false
           }
         ]
       },
@@ -3104,34 +3109,20 @@
         "oneOf": [
           {
             "type": "object",
-            "additionalProperties": false,
-            "required": ["type", "timestamp", "data"],
             "properties": {
-              "type": { "const": "history.updated" },
+              "type": { "type": "string", "const": "history.updated" },
               "timestamp": {
                 "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
               },
               "data": {
                 "oneOf": [
                   {
                     "type": "object",
-                    "additionalProperties": false,
-                    "required": [
-                      "id",
-                      "source",
-                      "state",
-                      "mintUrl",
-                      "unit",
-                      "amount",
-                      "createdAt",
-                      "updatedAt",
-                      "type"
-                    ],
                     "properties": {
                       "id": { "type": "string", "pattern": "\\S" },
-                      "source": { "enum": ["operation", "legacy"] },
+                      "source": { "type": "string", "enum": ["operation", "legacy"] },
                       "operationId": { "type": "string", "pattern": "\\S" },
                       "state": { "type": "string", "pattern": "\\S" },
                       "mintUrl": { "type": "string", "pattern": "\\S" },
@@ -3139,21 +3130,17 @@
                       "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
                       "createdAt": {
                         "type": "string",
-                        "format": "date-time",
-                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                        "format": "date-time"
                       },
                       "updatedAt": {
                         "type": "string",
-                        "format": "date-time",
-                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                        "format": "date-time"
                       },
-                      "type": { "const": "mint" },
+                      "type": { "type": "string", "const": "mint" },
                       "quoteId": { "type": "string", "pattern": "\\S" }
-                    }
-                  },
-                  {
-                    "type": "object",
-                    "additionalProperties": false,
+                    },
                     "required": [
                       "id",
                       "source",
@@ -3165,9 +3152,13 @@
                       "updatedAt",
                       "type"
                     ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
                     "properties": {
                       "id": { "type": "string", "pattern": "\\S" },
-                      "source": { "enum": ["operation", "legacy"] },
+                      "source": { "type": "string", "enum": ["operation", "legacy"] },
                       "operationId": { "type": "string", "pattern": "\\S" },
                       "state": { "type": "string", "pattern": "\\S" },
                       "mintUrl": { "type": "string", "pattern": "\\S" },
@@ -3175,21 +3166,17 @@
                       "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
                       "createdAt": {
                         "type": "string",
-                        "format": "date-time",
-                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                        "format": "date-time"
                       },
                       "updatedAt": {
                         "type": "string",
-                        "format": "date-time",
-                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                        "format": "date-time"
                       },
-                      "type": { "const": "melt" },
+                      "type": { "type": "string", "const": "melt" },
                       "quoteId": { "type": "string", "pattern": "\\S" }
-                    }
-                  },
-                  {
-                    "type": "object",
-                    "additionalProperties": false,
+                    },
                     "required": [
                       "id",
                       "source",
@@ -3201,9 +3188,13 @@
                       "updatedAt",
                       "type"
                     ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
                     "properties": {
                       "id": { "type": "string", "pattern": "\\S" },
-                      "source": { "enum": ["operation", "legacy"] },
+                      "source": { "type": "string", "enum": ["operation", "legacy"] },
                       "operationId": { "type": "string", "pattern": "\\S" },
                       "state": { "type": "string", "pattern": "\\S" },
                       "mintUrl": { "type": "string", "pattern": "\\S" },
@@ -3211,20 +3202,16 @@
                       "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
                       "createdAt": {
                         "type": "string",
-                        "format": "date-time",
-                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                        "format": "date-time"
                       },
                       "updatedAt": {
                         "type": "string",
-                        "format": "date-time",
-                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                        "format": "date-time"
                       },
-                      "type": { "const": "send" }
-                    }
-                  },
-                  {
-                    "type": "object",
-                    "additionalProperties": false,
+                      "type": { "type": "string", "const": "send" }
+                    },
                     "required": [
                       "id",
                       "source",
@@ -3236,9 +3223,13 @@
                       "updatedAt",
                       "type"
                     ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
                     "properties": {
                       "id": { "type": "string", "pattern": "\\S" },
-                      "source": { "enum": ["operation", "legacy"] },
+                      "source": { "type": "string", "enum": ["operation", "legacy"] },
                       "operationId": { "type": "string", "pattern": "\\S" },
                       "state": { "type": "string", "pattern": "\\S" },
                       "mintUrl": { "type": "string", "pattern": "\\S" },
@@ -3246,211 +3237,260 @@
                       "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
                       "createdAt": {
                         "type": "string",
-                        "format": "date-time",
-                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                        "format": "date-time"
                       },
                       "updatedAt": {
                         "type": "string",
-                        "format": "date-time",
-                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                        "format": "date-time"
                       },
-                      "type": { "const": "receive" }
-                    }
+                      "type": { "type": "string", "const": "receive" }
+                    },
+                    "required": [
+                      "id",
+                      "source",
+                      "state",
+                      "mintUrl",
+                      "unit",
+                      "amount",
+                      "createdAt",
+                      "updatedAt",
+                      "type"
+                    ],
+                    "additionalProperties": false
                   }
                 ]
               }
-            }
+            },
+            "required": ["type", "timestamp", "data"],
+            "additionalProperties": false
           },
           {
             "type": "object",
-            "additionalProperties": false,
-            "required": ["type", "timestamp", "data"],
             "properties": {
-              "type": { "const": "operation.updated" },
+              "type": { "type": "string", "const": "operation.updated" },
               "timestamp": {
                 "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
               },
               "data": {
                 "type": "object",
-                "additionalProperties": false,
-                "required": ["operationType", "operationId", "mintUrl"],
                 "properties": {
-                  "operationType": { "enum": ["mint", "melt", "send", "receive"] },
+                  "operationType": {
+                    "type": "string",
+                    "enum": ["mint", "melt", "send", "receive"]
+                  },
                   "operationId": { "type": "string", "pattern": "\\S" },
                   "mintUrl": { "type": "string", "pattern": "\\S" }
-                }
+                },
+                "required": ["operationType", "operationId", "mintUrl"],
+                "additionalProperties": false
               }
-            }
+            },
+            "required": ["type", "timestamp", "data"],
+            "additionalProperties": false
           },
           {
             "type": "object",
-            "additionalProperties": false,
-            "required": ["type", "timestamp", "data"],
             "properties": {
-              "type": { "const": "quote.updated" },
+              "type": { "type": "string", "const": "quote.updated" },
               "timestamp": {
                 "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
               },
               "data": {
                 "type": "object",
-                "additionalProperties": false,
-                "required": ["quoteType", "mintUrl", "method", "quoteId"],
                 "properties": {
-                  "quoteType": { "enum": ["mint", "melt"] },
+                  "quoteType": { "type": "string", "enum": ["mint", "melt"] },
                   "mintUrl": { "type": "string", "pattern": "\\S" },
                   "method": { "type": "string", "pattern": "\\S" },
                   "quoteId": { "type": "string", "pattern": "\\S" }
-                }
+                },
+                "required": ["quoteType", "mintUrl", "method", "quoteId"],
+                "additionalProperties": false
               }
-            }
+            },
+            "required": ["type", "timestamp", "data"],
+            "additionalProperties": false
           },
           {
             "type": "object",
-            "additionalProperties": false,
-            "required": ["type", "timestamp", "data"],
             "properties": {
-              "type": { "const": "mint.updated" },
+              "type": { "type": "string", "const": "mint.updated" },
               "timestamp": {
                 "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
               },
               "data": {
                 "type": "object",
-                "additionalProperties": false,
+                "properties": { "mintUrl": { "type": "string", "pattern": "\\S" } },
                 "required": ["mintUrl"],
-                "properties": { "mintUrl": { "type": "string", "pattern": "\\S" } }
+                "additionalProperties": false
               }
-            }
+            },
+            "required": ["type", "timestamp", "data"],
+            "additionalProperties": false
           },
           {
             "type": "object",
-            "additionalProperties": false,
-            "required": ["type", "timestamp", "data"],
             "properties": {
-              "type": { "const": "balance.updated" },
+              "type": { "type": "string", "const": "balance.updated" },
               "timestamp": {
                 "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
               },
               "data": {
                 "type": "object",
-                "additionalProperties": false,
+                "properties": { "mintUrl": { "type": "string", "pattern": "\\S" } },
                 "required": ["mintUrl"],
-                "properties": { "mintUrl": { "type": "string", "pattern": "\\S" } }
+                "additionalProperties": false
               }
-            }
+            },
+            "required": ["type", "timestamp", "data"],
+            "additionalProperties": false
           }
         ]
       },
       "KnownMints": {
         "type": "object",
-        "additionalProperties": false,
-        "required": ["items"],
         "properties": {
           "items": {
             "type": "array",
             "items": {
               "type": "object",
-              "additionalProperties": false,
-              "required": ["mintUrl", "name", "trusted", "createdAt", "updatedAt"],
               "properties": {
                 "mintUrl": { "type": "string" },
                 "name": { "type": "string" },
                 "trusted": { "type": "boolean" },
                 "createdAt": {
                   "type": "string",
-                  "format": "date-time",
-                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                  "format": "date-time"
                 },
                 "updatedAt": {
                   "type": "string",
-                  "format": "date-time",
-                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                  "format": "date-time"
                 }
-              }
+              },
+              "required": ["mintUrl", "name", "trusted", "createdAt", "updatedAt"],
+              "additionalProperties": false
             }
           }
-        }
+        },
+        "required": ["items"],
+        "additionalProperties": false
       },
       "KnownMint": {
         "type": "object",
-        "additionalProperties": false,
-        "required": ["mintUrl", "name", "trusted", "createdAt", "updatedAt"],
         "properties": {
           "mintUrl": { "type": "string" },
           "name": { "type": "string" },
           "trusted": { "type": "boolean" },
           "createdAt": {
             "type": "string",
-            "format": "date-time",
-            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+            "format": "date-time"
           },
           "updatedAt": {
             "type": "string",
-            "format": "date-time",
-            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+            "format": "date-time"
           }
-        }
+        },
+        "required": ["mintUrl", "name", "trusted", "createdAt", "updatedAt"],
+        "additionalProperties": false
       },
       "MintUrlRequest": {
         "type": "object",
-        "additionalProperties": false,
+        "properties": { "mintUrl": { "type": "string" } },
         "required": ["mintUrl"],
-        "properties": { "mintUrl": { "type": "string" } }
+        "additionalProperties": false
       },
       "MintInformation": {
         "type": "object",
-        "additionalProperties": false,
-        "required": ["mintUrl", "info"],
         "properties": {
           "mintUrl": { "type": "string" },
-          "info": {
-            "type": "object",
-            "additionalProperties": true,
-            "required": [],
-            "properties": {}
-          }
-        }
+          "info": { "type": "object", "properties": {}, "additionalProperties": true }
+        },
+        "required": ["mintUrl", "info"],
+        "additionalProperties": false
       },
       "PaymentMethodCapabilities": {
         "type": "object",
-        "additionalProperties": false,
-        "required": ["items"],
         "properties": {
           "items": {
             "type": "array",
             "items": {
               "type": "object",
-              "additionalProperties": false,
-              "required": ["operation", "nut", "method", "unit"],
               "properties": {
-                "operation": { "enum": ["mint", "melt"] },
-                "nut": { "oneOf": [{ "const": 4 }, { "const": 5 }] },
+                "operation": { "type": "string", "enum": ["mint", "melt"] },
+                "nut": {
+                  "oneOf": [
+                    { "type": "number", "const": 4 },
+                    { "type": "number", "const": 5 }
+                  ]
+                },
                 "method": { "type": "string" },
                 "unit": { "type": "string" },
                 "minAmount": {
-                  "anyOf": [{ "type": "null" }, { "type": "string", "pattern": "^(0|[1-9]\\d*)$" }]
+                  "anyOf": [{ "type": "string", "pattern": "^(0|[1-9]\\d*)$" }, { "type": "null" }]
                 },
                 "maxAmount": {
-                  "anyOf": [{ "type": "null" }, { "type": "string", "pattern": "^(0|[1-9]\\d*)$" }]
+                  "anyOf": [{ "type": "string", "pattern": "^(0|[1-9]\\d*)$" }, { "type": "null" }]
                 },
                 "options": {}
-              }
+              },
+              "required": ["operation", "nut", "method", "unit"],
+              "additionalProperties": false
             }
           }
-        }
+        },
+        "required": ["items"],
+        "additionalProperties": false
       },
       "MintQuote": {
         "oneOf": [
           {
             "type": "object",
-            "additionalProperties": false,
+            "properties": {
+              "type": { "type": "string", "const": "mint" },
+              "mintUrl": { "type": "string" },
+              "quoteId": { "type": "string" },
+              "request": { "type": "string" },
+              "unit": { "type": "string" },
+              "amountPaid": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+              "amountIssued": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+              "expiry": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                    "format": "date-time"
+                  },
+                  { "type": "null" }
+                ]
+              },
+              "createdAt": {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
+              },
+              "updatedAt": {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
+              },
+              "method": { "type": "string", "const": "bolt11" },
+              "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+              "reusable": { "type": "boolean", "const": false },
+              "state": { "type": "string", "enum": ["UNPAID", "PAID", "ISSUED"] }
+            },
             "required": [
               "type",
               "mintUrl",
@@ -3467,8 +3507,12 @@
               "reusable",
               "state"
             ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
             "properties": {
-              "type": { "const": "mint" },
+              "type": { "type": "string", "const": "mint" },
               "mintUrl": { "type": "string" },
               "quoteId": { "type": "string" },
               "request": { "type": "string" },
@@ -3477,33 +3521,28 @@
               "amountIssued": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
               "expiry": {
                 "anyOf": [
-                  { "type": "null" },
                   {
                     "type": "string",
-                    "format": "date-time",
-                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-                  }
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                    "format": "date-time"
+                  },
+                  { "type": "null" }
                 ]
               },
               "createdAt": {
                 "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
               },
               "updatedAt": {
                 "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
               },
-              "method": { "const": "bolt11" },
+              "method": { "type": "string", "const": "bolt12" },
               "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-              "reusable": { "const": false },
-              "state": { "enum": ["UNPAID", "PAID", "ISSUED"] }
-            }
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
+              "reusable": { "type": "boolean", "const": true }
+            },
             "required": [
               "type",
               "mintUrl",
@@ -3518,8 +3557,12 @@
               "method",
               "reusable"
             ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
             "properties": {
-              "type": { "const": "mint" },
+              "type": { "type": "string", "const": "mint" },
               "mintUrl": { "type": "string" },
               "quoteId": { "type": "string" },
               "request": { "type": "string" },
@@ -3528,32 +3571,27 @@
               "amountIssued": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
               "expiry": {
                 "anyOf": [
-                  { "type": "null" },
                   {
                     "type": "string",
-                    "format": "date-time",
-                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-                  }
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                    "format": "date-time"
+                  },
+                  { "type": "null" }
                 ]
               },
               "createdAt": {
                 "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
               },
               "updatedAt": {
                 "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
               },
-              "method": { "const": "bolt12" },
-              "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-              "reusable": { "const": true }
-            }
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
+              "method": { "type": "string", "const": "onchain" },
+              "reusable": { "type": "boolean", "const": true }
+            },
             "required": [
               "type",
               "mintUrl",
@@ -3568,37 +3606,7 @@
               "method",
               "reusable"
             ],
-            "properties": {
-              "type": { "const": "mint" },
-              "mintUrl": { "type": "string" },
-              "quoteId": { "type": "string" },
-              "request": { "type": "string" },
-              "unit": { "type": "string" },
-              "amountPaid": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-              "amountIssued": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-              "expiry": {
-                "anyOf": [
-                  { "type": "null" },
-                  {
-                    "type": "string",
-                    "format": "date-time",
-                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-                  }
-                ]
-              },
-              "createdAt": {
-                "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-              },
-              "updatedAt": {
-                "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-              },
-              "method": { "const": "onchain" },
-              "reusable": { "const": true }
-            }
+            "additionalProperties": false
           }
         ]
       },
@@ -3606,44 +3614,42 @@
         "oneOf": [
           {
             "type": "object",
-            "additionalProperties": false,
-            "required": ["method", "amount", "unit"],
             "properties": {
               "mintUrl": { "type": "string" },
-              "method": { "const": "bolt11" },
+              "method": { "type": "string", "const": "bolt11" },
               "amount": { "type": "string", "pattern": "^[1-9]\\d*$" },
               "unit": { "type": "string" },
               "locked": { "type": "boolean" }
-            }
+            },
+            "required": ["method", "amount", "unit"],
+            "additionalProperties": false
           },
           {
             "type": "object",
-            "additionalProperties": false,
-            "required": ["mintUrl", "method", "unit"],
             "properties": {
               "mintUrl": { "type": "string" },
-              "method": { "const": "onchain" },
+              "method": { "type": "string", "const": "onchain" },
               "unit": { "type": "string" }
-            }
+            },
+            "required": ["mintUrl", "method", "unit"],
+            "additionalProperties": false
           },
           {
             "type": "object",
-            "additionalProperties": false,
-            "required": ["mintUrl", "method", "unit"],
             "properties": {
               "mintUrl": { "type": "string" },
-              "method": { "const": "bolt12" },
+              "method": { "type": "string", "const": "bolt12" },
               "unit": { "type": "string" },
               "amount": { "type": "string", "pattern": "^[1-9]\\d*$" },
               "description": { "type": "string" }
-            }
+            },
+            "required": ["mintUrl", "method", "unit"],
+            "additionalProperties": false
           }
         ]
       },
       "PendingMintQuotes": {
         "type": "object",
-        "additionalProperties": false,
-        "required": ["items", "offset", "limit"],
         "properties": {
           "items": {
             "type": "array",
@@ -3651,7 +3657,39 @@
               "oneOf": [
                 {
                   "type": "object",
-                  "additionalProperties": false,
+                  "properties": {
+                    "type": { "type": "string", "const": "mint" },
+                    "mintUrl": { "type": "string" },
+                    "quoteId": { "type": "string" },
+                    "request": { "type": "string" },
+                    "unit": { "type": "string" },
+                    "amountPaid": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                    "amountIssued": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                    "expiry": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                          "format": "date-time"
+                        },
+                        { "type": "null" }
+                      ]
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time"
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time"
+                    },
+                    "method": { "type": "string", "const": "bolt11" },
+                    "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                    "reusable": { "type": "boolean", "const": false },
+                    "state": { "type": "string", "enum": ["UNPAID", "PAID", "ISSUED"] }
+                  },
                   "required": [
                     "type",
                     "mintUrl",
@@ -3668,8 +3706,12 @@
                     "reusable",
                     "state"
                   ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
                   "properties": {
-                    "type": { "const": "mint" },
+                    "type": { "type": "string", "const": "mint" },
                     "mintUrl": { "type": "string" },
                     "quoteId": { "type": "string" },
                     "request": { "type": "string" },
@@ -3678,33 +3720,28 @@
                     "amountIssued": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
                     "expiry": {
                       "anyOf": [
-                        { "type": "null" },
                         {
                           "type": "string",
-                          "format": "date-time",
-                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-                        }
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                          "format": "date-time"
+                        },
+                        { "type": "null" }
                       ]
                     },
                     "createdAt": {
                       "type": "string",
-                      "format": "date-time",
-                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time"
                     },
                     "updatedAt": {
                       "type": "string",
-                      "format": "date-time",
-                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time"
                     },
-                    "method": { "const": "bolt11" },
+                    "method": { "type": "string", "const": "bolt12" },
                     "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-                    "reusable": { "const": false },
-                    "state": { "enum": ["UNPAID", "PAID", "ISSUED"] }
-                  }
-                },
-                {
-                  "type": "object",
-                  "additionalProperties": false,
+                    "reusable": { "type": "boolean", "const": true }
+                  },
                   "required": [
                     "type",
                     "mintUrl",
@@ -3719,8 +3756,12 @@
                     "method",
                     "reusable"
                   ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
                   "properties": {
-                    "type": { "const": "mint" },
+                    "type": { "type": "string", "const": "mint" },
                     "mintUrl": { "type": "string" },
                     "quoteId": { "type": "string" },
                     "request": { "type": "string" },
@@ -3729,32 +3770,27 @@
                     "amountIssued": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
                     "expiry": {
                       "anyOf": [
-                        { "type": "null" },
                         {
                           "type": "string",
-                          "format": "date-time",
-                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-                        }
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                          "format": "date-time"
+                        },
+                        { "type": "null" }
                       ]
                     },
                     "createdAt": {
                       "type": "string",
-                      "format": "date-time",
-                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time"
                     },
                     "updatedAt": {
                       "type": "string",
-                      "format": "date-time",
-                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time"
                     },
-                    "method": { "const": "bolt12" },
-                    "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-                    "reusable": { "const": true }
-                  }
-                },
-                {
-                  "type": "object",
-                  "additionalProperties": false,
+                    "method": { "type": "string", "const": "onchain" },
+                    "reusable": { "type": "boolean", "const": true }
+                  },
                   "required": [
                     "type",
                     "mintUrl",
@@ -3769,50 +3805,47 @@
                     "method",
                     "reusable"
                   ],
-                  "properties": {
-                    "type": { "const": "mint" },
-                    "mintUrl": { "type": "string" },
-                    "quoteId": { "type": "string" },
-                    "request": { "type": "string" },
-                    "unit": { "type": "string" },
-                    "amountPaid": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-                    "amountIssued": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-                    "expiry": {
-                      "anyOf": [
-                        { "type": "null" },
-                        {
-                          "type": "string",
-                          "format": "date-time",
-                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-                        }
-                      ]
-                    },
-                    "createdAt": {
-                      "type": "string",
-                      "format": "date-time",
-                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-                    },
-                    "updatedAt": {
-                      "type": "string",
-                      "format": "date-time",
-                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-                    },
-                    "method": { "const": "onchain" },
-                    "reusable": { "const": true }
-                  }
+                  "additionalProperties": false
                 }
               ]
             }
           },
-          "offset": { "type": "integer", "minimum": 0 },
-          "limit": { "type": "integer", "minimum": 1 }
-        }
+          "offset": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+          "limit": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
+        },
+        "required": ["items", "offset", "limit"],
+        "additionalProperties": false
       },
       "MeltQuote": {
         "oneOf": [
           {
             "type": "object",
-            "additionalProperties": false,
+            "properties": {
+              "type": { "type": "string", "const": "melt" },
+              "mintUrl": { "type": "string" },
+              "quoteId": { "type": "string" },
+              "request": { "type": "string" },
+              "unit": { "type": "string" },
+              "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+              "state": { "type": "string", "enum": ["UNPAID", "PENDING", "PAID"] },
+              "expiry": {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
+              },
+              "createdAt": {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
+              },
+              "updatedAt": {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
+              },
+              "feeReserve": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+              "method": { "type": "string", "const": "bolt11" }
+            },
             "required": [
               "type",
               "mintUrl",
@@ -3827,36 +3860,36 @@
               "feeReserve",
               "method"
             ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
             "properties": {
-              "type": { "const": "melt" },
+              "type": { "type": "string", "const": "melt" },
               "mintUrl": { "type": "string" },
               "quoteId": { "type": "string" },
               "request": { "type": "string" },
               "unit": { "type": "string" },
               "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-              "state": { "enum": ["UNPAID", "PENDING", "PAID"] },
+              "state": { "type": "string", "enum": ["UNPAID", "PENDING", "PAID"] },
               "expiry": {
                 "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
               },
               "createdAt": {
                 "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
               },
               "updatedAt": {
                 "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
               },
               "feeReserve": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-              "method": { "const": "bolt11" }
-            }
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
+              "method": { "type": "string", "const": "bolt12" }
+            },
             "required": [
               "type",
               "mintUrl",
@@ -3871,36 +3904,52 @@
               "feeReserve",
               "method"
             ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
             "properties": {
-              "type": { "const": "melt" },
+              "type": { "type": "string", "const": "melt" },
               "mintUrl": { "type": "string" },
               "quoteId": { "type": "string" },
               "request": { "type": "string" },
               "unit": { "type": "string" },
               "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-              "state": { "enum": ["UNPAID", "PENDING", "PAID"] },
+              "state": { "type": "string", "enum": ["UNPAID", "PENDING", "PAID"] },
               "expiry": {
                 "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
               },
               "createdAt": {
                 "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
               },
               "updatedAt": {
                 "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
               },
-              "feeReserve": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-              "method": { "const": "bolt12" }
-            }
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
+              "method": { "type": "string", "const": "onchain" },
+              "feeOptions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "feeIndex": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+                    "feeReserve": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                    "estimatedBlocks": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": ["feeIndex", "feeReserve", "estimatedBlocks"],
+                  "additionalProperties": false
+                }
+              }
+            },
             "required": [
               "type",
               "mintUrl",
@@ -3915,44 +3964,7 @@
               "method",
               "feeOptions"
             ],
-            "properties": {
-              "type": { "const": "melt" },
-              "mintUrl": { "type": "string" },
-              "quoteId": { "type": "string" },
-              "request": { "type": "string" },
-              "unit": { "type": "string" },
-              "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-              "state": { "enum": ["UNPAID", "PENDING", "PAID"] },
-              "expiry": {
-                "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-              },
-              "createdAt": {
-                "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-              },
-              "updatedAt": {
-                "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-              },
-              "method": { "const": "onchain" },
-              "feeOptions": {
-                "type": "array",
-                "items": {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "required": ["feeIndex", "feeReserve", "estimatedBlocks"],
-                  "properties": {
-                    "feeIndex": { "type": "integer", "minimum": 0 },
-                    "feeReserve": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-                    "estimatedBlocks": { "type": "integer", "minimum": 0 }
-                  }
-                }
-              }
-            }
+            "additionalProperties": false
           }
         ]
       },
@@ -3960,46 +3972,44 @@
         "oneOf": [
           {
             "type": "object",
-            "additionalProperties": false,
-            "required": ["method", "invoice"],
             "properties": {
               "mintUrl": { "type": "string" },
-              "method": { "const": "bolt11" },
+              "method": { "type": "string", "const": "bolt11" },
               "invoice": { "type": "string" },
               "amount": { "type": "string", "pattern": "^[1-9]\\d*$" },
               "unit": { "type": "string" }
-            }
+            },
+            "required": ["method", "invoice"],
+            "additionalProperties": false
           },
           {
             "type": "object",
-            "additionalProperties": false,
-            "required": ["mintUrl", "method", "offer"],
             "properties": {
               "mintUrl": { "type": "string" },
-              "method": { "const": "bolt12" },
+              "method": { "type": "string", "const": "bolt12" },
               "offer": { "type": "string" },
               "amount": { "type": "string", "pattern": "^[1-9]\\d*$" },
               "unit": { "type": "string" }
-            }
+            },
+            "required": ["mintUrl", "method", "offer"],
+            "additionalProperties": false
           },
           {
             "type": "object",
-            "additionalProperties": false,
-            "required": ["mintUrl", "method", "address", "amount"],
             "properties": {
               "mintUrl": { "type": "string" },
-              "method": { "const": "onchain" },
+              "method": { "type": "string", "const": "onchain" },
               "address": { "type": "string" },
               "amount": { "type": "string", "pattern": "^[1-9]\\d*$" },
               "unit": { "type": "string" }
-            }
+            },
+            "required": ["mintUrl", "method", "address", "amount"],
+            "additionalProperties": false
           }
         ]
       },
       "PendingMeltQuotes": {
         "type": "object",
-        "additionalProperties": false,
-        "required": ["items", "offset", "limit"],
         "properties": {
           "items": {
             "type": "array",
@@ -4007,7 +4017,32 @@
               "oneOf": [
                 {
                   "type": "object",
-                  "additionalProperties": false,
+                  "properties": {
+                    "type": { "type": "string", "const": "melt" },
+                    "mintUrl": { "type": "string" },
+                    "quoteId": { "type": "string" },
+                    "request": { "type": "string" },
+                    "unit": { "type": "string" },
+                    "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                    "state": { "type": "string", "enum": ["UNPAID", "PENDING", "PAID"] },
+                    "expiry": {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time"
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time"
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time"
+                    },
+                    "feeReserve": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                    "method": { "type": "string", "const": "bolt11" }
+                  },
                   "required": [
                     "type",
                     "mintUrl",
@@ -4022,36 +4057,36 @@
                     "feeReserve",
                     "method"
                   ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
                   "properties": {
-                    "type": { "const": "melt" },
+                    "type": { "type": "string", "const": "melt" },
                     "mintUrl": { "type": "string" },
                     "quoteId": { "type": "string" },
                     "request": { "type": "string" },
                     "unit": { "type": "string" },
                     "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-                    "state": { "enum": ["UNPAID", "PENDING", "PAID"] },
+                    "state": { "type": "string", "enum": ["UNPAID", "PENDING", "PAID"] },
                     "expiry": {
                       "type": "string",
-                      "format": "date-time",
-                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time"
                     },
                     "createdAt": {
                       "type": "string",
-                      "format": "date-time",
-                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time"
                     },
                     "updatedAt": {
                       "type": "string",
-                      "format": "date-time",
-                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time"
                     },
                     "feeReserve": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-                    "method": { "const": "bolt11" }
-                  }
-                },
-                {
-                  "type": "object",
-                  "additionalProperties": false,
+                    "method": { "type": "string", "const": "bolt12" }
+                  },
                   "required": [
                     "type",
                     "mintUrl",
@@ -4066,36 +4101,56 @@
                     "feeReserve",
                     "method"
                   ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
                   "properties": {
-                    "type": { "const": "melt" },
+                    "type": { "type": "string", "const": "melt" },
                     "mintUrl": { "type": "string" },
                     "quoteId": { "type": "string" },
                     "request": { "type": "string" },
                     "unit": { "type": "string" },
                     "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-                    "state": { "enum": ["UNPAID", "PENDING", "PAID"] },
+                    "state": { "type": "string", "enum": ["UNPAID", "PENDING", "PAID"] },
                     "expiry": {
                       "type": "string",
-                      "format": "date-time",
-                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time"
                     },
                     "createdAt": {
                       "type": "string",
-                      "format": "date-time",
-                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time"
                     },
                     "updatedAt": {
                       "type": "string",
-                      "format": "date-time",
-                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time"
                     },
-                    "feeReserve": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-                    "method": { "const": "bolt12" }
-                  }
-                },
-                {
-                  "type": "object",
-                  "additionalProperties": false,
+                    "method": { "type": "string", "const": "onchain" },
+                    "feeOptions": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "feeIndex": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "feeReserve": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                          "estimatedBlocks": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": ["feeIndex", "feeReserve", "estimatedBlocks"],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
                   "required": [
                     "type",
                     "mintUrl",
@@ -4110,55 +4165,72 @@
                     "method",
                     "feeOptions"
                   ],
-                  "properties": {
-                    "type": { "const": "melt" },
-                    "mintUrl": { "type": "string" },
-                    "quoteId": { "type": "string" },
-                    "request": { "type": "string" },
-                    "unit": { "type": "string" },
-                    "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-                    "state": { "enum": ["UNPAID", "PENDING", "PAID"] },
-                    "expiry": {
-                      "type": "string",
-                      "format": "date-time",
-                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-                    },
-                    "createdAt": {
-                      "type": "string",
-                      "format": "date-time",
-                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-                    },
-                    "updatedAt": {
-                      "type": "string",
-                      "format": "date-time",
-                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-                    },
-                    "method": { "const": "onchain" },
-                    "feeOptions": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "required": ["feeIndex", "feeReserve", "estimatedBlocks"],
-                        "properties": {
-                          "feeIndex": { "type": "integer", "minimum": 0 },
-                          "feeReserve": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-                          "estimatedBlocks": { "type": "integer", "minimum": 0 }
-                        }
-                      }
-                    }
-                  }
+                  "additionalProperties": false
                 }
               ]
             }
           },
-          "offset": { "type": "integer", "minimum": 0 },
-          "limit": { "type": "integer", "minimum": 1 }
-        }
+          "offset": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+          "limit": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
+        },
+        "required": ["items", "offset", "limit"],
+        "additionalProperties": false
       },
       "MintOperation": {
         "type": "object",
-        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "type": { "type": "string", "const": "mint" },
+          "state": {
+            "type": "string",
+            "enum": ["init", "pending", "executing", "finalized", "failed"]
+          },
+          "mintUrl": { "type": "string" },
+          "unit": { "type": "string" },
+          "method": { "type": "string", "enum": ["bolt11", "bolt12", "onchain"] },
+          "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+          "quote": {
+            "type": "object",
+            "properties": { "mintUrl": { "type": "string" }, "quoteId": { "type": "string" } },
+            "required": ["mintUrl", "quoteId"],
+            "additionalProperties": false
+          },
+          "expiry": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
+              },
+              { "type": "null" }
+            ]
+          },
+          "failure": {
+            "type": "object",
+            "properties": {
+              "reason": { "type": "string" },
+              "code": { "type": "string" },
+              "retryable": { "type": "boolean" },
+              "observedAt": {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
+              }
+            },
+            "required": ["reason", "observedAt"],
+            "additionalProperties": false
+          },
+          "createdAt": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+            "format": "date-time"
+          }
+        },
         "required": [
           "id",
           "type",
@@ -4171,77 +4243,81 @@
           "createdAt",
           "updatedAt"
         ],
-        "properties": {
-          "id": { "type": "string" },
-          "type": { "const": "mint" },
-          "state": { "enum": ["init", "pending", "executing", "finalized", "failed"] },
-          "mintUrl": { "type": "string" },
-          "unit": { "type": "string" },
-          "method": { "enum": ["bolt11", "bolt12", "onchain"] },
-          "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-          "quote": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["mintUrl", "quoteId"],
-            "properties": { "mintUrl": { "type": "string" }, "quoteId": { "type": "string" } }
-          },
-          "expiry": {
-            "anyOf": [
-              { "type": "null" },
-              {
-                "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-              }
-            ]
-          },
-          "failure": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["reason", "observedAt"],
-            "properties": {
-              "reason": { "type": "string" },
-              "code": { "type": "string" },
-              "retryable": { "type": "boolean" },
-              "observedAt": {
-                "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-              }
-            }
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time",
-            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-          },
-          "updatedAt": {
-            "type": "string",
-            "format": "date-time",
-            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-          }
-        }
+        "additionalProperties": false
       },
       "CreateMintOperationRequest": {
         "type": "object",
-        "additionalProperties": false,
-        "required": ["mintUrl", "quoteId", "amount"],
         "properties": {
           "mintUrl": { "type": "string" },
           "quoteId": { "type": "string", "pattern": "\\S" },
           "amount": { "type": "string", "pattern": "^[1-9]\\d*$" }
-        }
+        },
+        "required": ["mintUrl", "quoteId", "amount"],
+        "additionalProperties": false
       },
       "MintOperations": {
         "type": "object",
-        "additionalProperties": false,
-        "required": ["items", "offset", "limit"],
         "properties": {
           "items": {
             "type": "array",
             "items": {
               "type": "object",
-              "additionalProperties": false,
+              "properties": {
+                "id": { "type": "string" },
+                "type": { "type": "string", "const": "mint" },
+                "state": {
+                  "type": "string",
+                  "enum": ["init", "pending", "executing", "finalized", "failed"]
+                },
+                "mintUrl": { "type": "string" },
+                "unit": { "type": "string" },
+                "method": { "type": "string", "enum": ["bolt11", "bolt12", "onchain"] },
+                "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                "quote": {
+                  "type": "object",
+                  "properties": {
+                    "mintUrl": { "type": "string" },
+                    "quoteId": { "type": "string" }
+                  },
+                  "required": ["mintUrl", "quoteId"],
+                  "additionalProperties": false
+                },
+                "expiry": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time"
+                    },
+                    { "type": "null" }
+                  ]
+                },
+                "failure": {
+                  "type": "object",
+                  "properties": {
+                    "reason": { "type": "string" },
+                    "code": { "type": "string" },
+                    "retryable": { "type": "boolean" },
+                    "observedAt": {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time"
+                    }
+                  },
+                  "required": ["reason", "observedAt"],
+                  "additionalProperties": false
+                },
+                "createdAt": {
+                  "type": "string",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                  "format": "date-time"
+                },
+                "updatedAt": {
+                  "type": "string",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                  "format": "date-time"
+                }
+              },
               "required": [
                 "id",
                 "type",
@@ -4254,68 +4330,44 @@
                 "createdAt",
                 "updatedAt"
               ],
-              "properties": {
-                "id": { "type": "string" },
-                "type": { "const": "mint" },
-                "state": { "enum": ["init", "pending", "executing", "finalized", "failed"] },
-                "mintUrl": { "type": "string" },
-                "unit": { "type": "string" },
-                "method": { "enum": ["bolt11", "bolt12", "onchain"] },
-                "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-                "quote": {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "required": ["mintUrl", "quoteId"],
-                  "properties": { "mintUrl": { "type": "string" }, "quoteId": { "type": "string" } }
-                },
-                "expiry": {
-                  "anyOf": [
-                    { "type": "null" },
-                    {
-                      "type": "string",
-                      "format": "date-time",
-                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-                    }
-                  ]
-                },
-                "failure": {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "required": ["reason", "observedAt"],
-                  "properties": {
-                    "reason": { "type": "string" },
-                    "code": { "type": "string" },
-                    "retryable": { "type": "boolean" },
-                    "observedAt": {
-                      "type": "string",
-                      "format": "date-time",
-                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-                    }
-                  }
-                },
-                "createdAt": {
-                  "type": "string",
-                  "format": "date-time",
-                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-                },
-                "updatedAt": {
-                  "type": "string",
-                  "format": "date-time",
-                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-                }
-              }
+              "additionalProperties": false
             }
           },
-          "offset": { "type": "integer", "minimum": 0 },
-          "limit": { "type": "integer", "minimum": 1 }
-        }
+          "offset": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+          "limit": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
+        },
+        "required": ["items", "offset", "limit"],
+        "additionalProperties": false
       },
       "Never": { "not": {} },
       "MeltOperation": {
         "oneOf": [
           {
             "type": "object",
-            "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string" },
+              "type": { "type": "string", "const": "melt" },
+              "mintUrl": { "type": "string" },
+              "unit": { "type": "string" },
+              "method": { "type": "string", "enum": ["bolt11", "bolt12", "onchain"] },
+              "createdAt": {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
+              },
+              "updatedAt": {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
+              },
+              "state": { "type": "string", "const": "init" },
+              "quote": {
+                "type": "object",
+                "properties": { "mintUrl": { "type": "string" }, "quoteId": { "type": "string" } },
+                "required": ["mintUrl", "quoteId"],
+                "additionalProperties": false
+              }
+            },
             "required": [
               "id",
               "type",
@@ -4326,34 +4378,53 @@
               "updatedAt",
               "state"
             ],
-            "properties": {
-              "id": { "type": "string" },
-              "type": { "const": "melt" },
-              "mintUrl": { "type": "string" },
-              "unit": { "type": "string" },
-              "method": { "enum": ["bolt11", "bolt12", "onchain"] },
-              "createdAt": {
-                "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-              },
-              "updatedAt": {
-                "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-              },
-              "state": { "const": "init" },
-              "quote": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["mintUrl", "quoteId"],
-                "properties": { "mintUrl": { "type": "string" }, "quoteId": { "type": "string" } }
-              }
-            }
+            "additionalProperties": false
           },
           {
             "type": "object",
-            "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string" },
+              "type": { "type": "string", "const": "melt" },
+              "mintUrl": { "type": "string" },
+              "unit": { "type": "string" },
+              "method": { "type": "string", "enum": ["bolt11", "bolt12", "onchain"] },
+              "createdAt": {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
+              },
+              "updatedAt": {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "prepared",
+                  "executing",
+                  "pending",
+                  "failed",
+                  "finalized",
+                  "rolling_back",
+                  "rolled_back"
+                ]
+              },
+              "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+              "quote": {
+                "type": "object",
+                "properties": { "mintUrl": { "type": "string" }, "quoteId": { "type": "string" } },
+                "required": ["mintUrl", "quoteId"],
+                "additionalProperties": false
+              },
+              "feeReserve": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+              "swapFee": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+              "inputAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+              "needsSwap": { "type": "boolean" },
+              "feeIndex": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+              "changeAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+              "effectiveFee": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" }
+            },
             "required": [
               "id",
               "type",
@@ -4370,65 +4441,22 @@
               "inputAmount",
               "needsSwap"
             ],
-            "properties": {
-              "id": { "type": "string" },
-              "type": { "const": "melt" },
-              "mintUrl": { "type": "string" },
-              "unit": { "type": "string" },
-              "method": { "enum": ["bolt11", "bolt12", "onchain"] },
-              "createdAt": {
-                "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-              },
-              "updatedAt": {
-                "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-              },
-              "state": {
-                "enum": [
-                  "prepared",
-                  "executing",
-                  "pending",
-                  "failed",
-                  "finalized",
-                  "rolling_back",
-                  "rolled_back"
-                ]
-              },
-              "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-              "quote": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["mintUrl", "quoteId"],
-                "properties": { "mintUrl": { "type": "string" }, "quoteId": { "type": "string" } }
-              },
-              "feeReserve": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-              "swapFee": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-              "inputAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-              "needsSwap": { "type": "boolean" },
-              "feeIndex": { "type": "integer", "minimum": 0 },
-              "changeAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-              "effectiveFee": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" }
-            }
+            "additionalProperties": false
           }
         ]
       },
       "CreateMeltOperationRequest": {
         "type": "object",
-        "additionalProperties": false,
-        "required": ["mintUrl", "quoteId"],
         "properties": {
           "mintUrl": { "type": "string" },
           "quoteId": { "type": "string", "pattern": "\\S" },
-          "feeIndex": { "type": "integer", "minimum": 0 }
-        }
+          "feeIndex": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+        },
+        "required": ["mintUrl", "quoteId"],
+        "additionalProperties": false
       },
       "MeltOperations": {
         "type": "object",
-        "additionalProperties": false,
-        "required": ["items", "offset", "limit"],
         "properties": {
           "items": {
             "type": "array",
@@ -4436,7 +4464,33 @@
               "oneOf": [
                 {
                   "type": "object",
-                  "additionalProperties": false,
+                  "properties": {
+                    "id": { "type": "string" },
+                    "type": { "type": "string", "const": "melt" },
+                    "mintUrl": { "type": "string" },
+                    "unit": { "type": "string" },
+                    "method": { "type": "string", "enum": ["bolt11", "bolt12", "onchain"] },
+                    "createdAt": {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time"
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time"
+                    },
+                    "state": { "type": "string", "const": "init" },
+                    "quote": {
+                      "type": "object",
+                      "properties": {
+                        "mintUrl": { "type": "string" },
+                        "quoteId": { "type": "string" }
+                      },
+                      "required": ["mintUrl", "quoteId"],
+                      "additionalProperties": false
+                    }
+                  },
                   "required": [
                     "id",
                     "type",
@@ -4447,37 +4501,56 @@
                     "updatedAt",
                     "state"
                   ],
-                  "properties": {
-                    "id": { "type": "string" },
-                    "type": { "const": "melt" },
-                    "mintUrl": { "type": "string" },
-                    "unit": { "type": "string" },
-                    "method": { "enum": ["bolt11", "bolt12", "onchain"] },
-                    "createdAt": {
-                      "type": "string",
-                      "format": "date-time",
-                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-                    },
-                    "updatedAt": {
-                      "type": "string",
-                      "format": "date-time",
-                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-                    },
-                    "state": { "const": "init" },
-                    "quote": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["mintUrl", "quoteId"],
-                      "properties": {
-                        "mintUrl": { "type": "string" },
-                        "quoteId": { "type": "string" }
-                      }
-                    }
-                  }
+                  "additionalProperties": false
                 },
                 {
                   "type": "object",
-                  "additionalProperties": false,
+                  "properties": {
+                    "id": { "type": "string" },
+                    "type": { "type": "string", "const": "melt" },
+                    "mintUrl": { "type": "string" },
+                    "unit": { "type": "string" },
+                    "method": { "type": "string", "enum": ["bolt11", "bolt12", "onchain"] },
+                    "createdAt": {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time"
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time"
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "prepared",
+                        "executing",
+                        "pending",
+                        "failed",
+                        "finalized",
+                        "rolling_back",
+                        "rolled_back"
+                      ]
+                    },
+                    "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                    "quote": {
+                      "type": "object",
+                      "properties": {
+                        "mintUrl": { "type": "string" },
+                        "quoteId": { "type": "string" }
+                      },
+                      "required": ["mintUrl", "quoteId"],
+                      "additionalProperties": false
+                    },
+                    "feeReserve": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                    "swapFee": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                    "inputAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                    "needsSwap": { "type": "boolean" },
+                    "feeIndex": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+                    "changeAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                    "effectiveFee": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" }
+                  },
                   "required": [
                     "id",
                     "type",
@@ -4494,69 +4567,51 @@
                     "inputAmount",
                     "needsSwap"
                   ],
-                  "properties": {
-                    "id": { "type": "string" },
-                    "type": { "const": "melt" },
-                    "mintUrl": { "type": "string" },
-                    "unit": { "type": "string" },
-                    "method": { "enum": ["bolt11", "bolt12", "onchain"] },
-                    "createdAt": {
-                      "type": "string",
-                      "format": "date-time",
-                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-                    },
-                    "updatedAt": {
-                      "type": "string",
-                      "format": "date-time",
-                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-                    },
-                    "state": {
-                      "enum": [
-                        "prepared",
-                        "executing",
-                        "pending",
-                        "failed",
-                        "finalized",
-                        "rolling_back",
-                        "rolled_back"
-                      ]
-                    },
-                    "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-                    "quote": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["mintUrl", "quoteId"],
-                      "properties": {
-                        "mintUrl": { "type": "string" },
-                        "quoteId": { "type": "string" }
-                      }
-                    },
-                    "feeReserve": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-                    "swapFee": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-                    "inputAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-                    "needsSwap": { "type": "boolean" },
-                    "feeIndex": { "type": "integer", "minimum": 0 },
-                    "changeAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-                    "effectiveFee": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" }
-                  }
+                  "additionalProperties": false
                 }
               ]
             }
           },
-          "offset": { "type": "integer", "minimum": 0 },
-          "limit": { "type": "integer", "minimum": 1 }
-        }
+          "offset": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+          "limit": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
+        },
+        "required": ["items", "offset", "limit"],
+        "additionalProperties": false
       },
       "ExecuteMeltOperationResponse": {
         "type": "object",
-        "additionalProperties": false,
-        "required": ["operation"],
         "properties": {
           "operation": {
             "oneOf": [
               {
                 "type": "object",
-                "additionalProperties": false,
+                "properties": {
+                  "id": { "type": "string" },
+                  "type": { "type": "string", "const": "melt" },
+                  "mintUrl": { "type": "string" },
+                  "unit": { "type": "string" },
+                  "method": { "type": "string", "enum": ["bolt11", "bolt12", "onchain"] },
+                  "createdAt": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                    "format": "date-time"
+                  },
+                  "updatedAt": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                    "format": "date-time"
+                  },
+                  "state": { "type": "string", "const": "init" },
+                  "quote": {
+                    "type": "object",
+                    "properties": {
+                      "mintUrl": { "type": "string" },
+                      "quoteId": { "type": "string" }
+                    },
+                    "required": ["mintUrl", "quoteId"],
+                    "additionalProperties": false
+                  }
+                },
                 "required": [
                   "id",
                   "type",
@@ -4567,37 +4622,56 @@
                   "updatedAt",
                   "state"
                 ],
-                "properties": {
-                  "id": { "type": "string" },
-                  "type": { "const": "melt" },
-                  "mintUrl": { "type": "string" },
-                  "unit": { "type": "string" },
-                  "method": { "enum": ["bolt11", "bolt12", "onchain"] },
-                  "createdAt": {
-                    "type": "string",
-                    "format": "date-time",
-                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-                  },
-                  "updatedAt": {
-                    "type": "string",
-                    "format": "date-time",
-                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-                  },
-                  "state": { "const": "init" },
-                  "quote": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["mintUrl", "quoteId"],
-                    "properties": {
-                      "mintUrl": { "type": "string" },
-                      "quoteId": { "type": "string" }
-                    }
-                  }
-                }
+                "additionalProperties": false
               },
               {
                 "type": "object",
-                "additionalProperties": false,
+                "properties": {
+                  "id": { "type": "string" },
+                  "type": { "type": "string", "const": "melt" },
+                  "mintUrl": { "type": "string" },
+                  "unit": { "type": "string" },
+                  "method": { "type": "string", "enum": ["bolt11", "bolt12", "onchain"] },
+                  "createdAt": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                    "format": "date-time"
+                  },
+                  "updatedAt": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                    "format": "date-time"
+                  },
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "prepared",
+                      "executing",
+                      "pending",
+                      "failed",
+                      "finalized",
+                      "rolling_back",
+                      "rolled_back"
+                    ]
+                  },
+                  "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                  "quote": {
+                    "type": "object",
+                    "properties": {
+                      "mintUrl": { "type": "string" },
+                      "quoteId": { "type": "string" }
+                    },
+                    "required": ["mintUrl", "quoteId"],
+                    "additionalProperties": false
+                  },
+                  "feeReserve": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                  "swapFee": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                  "inputAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                  "needsSwap": { "type": "boolean" },
+                  "feeIndex": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+                  "changeAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                  "effectiveFee": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" }
+                },
                 "required": [
                   "id",
                   "type",
@@ -4614,51 +4688,7 @@
                   "inputAmount",
                   "needsSwap"
                 ],
-                "properties": {
-                  "id": { "type": "string" },
-                  "type": { "const": "melt" },
-                  "mintUrl": { "type": "string" },
-                  "unit": { "type": "string" },
-                  "method": { "enum": ["bolt11", "bolt12", "onchain"] },
-                  "createdAt": {
-                    "type": "string",
-                    "format": "date-time",
-                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-                  },
-                  "updatedAt": {
-                    "type": "string",
-                    "format": "date-time",
-                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-                  },
-                  "state": {
-                    "enum": [
-                      "prepared",
-                      "executing",
-                      "pending",
-                      "failed",
-                      "finalized",
-                      "rolling_back",
-                      "rolled_back"
-                    ]
-                  },
-                  "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-                  "quote": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["mintUrl", "quoteId"],
-                    "properties": {
-                      "mintUrl": { "type": "string" },
-                      "quoteId": { "type": "string" }
-                    }
-                  },
-                  "feeReserve": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-                  "swapFee": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-                  "inputAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-                  "needsSwap": { "type": "boolean" },
-                  "feeIndex": { "type": "integer", "minimum": 0 },
-                  "changeAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-                  "effectiveFee": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" }
-                }
+                "additionalProperties": false
               }
             ]
           },
@@ -4666,33 +4696,47 @@
             "oneOf": [
               {
                 "type": "object",
-                "additionalProperties": false,
+                "properties": {
+                  "preimage": { "type": "string", "x-sensitive": true },
+                  "outpoint": { "not": {} }
+                },
                 "required": ["preimage"],
-                "properties": { "preimage": { "type": "string", "x-sensitive": true } }
+                "additionalProperties": false
               },
               {
                 "type": "object",
-                "additionalProperties": false,
+                "properties": {
+                  "preimage": { "not": {} },
+                  "outpoint": { "type": "string", "x-sensitive": true }
+                },
                 "required": ["outpoint"],
-                "properties": { "outpoint": { "type": "string", "x-sensitive": true } }
+                "additionalProperties": false
               }
             ]
           }
-        }
+        },
+        "required": ["operation"],
+        "additionalProperties": false
       },
       "MeltResult": {
         "oneOf": [
           {
             "type": "object",
-            "additionalProperties": false,
+            "properties": {
+              "preimage": { "type": "string", "x-sensitive": true },
+              "outpoint": { "not": {} }
+            },
             "required": ["preimage"],
-            "properties": { "preimage": { "type": "string", "x-sensitive": true } }
+            "additionalProperties": false
           },
           {
             "type": "object",
-            "additionalProperties": false,
+            "properties": {
+              "preimage": { "not": {} },
+              "outpoint": { "type": "string", "x-sensitive": true }
+            },
             "required": ["outpoint"],
-            "properties": { "outpoint": { "type": "string", "x-sensitive": true } }
+            "additionalProperties": false
           }
         ]
       },
@@ -4700,7 +4744,25 @@
         "oneOf": [
           {
             "type": "object",
-            "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string" },
+              "type": { "type": "string", "const": "send" },
+              "mintUrl": { "type": "string" },
+              "unit": { "type": "string" },
+              "method": { "type": "string", "enum": ["default", "p2pk"] },
+              "requestedAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+              "createdAt": {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
+              },
+              "updatedAt": {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
+              },
+              "state": { "type": "string", "const": "init" }
+            },
             "required": [
               "id",
               "type",
@@ -4712,29 +4774,42 @@
               "updatedAt",
               "state"
             ],
-            "properties": {
-              "id": { "type": "string" },
-              "type": { "const": "send" },
-              "mintUrl": { "type": "string" },
-              "unit": { "type": "string" },
-              "method": { "enum": ["default", "p2pk"] },
-              "requestedAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-              "createdAt": {
-                "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-              },
-              "updatedAt": {
-                "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-              },
-              "state": { "const": "init" }
-            }
+            "additionalProperties": false
           },
           {
             "type": "object",
-            "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string" },
+              "type": { "type": "string", "const": "send" },
+              "mintUrl": { "type": "string" },
+              "unit": { "type": "string" },
+              "method": { "type": "string", "enum": ["default", "p2pk"] },
+              "requestedAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+              "createdAt": {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
+              },
+              "updatedAt": {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "prepared",
+                  "executing",
+                  "pending",
+                  "finalized",
+                  "rolling_back",
+                  "rolled_back"
+                ]
+              },
+              "inputAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+              "fee": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+              "needsSwap": { "type": "boolean" }
+            },
             "required": [
               "id",
               "type",
@@ -4749,37 +4824,7 @@
               "fee",
               "needsSwap"
             ],
-            "properties": {
-              "id": { "type": "string" },
-              "type": { "const": "send" },
-              "mintUrl": { "type": "string" },
-              "unit": { "type": "string" },
-              "method": { "enum": ["default", "p2pk"] },
-              "requestedAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-              "createdAt": {
-                "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-              },
-              "updatedAt": {
-                "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-              },
-              "state": {
-                "enum": [
-                  "prepared",
-                  "executing",
-                  "pending",
-                  "finalized",
-                  "rolling_back",
-                  "rolled_back"
-                ]
-              },
-              "inputAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-              "fee": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-              "needsSwap": { "type": "boolean" }
-            }
+            "additionalProperties": false
           }
         ]
       },
@@ -4787,57 +4832,60 @@
         "oneOf": [
           {
             "type": "object",
-            "additionalProperties": false,
-            "required": ["amount", "unit"],
             "properties": {
               "mintUrl": { "type": "string" },
               "amount": { "type": "string", "pattern": "^[1-9]\\d*$" },
               "unit": { "type": "string", "pattern": "\\S" },
-              "forceSwap": { "type": "boolean" }
-            }
+              "forceSwap": { "type": "boolean" },
+              "source": { "not": {} }
+            },
+            "required": ["amount", "unit"],
+            "additionalProperties": false
           },
           {
             "type": "object",
-            "additionalProperties": false,
+            "properties": {
+              "mintUrl": { "type": "string" },
+              "source": {
+                "type": "object",
+                "properties": {
+                  "type": { "type": "string", "const": "payment-request" },
+                  "request": { "type": "string", "pattern": "\\S", "x-sensitive": true }
+                },
+                "required": ["type", "request"],
+                "additionalProperties": false
+              },
+              "amount": { "not": {} },
+              "unit": { "not": {} },
+              "forceSwap": { "not": {} }
+            },
             "required": ["source"],
-            "properties": {
-              "mintUrl": { "type": "string" },
-              "source": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["type", "request"],
-                "properties": {
-                  "type": { "const": "payment-request" },
-                  "request": { "type": "string", "pattern": "\\S", "x-sensitive": true }
-                }
-              }
-            }
+            "additionalProperties": false
           },
           {
             "type": "object",
-            "additionalProperties": false,
-            "required": ["source", "amount"],
             "properties": {
               "mintUrl": { "type": "string" },
               "source": {
                 "type": "object",
-                "additionalProperties": false,
-                "required": ["type", "request"],
                 "properties": {
-                  "type": { "const": "payment-request" },
+                  "type": { "type": "string", "const": "payment-request" },
                   "request": { "type": "string", "pattern": "\\S", "x-sensitive": true }
-                }
+                },
+                "required": ["type", "request"],
+                "additionalProperties": false
               },
               "amount": { "type": "string", "pattern": "^[1-9]\\d*$" },
-              "unit": { "type": "string", "pattern": "\\S" }
-            }
+              "unit": { "type": "string", "pattern": "\\S" },
+              "forceSwap": { "not": {} }
+            },
+            "required": ["source", "amount"],
+            "additionalProperties": false
           }
         ]
       },
       "SendOperations": {
         "type": "object",
-        "additionalProperties": false,
-        "required": ["items", "offset", "limit"],
         "properties": {
           "items": {
             "type": "array",
@@ -4845,7 +4893,25 @@
               "oneOf": [
                 {
                   "type": "object",
-                  "additionalProperties": false,
+                  "properties": {
+                    "id": { "type": "string" },
+                    "type": { "type": "string", "const": "send" },
+                    "mintUrl": { "type": "string" },
+                    "unit": { "type": "string" },
+                    "method": { "type": "string", "enum": ["default", "p2pk"] },
+                    "requestedAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                    "createdAt": {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time"
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time"
+                    },
+                    "state": { "type": "string", "const": "init" }
+                  },
                   "required": [
                     "id",
                     "type",
@@ -4857,29 +4923,42 @@
                     "updatedAt",
                     "state"
                   ],
-                  "properties": {
-                    "id": { "type": "string" },
-                    "type": { "const": "send" },
-                    "mintUrl": { "type": "string" },
-                    "unit": { "type": "string" },
-                    "method": { "enum": ["default", "p2pk"] },
-                    "requestedAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-                    "createdAt": {
-                      "type": "string",
-                      "format": "date-time",
-                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-                    },
-                    "updatedAt": {
-                      "type": "string",
-                      "format": "date-time",
-                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-                    },
-                    "state": { "const": "init" }
-                  }
+                  "additionalProperties": false
                 },
                 {
                   "type": "object",
-                  "additionalProperties": false,
+                  "properties": {
+                    "id": { "type": "string" },
+                    "type": { "type": "string", "const": "send" },
+                    "mintUrl": { "type": "string" },
+                    "unit": { "type": "string" },
+                    "method": { "type": "string", "enum": ["default", "p2pk"] },
+                    "requestedAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                    "createdAt": {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time"
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time"
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "prepared",
+                        "executing",
+                        "pending",
+                        "finalized",
+                        "rolling_back",
+                        "rolled_back"
+                      ]
+                    },
+                    "inputAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                    "fee": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                    "needsSwap": { "type": "boolean" }
+                  },
                   "required": [
                     "id",
                     "type",
@@ -4894,55 +4973,43 @@
                     "fee",
                     "needsSwap"
                   ],
-                  "properties": {
-                    "id": { "type": "string" },
-                    "type": { "const": "send" },
-                    "mintUrl": { "type": "string" },
-                    "unit": { "type": "string" },
-                    "method": { "enum": ["default", "p2pk"] },
-                    "requestedAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-                    "createdAt": {
-                      "type": "string",
-                      "format": "date-time",
-                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-                    },
-                    "updatedAt": {
-                      "type": "string",
-                      "format": "date-time",
-                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-                    },
-                    "state": {
-                      "enum": [
-                        "prepared",
-                        "executing",
-                        "pending",
-                        "finalized",
-                        "rolling_back",
-                        "rolled_back"
-                      ]
-                    },
-                    "inputAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-                    "fee": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-                    "needsSwap": { "type": "boolean" }
-                  }
+                  "additionalProperties": false
                 }
               ]
             }
           },
-          "offset": { "type": "integer", "minimum": 0 },
-          "limit": { "type": "integer", "minimum": 1 }
-        }
+          "offset": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+          "limit": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
+        },
+        "required": ["items", "offset", "limit"],
+        "additionalProperties": false
       },
       "ExecuteSendOperationResponse": {
         "type": "object",
-        "additionalProperties": false,
-        "required": ["operation", "result"],
         "properties": {
           "operation": {
             "oneOf": [
               {
                 "type": "object",
-                "additionalProperties": false,
+                "properties": {
+                  "id": { "type": "string" },
+                  "type": { "type": "string", "const": "send" },
+                  "mintUrl": { "type": "string" },
+                  "unit": { "type": "string" },
+                  "method": { "type": "string", "enum": ["default", "p2pk"] },
+                  "requestedAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                  "createdAt": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                    "format": "date-time"
+                  },
+                  "updatedAt": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                    "format": "date-time"
+                  },
+                  "state": { "type": "string", "const": "init" }
+                },
                 "required": [
                   "id",
                   "type",
@@ -4954,29 +5021,42 @@
                   "updatedAt",
                   "state"
                 ],
-                "properties": {
-                  "id": { "type": "string" },
-                  "type": { "const": "send" },
-                  "mintUrl": { "type": "string" },
-                  "unit": { "type": "string" },
-                  "method": { "enum": ["default", "p2pk"] },
-                  "requestedAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-                  "createdAt": {
-                    "type": "string",
-                    "format": "date-time",
-                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-                  },
-                  "updatedAt": {
-                    "type": "string",
-                    "format": "date-time",
-                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-                  },
-                  "state": { "const": "init" }
-                }
+                "additionalProperties": false
               },
               {
                 "type": "object",
-                "additionalProperties": false,
+                "properties": {
+                  "id": { "type": "string" },
+                  "type": { "type": "string", "const": "send" },
+                  "mintUrl": { "type": "string" },
+                  "unit": { "type": "string" },
+                  "method": { "type": "string", "enum": ["default", "p2pk"] },
+                  "requestedAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                  "createdAt": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                    "format": "date-time"
+                  },
+                  "updatedAt": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                    "format": "date-time"
+                  },
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "prepared",
+                      "executing",
+                      "pending",
+                      "finalized",
+                      "rolling_back",
+                      "rolled_back"
+                    ]
+                  },
+                  "inputAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                  "fee": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                  "needsSwap": { "type": "boolean" }
+                },
                 "required": [
                   "id",
                   "type",
@@ -4991,59 +5071,48 @@
                   "fee",
                   "needsSwap"
                 ],
-                "properties": {
-                  "id": { "type": "string" },
-                  "type": { "const": "send" },
-                  "mintUrl": { "type": "string" },
-                  "unit": { "type": "string" },
-                  "method": { "enum": ["default", "p2pk"] },
-                  "requestedAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-                  "createdAt": {
-                    "type": "string",
-                    "format": "date-time",
-                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-                  },
-                  "updatedAt": {
-                    "type": "string",
-                    "format": "date-time",
-                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-                  },
-                  "state": {
-                    "enum": [
-                      "prepared",
-                      "executing",
-                      "pending",
-                      "finalized",
-                      "rolling_back",
-                      "rolled_back"
-                    ]
-                  },
-                  "inputAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-                  "fee": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-                  "needsSwap": { "type": "boolean" }
-                }
+                "additionalProperties": false
               }
             ]
           },
           "result": {
             "type": "object",
-            "additionalProperties": false,
+            "properties": { "token": { "type": "string", "x-sensitive": true } },
             "required": ["token"],
-            "properties": { "token": { "type": "string", "x-sensitive": true } }
+            "additionalProperties": false
           }
-        }
+        },
+        "required": ["operation", "result"],
+        "additionalProperties": false
       },
       "SendResult": {
         "type": "object",
-        "additionalProperties": false,
+        "properties": { "token": { "type": "string", "x-sensitive": true } },
         "required": ["token"],
-        "properties": { "token": { "type": "string", "x-sensitive": true } }
+        "additionalProperties": false
       },
       "ReceiveOperation": {
         "oneOf": [
           {
             "type": "object",
-            "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string" },
+              "type": { "type": "string", "const": "receive" },
+              "mintUrl": { "type": "string" },
+              "unit": { "type": "string" },
+              "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+              "createdAt": {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
+              },
+              "updatedAt": {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
+              },
+              "state": { "type": "string", "const": "init" }
+            },
             "required": [
               "id",
               "type",
@@ -5054,28 +5123,32 @@
               "updatedAt",
               "state"
             ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
             "properties": {
               "id": { "type": "string" },
-              "type": { "const": "receive" },
+              "type": { "type": "string", "const": "receive" },
               "mintUrl": { "type": "string" },
               "unit": { "type": "string" },
               "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
               "createdAt": {
                 "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
               },
               "updatedAt": {
                 "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                "format": "date-time"
               },
-              "state": { "const": "init" }
-            }
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
+              "state": {
+                "type": "string",
+                "enum": ["prepared", "executing", "finalized", "rolled_back"]
+              },
+              "fee": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" }
+            },
             "required": [
               "id",
               "type",
@@ -5087,38 +5160,18 @@
               "state",
               "fee"
             ],
-            "properties": {
-              "id": { "type": "string" },
-              "type": { "const": "receive" },
-              "mintUrl": { "type": "string" },
-              "unit": { "type": "string" },
-              "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-              "createdAt": {
-                "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-              },
-              "updatedAt": {
-                "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-              },
-              "state": { "enum": ["prepared", "executing", "finalized", "rolled_back"] },
-              "fee": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" }
-            }
+            "additionalProperties": false
           }
         ]
       },
       "CreateReceiveOperationRequest": {
         "type": "object",
-        "additionalProperties": false,
+        "properties": { "token": { "type": "string", "pattern": "\\S", "x-sensitive": true } },
         "required": ["token"],
-        "properties": { "token": { "type": "string", "pattern": "\\S", "x-sensitive": true } }
+        "additionalProperties": false
       },
       "ReceiveOperations": {
         "type": "object",
-        "additionalProperties": false,
-        "required": ["items", "offset", "limit"],
         "properties": {
           "items": {
             "type": "array",
@@ -5126,7 +5179,24 @@
               "oneOf": [
                 {
                   "type": "object",
-                  "additionalProperties": false,
+                  "properties": {
+                    "id": { "type": "string" },
+                    "type": { "type": "string", "const": "receive" },
+                    "mintUrl": { "type": "string" },
+                    "unit": { "type": "string" },
+                    "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                    "createdAt": {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time"
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time"
+                    },
+                    "state": { "type": "string", "const": "init" }
+                  },
                   "required": [
                     "id",
                     "type",
@@ -5137,28 +5207,32 @@
                     "updatedAt",
                     "state"
                   ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
                   "properties": {
                     "id": { "type": "string" },
-                    "type": { "const": "receive" },
+                    "type": { "type": "string", "const": "receive" },
                     "mintUrl": { "type": "string" },
                     "unit": { "type": "string" },
                     "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
                     "createdAt": {
                       "type": "string",
-                      "format": "date-time",
-                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time"
                     },
                     "updatedAt": {
                       "type": "string",
-                      "format": "date-time",
-                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                      "format": "date-time"
                     },
-                    "state": { "const": "init" }
-                  }
-                },
-                {
-                  "type": "object",
-                  "additionalProperties": false,
+                    "state": {
+                      "type": "string",
+                      "enum": ["prepared", "executing", "finalized", "rolled_back"]
+                    },
+                    "fee": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" }
+                  },
                   "required": [
                     "id",
                     "type",
@@ -5170,215 +5244,200 @@
                     "state",
                     "fee"
                   ],
-                  "properties": {
-                    "id": { "type": "string" },
-                    "type": { "const": "receive" },
-                    "mintUrl": { "type": "string" },
-                    "unit": { "type": "string" },
-                    "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
-                    "createdAt": {
-                      "type": "string",
-                      "format": "date-time",
-                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-                    },
-                    "updatedAt": {
-                      "type": "string",
-                      "format": "date-time",
-                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-                    },
-                    "state": { "enum": ["prepared", "executing", "finalized", "rolled_back"] },
-                    "fee": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" }
-                  }
+                  "additionalProperties": false
                 }
               ]
             }
           },
-          "offset": { "type": "integer", "minimum": 0 },
-          "limit": { "type": "integer", "minimum": 1 }
-        }
+          "offset": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+          "limit": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
+        },
+        "required": ["items", "offset", "limit"],
+        "additionalProperties": false
       },
       "InitializeWalletResponse": {
         "type": "object",
-        "additionalProperties": false,
-        "required": ["generatedMnemonic", "status"],
         "properties": {
           "generatedMnemonic": { "type": "string", "x-sensitive": true },
           "status": {
             "oneOf": [
               {
                 "type": "object",
-                "additionalProperties": false,
-                "required": ["daemon", "wallet", "seedAccess", "cocoSession"],
                 "properties": {
                   "daemon": {
                     "type": "object",
-                    "additionalProperties": false,
-                    "required": ["version", "interfaceVersion"],
                     "properties": {
                       "version": { "type": "string" },
-                      "interfaceVersion": { "const": "1" }
-                    }
+                      "interfaceVersion": { "type": "string", "const": "1" }
+                    },
+                    "required": ["version", "interfaceVersion"],
+                    "additionalProperties": false
                   },
-                  "wallet": { "type": "null" },
-                  "seedAccess": { "type": "null" },
+                  "wallet": { "type": "null", "const": null },
+                  "seedAccess": { "type": "null", "const": null },
                   "cocoSession": {
                     "type": "object",
-                    "additionalProperties": false,
-                    "required": ["state", "startedAt", "lastFailure"],
                     "properties": {
-                      "state": { "enum": ["stopped", "starting", "running", "stopping", "failed"] },
+                      "state": {
+                        "type": "string",
+                        "enum": ["stopped", "starting", "running", "stopping", "failed"]
+                      },
                       "startedAt": {
                         "anyOf": [
-                          { "type": "null" },
                           {
                             "type": "string",
-                            "format": "date-time",
-                            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-                          }
+                            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                            "format": "date-time"
+                          },
+                          { "type": "null" }
                         ]
                       },
                       "lastFailure": {
                         "anyOf": [
-                          { "type": "null" },
                           {
                             "type": "object",
-                            "additionalProperties": false,
-                            "required": ["code", "message", "occurredAt"],
                             "properties": {
                               "code": { "type": "string" },
                               "message": { "type": "string" },
                               "occurredAt": {
                                 "type": "string",
-                                "format": "date-time",
-                                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                                "format": "date-time"
                               }
-                            }
-                          }
+                            },
+                            "required": ["code", "message", "occurredAt"],
+                            "additionalProperties": false
+                          },
+                          { "type": "null" }
                         ]
                       }
-                    }
+                    },
+                    "required": ["state", "startedAt", "lastFailure"],
+                    "additionalProperties": false
                   }
-                }
+                },
+                "required": ["daemon", "wallet", "seedAccess", "cocoSession"],
+                "additionalProperties": false
               },
               {
                 "type": "object",
-                "additionalProperties": false,
-                "required": ["daemon", "wallet", "seedAccess", "cocoSession"],
                 "properties": {
                   "daemon": {
                     "type": "object",
-                    "additionalProperties": false,
-                    "required": ["version", "interfaceVersion"],
                     "properties": {
                       "version": { "type": "string" },
-                      "interfaceVersion": { "const": "1" }
-                    }
+                      "interfaceVersion": { "type": "string", "const": "1" }
+                    },
+                    "required": ["version", "interfaceVersion"],
+                    "additionalProperties": false
                   },
                   "wallet": {
                     "type": "object",
-                    "additionalProperties": false,
-                    "required": ["configuredAt"],
                     "properties": {
                       "configuredAt": {
                         "type": "string",
-                        "format": "date-time",
-                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                        "format": "date-time"
                       }
-                    }
+                    },
+                    "required": ["configuredAt"],
+                    "additionalProperties": false
                   },
                   "seedAccess": {
                     "type": "object",
-                    "additionalProperties": false,
-                    "required": ["state", "requiresPassphrase"],
                     "properties": {
-                      "state": { "enum": ["locked", "available"] },
+                      "state": { "type": "string", "enum": ["locked", "available"] },
                       "requiresPassphrase": { "type": "boolean" }
-                    }
+                    },
+                    "required": ["state", "requiresPassphrase"],
+                    "additionalProperties": false
                   },
                   "cocoSession": {
                     "type": "object",
-                    "additionalProperties": false,
-                    "required": ["state", "startedAt", "lastFailure"],
                     "properties": {
-                      "state": { "enum": ["stopped", "starting", "running", "stopping", "failed"] },
+                      "state": {
+                        "type": "string",
+                        "enum": ["stopped", "starting", "running", "stopping", "failed"]
+                      },
                       "startedAt": {
                         "anyOf": [
-                          { "type": "null" },
                           {
                             "type": "string",
-                            "format": "date-time",
-                            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-                          }
+                            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                            "format": "date-time"
+                          },
+                          { "type": "null" }
                         ]
                       },
                       "lastFailure": {
                         "anyOf": [
-                          { "type": "null" },
                           {
                             "type": "object",
-                            "additionalProperties": false,
-                            "required": ["code", "message", "occurredAt"],
                             "properties": {
                               "code": { "type": "string" },
                               "message": { "type": "string" },
                               "occurredAt": {
                                 "type": "string",
-                                "format": "date-time",
-                                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                                "format": "date-time"
                               }
-                            }
-                          }
+                            },
+                            "required": ["code", "message", "occurredAt"],
+                            "additionalProperties": false
+                          },
+                          { "type": "null" }
                         ]
                       }
-                    }
+                    },
+                    "required": ["state", "startedAt", "lastFailure"],
+                    "additionalProperties": false
                   }
-                }
+                },
+                "required": ["daemon", "wallet", "seedAccess", "cocoSession"],
+                "additionalProperties": false
               }
             ]
           }
-        }
+        },
+        "required": ["generatedMnemonic", "status"],
+        "additionalProperties": false
       },
       "InitializeWalletRequest": {
         "type": "object",
-        "additionalProperties": false,
-        "required": [],
-        "properties": { "passphrase": { "type": "string", "x-sensitive": true } }
+        "properties": { "passphrase": { "type": "string", "x-sensitive": true } },
+        "additionalProperties": false
       },
       "WalletRecoveryMaterialResponse": {
         "type": "object",
-        "additionalProperties": false,
+        "properties": { "mnemonic": { "type": "string", "x-sensitive": true } },
         "required": ["mnemonic"],
-        "properties": { "mnemonic": { "type": "string", "x-sensitive": true } }
+        "additionalProperties": false
       },
       "WalletRecoveryMaterialRequest": {
         "type": "object",
-        "additionalProperties": false,
-        "required": [],
-        "properties": { "passphrase": { "type": "string", "x-sensitive": true } }
+        "properties": { "passphrase": { "type": "string", "x-sensitive": true } },
+        "additionalProperties": false
       },
       "StartSessionRequest": {
         "type": "object",
-        "additionalProperties": false,
-        "required": [],
-        "properties": { "passphrase": { "type": "string", "x-sensitive": true } }
+        "properties": { "passphrase": { "type": "string", "x-sensitive": true } },
+        "additionalProperties": false
       },
       "StopSessionRequest": {
         "type": "object",
-        "additionalProperties": false,
-        "required": [],
-        "properties": {}
+        "propertyNames": { "type": "string" },
+        "additionalProperties": { "not": {} }
       },
       "ProcessShutdownResponse": {
         "type": "object",
-        "additionalProperties": false,
+        "properties": { "status": { "type": "string", "const": "stopping" } },
         "required": ["status"],
-        "properties": { "status": { "const": "stopping" } }
+        "additionalProperties": false
       },
       "ProcessShutdownRequest": {
         "type": "object",
-        "additionalProperties": false,
-        "required": [],
-        "properties": {}
+        "propertyNames": { "type": "string" },
+        "additionalProperties": { "not": {} }
       }
     }
   }
