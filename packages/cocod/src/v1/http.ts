@@ -1304,7 +1304,7 @@ export function createV1RouteDefinitions(
             kind === 'pending' ? await mint.listPending() : await mint.listInFlight();
           return {
             items: operations
-              .toSorted(compareMintOperationsForPagination)
+              .toSorted(compareOperationsForPagination)
               .slice(offset, offset + limit)
               .map(toMintOperationDocument),
             offset,
@@ -1413,7 +1413,7 @@ export function createV1RouteDefinitions(
             kind === 'prepared' ? await melt.listPrepared() : await melt.listInFlight();
           return {
             items: operations
-              .toSorted(compareMeltOperationsForPagination)
+              .toSorted(compareOperationsForPagination)
               .slice(offset, offset + limit)
               .map(toMeltOperationDocument),
             offset,
@@ -1510,7 +1510,7 @@ export function createV1RouteDefinitions(
           : parseMintUrl(input.mintUrl, 'The Mint URL is invalid');
       try {
         const operation =
-          'source' in input
+          input.source !== undefined
             ? await preparePaymentRequestSend(session, input, mintUrl)
             : await session.manager.ops.send.prepare({
                 mintUrl,
@@ -1521,7 +1521,7 @@ export function createV1RouteDefinitions(
         return new V1HttpResponse(toSendOperationDocument(operation), 201);
       } catch (error) {
         if (error instanceof V1HttpError) throw error;
-        if ('source' in input) {
+        if (input.source !== undefined) {
           throw paymentRequestCocoError('prepare the Payment Request', error);
         }
         throw sendOperationCocoError('prepare the Send Operation', error);
@@ -1557,7 +1557,7 @@ export function createV1RouteDefinitions(
             kind === 'prepared' ? await send.listPrepared() : await send.listInFlight();
           return {
             items: operations
-              .toSorted(compareSendOperationsForPagination)
+              .toSorted(compareOperationsForPagination)
               .slice(offset, offset + limit)
               .map(toSendOperationDocument),
             offset,
@@ -1688,7 +1688,7 @@ export function createV1RouteDefinitions(
             kind === 'prepared' ? await receive.listPrepared() : await receive.listInFlight();
           return {
             items: operations
-              .toSorted(compareReceiveOperationsForPagination)
+              .toSorted(compareOperationsForPagination)
               .slice(offset, offset + limit)
               .map(toReceiveOperationDocument),
             offset,
@@ -2168,7 +2168,7 @@ async function preparePaymentRequestSend(
     });
   }
   const amount =
-    input.amount === undefined
+    !('amount' in input) || input.amount === undefined
       ? undefined
       : input.unit === undefined
         ? input.amount
@@ -2467,6 +2467,73 @@ function compareQuotesForPagination(
   return quoteComparison !== 0 ? quoteComparison : left.method.localeCompare(right.method);
 }
 
+function compareOperationsForPagination<T extends { createdAt: number; id: string }>(
+  left: T,
+  right: T,
+): number {
+  return left.createdAt !== right.createdAt
+    ? right.createdAt - left.createdAt
+    : left.id.localeCompare(right.id);
+}
+
+interface OperationStateMappingError extends Error {
+  readonly operationId: string;
+  readonly state: string;
+  readonly expectedStates: readonly string[];
+}
+
+type OperationErrorConstructor<T extends Error> = abstract new (...args: never[]) => T;
+
+function createOperationCocoErrorMapper({
+  type,
+  label,
+  notFoundError,
+  stateError,
+  notFound,
+}: {
+  type: 'mint' | 'melt' | 'send' | 'receive';
+  label: 'Mint' | 'Melt' | 'Send' | 'Receive';
+  notFoundError: OperationErrorConstructor<Error>;
+  stateError: OperationErrorConstructor<OperationStateMappingError>;
+  notFound: (cause?: unknown) => V1HttpError;
+}): (action: string, cause: unknown) => V1HttpError {
+  return (action, cause) => {
+    if (cause instanceof notFoundError) return notFound(cause);
+    if (cause instanceof OperationInProgressError) {
+      return new V1HttpError({
+        status: 409,
+        code: 'operation_in_progress',
+        message: `The ${label} Operation is already in progress`,
+        retryable: true,
+        details: { type, operationId: cause.operationId },
+        cause,
+      });
+    }
+    if (cause instanceof stateError) {
+      return new V1HttpError({
+        status: 409,
+        code: 'invalid_operation_state',
+        message: `The ${label} Operation command is unavailable in its current state`,
+        retryable: false,
+        details: {
+          type,
+          operationId: cause.operationId,
+          state: cause.state,
+          expectedStates: [...cause.expectedStates],
+        },
+        cause,
+      });
+    }
+    return new V1HttpError({
+      status: 500,
+      code: 'coco_error',
+      message: `Coco could not ${action}`,
+      retryable: false,
+      cause,
+    });
+  };
+}
+
 function toMintOperationDocument(operation: MintOperation): MintOperationDocument {
   const mintUrl = normalizeMintUrl(operation.mintUrl);
   return {
@@ -2503,12 +2570,6 @@ function toMintOperationDocument(operation: MintOperation): MintOperationDocumen
   };
 }
 
-function compareMintOperationsForPagination(left: MintOperation, right: MintOperation): number {
-  return left.createdAt !== right.createdAt
-    ? right.createdAt - left.createdAt
-    : left.id.localeCompare(right.id);
-}
-
 function parseMintOperationPageQuery(
   request: Request,
   kind: 'pending' | 'in-flight',
@@ -2523,41 +2584,13 @@ function parseMintOperationPageQuery(
   };
 }
 
-function mintOperationCocoError(action: string, cause: unknown): V1HttpError {
-  if (cause instanceof MintOperationNotFoundError) return mintOperationNotFound(cause);
-  if (cause instanceof OperationInProgressError) {
-    return new V1HttpError({
-      status: 409,
-      code: 'operation_in_progress',
-      message: 'The Mint Operation is already in progress',
-      retryable: true,
-      details: { type: 'mint', operationId: cause.operationId },
-      cause,
-    });
-  }
-  if (cause instanceof MintOperationStateError) {
-    return new V1HttpError({
-      status: 409,
-      code: 'invalid_operation_state',
-      message: 'The Mint Operation command is unavailable in its current state',
-      retryable: false,
-      details: {
-        type: 'mint',
-        operationId: cause.operationId,
-        state: cause.state,
-        expectedStates: [...cause.expectedStates],
-      },
-      cause,
-    });
-  }
-  return new V1HttpError({
-    status: 500,
-    code: 'coco_error',
-    message: `Coco could not ${action}`,
-    retryable: false,
-    cause,
-  });
-}
+const mintOperationCocoError = createOperationCocoErrorMapper({
+  type: 'mint',
+  label: 'Mint',
+  notFoundError: MintOperationNotFoundError,
+  stateError: MintOperationStateError,
+  notFound: mintOperationNotFound,
+});
 
 function mintOperationNotFound(cause?: unknown): V1HttpError {
   return new V1HttpError({
@@ -2615,41 +2648,13 @@ function toMeltOperationDocument(operation: MeltOperation): MeltOperationDocumen
   };
 }
 
-function meltOperationCocoError(action: string, cause: unknown): V1HttpError {
-  if (cause instanceof MeltOperationNotFoundError) return meltOperationNotFound(cause);
-  if (cause instanceof OperationInProgressError) {
-    return new V1HttpError({
-      status: 409,
-      code: 'operation_in_progress',
-      message: 'The Melt Operation is already in progress',
-      retryable: true,
-      details: { type: 'melt', operationId: cause.operationId },
-      cause,
-    });
-  }
-  if (cause instanceof MeltOperationStateError) {
-    return new V1HttpError({
-      status: 409,
-      code: 'invalid_operation_state',
-      message: 'The Melt Operation command is unavailable in its current state',
-      retryable: false,
-      details: {
-        type: 'melt',
-        operationId: cause.operationId,
-        state: cause.state,
-        expectedStates: [...cause.expectedStates],
-      },
-      cause,
-    });
-  }
-  return new V1HttpError({
-    status: 500,
-    code: 'coco_error',
-    message: `Coco could not ${action}`,
-    retryable: false,
-    cause,
-  });
-}
+const meltOperationCocoError = createOperationCocoErrorMapper({
+  type: 'melt',
+  label: 'Melt',
+  notFoundError: MeltOperationNotFoundError,
+  stateError: MeltOperationStateError,
+  notFound: meltOperationNotFound,
+});
 
 function toMeltResultDocument(operation: MeltOperation): MeltResultDocument | null {
   if (operation.state !== 'finalized' || !operation.finalizedData) return null;
@@ -2667,12 +2672,6 @@ function meltOperationNotFound(cause?: unknown): V1HttpError {
     retryable: false,
     cause,
   });
-}
-
-function compareMeltOperationsForPagination(left: MeltOperation, right: MeltOperation): number {
-  return left.createdAt !== right.createdAt
-    ? right.createdAt - left.createdAt
-    : left.id.localeCompare(right.id);
 }
 
 function parseMeltOperationPageQuery(
@@ -2718,12 +2717,6 @@ function toSendOperationDocument(operation: SendOperation): SendOperationDocumen
   };
 }
 
-function compareSendOperationsForPagination(left: SendOperation, right: SendOperation): number {
-  return left.createdAt !== right.createdAt
-    ? right.createdAt - left.createdAt
-    : left.id.localeCompare(right.id);
-}
-
 function parseSendOperationPageQuery(
   request: Request,
   kind: 'prepared' | 'in-flight',
@@ -2740,41 +2733,13 @@ function parseSendOperationPageQuery(
   };
 }
 
-function sendOperationCocoError(action: string, cause: unknown): V1HttpError {
-  if (cause instanceof SendOperationNotFoundError) return sendOperationNotFound(cause);
-  if (cause instanceof OperationInProgressError) {
-    return new V1HttpError({
-      status: 409,
-      code: 'operation_in_progress',
-      message: 'The Send Operation is already in progress',
-      retryable: true,
-      details: { type: 'send', operationId: cause.operationId },
-      cause,
-    });
-  }
-  if (cause instanceof SendOperationStateError) {
-    return new V1HttpError({
-      status: 409,
-      code: 'invalid_operation_state',
-      message: 'The Send Operation command is unavailable in its current state',
-      retryable: false,
-      details: {
-        type: 'send',
-        operationId: cause.operationId,
-        state: cause.state,
-        expectedStates: [...cause.expectedStates],
-      },
-      cause,
-    });
-  }
-  return new V1HttpError({
-    status: 500,
-    code: 'coco_error',
-    message: `Coco could not ${action}`,
-    retryable: false,
-    cause,
-  });
-}
+const sendOperationCocoError = createOperationCocoErrorMapper({
+  type: 'send',
+  label: 'Send',
+  notFoundError: SendOperationNotFoundError,
+  stateError: SendOperationStateError,
+  notFound: sendOperationNotFound,
+});
 
 function sendOperationNotFound(cause?: unknown): V1HttpError {
   return new V1HttpError({
@@ -2806,15 +2771,6 @@ function toReceiveOperationDocument(operation: ReceiveOperation): ReceiveOperati
   return { ...base, state: operation.state, fee: operation.fee.toString() };
 }
 
-function compareReceiveOperationsForPagination(
-  left: ReceiveOperation,
-  right: ReceiveOperation,
-): number {
-  return left.createdAt !== right.createdAt
-    ? right.createdAt - left.createdAt
-    : left.id.localeCompare(right.id);
-}
-
 function parseReceiveOperationPageQuery(
   request: Request,
   kind: 'prepared' | 'in-flight',
@@ -2831,41 +2787,13 @@ function parseReceiveOperationPageQuery(
   };
 }
 
-function receiveOperationCocoError(action: string, cause: unknown): V1HttpError {
-  if (cause instanceof ReceiveOperationNotFoundError) return receiveOperationNotFound(cause);
-  if (cause instanceof OperationInProgressError) {
-    return new V1HttpError({
-      status: 409,
-      code: 'operation_in_progress',
-      message: 'The Receive Operation is already in progress',
-      retryable: true,
-      details: { type: 'receive', operationId: cause.operationId },
-      cause,
-    });
-  }
-  if (cause instanceof ReceiveOperationStateError) {
-    return new V1HttpError({
-      status: 409,
-      code: 'invalid_operation_state',
-      message: 'The Receive Operation command is unavailable in its current state',
-      retryable: false,
-      details: {
-        type: 'receive',
-        operationId: cause.operationId,
-        state: cause.state,
-        expectedStates: [...cause.expectedStates],
-      },
-      cause,
-    });
-  }
-  return new V1HttpError({
-    status: 500,
-    code: 'coco_error',
-    message: `Coco could not ${action}`,
-    retryable: false,
-    cause,
-  });
-}
+const receiveOperationCocoError = createOperationCocoErrorMapper({
+  type: 'receive',
+  label: 'Receive',
+  notFoundError: ReceiveOperationNotFoundError,
+  stateError: ReceiveOperationStateError,
+  notFound: receiveOperationNotFound,
+});
 
 function receiveOperationNotFound(cause?: unknown): V1HttpError {
   return new V1HttpError({
