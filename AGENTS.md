@@ -1,207 +1,70 @@
 # AGENTS
 
-Guidance for agentic coding in this repo.
+Repository-specific routing for coding agents. Keep durable guidance here; use executable config
+and linked documents for details that change with the codebase.
 
-## AI-assisted workflow
+## Sources of truth
 
-- We typically create a git worktree per feature.
-- If you are in a feature worktree, the project root is the worktree root (paths may differ).
-- When planning in a feature worktree, use `FEATURE_TODO.md` in the worktree root to track plan and progress. If you are building and this file is present, check whether it should be updated.
+- Use the affected package's `package.json`, root scripts, and tool config for current commands and
+  settings. If prose disagrees with executable config, follow the config and flag or fix the prose.
+- Use `CONTRIBUTING.md` for setup, development workflow, testing, pull requests, changesets, and
+  release expectations.
+- Follow nearby source and tests for package-local conventions; avoid creating a second convention
+  when an established pattern exists.
 
 ## Agent skills
 
 ### Issue tracker
 
-Issues are tracked in GitHub Issues for `cashubtc/coco`. External pull requests are not a
-triage request surface. See `docs/agents/issue-tracker.md`.
+Issues are tracked in GitHub Issues for `cashubtc/coco`. External pull requests are not a triage
+request surface. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
-Use the default mattpocock/skills triage label vocabulary. See `docs/agents/triage-labels.md`.
+Use the five default mattpocock/skills triage labels. See `docs/agents/triage-labels.md`.
 
 ### Domain docs
 
-Route domain work through the multi-context map and read the relevant glossaries and ADRs. See
-`docs/agents/domain.md`.
+This is a multi-context repository. Route domain work through the context map and read every
+relevant glossary and ADR. See `docs/agents/domain.md`.
 
-## Git and commits
+## File router
 
-- Prefer Conventional Commit style messages.
-- Prefer scoped commit and PR titles when the affected package or area is clear (for example `fix(core): ...` or `feat(react): ...`).
-- Use unscoped titles for repo-wide changes when a single package scope would be misleading.
+- Wallet behavior and public APIs: `packages/core`. Start in `api/` for public wrappers,
+  `services/` for orchestration, `operations/` for flow state, `infra/` for transports and protocol
+  handlers, `repositories/` for persistence contracts and memory implementations, and `models/`
+  for domain types and errors.
+- React hooks and providers: `packages/react`.
+- Persistence: put repository interfaces in `packages/core`, reusable SQL repositories and schema
+  logic in `packages/sql-storage`, and runtime bindings in the matching adapter:
+  `packages/indexeddb`, `packages/sqlite3`, `packages/sqlite-bun`, or `packages/expo-sqlite`.
+- Storage conformance helpers shared by adapters: `packages/adapter-tests`.
+- CLI, daemon, and host lifecycle: `packages/cocod`; domain changes here read both the Cocod Host
+  and Coco Cashu contexts through `docs/agents/domain.md`.
+- Public documentation and examples: `packages/docs`.
 
-## Repository layout
+## Workflow
 
-- packages/core: core TS library (services, models, repositories, tests).
-- packages/react: React hooks/providers for core (Vite build, ESLint).
-- packages/sqlite3: SQLite3 adapter (bun tests).
-- packages/indexeddb: IndexedDB adapter (bun + vitest browser tests).
-- packages/expo-sqlite: Expo SQLite adapter.
-- packages/adapter-tests: contract test helpers.
-- packages/cocod: Cashu wallet CLI + daemon on the workspace packages (private, bun tests).
-- packages/docs: VitePress docs site.
+1. Identify the affected packages and inspect their `package.json`, README, and relevant tests.
+2. Check the working tree and preserve changes outside the requested scope. If `FEATURE_TODO.md`
+   applies to the active feature, keep its plan and progress current.
+3. Before implementation, load every document required by the applicable `Agent skills` pointer.
+4. Keep changes focused. Update public exports, documentation, and tests when the changed behavior
+   requires them. Edit source files rather than generated `dist/` output.
+5. Run the smallest relevant verification from the affected package scripts. For shared or
+   cross-package changes, also run the root build and typecheck when practical.
+6. Before handoff, assess whether the change needs a changeset under `CONTRIBUTING.md`, update an
+   applicable `FEATURE_TODO.md`, and report the verification run or any unresolved failure.
 
-## Core package layout
+## Repository-specific constraints
 
-- `api/` exposes public API wrappers.
-- `services/` holds business logic and orchestration.
-- `operations/` implements send/melt flows.
-- `infra/` contains transport/request helpers and subscriptions.
-- `repositories/` defines interfaces and memory adapters.
-- `models/` and `types.ts` hold domain types/errors.
+- Use Bun for workspace installation and scripts.
+- New workspace packages with build-time dependencies on internal `@cashu/coco-*` packages must
+  declare those dependencies as `peerDependencies`; the root build derives package order from that
+  graph.
+- For `packages/cocod`, build the workspace before commands that resolve workspace packages through
+  their `dist/` exports; consult its README for the current command sequence.
 
-## Tooling
-
-- Use Bun workspaces; root scripts call `bun run --filter='pkg' ...`.
-- `tsdown` builds most packages (ESM + CJS).
-- React package builds with `tsc -b` + `vite`.
-- Docs use VitePress.
-- No root ESLint config; only React package is linted.
-
-## Install
-
-- `bun install`
-
-## Build
-
-- All packages: `bun run build`
-- Core: `bun run --filter='@cashu/coco-core' build`
-- Adapter tests: `bun run --filter='@cashu/coco-adapter-tests' build`
-- IndexedDB: `bun run --filter='@cashu/coco-indexeddb' build`
-- Expo SQLite: `bun run --filter='@cashu/coco-expo-sqlite' build`
-- SQLite3: `bun run --filter='@cashu/coco-sqlite' build`
-- React: `bun run --filter='@cashu/coco-react' build`
-- Docs: `bun run docs:build`
-
-## Typecheck
-
-- All packages: `bun run typecheck`
-- Core: `bun run --filter='@cashu/coco-core' typecheck`
-- IndexedDB: `bun run --filter='@cashu/coco-indexeddb' typecheck`
-- Expo SQLite: `bun run --filter='@cashu/coco-expo-sqlite' typecheck`
-- SQLite3: `bun run --filter='@cashu/coco-sqlite' typecheck`
-- React (project refs): `bun run --filter='@cashu/coco-react' typecheck`
-- cocod: `bun run --filter='cocod' typecheck` (build the workspace first; it resolves core through dist/)
-
-## Lint
-
-- React only: `bun run --filter='@cashu/coco-react' lint`
-
-## Test
-
-- Core all tests: `bun run --filter='@cashu/coco-core' test`
-- Core unit: `bun run --filter='@cashu/coco-core' test:unit`
-- Core integration: `bun run --filter='@cashu/coco-core' test:integration`
-- SQLite3 adapter: `bun run --filter='@cashu/coco-sqlite' test`
-- IndexedDB adapter: `bun run --filter='@cashu/coco-indexeddb' test`
-- IndexedDB browser tests: `bun run --filter='@cashu/coco-indexeddb' test:browser`
-- Expo SQLite tests (no script): `bun --cwd packages/expo-sqlite test`
-- cocod: `bun run --filter='cocod' test` (build the workspace first)
-- React package has no tests yet.
-
-## Run a single test
-
-- Bun file: `bun run --filter='@cashu/coco-core' test -- test/unit/Manager.test.ts`
-- Bun by name: `bun run --filter='@cashu/coco-core' test -- -t "initializeCoco" test/unit/Manager.test.ts`
-- SQLite3 file: `bun run --filter='@cashu/coco-sqlite' test -- src/test/integration.test.ts`
-- IndexedDB file: `bun run --filter='@cashu/coco-indexeddb' test -- src/test/integration.test.ts`
-- Vitest browser file: `bun run --filter='@cashu/coco-indexeddb' test:browser -- src/test/integration.test.ts`
-- Run all browsers locally: `CI=1 bun run --filter='@cashu/coco-indexeddb' test:browser`
-
-## Docs
-
-- Dev server: `bun run docs:dev`
-- Preview build: `bun run docs:preview`
-- Package-local: `bun --cwd packages/docs run docs:dev`
-
-## Formatting
-
-- Prettier config in `.prettierrc`: single quotes, 100 char width, trailing commas.
-- Indentation is 2 spaces, no tabs.
-- Use semicolons (matches existing files).
-- Keep lines <= 100 chars where practical.
-
-## TypeScript and modules
-
-- Packages are ESM (`"type": "module"`); use `import`/`export`.
-- `moduleResolution: "bundler"` and `verbatimModuleSyntax` are on.
-- Use `import type` for type-only imports.
-- `allowImportingTsExtensions` is enabled; keep `.ts` extensions on local imports where used.
-- `strict`, `noUncheckedIndexedAccess`, and `noImplicitOverride` are enabled.
-- React package also enables `noUnusedLocals`/`noUnusedParameters`; core adapters do not.
-- Avoid `any`; if required, keep it localized and add an eslint disable comment only if needed.
-
-## Imports
-
-- Order: external first, then internal/alias, then relative.
-- Prefer named exports; default exports are rare (React hooks may default-export).
-- Use path aliases in core (`@core/*`) when already established.
-- Keep import ordering consistent within a file; don't churn order without reason.
-
-## Naming
-
-- Classes and types: `PascalCase`.
-- Functions/variables: `camelCase`.
-- Constants: `SCREAMING_SNAKE_CASE` when truly constant.
-- Repositories are `XxxRepository` implementations (e.g., `SqliteProofRepository`).
-- React hooks: `useX` and file names `useX.ts`.
-- React components: `PascalCase` file names matching component names.
-- Test files: `*.test.ts` under `test/unit` or `test/integration`.
-
-## Error handling
-
-- Validate inputs early; return empty arrays for no-op cases (common pattern).
-- Prefer domain errors in `packages/core/models/Error.ts` for protocol/state failures.
-- Include `cause` when wrapping errors; preserve original error objects.
-- Log with context: `logger?.info('message', { mintUrl, ... })`.
-- Avoid swallowing exceptions; either handle and log or rethrow.
-
-## Logging and events
-
-- Use structured logging across services (`debug/info/warn/error`).
-- Emit `EventBus` events when state changes in core services.
-- Avoid emitting events from adapters unless that interface requires it.
-
-## Data and repositories
-
-- Repositories are transactional; keep operations atomic.
-- Pre-check invariants (existence, state, reservation) before mutating.
-- Serialize JSON fields consistently and defensively parse.
-- Normalize mint URLs with `normalizeMintUrl()` before persistence.
-
-## Exports and barrels
-
-- Public exports go through each package's `index.ts`.
-- Update `index.ts` when adding new public types/services.
-- Keep adapter packages exporting repository classes from `src/index.ts`.
-- Avoid exporting internal helpers from package roots.
-
-## Comments and docs
-
-- Use JSDoc on public APIs and non-obvious flows.
-- Keep section dividers and headings consistent with existing style.
-- Avoid inline comments for trivial code.
-
-## React package specifics
-
-- ESLint config: `packages/react/eslint.config.js`.
-- Keep hooks rules clean (`react-hooks`).
-- Use `useCallback`/`useMemo` when a value is referenced in deps arrays.
-- When catching unknown errors in hooks, normalize via `e instanceof Error ? e : new Error(String(e))`.
-
-## Testing notes
-
-- Use `bun:test` (`describe`, `it`, `expect`, `mock`).
-- Prefer Bun `mock()` for test doubles and spies.
-- Assert mock usage with `toHaveBeenCalled*` or `mock.calls` instead of manual counters.
-- Keep async tests `async` and `await` promises; avoid racey timers unless needed.
-- Browser tests run via Playwright in Vitest; see `packages/indexeddb/vitest.config.ts`.
-
-## Build outputs
-
-- Build artifacts live in `dist/`; do not edit generated files.
-- `tsdown` builds ESM and CJS; keep entry points in `index.ts`.
-
-## Cursor/Copilot rules
-
-- No `.cursor/rules`, `.cursorrules`, or `.github/copilot-instructions.md` found.
+Work is complete when the requested outcome is implemented, relevant verification passes (or its
+failure is clearly reported), and exports, tests, documentation, changesets, and active feature
+tracking have each been considered.
