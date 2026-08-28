@@ -7,6 +7,7 @@ import type {
   PendingMintOperation,
 } from '@core/operations/mint';
 import type { MintQuoteRef, QuoteIdentity } from '../models/QuoteIdentity.ts';
+import { MintOperationNotFoundError, MintOperationStateError } from '../models/Error.ts';
 
 /** Mint methods supported by the default `Manager` wiring. */
 export type DefaultSupportedMintMethod = 'bolt11' | 'onchain' | 'bolt12';
@@ -63,8 +64,16 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
    * Concurrent calls join active local execution, while terminal outcomes are returned as-is.
    */
   async execute(operationOrId: MintOperation | string): Promise<MintOperation> {
-    const operationId = typeof operationOrId === 'string' ? operationOrId : operationOrId.id;
-    return this.mintOperationService.execute(operationId);
+    const operation = await this.resolveOperation(operationOrId);
+    if (operation.state === 'init') {
+      throw new MintOperationStateError(operation.id, operation.state, [
+        'pending',
+        'executing',
+        'finalized',
+        'failed',
+      ]);
+    }
+    return this.mintOperationService.execute(operation.id);
   }
 
   /** Returns a mint operation by ID, or `null` when it does not exist. */
@@ -94,7 +103,7 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
   async checkPayment(operationId: string): Promise<PendingMintCheckResult> {
     const operation = await this.requireOperation(operationId);
     if (operation.state !== 'pending') {
-      throw new Error(`Cannot check payment in state '${operation.state}'. Expected 'pending'.`);
+      throw new MintOperationStateError(operation.id, operation.state, ['pending']);
     }
 
     return this.mintOperationService.checkPendingOperation(operation.id);
@@ -125,13 +134,28 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
    * and terminal operations are returned as-is.
    */
   async finalize(operationId: string): Promise<MintOperation> {
+    const operation = await this.requireOperation(operationId);
+    if (operation.state === 'init') {
+      throw new MintOperationStateError(operation.id, operation.state, [
+        'pending',
+        'executing',
+        'finalized',
+        'failed',
+      ]);
+    }
     return this.mintOperationService.finalize(operationId);
+  }
+
+  private async resolveOperation(operationOrId: MintOperation | string): Promise<MintOperation> {
+    return this.requireOperation(
+      typeof operationOrId === 'string' ? operationOrId : operationOrId.id,
+    );
   }
 
   private async requireOperation(operationId: string): Promise<MintOperation> {
     const operation = await this.mintOperationService.getOperation(operationId);
     if (!operation) {
-      throw new Error(`Operation ${operationId} not found`);
+      throw new MintOperationNotFoundError(operationId);
     }
 
     return operation;

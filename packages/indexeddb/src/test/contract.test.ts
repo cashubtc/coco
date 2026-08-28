@@ -3,6 +3,7 @@ import { Amount } from '@cashu/cashu-ts';
 import Dexie from 'dexie';
 import {
   runRepositoryTransactionContract,
+  runMintRepositoryContract,
   runKeyRingDerivationRepositoryContract,
   runAuthSessionRepositoryContract,
   runProofRepositoryContract,
@@ -73,6 +74,8 @@ runRepositoryTransactionContract(
   },
   { describe, it, expect },
 );
+
+runMintRepositoryContract({ createRepositories }, { describe, it, expect });
 
 runKeyRingDerivationRepositoryContract(
   { createRepositories, createSharedRepositories },

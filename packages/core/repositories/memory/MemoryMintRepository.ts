@@ -1,4 +1,5 @@
 import type { Mint } from '../../models/Mint';
+import { UnknownMintError } from '../../models/Error';
 import type { MintRepository } from '..';
 
 export class MemoryMintRepository implements MintRepository {
@@ -12,7 +13,7 @@ export class MemoryMintRepository implements MintRepository {
   async getMintByUrl(mintUrl: string): Promise<Mint> {
     const mint = this.mints.get(mintUrl);
     if (!mint) {
-      throw new Error(`Mint not found: ${mintUrl}`);
+      throw new UnknownMintError(`Mint not found: ${mintUrl}`);
     }
     return mint;
   }
@@ -29,8 +30,17 @@ export class MemoryMintRepository implements MintRepository {
     this.mints.set(mint.mintUrl, mint);
   }
 
-  async addOrUpdateMint(mint: Mint): Promise<void> {
-    this.mints.set(mint.mintUrl, mint);
+  async addOrUpdateMint(
+    mint: Mint,
+    options?: { preserveExistingTrust?: boolean },
+  ): Promise<boolean> {
+    const existing = this.mints.get(mint.mintUrl);
+    this.mints.set(mint.mintUrl, {
+      ...mint,
+      trusted: existing && options?.preserveExistingTrust ? existing.trusted : mint.trusted,
+      createdAt: existing?.createdAt ?? mint.createdAt,
+    });
+    return existing === undefined;
   }
 
   async updateMint(mint: Mint): Promise<void> {

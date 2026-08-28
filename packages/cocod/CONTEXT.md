@@ -33,7 +33,8 @@ _Avoid_: Wallet state, Coco Session, client authentication
 **Client Credential**:
 Material one or more Cocod Clients present to prove Client Capabilities on cocod's network
 interface. It grants authority without necessarily identifying an individual consumer, and it does
-not grant Wallet Seed Access.
+not grant Wallet Seed Access. V1 bootstraps one administrative credential that downstream
+consumers may share; cocod cannot distinguish those consumers.
 _Avoid_: Wallet passphrase, Wallet login, client session
 
 **Unattended Coco Session Start**:

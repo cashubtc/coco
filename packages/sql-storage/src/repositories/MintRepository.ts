@@ -1,4 +1,4 @@
-import type { MintRepository, Mint } from '@cashu/coco-core/adapter';
+import { UnknownMintError, type MintRepository, type Mint } from '@cashu/coco-core/adapter';
 import type { SqlDatabase } from '../index.ts';
 
 export class SqliteMintRepository implements MintRepository {
@@ -29,7 +29,7 @@ export class SqliteMintRepository implements MintRepository {
       [mintUrl],
     );
     if (!row) {
-      throw new Error(`Mint not found: ${mintUrl}`);
+      throw new UnknownMintError(`Mint not found: ${mintUrl}`);
     }
     return {
       mintUrl: row.mintUrl,
@@ -108,28 +108,50 @@ export class SqliteMintRepository implements MintRepository {
     );
   }
 
-  async addOrUpdateMint(mint: Mint): Promise<void> {
-    await this.db.run(
-      `INSERT INTO coco_cashu_mints (mintUrl, name, mintInfo, trusted, createdAt, updatedAt)
-       VALUES (?, ?, ?, ?, ?, ?)
-       ON CONFLICT(mintUrl) DO UPDATE SET
-         name=excluded.name,
-         mintInfo=excluded.mintInfo,
-         trusted=excluded.trusted,
-         updatedAt=excluded.updatedAt`,
-      [
-        mint.mintUrl,
-        mint.name,
-        JSON.stringify(mint.mintInfo),
-        mint.trusted ? 1 : 0,
-        mint.createdAt,
-        mint.updatedAt,
-      ],
+  async addOrUpdateMint(
+    mint: Mint,
+    options?: { preserveExistingTrust?: boolean },
+  ): Promise<boolean> {
+    return this.db.transaction(
+      async (database) => {
+        const serializedMintInfo = JSON.stringify(mint.mintInfo);
+        const inserted = await database.run(
+          `INSERT INTO coco_cashu_mints (mintUrl, name, mintInfo, trusted, createdAt, updatedAt)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(mintUrl) DO NOTHING`,
+          [
+            mint.mintUrl,
+            mint.name,
+            serializedMintInfo,
+            mint.trusted ? 1 : 0,
+            mint.createdAt,
+            mint.updatedAt,
+          ],
+        );
+        if (inserted.changes === 1) return true;
+
+        await database.run(
+          `UPDATE coco_cashu_mints
+           SET name = ?, mintInfo = ?, trusted = CASE WHEN ? = 1 THEN trusted ELSE ? END,
+               updatedAt = ?
+           WHERE mintUrl = ?`,
+          [
+            mint.name,
+            serializedMintInfo,
+            options?.preserveExistingTrust ? 1 : 0,
+            mint.trusted ? 1 : 0,
+            mint.updatedAt,
+            mint.mintUrl,
+          ],
+        );
+        return false;
+      },
+      { mode: 'immediate' },
     );
   }
 
   async updateMint(mint: Mint): Promise<void> {
-    await this.addNewMint(mint);
+    await this.addOrUpdateMint(mint);
   }
 
   async setMintTrusted(mintUrl: string, trusted: boolean): Promise<void> {

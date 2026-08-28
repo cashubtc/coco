@@ -34,7 +34,8 @@ export interface MintRepository {
   getAllMints(): Promise<Mint[]>;
   getAllTrustedMints(): Promise<Mint[]>;
   addNewMint(mint: Mint): Promise<void>;
-  addOrUpdateMint(mint: Mint): Promise<void>;
+  /** Atomically persists a Mint and reports whether the repository inserted it. */
+  addOrUpdateMint(mint: Mint, options?: { preserveExistingTrust?: boolean }): Promise<boolean>;
   updateMint(mint: Mint): Promise<void>;
   setMintTrusted(mintUrl: string, trusted: boolean): Promise<void>;
   deleteMint(mintUrl: string): Promise<void>;

@@ -1,6 +1,7 @@
 import { Amount } from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it, mock } from 'bun:test';
 import { MintOpsApi } from '../../api/MintOpsApi.ts';
+import { MintOperationNotFoundError, MintOperationStateError } from '../../models/Error.ts';
 import type { MintOperationService } from '../../operations/mint/MintOperationService.ts';
 import type {
   ExecutingMintOperation,
@@ -163,14 +164,8 @@ describe('MintOpsApi', () => {
     expect(mintOperationService.prepare).toHaveBeenCalledWith(quote, Amount.from(10));
   });
 
-  it('execute delegates every persisted operation state to the service by ID', async () => {
-    const states: MintOperation['state'][] = [
-      'init',
-      'pending',
-      'executing',
-      'finalized',
-      'failed',
-    ];
+  it('execute reloads and delegates every executable persisted operation state by ID', async () => {
+    const states: MintOperation['state'][] = ['pending', 'executing', 'finalized', 'failed'];
 
     for (const state of states) {
       const operation = {
@@ -178,6 +173,9 @@ describe('MintOpsApi', () => {
         id: `op-${state}`,
         state,
       } as MintOperation;
+      (
+        mintOperationService.getOperation as unknown as ReturnType<typeof mock>
+      ).mockResolvedValueOnce(operation);
       (mintOperationService.execute as unknown as ReturnType<typeof mock>).mockResolvedValueOnce(
         operation,
       );
@@ -188,18 +186,25 @@ describe('MintOpsApi', () => {
       expect(result).toBe(operation);
     }
 
-    expect(mintOperationService.getOperation).not.toHaveBeenCalled();
+    expect(mintOperationService.getOperation).toHaveBeenCalledTimes(states.length);
   });
 
-  it('execute delegates missing operation errors to the service', async () => {
-    (mintOperationService.execute as unknown as ReturnType<typeof mock>).mockRejectedValueOnce(
-      new Error('Operation missing-op not found'),
-    );
+  it('execute reports typed missing and invalid-state lifecycle errors', async () => {
+    (mintOperationService.getOperation as unknown as ReturnType<typeof mock>)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ ...pendingOperation, state: 'init' } as MintOperation);
 
-    await expect(api.execute('missing-op')).rejects.toThrow('Operation missing-op not found');
+    const missing = await api.execute('missing-op').catch((error: unknown) => error);
+    const invalid = await api.execute('init-op').catch((error: unknown) => error);
 
-    expect(mintOperationService.execute).toHaveBeenCalledWith('missing-op');
-    expect(mintOperationService.getOperation).not.toHaveBeenCalled();
+    expect(missing).toBeInstanceOf(MintOperationNotFoundError);
+    expect(invalid).toBeInstanceOf(MintOperationStateError);
+    expect(invalid).toMatchObject({
+      operationId: pendingOperation.id,
+      state: 'init',
+      expectedStates: ['pending', 'executing', 'finalized', 'failed'],
+    });
+    expect(mintOperationService.execute).not.toHaveBeenCalled();
   });
 
   it('get and listByQuote delegate to the service', async () => {
@@ -236,7 +241,9 @@ describe('MintOpsApi', () => {
       } as MintOperation,
     );
 
-    await expect(api.checkPayment(pendingOperation.id)).rejects.toThrow("Expected 'pending'");
+    const error = await api.checkPayment(pendingOperation.id).catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(MintOperationStateError);
+    expect(error).toMatchObject({ state: 'finalized', expectedStates: ['pending'] });
   });
 
   it('refresh reconciles pending and executing operations', async () => {

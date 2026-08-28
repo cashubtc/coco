@@ -50,6 +50,7 @@ export {
   projectLegacyHistoryRow,
   DerivationIndexExhaustedError,
   QuoteIdentityConflictError,
+  UnknownMintError,
 } from './models/index.ts';
 export type {
   MeltMethod,

@@ -20,6 +20,7 @@ import {
   type KeyRingRepository,
   DerivationIndexExhaustedError,
   QuoteIdentityConflictError,
+  UnknownMintError,
 } from '@cashu/coco-core/adapter';
 
 type TransactionFactory<TRepositories extends Repositories = Repositories> = () => Promise<{
@@ -40,6 +41,60 @@ export type KeyRingDerivationContractOptions<TRepositories extends Repositories 
     dispose(): Promise<void>;
   }>;
 };
+
+/** Registers the shared creation, trust-preservation, and typed-absence Mint repository contract. */
+export function runMintRepositoryContract(options: ContractOptions, runner: ContractRunner): void {
+  const { describe, it, expect } = runner;
+
+  describe('MintRepository contract', () => {
+    it('reports exactly one insert under concurrent upserts', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const mint = createDummyMint();
+        const results = await Promise.all([
+          repositories.mintRepository.addOrUpdateMint(mint),
+          repositories.mintRepository.addOrUpdateMint(mint),
+        ]);
+
+        expect(results.filter(Boolean).length).toBe(1);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('preserves existing trust when requested during refresh', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const mint = { ...createDummyMint(), trusted: true };
+        await repositories.mintRepository.addOrUpdateMint(mint);
+        const created = await repositories.mintRepository.addOrUpdateMint(
+          { ...mint, name: 'Refreshed Mint', trusted: false },
+          { preserveExistingTrust: true },
+        );
+        const stored = await repositories.mintRepository.getMintByUrl(mint.mintUrl);
+
+        expect(created).toBe(false);
+        expect(stored.name).toBe('Refreshed Mint');
+        expect(stored.trusted).toBe(true);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('uses the typed absence error for an unknown Mint', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        await expectThrowsNamed(
+          () => repositories.mintRepository.getMintByUrl('https://unknown-mint.test'),
+          UnknownMintError.name,
+          expect,
+        );
+      } finally {
+        await dispose();
+      }
+    });
+  });
+}
 
 function sortedIndexes(indexes: number[]): number[] {
   return [...indexes].sort((left, right) => left - right);
