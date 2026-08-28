@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "lib": ["ESNext"],
+    "target": "ESNext",
+    "module": "Preserve",
+    "moduleDetection": "force",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "types": ["bun"],
+    "noEmit": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "baseUrl": "../..",
+    "paths": {
+      "@cashu/coco-core": ["packages/core/index.ts"],
+      "@cashu/coco-core/adapter": ["packages/core/adapter.ts"],
+      "@cashu/coco-sql-storage": ["packages/sql-storage/src/index.ts"],
+      "@cashu/coco-sqlite-bun": ["packages/sqlite-bun/src/index.ts"],
+      "@core/*": ["packages/core/*"]
+    }
+  },
+  "include": ["./**/*.ts"]
+}

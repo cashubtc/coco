@@ -1,6 +1,6 @@
 import { describe, it, expect, mock, beforeEach } from 'bun:test';
 import { WsConnectionManager, type WebSocketLike } from '../../infra/WsConnectionManager';
-import { NullLogger } from '../../logging';
+import { NullLogger, type Logger } from '../../logging';
 
 class MockWebSocket implements WebSocketLike {
   private listeners: Map<string, Set<(event: any) => void>> = new Map();
@@ -61,6 +61,15 @@ class MockWebSocket implements WebSocketLike {
       }
     }
   }
+
+  triggerError(error: Error): void {
+    const errorListeners = this.listeners.get('error');
+    if (errorListeners) {
+      for (const listener of errorListeners) {
+        listener(error);
+      }
+    }
+  }
 }
 
 describe('WsConnectionManager pause/resume', () => {
@@ -86,6 +95,24 @@ describe('WsConnectionManager pause/resume', () => {
     expect(mockSocket.closed).toBe(true);
     expect(mockSocket.closeCode).toBe(1000);
     expect(mockSocket.closeReason).toBe('Paused');
+  });
+
+  it('should log socket errors with mint context', () => {
+    const error = mock(() => {});
+    const logger: Logger = {
+      error,
+      warn: () => {},
+      info: () => {},
+      debug: () => {},
+    };
+    const mintUrl = 'https://mint.example.com';
+    const socketError = new Error('connection failed');
+    wsManager = new WsConnectionManager(wsFactory, logger);
+
+    wsManager.on(mintUrl, 'open', () => {});
+    mockSocket.triggerError(socketError);
+
+    expect(error).toHaveBeenCalledWith('WS error', { mintUrl, err: socketError });
   });
 
   it('should clear reconnect timers when paused', async () => {
