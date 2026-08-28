@@ -22,7 +22,8 @@ export class KeyRingApi {
   }
 
   /**
-   * Adds an existing keypair to the keyring using a secret key.
+   * Adds an existing keypair using its canonical compressed public key. If the same secret is
+   * already stored under coco's legacy public key encoding, returns that existing keypair.
    * @param secretKey - The 32-byte secret key as Uint8Array
    */
   async addKeyPair(secretKey: Uint8Array): Promise<Keypair> {
@@ -30,17 +31,17 @@ export class KeyRingApi {
   }
 
   /**
-   * Removes a keypair from the keyring.
-   * @param publicKey - The public key (hex string) of the keypair to remove
+   * Removes a keypair from the keyring using its canonical or legacy public key encoding.
+   * @param publicKey - A canonical or legacy public key hex string for the keypair to remove
    */
   async removeKeyPair(publicKey: string): Promise<void> {
     return this.keyRingService.removeKeyPair(publicKey);
   }
 
   /**
-   * Retrieves a specific keypair by its public key.
-   * @param publicKey - The public key (hex string) to look up
-   * @returns The keypair if found, null otherwise
+   * Retrieves a specific keypair using its canonical or legacy public key encoding.
+   * @param publicKey - A canonical or legacy public key hex string to look up
+   * @returns The persisted keypair if found, preserving its stored public key encoding
    */
   async getKeyPair(publicKey: string): Promise<Keypair | null> {
     return this.keyRingService.getKeyPair(publicKey);
