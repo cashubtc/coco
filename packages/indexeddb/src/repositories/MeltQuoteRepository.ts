@@ -1,9 +1,11 @@
 import type { MeltQuoteRepository } from '@cashu/coco-core/adapter';
 import {
   deserializeAmount,
+  deserializeBlindedSignatures,
   normalizeMintUrl,
   QuoteIdentityConflictError,
   serializeAmount,
+  serializeBlindedSignatures,
 } from '@cashu/coco-core/adapter';
 import type { MeltQuote } from '@cashu/coco-core/adapter';
 import type { QuoteIdentity } from '@cashu/coco-core/adapter';
@@ -20,7 +22,7 @@ function rowToQuote(row: MeltQuoteRow): MeltQuote {
     amount: deserializeAmount(row.amount),
     unit: row.unit,
     expiry: row.expiry,
-    change: row.change ?? undefined,
+    change: deserializeBlindedSignatures(row.change),
     lastObservedRemoteState: row.lastObservedRemoteState ?? undefined,
     lastObservedRemoteStateAt: row.lastObservedRemoteStateAt ?? undefined,
     createdAt: row.createdAt,
@@ -120,7 +122,7 @@ export class IdbMeltQuoteRepository implements MeltQuoteRepository {
       outpoint: quote.method === 'onchain' ? (quote.outpoint ?? null) : null,
       expiry: quote.expiry,
       payment_preimage: quote.method === 'onchain' ? null : (quote.payment_preimage ?? null),
-      change: quote.change,
+      change: serializeBlindedSignatures(quote.change),
       lastObservedRemoteState: quote.lastObservedRemoteState ?? quote.state,
       lastObservedRemoteStateAt: quote.lastObservedRemoteStateAt ?? now,
       createdAt: existing?.createdAt ?? quote.createdAt,

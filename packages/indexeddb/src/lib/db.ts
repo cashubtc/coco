@@ -1,5 +1,5 @@
 import Dexie, { type Transaction as DexieTransaction } from 'dexie';
-import type { SerializedBlindedSignature } from '@cashu/cashu-ts';
+import type { StoredBlindedSignature } from '@cashu/coco-core/adapter';
 
 export interface IdbDbOptions {
   name?: string;
@@ -182,7 +182,7 @@ export interface MeltQuoteRow {
   fee_options?: { fee_index: number; fee_reserve: string | number; estimated_blocks: number }[];
   outpoint?: string | null;
   payment_preimage?: string | null;
-  change?: SerializedBlindedSignature[];
+  change?: StoredBlindedSignature[];
   lastObservedRemoteState?: 'UNPAID' | 'PENDING' | 'PAID' | null;
   lastObservedRemoteStateAt?: number | null;
   createdAt: number;
