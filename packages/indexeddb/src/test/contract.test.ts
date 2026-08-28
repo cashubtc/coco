@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { Amount } from '@cashu/cashu-ts';
 import Dexie from 'dexie';
 import {
   runRepositoryTransactionContract,
@@ -422,6 +423,46 @@ describe('indexeddb quote storage constraints', () => {
 });
 
 describe('hydration corruption guard', () => {
+  it('rehydrates legacy melt change amounts that lost their prototype', async () => {
+    const { repositories, dispose } = await createRepositories();
+    try {
+      await repositories.db.table('coco_cashu_melt_quotes').put({
+        mintUrl: 'https://mint.test',
+        method: 'bolt11',
+        quoteId: 'legacy-change-amount',
+        quote: 'legacy-change-amount',
+        state: 'PAID',
+        request: 'bolt11-request',
+        amount: '10',
+        unit: 'sat',
+        fee_reserve: '1',
+        expiry: 0,
+        payment_preimage: 'preimage',
+        change: [
+          {
+            id: 'keyset-1',
+            amount: { value: 2n },
+            C_: '02'.padEnd(66, '1'),
+          },
+        ],
+        lastObservedRemoteState: 'PAID',
+        lastObservedRemoteStateAt: 0,
+        createdAt: 0,
+        updatedAt: 0,
+      });
+
+      const stored = await repositories.meltQuoteRepository.getMeltQuote(
+        'https://mint.test',
+        'bolt11',
+        'legacy-change-amount',
+      );
+
+      expect(stored?.change?.[0]?.amount.equals(Amount.from(2))).toBe(true);
+    } finally {
+      await dispose();
+    }
+  });
+
   it('throws when send operation has prepared state but null financial fields', async () => {
     const { repositories, dispose } = await createRepositories();
     try {

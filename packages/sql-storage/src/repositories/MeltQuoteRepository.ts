@@ -1,8 +1,10 @@
 import {
   deserializeAmount,
+  deserializeBlindedSignatures,
   normalizeMintUrl,
   QuoteIdentityConflictError,
   serializeAmount,
+  serializeBlindedSignatures,
   stringifyJson,
   type MeltQuote,
   type MeltQuoteRepository,
@@ -41,7 +43,7 @@ function rowToQuote(row: MeltQuoteRow): MeltQuote {
     amount: deserializeAmount(row.amount),
     unit: row.unit,
     expiry: row.expiry,
-    change: row.changeJson ? JSON.parse(row.changeJson) : undefined,
+    change: row.changeJson ? deserializeBlindedSignatures(JSON.parse(row.changeJson)) : undefined,
     lastObservedRemoteState: (row.lastObservedRemoteState ?? undefined) as
       | MeltQuote['state']
       | undefined,
@@ -151,7 +153,7 @@ export class SqliteMeltQuoteRepository implements MeltQuoteRepository {
             )
           : null,
       outpoint: quote.method === 'onchain' ? (quote.outpoint ?? null) : null,
-      changeJson: quote.change ? stringifyJson(quote.change) : null,
+      changeJson: quote.change ? stringifyJson(serializeBlindedSignatures(quote.change)) : null,
       lastObservedRemoteState: quote.lastObservedRemoteState ?? quote.state,
       lastObservedRemoteStateAt: quote.lastObservedRemoteStateAt ?? now,
       createdAt: quote.createdAt,

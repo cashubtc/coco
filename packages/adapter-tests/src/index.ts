@@ -1305,6 +1305,36 @@ export async function runMeltQuoteRepositoryContract(
       }
     });
 
+    it('rehydrates cached melt change signature amounts', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const quote = createDummyMeltQuote({
+          quoteId: 'paid-melt-with-change',
+          quote: 'paid-melt-with-change',
+          state: 'PAID',
+          change: [
+            {
+              id: 'keyset-1',
+              amount: Amount.from(2),
+              C_: '02'.padEnd(66, '1'),
+            },
+          ],
+        });
+
+        await repositories.meltQuoteRepository.upsertMeltQuote(quote);
+        const stored = await repositories.meltQuoteRepository.getMeltQuote(
+          quote.mintUrl,
+          quote.method,
+          quote.quoteId,
+        );
+
+        expect(stored?.change).toHaveLength(1);
+        expect(stored?.change?.[0]?.amount.equals(Amount.from(2))).toBe(true);
+      } finally {
+        await dispose();
+      }
+    });
+
     it('looks up canonical melt quotes by identity without method', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {
