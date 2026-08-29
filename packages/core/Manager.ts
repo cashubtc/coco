@@ -35,6 +35,7 @@ import { MeltOperationService } from './operations/melt/MeltOperationService';
 import { MintOperationService } from './operations/mint/MintOperationService';
 import { ReceiveOperationService } from './operations/receive/ReceiveOperationService';
 import { MintScopedLock } from './operations/MintScopedLock';
+import { KeysetRotationService } from './operations/KeysetRotationService.ts';
 import {
   SubscriptionManager,
   type WebSocketFactory,
@@ -958,6 +959,11 @@ export class Manager {
     // send, receive, melt, and mint serialize their per-mint deterministic-output
     // derivation against each other. Passing separate instances would break that.
     const mintScopedLock = new MintScopedLock();
+    const keysetRotationService = new KeysetRotationService(
+      walletService,
+      mintScopedLock,
+      this.getChildLogger('KeysetRotationService'),
+    );
 
     const sendOperationLogger = this.getChildLogger('SendOperationService');
     const sendHandlerProvider = new SendHandlerProvider({
@@ -974,6 +980,7 @@ export class Manager {
       sendHandlerProvider,
       sendOperationLogger,
       mintScopedLock,
+      keysetRotationService,
     );
     const sendOperationRepository = repositories.sendOperationRepository;
 
@@ -991,6 +998,7 @@ export class Manager {
       this.eventBus,
       receiveOperationLogger,
       mintScopedLock,
+      keysetRotationService,
     );
     const receiveOperationRepository = repositories.receiveOperationRepository;
     const paymentRequestReceiveOperationRepository =
@@ -1037,6 +1045,7 @@ export class Manager {
       this.eventBus,
       meltOperationLogger,
       mintScopedLock,
+      keysetRotationService,
     );
     const meltOperationRepository = repositories.meltOperationRepository;
 
@@ -1053,6 +1062,7 @@ export class Manager {
       this.eventBus,
       mintOperationLogger,
       mintScopedLock,
+      keysetRotationService,
     );
     const mintOperationRepository = repositories.mintOperationRepository;
 

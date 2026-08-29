@@ -1,4 +1,4 @@
-import { Amount } from '@cashu/cashu-ts';
+import { Amount, StaleKeysetError as CashuStaleKeysetError } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
 import {
   OutputData,
@@ -46,7 +46,13 @@ import type { MintAdapter } from '../../infra/MintAdapter';
 import type { Logger } from '../../logging/Logger';
 import { serializeOutputData } from '../../utils';
 import type { CoreProof } from '../../types';
-import { MintQuoteValidationError, QuoteIdentityConflictError } from '../../models/Error';
+import {
+  MintQuoteValidationError,
+  QuoteIdentityConflictError,
+  StaleKeysetError,
+} from '../../models/Error';
+import { MintScopedLock } from '../../operations/MintScopedLock.ts';
+import { KeysetRotationService } from '../../operations/KeysetRotationService.ts';
 
 describe('MintOperationService', () => {
   const mintUrl = 'https://mint.test';
@@ -1943,6 +1949,47 @@ describe('MintOperationService', () => {
     expect(result.state).toBe('finalized');
     expect(handler.recoverExecuting).toHaveBeenCalledTimes(1);
     expect(handler.execute).not.toHaveBeenCalled();
+  });
+
+  it('fails a stale mint claim as retryable without replaying its output allocation', async () => {
+    await persistQuote();
+    const pending = await service.prepare({ mintUrl, method: 'bolt11', quoteId }, Amount.from(10));
+    (handler.execute as Mock<any>).mockRejectedValue(new CashuStaleKeysetError(false));
+    const requireMintRefresh = mock(async () => {});
+    const refreshRequiredMint = mock(async () => ({}));
+    walletService = {
+      ...walletService,
+      requireMintRefresh,
+      refreshRequiredMint,
+      clearCache: mock(() => {}),
+    } as unknown as WalletService;
+    const mintScopedLock = new MintScopedLock();
+    service = new MintOperationService(
+      handlerProvider,
+      operationRepo,
+      quoteLifecycle,
+      proofRepo,
+      proofService,
+      mintService,
+      walletService,
+      mintAdapter,
+      eventBus,
+      logger,
+      mintScopedLock,
+      new KeysetRotationService(walletService, mintScopedLock),
+    );
+
+    await expect(service.execute(pending.id)).rejects.toBeInstanceOf(StaleKeysetError);
+
+    const failed = await operationRepo.getById(pending.id);
+    expect(handler.execute).toHaveBeenCalledTimes(1);
+    expect(failed?.state).toBe('failed');
+    expect(failed?.terminalFailure).toMatchObject({
+      code: 'stale_keyset',
+      retryable: true,
+    });
+    expect(requireMintRefresh).toHaveBeenCalledWith(mintUrl);
+    expect(refreshRequiredMint).toHaveBeenCalledWith(mintUrl, 'sat');
   });
 
   it('execute rejects missing and init operations', async () => {

@@ -1,4 +1,9 @@
-import { Amount, type Proof } from '@cashu/cashu-ts';
+import {
+  Amount,
+  StaleKeysetError as CashuStaleKeysetError,
+  UnknownKeysetError,
+  type Proof,
+} from '@cashu/cashu-ts';
 import type { MintOperationRepository, ProofRepository } from '../../repositories';
 import type {
   ExecutingMintOperation,
@@ -31,6 +36,7 @@ import type { Logger } from '../../logging/Logger';
 import { generateSubId, mapProofToCoreProof, normalizeMintUrl } from '../../utils';
 import {
   OperationInProgressError,
+  OperationRecoveryRequiredError,
   ProofValidationError,
   UnknownMintError,
 } from '../../models/Error';
@@ -46,6 +52,7 @@ import {
 } from '../../models/MintQuoteClaimability.ts';
 import type { MintQuoteRef } from '../../models/QuoteIdentity';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle';
+import type { KeysetRotationService } from '../KeysetRotationService.ts';
 
 export interface ClaimMintQuoteOptions {
   autoClaimRemaining?: boolean;
@@ -69,6 +76,7 @@ export class MintOperationService {
   private readonly operationIdLock = new OperationIdLock();
   private recoveryLock: Promise<void> | null = null;
   private readonly mintScopedLock: MintScopedLock;
+  private readonly keysetRotationService?: KeysetRotationService;
 
   constructor(
     handlerProvider: MintHandlerProvider,
@@ -82,6 +90,7 @@ export class MintOperationService {
     eventBus: EventBus<CoreEvents>,
     logger?: Logger,
     mintScopedLock?: MintScopedLock,
+    keysetRotationService?: KeysetRotationService,
   ) {
     this.handlerProvider = handlerProvider;
     this.mintOperationRepository = mintOperationRepository;
@@ -94,6 +103,7 @@ export class MintOperationService {
     this.eventBus = eventBus;
     this.logger = logger;
     this.mintScopedLock = mintScopedLock ?? new MintScopedLock();
+    this.keysetRotationService = keysetRotationService;
   }
 
   private buildDeps() {
@@ -458,6 +468,12 @@ export class MintOperationService {
             throw new Error(result.error ?? 'Mint execution failed');
         }
       } catch (e) {
+        if (e instanceof CashuStaleKeysetError) {
+          return await this.handleStaleKeyset(executing, e);
+        }
+        if (e instanceof UnknownKeysetError) {
+          return await this.handleUnknownKeyset(executing, e);
+        }
         await this.tryRecoverExecutingOperation(executing);
 
         const current = await this.mintOperationRepository.getById(operationId);
@@ -470,6 +486,93 @@ export class MintOperationService {
     } finally {
       releaseLock();
     }
+  }
+
+  private async handleStaleKeyset(
+    executing: ExecutingMintOperation,
+    cause: CashuStaleKeysetError,
+  ): Promise<TerminalMintOperation> {
+    const service = this.requireKeysetRotationService(executing, cause);
+    return service.handleStaleKeyset<TerminalMintOperation>({
+      operationId: executing.id,
+      mintUrl: executing.mintUrl,
+      unit: executing.unit,
+      cause,
+      reconcile: async () => this.reconcileStaleExecution(executing, cause),
+    });
+  }
+
+  private async reconcileStaleExecution(executing: ExecutingMintOperation, cause: unknown) {
+    if (await this.hasSavedOutputs(executing)) {
+      return {
+        status: 'resolved' as const,
+        value: await this.finalizeIssuedOperation(executing),
+      };
+    }
+
+    const quote = await this.quoteLifecycle.refreshMintQuote(
+      executing.mintUrl,
+      executing.method,
+      executing.quoteId,
+    );
+    const siblings = await this.mintOperationRepository.getByQuoteId(
+      executing.mintUrl,
+      executing.method,
+      executing.quoteId,
+    );
+    const assessment = this.assessQuoteClaimability(quote, siblings, {
+      requestedAmount: executing.amount,
+      targetOperationId: executing.id,
+    });
+
+    if (assessment.status === 'complete') {
+      if (!(await this.ensureOutputsSaved(executing))) {
+        return { status: 'recovery_required' as const, cause };
+      }
+      return {
+        status: 'resolved' as const,
+        value: await this.finalizeIssuedOperation(executing),
+      };
+    }
+    if (assessment.status === 'invalid') {
+      return { status: 'recovery_required' as const, cause };
+    }
+
+    await this.failOperation(executing, 'Mint rejected stale output keyset', {
+      code: 'stale_keyset',
+      retryable: true,
+    });
+    return { status: 'rolled_back' as const };
+  }
+
+  private async handleUnknownKeyset(
+    executing: ExecutingMintOperation,
+    cause: UnknownKeysetError,
+  ): Promise<never> {
+    const service = this.requireKeysetRotationService(executing, cause);
+    return service.refreshUnknownKeyset({
+      operationId: executing.id,
+      mintUrl: executing.mintUrl,
+      unit: executing.unit,
+      keysetId: cause.keysetId,
+      cause,
+    });
+  }
+
+  private requireKeysetRotationService(
+    operation: ExecutingMintOperation,
+    cause: unknown,
+  ): KeysetRotationService {
+    if (this.keysetRotationService) {
+      return this.keysetRotationService;
+    }
+    throw new OperationRecoveryRequiredError(
+      operation.id,
+      operation.mintUrl,
+      operation.unit,
+      'Keyset recovery is not configured',
+      cause,
+    );
   }
 
   async finalize(operationId: string): Promise<MintOperation> {
@@ -1095,6 +1198,7 @@ export class MintOperationService {
   private async failOperation(
     op: ExecutingMintOperation,
     error: string,
+    failure?: { code?: string; retryable?: boolean },
   ): Promise<FailedMintOperation> {
     const current = await this.mintOperationRepository.getById(op.id);
     if (!current) {
@@ -1120,6 +1224,8 @@ export class MintOperationService {
       error,
       terminalFailure: {
         reason: error,
+        code: failure?.code,
+        retryable: failure?.retryable,
         observedAt: Date.now(),
       },
     };

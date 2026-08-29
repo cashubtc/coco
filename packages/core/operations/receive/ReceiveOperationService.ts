@@ -5,6 +5,8 @@ import {
   type ProofState as CashuProofState,
   type Token,
   Amount,
+  StaleKeysetError as CashuStaleKeysetError,
+  UnknownKeysetError,
 } from '@cashu/cashu-ts';
 
 import {
@@ -20,6 +22,7 @@ import {
   MintOperationError,
   ProofValidationError,
   OperationInProgressError,
+  OperationRecoveryRequiredError,
 } from '../../models/Error';
 import type {
   ReceiveOperation,
@@ -44,6 +47,7 @@ import type { ReceiveOperationRepository, ProofRepository } from '../../reposito
 import { OperationIdLock } from '../OperationIdLock';
 import { MintScopedLock } from '../MintScopedLock';
 import { DEFAULT_UNIT, normalizeUnit } from '../../amounts.ts';
+import type { KeysetRotationService } from '../KeysetRotationService.ts';
 
 const NON_TERMINAL_RECEIVE_MINT_ERROR_CODES = new Set([
   // 11003 is special for receive recovery: the mint may already have accepted and
@@ -80,6 +84,7 @@ export class ReceiveOperationService {
   private recoveryLock: Promise<void> | null = null;
   /** In-memory lock to serialize deterministic-output derivation (counter) per mint */
   private readonly mintScopedLock: MintScopedLock;
+  private readonly keysetRotationService?: KeysetRotationService;
 
   constructor(
     receiveOperationRepository: ReceiveOperationRepository,
@@ -92,6 +97,7 @@ export class ReceiveOperationService {
     eventBus: EventBus<CoreEvents>,
     logger?: Logger,
     mintScopedLock?: MintScopedLock,
+    keysetRotationService?: KeysetRotationService,
   ) {
     this.receiveOperationRepository = receiveOperationRepository;
     this.proofRepository = proofRepository;
@@ -103,6 +109,7 @@ export class ReceiveOperationService {
     this.eventBus = eventBus;
     this.logger = logger;
     this.mintScopedLock = mintScopedLock ?? new MintScopedLock();
+    this.keysetRotationService = keysetRotationService;
   }
 
   /**
@@ -299,6 +306,12 @@ export class ReceiveOperationService {
       try {
         return await this.executeInternal(executing);
       } catch (e) {
+        if (e instanceof CashuStaleKeysetError) {
+          return await this.handleStaleKeyset(executing, e);
+        }
+        if (e instanceof UnknownKeysetError) {
+          return await this.handleUnknownKeyset(executing, e);
+        }
         const rollbackReason = this.getRollbackReasonForReceiveFailure(e);
         if (rollbackReason) {
           await this.markAsRolledBack(executing, rollbackReason);
@@ -311,6 +324,84 @@ export class ReceiveOperationService {
     } finally {
       releaseLock();
     }
+  }
+
+  private async handleStaleKeyset(
+    executing: ExecutingReceiveOperation,
+    cause: CashuStaleKeysetError,
+  ): Promise<FinalizedReceiveOperation> {
+    if (!this.keysetRotationService) {
+      throw new OperationRecoveryRequiredError(
+        executing.id,
+        executing.mintUrl,
+        executing.unit,
+        'Stale keyset recovery is not configured',
+        cause,
+      );
+    }
+
+    return this.keysetRotationService.handleStaleKeyset<FinalizedReceiveOperation>({
+      operationId: executing.id,
+      mintUrl: executing.mintUrl,
+      unit: executing.unit,
+      cause,
+      reconcile: async () => this.reconcileStaleExecution(executing, cause),
+    });
+  }
+
+  private async reconcileStaleExecution(executing: ExecutingReceiveOperation, cause: unknown) {
+    if (await this.hasSavedOutputs(executing)) {
+      return {
+        status: 'resolved' as const,
+        value: await this.markAsFinalized(executing),
+      };
+    }
+
+    const inputStates = await this.checkProofStatesWithMint(
+      executing.mintUrl,
+      executing.inputProofs,
+    );
+    if (inputStates.every((state) => state.state === 'UNSPENT')) {
+      await this.markAsRolledBack(executing, 'Mint rejected stale receive outputs');
+      return { status: 'rolled_back' as const };
+    }
+    if (!inputStates.every((state) => state.state === 'SPENT') || !executing.outputData) {
+      return { status: 'recovery_required' as const, cause };
+    }
+
+    await this.proofService.recoverProofsFromOutputData(executing.mintUrl, executing.outputData, {
+      unit: executing.unit,
+      createdByOperationId: executing.id,
+    });
+    if (!(await this.hasSavedOutputs(executing))) {
+      return { status: 'recovery_required' as const, cause };
+    }
+    return {
+      status: 'resolved' as const,
+      value: await this.markAsFinalized(executing),
+    };
+  }
+
+  private async handleUnknownKeyset(
+    executing: ExecutingReceiveOperation,
+    cause: UnknownKeysetError,
+  ): Promise<never> {
+    if (!this.keysetRotationService) {
+      throw new OperationRecoveryRequiredError(
+        executing.id,
+        executing.mintUrl,
+        executing.unit,
+        'Unknown keyset recovery is not configured',
+        cause,
+      );
+    }
+    return this.keysetRotationService.refreshUnknownKeyset({
+      operationId: executing.id,
+      mintUrl: executing.mintUrl,
+      unit: executing.unit,
+      keysetId: cause.keysetId,
+      cause,
+    });
   }
 
   /** Internal execute logic used by execute(), separated for error handling. */

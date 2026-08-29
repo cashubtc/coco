@@ -1,4 +1,4 @@
-import { Amount } from '@cashu/cashu-ts';
+import { Amount, StaleKeysetError as CashuStaleKeysetError } from '@cashu/cashu-ts';
 import type {
   FinalizedReceiveOperation,
   InitReceiveOperation,
@@ -19,6 +19,7 @@ import {
   MintOperationError,
   NetworkError,
   ProofValidationError,
+  StaleKeysetError,
   UnknownMintError,
 } from '../../models/Error';
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
@@ -28,6 +29,7 @@ import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepo
 import { ReceiveOperationService } from '../../operations/receive/ReceiveOperationService';
 import { MintScopedLock } from '../../operations/MintScopedLock';
 import { MemoryReceiveOperationRepository } from '../../repositories/memory/MemoryReceiveOperationRepository';
+import { KeysetRotationService } from '../../operations/KeysetRotationService.ts';
 
 describe('ReceiveOperationService', () => {
   const mintUrl = 'https://mint.test';
@@ -164,6 +166,47 @@ describe('ReceiveOperationService', () => {
     expect(prepared.state).toBe('prepared');
     expect(prepared.fee).toEqual(Amount.from(0));
     expect(prepared.outputData).toBeDefined();
+  });
+
+  it('rolls back stale receive outputs without replaying them and refreshes the mint', async () => {
+    mockWalletReceive.mockImplementation(async () => {
+      throw new CashuStaleKeysetError(false);
+    });
+    (mintAdapter.checkProofStates as Mock<any>).mockImplementation(
+      async (_mintUrl: string, ys: string[]) =>
+        ys.map((y) => ({ Y: y, state: 'UNSPENT', witness: null })),
+    );
+    const requireMintRefresh = mock(async () => {});
+    const refreshRequiredMint = mock(async () => ({}));
+    walletService = {
+      ...walletService,
+      requireMintRefresh,
+      refreshRequiredMint,
+    } as unknown as WalletService;
+    const mintScopedLock = new MintScopedLock();
+    const keysetRotationService = new KeysetRotationService(walletService, mintScopedLock);
+    service = new ReceiveOperationService(
+      receiveOpRepo,
+      proofRepo,
+      proofService,
+      mintService,
+      walletService,
+      mintAdapter,
+      tokenService,
+      eventBus,
+      undefined,
+      mintScopedLock,
+      keysetRotationService,
+    );
+
+    const init = await service.init({ mint: mintUrl, proofs: [makeProof('p1')] } as Token);
+    const prepared = await service.prepare(init);
+
+    await expect(service.execute(prepared)).rejects.toBeInstanceOf(StaleKeysetError);
+    expect(mockWalletReceive).toHaveBeenCalledTimes(1);
+    expect((await receiveOpRepo.getById(prepared.id))?.state).toBe('rolled_back');
+    expect(requireMintRefresh).toHaveBeenCalledWith(mintUrl);
+    expect(refreshRequiredMint).toHaveBeenCalledWith(mintUrl, 'sat');
   });
 
   it('serializes concurrent prepare() on the same mint so deterministic outputs cannot collide', async () => {
