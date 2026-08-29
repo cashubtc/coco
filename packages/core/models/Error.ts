@@ -125,6 +125,58 @@ export class OperationInProgressError extends Error {
   }
 }
 
+/**
+ * A stale output keyset was rejected and the failed operation was safely rolled back.
+ * Callers may create a new operation; the original operation must not be replayed.
+ */
+export class StaleKeysetError extends Error {
+  readonly operationId: string;
+  readonly mintUrl: string;
+  readonly unit: string;
+  readonly retryable = true;
+
+  constructor(
+    operationId: string,
+    mintUrl: string,
+    unit: string,
+    message?: string,
+    cause?: unknown,
+  ) {
+    super(message ?? `Operation ${operationId} used a stale keyset; create a new operation`);
+    this.name = 'StaleKeysetError';
+    this.operationId = operationId;
+    this.mintUrl = mintUrl;
+    this.unit = unit;
+    (this as unknown as { cause?: unknown }).cause = cause;
+  }
+}
+
+/**
+ * An operation could not establish a safe terminal outcome after an execution error.
+ * Callers must not create a replacement operation until recovery resolves it.
+ */
+export class OperationRecoveryRequiredError extends Error {
+  readonly operationId: string;
+  readonly mintUrl: string;
+  readonly unit: string;
+  readonly retryable = false;
+
+  constructor(
+    operationId: string,
+    mintUrl: string,
+    unit: string,
+    message?: string,
+    cause?: unknown,
+  ) {
+    super(message ?? `Operation ${operationId} requires recovery before retrying`);
+    this.name = 'OperationRecoveryRequiredError';
+    this.operationId = operationId;
+    this.mintUrl = mintUrl;
+    this.unit = unit;
+    (this as unknown as { cause?: unknown }).cause = cause;
+  }
+}
+
 export class AuthSessionError extends Error {
   readonly mintUrl: string;
   constructor(mintUrl: string, message?: string, cause?: unknown) {

@@ -65,6 +65,7 @@ function makeService(keysets: Keyset[], outputDataCreator?: OutputDataCreator) {
     mint: makeMint(url),
     keysets: keysets.map((keyset) => ({ ...keyset, mintUrl: url })),
   }));
+  const requireMintRefresh = mock(async () => {});
   const getSeed = mock(async () => new Uint8Array(64).fill(1));
   const getRequestFn = mock(
     () =>
@@ -73,7 +74,7 @@ function makeService(keysets: Keyset[], outputDataCreator?: OutputDataCreator) {
   );
 
   const service = new WalletService(
-    { ensureUpdatedMint, updateMintData } as any,
+    { ensureUpdatedMint, updateMintData, requireMintRefresh } as any,
     { getSeed } as any,
     { getRequestFn } as any,
     undefined,
@@ -81,10 +82,43 @@ function makeService(keysets: Keyset[], outputDataCreator?: OutputDataCreator) {
     outputDataCreator,
   );
 
-  return { service, ensureUpdatedMint, updateMintData, getRequestFn };
+  return { service, ensureUpdatedMint, updateMintData, requireMintRefresh, getRequestFn };
 }
 
 describe('WalletService unit scoping', () => {
+  it('builds wallets that use only Coco cached keyset snapshots', async () => {
+    const { service } = makeService([makeKeyset('sat')]);
+
+    const wallet = await service.getWallet(mintUrl, 'sat');
+
+    expect((wallet as unknown as { _strictCachedKeysets: boolean })._strictCachedKeysets).toBe(
+      true,
+    );
+  });
+
+  it('retains the reconciliation snapshot until a forced refresh invalidates every unit', async () => {
+    const { service, requireMintRefresh, updateMintData } = makeService([
+      makeKeyset('sat'),
+      makeKeyset('usd'),
+    ]);
+    const firstSat = await service.getWallet(mintUrl, 'sat');
+    const firstUsd = await service.getWallet(mintUrl, 'usd');
+
+    await service.requireMintRefresh(mintUrl);
+    const secondSat = await service.getWallet(mintUrl, 'sat');
+    const secondUsd = await service.getWallet(mintUrl, 'usd');
+
+    expect(requireMintRefresh).toHaveBeenCalledWith(mintUrl);
+    expect(secondSat).toBe(firstSat);
+    expect(secondUsd).toBe(firstUsd);
+
+    const refreshedSat = await service.refreshRequiredMint(mintUrl, 'sat');
+    const refreshedUsd = await service.getWallet(mintUrl, 'usd');
+    expect(updateMintData).toHaveBeenCalledWith(mintUrl);
+    expect(refreshedSat).not.toBe(secondSat);
+    expect(refreshedUsd).not.toBe(secondUsd);
+  });
+
   it('uses the supplied creator when a Wallet Instance prepares outputs', async () => {
     const output = {
       blindedMessage: { amount: Amount.from(1), id: 'custom-keyset', B_: 'custom-blinded' },

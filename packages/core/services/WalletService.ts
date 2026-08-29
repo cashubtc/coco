@@ -166,6 +166,23 @@ export class WalletService {
     return this.getWallet(normalizedMintUrl, normalizedUnit);
   }
 
+  /** Persist that the Known Mint needs refresh without changing the reconciliation snapshot. */
+  async requireMintRefresh(mintUrl: string): Promise<void> {
+    const normalizedMintUrl = normalizeMintUrl(mintUrl);
+    await this.mintService.requireMintRefresh(normalizedMintUrl);
+  }
+
+  /**
+   * Force a persisted mint/keyset refresh and rebuild one unit-scoped Wallet Instance.
+   */
+  async refreshRequiredMint(mintUrl: string, unit: string): Promise<Wallet> {
+    const normalizedMintUrl = normalizeMintUrl(mintUrl);
+    const normalizedUnit = normalizeUnit(unit);
+    this.clearCache(normalizedMintUrl);
+    await this.mintService.updateMintData(normalizedMintUrl);
+    return this.getWallet(normalizedMintUrl, normalizedUnit);
+  }
+
   private getWalletCacheKey(mintUrl: string, unit: string): string {
     return `${normalizeMintUrl(mintUrl)}::${normalizeUnit(unit, { defaultUnit: DEFAULT_UNIT })}`;
   }
@@ -219,6 +236,7 @@ export class WalletService {
           this.logger && this.logger.child ? this.logger.child({ module: 'Wallet' }) : undefined,
         bip39seed: seed,
         outputDataCreator: this.outputDataCreator,
+        strictCachedKeysets: true,
       },
     );
     wallet.loadMintFromCache(mint.mintInfo, cache);

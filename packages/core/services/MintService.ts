@@ -208,8 +208,27 @@ export class MintService {
     return this.updateMint(mint);
   }
 
+  /**
+   * Persist that cached mint metadata must be refreshed before it is trusted again.
+   */
+  async requireMintRefresh(mintUrl: string): Promise<void> {
+    const normalizedMintUrl = normalizeMintUrl(mintUrl);
+    const mint = await this.mintRepo.getMintByUrl(normalizedMintUrl).catch(() => null);
+    if (!mint) {
+      throw new UnknownMintError(`Mint ${normalizedMintUrl} is not known`);
+    }
+    if (mint.updatedAt === 0) return;
+    await this.mintRepo.updateMint({ ...mint, updatedAt: 0 });
+    this.logger?.warn('Mint marked as requiring refresh', { mintUrl: normalizedMintUrl });
+  }
+
   async isTrustedMint(mintUrl: string): Promise<boolean> {
     return await this.mintRepo.isTrustedMint(normalizeMintUrl(mintUrl));
+  }
+
+  /** Return Coco's filtered persisted keyset snapshot without triggering a network refresh. */
+  async getCachedKeysets(mintUrl: string): Promise<Keyset[]> {
+    return excludeBlsKeysets(await this.keysetRepo.getKeysetsByMintUrl(normalizeMintUrl(mintUrl)));
   }
 
   async ensureUpdatedMint(mintUrl: string): Promise<{ mint: Mint; keysets: Keyset[] }> {

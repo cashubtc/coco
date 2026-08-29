@@ -194,6 +194,16 @@ describe('MintService', () => {
   });
 
   describe('ensureUpdatedMint', () => {
+    it('durably marks a known mint as requiring refresh', async () => {
+      await service.addMintByUrl(testMintUrl);
+      expect((await mintRepo.getMintByUrl(testMintUrl)).updatedAt).toBeGreaterThan(0);
+
+      await service.requireMintRefresh(testMintUrl);
+      await service.requireMintRefresh(testMintUrl);
+
+      expect((await mintRepo.getMintByUrl(testMintUrl)).updatedAt).toBe(0);
+    });
+
     it('should create mint if it does not exist', async () => {
       const result = await service.ensureUpdatedMint(testMintUrl);
 
