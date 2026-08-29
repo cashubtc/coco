@@ -31,6 +31,16 @@ _Avoid_: Wallet instance, app instance
 A transient mint-and-unit-scoped view of a wallet used for a specific mint interaction. It is not the wallet's identity.
 _Avoid_: Wallet, account
 
+**Wallet Keyset Snapshot**:
+The mint keyset state available to a Wallet Instance for an operation. It can become stale while
+the Known Mint continues to rotate its keysets.
+_Avoid_: Keyset cache, current mint state
+
+**Usable Keyset**:
+A Known Mint keyset that Coco can use consistently for proof validation, state derivation, and new
+proof construction. Mint advertisement or active status alone does not make a keyset usable.
+_Avoid_: Active keyset, supported curve
+
 **Known Mint**:
 A mint whose information and keysets are retained locally, whether or not the user trusts it for wallet operations.
 _Avoid_: Added mint, cached mint
@@ -97,6 +107,26 @@ NUT-11 P2PK spending condition. Coco uses it while satisfying a NUT-18 payment r
 payer, not while creating an incoming payment request.
 _Avoid_: Payment request key, P2PK target, payment request pubkey
 
+**Payment Request Amount**:
+The value a payment request receiver requires after subtracting the delivered proofs' input fees.
+It excludes any additional payment-method fee requested for accepting an unlisted mint.
+_Avoid_: Gross amount, token amount, send amount
+
+**Payment Request Delivery Amount**:
+The proof value a payer must deliver so the receiver retains the Payment Request Amount plus any
+applicable payment-method fee after input fees.
+_Avoid_: Payment Request Amount, requested amount, gross amount
+
+**Payment Request Method Fee**:
+Additional value a receiver requests for accepting payment from an unlisted mint through a
+supported melt method. It is distinct from the input fees charged by that mint's keyset.
+_Avoid_: Input fee, service fee, delivery fee
+
+**Payment Request Candidate**:
+A Trusted Mint option capable of satisfying a payment request, including its applicable method and
+complete delivery cost. A candidate is presented for selection; Coco does not select it implicitly.
+_Avoid_: Payable mint, selected mint, payment option
+
 **Melt Quote State**:
 The mint's settlement state for a melt quote. `PAID` is terminal, while `PENDING` can return to
 `UNPAID` when settlement fails; a newer `UNPAID` observation can therefore be more accurate than an
@@ -144,3 +174,33 @@ _Avoid_: Recovery, Wallet Import, restored mint, restored wallet
 **Operation Recovery**:
 The act of reconciling persisted in-flight wallet operations after interruption so local operation state, proof state, and mint state agree again.
 _Avoid_: Restore, restart, resume
+
+**Exact Operation Request**:
+Immutable mint request material owned by a durable operation and reused for both initial submission
+and Operation Recovery.
+_Avoid_: Retry request, regenerated request, execution attempt
+
+**Stale Keyset Failure**:
+A terminal operation failure caused by a mint rejecting an Exact Operation Request built from a
+stale Wallet Keyset Snapshot. It is safe to retry through a new operation only after Coco proves
+the request was not applied, releases the failed operation's resources, and refreshes the Known
+Mint. Coco reports it through a stable `StaleKeysetError` containing the failed operation ID, mint
+URL, and unit.
+_Avoid_: Retry attempt, Successor Operation, mutated operation
+
+**Ambiguous Operation Outcome**:
+An operation outcome for which Coco cannot prove whether its Exact Operation Request affected the
+mint. The operation retains its locally owned resources until Operation Recovery establishes a safe
+result. Coco reports the blocked caller boundary through `OperationRecoveryRequiredError`,
+including the operation ID, mint URL, and unit.
+_Avoid_: Failed operation, timed-out operation
+
+**Output Allocation**:
+A durable commitment of deterministic counter positions to planned Cashu outputs. Output derivation
+inside a transaction that does not commit is not an Output Allocation.
+_Avoid_: Output generation, tentative outputs, counter increment
+
+**Keypair Allocation**:
+A durable commitment of one purpose-specific Wallet derivation index and its derived keypair. Key
+derivation inside a transaction that does not commit is not a Keypair Allocation.
+_Avoid_: Key generation, tentative key, high-water-mark increment
