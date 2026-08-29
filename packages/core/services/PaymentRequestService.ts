@@ -276,10 +276,24 @@ export class PaymentRequestService {
   private async readPaymentRequest(paymentRequest: string): Promise<PaymentRequest> {
     this.logger?.debug('Reading payment request', { paymentRequest });
     const decodedPaymentRequest = PaymentRequest.fromEncodedRequest(paymentRequest);
+    this.assertLegacyPaymentRequest(decodedPaymentRequest);
     this.logger?.info('Payment request decoded', {
       decodedPaymentRequest,
     });
     return decodedPaymentRequest;
+  }
+
+  private assertLegacyPaymentRequest(paymentRequest: PaymentRequest): void {
+    if (paymentRequest.mintsPreferred === true) {
+      throw new PaymentRequestError(
+        'Payment requests with advisory mint lists are not supported yet',
+      );
+    }
+    if (paymentRequest.supportedMethods && paymentRequest.supportedMethods.length > 0) {
+      throw new PaymentRequestError(
+        'Payment requests with supported melt methods are not supported yet',
+      );
+    }
   }
 
   private validateMint(mintUrl: string, mints?: string[]): void {
@@ -529,16 +543,18 @@ export class PaymentRequestService {
 
     const paymentRequest = amountUnchanged
       ? request.paymentRequest
-      : new PaymentRequest(
-          request.paymentRequest.transport,
-          request.paymentRequest.id,
+      : new PaymentRequest({
+          transport: request.paymentRequest.transport,
+          id: request.paymentRequest.id,
           amount,
-          request.unit,
-          request.paymentRequest.mints,
-          request.paymentRequest.description,
-          request.paymentRequest.singleUse,
-          request.paymentRequest.nut10,
-        );
+          unit: request.unit,
+          mints: request.paymentRequest.mints,
+          description: request.paymentRequest.description,
+          singleUse: request.paymentRequest.singleUse,
+          nut10: request.paymentRequest.nut10,
+          mintsPreferred: request.paymentRequest.mintsPreferred,
+          supportedMethods: request.paymentRequest.supportedMethods,
+        });
     const spendingCondition = this.resolveSpendingCondition(paymentRequest);
     const payableMints = await this.findMatchingMints(
       paymentRequest,

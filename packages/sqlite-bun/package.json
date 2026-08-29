@@ -32,7 +32,7 @@
     "test": "bun test"
   },
   "peerDependencies": {
-    "@cashu/cashu-ts": "5.0.0-rc.4",
+    "@cashu/cashu-ts": "5.0.0-rc.7",
     "@cashu/coco-core": "1.0.0",
     "typescript": "^5"
   }
