@@ -22,6 +22,8 @@ import {
   QuoteIdentityConflictError,
 } from '@cashu/coco-core/adapter';
 
+export * from './durableEventOutbox.ts';
+
 type TransactionFactory<TRepositories extends Repositories = Repositories> = () => Promise<{
   repositories: TRepositories;
   dispose(): Promise<void>;
