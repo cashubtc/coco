@@ -14,12 +14,15 @@ Known Mint.
 
 ## Consequences
 
-A stale-keyset rejection refreshes the Known Mint through Coco and rebuilds the Wallet Instance.
-After Coco proves that the Exact Operation Request was not applied, the affected operation rolls
-back and reports a Stale Keyset Failure. Coco neither mutates the original request nor replays
-outputs derived from a stale snapshot; the caller must prepare a new operation.
+A stale-keyset rejection marks the Known Mint stale and invalidates every Wallet Instance for that
+mint. The next normal Wallet Instance access refreshes the persisted mint and keyset data, then
+builds a Wallet Instance for the requested unit. The failing operation does not synchronously fetch
+mint metadata.
 
-Stale cleanup is serialized through Coco's shared mint lock. It invalidates every cached Wallet
-Instance for the Known Mint, forces one persisted mint/keyset refresh, and rebuilds only the unit
-needed by the caller. If the network refresh fails, Coco retains a persisted refresh requirement so
-a restart cannot treat the old snapshot as fresh.
+The affected operation rolls back after the mint's structured rejection proves that its Exact
+Operation Request was not applied. Coco neither mutates the original request nor replays outputs
+derived from a stale snapshot; the caller must prepare a new operation.
+
+Invalidation advances a cache generation so an in-flight Wallet Instance build cannot repopulate
+the cache with the stale snapshot. Marking the persisted Known Mint stale also survives restart and
+causes the existing time-to-live check to refresh it on the next access.

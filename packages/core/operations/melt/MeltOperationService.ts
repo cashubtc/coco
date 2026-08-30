@@ -1,8 +1,4 @@
-import {
-  MeltChangeError,
-  StaleKeysetError as CashuStaleKeysetError,
-  UnknownKeysetError,
-} from '@cashu/cashu-ts';
+import type { StaleKeysetError } from '@cashu/cashu-ts';
 import type { MeltOperationRepository, ProofRepository } from '../../repositories';
 import type {
   MeltOperation,
@@ -23,20 +19,16 @@ import type {
   PendingCheckResult,
 } from './MeltMethodHandler';
 import { normalizeMeltMethodData } from './MeltMethodHandler';
-import type { MintService } from '../../services/MintService';
+import { asStaleKeysetError, type MintService } from '../../services/MintService';
 import type { WalletService } from '../../services/WalletService';
 import type { ProofService } from '../../services/ProofService';
 import type { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
 import { generateSubId, normalizeMintUrl } from '../../utils';
-import {
-  OperationRecoveryRequiredError,
-  UnknownMintError,
-  ProofValidationError,
-} from '../../models/Error';
+import { UnknownMintError, ProofValidationError } from '../../models/Error';
 import type { MintAdapter } from '@core/infra';
-import type { MeltHandlerProvider } from '../../infra/handlers/melt';
+import { getSwapSendSecrets, type MeltHandlerProvider } from '../../infra/handlers/melt';
 import type { FinalizeResult } from './MeltMethodHandler';
 import { MintScopedLock } from '../MintScopedLock';
 import { OperationIdLock } from '../OperationIdLock';
@@ -44,7 +36,6 @@ import { DEFAULT_UNIT, normalizeUnit } from '../../amounts.ts';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle';
 import { resolveOnchainMeltFeeOption, type MeltQuote } from '../../models/MeltQuote.ts';
 import type { MeltQuoteRef, QuoteIdentity } from '../../models/QuoteIdentity.ts';
-import type { KeysetRotationService } from '../KeysetRotationService.ts';
 
 /**
  * MeltOperationService orchestrates melt sagas while delegating
@@ -65,7 +56,6 @@ export class MeltOperationService {
   private readonly operationIdLock = new OperationIdLock();
   private recoveryLock: Promise<void> | null = null;
   private readonly mintScopedLock: MintScopedLock;
-  private readonly keysetRotationService?: KeysetRotationService;
 
   constructor(
     handlerProvider: MeltHandlerProvider,
@@ -79,7 +69,6 @@ export class MeltOperationService {
     eventBus: EventBus<CoreEvents>,
     logger?: Logger,
     mintScopedLock?: MintScopedLock,
-    keysetRotationService?: KeysetRotationService,
   ) {
     this.handlerProvider = handlerProvider;
     this.meltOperationRepository = meltOperationRepository;
@@ -92,7 +81,6 @@ export class MeltOperationService {
     this.eventBus = eventBus;
     this.logger = logger;
     this.mintScopedLock = mintScopedLock ?? new MintScopedLock();
-    this.keysetRotationService = keysetRotationService;
   }
 
   private buildDeps() {
@@ -457,14 +445,9 @@ export class MeltOperationService {
           }
         }
       } catch (e) {
-        if (e instanceof CashuStaleKeysetError) {
-          return await this.handleStaleKeyset(executing, e);
-        }
-        if (e instanceof MeltChangeError) {
-          return await this.handleMeltChangeError(executing, e);
-        }
-        if (e instanceof UnknownKeysetError) {
-          return await this.handleUnknownKeyset(executing, e);
+        const staleKeysetError = asStaleKeysetError(e);
+        if (staleKeysetError) {
+          return await this.handleStaleKeyset(executing, staleKeysetError);
         }
         // Attempt to recover the executing operation before re-throwing
         await this.tryRecoverExecutingOperation(executing);
@@ -477,89 +460,30 @@ export class MeltOperationService {
 
   private async handleStaleKeyset(
     executing: ExecutingMeltOperation,
-    cause: CashuStaleKeysetError,
-  ): Promise<PendingMeltOperation | FinalizedMeltOperation> {
-    const service = this.requireKeysetRotationService(executing, cause);
-    return service.handleStaleKeyset<PendingMeltOperation | FinalizedMeltOperation>({
-      operationId: executing.id,
-      mintUrl: executing.mintUrl,
-      unit: executing.unit,
-      cause,
-      reconcile: async () => {
-        await this.recoverExecutingOperation(executing, { skipLock: true });
-        const current = await this.meltOperationRepository.getById(executing.id);
-        if (current?.state === 'finalized' || current?.state === 'pending') {
-          return { status: 'resolved', value: current };
-        }
-        if (current?.state === 'rolled_back') {
-          return { status: 'rolled_back' };
-        }
-        return { status: 'recovery_required', cause };
-      },
-    });
-  }
-
-  private async handleMeltChangeError(
-    executing: ExecutingMeltOperation,
-    cause: MeltChangeError,
-  ): Promise<PendingMeltOperation | FinalizedMeltOperation> {
-    const nestedCause = (cause as Error & { cause?: unknown }).cause;
-    if (nestedCause instanceof UnknownKeysetError) {
-      const service = this.requireKeysetRotationService(executing, cause);
-      await service.refreshMintSnapshot({
-        operationId: executing.id,
-        mintUrl: executing.mintUrl,
-        unit: executing.unit,
-        cause,
-      });
-    }
-
-    try {
-      await this.recoverExecutingOperation(executing, { skipLock: true });
-      const current = await this.meltOperationRepository.getById(executing.id);
-      if (current?.state === 'finalized' || current?.state === 'pending') {
-        return current;
-      }
-      throw new Error(`Melt operation remained in state ${current?.state ?? 'missing'}`);
-    } catch (recoveryCause) {
-      throw new OperationRecoveryRequiredError(
-        executing.id,
-        executing.mintUrl,
-        executing.unit,
-        'Paid melt change could not be recovered',
-        recoveryCause,
-      );
-    }
-  }
-
-  private async handleUnknownKeyset(
-    executing: ExecutingMeltOperation,
-    cause: UnknownKeysetError,
+    cause: StaleKeysetError,
   ): Promise<never> {
-    const service = this.requireKeysetRotationService(executing, cause);
-    return service.refreshUnknownKeyset({
-      operationId: executing.id,
-      mintUrl: executing.mintUrl,
-      unit: executing.unit,
-      keysetId: cause.keysetId,
-      cause,
-    });
-  }
-
-  private requireKeysetRotationService(
-    operation: ExecutingMeltOperation,
-    cause: unknown,
-  ): KeysetRotationService {
-    if (this.keysetRotationService) {
-      return this.keysetRotationService;
+    if (executing.needsSwap && executing.swapOutputData) {
+      const swapSendSecrets = getSwapSendSecrets(executing.swapOutputData);
+      const savedSwapProofs = await this.proofRepository.getProofsBySecrets(
+        executing.mintUrl,
+        swapSendSecrets,
+      );
+      if (savedSwapProofs.length > 0) {
+        await this.proofService.restoreProofsToReady(executing.mintUrl, swapSendSecrets);
+        await this.proofService.releaseProofs(executing.mintUrl, executing.inputProofSecrets);
+      } else {
+        await this.proofService.restoreProofsToReady(
+          executing.mintUrl,
+          executing.inputProofSecrets,
+        );
+      }
+    } else {
+      await this.proofService.restoreProofsToReady(executing.mintUrl, executing.inputProofSecrets);
     }
-    throw new OperationRecoveryRequiredError(
-      operation.id,
-      operation.mintUrl,
-      operation.unit,
-      'Keyset recovery is not configured',
-      cause,
-    );
+
+    await this.markAsRolledBack(executing, 'Mint rejected stale melt outputs');
+    await this.walletService.invalidateMintSnapshot(executing.mintUrl);
+    throw cause;
   }
 
   async finalize(

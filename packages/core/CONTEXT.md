@@ -182,17 +182,17 @@ _Avoid_: Retry request, regenerated request, execution attempt
 
 **Stale Keyset Failure**:
 A terminal operation failure caused by a mint rejecting an Exact Operation Request built from a
-stale Wallet Keyset Snapshot. It is safe to retry through a new operation only after Coco proves
-the request was not applied, releases the failed operation's resources, and refreshes the Known
-Mint. Coco reports it through a stable `StaleKeysetError` containing the failed operation ID, mint
-URL, and unit.
+stale Wallet Keyset Snapshot. The structured mint rejection proves the request was not applied, so
+Coco releases the failed operation's resources, marks the Known Mint stale, invalidates its Wallet
+Instances, and propagates cashu-ts's `StaleKeysetError`. The caller may create a new operation; its
+next Wallet Instance access refreshes the Known Mint.
 _Avoid_: Retry attempt, Successor Operation, mutated operation
 
 **Ambiguous Operation Outcome**:
 An operation outcome for which Coco cannot prove whether its Exact Operation Request affected the
 mint. The operation retains its locally owned resources until Operation Recovery establishes a safe
-result. Coco reports the blocked caller boundary through `OperationRecoveryRequiredError`,
-including the operation ID, mint URL, and unit.
+result. The original execution error remains visible to the caller while the persisted operation
+stays available for recovery.
 _Avoid_: Failed operation, timed-out operation
 
 **Output Allocation**:

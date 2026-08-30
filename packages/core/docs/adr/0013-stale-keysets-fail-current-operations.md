@@ -3,9 +3,10 @@
 Status: accepted
 
 When a mint rejects an Exact Operation Request built from a stale Wallet Keyset Snapshot, Coco
-preserves the failed request. Once the rejection or Operation Recovery proves that the request was
-not applied, Coco rolls the operation back, releases its resources, refreshes the Known Mint, and
-reports a Stale Keyset Failure. The caller creates a new operation with a new Output Allocation.
+uses that structured rejection as proof that the request was not applied. Coco rolls the operation
+back, releases its resources, marks the Known Mint stale, invalidates its Wallet Instances, and
+propagates cashu-ts's `StaleKeysetError`. The caller creates a new operation with a new Output
+Allocation; normal Wallet Instance creation refreshes the Known Mint on that next attempt.
 
 ## Considered Options
 
@@ -14,32 +15,33 @@ request mutable. We also rejected automatically creating linked successor operat
 additional lineage, retry-loop, persistence, and API machinery is disproportionate to requiring an
 explicit caller retry.
 
+We rejected synchronous reconciliation and mint refresh for a structured stale-keyset rejection.
+The mint has already given a definitive response, so follow-up proof or quote requests add failure
+modes without making rollback safer. A network failure during an eager refresh would also turn a
+terminal rejection into an unnecessarily blocked recovery path.
+
 ## Consequences
 
 Coco does not automatically retry or replace an operation after a stale-keyset rejection. A caller
-may create a new operation only after the prior operation has safely rolled back. An Ambiguous
-Operation Outcome retains its resources and is not reported as retryable until recovery proves the
-request was not applied. Coco returns its stable `StaleKeysetError`, including the failed operation
-ID, only after synchronous rollback and Known Mint refresh succeed; the upstream error remains its
-cause. Cleanup failure instead produces `OperationRecoveryRequiredError`, including the operation
-ID, mint URL, unit, and failure cause.
+may create a new operation only after the prior operation has safely reached its existing terminal
+state. Send, receive, and melt operations use their existing `rolled_back` state; mint operations
+use their existing structured terminal-failure field. No operation states, lineage fields, or
+repository migrations are added.
 
-The crash-safe order is to persist the Known Mint refresh requirement, prove and persist safe
-operation rollback with resource release, and then force the refresh. Coco returns
-`StaleKeysetError` only after all three steps complete. An interruption therefore leaves either a
-recoverable operation or a Known Mint that cannot be mistaken for fresh.
+After local rollback, Coco sets the Known Mint's freshness timestamp to a stale value and clears its
+Wallet Instance cache. The next operation reaches the existing time-to-live refresh path and builds
+from the new Wallet Keyset Snapshot. A cache generation prevents a Wallet Instance build that began
+before invalidation from restoring stale data afterward.
+
+Coco propagates cashu-ts's `StaleKeysetError` rather than introducing a parallel public error. Melt
+requests call the mint adapter directly, so Coco also normalizes a structured 12xxx
+`MintOperationError` from that path into cashu-ts's stale-keyset error while preserving the original
+error as its cause.
 
 `UnknownKeysetError` and `MeltChangeError` are not aliases for Stale Keyset Failure. Coco routes
 them through operation-specific recovery because an unknown input keyset or already-paid melt may
 make a new operation unsafe.
 
-Existing `failed` and `rolled_back` states represent the persisted terminal outcome; this decision
-does not add operation states, lineage fields, or repository migrations. Mint operations use their
-existing structured terminal-failure field. Other operations retain their existing error text,
-while runtime callers receive the structured Coco error. Existing operation events and structured
-logs report the outcome; this upgrade does not add a public stale-keyset event.
-
-A `MeltChangeError` resumes the persisted melt: finalized recovery returns success, pending recovery
-returns the pending operation, and an unresolved outcome remains recovery-required. An
-`UnknownKeysetError` forces one Known Mint refresh; if the keyset is still unknown, Coco safely
-rolls back where possible and reports `KeysetSyncError` rather than inviting a stale-output retry.
+Those broader recovery cases keep their existing generic operation-recovery behavior and remain
+separate follow-up work. An Ambiguous Operation Outcome still retains its resources until recovery
+can establish a safe result.

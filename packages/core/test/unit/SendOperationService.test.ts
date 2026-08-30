@@ -20,8 +20,6 @@ import type {
 } from '../../operations/send/SendOperation';
 import type { SendMethodHandler } from '../../operations/send/SendMethodHandler';
 import { MintScopedLock } from '../../operations/MintScopedLock.ts';
-import { KeysetRotationService } from '../../operations/KeysetRotationService.ts';
-import { StaleKeysetError } from '../../models/Error.ts';
 
 describe('SendOperationService', () => {
   const mintUrl = 'https://mint.test';
@@ -120,6 +118,7 @@ describe('SendOperationService', () => {
       releaseProofs: mock((selectedMintUrl: string, secrets: string[]) =>
         proofRepo.releaseProofs(selectedMintUrl, secrets),
       ),
+      restoreProofsToReady: mock(async () => {}),
       createOutputsAndIncrementCounters: mock(async () => ({
         keep: [],
         send: [],
@@ -367,13 +366,10 @@ describe('SendOperationService', () => {
         failed: failedOperation,
       })),
     };
-    const requireMintRefresh = mock(async () => {});
-    const refreshRequiredMint = mock(async () => ({}));
+    const invalidateMintSnapshot = mock(async () => {});
     walletService = {
       ...walletService,
-      requireMintRefresh,
-      refreshRequiredMint,
-      clearCache: mock(() => {}),
+      invalidateMintSnapshot,
     } as unknown as WalletService;
     const mintScopedLock = new MintScopedLock();
     handlerProvider = new SendHandlerProvider({
@@ -390,15 +386,14 @@ describe('SendOperationService', () => {
       handlerProvider,
       logger,
       mintScopedLock,
-      new KeysetRotationService(walletService, mintScopedLock),
     );
 
-    await expect(service.execute(preparedOp)).rejects.toBeInstanceOf(StaleKeysetError);
+    await expect(service.execute(preparedOp)).rejects.toBeInstanceOf(CashuStaleKeysetError);
     expect(customHandler.execute).toHaveBeenCalledTimes(1);
-    expect(customHandler.recoverExecuting).toHaveBeenCalledTimes(1);
+    expect(customHandler.recoverExecuting).not.toHaveBeenCalled();
+    expect(proofService.restoreProofsToReady).toHaveBeenCalledWith(mintUrl, ['proof-1']);
     expect((await sendOpRepo.getById(preparedOp.id))?.state).toBe('rolled_back');
-    expect(requireMintRefresh).toHaveBeenCalledWith(mintUrl);
-    expect(refreshRequiredMint).toHaveBeenCalledWith(mintUrl, 'sat');
+    expect(invalidateMintSnapshot).toHaveBeenCalledWith(mintUrl);
   });
 
   it('waits for an in-progress finalization to finish before returning', async () => {

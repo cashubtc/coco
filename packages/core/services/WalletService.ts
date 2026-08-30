@@ -23,6 +23,7 @@ interface CachedWallet {
 
 export class WalletService {
   private walletCache: Map<string, CachedWallet> = new Map();
+  private cacheGeneration = 0;
   private readonly CACHE_TTL = 5 * 60 * 1000;
   private readonly mintService: MintService;
   private readonly seedService: SeedService;
@@ -72,8 +73,11 @@ export class WalletService {
     const existing = this.inFlight.get(cacheKey);
     if (existing) return existing;
 
-    const promise = this.buildWallet(normalizedMintUrl, normalizedUnit).finally(() => {
-      this.inFlight.delete(cacheKey);
+    const generation = this.cacheGeneration;
+    const promise = this.buildWallet(normalizedMintUrl, normalizedUnit, generation).finally(() => {
+      if (this.inFlight.get(cacheKey) === promise) {
+        this.inFlight.delete(cacheKey);
+      }
     });
     this.inFlight.set(cacheKey, promise);
     return promise;
@@ -119,6 +123,7 @@ export class WalletService {
    * Clear cached wallet for a specific mint URL
    */
   clearCache(mintUrl: string, unit?: string): void {
+    this.cacheGeneration++;
     const normalizedMintUrl = normalizeMintUrl(mintUrl);
     if (unit !== undefined) {
       const normalizedUnit = normalizeUnit(unit, { defaultUnit: DEFAULT_UNIT });
@@ -150,6 +155,7 @@ export class WalletService {
    * Clear all cached wallets
    */
   clearAllCaches(): void {
+    this.cacheGeneration++;
     this.walletCache.clear();
     this.inFlight.clear();
     this.logger?.debug('All wallet caches cleared');
@@ -166,21 +172,11 @@ export class WalletService {
     return this.getWallet(normalizedMintUrl, normalizedUnit);
   }
 
-  /** Persist that the Known Mint needs refresh without changing the reconciliation snapshot. */
-  async requireMintRefresh(mintUrl: string): Promise<void> {
+  /** Invalidate both persisted freshness and every Wallet Instance for a Known Mint. */
+  async invalidateMintSnapshot(mintUrl: string): Promise<void> {
     const normalizedMintUrl = normalizeMintUrl(mintUrl);
-    await this.mintService.requireMintRefresh(normalizedMintUrl);
-  }
-
-  /**
-   * Force a persisted mint/keyset refresh and rebuild one unit-scoped Wallet Instance.
-   */
-  async refreshRequiredMint(mintUrl: string, unit: string): Promise<Wallet> {
-    const normalizedMintUrl = normalizeMintUrl(mintUrl);
-    const normalizedUnit = normalizeUnit(unit);
+    await this.mintService.markMintSnapshotStale(normalizedMintUrl);
     this.clearCache(normalizedMintUrl);
-    await this.mintService.updateMintData(normalizedMintUrl);
-    return this.getWallet(normalizedMintUrl, normalizedUnit);
   }
 
   private getWalletCacheKey(mintUrl: string, unit: string): string {
@@ -191,7 +187,7 @@ export class WalletService {
     return normalizeUnit(unit || DEFAULT_UNIT, { defaultUnit: DEFAULT_UNIT });
   }
 
-  private async buildWallet(mintUrl: string, unit: string): Promise<Wallet> {
+  private async buildWallet(mintUrl: string, unit: string, generation: number): Promise<Wallet> {
     const normalizedMintUrl = normalizeMintUrl(mintUrl);
     const normalizedUnit = normalizeUnit(unit);
     const { mint, keysets } = await this.mintService.ensureUpdatedMint(normalizedMintUrl);
@@ -241,10 +237,12 @@ export class WalletService {
     );
     wallet.loadMintFromCache(mint.mintInfo, cache);
 
-    this.walletCache.set(this.getWalletCacheKey(normalizedMintUrl, normalizedUnit), {
-      wallet,
-      lastCheck: Date.now(),
-    });
+    if (generation === this.cacheGeneration) {
+      this.walletCache.set(this.getWalletCacheKey(normalizedMintUrl, normalizedUnit), {
+        wallet,
+        lastCheck: Date.now(),
+      });
+    }
 
     this.logger?.info('Wallet built', {
       mintUrl: normalizedMintUrl,

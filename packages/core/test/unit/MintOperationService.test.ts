@@ -46,13 +46,8 @@ import type { MintAdapter } from '../../infra/MintAdapter';
 import type { Logger } from '../../logging/Logger';
 import { serializeOutputData } from '../../utils';
 import type { CoreProof } from '../../types';
-import {
-  MintQuoteValidationError,
-  QuoteIdentityConflictError,
-  StaleKeysetError,
-} from '../../models/Error';
+import { MintQuoteValidationError, QuoteIdentityConflictError } from '../../models/Error';
 import { MintScopedLock } from '../../operations/MintScopedLock.ts';
-import { KeysetRotationService } from '../../operations/KeysetRotationService.ts';
 
 describe('MintOperationService', () => {
   const mintUrl = 'https://mint.test';
@@ -1955,13 +1950,10 @@ describe('MintOperationService', () => {
     await persistQuote();
     const pending = await service.prepare({ mintUrl, method: 'bolt11', quoteId }, Amount.from(10));
     (handler.execute as Mock<any>).mockRejectedValue(new CashuStaleKeysetError(false));
-    const requireMintRefresh = mock(async () => {});
-    const refreshRequiredMint = mock(async () => ({}));
+    const invalidateMintSnapshot = mock(async () => {});
     walletService = {
       ...walletService,
-      requireMintRefresh,
-      refreshRequiredMint,
-      clearCache: mock(() => {}),
+      invalidateMintSnapshot,
     } as unknown as WalletService;
     const mintScopedLock = new MintScopedLock();
     service = new MintOperationService(
@@ -1976,10 +1968,9 @@ describe('MintOperationService', () => {
       eventBus,
       logger,
       mintScopedLock,
-      new KeysetRotationService(walletService, mintScopedLock),
     );
 
-    await expect(service.execute(pending.id)).rejects.toBeInstanceOf(StaleKeysetError);
+    await expect(service.execute(pending.id)).rejects.toBeInstanceOf(CashuStaleKeysetError);
 
     const failed = await operationRepo.getById(pending.id);
     expect(handler.execute).toHaveBeenCalledTimes(1);
@@ -1988,8 +1979,7 @@ describe('MintOperationService', () => {
       code: 'stale_keyset',
       retryable: true,
     });
-    expect(requireMintRefresh).toHaveBeenCalledWith(mintUrl);
-    expect(refreshRequiredMint).toHaveBeenCalledWith(mintUrl, 'sat');
+    expect(invalidateMintSnapshot).toHaveBeenCalledWith(mintUrl);
   });
 
   it('execute rejects missing and init operations', async () => {

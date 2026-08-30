@@ -1,6 +1,7 @@
 import {
   Amount,
   MeltChangeError,
+  MintOperationError,
   StaleKeysetError as CashuStaleKeysetError,
 } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
@@ -44,7 +45,6 @@ import {
   QuoteIdentityConflictError,
 } from '../../models/Error.ts';
 import { MintScopedLock } from '../../operations/MintScopedLock.ts';
-import { KeysetRotationService } from '../../operations/KeysetRotationService.ts';
 
 describe('MeltOperationService', () => {
   const mintUrl = 'https://mint.test';
@@ -273,6 +273,7 @@ describe('MeltOperationService', () => {
 
     proofService = {
       releaseProofs: mock(async () => {}),
+      restoreProofsToReady: mock(async () => {}),
     } as unknown as ProofService;
 
     mintService = {
@@ -929,13 +930,10 @@ describe('MeltOperationService', () => {
 
   describe('execute', () => {
     const configureKeysetRecovery = () => {
-      const requireMintRefresh = mock(async () => {});
-      const refreshRequiredMint = mock(async () => ({}));
+      const invalidateMintSnapshot = mock(async () => {});
       walletService = {
         ...walletService,
-        requireMintRefresh,
-        refreshRequiredMint,
-        clearCache: mock(() => {}),
+        invalidateMintSnapshot,
       } as unknown as WalletService;
       const mintScopedLock = new MintScopedLock();
       service = new MeltOperationService(
@@ -950,9 +948,8 @@ describe('MeltOperationService', () => {
         eventBus,
         logger,
         mintScopedLock,
-        new KeysetRotationService(walletService, mintScopedLock),
       );
-      return { requireMintRefresh, refreshRequiredMint };
+      return { invalidateMintSnapshot };
     };
 
     it('finalizes immediately on PAID response', async () => {
@@ -1015,21 +1012,40 @@ describe('MeltOperationService', () => {
       expect(handler.recoverExecuting).toHaveBeenCalled();
     });
 
-    it('returns the original pending melt when stale pre-melt outputs were already applied', async () => {
+    it('rolls back a stale pre-melt swap without remote reconciliation', async () => {
       const prepared = makePreparedOp('op-stale-melt');
       await meltOperationRepository.create(prepared);
       (handler.execute as Mock<any>).mockRejectedValue(new CashuStaleKeysetError(false));
-      const { requireMintRefresh, refreshRequiredMint } = configureKeysetRecovery();
+      const { invalidateMintSnapshot } = configureKeysetRecovery();
 
-      const result = await service.execute(prepared.id);
+      await expect(service.execute(prepared.id)).rejects.toBeInstanceOf(CashuStaleKeysetError);
 
-      expect(result.state).toBe('pending');
-      expect(handler.recoverExecuting).toHaveBeenCalledTimes(1);
-      expect(requireMintRefresh).toHaveBeenCalledWith(mintUrl);
-      expect(refreshRequiredMint).toHaveBeenCalledWith(mintUrl, 'sat');
+      expect(handler.recoverExecuting).not.toHaveBeenCalled();
+      expect((await meltOperationRepository.getById(prepared.id))?.state).toBe('rolled_back');
+      expect(proofService.restoreProofsToReady).toHaveBeenCalledWith(
+        mintUrl,
+        prepared.inputProofSecrets,
+      );
+      expect(invalidateMintSnapshot).toHaveBeenCalledWith(mintUrl);
     });
 
-    it('recovers paid melt change through the original operation', async () => {
+    it('normalizes a raw direct-melt keyset rejection and lazily invalidates the snapshot', async () => {
+      const prepared = makePreparedOp('op-stale-direct-melt', { needsSwap: false });
+      await meltOperationRepository.create(prepared);
+      const rejection = new MintOperationError(12002, 'Keyset is inactive');
+      (handler.execute as Mock<any>).mockRejectedValue(rejection);
+      const { invalidateMintSnapshot } = configureKeysetRecovery();
+
+      const error = await service.execute(prepared.id).catch((cause: unknown) => cause);
+
+      expect(error).toBeInstanceOf(CashuStaleKeysetError);
+      expect((error as CashuStaleKeysetError).cause).toBe(rejection);
+      expect(handler.recoverExecuting).not.toHaveBeenCalled();
+      expect((await meltOperationRepository.getById(prepared.id))?.state).toBe('rolled_back');
+      expect(invalidateMintSnapshot).toHaveBeenCalledWith(mintUrl);
+    });
+
+    it('preserves generic recovery while propagating a paid melt change error', async () => {
       const prepared = makePreparedOp('op-melt-change');
       await meltOperationRepository.create(prepared);
       (handler.execute as Mock<any>).mockRejectedValue(
@@ -1044,12 +1060,10 @@ describe('MeltOperationService', () => {
           expiry: Math.floor(Date.now() / 1000) + 3600,
         }),
       );
-      configureKeysetRecovery();
+      await expect(service.execute(prepared.id)).rejects.toBeInstanceOf(MeltChangeError);
 
-      const result = await service.execute(prepared.id);
-
-      expect(result.state).toBe('pending');
       expect(handler.recoverExecuting).toHaveBeenCalledTimes(1);
+      expect((await meltOperationRepository.getById(prepared.id))?.state).toBe('pending');
     });
   });
 

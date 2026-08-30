@@ -1,6 +1,5 @@
 import {
-  StaleKeysetError as CashuStaleKeysetError,
-  UnknownKeysetError,
+  type StaleKeysetError,
   type Token,
   type ProofState as CashuProofState,
 } from '@cashu/cashu-ts';
@@ -25,7 +24,7 @@ import {
 } from './SendOperation';
 import type { SendMethod, SendMethodData } from './SendMethodHandler';
 import { SendHandlerProvider } from '../../infra/handlers/send/SendHandlerProvider';
-import type { MintService } from '../../services/MintService';
+import { asStaleKeysetError, type MintService } from '../../services/MintService';
 import type { WalletService } from '../../services/WalletService';
 import type { ProofService } from '../../services/ProofService';
 import type { EventBus } from '../../events/EventBus';
@@ -36,11 +35,9 @@ import {
   UnknownMintError,
   ProofValidationError,
   OperationInProgressError,
-  OperationRecoveryRequiredError,
 } from '../../models/Error';
 import { MintScopedLock } from '../MintScopedLock';
 import { OperationIdLock } from '../OperationIdLock';
-import type { KeysetRotationService } from '../KeysetRotationService.ts';
 import { normalizeUnitAmount, type UnitAmount } from '../../amounts.ts';
 
 /**
@@ -73,7 +70,6 @@ export class SendOperationService {
   private recoveryLock: Promise<void> | null = null;
   /** In-memory lock to serialize proof selection/reservation per mint */
   private readonly mintScopedLock: MintScopedLock;
-  private readonly keysetRotationService?: KeysetRotationService;
 
   constructor(
     sendOperationRepository: SendOperationRepository,
@@ -85,7 +81,6 @@ export class SendOperationService {
     handlerProvider: SendHandlerProvider,
     logger?: Logger,
     mintScopedLock?: MintScopedLock,
-    keysetRotationService?: KeysetRotationService,
   ) {
     this.sendOperationRepository = sendOperationRepository;
     this.proofRepository = proofRepository;
@@ -96,7 +91,6 @@ export class SendOperationService {
     this.handlerProvider = handlerProvider;
     this.logger = logger;
     this.mintScopedLock = mintScopedLock ?? new MintScopedLock();
-    this.keysetRotationService = keysetRotationService;
   }
 
   private buildDeps() {
@@ -314,11 +308,9 @@ export class SendOperationService {
           failed = result.failed;
         }
       } catch (e) {
-        if (e instanceof CashuStaleKeysetError) {
-          return await this.handleStaleKeyset(executing, e);
-        }
-        if (e instanceof UnknownKeysetError) {
-          return await this.handleUnknownKeyset(executing, e);
+        const staleKeysetError = asStaleKeysetError(e);
+        if (staleKeysetError) {
+          return await this.handleStaleKeyset(executing, staleKeysetError);
         }
         // Attempt to recover the executing operation before re-throwing
         await this.tryRecoverExecutingOperation(executing);
@@ -352,60 +344,12 @@ export class SendOperationService {
 
   private async handleStaleKeyset(
     executing: ExecutingSendOperation,
-    cause: CashuStaleKeysetError,
-  ): Promise<{ operation: PendingSendOperation; token: Token }> {
-    if (!this.keysetRotationService) {
-      throw new OperationRecoveryRequiredError(
-        executing.id,
-        executing.mintUrl,
-        executing.unit,
-        'Stale keyset recovery is not configured',
-        cause,
-      );
-    }
-
-    return this.keysetRotationService.handleStaleKeyset<{
-      operation: PendingSendOperation;
-      token: Token;
-    }>({
-      operationId: executing.id,
-      mintUrl: executing.mintUrl,
-      unit: executing.unit,
-      cause,
-      reconcile: async () => {
-        await this.recoverExecutingOperation(executing);
-        const current = await this.sendOperationRepository.getById(executing.id);
-        if (current?.state === 'pending' && current.token) {
-          return { status: 'resolved', value: { operation: current, token: current.token } };
-        }
-        if (current?.state === 'rolled_back') {
-          return { status: 'rolled_back' };
-        }
-        return { status: 'recovery_required', cause };
-      },
-    });
-  }
-
-  private async handleUnknownKeyset(
-    executing: ExecutingSendOperation,
-    cause: UnknownKeysetError,
+    cause: StaleKeysetError,
   ): Promise<never> {
-    if (!this.keysetRotationService) {
-      throw new OperationRecoveryRequiredError(
-        executing.id,
-        executing.mintUrl,
-        executing.unit,
-        'Unknown keyset recovery is not configured',
-        cause,
-      );
-    }
-    return this.keysetRotationService.refreshUnknownKeyset({
-      operationId: executing.id,
-      mintUrl: executing.mintUrl,
-      unit: executing.unit,
-      keysetId: cause.keysetId,
-      cause,
-    });
+    await this.proofService.restoreProofsToReady(executing.mintUrl, executing.inputProofSecrets);
+    await this.markAsRolledBack(executing, 'Mint rejected stale send outputs');
+    await this.walletService.invalidateMintSnapshot(executing.mintUrl);
+    throw cause;
   }
 
   /**

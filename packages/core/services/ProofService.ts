@@ -776,9 +776,9 @@ export class ProofService {
     }
     const wallet = await this.walletService.getWallet(mintUrl, unit);
     const selectedProofs = wallet.selectProofsToSend(proofs, requestedAmount, includeFees);
-    let cachedKeysets: Keyset[] = [];
+    let persistedKeysets: Keyset[] = [];
     try {
-      cachedKeysets = await this.mintService.getCachedKeysets(mintUrl);
+      persistedKeysets = await this.mintService.getPersistedKeysets(mintUrl);
     } catch (error) {
       this.logger?.warn('Could not load cached keyset diagnostics for proof selection', {
         mintUrl,
@@ -786,7 +786,7 @@ export class ProofService {
         error: error instanceof Error ? error.message : String(error),
       });
     }
-    const cachedKeysetsById = new Map(cachedKeysets.map((keyset) => [keyset.id, keyset]));
+    const persistedKeysetsById = new Map(persistedKeysets.map((keyset) => [keyset.id, keyset]));
     const selectedProofsByKeysetId = new Map<string, Proof[]>();
     for (const proof of selectedProofs.send) {
       selectedProofsByKeysetId.set(proof.id, [
@@ -795,7 +795,7 @@ export class ProofService {
       ]);
     }
     const selectedKeysets = [...selectedProofsByKeysetId].map(([keysetId, keysetProofs]) => {
-      const keyset = cachedKeysetsById.get(keysetId);
+      const keyset = persistedKeysetsById.get(keysetId);
       return {
         keysetId,
         versionPrefix: keysetId.slice(0, 2),

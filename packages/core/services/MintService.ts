@@ -1,4 +1,10 @@
-import { Amount, isBlsKeyset, type AmountLike } from '@cashu/cashu-ts';
+import {
+  Amount,
+  isBlsKeyset,
+  isMintOperationError,
+  StaleKeysetError,
+  type AmountLike,
+} from '@cashu/cashu-ts';
 import {
   KeysetSyncError,
   MintFetchError,
@@ -21,6 +27,20 @@ const MINT_REFRESH_TTL_S = 60 * 5;
 function excludeBlsKeysets<T extends { id: string }>(keysets: T[]): T[] {
   // TODO: Admit BLS keysets after every proof-state lookup uses curve-aware Y derivation.
   return keysets.filter((keyset) => !isBlsKeyset(keyset.id));
+}
+
+/** Normalize every mint keyset rejection to cashu-ts' public stale-keyset signal. */
+export function asStaleKeysetError(error: unknown): StaleKeysetError | null {
+  if (error instanceof StaleKeysetError) return error;
+  if (
+    isMintOperationError(error) &&
+    Number.isFinite(error.code) &&
+    error.code >= 12000 &&
+    error.code < 13000
+  ) {
+    return new StaleKeysetError(false, { cause: error });
+  }
+  return null;
 }
 
 function supportsNut29MintQuoteCheckFromInfo(mintInfo: MintInfo, method: string): boolean {
@@ -211,7 +231,7 @@ export class MintService {
   /**
    * Persist that cached mint metadata must be refreshed before it is trusted again.
    */
-  async requireMintRefresh(mintUrl: string): Promise<void> {
+  async markMintSnapshotStale(mintUrl: string): Promise<void> {
     const normalizedMintUrl = normalizeMintUrl(mintUrl);
     const mint = await this.mintRepo.getMintByUrl(normalizedMintUrl).catch(() => null);
     if (!mint) {
@@ -227,7 +247,7 @@ export class MintService {
   }
 
   /** Return Coco's filtered persisted keyset snapshot without triggering a network refresh. */
-  async getCachedKeysets(mintUrl: string): Promise<Keyset[]> {
+  async getPersistedKeysets(mintUrl: string): Promise<Keyset[]> {
     return excludeBlsKeysets(await this.keysetRepo.getKeysetsByMintUrl(normalizeMintUrl(mintUrl)));
   }
 
