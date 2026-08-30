@@ -102,6 +102,11 @@ export class IdbDb extends Dexie {
   }
 }
 
+/** Run a root repository operation without inheriting a caller's ambient Dexie transaction. */
+export function runOutsideIdbTransaction<T>(fn: () => T): T {
+  return Dexie.ignoreTransaction(fn);
+}
+
 export function getUnixTimeSeconds(): number {
   return Math.floor(Date.now() / 1000);
 }

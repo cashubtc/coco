@@ -20,6 +20,7 @@ export type {
   RepositoryTransactionScope,
   SendOperationRepository,
 } from './repositories/index.ts';
+export { RepositoryTransactionConflictError } from './repositories/index.ts';
 export type {
   AuthSession,
   Counter,

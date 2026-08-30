@@ -1,6 +1,7 @@
 import type { ProofRepository, ProofUnitFilter } from '..';
 import type { CoreProof, ProofState } from '../../types';
 import { normalizeUnit } from '../../amounts.ts';
+import { cloneMemoryValue, COPY_MEMORY_REPOSITORY_STATE } from './MemoryRepositoryTransaction.ts';
 
 function normalizeProofUnit(proof: CoreProof): string {
   return normalizeUnit((proof as { unit?: string }).unit);
@@ -18,6 +19,10 @@ function matchesUnit(proof: CoreProof, unitFilter?: Set<string>): boolean {
 
 export class MemoryProofRepository implements ProofRepository {
   private proofsByMint: Map<string, Map<string, CoreProof>> = new Map();
+
+  [COPY_MEMORY_REPOSITORY_STATE](source: MemoryProofRepository): void {
+    this.proofsByMint = cloneMemoryValue(source.proofsByMint);
+  }
 
   private getMintMap(mintUrl: string): Map<string, CoreProof> {
     if (!this.proofsByMint.has(mintUrl)) {

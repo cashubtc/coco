@@ -1,9 +1,14 @@
 import { isMintQuotePending, type MintQuote } from '@core/models/MintQuote';
 import type { LegacyMintQuoteRepository } from '..';
 import { normalizeMintUrl } from '../../utils';
+import { cloneMemoryValue, COPY_MEMORY_REPOSITORY_STATE } from './MemoryRepositoryTransaction.ts';
 
 export class MemoryLegacyMintQuoteRepository implements LegacyMintQuoteRepository {
-  private readonly quotes = new Map<string, MintQuote>();
+  private quotes = new Map<string, MintQuote>();
+
+  [COPY_MEMORY_REPOSITORY_STATE](source: MemoryLegacyMintQuoteRepository): void {
+    this.quotes = cloneMemoryValue(source.quotes);
+  }
 
   private makeKey(mintUrl: string, method: string, quoteId: string): string {
     return `${normalizeMintUrl(mintUrl)}::${method}::${quoteId}`;

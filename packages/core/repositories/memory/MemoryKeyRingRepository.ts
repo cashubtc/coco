@@ -1,6 +1,7 @@
 import type { Keypair, KeypairPurpose } from '../../models/Keypair';
 import { DerivationIndexExhaustedError } from '../../models/Error.ts';
 import type { KeyRingRepository } from '..';
+import { cloneMemoryValue, COPY_MEMORY_REPOSITORY_STATE } from './MemoryRepositoryTransaction.ts';
 
 const DEFAULT_KEYPAIR_PURPOSE: KeypairPurpose = 'p2pk';
 const MAX_DERIVATION_INDEX = 0x7fffffff;
@@ -9,6 +10,12 @@ export class MemoryKeyRingRepository implements KeyRingRepository {
   private keyPairs: Map<string, Keypair> = new Map();
   private insertionOrder: string[] = [];
   private highWaterMarks: Map<KeypairPurpose, number> = new Map();
+
+  [COPY_MEMORY_REPOSITORY_STATE](source: MemoryKeyRingRepository): void {
+    this.keyPairs = cloneMemoryValue(source.keyPairs);
+    this.insertionOrder = cloneMemoryValue(source.insertionOrder);
+    this.highWaterMarks = cloneMemoryValue(source.highWaterMarks);
+  }
 
   async getPersistedKeyPair(publicKey: string, purpose?: KeypairPurpose): Promise<Keypair | null> {
     const keyPair = this.keyPairs.get(publicKey) ?? null;

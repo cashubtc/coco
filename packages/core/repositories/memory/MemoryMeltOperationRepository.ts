@@ -1,11 +1,16 @@
 import type { MeltOperationRepository } from '..';
 import type { MeltOperation, MeltOperationState } from '../../operations/melt/MeltOperation';
+import { cloneMemoryValue, COPY_MEMORY_REPOSITORY_STATE } from './MemoryRepositoryTransaction.ts';
 
 const getOperationQuoteId = (operation: MeltOperation): string | undefined =>
   'quoteId' in operation && operation.quoteId ? operation.quoteId : undefined;
 
 export class MemoryMeltOperationRepository implements MeltOperationRepository {
-  private readonly operations = new Map<string, MeltOperation>();
+  private operations = new Map<string, MeltOperation>();
+
+  [COPY_MEMORY_REPOSITORY_STATE](source: MemoryMeltOperationRepository): void {
+    this.operations = cloneMemoryValue(source.operations);
+  }
 
   async create(operation: MeltOperation): Promise<void> {
     if (this.operations.has(operation.id)) {

@@ -3,9 +3,14 @@ import type {
   ReceiveOperation,
   ReceiveOperationState,
 } from '../../operations/receive/ReceiveOperation';
+import { cloneMemoryValue, COPY_MEMORY_REPOSITORY_STATE } from './MemoryRepositoryTransaction.ts';
 
 export class MemoryReceiveOperationRepository implements ReceiveOperationRepository {
-  private readonly operations = new Map<string, ReceiveOperation>();
+  private operations = new Map<string, ReceiveOperation>();
+
+  [COPY_MEMORY_REPOSITORY_STATE](source: MemoryReceiveOperationRepository): void {
+    this.operations = cloneMemoryValue(source.operations);
+  }
 
   async create(operation: ReceiveOperation): Promise<void> {
     if (this.operations.has(operation.id)) {

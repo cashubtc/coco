@@ -70,6 +70,9 @@ async function expectRejects(fn: () => Promise<void>) {
 runRepositoryTransactionContract(
   {
     createRepositories,
+    createSharedRepositories,
+    holdTransactionOpen: (release) => Dexie.waitFor(release),
+    testConcurrentRootOperationIsolation: true,
   },
   { describe, it, expect },
 );
