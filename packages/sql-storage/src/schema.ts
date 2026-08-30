@@ -1,4 +1,4 @@
-import { normalizeMintUrl } from '@cashu/coco-core/adapter';
+import { DEFAULT_DURABLE_EVENT_STORAGE_LIMITS, normalizeMintUrl } from '@cashu/coco-core/adapter';
 import type { SqlDatabase } from './index.ts';
 
 export interface Migration {
@@ -1504,6 +1504,228 @@ const MIGRATIONS: readonly Migration[] = [
       FROM coco_cashu_keypairs
       WHERE derivationIndex IS NOT NULL
       GROUP BY purpose;
+    `,
+  },
+  {
+    id: '039_durable_event_outbox',
+    sql: `
+      CREATE TABLE coco_cashu_event_outbox_storage_stats (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        policyVersion INTEGER NOT NULL CHECK (policyVersion = 1),
+        eventRows INTEGER NOT NULL CHECK (eventRows >= 0),
+        revisionSeals INTEGER NOT NULL CHECK (revisionSeals >= 0),
+        streams INTEGER NOT NULL CHECK (streams >= 0),
+        payloadBytes INTEGER NOT NULL CHECK (payloadBytes >= 0),
+        maxEventRows INTEGER NOT NULL CHECK (maxEventRows > 0),
+        maxRevisionSeals INTEGER NOT NULL CHECK (maxRevisionSeals > 0),
+        maxStreams INTEGER NOT NULL CHECK (maxStreams > 0),
+        maxPayloadBytes INTEGER NOT NULL CHECK (maxPayloadBytes > 0),
+        CHECK (eventRows <= maxEventRows),
+        CHECK (revisionSeals <= maxRevisionSeals),
+        CHECK (streams <= maxStreams),
+        CHECK (payloadBytes <= maxPayloadBytes)
+      );
+
+      INSERT INTO coco_cashu_event_outbox_storage_stats (
+        id, policyVersion, eventRows, revisionSeals, streams, payloadBytes,
+        maxEventRows, maxRevisionSeals, maxStreams, maxPayloadBytes
+      ) VALUES (
+        1, 1, 0, 0, 0, 0,
+        ${DEFAULT_DURABLE_EVENT_STORAGE_LIMITS.maxEventRows},
+        ${DEFAULT_DURABLE_EVENT_STORAGE_LIMITS.maxRevisionSeals},
+        ${DEFAULT_DURABLE_EVENT_STORAGE_LIMITS.maxStreams},
+        ${DEFAULT_DURABLE_EVENT_STORAGE_LIMITS.maxPayloadBytes}
+      );
+
+      CREATE TABLE coco_cashu_event_outbox_stream_checkpoints (
+        streamId TEXT PRIMARY KEY,
+        compactedThroughRevision INTEGER NOT NULL
+          CHECK (compactedThroughRevision >= -1),
+        updatedAt INTEGER NOT NULL CHECK (updatedAt >= 0)
+      );
+
+      CREATE TABLE coco_cashu_event_outbox_revisions (
+        streamId TEXT NOT NULL,
+        streamRevision INTEGER NOT NULL CHECK (streamRevision >= 0),
+        expectedPreviousRevision INTEGER
+          CHECK (
+            expectedPreviousRevision IS NULL OR
+            (expectedPreviousRevision >= 0 AND expectedPreviousRevision < streamRevision)
+          ),
+        eventCount INTEGER NOT NULL CHECK (eventCount BETWEEN 1 AND 32),
+        eventSetHash TEXT NOT NULL
+          CHECK (length(eventSetHash) = 64 AND eventSetHash NOT GLOB '*[^0-9a-f]*'),
+        sealedAt INTEGER NOT NULL CHECK (sealedAt >= 0),
+        PRIMARY KEY (streamId, streamRevision),
+        FOREIGN KEY (streamId)
+          REFERENCES coco_cashu_event_outbox_stream_checkpoints(streamId)
+          ON DELETE RESTRICT
+      );
+
+      CREATE TABLE coco_cashu_event_outbox (
+        id TEXT PRIMARY KEY,
+        envelopeVersion INTEGER NOT NULL CHECK (envelopeVersion = 1),
+        eventKey TEXT NOT NULL,
+        eventType TEXT NOT NULL,
+        consumerId TEXT NOT NULL,
+        streamId TEXT NOT NULL,
+        streamRevision INTEGER NOT NULL CHECK (streamRevision >= 0),
+        payloadVersion INTEGER NOT NULL CHECK (payloadVersion >= 1),
+        payloadJson TEXT NOT NULL
+          CHECK (json_valid(payloadJson) AND json_type(payloadJson) = 'object'),
+        payloadBytes INTEGER NOT NULL
+          CHECK (
+            payloadBytes >= 2 AND
+            payloadBytes <= 65536 AND
+            length(CAST(payloadJson AS BLOB)) = payloadBytes
+          ),
+        contentHash TEXT NOT NULL
+          CHECK (length(contentHash) = 64 AND contentHash NOT GLOB '*[^0-9a-f]*'),
+        occurredAt INTEGER NOT NULL CHECK (occurredAt >= 0),
+        status TEXT NOT NULL CHECK (status IN ('pending', 'published', 'blocked')),
+        createdAt INTEGER NOT NULL CHECK (createdAt >= 0),
+        availableAt INTEGER NOT NULL CHECK (availableAt >= 0),
+        claimCount INTEGER NOT NULL DEFAULT 0 CHECK (claimCount >= 0),
+        failureCount INTEGER NOT NULL DEFAULT 0 CHECK (failureCount >= 0),
+        totalFailureCount INTEGER NOT NULL DEFAULT 0 CHECK (totalFailureCount >= 0),
+        requeueCount INTEGER NOT NULL DEFAULT 0 CHECK (requeueCount >= 0),
+        lastAttemptAt INTEGER CHECK (lastAttemptAt IS NULL OR lastAttemptAt >= 0),
+        lastErrorCode TEXT,
+        safeErrorMessage TEXT CHECK (
+          safeErrorMessage IS NULL OR length(safeErrorMessage) BETWEEN 1 AND 256
+        ),
+        leaseOwner TEXT,
+        leaseToken TEXT,
+        leaseExpiresAt INTEGER CHECK (leaseExpiresAt IS NULL OR leaseExpiresAt >= 0),
+        publishedAt INTEGER CHECK (publishedAt IS NULL OR publishedAt >= 0),
+        blockedAt INTEGER CHECK (blockedAt IS NULL OR blockedAt >= 0),
+        UNIQUE (streamId, streamRevision, consumerId, eventKey),
+        FOREIGN KEY (streamId, streamRevision)
+          REFERENCES coco_cashu_event_outbox_revisions(streamId, streamRevision)
+          ON DELETE CASCADE,
+        CHECK (
+          (leaseOwner IS NULL AND leaseToken IS NULL AND leaseExpiresAt IS NULL) OR
+          (
+            status = 'pending' AND
+            leaseOwner IS NOT NULL AND leaseToken IS NOT NULL AND leaseExpiresAt IS NOT NULL
+          )
+        ),
+        CHECK (
+          (status = 'pending' AND publishedAt IS NULL AND blockedAt IS NULL) OR
+          (
+            status = 'published' AND publishedAt IS NOT NULL AND blockedAt IS NULL AND
+            leaseOwner IS NULL AND leaseToken IS NULL AND leaseExpiresAt IS NULL
+          ) OR
+          (
+            status = 'blocked' AND blockedAt IS NOT NULL AND publishedAt IS NULL AND
+            leaseOwner IS NULL AND leaseToken IS NULL AND leaseExpiresAt IS NULL
+          )
+        )
+      );
+
+      CREATE INDEX idx_coco_cashu_event_outbox_due
+        ON coco_cashu_event_outbox(
+          status, availableAt, leaseExpiresAt, occurredAt, createdAt, id
+        );
+      CREATE INDEX idx_coco_cashu_event_outbox_contract_due
+        ON coco_cashu_event_outbox(
+          status, consumerId, eventType, envelopeVersion, payloadVersion,
+          availableAt, leaseExpiresAt, occurredAt, createdAt, id
+        );
+      CREATE INDEX idx_coco_cashu_event_outbox_inspection
+        ON coco_cashu_event_outbox(status, publishedAt, id);
+      CREATE INDEX idx_coco_cashu_event_outbox_stream_revision
+        ON coco_cashu_event_outbox(streamId, streamRevision, id);
+
+      CREATE TRIGGER coco_cashu_event_outbox_immutable_intent
+      BEFORE UPDATE OF
+        id, envelopeVersion, eventKey, eventType, consumerId, streamId, streamRevision,
+        payloadVersion, payloadJson, payloadBytes, contentHash, occurredAt, createdAt
+      ON coco_cashu_event_outbox
+      BEGIN
+        SELECT RAISE(ABORT, 'durable event intent is immutable');
+      END;
+
+      CREATE TRIGGER coco_cashu_event_outbox_checkpoint_capacity
+      BEFORE INSERT ON coco_cashu_event_outbox_stream_checkpoints
+      WHEN (
+        SELECT streams + 1 > maxStreams
+        FROM coco_cashu_event_outbox_storage_stats
+        WHERE id = 1
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'durable event outbox capacity exceeded');
+      END;
+
+      CREATE TRIGGER coco_cashu_event_outbox_checkpoint_insert_stats
+      AFTER INSERT ON coco_cashu_event_outbox_stream_checkpoints
+      BEGIN
+        UPDATE coco_cashu_event_outbox_storage_stats SET streams = streams + 1 WHERE id = 1;
+      END;
+
+      CREATE TRIGGER coco_cashu_event_outbox_checkpoint_delete_stats
+      AFTER DELETE ON coco_cashu_event_outbox_stream_checkpoints
+      BEGIN
+        UPDATE coco_cashu_event_outbox_storage_stats SET streams = streams - 1 WHERE id = 1;
+      END;
+
+      CREATE TRIGGER coco_cashu_event_outbox_revision_capacity
+      BEFORE INSERT ON coco_cashu_event_outbox_revisions
+      WHEN (
+        SELECT revisionSeals + 1 > maxRevisionSeals
+        FROM coco_cashu_event_outbox_storage_stats
+        WHERE id = 1
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'durable event outbox capacity exceeded');
+      END;
+
+      CREATE TRIGGER coco_cashu_event_outbox_revision_insert_stats
+      AFTER INSERT ON coco_cashu_event_outbox_revisions
+      BEGIN
+        UPDATE coco_cashu_event_outbox_storage_stats
+        SET revisionSeals = revisionSeals + 1
+        WHERE id = 1;
+      END;
+
+      CREATE TRIGGER coco_cashu_event_outbox_revision_delete_stats
+      AFTER DELETE ON coco_cashu_event_outbox_revisions
+      BEGIN
+        UPDATE coco_cashu_event_outbox_storage_stats
+        SET revisionSeals = revisionSeals - 1
+        WHERE id = 1;
+      END;
+
+      CREATE TRIGGER coco_cashu_event_outbox_event_capacity
+      BEFORE INSERT ON coco_cashu_event_outbox
+      WHEN (
+        SELECT
+          eventRows + 1 > maxEventRows OR
+          payloadBytes + NEW.payloadBytes > maxPayloadBytes
+        FROM coco_cashu_event_outbox_storage_stats
+        WHERE id = 1
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'durable event outbox capacity exceeded');
+      END;
+
+      CREATE TRIGGER coco_cashu_event_outbox_event_insert_stats
+      AFTER INSERT ON coco_cashu_event_outbox
+      BEGIN
+        UPDATE coco_cashu_event_outbox_storage_stats
+        SET eventRows = eventRows + 1,
+            payloadBytes = payloadBytes + NEW.payloadBytes
+        WHERE id = 1;
+      END;
+
+      CREATE TRIGGER coco_cashu_event_outbox_event_delete_stats
+      AFTER DELETE ON coco_cashu_event_outbox
+      BEGIN
+        UPDATE coco_cashu_event_outbox_storage_stats
+        SET eventRows = eventRows - 1,
+            payloadBytes = payloadBytes - OLD.payloadBytes
+        WHERE id = 1;
+      END;
     `,
   },
 ];

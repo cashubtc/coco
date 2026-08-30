@@ -43,7 +43,9 @@ export {
   SqliteReceiveOperationRepository,
   SqlitePaymentRequestReceiveOperationRepository,
   SqlitePaymentRequestReceiveAttemptRepository,
+  SqliteDurableEventOutboxRepository,
 } from './repositories.ts';
+export { configureDurableEventOutboxStorageLimits } from './repositories/DurableEventOutboxRepository.ts';
 export type { SqlStorageRepositoriesOptions } from './repositories.ts';
 export { ensureSchema, ensureSchemaUpTo, MIGRATIONS } from './schema.ts';
 export type { Migration } from './schema.ts';

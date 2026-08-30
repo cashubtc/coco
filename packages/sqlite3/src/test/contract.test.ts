@@ -15,8 +15,14 @@ import {
   runSendOperationRepositoryContract,
   runMeltOperationRepositoryContract,
   runMeltQuoteRepositoryContract,
+  runDurableEventOutboxRepositoryContract,
 } from '@cashu/coco-adapter-tests';
-import { runSqlDatabaseContract } from '@cashu/coco-sql-storage/test';
+import {
+  createTransactionalSqliteDurableEventOutboxRepository,
+  runSqlDatabaseContract,
+} from '@cashu/coco-sql-storage/test';
+import { configureDurableEventOutboxStorageLimits, ensureSchema } from '@cashu/coco-sql-storage';
+import type { DurableEventStorageLimits } from '@cashu/coco-core/adapter';
 import { SqliteRepositories as Repositories } from '../index.ts';
 import { SqliteDb } from '../db.ts';
 
@@ -80,6 +86,69 @@ runRepositoryTransactionContract(
 
 runKeyRingDerivationRepositoryContract(
   { createRepositories, createSharedRepositories },
+  { describe, it, expect },
+);
+
+runDurableEventOutboxRepositoryContract(
+  {
+    async createRepository(options?: { readonly limits?: DurableEventStorageLimits }) {
+      const rawDatabase = new Database(':memory:');
+      const database = new SqliteDb({ database: rawDatabase });
+      await ensureSchema(database);
+      if (options?.limits) {
+        await configureDurableEventOutboxStorageLimits(database, options.limits);
+      }
+      return {
+        repository: createTransactionalSqliteDurableEventOutboxRepository(database),
+        dispose: async () => {
+          rawDatabase.close();
+        },
+      };
+    },
+    async createSharedRepositories() {
+      const directory = await mkdtemp(join(tmpdir(), 'coco-sqlite3-outbox-'));
+      const filename = join(directory, 'wallet.sqlite');
+      const firstRawDatabase = new Database(filename);
+      const secondRawDatabase = new Database(filename);
+      const firstDatabase = new SqliteDb({ database: firstRawDatabase });
+      const secondDatabase = new SqliteDb({ database: secondRawDatabase });
+      await ensureSchema(firstDatabase);
+      await ensureSchema(secondDatabase);
+      firstRawDatabase.pragma('busy_timeout = 0');
+      secondRawDatabase.pragma('busy_timeout = 0');
+      return {
+        first: createTransactionalSqliteDurableEventOutboxRepository(firstDatabase),
+        second: createTransactionalSqliteDurableEventOutboxRepository(secondDatabase),
+        dispose: async () => {
+          firstRawDatabase.close();
+          secondRawDatabase.close();
+          await rm(directory, { recursive: true, force: true });
+        },
+      };
+    },
+    async createRestartableRepository() {
+      const directory = await mkdtemp(join(tmpdir(), 'coco-sqlite3-outbox-restart-'));
+      const filename = join(directory, 'wallet.sqlite');
+      let rawDatabase = new Database(filename);
+      let database = new SqliteDb({ database: rawDatabase });
+      await ensureSchema(database);
+      const reopen = async () => {
+        rawDatabase.close();
+        rawDatabase = new Database(filename);
+        database = new SqliteDb({ database: rawDatabase });
+        await ensureSchema(database);
+        return createTransactionalSqliteDurableEventOutboxRepository(database);
+      };
+      return {
+        repository: createTransactionalSqliteDurableEventOutboxRepository(database),
+        restart: reopen,
+        dispose: async () => {
+          rawDatabase.close();
+          await rm(directory, { recursive: true, force: true });
+        },
+      };
+    },
+  },
   { describe, it, expect },
 );
 

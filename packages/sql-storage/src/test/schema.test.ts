@@ -5,10 +5,13 @@ import { Database } from 'bun:sqlite';
 import {
   ensureSchemaUpTo,
   MIGRATIONS,
+  SqliteDurableEventOutboxRepository,
   SqliteKeyRingRepository,
   SqliteMintQuoteRepository,
   type SqlDatabase,
 } from '../index.ts';
+import { createTransactionalSqliteDurableEventOutboxRepository } from './durableEventOutbox.ts';
+import type { DurableEventRevisionBatch } from '@cashu/coco-core/adapter';
 import { createBunSqlDatabase } from './bunSqlDatabase.ts';
 
 const EXPECTED_MIGRATION_IDS = [
@@ -51,7 +54,30 @@ const EXPECTED_MIGRATION_IDS = [
   '036_quote_identity_unique_indexes',
   '037_mint_quote_accounting',
   '038_keypair_derivation_allocations',
+  '039_durable_event_outbox',
 ] as const;
+
+function outboxBatch(): DurableEventRevisionBatch {
+  return {
+    streamId: 'operation-1',
+    expectedPreviousRevision: 0,
+    streamRevision: 1,
+    events: [
+      {
+        id: 'event-1',
+        envelopeVersion: 1,
+        eventKey: 'project-history',
+        eventType: 'wallet.operation.finalized',
+        consumerId: 'wallet.history.projector',
+        streamId: 'operation-1',
+        streamRevision: 1,
+        payloadVersion: 1,
+        payload: { operationId: 'operation-1' },
+        occurredAt: 100,
+      },
+    ],
+  };
+}
 
 function deriveKeyPair(derivationIndex: number, purpose: 'p2pk' | 'nut20_mint_quote') {
   return {
@@ -116,6 +142,30 @@ async function insertMeltOperationRow(db: SqlDatabase, id: string, quoteId: stri
   );
 }
 
+async function insertRawOutboxEvent(
+  db: SqlDatabase,
+  options: { readonly id: string; readonly eventKey: string },
+): Promise<void> {
+  const payloadJson = '{"value":1}';
+  await db.run(
+    `INSERT INTO coco_cashu_event_outbox (
+      id, envelopeVersion, eventKey, eventType, consumerId, streamId, streamRevision,
+      payloadVersion, payloadJson, payloadBytes, contentHash, occurredAt, status,
+      createdAt, availableAt
+    ) VALUES (?, 1, ?, ?, ?, ?, 0, 1, ?, ?, ?, 1, 'pending', 1, 1)`,
+    [
+      options.id,
+      options.eventKey,
+      'wallet.operation.finalized',
+      'wallet.history.projector',
+      'operation-1',
+      payloadJson,
+      payloadJson.length,
+      'b'.repeat(64),
+    ],
+  );
+}
+
 const LEGACY_SEND_TOKEN = {
   mint: 'https://mint.test',
   proofs: [{ id: 'keyset-1', amount: '100', secret: 'send-secret', C: 'C_send' }],
@@ -176,6 +226,13 @@ async function expectUniqueViolation(fn: () => Promise<void>): Promise<void> {
   expect(String(rejection).toLowerCase()).toContain('unique');
 }
 
+async function deleteTestFile(path: string): Promise<void> {
+  const runtime = globalThis as typeof globalThis & {
+    Bun: { file(filename: string): { delete(): Promise<void> } };
+  };
+  await runtime.Bun.file(path).delete();
+}
+
 function itWithDatabase(name: string, fn: (db: SqlDatabase) => Promise<void>): void {
   it(name, async () => {
     const database = new Database(':memory:');
@@ -189,6 +246,115 @@ function itWithDatabase(name: string, fn: (db: SqlDatabase) => Promise<void>): v
 }
 
 describe('shared SQL schema migrations', () => {
+  itWithDatabase(
+    'rolls producer state and its event batch back in one SQL transaction',
+    async (db) => {
+      await ensureSchemaUpTo(db);
+      await db.exec('CREATE TABLE host_state (id TEXT PRIMARY KEY, revision INTEGER NOT NULL)');
+
+      await expect(
+        db.transaction(
+          async (transaction) => {
+            await transaction.run('INSERT INTO host_state (id, revision) VALUES (?, ?)', [
+              'operation-1',
+              1,
+            ]);
+            await new SqliteDurableEventOutboxRepository(transaction).enqueueRevision(
+              outboxBatch(),
+              100,
+            );
+            throw new Error('abort producer transaction');
+          },
+          { mode: 'immediate' },
+        ),
+      ).rejects.toThrow('abort producer transaction');
+
+      expect(await db.get('SELECT id FROM host_state')).toBeUndefined();
+      expect(
+        (await createTransactionalSqliteDurableEventOutboxRepository(db).getStorageStats())
+          .eventRows,
+      ).toBe(0);
+    },
+  );
+
+  itWithDatabase('rolls a local effect and publication back in one SQL transaction', async (db) => {
+    await ensureSchemaUpTo(db);
+    await db.exec('CREATE TABLE host_effect (eventId TEXT PRIMARY KEY)');
+    const repository = createTransactionalSqliteDurableEventOutboxRepository(db);
+    await repository.enqueueRevision(outboxBatch(), 100);
+    const claim = await repository.claimNext({
+      workerId: 'worker-1',
+      leaseToken: 'lease-1',
+      leaseDurationMs: 1_000,
+      now: 100,
+      contracts: [outboxBatch().events[0]!],
+    });
+    if (!claim) throw new Error('expected a claim');
+
+    await expect(
+      db.transaction(
+        async (transaction) => {
+          const scoped = new SqliteDurableEventOutboxRepository(transaction);
+          expect(await scoped.readAndValidateCurrentClaim(claim)).not.toBeNull();
+          await transaction.run('INSERT INTO host_effect (eventId) VALUES (?)', [claim.id]);
+          expect(await scoped.markPublished(claim.id, claim.leaseToken, 110)).toBe('updated');
+          throw new Error('abort consumer transaction');
+        },
+        { mode: 'immediate' },
+      ),
+    ).rejects.toThrow('abort consumer transaction');
+
+    expect(await db.get('SELECT eventId FROM host_effect')).toBeUndefined();
+    expect(await repository.readAndValidateCurrentClaim(claim)).not.toBeNull();
+  });
+
+  it('preserves wallet data across a file-backed 038 to 039 reopen', async () => {
+    const filename = `/tmp/coco-outbox-migration-${Date.now()}-${Math.random()}.sqlite`;
+    let database = new Database(filename);
+    try {
+      let db = createBunSqlDatabase(database);
+      await ensureSchemaUpTo(db, '039_durable_event_outbox');
+      await db.run(
+        `INSERT INTO coco_cashu_keypairs
+          (publicKey, secretKey, createdAt, derivationIndex, purpose)
+         VALUES (?, ?, ?, ?, ?)`,
+        ['preserved-key', 'ab'.repeat(32), 123, 7, 'p2pk'],
+      );
+      database.close();
+
+      database = new Database(filename);
+      db = createBunSqlDatabase(database);
+      await ensureSchemaUpTo(db);
+
+      expect(
+        await db.get(
+          `SELECT publicKey, secretKey, createdAt, derivationIndex, purpose
+           FROM coco_cashu_keypairs WHERE publicKey = ?`,
+          ['preserved-key'],
+        ),
+      ).toEqual({
+        publicKey: 'preserved-key',
+        secretKey: 'ab'.repeat(32),
+        createdAt: 123,
+        derivationIndex: 7,
+        purpose: 'p2pk',
+      });
+      expect(
+        await db.get(
+          `SELECT eventRows, revisionSeals, streams, payloadBytes
+           FROM coco_cashu_event_outbox_storage_stats WHERE id = 1`,
+        ),
+      ).toEqual({ eventRows: 0, revisionSeals: 0, streams: 0, payloadBytes: 0 });
+    } finally {
+      database.close();
+      await Promise.all([
+        deleteTestFile(filename),
+        deleteTestFile(`${filename}-shm`),
+        deleteTestFile(`${filename}-wal`),
+      ]);
+    }
+  });
+
   itWithDatabase('preserves the migration list and applies all migration ids', async (db) => {
     expect(MIGRATIONS.map((migration) => migration.id)).toEqual(EXPECTED_MIGRATION_IDS);
 
@@ -201,6 +367,105 @@ describe('shared SQL schema migrations', () => {
 
     const busyTimeout = await db.get<{ timeout: number }>('PRAGMA busy_timeout');
     expect(busyTimeout?.timeout).toBe(5000);
+  });
+
+  itWithDatabase('creates the durable event outbox schema and query indexes', async (db) => {
+    await ensureSchemaUpTo(db);
+
+    expect(await getColumnNames(db, 'coco_cashu_event_outbox')).toEqual(
+      expect.arrayContaining([
+        'id',
+        'eventKey',
+        'consumerId',
+        'streamId',
+        'payloadJson',
+        'status',
+        'leaseToken',
+        'publishedAt',
+        'blockedAt',
+      ]),
+    );
+    expect(await getIndexNames(db, 'coco_cashu_event_outbox')).toEqual(
+      expect.arrayContaining([
+        'idx_coco_cashu_event_outbox_due',
+        'idx_coco_cashu_event_outbox_contract_due',
+        'idx_coco_cashu_event_outbox_inspection',
+        'idx_coco_cashu_event_outbox_stream_revision',
+      ]),
+    );
+    expect(
+      await db.get(
+        `SELECT eventRows, revisionSeals, streams, payloadBytes
+         FROM coco_cashu_event_outbox_storage_stats WHERE id = 1`,
+      ),
+    ).toEqual({ eventRows: 0, revisionSeals: 0, streams: 0, payloadBytes: 0 });
+  });
+
+  itWithDatabase('enforces immutable outbox intent and valid delivery state', async (db) => {
+    await ensureSchemaUpTo(db);
+    await db.run(
+      `INSERT INTO coco_cashu_event_outbox_stream_checkpoints
+        (streamId, compactedThroughRevision, updatedAt)
+       VALUES ('operation-1', -1, 1)`,
+    );
+    await db.run(
+      `INSERT INTO coco_cashu_event_outbox_revisions
+        (streamId, streamRevision, expectedPreviousRevision, eventCount, eventSetHash, sealedAt)
+       VALUES ('operation-1', 0, NULL, 1, ?, 1)`,
+      ['a'.repeat(64)],
+    );
+    await insertRawOutboxEvent(db, { id: 'event-1', eventKey: 'project-history' });
+
+    await expect(
+      db.run(`UPDATE coco_cashu_event_outbox SET payloadJson = '{"value":2}' WHERE id = 'event-1'`),
+    ).rejects.toThrow('durable event intent is immutable');
+    await expect(
+      db.run(`UPDATE coco_cashu_event_outbox SET status = 'published' WHERE id = 'event-1'`),
+    ).rejects.toThrow();
+    expect(
+      await db.get<{ payloadJson: string; status: string }>(
+        'SELECT payloadJson, status FROM coco_cashu_event_outbox WHERE id = ?',
+        ['event-1'],
+      ),
+    ).toEqual({ payloadJson: '{"value":1}', status: 'pending' });
+  });
+
+  itWithDatabase('keeps outbox capacity counters atomic under raw SQL writes', async (db) => {
+    await ensureSchemaUpTo(db);
+    await db.run(
+      `UPDATE coco_cashu_event_outbox_storage_stats
+       SET maxEventRows = 1 WHERE id = 1`,
+    );
+    await db.run(
+      `INSERT INTO coco_cashu_event_outbox_stream_checkpoints
+        (streamId, compactedThroughRevision, updatedAt)
+       VALUES ('operation-1', -1, 1)`,
+    );
+    await db.run(
+      `INSERT INTO coco_cashu_event_outbox_revisions
+        (streamId, streamRevision, expectedPreviousRevision, eventCount, eventSetHash, sealedAt)
+       VALUES ('operation-1', 0, NULL, 1, ?, 1)`,
+      ['a'.repeat(64)],
+    );
+    await insertRawOutboxEvent(db, { id: 'event-1', eventKey: 'project-history' });
+
+    await expect(
+      insertRawOutboxEvent(db, { id: 'event-2', eventKey: 'notify-host' }),
+    ).rejects.toThrow('durable event outbox capacity exceeded');
+    expect(
+      await db.get(
+        `SELECT eventRows, revisionSeals, streams, payloadBytes
+         FROM coco_cashu_event_outbox_storage_stats WHERE id = 1`,
+      ),
+    ).toEqual({ eventRows: 1, revisionSeals: 1, streams: 1, payloadBytes: 11 });
+
+    await db.run(`DELETE FROM coco_cashu_event_outbox WHERE id = 'event-1'`);
+    expect(
+      await db.get(
+        `SELECT eventRows, revisionSeals, streams, payloadBytes
+         FROM coco_cashu_event_outbox_storage_stats WHERE id = 1`,
+      ),
+    ).toEqual({ eventRows: 0, revisionSeals: 1, streams: 1, payloadBytes: 0 });
   });
 
   itWithDatabase('backfills per-purpose keypair derivation allocations', async (db) => {

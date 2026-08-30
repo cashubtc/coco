@@ -38,6 +38,7 @@ import {
   SqlitePaymentRequestReceiveAttemptRepository,
   SqlitePaymentRequestReceiveOperationRepository,
 } from './repositories/PaymentRequestReceiveRepository.ts';
+import { SqliteDurableEventOutboxRepository } from './repositories/DurableEventOutboxRepository.ts';
 
 export interface SqlStorageRepositoriesOptions {
   database: SqlDatabase;
@@ -136,4 +137,5 @@ export {
   SqliteReceiveOperationRepository,
   SqlitePaymentRequestReceiveOperationRepository,
   SqlitePaymentRequestReceiveAttemptRepository,
+  SqliteDurableEventOutboxRepository,
 };

@@ -52,3 +52,7 @@ database lifecycle under your application code.
 - Pass an already opened `expo-sqlite` database instance via the `database` option.
 - The adapter ensures schema creation and migrations when you call `init()`.
 - `ExpoSqliteRepositories` remains available as a migration alias.
+- Migration 039 provisions the generic durable outbox tables, but native Expo outbox activation is
+  intentionally disabled. The shared SQL contract passes through an Expo-compatible test shim;
+  activation requires claim-contention and producer/consumer transaction tests on a real native
+  Expo SQLite runtime.
