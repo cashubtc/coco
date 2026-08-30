@@ -385,6 +385,15 @@ interface RepositoriesBase {
 
 export interface Repositories extends RepositoriesBase {
   init(): Promise<void>;
+
+  /**
+   * Runs one strong Wallet write transaction across the complete repository scope.
+   *
+   * Successful callbacks commit atomically and failed callbacks roll back completely. Adapters
+   * isolate concurrent work and either serialize conflicting writers or reject them with
+   * `RepositoryTransactionConflictError`. Callbacks must remain compatible with IndexedDB's
+   * transaction lifetime and therefore must not perform remote or unrelated asynchronous work.
+   */
   withTransaction<T>(fn: (repos: RepositoryTransactionScope) => Promise<T>): Promise<T>;
 }
 
@@ -392,4 +401,5 @@ export type RepositoryTransactionScope = Omit<RepositoriesBase, 'keyRingReposito
   keyRingRepository: Omit<KeyRingRepository, 'deriveAndPersistKeyPair'>;
 };
 
+export { RepositoryTransactionConflictError } from './RepositoryTransactionError.ts';
 export * from './memory';

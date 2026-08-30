@@ -1,8 +1,13 @@
 import type { Keyset } from '../../models/Keyset';
 import type { KeysetRepository } from '..';
+import { cloneMemoryValue, COPY_MEMORY_REPOSITORY_STATE } from './MemoryRepositoryTransaction.ts';
 
 export class MemoryKeysetRepository implements KeysetRepository {
   private keysetsByMint: Map<string, Map<string, Keyset>> = new Map();
+
+  [COPY_MEMORY_REPOSITORY_STATE](source: MemoryKeysetRepository): void {
+    this.keysetsByMint = cloneMemoryValue(source.keysetsByMint);
+  }
 
   private getMintMap(mintUrl: string): Map<string, Keyset> {
     if (!this.keysetsByMint.has(mintUrl)) {

@@ -8,6 +8,7 @@ import type {
   PaymentRequestReceiveOperation,
   PaymentRequestReceiveState,
 } from '../../operations/paymentRequestReceive/PaymentRequestReceiveOperation';
+import { cloneMemoryValue, COPY_MEMORY_REPOSITORY_STATE } from './MemoryRepositoryTransaction.ts';
 
 function cloneOperation(operation: PaymentRequestReceiveOperation): PaymentRequestReceiveOperation {
   return { ...operation, mints: [...operation.mints] };
@@ -23,7 +24,11 @@ function cloneAttempt(attempt: PaymentRequestReceiveAttempt): PaymentRequestRece
 }
 
 export class MemoryPaymentRequestReceiveOperationRepository implements PaymentRequestReceiveOperationRepository {
-  private readonly operations = new Map<string, PaymentRequestReceiveOperation>();
+  private operations = new Map<string, PaymentRequestReceiveOperation>();
+
+  [COPY_MEMORY_REPOSITORY_STATE](source: MemoryPaymentRequestReceiveOperationRepository): void {
+    this.operations = cloneMemoryValue(source.operations);
+  }
 
   async create(operation: PaymentRequestReceiveOperation): Promise<void> {
     if (this.operations.has(operation.id)) {
@@ -66,7 +71,11 @@ export class MemoryPaymentRequestReceiveOperationRepository implements PaymentRe
 }
 
 export class MemoryPaymentRequestReceiveAttemptRepository implements PaymentRequestReceiveAttemptRepository {
-  private readonly attempts = new Map<string, PaymentRequestReceiveAttempt>();
+  private attempts = new Map<string, PaymentRequestReceiveAttempt>();
+
+  [COPY_MEMORY_REPOSITORY_STATE](source: MemoryPaymentRequestReceiveAttemptRepository): void {
+    this.attempts = cloneMemoryValue(source.attempts);
+  }
 
   async create(attempt: PaymentRequestReceiveAttempt): Promise<void> {
     if (this.attempts.has(attempt.id)) {

@@ -1,8 +1,13 @@
 import type { AuthSession } from '@core/models/AuthSession';
 import type { AuthSessionRepository } from '..';
+import { cloneMemoryValue, COPY_MEMORY_REPOSITORY_STATE } from './MemoryRepositoryTransaction.ts';
 
 export class MemoryAuthSessionRepository implements AuthSessionRepository {
-  private readonly sessions = new Map<string, AuthSession>();
+  private sessions = new Map<string, AuthSession>();
+
+  [COPY_MEMORY_REPOSITORY_STATE](source: MemoryAuthSessionRepository): void {
+    this.sessions = cloneMemoryValue(source.sessions);
+  }
 
   async getSession(mintUrl: string): Promise<AuthSession | null> {
     return this.sessions.get(mintUrl) ?? null;
