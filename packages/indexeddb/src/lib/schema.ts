@@ -1,4 +1,8 @@
-import { normalizeMintUrl, stringifyJson } from '@cashu/coco-core/adapter';
+import {
+  DEFAULT_DURABLE_EVENT_STORAGE_LIMITS,
+  normalizeMintUrl,
+  stringifyJson,
+} from '@cashu/coco-core/adapter';
 import type { IdbDb } from './db.ts';
 
 function normalizeStoredAmount(value: unknown): string | null | undefined {
@@ -1206,4 +1210,63 @@ export async function ensureSchema(db: IdbDb): Promise<void> {
         });
       }
     });
+
+  // Version 34: Add the generic durable event outbox stores and persisted capacity policy.
+  db.version(34)
+    .stores({
+      coco_cashu_mints: '&mintUrl, name, updatedAt, trusted',
+      coco_cashu_keysets: '&[mintUrl+id], mintUrl, id, updatedAt, unit',
+      coco_cashu_counters: '&[mintUrl+keysetId]',
+      coco_cashu_proofs:
+        '&[mintUrl+secret], [mintUrl+state], [mintUrl+unit+state], [mintUrl+id+state], [mintUrl+id+unit+state], [mintUrl+unit+id+state], [unit+state], state, mintUrl, unit, id, usedByOperationId, createdByOperationId',
+      coco_cashu_mint_quotes: '&[mintUrl+quote], state, mintUrl',
+      coco_cashu_canonical_mint_quotes:
+        '&[mintUrl+method+quoteId], &[mintUrl+quoteId], state, mintUrl, method',
+      coco_cashu_melt_quotes:
+        '&[mintUrl+method+quoteId], &[mintUrl+quoteId], state, mintUrl, method',
+      coco_cashu_history:
+        '++id, mintUrl, type, createdAt, [mintUrl+quoteId+type], [mintUrl+operationId]',
+      coco_cashu_keypairs: '&publicKey, createdAt, derivationIndex, [purpose+derivationIndex]',
+      coco_cashu_keypair_derivation_allocations: '&purpose',
+      coco_cashu_send_operations: '&id, state, mintUrl, createdAt',
+      coco_cashu_melt_operations: '&id, state, mintUrl, createdAt, [mintUrl+quoteId]',
+      coco_cashu_receive_operations: '&id, state, mintUrl, createdAt',
+      coco_cashu_auth_sessions: '&mintUrl',
+      coco_cashu_mint_operations:
+        '&id, state, mintUrl, createdAt, [mintUrl+quoteId], [mintUrl+method+quoteId]',
+      coco_cashu_payment_request_receive_operations: '&id, state, requestId',
+      coco_cashu_payment_request_receive_attempts:
+        '&id, requestOperationId, requestId, state, &[requestOperationId+payloadHash], [requestId+payloadHash], &transportMessageId, &receiveOperationId',
+      coco_cashu_event_outbox:
+        '&id, &[streamId+streamRevision+consumerId+eventKey], [status+availableAt], status, [streamId+streamRevision], [status+publishedAt], [consumerId+eventType+envelopeVersion+payloadVersion]',
+      coco_cashu_event_outbox_revisions: '&[streamId+streamRevision], streamId',
+      coco_cashu_event_outbox_stream_checkpoints: '&streamId',
+      coco_cashu_event_outbox_storage_stats: '&id',
+    })
+    .upgrade(async (tx) => {
+      await tx.table('coco_cashu_event_outbox_storage_stats').add({
+        id: 'v1',
+        policyVersion: 1,
+        eventRows: 0,
+        revisionSeals: 0,
+        streams: 0,
+        payloadBytes: 0,
+        limits: { ...DEFAULT_DURABLE_EVENT_STORAGE_LIMITS },
+      });
+    });
+
+  await db.open();
+  await db.runTransaction('rw', ['coco_cashu_event_outbox_storage_stats'], async (transaction) => {
+    const table = transaction.table('coco_cashu_event_outbox_storage_stats');
+    if (await table.get('v1')) return;
+    await table.add({
+      id: 'v1',
+      policyVersion: 1,
+      eventRows: 0,
+      revisionSeals: 0,
+      streams: 0,
+      payloadBytes: 0,
+      limits: { ...DEFAULT_DURABLE_EVENT_STORAGE_LIMITS },
+    });
+  });
 }

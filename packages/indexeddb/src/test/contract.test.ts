@@ -13,10 +13,87 @@ import {
   runSendOperationRepositoryContract,
   runMeltOperationRepositoryContract,
   runMeltQuoteRepositoryContract,
+  runDurableEventOutboxRepositoryContract,
 } from '@cashu/coco-adapter-tests';
-import { IndexedDbRepositories } from '../index.ts';
+import type {
+  DurableEventRevisionBatch,
+  DurableEventStorageLimits,
+} from '@cashu/coco-core/adapter';
+import {
+  ensureSchema,
+  IdbDb,
+  IdbDurableEventOutboxRepository,
+  IDB_DURABLE_EVENT_OUTBOX_STORES,
+  IndexedDbRepositories,
+} from '../index.ts';
+import {
+  configureTransactionalIdbDurableEventOutboxStorageLimits,
+  createTransactionalIdbDurableEventOutboxRepository,
+} from './durableEventOutbox.ts';
 
 let dbCounter = 0;
+
+function outboxBatch(): DurableEventRevisionBatch {
+  return {
+    streamId: 'operation-1',
+    expectedPreviousRevision: 0,
+    streamRevision: 1,
+    events: [
+      {
+        id: 'operation-1-event-1',
+        eventKey: 'project-history',
+        consumerId: 'wallet.history.projector',
+        eventType: 'wallet.operation.finalized',
+        envelopeVersion: 1,
+        payloadVersion: 1,
+        streamId: 'operation-1',
+        streamRevision: 1,
+        payload: { operationId: 'operation-1' },
+        occurredAt: 100,
+      },
+    ],
+  };
+}
+
+function runOutboxClaimWorker(
+  dbName: string,
+  token: string,
+  workerId: string,
+): Promise<string | null> {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL('./durableEventOutbox.worker.ts', import.meta.url), {
+      type: 'module',
+    });
+    worker.onmessage = (event: MessageEvent<{ result: string | null; error?: string }>) => {
+      worker.terminate();
+      if (event.data.error) reject(new Error(event.data.error));
+      else resolve(event.data.result);
+    };
+    worker.onerror = (event) => {
+      worker.terminate();
+      reject(event.error ?? new Error(event.message));
+    };
+    worker.postMessage({ dbName, action: 'claim', token, workerId });
+  });
+}
+
+function runOutboxEnqueueWorker(dbName: string): Promise<string | null> {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL('./durableEventOutbox.worker.ts', import.meta.url), {
+      type: 'module',
+    });
+    worker.onmessage = (event: MessageEvent<{ result: string | null; error?: string }>) => {
+      worker.terminate();
+      if (event.data.error) reject(new Error(event.data.error));
+      else resolve(event.data.result);
+    };
+    worker.onerror = (event) => {
+      worker.terminate();
+      reject(event.error ?? new Error(event.message));
+    };
+    worker.postMessage({ dbName, action: 'enqueue' });
+  });
+}
 
 function deriveKeyPair(derivationIndex: number, purpose: 'p2pk' | 'nut20_mint_quote') {
   return {
@@ -79,6 +156,65 @@ runKeyRingDerivationRepositoryContract(
   { describe, it, expect },
 );
 
+runDurableEventOutboxRepositoryContract(
+  {
+    async createRepository(options?: { readonly limits?: DurableEventStorageLimits }) {
+      const dbName = `coco_cashu_outbox_contract_${Date.now()}_${dbCounter++}`;
+      const database = new IdbDb({ name: dbName });
+      await ensureSchema(database);
+      await database.open();
+      if (options?.limits) {
+        await configureTransactionalIdbDurableEventOutboxStorageLimits(database, options.limits);
+      }
+      return {
+        repository: createTransactionalIdbDurableEventOutboxRepository(database),
+        dispose: async () => {
+          database.close();
+          await Dexie.delete(dbName);
+        },
+      };
+    },
+    async createSharedRepositories() {
+      const dbName = `coco_cashu_outbox_shared_${Date.now()}_${dbCounter++}`;
+      const firstDatabase = new IdbDb({ name: dbName });
+      const secondDatabase = new IdbDb({ name: dbName });
+      await ensureSchema(firstDatabase);
+      await ensureSchema(secondDatabase);
+      await firstDatabase.open();
+      await secondDatabase.open();
+      return {
+        first: createTransactionalIdbDurableEventOutboxRepository(firstDatabase),
+        second: createTransactionalIdbDurableEventOutboxRepository(secondDatabase),
+        dispose: async () => {
+          firstDatabase.close();
+          secondDatabase.close();
+          await Dexie.delete(dbName);
+        },
+      };
+    },
+    async createRestartableRepository() {
+      const dbName = `coco_cashu_outbox_restart_${Date.now()}_${dbCounter++}`;
+      let database = new IdbDb({ name: dbName });
+      await ensureSchema(database);
+      const reopen = async () => {
+        database.close();
+        database = new IdbDb({ name: dbName });
+        await ensureSchema(database);
+        return createTransactionalIdbDurableEventOutboxRepository(database);
+      };
+      return {
+        repository: createTransactionalIdbDurableEventOutboxRepository(database),
+        restart: reopen,
+        dispose: async () => {
+          database.close();
+          await Dexie.delete(dbName);
+        },
+      };
+    },
+  },
+  { describe, it, expect },
+);
+
 runAuthSessionRepositoryContract({ createRepositories }, { describe, it, expect });
 
 runProofRepositoryContract({ createRepositories }, { describe, it, expect });
@@ -96,6 +232,201 @@ runMeltOperationRepositoryContract({ createRepositories }, { describe, it, expec
 runMeltQuoteRepositoryContract({ createRepositories }, { describe, it, expect });
 
 runPaymentRequestReceiveRepositoryContract({ createRepositories }, { describe, it, expect });
+
+describe('indexeddb durable event outbox transaction boundaries', () => {
+  it('rolls producer state and its event batch back in one IndexedDB transaction', async () => {
+    const dbName = `coco_cashu_outbox_producer_rollback_${Date.now()}_${dbCounter++}`;
+    const database = new IdbDb({ name: dbName });
+    await ensureSchema(database);
+    try {
+      await expectRejects(async () => {
+        await database.runTransaction(
+          'rw',
+          ['coco_cashu_mints', ...IDB_DURABLE_EVENT_OUTBOX_STORES],
+          async (transaction) => {
+            await transaction.table('coco_cashu_mints').add({
+              mintUrl: 'https://mint.test',
+              name: 'Rolled back mint',
+              trusted: true,
+              updatedAt: 100,
+            });
+            await new IdbDurableEventOutboxRepository(transaction).enqueueRevision(
+              outboxBatch(),
+              100,
+            );
+            throw new Error('abort producer transaction');
+          },
+        );
+      });
+
+      expect(await database.table('coco_cashu_mints').get('https://mint.test')).toBeUndefined();
+      expect(
+        (await createTransactionalIdbDurableEventOutboxRepository(database).getStorageStats())
+          .eventRows,
+      ).toBe(0);
+    } finally {
+      database.close();
+      await Dexie.delete(dbName);
+    }
+  });
+
+  it('rolls a local effect and publication back in one IndexedDB transaction', async () => {
+    const dbName = `coco_cashu_outbox_consumer_rollback_${Date.now()}_${dbCounter++}`;
+    const database = new IdbDb({ name: dbName });
+    await ensureSchema(database);
+    try {
+      const repository = createTransactionalIdbDurableEventOutboxRepository(database);
+      await repository.enqueueRevision(outboxBatch(), 100);
+      const claim = await repository.claimNext({
+        workerId: 'worker-1',
+        leaseToken: 'lease-1',
+        leaseDurationMs: 1_000,
+        now: 100,
+        contracts: [outboxBatch().events[0]!],
+      });
+      if (!claim) throw new Error('expected a claim');
+
+      await expectRejects(async () => {
+        await database.runTransaction(
+          'rw',
+          ['coco_cashu_mints', ...IDB_DURABLE_EVENT_OUTBOX_STORES],
+          async (transaction) => {
+            const scoped = new IdbDurableEventOutboxRepository(transaction);
+            expect(await scoped.readAndValidateCurrentClaim(claim)).not.toBeNull();
+            await transaction.table('coco_cashu_mints').add({
+              mintUrl: 'https://effect.test',
+              name: 'Rolled back effect',
+              trusted: true,
+              updatedAt: 110,
+            });
+            expect(await scoped.markPublished(claim.id, claim.leaseToken, 110)).toBe('updated');
+            throw new Error('abort consumer transaction');
+          },
+        );
+      });
+
+      expect(await database.table('coco_cashu_mints').get('https://effect.test')).toBeUndefined();
+      expect(await repository.readAndValidateCurrentClaim(claim)).not.toBeNull();
+    } finally {
+      database.close();
+      await Dexie.delete(dbName);
+    }
+  });
+
+  it('migrates version 33 data without changing existing wallet rows', async () => {
+    const dbName = `coco_cashu_outbox_migration_${Date.now()}_${dbCounter++}`;
+    const legacy = new Dexie(dbName);
+    legacy.version(33).stores({
+      coco_cashu_mints: '&mintUrl, name, updatedAt, trusted',
+    });
+    await legacy.open();
+    await legacy.table('coco_cashu_mints').add({
+      mintUrl: 'https://mint.test',
+      name: 'Preserved mint',
+      trusted: true,
+      updatedAt: 123,
+    });
+    let receivedVersionChange = false;
+    legacy.on('versionchange', () => {
+      receivedVersionChange = true;
+      legacy.close();
+    });
+
+    const database = new IdbDb({ name: dbName });
+    await ensureSchema(database);
+    try {
+      expect(receivedVersionChange).toBe(true);
+      expect(legacy.isOpen()).toBe(false);
+      expect(await database.table('coco_cashu_mints').get('https://mint.test')).toEqual({
+        mintUrl: 'https://mint.test',
+        name: 'Preserved mint',
+        trusted: true,
+        updatedAt: 123,
+      });
+      expect(
+        (await createTransactionalIdbDurableEventOutboxRepository(database).getStorageStats())
+          .eventRows,
+      ).toBe(0);
+      await legacy.table('coco_cashu_mints').add({
+        mintUrl: 'https://stale-session.test',
+        name: 'Stale session write',
+        trusted: true,
+        updatedAt: 124,
+      });
+      expect(await database.table('coco_cashu_mints').get('https://stale-session.test')).toEqual({
+        mintUrl: 'https://stale-session.test',
+        name: 'Stale session write',
+        trusted: true,
+        updatedAt: 124,
+      });
+    } finally {
+      legacy.close();
+      database.close();
+      await Dexie.delete(dbName);
+    }
+  });
+
+  it('fails when the caller omits a required outbox store from the transaction', async () => {
+    const dbName = `coco_cashu_outbox_store_union_${Date.now()}_${dbCounter++}`;
+    const database = new IdbDb({ name: dbName });
+    await ensureSchema(database);
+    try {
+      await expectRejects(async () => {
+        await database.runTransaction('rw', [IDB_DURABLE_EVENT_OUTBOX_STORES[0]], (transaction) =>
+          new IdbDurableEventOutboxRepository(transaction).enqueueRevision(outboxBatch(), 100),
+        );
+      });
+      expect(
+        (await createTransactionalIdbDurableEventOutboxRepository(database).getStorageStats())
+          .eventRows,
+      ).toBe(0);
+    } finally {
+      database.close();
+      await Dexie.delete(dbName);
+    }
+  });
+
+  it('allows only one browser Worker to claim one stored event', async () => {
+    const dbName = `coco_cashu_outbox_worker_${Date.now()}_${dbCounter++}`;
+    const database = new IdbDb({ name: dbName });
+    await ensureSchema(database);
+    try {
+      await createTransactionalIdbDurableEventOutboxRepository(database).enqueueRevision(
+        outboxBatch(),
+        100,
+      );
+      const claims = await Promise.all([
+        runOutboxClaimWorker(dbName, 'worker-token-1', 'browser-worker-1'),
+        runOutboxClaimWorker(dbName, 'worker-token-2', 'browser-worker-2'),
+      ]);
+      expect(claims.filter((id) => id !== null)).toHaveLength(1);
+      expect(claims.find((id) => id !== null)).toBe('operation-1-event-1');
+    } finally {
+      database.close();
+      await Dexie.delete(dbName);
+    }
+  });
+
+  it('serializes an identical enqueue race across browser Workers', async () => {
+    const dbName = `coco_cashu_outbox_worker_enqueue_${Date.now()}_${dbCounter++}`;
+    const database = new IdbDb({ name: dbName });
+    await ensureSchema(database);
+    try {
+      expect(
+        (
+          await Promise.all([runOutboxEnqueueWorker(dbName), runOutboxEnqueueWorker(dbName)])
+        ).sort(),
+      ).toEqual(['existing', 'inserted']);
+      const stats =
+        await createTransactionalIdbDurableEventOutboxRepository(database).getStorageStats();
+      expect(stats.eventRows).toBe(1);
+      expect(stats.revisionSeals).toBe(1);
+    } finally {
+      database.close();
+      await Dexie.delete(dbName);
+    }
+  });
+});
 
 describe('indexeddb quote storage constraints', () => {
   it('rolls back the keypair and high-water mark when persistence aborts', async () => {

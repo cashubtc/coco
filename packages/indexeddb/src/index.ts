@@ -37,6 +37,10 @@ import {
   IdbPaymentRequestReceiveAttemptRepository,
   IdbPaymentRequestReceiveOperationRepository,
 } from './repositories/PaymentRequestReceiveRepository.ts';
+import {
+  IdbDurableEventOutboxRepository,
+  IDB_DURABLE_EVENT_OUTBOX_STORES,
+} from './repositories/DurableEventOutboxRepository.ts';
 
 export interface IndexedDbRepositoriesOptions extends IdbDbOptions {}
 
@@ -144,4 +148,11 @@ export {
   IdbReceiveOperationRepository,
   IdbPaymentRequestReceiveOperationRepository,
   IdbPaymentRequestReceiveAttemptRepository,
+  IdbDurableEventOutboxRepository,
+  IDB_DURABLE_EVENT_OUTBOX_STORES,
 };
+export {
+  configureIdbDurableEventOutboxStorageLimits,
+  createIdbDurableEventStorageStats,
+  validateIdbDurableEventStorageLimits,
+} from './repositories/DurableEventOutboxRepository.ts';
