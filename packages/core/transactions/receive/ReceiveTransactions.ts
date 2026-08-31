@@ -1,10 +1,10 @@
-import type { ReceiveOperation } from '@core/operations/receive/ReceiveOperation.ts';
 import type { CoreTransactionRunner } from '../CoreTransaction.ts';
 import type {
   AppliedReceiveResult,
   ApplyReceiveResultCommand,
   BegunReceiveExecution,
   BeginReceiveExecutionCommand,
+  CancelPreparedReceiveCommand,
   FailedReceiveExecution,
   FailReceiveExecutionCommand,
   PrepareReceiveCommand,
@@ -16,7 +16,7 @@ export interface ReceiveTransactions {
   beginExecution(command: BeginReceiveExecutionCommand): Promise<BegunReceiveExecution>;
   applyResult(command: ApplyReceiveResultCommand): Promise<AppliedReceiveResult>;
   failExecution(command: FailReceiveExecutionCommand): Promise<FailedReceiveExecution>;
-  updateLegacyOperation(operation: ReceiveOperation): Promise<void>;
+  cancelPrepared(command: CancelPreparedReceiveCommand): Promise<FailedReceiveExecution>;
   deleteLegacyInit(operationId: string): Promise<void>;
 }
 
@@ -39,8 +39,8 @@ export class CoreReceiveTransactions implements ReceiveTransactions {
     return this.runner.run((transaction) => transaction.receives.failExecution(command));
   }
 
-  updateLegacyOperation(operation: ReceiveOperation): Promise<void> {
-    return this.runner.run((transaction) => transaction.receives.updateLegacyOperation(operation));
+  cancelPrepared(command: CancelPreparedReceiveCommand): Promise<FailedReceiveExecution> {
+    return this.runner.run((transaction) => transaction.receives.cancelPrepared(command));
   }
 
   deleteLegacyInit(operationId: string): Promise<void> {

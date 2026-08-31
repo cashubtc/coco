@@ -273,6 +273,65 @@ describe('ReceiveTransactions execution', () => {
     ).toEqual([]);
   });
 
+  it('records exact restored outputs as spent while finalizing a proven successful receive', async () => {
+    const environment = await setup();
+    const { begun } = await prepareAndBegin(environment, 'receive-restored-spent');
+    const secret = getSecretsFromSerializedOutputData(begun.operation.outputData).keepSecrets[0]!;
+
+    const applied = await environment.transactions.applyResult({
+      operationId: begun.operation.id,
+      expectedRevision: begun.operation.revision ?? 0,
+      updatedAt: 400,
+      proofs: [{ ...receivedProof(secret, begun.operation.id), state: 'spent' }],
+    });
+
+    expect(applied.operation.state).toBe('finalized');
+    expect(
+      (await environment.repositories.proofRepository.getProofBySecret(mintUrl, secret))?.state,
+    ).toBe('spent');
+  });
+
+  it('reconciles a partially saved restored result to its proven spent state', async () => {
+    const environment = await setup();
+    const { begun } = await prepareAndBegin(environment, 'receive-partial-restored-spent');
+    const secret = getSecretsFromSerializedOutputData(begun.operation.outputData).keepSecrets[0]!;
+    const restoredProof = receivedProof(secret, begun.operation.id);
+    await environment.repositories.proofRepository.saveProofs(mintUrl, [restoredProof]);
+
+    await environment.transactions.applyResult({
+      operationId: begun.operation.id,
+      expectedRevision: begun.operation.revision ?? 0,
+      updatedAt: 400,
+      proofs: [{ ...restoredProof, state: 'spent' }],
+    });
+
+    expect(
+      (await environment.repositories.proofRepository.getProofBySecret(mintUrl, secret))?.state,
+    ).toBe('spent');
+  });
+
+  it('conditionally cancels a prepared Receive without a generic write escape hatch', async () => {
+    const environment = await setup();
+    const prepared = await environment.transactions.prepare(command('receive-cancel'));
+
+    const cancelled = await environment.transactions.cancelPrepared({
+      operationId: prepared.operation.id,
+      expectedRevision: prepared.operation.revision ?? 0,
+      updatedAt: 300,
+      error: 'User cancelled receive operation',
+    });
+    const duplicate = await environment.transactions.cancelPrepared({
+      operationId: prepared.operation.id,
+      expectedRevision: prepared.operation.revision ?? 0,
+      updatedAt: 300,
+      error: 'User cancelled receive operation',
+    });
+
+    expect(cancelled.committed).toBe(true);
+    expect(duplicate.committed).toBe(false);
+    expect(duplicate.operation.revision).toBe(1);
+  });
+
   it('rejects a returned proof from a different keyset than its allocated output', async () => {
     const environment = await setup();
     const { begun } = await prepareAndBegin(environment, 'receive-wrong-keyset');

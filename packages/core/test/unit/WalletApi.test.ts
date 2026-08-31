@@ -261,7 +261,28 @@ describe('WalletApi - Trust Enforcement', () => {
         }
         return { operation: rolledBack, committed: true };
       },
-      updateLegacyOperation: (operation) => receiveOpRepo.update(operation),
+      cancelPrepared: async ({ operationId, expectedRevision, updatedAt, error }) => {
+        const current = await receiveOpRepo.getById(operationId);
+        if (!current || current.state !== 'prepared') throw new Error('Receive not prepared');
+        const rolledBack = {
+          ...current,
+          state: 'rolled_back' as const,
+          revision: expectedRevision + 1,
+          updatedAt,
+          error,
+        };
+        if (
+          !(await receiveOpRepo.transition({
+            operationId,
+            expectedState: 'prepared',
+            expectedRevision,
+            next: rolledBack,
+          }))
+        ) {
+          throw new Error('Receive cancellation conflict');
+        }
+        return { operation: rolledBack, committed: true };
+      },
       deleteLegacyInit: (operationId) => receiveOpRepo.delete(operationId),
     };
     receiveOperationService = new ReceiveOperationService({
