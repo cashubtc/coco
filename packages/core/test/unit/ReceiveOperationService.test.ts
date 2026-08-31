@@ -105,6 +105,73 @@ describe('ReceiveOperationService', () => {
         counter: { mintUrl: operation.mintUrl, keysetId, counter: 1 },
       };
     },
+    beginExecution: async ({ operationId, expectedRevision, updatedAt }) => {
+      const current = await receiveOpRepo.getById(operationId);
+      if (!current || current.state !== 'prepared')
+        throw new Error('Receive operation not prepared');
+      const executing = {
+        ...current,
+        state: 'executing' as const,
+        revision: expectedRevision + 1,
+        updatedAt,
+      };
+      const transitioned = await receiveOpRepo.transition({
+        operationId,
+        expectedState: 'prepared',
+        expectedRevision,
+        next: executing,
+      });
+      if (!transitioned) throw new Error('Receive execution conflict');
+      return {
+        operation: executing,
+        request: {
+          mintUrl: executing.mintUrl,
+          unit: executing.unit,
+          inputProofs: executing.inputProofs,
+          outputData: executing.outputData,
+        },
+      };
+    },
+    applyResult: async ({ operationId, expectedRevision, updatedAt, proofs }) => {
+      const current = await receiveOpRepo.getById(operationId);
+      if (!current || current.state !== 'executing')
+        throw new Error('Receive operation not executing');
+      await proofRepo.saveProofs(current.mintUrl, proofs);
+      const finalized = {
+        ...current,
+        state: 'finalized' as const,
+        revision: expectedRevision + 1,
+        updatedAt,
+      };
+      const transitioned = await receiveOpRepo.transition({
+        operationId,
+        expectedState: 'executing',
+        expectedRevision,
+        next: finalized,
+      });
+      if (!transitioned) throw new Error('Receive result conflict');
+      return { operation: finalized, savedProofs: proofs, committed: true };
+    },
+    failExecution: async ({ operationId, expectedRevision, updatedAt, error }) => {
+      const current = await receiveOpRepo.getById(operationId);
+      if (!current || current.state !== 'executing')
+        throw new Error('Receive operation not executing');
+      const rolledBack = {
+        ...current,
+        state: 'rolled_back' as const,
+        revision: expectedRevision + 1,
+        updatedAt,
+        error,
+      };
+      const transitioned = await receiveOpRepo.transition({
+        operationId,
+        expectedState: 'executing',
+        expectedRevision,
+        next: rolledBack,
+      });
+      if (!transitioned) throw new Error('Receive failure conflict');
+      return { operation: rolledBack, committed: true };
+    },
     updateLegacyOperation: (operation) => receiveOpRepo.update(operation),
     deleteLegacyInit: (operationId) => receiveOpRepo.delete(operationId),
   });
@@ -308,7 +375,89 @@ describe('ReceiveOperationService', () => {
 
     expect(finalized.state).toBe('finalized');
     expect(persistedState).toBe('finalized');
-    expect(lockedDuringEvent).toBe(true);
+    expect(lockedDuringEvent).toBe(false);
+  });
+
+  it('commits executing before mint contact and submits the persisted signed request', async () => {
+    const signed = { ...makeProof('signed'), witness: '{"signatures":["persisted"]}' };
+    (proofService.prepareProofsForReceiving as Mock<any>).mockResolvedValueOnce([signed]);
+    const init = await service.init({ mint: mintUrl, proofs: [makeProof('unsigned')] } as Token);
+    const prepared = await service.prepare(init);
+    let stateDuringReceive: string | undefined;
+    let submittedProofs: Proof[] | undefined;
+    mockWalletReceive.mockImplementationOnce(async (token: Token) => {
+      stateDuringReceive = (await receiveOpRepo.getById(prepared.id))?.state;
+      submittedProofs = token.proofs;
+      return [makeProof('n1')];
+    });
+
+    await service.execute({ ...prepared, inputProofs: [makeProof('stale-caller-copy')] });
+
+    expect(stateDuringReceive).toBe('executing');
+    expect(submittedProofs).toEqual([signed]);
+  });
+
+  it('leaves the exact operation executing when local apply fails after remote success', async () => {
+    const init = await service.init({ mint: mintUrl, proofs: [makeProof('p1')] } as Token);
+    const prepared = await service.prepare(init);
+    const crashingTransactions: ReceiveTransactions = {
+      ...makeTransactions(proofService),
+      applyResult: async () => {
+        throw new Error('simulated crash before local apply');
+      },
+    };
+    service = new ReceiveOperationService({
+      operationQueries: receiveOpRepo,
+      proofQueries: proofRepo,
+      transactions: crashingTransactions,
+      proofService,
+      mintService,
+      walletService,
+      mintAdapter,
+      tokenService,
+      seedService,
+      eventBus,
+    });
+
+    await expect(service.execute(prepared)).rejects.toThrow('simulated crash before local apply');
+
+    const stored = await receiveOpRepo.getById(prepared.id);
+    expect(stored?.state).toBe('executing');
+    expect(stored && 'outputData' in stored ? stored.outputData : undefined).toEqual(
+      prepared.outputData,
+    );
+    expect(await proofRepo.getProofsByOperationId(mintUrl, prepared.id)).toEqual([]);
+  });
+
+  it('returns the committed result and logs post-commit listener failures', async () => {
+    const init = await service.init({ mint: mintUrl, proofs: [makeProof('p1')] } as Token);
+    const prepared = await service.prepare(init);
+    const logError = mock(() => {});
+    eventBus.on('receive-op:finalized', () => {
+      throw new Error('listener failed');
+    });
+    service = new ReceiveOperationService({
+      operationQueries: receiveOpRepo,
+      proofQueries: proofRepo,
+      transactions: makeTransactions(proofService),
+      proofService,
+      mintService,
+      walletService,
+      mintAdapter,
+      tokenService,
+      seedService,
+      eventBus,
+      logger: {
+        error: logError,
+        warn: mock(() => {}),
+        info: mock(() => {}),
+        debug: mock(() => {}),
+      },
+    });
+
+    await expect(service.execute(prepared)).resolves.toMatchObject({ state: 'finalized' });
+    expect(logError).toHaveBeenCalled();
+    expect((await receiveOpRepo.getById(prepared.id))?.state).toBe('finalized');
   });
 
   it('emits receive-op:rolled-back after the rolled back state is persisted', async () => {
@@ -574,7 +723,7 @@ describe('ReceiveOperationService', () => {
     { code: 11002, message: 'Proofs are pending' },
     { code: 11004, message: 'Outputs are pending' },
   ]) {
-    it(`rolls back when receive fails with non-spendable NUT-03 state ${code}`, async () => {
+    it(`keeps executing when receive has ambiguous NUT-03 pending state ${code}`, async () => {
       const proofs = [makeProof('p1')];
       const initOp = await service.init({ mint: mintUrl, proofs } as Token);
       const prepared = await service.prepare(initOp);
@@ -586,8 +735,7 @@ describe('ReceiveOperationService', () => {
       await expect(service.execute(prepared)).rejects.toThrow(message);
 
       const stored = await receiveOpRepo.getById(prepared.id);
-      expect(stored?.state).toBe('rolled_back');
-      expect(stored?.error).toBe(message);
+      expect(stored?.state).toBe('executing');
     });
   }
 
