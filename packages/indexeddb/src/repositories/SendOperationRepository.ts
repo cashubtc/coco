@@ -49,6 +49,7 @@ function rowToOperation(row: SendOperationRow): SendOperation {
     updatedAt: row.updatedAt * 1000,
     revision: row.revision ?? 0,
     error: row.error ?? undefined,
+    executionMemo: row.executionMemo ?? undefined,
     method: row.method as SendMethod,
     methodData: parseMethodData(row),
   };
@@ -119,6 +120,7 @@ function operationToRow(op: SendOperation): SendOperationRow {
       updatedAt: updatedAtSeconds,
       revision: op.revision ?? 0,
       error: op.error ?? null,
+      executionMemo: op.executionMemo ?? null,
       method: op.method,
       methodDataJson: stringifyJson(op.methodData),
       needsSwap: null,
@@ -141,6 +143,7 @@ function operationToRow(op: SendOperation): SendOperationRow {
     updatedAt: updatedAtSeconds,
     revision: op.revision ?? 0,
     error: op.error ?? null,
+    executionMemo: op.executionMemo ?? null,
     method: op.method,
     methodDataJson: stringifyJson(op.methodData),
     needsSwap: op.needsSwap ? 1 : 0,

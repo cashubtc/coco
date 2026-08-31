@@ -16,13 +16,7 @@
  * - rolled_back: Operation cancelled, proofs reclaimed
  */
 export type SendOperationState =
-  | 'init'
-  | 'prepared'
-  | 'executing'
-  | 'pending'
-  | 'finalized'
-  | 'rolling_back'
-  | 'rolled_back';
+  'init' | 'prepared' | 'executing' | 'pending' | 'finalized' | 'rolling_back' | 'rolled_back';
 
 import type { Amount, Token } from '@cashu/cashu-ts';
 import { getSecretsFromSerializedOutputData, type SerializedOutputData } from '../../utils';
@@ -71,6 +65,14 @@ interface SendOperationBase<M extends SendMethod = SendMethod> {
 
   /** Error message if the operation failed */
   error?: string;
+
+  /**
+   * Normalized token memo fixed before a swap request is submitted.
+   *
+   * Swap recovery uses this durable value to reconstruct the same token metadata after a crash
+   * between the mint response and the local result transaction.
+   */
+  executionMemo?: string;
 }
 
 /**

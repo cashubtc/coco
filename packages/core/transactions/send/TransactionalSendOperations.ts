@@ -15,9 +15,11 @@ import {
 import { assertSameUnit, normalizeUnit } from '@core/amounts.ts';
 import { SendOperationConflictError, ProofValidationError } from '@core/models/Error.ts';
 import type {
+  ExecutingSendOperation,
   InitSendOperation,
   PendingSendOperation,
   PreparedSendOperation,
+  RolledBackSendOperation,
   SendOperation,
 } from '@core/operations/send/SendOperation.ts';
 import type {
@@ -26,7 +28,12 @@ import type {
   ProofRepository,
   SendOperationRepository,
 } from '@core/repositories';
-import { serializeOutputData } from '@core/utils.ts';
+import type { CoreProof } from '@core/types.ts';
+import {
+  getSecretsFromSerializedOutputData,
+  serializeOutputData,
+  type SerializedOutputData,
+} from '@core/utils.ts';
 
 export interface PrepareSendCommand {
   operation: InitSendOperation;
@@ -63,9 +70,64 @@ export interface ExecuteExactSendResult {
   committed: boolean;
 }
 
+export interface BeginSwapExecutionCommand {
+  operationId: string;
+  expectedRevision: number;
+  updatedAt: number;
+  /** Normalized before entering the retried transaction. */
+  memo?: string;
+}
+
+export interface SwapTransportRequest {
+  mintUrl: string;
+  unit: string;
+  amount: Amount;
+  inputProofs: Proof[];
+  outputData: SerializedOutputData;
+}
+
+export interface BegunSwapExecution {
+  operation: ExecutingSendOperation;
+  request: SwapTransportRequest;
+}
+
+export interface ApplySwapResultCommand {
+  operationId: string;
+  expectedRevision: number;
+  updatedAt: number;
+  keepProofs: CoreProof[];
+  sendProofs: CoreProof[];
+  token: Token;
+}
+
+export interface AppliedSwapResult {
+  operation: PendingSendOperation;
+  savedProofs: CoreProof[];
+  spentInputSecrets: string[];
+  /** False when an equivalent result had already committed. */
+  committed: boolean;
+}
+
+export interface FailSwapExecutionCommand {
+  operationId: string;
+  expectedRevision: number;
+  updatedAt: number;
+  error: string;
+}
+
+export interface FailedSwapExecution {
+  operation: RolledBackSendOperation;
+  releasedInputSecrets: string[];
+  /** False when the same terminal failure had already committed. */
+  committed: boolean;
+}
+
 export interface TransactionalSendOperations {
   prepare(command: PrepareSendCommand): Promise<PreparedSendResult>;
   executeExact(command: ExecuteExactSendCommand): Promise<ExecuteExactSendResult>;
+  beginExecution(command: BeginSwapExecutionCommand): Promise<BegunSwapExecution>;
+  applyResult(command: ApplySwapResultCommand): Promise<AppliedSwapResult>;
+  failExecution(command: FailSwapExecutionCommand): Promise<FailedSwapExecution>;
   updateLegacy(operation: SendOperation): Promise<void>;
   deleteLegacy(operationId: string): Promise<void>;
 }
@@ -234,6 +296,231 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
     return { operation: pending, token, committed: true };
   }
 
+  async beginExecution(command: BeginSwapExecutionCommand): Promise<BegunSwapExecution> {
+    const current = await this.sends.getById(command.operationId);
+    if (!current) {
+      throw new SendOperationConflictError(command.operationId, 'Send operation not found');
+    }
+    if (current.state !== 'prepared') {
+      throw new SendOperationConflictError(
+        command.operationId,
+        `Cannot begin Send execution in state ${current.state}`,
+      );
+    }
+    if ((current.revision ?? 0) !== command.expectedRevision) {
+      throw new SendOperationConflictError(
+        command.operationId,
+        'Send preparation revision changed before execution',
+      );
+    }
+    if (!current.needsSwap || !current.outputData) {
+      throw new SendOperationConflictError(
+        command.operationId,
+        'Swap execution requires a prepared swap request',
+      );
+    }
+
+    const inputProofs = await this.getOwnedReadyInputs(current);
+    const executing: ExecutingSendOperation = {
+      ...current,
+      state: 'executing',
+      revision: (current.revision ?? 0) + 1,
+      updatedAt: command.updatedAt,
+      executionMemo: command.memo,
+    };
+    const transitioned = await this.sends.transition({
+      operationId: current.id,
+      expectedState: 'prepared',
+      expectedRevision: command.expectedRevision,
+      next: executing,
+    });
+    if (!transitioned) {
+      throw new SendOperationConflictError(
+        current.id,
+        'Send execution lost a prepared-state conflict',
+      );
+    }
+
+    return {
+      operation: executing,
+      request: {
+        mintUrl: executing.mintUrl,
+        unit: executing.unit,
+        amount: executing.amount,
+        inputProofs,
+        outputData: current.outputData,
+      },
+    };
+  }
+
+  async applyResult(command: ApplySwapResultCommand): Promise<AppliedSwapResult> {
+    const current = await this.sends.getById(command.operationId);
+    if (!current) {
+      throw new SendOperationConflictError(command.operationId, 'Send operation not found');
+    }
+    if (current.state === 'pending') {
+      if (
+        !current.needsSwap ||
+        !current.outputData ||
+        current.revision !== command.expectedRevision + 1 ||
+        !current.token ||
+        !sameToken(current.token, command.token)
+      ) {
+        throw new SendOperationConflictError(
+          command.operationId,
+          'Send result conflicts with the persisted pending token',
+        );
+      }
+      assertSwapResult(current, command);
+      const persistedProofs = (
+        await this.proofs.getProofsByOperationId(current.mintUrl, current.id)
+      ).filter((proof) => proof.createdByOperationId === current.id);
+      if (!sameCoreProofSet(persistedProofs, [...command.keepProofs, ...command.sendProofs])) {
+        throw new SendOperationConflictError(
+          command.operationId,
+          'Send result conflicts with the persisted pending proofs',
+        );
+      }
+      return {
+        operation: current,
+        savedProofs: [],
+        spentInputSecrets: [],
+        committed: false,
+      };
+    }
+    if (current.state !== 'executing' || !current.needsSwap || !current.outputData) {
+      throw new SendOperationConflictError(
+        command.operationId,
+        `Cannot apply Send result in state ${current.state}`,
+      );
+    }
+    if ((current.revision ?? 0) !== command.expectedRevision) {
+      throw new SendOperationConflictError(
+        command.operationId,
+        'Send execution revision changed before applying its result',
+      );
+    }
+
+    await this.getOwnedReadyInputs(current);
+    assertSwapResult(current, command);
+    const savedProofs = [...command.keepProofs, ...command.sendProofs];
+    if (savedProofs.length > 0) {
+      await this.proofs.saveProofs(current.mintUrl, savedProofs);
+    }
+    await this.proofs.setProofState(current.mintUrl, current.inputProofSecrets, 'spent');
+
+    const pending: PendingSendOperation = {
+      ...current,
+      state: 'pending',
+      revision: (current.revision ?? 0) + 1,
+      updatedAt: command.updatedAt,
+      token: command.token,
+    };
+    const transitioned = await this.sends.transition({
+      operationId: current.id,
+      expectedState: 'executing',
+      expectedRevision: command.expectedRevision,
+      next: pending,
+    });
+    if (!transitioned) {
+      throw new SendOperationConflictError(
+        current.id,
+        'Send result lost an executing-state conflict',
+      );
+    }
+
+    return {
+      operation: pending,
+      savedProofs,
+      spentInputSecrets: [...current.inputProofSecrets],
+      committed: true,
+    };
+  }
+
+  async failExecution(command: FailSwapExecutionCommand): Promise<FailedSwapExecution> {
+    const current = await this.sends.getById(command.operationId);
+    if (!current) {
+      throw new SendOperationConflictError(command.operationId, 'Send operation not found');
+    }
+    if (
+      current.state === 'rolled_back' &&
+      current.revision === command.expectedRevision + 1 &&
+      current.error === command.error
+    ) {
+      return {
+        operation: current,
+        releasedInputSecrets: [],
+        committed: false,
+      };
+    }
+    if (current.state !== 'executing' || !current.needsSwap) {
+      throw new SendOperationConflictError(
+        command.operationId,
+        `Cannot fail Send execution in state ${current.state}`,
+      );
+    }
+    if ((current.revision ?? 0) !== command.expectedRevision) {
+      throw new SendOperationConflictError(
+        command.operationId,
+        'Send execution revision changed before applying its failure',
+      );
+    }
+
+    await this.getOwnedReadyInputs(current);
+    await this.proofs.releaseProofs(current.mintUrl, current.inputProofSecrets);
+    const failed: RolledBackSendOperation = {
+      ...current,
+      state: 'rolled_back',
+      revision: (current.revision ?? 0) + 1,
+      updatedAt: command.updatedAt,
+      error: command.error,
+    };
+    const transitioned = await this.sends.transition({
+      operationId: current.id,
+      expectedState: 'executing',
+      expectedRevision: command.expectedRevision,
+      next: failed,
+    });
+    if (!transitioned) {
+      throw new SendOperationConflictError(
+        current.id,
+        'Send failure lost an executing-state conflict',
+      );
+    }
+
+    return {
+      operation: failed,
+      releasedInputSecrets: [...current.inputProofSecrets],
+      committed: true,
+    };
+  }
+
+  private async getOwnedReadyInputs(
+    operation: PreparedSendOperation | ExecutingSendOperation,
+  ): Promise<CoreProof[]> {
+    const proofs = await this.proofs.getProofsBySecrets(
+      operation.mintUrl,
+      operation.inputProofSecrets,
+    );
+    const bySecret = new Map(proofs.map((proof) => [proof.secret, proof]));
+    if (bySecret.size !== operation.inputProofSecrets.length) {
+      throw new ProofValidationError('Could not find all reserved Send proofs');
+    }
+    return operation.inputProofSecrets.map((secret) => {
+      const proof = bySecret.get(secret);
+      if (
+        !proof ||
+        proof.state !== 'ready' ||
+        proof.usedByOperationId !== operation.id ||
+        proof.mintUrl !== operation.mintUrl ||
+        normalizeUnit(proof.unit) !== normalizeUnit(operation.unit)
+      ) {
+        throw new ProofValidationError(`Send proof ${secret} is not ready and owned by operation`);
+      }
+      return proof;
+    });
+  }
+
   updateLegacy(operation: SendOperation) {
     return this.sends.update(operation);
   }
@@ -321,6 +608,101 @@ async function loadOwnedReadyProofs(
 function normalizeMemo(memo: string | undefined): string | undefined {
   const trimmed = memo?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function assertSwapResult(
+  operation: ExecutingSendOperation | PendingSendOperation,
+  command: ApplySwapResultCommand,
+): void {
+  const outputSecrets = getSecretsFromSerializedOutputData(operation.outputData!);
+  assertProofSet(operation, command.keepProofs, outputSecrets.keepSecrets, 'ready', 'keep');
+  assertProofSet(operation, command.sendProofs, outputSecrets.sendSecrets, 'inflight', 'send');
+
+  if (
+    command.token.mint !== operation.mintUrl ||
+    normalizeUnit(command.token.unit) !== normalizeUnit(operation.unit) ||
+    command.token.memo !== operation.executionMemo ||
+    !sameProofSet(command.token.proofs, command.sendProofs)
+  ) {
+    throw new ProofValidationError('Swap token does not match the persisted Send request');
+  }
+}
+
+function assertProofSet(
+  operation: ExecutingSendOperation | PendingSendOperation,
+  proofs: CoreProof[],
+  expectedSecrets: string[],
+  state: CoreProof['state'],
+  kind: string,
+): void {
+  if (
+    new Set(expectedSecrets).size !== expectedSecrets.length ||
+    new Set(proofs.map((proof) => proof.secret)).size !== proofs.length ||
+    proofs.length !== expectedSecrets.length
+  ) {
+    throw new ProofValidationError(`Swap ${kind} proofs do not match allocated outputs`);
+  }
+  const expected = new Set(expectedSecrets);
+  for (const proof of proofs) {
+    if (
+      !expected.has(proof.secret) ||
+      proof.mintUrl !== operation.mintUrl ||
+      normalizeUnit(proof.unit) !== normalizeUnit(operation.unit) ||
+      proof.state !== state ||
+      proof.createdByOperationId !== operation.id
+    ) {
+      throw new ProofValidationError(`Swap ${kind} proofs do not match allocated outputs`);
+    }
+  }
+}
+
+function sameToken(left: Token, right: Token): boolean {
+  return (
+    left.mint === right.mint &&
+    normalizeUnit(left.unit) === normalizeUnit(right.unit) &&
+    left.memo === right.memo &&
+    sameProofSet(left.proofs, right.proofs)
+  );
+}
+
+function sameCoreProofSet(left: CoreProof[], right: CoreProof[]): boolean {
+  return (
+    sameProofSet(left, right) &&
+    left.every((proof) => {
+      const candidate = right.find((item) => item.secret === proof.secret);
+      return (
+        candidate?.mintUrl === proof.mintUrl &&
+        normalizeUnit(candidate.unit) === normalizeUnit(proof.unit) &&
+        candidate.createdByOperationId === proof.createdByOperationId
+      );
+    })
+  );
+}
+
+function sameProofSet(left: Proof[], right: Proof[]): boolean {
+  if (
+    left.length !== right.length ||
+    new Set(left.map((proof) => proof.secret)).size !== left.length ||
+    new Set(right.map((proof) => proof.secret)).size !== right.length
+  ) {
+    return false;
+  }
+  const rightBySecret = new Map(right.map((proof) => [proof.secret, proof]));
+  return left.every((proof) => {
+    const candidate = rightBySecret.get(proof.secret);
+    return candidate ? sameProof(proof, candidate) : false;
+  });
+}
+
+function sameProof(left: Proof, right: Proof): boolean {
+  return (
+    left.id === right.id &&
+    left.secret === right.secret &&
+    left.C === right.C &&
+    Amount.from(left.amount).equals(Amount.from(right.amount)) &&
+    left.witness === right.witness &&
+    JSON.stringify(left.dleq) === JSON.stringify(right.dleq)
+  );
 }
 
 function assertCurrentActiveKeys(
