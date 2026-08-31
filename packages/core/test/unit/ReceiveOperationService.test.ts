@@ -28,6 +28,9 @@ import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepo
 import { ReceiveOperationService } from '../../operations/receive/ReceiveOperationService';
 import { MintScopedLock } from '../../operations/MintScopedLock';
 import { MemoryReceiveOperationRepository } from '../../repositories/memory/MemoryReceiveOperationRepository';
+import type { ReceiveTransactions } from '../../transactions/receive/ReceiveTransactions.ts';
+import { serializeOutputData } from '../../utils.ts';
+import type { SeedService } from '../../services/SeedService.ts';
 
 describe('ReceiveOperationService', () => {
   const mintUrl = 'https://mint.test';
@@ -74,6 +77,42 @@ describe('ReceiveOperationService', () => {
       checkProofStates: mock(() => Promise.resolve([])),
     }) as unknown as MintAdapter;
 
+  const makeTransactions = (serviceProofs: ProofService): ReceiveTransactions => ({
+    prepare: async ({ operation, fee }) => {
+      const outputResult = await serviceProofs.createOutputsAndIncrementCounters(
+        operation.mintUrl,
+        {
+          keep: { amount: operation.amount.subtract(fee), unit: operation.unit },
+          send: { amount: Amount.zero(), unit: operation.unit },
+        },
+        {},
+      );
+      if (outputResult.keep.length === 0) {
+        throw new Error('Failed to create deterministic outputs for receive');
+      }
+      const prepared: PreparedReceiveOperation = {
+        ...operation,
+        state: 'prepared',
+        revision: 0,
+        fee,
+        outputData: serializeOutputData({ keep: outputResult.keep, send: [] }),
+      };
+      const existing = await receiveOpRepo.getById(operation.id);
+      if (existing) await receiveOpRepo.update(prepared);
+      else await receiveOpRepo.create(prepared);
+      return {
+        operation: prepared,
+        counter: { mintUrl: operation.mintUrl, keysetId, counter: 1 },
+      };
+    },
+    updateLegacyOperation: (operation) => receiveOpRepo.update(operation),
+    deleteLegacyInit: (operationId) => receiveOpRepo.delete(operationId),
+  });
+
+  const seedService = {
+    getSeed: async () => new Uint8Array(64).fill(1),
+  } as SeedService;
+
   beforeEach(() => {
     receiveOpRepo = new MemoryReceiveOperationRepository();
     proofRepo = new MemoryProofRepository();
@@ -89,6 +128,7 @@ describe('ReceiveOperationService', () => {
           getFeesForProofs: mock(() => Amount.zero()),
           receive: mockWalletReceive,
         },
+        keys: { id: keysetId, unit: 'sat', keys: { 1: 'unused' } },
       })),
       getWallet: mock(async () => ({
         checkProofsStates: mock(async () => []),
@@ -118,16 +158,18 @@ describe('ReceiveOperationService', () => {
 
     tokenService = new TokenService(mintService);
 
-    service = new ReceiveOperationService(
-      receiveOpRepo,
-      proofRepo,
+    service = new ReceiveOperationService({
+      operationQueries: receiveOpRepo,
+      proofQueries: proofRepo,
+      transactions: makeTransactions(proofService),
       proofService,
       mintService,
       walletService,
       mintAdapter,
       tokenService,
+      seedService,
       eventBus,
-    );
+    });
   });
 
   it('init -> prepare -> execute via receive() finalizes and emits event', async () => {
@@ -166,6 +208,19 @@ describe('ReceiveOperationService', () => {
     expect(prepared.outputData).toBeDefined();
   });
 
+  it('keeps init in memory and persists the exact P2PK-signed request during prepare', async () => {
+    const proof = makeProof('p2pk');
+    const signed = { ...proof, witness: '{"signatures":["signed-once"]}' };
+    (proofService.prepareProofsForReceiving as Mock<any>).mockResolvedValueOnce([signed]);
+
+    const init = await service.init({ mint: mintUrl, proofs: [proof] } as Token);
+    expect(await receiveOpRepo.getById(init.id)).toBeNull();
+
+    const prepared = await service.prepare(init);
+    expect(prepared.inputProofs).toEqual([signed]);
+    expect((await receiveOpRepo.getById(init.id))?.inputProofs).toEqual([signed]);
+  });
+
   it('serializes concurrent prepare() on the same mint so deterministic outputs cannot collide', async () => {
     // Two independent tokens received on the same mint at the same time (for example the
     // same gift-wrapped token delivered more than once, or two tokens arriving together)
@@ -192,18 +247,19 @@ describe('ReceiveOperationService', () => {
     } as unknown as ProofService;
 
     const mintScopedLock = new MintScopedLock();
-    service = new ReceiveOperationService(
-      receiveOpRepo,
-      proofRepo,
-      racingProofService,
+    service = new ReceiveOperationService({
+      operationQueries: receiveOpRepo,
+      proofQueries: proofRepo,
+      transactions: makeTransactions(racingProofService),
+      proofService: racingProofService,
       mintService,
       walletService,
       mintAdapter,
       tokenService,
+      seedService,
       eventBus,
-      undefined,
       mintScopedLock,
-    );
+    });
 
     const opA = await service.init({ mint: mintUrl, proofs: [makeProof('a')] } as Token);
     const opB = await service.init({ mint: mintUrl, proofs: [makeProof('b')] } as Token);
@@ -232,7 +288,7 @@ describe('ReceiveOperationService', () => {
 
     expect(prepared.state).toBe('prepared');
     expect(persistedState).toBe('prepared');
-    expect(lockedDuringEvent).toBe(true);
+    expect(lockedDuringEvent).toBe(false);
   });
 
   it('emits receive-op:finalized after the finalized state is persisted', async () => {

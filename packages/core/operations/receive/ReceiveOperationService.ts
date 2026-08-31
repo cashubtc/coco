@@ -4,14 +4,12 @@ import {
   type Proof,
   type ProofState as CashuProofState,
   type Token,
-  Amount,
 } from '@cashu/cashu-ts';
 
 import {
   generateSubId,
   normalizeMintUrl,
   mapProofToCoreProof,
-  serializeOutputData,
   deserializeOutputData,
   computeYHexForSecrets,
 } from '../../utils';
@@ -39,11 +37,17 @@ import type { MintService } from '../../services/MintService';
 import type { ProofService } from '../../services/ProofService';
 import type { TokenService } from '../../services/TokenService';
 import type { WalletService } from '../../services/WalletService';
+import type { SeedService } from '../../services/SeedService.ts';
 import { createReceiveOperation, getOutputProofSecrets } from './ReceiveOperation';
-import type { ReceiveOperationRepository, ProofRepository } from '../../repositories';
 import { OperationIdLock } from '../OperationIdLock';
 import { MintScopedLock } from '../MintScopedLock';
 import { DEFAULT_UNIT, normalizeUnit } from '../../amounts.ts';
+import type { ReceiveTransactions } from '../../transactions/receive/ReceiveTransactions.ts';
+import type {
+  ReceiveOperationQueries,
+  ReceiveProofQueries,
+} from '../../transactions/receive/ReceiveOperationQueries.ts';
+import type { PreparedReceiveResult } from '../../transactions/receive/TransactionalReceiveOperations.ts';
 
 const NON_TERMINAL_RECEIVE_MINT_ERROR_CODES = new Set([
   // 11003 is special for receive recovery: the mint may already have accepted and
@@ -56,6 +60,21 @@ const NON_TERMINAL_RECEIVE_MINT_ERROR_CODES = new Set([
   11003,
 ]);
 
+export interface ReceiveOperationServiceDependencies {
+  operationQueries: ReceiveOperationQueries;
+  proofQueries: ReceiveProofQueries;
+  transactions: ReceiveTransactions;
+  proofService: ProofService;
+  mintService: MintService;
+  walletService: WalletService;
+  mintAdapter: MintAdapter;
+  tokenService: TokenService;
+  seedService: SeedService;
+  eventBus: EventBus<CoreEvents>;
+  logger?: Logger;
+  mintScopedLock?: MintScopedLock;
+}
+
 /**
  * Service that manages receive operations as sagas.
  *
@@ -64,13 +83,15 @@ const NON_TERMINAL_RECEIVE_MINT_ERROR_CODES = new Set([
  * rolledback for failure state
  */
 export class ReceiveOperationService {
-  private readonly receiveOperationRepository: ReceiveOperationRepository;
-  private readonly proofRepository: ProofRepository;
+  private readonly operationQueries: ReceiveOperationQueries;
+  private readonly proofQueries: ReceiveProofQueries;
+  private readonly transactions: ReceiveTransactions;
   private readonly proofService: ProofService;
   private readonly mintService: MintService;
   private readonly walletService: WalletService;
   private readonly mintAdapter: MintAdapter;
   private readonly tokenService: TokenService;
+  private readonly seedService: SeedService;
   private readonly eventBus: EventBus<CoreEvents>;
   private readonly logger?: Logger;
 
@@ -81,28 +102,19 @@ export class ReceiveOperationService {
   /** In-memory lock to serialize deterministic-output derivation (counter) per mint */
   private readonly mintScopedLock: MintScopedLock;
 
-  constructor(
-    receiveOperationRepository: ReceiveOperationRepository,
-    proofRepository: ProofRepository,
-    proofService: ProofService,
-    mintService: MintService,
-    walletService: WalletService,
-    mintAdapter: MintAdapter,
-    tokenService: TokenService,
-    eventBus: EventBus<CoreEvents>,
-    logger?: Logger,
-    mintScopedLock?: MintScopedLock,
-  ) {
-    this.receiveOperationRepository = receiveOperationRepository;
-    this.proofRepository = proofRepository;
-    this.proofService = proofService;
-    this.mintService = mintService;
-    this.walletService = walletService;
-    this.mintAdapter = mintAdapter;
-    this.tokenService = tokenService;
-    this.eventBus = eventBus;
-    this.logger = logger;
-    this.mintScopedLock = mintScopedLock ?? new MintScopedLock();
+  constructor(dependencies: ReceiveOperationServiceDependencies) {
+    this.operationQueries = dependencies.operationQueries;
+    this.proofQueries = dependencies.proofQueries;
+    this.transactions = dependencies.transactions;
+    this.proofService = dependencies.proofService;
+    this.mintService = dependencies.mintService;
+    this.walletService = dependencies.walletService;
+    this.mintAdapter = dependencies.mintAdapter;
+    this.tokenService = dependencies.tokenService;
+    this.seedService = dependencies.seedService;
+    this.eventBus = dependencies.eventBus;
+    this.logger = dependencies.logger;
+    this.mintScopedLock = dependencies.mintScopedLock ?? new MintScopedLock();
   }
 
   /**
@@ -126,7 +138,7 @@ export class ReceiveOperationService {
 
   /**
    * Create a new receive operation by decoding and validating the token.
-   * Persists the init state so recovery can reason about this operation.
+   * The returned intent is not persisted. Preparation creates the first durable row atomically.
    */
   async init(
     token: Token | string,
@@ -157,8 +169,7 @@ export class ReceiveOperationService {
     const id = generateSubId();
     const operation = createReceiveOperation(id, mintUrl, { amount, unit }, preparedProofs, source);
 
-    await this.receiveOperationRepository.create(operation);
-    this.logger?.debug('Receive operation created', {
+    this.logger?.debug('Receive operation initialized in memory', {
       operationId: id,
       mintUrl,
       amount,
@@ -174,57 +185,37 @@ export class ReceiveOperationService {
    */
   async prepare(operation: InitReceiveOperation): Promise<PreparedReceiveOperation> {
     const releaseLock = await this.acquireOperationLock(operation.id);
+    let result: PreparedReceiveResult;
     try {
       // Serialize per-mint so concurrent receives on the same keyset cannot read the
       // same NUT-13 counter and derive colliding deterministic outputs. Mirrors the
       // send/melt/mint services, which already hold this lock across counter usage.
       const releaseMintLock = await this.mintScopedLock.acquire(operation.mintUrl);
-      let prepared: PreparedReceiveOperation;
       try {
-        const current = await this.receiveOperationRepository.getById(operation.id);
-        if (!current) {
-          throw new Error(`Operation ${operation.id} not found`);
-        }
-        if (current.state !== 'init') {
+        const current = await this.operationQueries.getById(operation.id);
+        if (current && current.state !== 'init') {
           throw new Error(`Cannot prepare operation in state '${current.state}'. Expected 'init'.`);
         }
-
-        try {
-          prepared = await this.prepareInternal(current as InitReceiveOperation);
-        } catch (e) {
-          if (current.state === 'init') {
-            await this.tryRecoverInitOperation(current as InitReceiveOperation);
-          }
-          throw e;
-        }
+        const intent = current ? (current as InitReceiveOperation) : operation;
+        result = await this.prepareInternal(intent);
       } finally {
         releaseMintLock();
       }
-
-      // Emit outside the mint lock so a listener cannot extend or re-enter the
-      // per-mint critical section. Mirrors the send service.
-      await this.eventBus.emit('receive-op:prepared', {
-        mintUrl: prepared.mintUrl,
-        operationId: prepared.id,
-        operation: prepared,
-      });
-
-      return prepared;
     } finally {
       releaseLock();
     }
+    await this.publishPrepared(result);
+    return result.operation;
   }
 
   /** Internal prepare logic used by prepare(), separated for error handling. */
-  private async prepareInternal(
-    operation: InitReceiveOperation,
-  ): Promise<PreparedReceiveOperation> {
+  private async prepareInternal(operation: InitReceiveOperation): Promise<PreparedReceiveResult> {
     if (!operation.inputProofs || operation.inputProofs.length === 0) {
       throw new ProofValidationError('Receive operation has no input proofs');
     }
 
     const { mintUrl } = operation;
-    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
+    const { wallet, keys } = await this.walletService.getWalletWithActiveKeysetId(
       mintUrl,
       operation.unit,
     );
@@ -234,32 +225,13 @@ export class ReceiveOperationService {
       throw new ProofValidationError('Receive amount is not sufficient after fees');
     }
 
-    const keepAmount = operation.amount.subtract(fee);
-
-    const outputResult = await this.proofService.createOutputsAndIncrementCounters(
-      mintUrl,
-      {
-        keep: { amount: keepAmount, unit: operation.unit },
-        send: { amount: Amount.zero(), unit: operation.unit },
-      },
-      {},
-    );
-
-    if (!outputResult.keep || outputResult.keep.length === 0) {
-      throw new Error('Failed to create deterministic outputs for receive');
-    }
-
-    const outputData = serializeOutputData({ keep: outputResult.keep, send: [] });
-
-    const prepared: PreparedReceiveOperation = {
-      ...operation,
-      state: 'prepared',
-      updatedAt: Date.now(),
+    const seed = await this.seedService.getSeed();
+    const result = await this.transactions.prepare({
+      operation: { ...operation, updatedAt: Date.now() },
+      activeKeys: keys,
+      seed,
       fee,
-      outputData,
-    };
-
-    await this.receiveOperationRepository.update(prepared);
+    });
 
     this.logger?.info('Receive operation prepared', {
       operationId: operation.id,
@@ -268,7 +240,27 @@ export class ReceiveOperationService {
       proofCount: operation.inputProofs.length,
     });
 
-    return prepared;
+    return result;
+  }
+
+  private async publishPrepared(result: PreparedReceiveResult): Promise<void> {
+    await this.publishCommittedEvent('counter:updated', result.counter);
+    await this.publishCommittedEvent('receive-op:prepared', {
+      mintUrl: result.operation.mintUrl,
+      operationId: result.operation.id,
+      operation: result.operation,
+    });
+  }
+
+  private async publishCommittedEvent<E extends keyof CoreEvents>(
+    event: E,
+    payload: CoreEvents[E],
+  ): Promise<void> {
+    try {
+      await this.eventBus.emit(event, payload, { throwOnError: true });
+    } catch (error) {
+      this.logger?.error('Failed to publish committed Receive event', { event, error });
+    }
   }
 
   /**
@@ -278,7 +270,7 @@ export class ReceiveOperationService {
   async execute(operation: PreparedReceiveOperation): Promise<FinalizedReceiveOperation> {
     const releaseLock = await this.acquireOperationLock(operation.id);
     try {
-      const current = await this.receiveOperationRepository.getById(operation.id);
+      const current = await this.operationQueries.getById(operation.id);
       if (!current) {
         throw new Error(`Operation ${operation.id} not found`);
       }
@@ -294,7 +286,7 @@ export class ReceiveOperationService {
         state: 'executing',
         updatedAt: Date.now(),
       };
-      await this.receiveOperationRepository.update(executing);
+      await this.transactions.updateLegacyOperation(executing);
 
       try {
         return await this.executeInternal(executing);
@@ -366,7 +358,7 @@ export class ReceiveOperationService {
    * Used by recovery when outputs are already saved.
    */
   async finalize(operationId: string): Promise<void> {
-    const preCheck = await this.receiveOperationRepository.getById(operationId);
+    const preCheck = await this.operationQueries.getById(operationId);
     if (!preCheck) {
       throw new Error(`Operation ${operationId} not found`);
     }
@@ -381,7 +373,7 @@ export class ReceiveOperationService {
 
     const releaseLock = await this.acquireOperationLock(operationId);
     try {
-      const operation = await this.receiveOperationRepository.getById(operationId);
+      const operation = await this.operationQueries.getById(operationId);
       if (!operation) {
         throw new Error(`Operation ${operationId} not found`);
       }
@@ -426,13 +418,13 @@ export class ReceiveOperationService {
       let initCount = 0;
       let executingCount = 0;
 
-      const initOps = await this.receiveOperationRepository.getByState('init');
+      const initOps = await this.operationQueries.getByState('init');
       for (const op of initOps) {
         let didRecover = false;
         try {
           const releaseLock = await this.acquireOperationLock(op.id);
           try {
-            const current = await this.receiveOperationRepository.getById(op.id);
+            const current = await this.operationQueries.getById(op.id);
             if (current && current.state === 'init') {
               await this.recoverInitOperation(current as InitReceiveOperation);
               didRecover = true;
@@ -454,18 +446,18 @@ export class ReceiveOperationService {
         }
       }
 
-      const preparedOps = await this.receiveOperationRepository.getByState('prepared');
+      const preparedOps = await this.operationQueries.getByState('prepared');
       for (const op of preparedOps) {
         this.logger?.warn('Found stale prepared receive operation, user can rollback manually', {
           operationId: op.id,
         });
       }
 
-      const executingOps = await this.receiveOperationRepository.getByState('executing');
+      const executingOps = await this.operationQueries.getByState('executing');
       for (const op of executingOps) {
         let didRecover = false;
         try {
-          const current = await this.receiveOperationRepository.getById(op.id);
+          const current = await this.operationQueries.getById(op.id);
           if (current && current.state === 'executing') {
             await this.recoverExecutingOperation(current as ExecutingReceiveOperation);
             didRecover = true;
@@ -499,21 +491,8 @@ export class ReceiveOperationService {
 
   /** Cleanup for failed init operations with no external side effects. */
   private async recoverInitOperation(op: InitReceiveOperation): Promise<void> {
-    await this.receiveOperationRepository.delete(op.id);
+    await this.transactions.deleteLegacyInit(op.id);
     this.logger?.info('Cleaned up failed receive init operation', { operationId: op.id });
-  }
-
-  /** Init recovery when prepare fails. */
-  private async tryRecoverInitOperation(op: InitReceiveOperation): Promise<void> {
-    try {
-      await this.recoverInitOperation(op);
-      this.logger?.info('Recovered init receive operation after failure', { operationId: op.id });
-    } catch (recoveryError) {
-      this.logger?.warn('Failed to recover init receive operation, will retry on next startup', {
-        operationId: op.id,
-        error: recoveryError instanceof Error ? recoveryError.message : String(recoveryError),
-      });
-    }
   }
 
   /**
@@ -526,7 +505,7 @@ export class ReceiveOperationService {
   ): Promise<void> {
     const releaseLock = options?.skipLock ? undefined : await this.acquireOperationLock(op.id);
     try {
-      const current = await this.receiveOperationRepository.getById(op.id);
+      const current = await this.operationQueries.getById(op.id);
       if (!current) {
         this.logger?.warn('Receive operation missing during recovery', { operationId: op.id });
         return;
@@ -697,7 +676,7 @@ export class ReceiveOperationService {
    * Persist finalized state and emit the operation finalized event.
    */
   private async markAsFinalized(op: ExecutingReceiveOperation): Promise<FinalizedReceiveOperation> {
-    const current = await this.receiveOperationRepository.getById(op.id);
+    const current = await this.operationQueries.getById(op.id);
     if (!current) {
       throw new Error(`Operation ${op.id} not found`);
     }
@@ -716,7 +695,7 @@ export class ReceiveOperationService {
       state: 'finalized',
       updatedAt: Date.now(),
     };
-    await this.receiveOperationRepository.update(finalized);
+    await this.transactions.updateLegacyOperation(finalized);
     await this.eventBus.emit('receive-op:finalized', {
       mintUrl: finalized.mintUrl,
       operationId: finalized.id,
@@ -745,7 +724,7 @@ export class ReceiveOperationService {
       updatedAt: Date.now(),
       error,
     };
-    await this.receiveOperationRepository.update(rolledBack);
+    await this.transactions.updateLegacyOperation(rolledBack);
     await this.eventBus.emit('receive-op:rolled-back', {
       mintUrl: rolledBack.mintUrl,
       operationId: rolledBack.id,
@@ -768,7 +747,7 @@ export class ReceiveOperationService {
     const outputSecrets = getOutputProofSecrets(op);
     if (outputSecrets.length === 0) return false;
 
-    const existingProofs = await this.proofRepository.getProofsBySecrets(op.mintUrl, outputSecrets);
+    const existingProofs = await this.proofQueries.getProofsBySecrets(op.mintUrl, outputSecrets);
     return existingProofs.length === new Set(outputSecrets).size;
   }
 
@@ -787,21 +766,21 @@ export class ReceiveOperationService {
    * Get an operation by ID.
    */
   async getOperation(operationId: string): Promise<ReceiveOperation | null> {
-    return this.receiveOperationRepository.getById(operationId);
+    return this.operationQueries.getById(operationId);
   }
 
   /**
    * Get all pending operations.
    */
   async getPendingOperations(): Promise<ReceiveOperation[]> {
-    return this.receiveOperationRepository.getPending();
+    return this.operationQueries.getPending();
   }
 
   /**
    * Get all prepared operations.
    */
   async getPreparedOperations(): Promise<PreparedReceiveOperation[]> {
-    const ops = await this.receiveOperationRepository.getByState('prepared');
+    const ops = await this.operationQueries.getByState('prepared');
     return ops.filter((op): op is PreparedReceiveOperation => op.state === 'prepared');
   }
 
@@ -812,7 +791,7 @@ export class ReceiveOperationService {
   async rollback(operationId: string, reason?: string): Promise<void> {
     const releaseLock = await this.acquireOperationLock(operationId);
     try {
-      const operation = await this.receiveOperationRepository.getById(operationId);
+      const operation = await this.operationQueries.getById(operationId);
       if (!operation) {
         throw new Error(`Operation ${operationId} not found`);
       }
@@ -828,7 +807,7 @@ export class ReceiveOperationService {
           throw new Error(`Cannot rollback operation in state ${operation.state}`);
 
         case 'init':
-          await this.receiveOperationRepository.delete(operation.id);
+          await this.transactions.deleteLegacyInit(operation.id);
           this.logger?.info('Receive operation cancelled', {
             operationId,
             reason: reason ?? 'User cancelled receive operation',

@@ -59,6 +59,14 @@ interface ReceiveOperationBase {
   /** Timestamp when the operation was last updated */
   updatedAt: number;
 
+  /**
+   * Monotonic persistence revision used by conditional state transitions.
+   *
+   * This is optional at the public boundary so persisted operations created by older Coco
+   * versions remain source-compatible. Repositories normalize a missing revision to zero.
+   */
+  revision?: number;
+
   /** Error message if the operation failed */
   error?: string;
 

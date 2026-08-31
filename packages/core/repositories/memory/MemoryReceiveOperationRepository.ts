@@ -16,19 +16,47 @@ export class MemoryReceiveOperationRepository implements ReceiveOperationReposit
     if (this.operations.has(operation.id)) {
       throw new Error(`ReceiveOperation with id ${operation.id} already exists`);
     }
-    this.operations.set(operation.id, { ...operation });
+    this.operations.set(operation.id, { ...operation, revision: operation.revision ?? 0 });
   }
 
   async update(operation: ReceiveOperation): Promise<void> {
     if (!this.operations.has(operation.id)) {
       throw new Error(`ReceiveOperation with id ${operation.id} not found`);
     }
-    this.operations.set(operation.id, { ...operation, updatedAt: Date.now() });
+    this.operations.set(operation.id, {
+      ...operation,
+      revision: operation.revision ?? 0,
+      updatedAt: Date.now(),
+    });
+  }
+
+  async transition(command: {
+    operationId: string;
+    expectedState: ReceiveOperationState;
+    expectedRevision: number;
+    next: ReceiveOperation;
+  }): Promise<boolean> {
+    const current = this.operations.get(command.operationId);
+    if (
+      !current ||
+      current.state !== command.expectedState ||
+      (current.revision ?? 0) !== command.expectedRevision
+    ) {
+      return false;
+    }
+    if (command.next.id !== command.operationId) {
+      throw new Error('Receive operation transition cannot change the operation id');
+    }
+    this.operations.set(command.operationId, {
+      ...command.next,
+      revision: command.expectedRevision + 1,
+    });
+    return true;
   }
 
   async getById(id: string): Promise<ReceiveOperation | null> {
     const op = this.operations.get(id);
-    return op ? { ...op } : null;
+    return op ? { ...op, revision: op.revision ?? 0 } : null;
   }
 
   async getByState(state: ReceiveOperationState): Promise<ReceiveOperation[]> {

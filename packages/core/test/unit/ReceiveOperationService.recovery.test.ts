@@ -20,6 +20,8 @@ import { ReceiveOpsApi } from '../../api/ReceiveOpsApi.ts';
 import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepository';
 import { ReceiveOperationService } from '../../operations/receive/ReceiveOperationService';
 import { MemoryReceiveOperationRepository } from '../../repositories/memory/MemoryReceiveOperationRepository';
+import type { ReceiveTransactions } from '../../transactions/receive/ReceiveTransactions.ts';
+import type { SeedService } from '../../services/SeedService.ts';
 
 describe('ReceiveOperationService - recoverPendingOperations', () => {
   const mintUrl = 'https://mint.test';
@@ -127,16 +129,25 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
 
     tokenService = new TokenService(mintService);
 
-    service = new ReceiveOperationService(
-      receiveOpRepo,
-      proofRepo,
+    const transactions: ReceiveTransactions = {
+      prepare: async () => {
+        throw new Error('Unexpected Receive preparation');
+      },
+      updateLegacyOperation: (operation) => receiveOpRepo.update(operation),
+      deleteLegacyInit: (operationId) => receiveOpRepo.delete(operationId),
+    };
+    service = new ReceiveOperationService({
+      operationQueries: receiveOpRepo,
+      proofQueries: proofRepo,
+      transactions,
       proofService,
       mintService,
       walletService,
       mintAdapter,
       tokenService,
+      seedService: { getSeed: async () => new Uint8Array(64) } as SeedService,
       eventBus,
-    );
+    });
     api = new ReceiveOpsApi(service);
   });
 

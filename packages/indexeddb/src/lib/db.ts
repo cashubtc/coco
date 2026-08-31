@@ -204,7 +204,13 @@ export interface SendOperationRow {
   amount: string | number;
   unit?: string | null;
   state:
-    'init' | 'prepared' | 'executing' | 'pending' | 'finalized' | 'rolling_back' | 'rolled_back';
+    | 'init'
+    | 'prepared'
+    | 'executing'
+    | 'pending'
+    | 'finalized'
+    | 'rolling_back'
+    | 'rolled_back';
   createdAt: number;
   updatedAt: number;
   revision?: number;
@@ -228,6 +234,7 @@ export interface ReceiveOperationRow {
   state: 'init' | 'prepared' | 'executing' | 'finalized' | 'rolled_back';
   createdAt: number;
   updatedAt: number;
+  revision?: number;
   error?: string | null;
   fee?: string | number | null;
   inputProofsJson?: string | null;
@@ -278,7 +285,13 @@ export interface MeltOperationRow {
   id: string;
   mintUrl: string;
   state:
-    'init' | 'prepared' | 'executing' | 'pending' | 'finalized' | 'rolling_back' | 'rolled_back';
+    | 'init'
+    | 'prepared'
+    | 'executing'
+    | 'pending'
+    | 'finalized'
+    | 'rolling_back'
+    | 'rolled_back';
   createdAt: number;
   updatedAt: number;
   error?: string | null;

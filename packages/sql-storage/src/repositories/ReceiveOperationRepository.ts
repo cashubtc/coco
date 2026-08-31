@@ -19,6 +19,7 @@ interface ReceiveOperationRow {
   state: ReceiveOperationState;
   createdAt: number;
   updatedAt: number;
+  revision: number | null;
   error: string | null;
   fee: string | number | null;
   inputProofsJson: string | null;
@@ -45,6 +46,7 @@ function rowToOperation(row: ReceiveOperationRow): ReceiveOperation {
     inputProofs: parseInputProofs(row.inputProofsJson),
     createdAt: row.createdAt * 1000,
     updatedAt: row.updatedAt * 1000,
+    revision: row.revision ?? 0,
     error: row.error ?? undefined,
     source: row.sourceJson ? JSON.parse(row.sourceJson) : undefined,
   };
@@ -90,6 +92,7 @@ function operationToParams(op: ReceiveOperation): SqlValue[] {
       JSON.stringify(op.inputProofs),
       null,
       op.source ? JSON.stringify(op.source) : null,
+      op.revision ?? 0,
     ];
   }
 
@@ -106,6 +109,7 @@ function operationToParams(op: ReceiveOperation): SqlValue[] {
     JSON.stringify(op.inputProofs),
     op.outputData ? JSON.stringify(op.outputData) : null,
     op.source ? JSON.stringify(op.source) : null,
+    op.revision ?? 0,
   ];
 }
 
@@ -128,8 +132,8 @@ export class SqliteReceiveOperationRepository implements ReceiveOperationReposit
     const params = operationToParams(operation);
     await this.db.run(
       `INSERT INTO coco_cashu_receive_operations
-        (id, mintUrl, unit, amount, state, createdAt, updatedAt, error, fee, inputProofsJson, outputDataJson, sourceJson)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (id, mintUrl, unit, amount, state, createdAt, updatedAt, error, fee, inputProofsJson, outputDataJson, sourceJson, revision)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       params,
     );
   }
@@ -148,7 +152,7 @@ export class SqliteReceiveOperationRepository implements ReceiveOperationReposit
     if (operation.state === 'init') {
       await this.db.run(
         `UPDATE coco_cashu_receive_operations
-         SET state = ?, updatedAt = ?, error = ?, unit = ?, inputProofsJson = ?, sourceJson = ?
+         SET state = ?, updatedAt = ?, error = ?, unit = ?, inputProofsJson = ?, sourceJson = ?, revision = ?
          WHERE id = ?`,
         [
           operation.state,
@@ -157,13 +161,14 @@ export class SqliteReceiveOperationRepository implements ReceiveOperationReposit
           getOperationUnit(operation),
           JSON.stringify(operation.inputProofs),
           operation.source ? JSON.stringify(operation.source) : null,
+          operation.revision ?? 0,
           operation.id,
         ],
       );
     } else {
       await this.db.run(
         `UPDATE coco_cashu_receive_operations
-         SET state = ?, updatedAt = ?, error = ?, unit = ?, fee = ?, inputProofsJson = ?, outputDataJson = ?, sourceJson = ?
+         SET state = ?, updatedAt = ?, error = ?, unit = ?, fee = ?, inputProofsJson = ?, outputDataJson = ?, sourceJson = ?, revision = ?
          WHERE id = ?`,
         [
           operation.state,
@@ -174,10 +179,47 @@ export class SqliteReceiveOperationRepository implements ReceiveOperationReposit
           JSON.stringify(operation.inputProofs),
           operation.outputData ? JSON.stringify(operation.outputData) : null,
           operation.source ? JSON.stringify(operation.source) : null,
+          operation.revision ?? 0,
           operation.id,
         ],
       );
     }
+  }
+
+  async transition(command: {
+    operationId: string;
+    expectedState: ReceiveOperationState;
+    expectedRevision: number;
+    next: ReceiveOperation;
+  }): Promise<boolean> {
+    if (command.next.id !== command.operationId) {
+      throw new Error('Receive operation transition cannot change the operation id');
+    }
+    const next = command.next;
+    const fee: SqlValue = next.state === 'init' ? null : serializeAmount(next.fee);
+    const outputData: SqlValue =
+      next.state === 'init' || !next.outputData ? null : JSON.stringify(next.outputData);
+    const result = await this.db.run(
+      `UPDATE coco_cashu_receive_operations
+       SET state = ?, updatedAt = ?, error = ?, unit = ?, fee = ?, inputProofsJson = ?,
+           outputDataJson = ?, sourceJson = ?, revision = ?
+       WHERE id = ? AND state = ? AND revision = ?`,
+      [
+        next.state,
+        Math.floor(next.updatedAt / 1000),
+        next.error ?? null,
+        getOperationUnit(next),
+        fee,
+        JSON.stringify(next.inputProofs),
+        outputData,
+        next.source ? JSON.stringify(next.source) : null,
+        command.expectedRevision + 1,
+        command.operationId,
+        command.expectedState,
+        command.expectedRevision,
+      ],
+    );
+    return result.changes === 1;
   }
 
   async getById(id: string): Promise<ReceiveOperation | null> {
