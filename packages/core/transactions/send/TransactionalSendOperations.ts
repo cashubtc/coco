@@ -16,12 +16,15 @@ import { assertSameUnit, normalizeUnit } from '@core/amounts.ts';
 import { SendOperationConflictError, ProofValidationError } from '@core/models/Error.ts';
 import type {
   ExecutingSendOperation,
+  FinalizedSendOperation,
   InitSendOperation,
   PendingSendOperation,
   PreparedSendOperation,
+  RollingBackSendOperation,
   RolledBackSendOperation,
   SendOperation,
 } from '@core/operations/send/SendOperation.ts';
+import { getSendProofSecrets } from '@core/operations/send/SendOperation.ts';
 import type {
   CounterRepository,
   KeysetRepository,
@@ -122,14 +125,71 @@ export interface FailedSwapExecution {
   committed: boolean;
 }
 
+export interface CancelPreparedSendCommand {
+  operationId: string;
+  expectedRevision: number;
+  updatedAt: number;
+  reason: string;
+}
+
+export interface CancelledPreparedSend {
+  operation: RolledBackSendOperation;
+  releasedInputSecrets: string[];
+  /** False when the same cancellation had already committed. */
+  committed: boolean;
+}
+
+export interface CompletePendingSendCommand {
+  operationId: string;
+  expectedRevision: number;
+  updatedAt: number;
+  /** Proof-state observations made outside the transaction. */
+  spentProofSecrets?: string[];
+}
+
+export interface CompletedPendingSend {
+  operation: PendingSendOperation | FinalizedSendOperation;
+  spentProofSecrets: string[];
+  releasedInputSecrets: string[];
+  /** True only when this call performed a proof or operation state change. */
+  committed: boolean;
+}
+
+export interface CleanupLegacyInitResult {
+  operationId: string;
+  mintUrl: string;
+  releasedProofSecrets: string[];
+}
+
+/** Compatibility-only seam for the existing pending default-token reclaim flow. */
+export interface BeginLegacyPendingRollbackCommand {
+  operationId: string;
+  expectedRevision: number;
+  updatedAt: number;
+}
+
+export interface CompleteLegacyPendingRollbackCommand {
+  operationId: string;
+  expectedRevision: number;
+  updatedAt: number;
+  reason: string;
+}
+
 export interface TransactionalSendOperations {
   prepare(command: PrepareSendCommand): Promise<PreparedSendResult>;
   executeExact(command: ExecuteExactSendCommand): Promise<ExecuteExactSendResult>;
   beginExecution(command: BeginSwapExecutionCommand): Promise<BegunSwapExecution>;
   applyResult(command: ApplySwapResultCommand): Promise<AppliedSwapResult>;
   failExecution(command: FailSwapExecutionCommand): Promise<FailedSwapExecution>;
-  updateLegacy(operation: SendOperation): Promise<void>;
-  deleteLegacy(operationId: string): Promise<void>;
+  cancelPrepared(command: CancelPreparedSendCommand): Promise<CancelledPreparedSend>;
+  completePending(command: CompletePendingSendCommand): Promise<CompletedPendingSend>;
+  cleanupLegacyInit(operationId: string): Promise<CleanupLegacyInitResult>;
+  beginLegacyPendingRollback(
+    command: BeginLegacyPendingRollbackCommand,
+  ): Promise<RollingBackSendOperation>;
+  completeLegacyPendingRollback(
+    command: CompleteLegacyPendingRollbackCommand,
+  ): Promise<RolledBackSendOperation>;
 }
 
 export class RepositoryTransactionalSendOperations implements TransactionalSendOperations {
@@ -495,6 +555,275 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
     };
   }
 
+  async cancelPrepared(command: CancelPreparedSendCommand): Promise<CancelledPreparedSend> {
+    const current = await this.sends.getById(command.operationId);
+    if (!current) {
+      throw new SendOperationConflictError(command.operationId, 'Send operation not found');
+    }
+    if (
+      current.state === 'rolled_back' &&
+      current.revision === command.expectedRevision + 1 &&
+      current.error === command.reason
+    ) {
+      return { operation: current, releasedInputSecrets: [], committed: false };
+    }
+    if (current.state !== 'prepared' || (current.revision ?? 0) !== command.expectedRevision) {
+      throw new SendOperationConflictError(
+        command.operationId,
+        'Send cancellation lost a prepared-state or revision conflict',
+      );
+    }
+
+    await this.getOwnedReadyInputs(current);
+    await this.proofs.releaseProofs(current.mintUrl, current.inputProofSecrets);
+    const rolledBack: RolledBackSendOperation = {
+      ...current,
+      state: 'rolled_back',
+      revision: command.expectedRevision + 1,
+      updatedAt: command.updatedAt,
+      error: command.reason,
+    };
+    const transitioned = await this.sends.transition({
+      operationId: current.id,
+      expectedState: 'prepared',
+      expectedRevision: command.expectedRevision,
+      next: rolledBack,
+    });
+    if (!transitioned) {
+      throw new SendOperationConflictError(
+        current.id,
+        'Send cancellation lost a prepared-state or revision conflict',
+      );
+    }
+
+    return {
+      operation: rolledBack,
+      releasedInputSecrets: [...current.inputProofSecrets],
+      committed: true,
+    };
+  }
+
+  async completePending(command: CompletePendingSendCommand): Promise<CompletedPendingSend> {
+    const current = await this.sends.getById(command.operationId);
+    if (!current) {
+      throw new SendOperationConflictError(command.operationId, 'Send operation not found');
+    }
+    if (current.state === 'finalized') {
+      const revision = current.revision ?? 0;
+      if (revision !== command.expectedRevision && revision !== command.expectedRevision + 1) {
+        throw new SendOperationConflictError(
+          command.operationId,
+          'Send completion conflicts with the finalized operation revision',
+        );
+      }
+      return {
+        operation: current,
+        spentProofSecrets: [],
+        releasedInputSecrets: [],
+        committed: false,
+      };
+    }
+    if (current.state !== 'pending' || (current.revision ?? 0) !== command.expectedRevision) {
+      throw new SendOperationConflictError(
+        command.operationId,
+        'Send completion lost a pending-state or revision conflict',
+      );
+    }
+
+    const expectedSecrets = getSendProofSecrets(current);
+    if (expectedSecrets.length === 0 || new Set(expectedSecrets).size !== expectedSecrets.length) {
+      throw new ProofValidationError(`Send operation ${current.id} has invalid send proof data`);
+    }
+    const observedSecrets = command.spentProofSecrets ?? [];
+    if (new Set(observedSecrets).size !== observedSecrets.length) {
+      throw new ProofValidationError('Send completion contains duplicate proof observations');
+    }
+    const expectedSet = new Set(expectedSecrets);
+    for (const secret of observedSecrets) {
+      if (!expectedSet.has(secret)) {
+        throw new ProofValidationError(`Proof ${secret} does not belong to Send operation`);
+      }
+    }
+
+    const sendProofs = await this.proofs.getProofsBySecrets(current.mintUrl, expectedSecrets);
+    const sendBySecret = new Map(sendProofs.map((proof) => [proof.secret, proof]));
+    if (sendBySecret.size !== expectedSecrets.length) {
+      throw new ProofValidationError('Cannot complete Send operation: missing send proof metadata');
+    }
+    for (const secret of expectedSecrets) {
+      const proof = sendBySecret.get(secret);
+      const owned = current.needsSwap
+        ? proof?.createdByOperationId === current.id
+        : proof?.usedByOperationId === current.id;
+      if (
+        !proof ||
+        !owned ||
+        proof.mintUrl !== current.mintUrl ||
+        normalizeUnit(proof.unit) !== normalizeUnit(current.unit) ||
+        (proof.state !== 'inflight' && proof.state !== 'spent')
+      ) {
+        throw new ProofValidationError(`Send proof ${secret} is not inflight and operation-owned`);
+      }
+    }
+
+    const newlySpent = observedSecrets.filter(
+      (secret) => sendBySecret.get(secret)?.state !== 'spent',
+    );
+    if (newlySpent.length > 0) {
+      await this.proofs.setProofState(current.mintUrl, newlySpent, 'spent');
+    }
+    const allSpent = expectedSecrets.every(
+      (secret) => observedSecrets.includes(secret) || sendBySecret.get(secret)?.state === 'spent',
+    );
+    if (!allSpent) {
+      return {
+        operation: current,
+        spentProofSecrets: newlySpent,
+        releasedInputSecrets: [],
+        committed: newlySpent.length > 0,
+      };
+    }
+
+    const inputs = await this.proofs.getProofsBySecrets(current.mintUrl, current.inputProofSecrets);
+    const inputBySecret = new Map(inputs.map((proof) => [proof.secret, proof]));
+    if (inputBySecret.size !== current.inputProofSecrets.length) {
+      throw new ProofValidationError(
+        'Cannot complete Send operation: missing input proof metadata',
+      );
+    }
+    for (const secret of current.inputProofSecrets) {
+      const proof = inputBySecret.get(secret);
+      if (
+        !proof ||
+        proof.usedByOperationId !== current.id ||
+        proof.mintUrl !== current.mintUrl ||
+        normalizeUnit(proof.unit) !== normalizeUnit(current.unit) ||
+        proof.state !== 'spent'
+      ) {
+        throw new ProofValidationError(`Send input ${secret} is not spent and operation-owned`);
+      }
+    }
+    await this.proofs.releaseProofs(current.mintUrl, current.inputProofSecrets);
+
+    const finalized: FinalizedSendOperation = {
+      ...current,
+      state: 'finalized',
+      revision: command.expectedRevision + 1,
+      updatedAt: command.updatedAt,
+    };
+    const transitioned = await this.sends.transition({
+      operationId: current.id,
+      expectedState: 'pending',
+      expectedRevision: command.expectedRevision,
+      next: finalized,
+    });
+    if (!transitioned) {
+      throw new SendOperationConflictError(
+        current.id,
+        'Send completion lost a pending-state or revision conflict',
+      );
+    }
+
+    return {
+      operation: finalized,
+      spentProofSecrets: newlySpent,
+      releasedInputSecrets: [...current.inputProofSecrets],
+      committed: true,
+    };
+  }
+
+  async cleanupLegacyInit(operationId: string): Promise<CleanupLegacyInitResult> {
+    const current = await this.sends.getById(operationId);
+    if (!current || current.state !== 'init') {
+      throw new SendOperationConflictError(operationId, 'Legacy Send init operation not found');
+    }
+    const operationProofs = await this.proofs.getProofsByOperationId(current.mintUrl, current.id);
+    const ownedSecrets = operationProofs
+      .filter((proof) => proof.usedByOperationId === current.id)
+      .map((proof) => proof.secret);
+    if (ownedSecrets.length > 0) {
+      await this.proofs.releaseProofs(current.mintUrl, ownedSecrets);
+    }
+    await this.sends.delete(current.id);
+    return {
+      operationId: current.id,
+      mintUrl: current.mintUrl,
+      releasedProofSecrets: ownedSecrets,
+    };
+  }
+
+  async beginLegacyPendingRollback(
+    command: BeginLegacyPendingRollbackCommand,
+  ): Promise<RollingBackSendOperation> {
+    const current = await this.sends.getById(command.operationId);
+    if (
+      !current ||
+      current.state !== 'pending' ||
+      current.method !== 'default' ||
+      (current.revision ?? 0) !== command.expectedRevision
+    ) {
+      throw new SendOperationConflictError(
+        command.operationId,
+        'Legacy pending Send rollback lost a state or revision conflict',
+      );
+    }
+    const rollingBack: RollingBackSendOperation = {
+      ...current,
+      state: 'rolling_back',
+      revision: command.expectedRevision + 1,
+      updatedAt: command.updatedAt,
+    };
+    const transitioned = await this.sends.transition({
+      operationId: current.id,
+      expectedState: 'pending',
+      expectedRevision: command.expectedRevision,
+      next: rollingBack,
+    });
+    if (!transitioned) {
+      throw new SendOperationConflictError(
+        current.id,
+        'Legacy pending Send rollback lost a state or revision conflict',
+      );
+    }
+    return rollingBack;
+  }
+
+  async completeLegacyPendingRollback(
+    command: CompleteLegacyPendingRollbackCommand,
+  ): Promise<RolledBackSendOperation> {
+    const current = await this.sends.getById(command.operationId);
+    if (
+      !current ||
+      current.state !== 'rolling_back' ||
+      (current.revision ?? 0) !== command.expectedRevision
+    ) {
+      throw new SendOperationConflictError(
+        command.operationId,
+        'Legacy pending Send rollback completion lost a state or revision conflict',
+      );
+    }
+    const rolledBack: RolledBackSendOperation = {
+      ...current,
+      state: 'rolled_back',
+      revision: command.expectedRevision + 1,
+      updatedAt: command.updatedAt,
+      error: command.reason,
+    };
+    const transitioned = await this.sends.transition({
+      operationId: current.id,
+      expectedState: 'rolling_back',
+      expectedRevision: command.expectedRevision,
+      next: rolledBack,
+    });
+    if (!transitioned) {
+      throw new SendOperationConflictError(
+        current.id,
+        'Legacy pending Send rollback completion lost a state or revision conflict',
+      );
+    }
+    return rolledBack;
+  }
+
   private async getOwnedReadyInputs(
     operation: PreparedSendOperation | ExecutingSendOperation,
   ): Promise<CoreProof[]> {
@@ -519,14 +848,6 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
       }
       return proof;
     });
-  }
-
-  updateLegacy(operation: SendOperation) {
-    return this.sends.update(operation);
-  }
-
-  deleteLegacy(operationId: string) {
-    return this.sends.delete(operationId);
   }
 }
 

@@ -564,7 +564,7 @@ describe('SendOperationService', () => {
     expect(satProof?.usedByOperationId).toBeUndefined();
   });
 
-  it('waits for an in-progress finalization to finish before returning', async () => {
+  it('serializes competing finalization attempts and returns idempotently', async () => {
     const pendingOp: PendingSendOperation = {
       id: 'send-op-pending',
       state: 'pending',
@@ -573,56 +573,28 @@ describe('SendOperationService', () => {
       unit: 'sat',
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      needsSwap: true,
+      needsSwap: false,
       fee: Amount.from(0),
       inputAmount: Amount.from(100),
       inputProofSecrets: ['proof-1'],
-      outputData: {
-        keep: [],
-        send: [
-          {
-            blindedMessage: { amount: 100, id: keysetId, B_: 'B_send_1' },
-            blindingFactor: 'abc123',
-            secret: Buffer.from('send-secret-1').toString('hex'),
-          },
-        ],
-      },
+      token: { mint: mintUrl, unit: 'sat', proofs: [makeProof('proof-1', 100)] },
       method: 'default',
       methodData: {},
     };
     await sendOpRepo.create(pendingOp);
-
-    let releaseFirstFinalize: () => void;
-    const firstFinalizeBlocked = new Promise<void>((resolve) => {
-      releaseFirstFinalize = resolve;
-    });
-
-    (proofService.releaseProofs as Mock<any>)
-      .mockImplementationOnce(async () => {
-        await firstFinalizeBlocked;
-      })
-      .mockImplementation(async () => {});
-
-    const firstFinalize = service.finalize(pendingOp.id);
-    await Promise.resolve();
-
-    const secondFinalize = service.finalize(pendingOp.id);
-    await Promise.resolve();
-
-    expect(service.isOperationLocked(pendingOp.id)).toBe(true);
-
-    releaseFirstFinalize!();
-
-    await expect(Promise.all([firstFinalize, secondFinalize])).resolves.toEqual([
-      undefined,
-      undefined,
+    await proofRepo.saveProofs(mintUrl, [
+      { ...makeProof('proof-1', 100), state: 'spent', usedByOperationId: pendingOp.id },
     ]);
+
+    await expect(
+      Promise.all([service.finalize(pendingOp.id), service.finalize(pendingOp.id)]),
+    ).resolves.toEqual([undefined, undefined]);
 
     const persisted = await sendOpRepo.getById(pendingOp.id);
     expect(persisted?.state).toBe('finalized');
   });
 
-  it('delegates finalization side effects to the send method handler before persisting', async () => {
+  it('keeps finalization persistence inside the Send transaction gateway', async () => {
     const pendingOp: PendingSendOperation = {
       id: 'send-op-custom-finalize',
       state: 'pending',
@@ -635,18 +607,21 @@ describe('SendOperationService', () => {
       fee: Amount.from(0),
       inputAmount: Amount.from(100),
       inputProofSecrets: ['proof-1'],
+      token: { mint: mintUrl, unit: 'sat', proofs: [makeProof('proof-1', 100)] },
       method: 'default',
       methodData: {},
     };
     await sendOpRepo.create(pendingOp);
+    await proofRepo.saveProofs(mintUrl, [
+      { ...makeProof('proof-1', 100), state: 'spent', usedByOperationId: pendingOp.id },
+    ]);
 
-    let persistedStateDuringFinalize: string | undefined;
     const customHandler: SendMethodHandler<'default'> = {
       execute: mock(async () => {
         throw new Error('not used');
       }),
-      finalize: mock(async ({ operation }) => {
-        persistedStateDuringFinalize = (await sendOpRepo.getById(operation.id))?.state;
+      finalize: mock(async () => {
+        throw new Error('legacy handler finalization must not run');
       }),
       recoverExecuting: mock(async () => {
         throw new Error('not used');
@@ -661,9 +636,56 @@ describe('SendOperationService', () => {
 
     await service.finalize(pendingOp.id);
 
-    expect(customHandler.finalize).toHaveBeenCalledTimes(1);
-    expect(persistedStateDuringFinalize).toBe('pending');
+    expect(customHandler.finalize).not.toHaveBeenCalled();
     expect((await sendOpRepo.getById(pendingOp.id))?.state).toBe('finalized');
+  });
+
+  it('preserves pending default-token reclaim through its narrow legacy gateway', async () => {
+    const pendingOp: PendingSendOperation = {
+      id: 'send-op-legacy-reclaim',
+      state: 'pending',
+      mintUrl,
+      amount: Amount.from(100),
+      unit: 'sat',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      revision: 1,
+      needsSwap: false,
+      fee: Amount.zero(),
+      inputAmount: Amount.from(100),
+      inputProofSecrets: ['proof-1'],
+      token: { mint: mintUrl, unit: 'sat', proofs: [makeProof('proof-1', 100)] },
+      method: 'default',
+      methodData: {},
+    };
+    await sendOpRepo.create(pendingOp);
+    let stateDuringReclaim: string | undefined;
+    const rollback = mock(async () => {
+      stateDuringReclaim = (await sendOpRepo.getById(pendingOp.id))?.state;
+    });
+    const customHandler: SendMethodHandler<'default'> = {
+      execute: mock(async () => {
+        throw new Error('not used');
+      }),
+      rollback,
+      recoverExecuting: mock(async () => {
+        throw new Error('not used');
+      }),
+    };
+    handlerProvider = new SendHandlerProvider({
+      default: customHandler,
+      p2pk: new P2pkSendHandler(),
+    });
+    service = buildService();
+
+    await service.rollback(pendingOp.id, 'Reclaimed by user');
+
+    expect(rollback).toHaveBeenCalledTimes(1);
+    expect(stateDuringReclaim).toBe('rolling_back');
+    const stored = await sendOpRepo.getById(pendingOp.id);
+    expect(stored?.state).toBe('rolled_back');
+    expect(stored?.revision).toBe(3);
+    expect(stored?.error).toBe('Reclaimed by user');
   });
 
   it('persists memo on the token when execute is called with a memo option', async () => {

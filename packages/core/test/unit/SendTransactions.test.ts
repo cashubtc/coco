@@ -3,6 +3,7 @@ import { describe, expect, it } from 'bun:test';
 import {
   createSendOperation,
   type ExecutingSendOperation,
+  type PendingSendOperation,
   type PreparedSendOperation,
 } from '../../operations/send';
 import type { RepositoryTransactionScope, SendOperationRepository } from '../../repositories';
@@ -599,5 +600,168 @@ describe('SendTransactions swap execution', () => {
     expect(await repositories.counterRepository.getCounter(mintUrl, keysetId)).toEqual(
       allocatedCounter,
     );
+  });
+});
+
+describe('SendTransactions cancellation and completion', () => {
+  async function createPrepared(
+    repositories: MemoryRepositories,
+    id: string,
+  ): Promise<PreparedSendOperation> {
+    const input = proof(`${id}-input`);
+    await repositories.proofRepository.saveProofs(mintUrl, [input]);
+    await repositories.proofRepository.reserveProofs(mintUrl, [input.secret], id);
+    const prepared: PreparedSendOperation = {
+      ...operation(id, false),
+      state: 'prepared',
+      revision: 0,
+      needsSwap: false,
+      fee: Amount.zero(),
+      inputAmount: Amount.from(10),
+      inputProofSecrets: [input.secret],
+    };
+    await repositories.sendOperationRepository.create(prepared);
+    return prepared;
+  }
+
+  it('atomically releases a prepared reservation and records cancellation', async () => {
+    const repositories = new MemoryRepositories();
+    const { transactions } = await setup(repositories);
+    const prepared = await createPrepared(repositories, 'cancel-send');
+
+    const cancelled = await transactions.cancelPrepared({
+      operationId: prepared.id,
+      expectedRevision: 0,
+      updatedAt: 300,
+      reason: 'Cancelled by user',
+    });
+
+    expect(cancelled.operation.state).toBe('rolled_back');
+    expect(cancelled.operation.revision).toBe(1);
+    expect(
+      (await repositories.proofRepository.getProofBySecret(mintUrl, prepared.inputProofSecrets[0]!))
+        ?.usedByOperationId,
+    ).toBeUndefined();
+  });
+
+  it('rolls back reservation release when cancellation loses its final transition', async () => {
+    const repositories = new RejectingSendTransitionRepositories();
+    const { transactions } = await setup(repositories);
+    const prepared = await createPrepared(repositories, 'cancel-conflict');
+
+    await expect(
+      transactions.cancelPrepared({
+        operationId: prepared.id,
+        expectedRevision: 0,
+        updatedAt: 300,
+        reason: 'Cancelled by user',
+      }),
+    ).rejects.toThrow('prepared-state or revision conflict');
+
+    expect((await repositories.sendOperationRepository.getById(prepared.id))?.state).toBe(
+      'prepared',
+    );
+    expect(
+      (await repositories.proofRepository.getProofBySecret(mintUrl, prepared.inputProofSecrets[0]!))
+        ?.usedByOperationId,
+    ).toBe(prepared.id);
+  });
+
+  it('allows only cancellation or swap execution to win from the same prepared revision', async () => {
+    const repositories = new MemoryRepositories();
+    const { transactions } = await setup(repositories);
+    await repositories.proofRepository.saveProofs(mintUrl, [proof('race-input')]);
+    const prepared = (await transactions.prepare(command('race-send'))).operation;
+
+    const results = await Promise.allSettled([
+      transactions.cancelPrepared({
+        operationId: prepared.id,
+        expectedRevision: prepared.revision ?? 0,
+        updatedAt: 300,
+        reason: 'Cancelled by user',
+      }),
+      transactions.beginExecution({
+        operationId: prepared.id,
+        expectedRevision: prepared.revision ?? 0,
+        updatedAt: 300,
+      }),
+    ]);
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    const stored = await repositories.sendOperationRepository.getById(prepared.id);
+    expect(stored).not.toBeNull();
+    expect(['executing', 'rolled_back']).toContain(stored!.state);
+    const input = await repositories.proofRepository.getProofBySecret(mintUrl, 'race-input');
+    expect(input?.usedByOperationId).toBe(stored?.state === 'executing' ? prepared.id : undefined);
+  });
+
+  it('commits the last spent observation, reservation release, and final state together', async () => {
+    const repositories = new MemoryRepositories();
+    const { transactions } = await setup(repositories);
+    const prepared = await createPrepared(repositories, 'complete-send');
+    const pending = await transactions.executeExact({
+      operationId: prepared.id,
+      expectedRevision: 0,
+      updatedAt: 300,
+    });
+
+    const completed = await transactions.completePending({
+      operationId: pending.operation.id,
+      expectedRevision: pending.operation.revision ?? 0,
+      updatedAt: 400,
+      spentProofSecrets: pending.operation.inputProofSecrets,
+    });
+
+    expect(completed.operation.state).toBe('finalized');
+    expect(completed.operation.revision).toBe(2);
+    const input = await repositories.proofRepository.getProofBySecret(
+      mintUrl,
+      pending.operation.inputProofSecrets[0]!,
+    );
+    expect(input?.state).toBe('spent');
+    expect(input?.usedByOperationId).toBeUndefined();
+
+    const duplicate = await transactions.completePending({
+      operationId: pending.operation.id,
+      expectedRevision: pending.operation.revision ?? 0,
+      updatedAt: 500,
+      spentProofSecrets: pending.operation.inputProofSecrets,
+    });
+    expect(duplicate.committed).toBe(false);
+  });
+
+  it('rolls back proof completion when the pending terminal transition loses', async () => {
+    const repositories = new RejectingSendTransitionRepositories();
+    const { transactions } = await setup(repositories);
+    const input = proof('terminal-conflict-input');
+    await repositories.proofRepository.saveProofs(mintUrl, [
+      { ...input, state: 'inflight', usedByOperationId: 'terminal-conflict' },
+    ]);
+    const pending: PendingSendOperation = {
+      ...operation('terminal-conflict', false),
+      state: 'pending',
+      revision: 1,
+      needsSwap: false,
+      fee: Amount.zero(),
+      inputAmount: Amount.from(10),
+      inputProofSecrets: [input.secret],
+      token: { mint: mintUrl, proofs: [input], unit: 'sat' },
+    };
+    await repositories.sendOperationRepository.create(pending);
+
+    await expect(
+      transactions.completePending({
+        operationId: pending.id,
+        expectedRevision: 1,
+        updatedAt: 400,
+        spentProofSecrets: [input.secret],
+      }),
+    ).rejects.toThrow('pending-state or revision conflict');
+
+    expect((await repositories.sendOperationRepository.getById(pending.id))?.state).toBe('pending');
+    const storedInput = await repositories.proofRepository.getProofBySecret(mintUrl, input.secret);
+    expect(storedInput?.state).toBe('inflight');
+    expect(storedInput?.usedByOperationId).toBe(pending.id);
   });
 });

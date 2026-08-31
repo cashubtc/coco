@@ -2,7 +2,9 @@ import {
   OutputData,
   type OutputConfig,
   type OutputDataCreator,
+  type Proof,
   type Token,
+  type Wallet,
   type ProofState as CashuProofState,
 } from '@cashu/cashu-ts';
 import type {
@@ -11,14 +13,10 @@ import type {
   PreparedSendOperation,
   ExecutingSendOperation,
   PendingSendOperation,
-  FinalizedSendOperation,
-  RollingBackSendOperation,
   RolledBackSendOperation,
-  PreparedOrLaterOperation,
 } from './SendOperation';
 import {
   createSendOperation,
-  hasPreparedData,
   getSendProofSecrets,
   isTerminalOperation,
   type CreateSendOperationOptions,
@@ -32,7 +30,12 @@ import type { SeedService } from '../../services/SeedService.ts';
 import type { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
-import { deserializeOutputData, generateSubId, mapProofToCoreProof } from '../../utils';
+import {
+  deserializeOutputData,
+  generateSubId,
+  getSecretsFromSerializedOutputData,
+  mapProofToCoreProof,
+} from '../../utils';
 import {
   MintOperationError,
   UnknownMintError,
@@ -47,7 +50,10 @@ import type { SendTransactions } from '../../transactions/send/SendTransactions.
 import type { PreparedSendResult } from '../../transactions/send/TransactionalSendOperations.ts';
 import type {
   AppliedSwapResult,
+  CancelledPreparedSend,
+  CompletedPendingSend,
   FailedSwapExecution,
+  SwapTransportRequest,
 } from '../../transactions/send/TransactionalSendOperations.ts';
 import type {
   SendOperationQueries,
@@ -334,7 +340,15 @@ export class SendOperationService {
       updatedAt: Date.now(),
       memo: options?.memo ? this.normalizeMemo(options.memo) : undefined,
     });
-    const outputData = deserializeOutputData(begun.request.outputData);
+    return this.submitPersistedSwap(begun.operation, begun.request, wallet);
+  }
+
+  private async submitPersistedSwap(
+    operation: ExecutingSendOperation,
+    request: SwapTransportRequest,
+    wallet: Wallet,
+  ): Promise<SwapExecutionOutcome> {
+    const outputData = deserializeOutputData(request.outputData);
     const outputConfig: OutputConfig = {
       send: { type: 'custom', data: outputData.send },
       keep: { type: 'custom', data: outputData.keep },
@@ -342,42 +356,37 @@ export class SendOperationService {
 
     let result: Awaited<ReturnType<typeof wallet.send>>;
     try {
-      result = await wallet.send(
-        begun.request.amount,
-        begun.request.inputProofs,
-        undefined,
-        outputConfig,
-      );
+      result = await wallet.send(request.amount, request.inputProofs, undefined, outputConfig);
     } catch (error) {
       if (!this.isDefinitiveSwapFailure(error)) {
         throw error;
       }
       const failed = await this.transactions.failExecution({
-        operationId: begun.operation.id,
-        expectedRevision: begun.operation.revision ?? 0,
+        operationId: operation.id,
+        expectedRevision: operation.revision ?? 0,
         updatedAt: Date.now(),
         error: error.message,
       });
       return { status: 'FAILED', result: failed, error };
     }
-    const keepProofs = mapProofToCoreProof(begun.request.mintUrl, 'ready', result.keep, {
-      unit: begun.request.unit,
-      createdByOperationId: begun.operation.id,
+    const keepProofs = mapProofToCoreProof(request.mintUrl, 'ready', result.keep, {
+      unit: request.unit,
+      createdByOperationId: operation.id,
     });
-    const sendProofs = mapProofToCoreProof(begun.request.mintUrl, 'inflight', result.send, {
-      unit: begun.request.unit,
-      createdByOperationId: begun.operation.id,
+    const sendProofs = mapProofToCoreProof(request.mintUrl, 'inflight', result.send, {
+      unit: request.unit,
+      createdByOperationId: operation.id,
     });
     const token: Token = {
-      mint: begun.request.mintUrl,
+      mint: request.mintUrl,
       proofs: result.send,
-      unit: begun.request.unit,
-      ...(begun.operation.executionMemo ? { memo: begun.operation.executionMemo } : {}),
+      unit: request.unit,
+      ...(operation.executionMemo ? { memo: operation.executionMemo } : {}),
     };
 
     const applied = await this.transactions.applyResult({
-      operationId: begun.operation.id,
-      expectedRevision: begun.operation.revision ?? 0,
+      operationId: operation.id,
+      expectedRevision: operation.revision ?? 0,
       updatedAt: Date.now(),
       keepProofs,
       sendProofs,
@@ -444,23 +453,8 @@ export class SendOperationService {
    * Throws if the operation is already in progress.
    */
   async finalize(operationId: string): Promise<void> {
-    // Check terminal states before acquiring lock to allow idempotent calls
-    const preCheck = await this.operationQueries.getById(operationId);
-    if (!preCheck) {
-      throw new Error(`Operation ${operationId} not found`);
-    }
-    if (preCheck.state === 'finalized') {
-      this.logger?.debug('Operation already finalized', { operationId });
-      return;
-    }
-    if (preCheck.state === 'rolled_back' || preCheck.state === 'rolling_back') {
-      this.logger?.debug('Operation was rolled back or is rolling back, skipping finalization', {
-        operationId,
-      });
-      return;
-    }
-
     let releaseLock: (() => void) | undefined;
+    let result: CompletedPendingSend | undefined;
     try {
       try {
         releaseLock = await this.acquireOperationLock(operationId);
@@ -492,13 +486,10 @@ export class SendOperationService {
         releaseLock = await this.acquireOperationLock(operationId);
       }
 
-      // Re-fetch after acquiring lock to ensure state hasn't changed
       const operation = await this.operationQueries.getById(operationId);
       if (!operation) {
         throw new Error(`Operation ${operationId} not found`);
       }
-
-      // Handle terminal states gracefully to avoid race conditions with rollback
       if (operation.state === 'finalized') {
         this.logger?.debug('Operation already finalized', { operationId });
         return;
@@ -514,97 +505,93 @@ export class SendOperationService {
       if (operation.state !== 'pending') {
         throw new Error(`Cannot finalize operation in state ${operation.state}`);
       }
-
-      // TypeScript knows operation is PendingSendOperation
-      const pendingOp = operation as PendingSendOperation;
-
-      const handler = this.handlerProvider.get(pendingOp.method);
-      await handler.finalize?.({
-        ...this.buildDeps(),
-        operation: pendingOp,
-      });
-
-      const finalized: FinalizedSendOperation = {
-        ...pendingOp,
-        state: 'finalized',
-        updatedAt: Date.now(),
-      };
-      await this.transactions.updateLegacyState(finalized);
-
-      await this.eventBus.emit('send:finalized', {
-        mintUrl: pendingOp.mintUrl,
+      const sendSecrets = getSendProofSecrets(operation);
+      const localProofs = await this.proofQueries.getProofsBySecrets(
+        operation.mintUrl,
+        sendSecrets,
+      );
+      const locallySpent =
+        localProofs.length === new Set(sendSecrets).size &&
+        localProofs.every((proof) => proof.state === 'spent');
+      let observedSpentSecrets: string[] | undefined;
+      if (!locallySpent) {
+        const states = await this.checkProofStatesWithMint(
+          operation.mintUrl,
+          sendSecrets,
+          operation.unit,
+        );
+        if (!states.every((state) => state.state === 'SPENT')) {
+          throw new ProofValidationError(`Cannot finalize unspent Send operation ${operationId}`);
+        }
+        observedSpentSecrets = sendSecrets;
+      }
+      result = await this.transactions.completePending({
         operationId,
-        operation: finalized,
+        expectedRevision: operation.revision ?? 0,
+        updatedAt: Date.now(),
+        spentProofSecrets: observedSpentSecrets,
       });
-
-      this.logger?.info('Send operation finalized', { operationId });
     } finally {
       releaseLock?.();
     }
+    if (result) await this.publishCompletedSend(result);
   }
 
   /**
-   * Rollback an operation by reclaiming the proofs.
-   * Only works for operations in 'prepared' or 'pending' state.
+   * Cancel a prepared operation and release its reservations.
+   * Pending-token reclaim is intentionally outside the migrated transaction flow.
    * Throws if the operation is already in progress.
    */
   async rollback(operationId: string, reason = 'Rolled back by user action'): Promise<void> {
     const releaseLock = await this.acquireOperationLock(operationId);
+    let cancelled: CancelledPreparedSend | undefined;
+    let legacyRolledBack: RolledBackSendOperation | undefined;
     try {
       const operation = await this.operationQueries.getById(operationId);
       if (!operation) {
         throw new Error(`Operation ${operationId} not found`);
       }
-
-      if (
-        operation.state === 'finalized' ||
-        operation.state === 'rolled_back' ||
-        operation.state === 'rolling_back' ||
-        operation.state === 'init' ||
-        operation.state === 'executing'
-      ) {
+      if (operation.state === 'prepared') {
+        cancelled = await this.transactions.cancelPrepared({
+          operationId,
+          expectedRevision: operation.revision ?? 0,
+          updatedAt: Date.now(),
+          reason,
+        });
+      } else if (operation.state === 'pending' && operation.method === 'default') {
+        const handler = this.handlerProvider.get('default');
+        if (!handler.rollback) {
+          throw new Error('Default Send operations can not be rolled back');
+        }
+        const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
+          operation.mintUrl,
+          operation.unit,
+        );
+        const rollingBack = await this.transactions.beginLegacyPendingRollback({
+          operationId,
+          expectedRevision: operation.revision ?? 0,
+          updatedAt: Date.now(),
+        });
+        await handler.rollback({ ...this.buildDeps(), operation: rollingBack, wallet });
+        legacyRolledBack = await this.transactions.completeLegacyPendingRollback({
+          operationId,
+          expectedRevision: rollingBack.revision ?? 0,
+          updatedAt: Date.now(),
+          reason,
+        });
+      } else {
         throw new Error(`Cannot rollback operation in state ${operation.state}`);
       }
-
-      // At this point, operation has PreparedData
-      if (!hasPreparedData(operation)) {
-        throw new Error(`Operation ${operationId} is not in a rollbackable state`);
-      }
-
-      const handler = this.handlerProvider.get(operation.method);
-      if (!handler.rollback) {
-        throw new Error(`Send operations of method ${operation.method} can not be rolled back`);
-      }
-
-      if (operation.state === 'pending' && operation.method === 'p2pk') {
-        throw new Error('Cannot rollback pending P2PK send operation');
-      }
-
-      const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
-        operation.mintUrl,
-        operation.unit,
-      );
-
-      let opForRollback: PreparedOrLaterOperation = operation;
-      if (operation.state === 'pending') {
-        const rollingBack: RollingBackSendOperation = {
-          ...operation,
-          state: 'rolling_back',
-          updatedAt: Date.now(),
-        };
-        await this.transactions.updateLegacyState(rollingBack);
-        opForRollback = rollingBack;
-      }
-
-      await handler.rollback({
-        ...this.buildDeps(),
-        operation: opForRollback,
-        wallet,
-      });
-
-      await this.markAsRolledBack(opForRollback, reason);
     } finally {
       releaseLock();
+    }
+    if (cancelled) await this.publishCancelledSend(cancelled);
+    if (legacyRolledBack) {
+      await this.publishCommittedEvent('send:rolled-back', {
+        mintUrl: legacyRolledBack.mintUrl,
+        operationId: legacyRolledBack.id,
+        operation: legacyRolledBack,
+      });
     }
   }
 
@@ -693,7 +680,7 @@ export class SendOperationService {
         rollingBackCount++;
       }
 
-      // 7. Clean up orphaned proof reservations
+      // 6. Clean up orphaned proof reservations
       orphanCount = await this.cleanupOrphanedReservations();
 
       this.logger?.info('Recovery completed', {
@@ -714,121 +701,194 @@ export class SendOperationService {
    * Releases any orphaned proof reservations and deletes the operation.
    */
   private async recoverInitOperation(op: InitSendOperation): Promise<void> {
-    // Find any proofs that might have been reserved for this operation
-    const reservedProofs = await this.proofQueries.getReservedProofs();
-    const orphanedForOp = reservedProofs.filter((p) => p.usedByOperationId === op.id);
-
-    if (orphanedForOp.length > 0) {
-      await this.proofService.releaseProofs(
-        op.mintUrl,
-        orphanedForOp.map((p) => p.secret),
-      );
+    const result = await this.transactions.cleanupLegacyInit(op.id);
+    if (result.releasedProofSecrets.length > 0) {
+      await this.publishCommittedEvent('proofs:released', {
+        mintUrl: result.mintUrl,
+        secrets: result.releasedProofSecrets,
+      });
     }
-
-    await this.transactions.deleteLegacyOperation(op.id);
     this.logger?.info('Cleaned up failed init operation', { operationId: op.id });
   }
 
   /**
-   * Recover an executing operation.
-   * Delegates to the handler for recovery logic.
+   * Recover an executing swap using only its persisted inputs, outputs, and memo.
    */
   private async recoverExecutingOperation(op: ExecutingSendOperation): Promise<void> {
-    const handler = this.handlerProvider.get(op.method);
-    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(op.mintUrl, op.unit);
-
-    const result = await handler.recoverExecuting({
-      ...this.buildDeps(),
-      operation: op,
-      wallet,
-    });
-
-    if (result.status === 'PENDING') {
-      await this.transactions.updateLegacyState(result.pending);
-      if (result.token) {
-        await this.eventBus.emit('send:pending', {
-          mintUrl: result.pending.mintUrl,
-          operationId: result.pending.id,
-          operation: result.pending,
-          token: result.token,
-        });
-      }
-      this.logger?.info('Recovered executing operation as pending', { operationId: op.id });
+    const latest = await this.operationQueries.getById(op.id);
+    if (!latest || latest.state !== 'executing') {
+      this.logger?.debug('Skipping executing Send recovery because state changed', {
+        operationId: op.id,
+        state: latest?.state,
+      });
+      return;
+    }
+    if (!latest.needsSwap || !latest.outputData) {
+      this.logger?.warn('Executing Send lacks a persisted swap request; leaving it for recovery', {
+        operationId: latest.id,
+      });
       return;
     }
 
-    await this.markAsRolledBack(op, result.failed.error ?? 'Recovered: operation failed');
-  }
-
-  /**
-   * Attempts to recover an executing operation, swallowing recovery errors.
-   * If recovery fails (e.g., mint unreachable), logs warning and leaves
-   * for startup recovery.
-   */
-  private async tryRecoverExecutingOperation(op: ExecutingSendOperation): Promise<void> {
-    try {
-      const latest = await this.operationQueries.getById(op.id);
-      if (!latest || latest.state !== 'executing') {
-        this.logger?.debug('Skipping executing operation recovery because state changed', {
-          operationId: op.id,
-          state: latest?.state,
-        });
-        return;
-      }
-
-      await this.recoverExecutingOperation(latest);
-      this.logger?.info('Recovered executing operation after failure', { operationId: op.id });
-    } catch (recoveryError) {
-      this.logger?.warn('Failed to recover executing operation, will retry on next startup', {
-        operationId: op.id,
-        error: recoveryError instanceof Error ? recoveryError.message : String(recoveryError),
-      });
+    const storedInputs = await this.proofQueries.getProofsBySecrets(
+      latest.mintUrl,
+      latest.inputProofSecrets,
+    );
+    const inputBySecret = new Map(storedInputs.map((proof) => [proof.secret, proof]));
+    if (inputBySecret.size !== latest.inputProofSecrets.length) {
+      throw new ProofValidationError('Cannot recover Send operation: missing input proof metadata');
     }
+    const inputProofs = latest.inputProofSecrets.map(
+      (secret) => inputBySecret.get(secret) as Proof,
+    );
+    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
+      latest.mintUrl,
+      latest.unit,
+    );
+    const inputStates = await wallet.checkProofsStates(inputProofs);
+    if (inputStates.length !== inputProofs.length) {
+      this.logger?.warn(
+        'Executing Send proof-state response was incomplete; preserving recovery material',
+        { operationId: latest.id },
+      );
+      return;
+    }
+    const allUnspent = inputStates.every((state) => state.state === 'UNSPENT');
+    const allSpent = inputStates.every((state) => state.state === 'SPENT');
+
+    if (allUnspent) {
+      const outcome = await this.submitPersistedSwap(
+        latest,
+        {
+          mintUrl: latest.mintUrl,
+          unit: latest.unit,
+          amount: latest.amount,
+          inputProofs,
+          outputData: latest.outputData,
+        },
+        wallet,
+      );
+      if (outcome.status === 'FAILED') {
+        await this.publishFailedSwap(outcome.result);
+      } else {
+        await this.publishAppliedSwap(outcome.result);
+      }
+      this.logger?.info('Replayed executing Send from its persisted request', {
+        operationId: latest.id,
+        result: outcome.status,
+      });
+      return;
+    }
+
+    if (!allSpent) {
+      this.logger?.warn('Executing Send outcome remains ambiguous; preserving recovery material', {
+        operationId: latest.id,
+      });
+      return;
+    }
+
+    const recovered = await this.proofService.recoverProofsFromOutputData(
+      latest.mintUrl,
+      latest.outputData,
+      {
+        unit: latest.unit,
+        createdByOperationId: latest.id,
+        persistRecoveredProofs: false,
+      },
+    );
+    const outputSecrets = getSecretsFromSerializedOutputData(latest.outputData);
+    const expectedSecrets = [...outputSecrets.keepSecrets, ...outputSecrets.sendSecrets];
+    const recoveredBySecret = new Map(recovered.map((proof) => [proof.secret, proof]));
+    if (!expectedSecrets.every((secret) => recoveredBySecret.has(secret))) {
+      this.logger?.warn(
+        'Executing Send outputs could not be fully reconstructed; preserving recovery material',
+        { operationId: latest.id },
+      );
+      return;
+    }
+
+    const keepProofs = mapProofToCoreProof(
+      latest.mintUrl,
+      'ready',
+      outputSecrets.keepSecrets.map((secret) => recoveredBySecret.get(secret)!),
+      { unit: latest.unit, createdByOperationId: latest.id },
+    );
+    const sendProofs = mapProofToCoreProof(
+      latest.mintUrl,
+      'inflight',
+      outputSecrets.sendSecrets.map((secret) => recoveredBySecret.get(secret)!),
+      { unit: latest.unit, createdByOperationId: latest.id },
+    );
+    const token: Token = {
+      mint: latest.mintUrl,
+      proofs: outputSecrets.sendSecrets.map((secret) => recoveredBySecret.get(secret)!),
+      unit: latest.unit,
+      ...(latest.executionMemo ? { memo: latest.executionMemo } : {}),
+    };
+    const applied = await this.transactions.applyResult({
+      operationId: latest.id,
+      expectedRevision: latest.revision ?? 0,
+      updatedAt: Date.now(),
+      keepProofs,
+      sendProofs,
+      token,
+    });
+    await this.publishAppliedSwap(applied);
+    this.logger?.info('Restored executing Send outputs from its persisted request', {
+      operationId: latest.id,
+    });
   }
 
   /**
    * Check a pending operation to see if it should be finalized.
    */
   async checkPendingOperation(op: PendingSendOperation): Promise<void> {
-    const handler = this.handlerProvider.get(op.method);
-    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(op.mintUrl, op.unit);
-
-    const decision =
-      (await handler.checkPending?.({
-        ...this.buildDeps(),
-        operation: op,
-        wallet,
-      })) ?? (await this.defaultCheckPendingDecision(op));
-
-    if (decision === 'finalize') {
-      await this.finalize(op.id);
-      this.logger?.info('Send operation finalized during recovery', { operationId: op.id });
-    } else if (decision === 'rollback') {
-      await this.rollback(op.id, 'Rollback requested by handler');
-    } else {
-      this.logger?.debug('Pending operation token not yet claimed, leaving as pending', {
-        operationId: op.id,
-      });
-    }
-  }
-
-  private async defaultCheckPendingDecision(
-    op: PendingSendOperation,
-  ): Promise<'finalize' | 'stay_pending'> {
-    const sendSecrets = getSendProofSecrets(op);
-
+    const latest = await this.operationQueries.getById(op.id);
+    if (!latest || latest.state !== 'pending') return;
+    const sendSecrets = getSendProofSecrets(latest);
     let sendStates: CashuProofState[];
     try {
-      sendStates = await this.checkProofStatesWithMint(op.mintUrl, sendSecrets, op.unit);
+      sendStates = await this.checkProofStatesWithMint(latest.mintUrl, sendSecrets, latest.unit);
     } catch (_e) {
       this.logger?.warn('Could not reach mint for recovery, will retry later', {
-        operationId: op.id,
-        mintUrl: op.mintUrl,
+        operationId: latest.id,
+        mintUrl: latest.mintUrl,
       });
-      return 'stay_pending';
+      return;
     }
 
-    return sendStates.every((s) => s.state === 'SPENT') ? 'finalize' : 'stay_pending';
+    if (!sendStates.every((state) => state.state === 'SPENT')) {
+      this.logger?.debug('Pending operation token not yet claimed, leaving as pending', {
+        operationId: latest.id,
+      });
+      return;
+    }
+
+    const result = await this.transactions.completePending({
+      operationId: latest.id,
+      expectedRevision: latest.revision ?? 0,
+      updatedAt: Date.now(),
+      spentProofSecrets: sendSecrets,
+    });
+    await this.publishCompletedSend(result);
+    this.logger?.info('Send operation finalized during recovery', { operationId: latest.id });
+  }
+
+  /**
+   * Persist a mint proof-state notification through the Send transaction boundary. The last send
+   * proof observation and the pending-to-finalized transition commit together.
+   */
+  async recordProofSpent(operationId: string, secret: string): Promise<boolean> {
+    const operation = await this.operationQueries.getById(operationId);
+    if (!operation || operation.state !== 'pending') return false;
+    const result = await this.transactions.completePending({
+      operationId,
+      expectedRevision: operation.revision ?? 0,
+      updatedAt: Date.now(),
+      spentProofSecrets: [secret],
+    });
+    await this.publishCompletedSend(result);
+    return true;
   }
 
   /**
@@ -844,36 +904,11 @@ export class SendOperationService {
     if (proofInputs.length !== secrets.length) {
       throw new ProofValidationError('Cannot check proof states: missing proof metadata');
     }
-    return wallet.checkProofsStates(proofInputs);
-  }
-
-  /**
-   * Mark an operation as rolled back with an error message.
-   */
-  private async markAsRolledBack(
-    op: PreparedOrLaterOperation,
-    error: string,
-  ): Promise<RolledBackSendOperation> {
-    const rolledBack: RolledBackSendOperation = {
-      ...op,
-      state: 'rolled_back',
-      updatedAt: Date.now(),
-      error,
-    };
-    await this.transactions.updateLegacyState(rolledBack);
-
-    await this.eventBus.emit('send:rolled-back', {
-      mintUrl: op.mintUrl,
-      operationId: op.id,
-      operation: rolledBack,
-    });
-
-    this.logger?.info('Operation rolled back during recovery', {
-      operationId: op.id,
-      error,
-    });
-
-    return rolledBack;
+    const states = await wallet.checkProofsStates(proofInputs);
+    if (states.length !== proofInputs.length) {
+      throw new ProofValidationError('Cannot check proof states: incomplete mint response');
+    }
+    return states;
   }
 
   /**
@@ -975,6 +1010,45 @@ export class SendOperationService {
       operationId: result.operation.id,
       operation: result.operation,
     });
+  }
+
+  private async publishCancelledSend(result: CancelledPreparedSend): Promise<void> {
+    if (!result.committed) return;
+    await this.publishCommittedEvent('proofs:released', {
+      mintUrl: result.operation.mintUrl,
+      secrets: result.releasedInputSecrets,
+    });
+    await this.publishCommittedEvent('send:rolled-back', {
+      mintUrl: result.operation.mintUrl,
+      operationId: result.operation.id,
+      operation: result.operation,
+    });
+    this.logger?.info('Prepared Send operation cancelled', { operationId: result.operation.id });
+  }
+
+  private async publishCompletedSend(result: CompletedPendingSend): Promise<void> {
+    if (!result.committed) return;
+    if (result.spentProofSecrets.length > 0) {
+      await this.publishCommittedEvent('proofs:state-changed', {
+        mintUrl: result.operation.mintUrl,
+        secrets: result.spentProofSecrets,
+        state: 'spent',
+      });
+    }
+    if (result.releasedInputSecrets.length > 0) {
+      await this.publishCommittedEvent('proofs:released', {
+        mintUrl: result.operation.mintUrl,
+        secrets: result.releasedInputSecrets,
+      });
+    }
+    if (result.operation.state === 'finalized') {
+      await this.publishCommittedEvent('send:finalized', {
+        mintUrl: result.operation.mintUrl,
+        operationId: result.operation.id,
+        operation: result.operation,
+      });
+      this.logger?.info('Send operation finalized', { operationId: result.operation.id });
+    }
   }
 
   private isDefinitiveSwapFailure(error: unknown): error is MintOperationError {
