@@ -17,6 +17,10 @@ export type { CoreEvents } from './events/types.ts';
 export type { EventHandler } from './events/EventBus.ts';
 export { type Logger, ConsoleLogger } from './logging/index.ts';
 export { MemoryRepositories } from './repositories/memory/MemoryRepositories.ts';
+export {
+  MemoryDurableEventOutboxRepository,
+  MemoryDurableEventOutboxTransactionPort,
+} from './outbox/memory/index.ts';
 export type {
   DefaultSendMethodData,
   P2pkSendMethodData,

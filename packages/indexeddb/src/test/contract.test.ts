@@ -14,6 +14,8 @@ import {
   runMeltOperationRepositoryContract,
   runMeltQuoteRepositoryContract,
   runDurableEventOutboxRepositoryContract,
+  runDurableEventOutboxHostContract,
+  createDurableEventOutboxRepositoryFromTransactionPort,
 } from '@cashu/coco-adapter-tests';
 import type {
   DurableEventRevisionBatch,
@@ -26,10 +28,7 @@ import {
   IDB_DURABLE_EVENT_OUTBOX_STORES,
   IndexedDbRepositories,
 } from '../index.ts';
-import {
-  configureTransactionalIdbDurableEventOutboxStorageLimits,
-  createTransactionalIdbDurableEventOutboxRepository,
-} from './durableEventOutbox.ts';
+import { createTransactionalIdbDurableEventOutboxRepository } from './durableEventOutbox.ts';
 
 let dbCounter = 0;
 
@@ -160,53 +159,60 @@ runDurableEventOutboxRepositoryContract(
   {
     async createRepository(options?: { readonly limits?: DurableEventStorageLimits }) {
       const dbName = `coco_cashu_outbox_contract_${Date.now()}_${dbCounter++}`;
-      const database = new IdbDb({ name: dbName });
-      await ensureSchema(database);
-      await database.open();
+      const repositories = new IndexedDbRepositories({ name: dbName });
+      await repositories.init();
       if (options?.limits) {
-        await configureTransactionalIdbDurableEventOutboxStorageLimits(database, options.limits);
+        await repositories.configureDurableEventOutboxStorageLimits(options.limits);
       }
       return {
-        repository: createTransactionalIdbDurableEventOutboxRepository(database),
+        repository: createDurableEventOutboxRepositoryFromTransactionPort(
+          repositories.durableEventOutbox,
+        ),
         dispose: async () => {
-          database.close();
+          repositories.db.close();
           await Dexie.delete(dbName);
         },
       };
     },
     async createSharedRepositories() {
       const dbName = `coco_cashu_outbox_shared_${Date.now()}_${dbCounter++}`;
-      const firstDatabase = new IdbDb({ name: dbName });
-      const secondDatabase = new IdbDb({ name: dbName });
-      await ensureSchema(firstDatabase);
-      await ensureSchema(secondDatabase);
-      await firstDatabase.open();
-      await secondDatabase.open();
+      const firstRepositories = new IndexedDbRepositories({ name: dbName });
+      const secondRepositories = new IndexedDbRepositories({ name: dbName });
+      await firstRepositories.init();
+      await secondRepositories.init();
       return {
-        first: createTransactionalIdbDurableEventOutboxRepository(firstDatabase),
-        second: createTransactionalIdbDurableEventOutboxRepository(secondDatabase),
+        first: createDurableEventOutboxRepositoryFromTransactionPort(
+          firstRepositories.durableEventOutbox,
+        ),
+        second: createDurableEventOutboxRepositoryFromTransactionPort(
+          secondRepositories.durableEventOutbox,
+        ),
         dispose: async () => {
-          firstDatabase.close();
-          secondDatabase.close();
+          firstRepositories.db.close();
+          secondRepositories.db.close();
           await Dexie.delete(dbName);
         },
       };
     },
     async createRestartableRepository() {
       const dbName = `coco_cashu_outbox_restart_${Date.now()}_${dbCounter++}`;
-      let database = new IdbDb({ name: dbName });
-      await ensureSchema(database);
+      let repositories = new IndexedDbRepositories({ name: dbName });
+      await repositories.init();
       const reopen = async () => {
-        database.close();
-        database = new IdbDb({ name: dbName });
-        await ensureSchema(database);
-        return createTransactionalIdbDurableEventOutboxRepository(database);
+        repositories.db.close();
+        repositories = new IndexedDbRepositories({ name: dbName });
+        await repositories.init();
+        return createDurableEventOutboxRepositoryFromTransactionPort(
+          repositories.durableEventOutbox,
+        );
       };
       return {
-        repository: createTransactionalIdbDurableEventOutboxRepository(database),
+        repository: createDurableEventOutboxRepositoryFromTransactionPort(
+          repositories.durableEventOutbox,
+        ),
         restart: reopen,
         dispose: async () => {
-          database.close();
+          repositories.db.close();
           await Dexie.delete(dbName);
         },
       };
@@ -214,6 +220,8 @@ runDurableEventOutboxRepositoryContract(
   },
   { describe, it, expect },
 );
+
+runDurableEventOutboxHostContract({ createRepositories }, { describe, it, expect });
 
 runAuthSessionRepositoryContract({ createRepositories }, { describe, it, expect });
 

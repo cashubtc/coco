@@ -28,7 +28,10 @@ const manager = await initializeCoco({
 - Pass `name` to control the IndexedDB database name. The default is `coco_cashu`.
 - This adapter is intended for environments where IndexedDB is available.
 - The generic durable outbox is opt-in and is not added to the global `Repositories` interface.
-  Construct `IdbDurableEventOutboxRepository` only with the caller's active Dexie transaction.
+  Use `repositories.durableEventOutbox.run()` for root outbox work and
+  `repositories.withDurableEventOutboxTransaction()` when Wallet state and event intent must commit
+  together. Advanced hosts can construct `IdbDurableEventOutboxRepository` with an active Dexie
+  transaction.
 - Before opening a write transaction, declare the complete `IDB_DURABLE_EVENT_OUTBOX_STORES` union
   together with every feature store used by that transaction. Do not await network, timers, or Web
   Crypto while it is active.

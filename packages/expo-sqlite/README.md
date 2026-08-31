@@ -47,12 +47,23 @@ database lifecycle under your application code.
 - Migration helpers, database wrapper classes, and individual repository classes
   are internal implementation details and are not public adapter exports.
 
+## Durable event outbox
+
+The generic outbox repository is enabled and opt-in. `SqliteRepositories` exposes:
+
+- `durableEventOutbox.run()` for publisher claims, inspection, requeue, and compaction;
+- `withDurableEventOutboxTransaction()` for committing Wallet repository changes and a sealed event
+  batch together; and
+- `configureDurableEventOutboxStorageLimits()` for persisted finite capacity limits.
+
+Outbox transactions acquire the SQLite writer lock before their first read. SQLite busy/locked
+conflicts can repeat the combined transaction callback, so create stable inputs beforehand and do
+not perform external effects inside it. A concrete Expo feature rollout should still run its
+producer/consumer transaction and competing-claim tests on the supported native devices.
+
 ## Notes
 
 - Pass an already opened `expo-sqlite` database instance via the `database` option.
 - The adapter ensures schema creation and migrations when you call `init()`.
 - `ExpoSqliteRepositories` remains available as a migration alias.
-- Migration 039 provisions the generic durable outbox tables, but native Expo outbox activation is
-  intentionally disabled. The shared SQL contract passes through an Expo-compatible test shim;
-  activation requires claim-contention and producer/consumer transaction tests on a real native
-  Expo SQLite runtime.
+- Migration 039 provisions the generic durable outbox tables and persisted capacity policy.

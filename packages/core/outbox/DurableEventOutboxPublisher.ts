@@ -8,7 +8,7 @@ import {
   DurableEventValidationError,
 } from './errors.ts';
 import type { DurableEventConsumerExecutor } from './TransactionalDurableEventConsumer.ts';
-import type { DurableEventOutboxRepository } from './repository.ts';
+import type { DurableEventOutboxTransactionPort } from './repository.ts';
 import {
   addDurableEventDelay,
   durableEventRetryDelay,
@@ -18,7 +18,7 @@ import type { SafeDurableEventFailure } from './types.ts';
 import { assertDurableEventContract, durableEventContractKey } from './validation.ts';
 
 export interface DurableEventPublisherOptions {
-  readonly repository: DurableEventOutboxRepository;
+  readonly transactionPort: DurableEventOutboxTransactionPort;
   readonly consumers: readonly DurableEventConsumerExecutor[];
   readonly workerId: string;
   readonly leaseDurationMs: number;
@@ -78,13 +78,17 @@ export class DurableEventOutboxPublisher {
     const result = { claimed: 0, published: 0, rescheduled: 0, blocked: 0, stale: 0 };
 
     for (let index = 0; index < limit; index += 1) {
-      const claim = await this.options.repository.claimNext({
-        workerId: this.options.workerId,
-        leaseToken: this.options.createLeaseToken(),
-        leaseDurationMs: this.options.leaseDurationMs,
-        now: this.options.now(),
-        contracts: [...this.consumers.values()].map((consumer) => consumer.contract),
-      });
+      const leaseToken = this.options.createLeaseToken();
+      const claimNow = this.options.now();
+      const claim = await this.options.transactionPort.run((outbox) =>
+        outbox.claimNext({
+          workerId: this.options.workerId,
+          leaseToken,
+          leaseDurationMs: this.options.leaseDurationMs,
+          now: claimNow,
+          contracts: [...this.consumers.values()].map((consumer) => consumer.contract),
+        }),
+      );
       if (!claim) break;
       result.claimed += 1;
       const consumer = this.consumers.get(durableEventContractKey(claim));
@@ -119,10 +123,13 @@ export class DurableEventOutboxPublisher {
         const shouldBlock =
           !normalized.retryable || failureCount >= this.options.retryPolicy.maxFailures;
         if (shouldBlock) {
-          const mutation = await this.options.repository.block(
-            { id: claim.id, leaseToken: claim.leaseToken },
-            normalized.failure,
-            this.options.now(),
+          const blockedAt = this.options.now();
+          const mutation = await this.options.transactionPort.run((outbox) =>
+            outbox.block(
+              { id: claim.id, leaseToken: claim.leaseToken },
+              normalized.failure,
+              blockedAt,
+            ),
           );
           if (mutation === 'updated') result.blocked += 1;
           else result.stale += 1;
@@ -135,10 +142,12 @@ export class DurableEventOutboxPublisher {
           this.options.retryPolicy,
           this.options.jitter(),
         );
-        const mutation = await this.options.repository.reschedule(
-          { id: claim.id, leaseToken: claim.leaseToken },
-          normalized.failure,
-          addDurableEventDelay(now, delay),
+        const mutation = await this.options.transactionPort.run((outbox) =>
+          outbox.reschedule(
+            { id: claim.id, leaseToken: claim.leaseToken },
+            normalized.failure,
+            addDurableEventDelay(now, delay),
+          ),
         );
         if (mutation === 'updated') result.rescheduled += 1;
         else result.stale += 1;

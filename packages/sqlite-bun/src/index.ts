@@ -1,5 +1,11 @@
 import type { Database } from 'bun:sqlite';
-import type { Repositories, RepositoryTransactionScope } from '@cashu/coco-core/adapter';
+import type {
+  DurableEventOutboxHostTransactionScope,
+  DurableEventOutboxTransactionPort,
+  DurableEventStorageLimits,
+  Repositories,
+  RepositoryTransactionScope,
+} from '@cashu/coco-core/adapter';
 import { SqlStorageRepositories } from '@cashu/coco-sql-storage';
 import { SqliteDb } from './db.ts';
 
@@ -7,7 +13,11 @@ export interface SqliteRepositoriesOptions {
   database: Database;
 }
 
+export type SqliteDurableEventOutboxTransactionScope =
+  DurableEventOutboxHostTransactionScope<RepositoryTransactionScope>;
+
 export class SqliteRepositories implements Repositories {
+  readonly durableEventOutbox: DurableEventOutboxTransactionPort;
   readonly mintRepository: Repositories['mintRepository'];
   readonly keyRingRepository: Repositories['keyRingRepository'];
   readonly counterRepository: Repositories['counterRepository'];
@@ -31,6 +41,7 @@ export class SqliteRepositories implements Repositories {
   constructor(options: SqliteRepositoriesOptions) {
     this.db = new SqliteDb(options);
     this.repositories = new SqlStorageRepositories({ database: this.db });
+    this.durableEventOutbox = this.repositories.durableEventOutbox;
     this.mintRepository = this.repositories.mintRepository;
     this.keyRingRepository = this.repositories.keyRingRepository;
     this.counterRepository = this.repositories.counterRepository;
@@ -57,5 +68,16 @@ export class SqliteRepositories implements Repositories {
 
   async withTransaction<T>(fn: (repos: RepositoryTransactionScope) => Promise<T>): Promise<T> {
     return this.repositories.withTransaction(fn);
+  }
+
+  /** Commit wallet repository changes and outbox state in one SQLite transaction. */
+  async withDurableEventOutboxTransaction<T>(
+    fn: (scope: SqliteDurableEventOutboxTransactionScope) => Promise<T>,
+  ): Promise<T> {
+    return this.repositories.withDurableEventOutboxTransaction(fn);
+  }
+
+  async configureDurableEventOutboxStorageLimits(limits: DurableEventStorageLimits): Promise<void> {
+    return this.repositories.configureDurableEventOutboxStorageLimits(limits);
   }
 }

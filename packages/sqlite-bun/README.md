@@ -42,6 +42,19 @@ adapter does not close a database that it did not open.
 - Migration helpers, database wrapper classes, and individual repository classes
   are internal implementation details and are not public adapter exports.
 
+## Durable event outbox
+
+The generic outbox is opt-in. `SqliteRepositories` exposes:
+
+- `durableEventOutbox.run()` for publisher claims, inspection, requeue, and compaction;
+- `withDurableEventOutboxTransaction()` for committing Wallet repository changes and a sealed event
+  batch together; and
+- `configureDurableEventOutboxStorageLimits()` for persisted finite capacity limits.
+
+SQLite busy/locked conflicts can repeat the combined transaction callback. Create stable IDs,
+timestamps, and payload inputs before entering it, and do not perform network or other external
+effects inside it.
+
 ## Notes
 
 - Uses `bun:sqlite` instead of `better-sqlite3`.

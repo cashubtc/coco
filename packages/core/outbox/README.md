@@ -30,6 +30,12 @@ For a consumer, the host supplies one transaction scope containing the local eff
 and `DurableEventOutboxConsumerWriter`. An error from either the effect or publication
 acknowledgement must roll back both writes.
 
+Storage adapters expose a `DurableEventOutboxTransactionPort` for publisher and administrative
+transactions. `DurableEventOutboxPublisher` accepts that port rather than a repository that opens
+hidden root transactions. SQL and IndexedDB adapters also expose
+`withDurableEventOutboxTransaction()` so Wallet state and event intent can share one physical
+transaction without adding the outbox to the global `Repositories` contract.
+
 ## Operational defaults
 
 - Events: 10,000 rows

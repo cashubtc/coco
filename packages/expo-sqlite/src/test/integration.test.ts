@@ -32,15 +32,7 @@ class BunExpoSqliteDatabaseShim {
   }
 
   async execAsync(sql: string): Promise<void> {
-    const statements = sql
-      .split(';')
-      .map((statement) => statement.trim())
-      .filter(Boolean);
-
-    for (const statementSql of statements) {
-      const statement = this.db.prepare(statementSql);
-      statement.run();
-    }
+    (this.db as unknown as { exec(statement: string): void }).exec(sql);
   }
 
   async runAsync(sql: string, ...params: any[]): Promise<RunResult> {

@@ -16,19 +16,42 @@ import {
   runMeltOperationRepositoryContract,
   runMeltQuoteRepositoryContract,
   runDurableEventOutboxRepositoryContract,
+  runDurableEventOutboxHostContract,
+  createDurableEventOutboxRepositoryFromTransactionPort,
   createDummyMint,
 } from '@cashu/coco-adapter-tests';
-import {
-  createTransactionalSqliteDurableEventOutboxRepository,
-  runSqlDatabaseContract,
-} from '@cashu/coco-sql-storage/test';
-import { configureDurableEventOutboxStorageLimits, ensureSchema } from '@cashu/coco-sql-storage';
-import type { DurableEventStorageLimits } from '@cashu/coco-core/adapter';
+import { runSqlDatabaseContract } from '@cashu/coco-sql-storage/test';
+import type {
+  DurableEventRevisionBatch,
+  DurableEventStorageLimits,
+} from '@cashu/coco-core/adapter';
 import { SqliteRepositories as Repositories } from '../index.ts';
 import type { SqliteRepositoriesOptions } from '../index.ts';
 import { ExpoSqliteDb } from '../db.ts';
 
 type RunResult = { changes: number; lastInsertRowId: number; lastInsertRowid: number };
+
+function expoOutboxBatch(): DurableEventRevisionBatch {
+  return {
+    streamId: 'expo-operation-1',
+    expectedPreviousRevision: 0,
+    streamRevision: 1,
+    events: [
+      {
+        id: 'expo-event-1',
+        envelopeVersion: 1,
+        eventKey: 'project-history',
+        eventType: 'wallet.operation.finalized',
+        consumerId: 'wallet.history.projector',
+        streamId: 'expo-operation-1',
+        streamRevision: 1,
+        payloadVersion: 1,
+        payload: { operationId: 'expo-operation-1' },
+        occurredAt: 100,
+      },
+    ],
+  };
+}
 
 class BunExpoSqliteDatabaseShim {
   private readonly db: Database;
@@ -203,15 +226,17 @@ runDurableEventOutboxRepositoryContract(
   {
     async createRepository(options?: { readonly limits?: DurableEventStorageLimits }) {
       const rawDatabase = new BunExpoSqliteDatabaseShim();
-      const database = new ExpoSqliteDb({
+      const repositories = new Repositories({
         database: rawDatabase as unknown as SqliteRepositoriesOptions['database'],
       });
-      await ensureSchema(database);
+      await repositories.init();
       if (options?.limits) {
-        await configureDurableEventOutboxStorageLimits(database, options.limits);
+        await repositories.configureDurableEventOutboxStorageLimits(options.limits);
       }
       return {
-        repository: createTransactionalSqliteDurableEventOutboxRepository(database),
+        repository: createDurableEventOutboxRepositoryFromTransactionPort(
+          repositories.durableEventOutbox,
+        ),
         dispose: () => rawDatabase.closeAsync(),
       };
     },
@@ -220,19 +245,23 @@ runDurableEventOutboxRepositoryContract(
       const filename = join(directory, 'wallet.sqlite');
       const firstRawDatabase = new NativeExpoSqliteDatabaseShim(filename);
       const secondRawDatabase = new NativeExpoSqliteDatabaseShim(filename);
-      const firstDatabase = new ExpoSqliteDb({
+      const firstRepositories = new Repositories({
         database: firstRawDatabase as unknown as SqliteRepositoriesOptions['database'],
       });
-      const secondDatabase = new ExpoSqliteDb({
+      const secondRepositories = new Repositories({
         database: secondRawDatabase as unknown as SqliteRepositoriesOptions['database'],
       });
-      await ensureSchema(firstDatabase);
-      await ensureSchema(secondDatabase);
+      await firstRepositories.init();
+      await secondRepositories.init();
       await firstRawDatabase.execAsync('PRAGMA busy_timeout = 0');
       await secondRawDatabase.execAsync('PRAGMA busy_timeout = 0');
       return {
-        first: createTransactionalSqliteDurableEventOutboxRepository(firstDatabase),
-        second: createTransactionalSqliteDurableEventOutboxRepository(secondDatabase),
+        first: createDurableEventOutboxRepositoryFromTransactionPort(
+          firstRepositories.durableEventOutbox,
+        ),
+        second: createDurableEventOutboxRepositoryFromTransactionPort(
+          secondRepositories.durableEventOutbox,
+        ),
         dispose: async () => {
           await firstRawDatabase.closeAsync();
           await secondRawDatabase.closeAsync();
@@ -244,21 +273,25 @@ runDurableEventOutboxRepositoryContract(
       const directory = await mkdtemp(join(tmpdir(), 'coco-expo-sqlite-outbox-restart-'));
       const filename = join(directory, 'wallet.sqlite');
       let rawDatabase = new NativeExpoSqliteDatabaseShim(filename);
-      let database = new ExpoSqliteDb({
+      let repositories = new Repositories({
         database: rawDatabase as unknown as SqliteRepositoriesOptions['database'],
       });
-      await ensureSchema(database);
+      await repositories.init();
       const reopen = async () => {
         await rawDatabase.closeAsync();
         rawDatabase = new NativeExpoSqliteDatabaseShim(filename);
-        database = new ExpoSqliteDb({
+        repositories = new Repositories({
           database: rawDatabase as unknown as SqliteRepositoriesOptions['database'],
         });
-        await ensureSchema(database);
-        return createTransactionalSqliteDurableEventOutboxRepository(database);
+        await repositories.init();
+        return createDurableEventOutboxRepositoryFromTransactionPort(
+          repositories.durableEventOutbox,
+        );
       };
       return {
-        repository: createTransactionalSqliteDurableEventOutboxRepository(database),
+        repository: createDurableEventOutboxRepositoryFromTransactionPort(
+          repositories.durableEventOutbox,
+        ),
         restart: reopen,
         dispose: async () => {
           await rawDatabase.closeAsync();
@@ -269,6 +302,8 @@ runDurableEventOutboxRepositoryContract(
   },
   { describe, it, expect },
 );
+
+runDurableEventOutboxHostContract({ createRepositories }, { describe, it, expect });
 
 runAuthSessionRepositoryContract({ createRepositories }, { describe, it, expect });
 
@@ -321,6 +356,29 @@ describe('expo-sqlite web transaction compatibility', () => {
 });
 
 describe('expo-sqlite native transaction compatibility', () => {
+  it('uses a writer-serialized native transaction for the public outbox capability', async () => {
+    const database = new NativeExpoSqliteDatabaseShim();
+    const repositories = new Repositories({
+      database: database as unknown as SqliteRepositoriesOptions['database'],
+    });
+
+    try {
+      await repositories.init();
+      database.executedSql.length = 0;
+
+      await repositories.withDurableEventOutboxTransaction((scope) =>
+        scope.durableEventOutbox.enqueueRevision(expoOutboxBatch(), 100),
+      );
+
+      expect(database.executedSql).toEqual(['BEGIN IMMEDIATE', 'COMMIT']);
+      await expect(
+        repositories.durableEventOutbox.run((outbox) => outbox.getStorageStats()),
+      ).resolves.toMatchObject({ eventRows: 1, revisionSeals: 1 });
+    } finally {
+      await database.closeAsync();
+    }
+  });
+
   it('uses exclusive transactions when available outside web', async () => {
     const database = new NativeExpoSqliteDatabaseShim();
     const repositories = new Repositories({

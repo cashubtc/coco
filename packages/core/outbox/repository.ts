@@ -92,3 +92,19 @@ export interface DurableEventOutboxRepository
   getStorageStats(): Promise<DurableEventStorageStats>;
   listOutstandingContracts(): Promise<readonly OutstandingDurableEventContract[]>;
 }
+
+/**
+ * Opens a host-owned root transaction and supplies an outbox repository bound to it.
+ *
+ * The scoped repository never opens a nested root transaction. Adapters can use this port for
+ * publisher claims and administrative operations while feature gateways use their adapter's
+ * combined wallet-and-outbox transaction scope.
+ */
+export interface DurableEventOutboxTransactionPort {
+  run<T>(work: (outbox: DurableEventOutboxRepository) => Promise<T>): Promise<T>;
+}
+
+/** Adapter-specific transaction scope that commits wallet repositories and outbox state together. */
+export type DurableEventOutboxHostTransactionScope<TRepositories> = TRepositories & {
+  readonly durableEventOutbox: DurableEventOutboxRepository;
+};

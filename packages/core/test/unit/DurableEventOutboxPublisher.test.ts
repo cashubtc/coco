@@ -62,11 +62,13 @@ function claimedEvent(overrides: Partial<ClaimedDurableEvent> = {}): ClaimedDura
 class PublisherRepository implements DurableEventOutboxRepository {
   readonly rescheduled: { failure: SafeDurableEventFailure; availableAt: number }[] = [];
   readonly blocked: SafeDurableEventFailure[] = [];
+  readonly claims: DurableEventClaimOptions[] = [];
   private claimed = false;
 
   constructor(private readonly event: ClaimedDurableEvent) {}
 
-  async claimNext(_options: DurableEventClaimOptions): Promise<ClaimedDurableEvent | null> {
+  async claimNext(options: DurableEventClaimOptions): Promise<ClaimedDurableEvent | null> {
+    this.claims.push(options);
     if (this.claimed) return null;
     this.claimed = true;
     return this.event;
@@ -135,7 +137,9 @@ function publisher(
   logger?: Logger,
 ): DurableEventOutboxPublisher {
   return new DurableEventOutboxPublisher({
-    repository,
+    transactionPort: {
+      run: (work) => work(repository),
+    },
     consumers: [consumer],
     workerId: 'worker-1',
     leaseDurationMs: 1_000,
@@ -155,6 +159,35 @@ function consumer(
 }
 
 describe('DurableEventOutboxPublisher', () => {
+  it('reuses stable claim inputs when the transaction port repeats an uncommitted callback', async () => {
+    const event = claimedEvent();
+    const firstAttempt = new PublisherRepository(event);
+    const secondAttempt = new PublisherRepository(event);
+    let tokenCalls = 0;
+    let clockCalls = 0;
+    const worker = new DurableEventOutboxPublisher({
+      transactionPort: {
+        async run(work) {
+          await work(firstAttempt);
+          return work(secondAttempt);
+        },
+      },
+      consumers: [consumer(event, async () => 'applied')],
+      workerId: 'worker-1',
+      leaseDurationMs: 1_000,
+      retryPolicy: { maxFailures: 3, baseDelayMs: 100, maxDelayMs: 1_000, jitterRatio: 0 },
+      createLeaseToken: () => `token-${++tokenCalls}`,
+      now: () => 200 + clockCalls++,
+      jitter: () => 0.5,
+    });
+
+    await worker.runOnce(1);
+
+    expect(tokenCalls).toBe(1);
+    expect(clockCalls).toBe(2);
+    expect(firstAttempt.claims).toEqual(secondAttempt.claims);
+  });
+
   it('publishes one claimed event', async () => {
     const event = claimedEvent();
     const repository = new PublisherRepository(event);

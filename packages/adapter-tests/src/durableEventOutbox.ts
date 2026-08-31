@@ -2,9 +2,14 @@ import type {
   ClaimedDurableEvent,
   DurableEventContract,
   DurableEventIntent,
+  DurableEventOutboxHostTransactionScope,
   DurableEventOutboxRepository,
+  DurableEventOutboxTransactionPort,
   DurableEventRevisionBatch,
   DurableEventStorageLimits,
+  Mint,
+  Repositories,
+  RepositoryTransactionScope,
 } from '@cashu/coco-core/adapter';
 import type { ContractRunner } from './index.ts';
 
@@ -31,6 +36,43 @@ export interface DurableEventOutboxRepositoryContractOptions {
   }): Promise<DurableEventOutboxRepositoryHandle>;
   createSharedRepositories?(): Promise<SharedDurableEventOutboxRepositoryHandle>;
   createRestartableRepository?(): Promise<RestartableDurableEventOutboxRepositoryHandle>;
+}
+
+/** Adapt a public root transaction port to the repository-shaped shared conformance harness. */
+export function createDurableEventOutboxRepositoryFromTransactionPort(
+  transactions: DurableEventOutboxTransactionPort,
+): DurableEventOutboxRepository {
+  return {
+    enqueueRevision: (batch, now) =>
+      transactions.run((outbox) => outbox.enqueueRevision(batch, now)),
+    claimNext: (options) => transactions.run((outbox) => outbox.claimNext(options)),
+    readAndValidateCurrentClaim: (claim) =>
+      transactions.run((outbox) => outbox.readAndValidateCurrentClaim(claim)),
+    markPublished: (id, leaseToken, now) =>
+      transactions.run((outbox) => outbox.markPublished(id, leaseToken, now)),
+    reschedule: (claim, failure, availableAt) =>
+      transactions.run((outbox) => outbox.reschedule(claim, failure, availableAt)),
+    block: (claim, failure, now) => transactions.run((outbox) => outbox.block(claim, failure, now)),
+    requeueBlocked: (options) => transactions.run((outbox) => outbox.requeueBlocked(options)),
+    compactPublishedThrough: (options) =>
+      transactions.run((outbox) => outbox.compactPublishedThrough(options)),
+    getStorageStats: () => transactions.run((outbox) => outbox.getStorageStats()),
+    listOutstandingContracts: () => transactions.run((outbox) => outbox.listOutstandingContracts()),
+  };
+}
+
+export interface DurableEventOutboxHostRepositories extends Repositories {
+  readonly durableEventOutbox: DurableEventOutboxTransactionPort;
+  withDurableEventOutboxTransaction<T>(
+    work: (scope: DurableEventOutboxHostTransactionScope<RepositoryTransactionScope>) => Promise<T>,
+  ): Promise<T>;
+}
+
+export interface DurableEventOutboxHostContractOptions {
+  createRepositories(): Promise<{
+    readonly repositories: DurableEventOutboxHostRepositories;
+    dispose(): Promise<void>;
+  }>;
 }
 
 const contract: DurableEventContract = {
@@ -547,4 +589,111 @@ export function runDurableEventOutboxRepositoryContract(
       });
     }
   });
+}
+
+/** Proves the adapter's public wallet-and-outbox composition surface is physically atomic. */
+export function runDurableEventOutboxHostContract(
+  options: DurableEventOutboxHostContractOptions,
+  testApi: ContractRunner,
+): void {
+  const { describe, it, expect } = testApi;
+
+  describe('durable event outbox host transaction contract', () => {
+    it('commits wallet state and a sealed event batch together', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        await repositories.withDurableEventOutboxTransaction(async (scope) => {
+          await scope.mintRepository.addOrUpdateMint(hostContractMint());
+          await scope.durableEventOutbox.enqueueRevision(eventBatch(), 100);
+        });
+
+        expect(await repositories.mintRepository.getAllMints()).toHaveLength(1);
+        const stats = await repositories.durableEventOutbox.run((outbox) =>
+          outbox.getStorageStats(),
+        );
+        expect(stats.eventRows).toBe(1);
+        expect(stats.revisionSeals).toBe(1);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('rolls wallet state and a sealed event batch back together', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        let producerFailed = false;
+        try {
+          await repositories.withDurableEventOutboxTransaction(async (scope) => {
+            await scope.mintRepository.addOrUpdateMint(hostContractMint());
+            await scope.durableEventOutbox.enqueueRevision(eventBatch(), 100);
+            throw new Error('abort producer transaction');
+          });
+        } catch {
+          producerFailed = true;
+        }
+        expect(producerFailed).toBe(true);
+
+        expect(await repositories.mintRepository.getAllMints()).toHaveLength(0);
+        const stats = await repositories.durableEventOutbox.run((outbox) =>
+          outbox.getStorageStats(),
+        );
+        expect(stats.eventRows).toBe(0);
+        expect(stats.revisionSeals).toBe(0);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('rolls a local consumer effect and publication acknowledgement back together', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        await repositories.durableEventOutbox.run((outbox) =>
+          outbox.enqueueRevision(eventBatch(), 100),
+        );
+        const claimed = await repositories.durableEventOutbox.run((outbox) =>
+          outbox.claimNext(claimOptions({ token: 'consumer-token', now: 100 })),
+        );
+        if (!claimed) throw new Error('expected a claimed event');
+
+        let consumerFailed = false;
+        try {
+          await repositories.withDurableEventOutboxTransaction(async (scope) => {
+            await scope.mintRepository.addOrUpdateMint(hostContractMint());
+            expect(
+              await scope.durableEventOutbox.markPublished(claimed.id, claimed.leaseToken, 110),
+            ).toBe('updated');
+            throw new Error('abort consumer transaction');
+          });
+        } catch {
+          consumerFailed = true;
+        }
+        expect(consumerFailed).toBe(true);
+
+        expect(await repositories.mintRepository.getAllMints()).toHaveLength(0);
+        const currentClaim = await repositories.durableEventOutbox.run((outbox) =>
+          outbox.readAndValidateCurrentClaim(claimed),
+        );
+        expect(currentClaim === null).toBe(false);
+      } finally {
+        await dispose();
+      }
+    });
+  });
+}
+
+function hostContractMint(): Mint {
+  return {
+    mintUrl: 'https://mint.test',
+    name: 'Test Mint',
+    mintInfo: {
+      name: 'Test Mint',
+      pubkey: 'pubkey',
+      version: '1.0',
+      contact: {},
+      nuts: {},
+    } as Mint['mintInfo'],
+    trusted: true,
+    createdAt: 0,
+    updatedAt: 0,
+  };
 }

@@ -1,4 +1,7 @@
 import type {
+  DurableEventOutboxHostTransactionScope,
+  DurableEventOutboxTransactionPort,
+  DurableEventStorageLimits,
   Repositories,
   MintRepository,
   KeysetRepository,
@@ -38,13 +41,42 @@ import {
   IdbPaymentRequestReceiveOperationRepository,
 } from './repositories/PaymentRequestReceiveRepository.ts';
 import {
+  configureIdbDurableEventOutboxStorageLimits,
   IdbDurableEventOutboxRepository,
   IDB_DURABLE_EVENT_OUTBOX_STORES,
 } from './repositories/DurableEventOutboxRepository.ts';
+import { IdbDurableEventOutboxTransactionPort } from './repositories/DurableEventOutboxTransactionPort.ts';
 
 export interface IndexedDbRepositoriesOptions extends IdbDbOptions {}
 
+export type IdbDurableEventOutboxTransactionScope =
+  DurableEventOutboxHostTransactionScope<RepositoryTransactionScope>;
+
+function createRepositoryScope(database: IdbDb): RepositoryTransactionScope {
+  return {
+    mintRepository: new IdbMintRepository(database),
+    keyRingRepository: new IdbKeyRingRepository(database),
+    counterRepository: new IdbCounterRepository(database),
+    keysetRepository: new IdbKeysetRepository(database),
+    proofRepository: new IdbProofRepository(database),
+    meltQuoteRepository: new IdbMeltQuoteRepository(database),
+    mintQuoteRepository: new IdbMintQuoteRepository(database),
+    legacyMintQuoteRepository: new IdbLegacyMintQuoteRepository(database),
+    historyRepository: new IdbHistoryRepository(database),
+    sendOperationRepository: new IdbSendOperationRepository(database),
+    meltOperationRepository: new IdbMeltOperationRepository(database),
+    authSessionRepository: new IdbAuthSessionRepository(database),
+    mintOperationRepository: new IdbMintOperationRepository(database),
+    receiveOperationRepository: new IdbReceiveOperationRepository(database),
+    paymentRequestReceiveOperationRepository: new IdbPaymentRequestReceiveOperationRepository(
+      database,
+    ),
+    paymentRequestReceiveAttemptRepository: new IdbPaymentRequestReceiveAttemptRepository(database),
+  };
+}
+
 export class IndexedDbRepositories implements Repositories {
+  readonly durableEventOutbox: DurableEventOutboxTransactionPort;
   readonly mintRepository: MintRepository;
   readonly keyRingRepository: KeyRingRepository;
   readonly counterRepository: CounterRepository;
@@ -66,6 +98,7 @@ export class IndexedDbRepositories implements Repositories {
 
   constructor(options: IndexedDbRepositoriesOptions) {
     this.db = new IdbDb(options);
+    this.durableEventOutbox = new IdbDurableEventOutboxTransactionPort(this.db);
     this.mintRepository = new IdbMintRepository(this.db);
     this.keyRingRepository = new IdbKeyRingRepository(this.db);
     this.counterRepository = new IdbCounterRepository(this.db);
@@ -100,32 +133,26 @@ export class IndexedDbRepositories implements Repositories {
 
   async withTransaction<T>(fn: (repos: RepositoryTransactionScope) => Promise<T>): Promise<T> {
     const stores = this.db.tables.map((t) => t.name);
-    return this.db.runTransaction('rw', stores, async () => {
-      const scopedDb = this.db;
-      const scopedRepositories: RepositoryTransactionScope = {
-        mintRepository: new IdbMintRepository(scopedDb),
-        keyRingRepository: new IdbKeyRingRepository(scopedDb),
-        counterRepository: new IdbCounterRepository(scopedDb),
-        keysetRepository: new IdbKeysetRepository(scopedDb),
-        proofRepository: new IdbProofRepository(scopedDb),
-        meltQuoteRepository: new IdbMeltQuoteRepository(scopedDb),
-        mintQuoteRepository: new IdbMintQuoteRepository(scopedDb),
-        legacyMintQuoteRepository: new IdbLegacyMintQuoteRepository(scopedDb),
-        historyRepository: new IdbHistoryRepository(scopedDb),
-        sendOperationRepository: new IdbSendOperationRepository(scopedDb),
-        meltOperationRepository: new IdbMeltOperationRepository(scopedDb),
-        authSessionRepository: new IdbAuthSessionRepository(scopedDb),
-        mintOperationRepository: new IdbMintOperationRepository(scopedDb),
-        receiveOperationRepository: new IdbReceiveOperationRepository(scopedDb),
-        paymentRequestReceiveOperationRepository: new IdbPaymentRequestReceiveOperationRepository(
-          scopedDb,
-        ),
-        paymentRequestReceiveAttemptRepository: new IdbPaymentRequestReceiveAttemptRepository(
-          scopedDb,
-        ),
-      };
-      return fn(scopedRepositories);
-    });
+    return this.db.runTransaction('rw', stores, () => fn(createRepositoryScope(this.db)));
+  }
+
+  /** Commit wallet repository changes and outbox state in one IndexedDB transaction. */
+  async withDurableEventOutboxTransaction<T>(
+    fn: (scope: IdbDurableEventOutboxTransactionScope) => Promise<T>,
+  ): Promise<T> {
+    const stores = this.db.tables.map((table) => table.name);
+    return this.db.runTransaction('rw', stores, (transaction) =>
+      fn({
+        ...createRepositoryScope(this.db),
+        durableEventOutbox: new IdbDurableEventOutboxRepository(transaction),
+      }),
+    );
+  }
+
+  async configureDurableEventOutboxStorageLimits(limits: DurableEventStorageLimits): Promise<void> {
+    return this.db.runTransaction('rw', [...IDB_DURABLE_EVENT_OUTBOX_STORES], (transaction) =>
+      configureIdbDurableEventOutboxStorageLimits(transaction, limits),
+    );
   }
 }
 
@@ -149,6 +176,7 @@ export {
   IdbPaymentRequestReceiveOperationRepository,
   IdbPaymentRequestReceiveAttemptRepository,
   IdbDurableEventOutboxRepository,
+  IdbDurableEventOutboxTransactionPort,
   IDB_DURABLE_EVENT_OUTBOX_STORES,
 };
 export {

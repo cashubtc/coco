@@ -14,34 +14,15 @@ import type {
   SafeDurableEventFailure,
 } from '@cashu/coco-core/adapter';
 import type { SqlDatabase } from '../index.ts';
-import { SqliteDurableEventOutboxRepository } from '../repositories/DurableEventOutboxRepository.ts';
+import { SqliteDurableEventOutboxTransactionPort } from '../DurableEventOutboxTransactionPort.ts';
 
 /** Creates a root convenience wrapper for adapter contract tests only. */
 export function createTransactionalSqliteDurableEventOutboxRepository(
   database: SqlDatabase,
 ): DurableEventOutboxRepository {
-  const isBusy = (error: unknown): boolean =>
-    error instanceof Error &&
-    'code' in error &&
-    (error.code === 'SQLITE_BUSY' || error.code === 'SQLITE_LOCKED');
-
-  const write = <T>(
-    operation: (repository: SqliteDurableEventOutboxRepository) => Promise<T>,
-  ): Promise<T> => {
-    const attempt = async (remainingAttempts: number): Promise<T> => {
-      try {
-        return await database.transaction(
-          (transaction) => operation(new SqliteDurableEventOutboxRepository(transaction)),
-          { mode: 'immediate' },
-        );
-      } catch (error) {
-        if (!isBusy(error) || remainingAttempts === 0) throw error;
-        await Promise.resolve();
-        return attempt(remainingAttempts - 1);
-      }
-    };
-    return attempt(50);
-  };
+  const transactions = new SqliteDurableEventOutboxTransactionPort(database);
+  const write = <T>(operation: (repository: DurableEventOutboxRepository) => Promise<T>) =>
+    transactions.run(operation);
 
   return {
     enqueueRevision(

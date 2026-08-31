@@ -1,4 +1,7 @@
 import type {
+  DurableEventOutboxHostTransactionScope,
+  DurableEventOutboxTransactionPort,
+  DurableEventStorageLimits,
   Repositories,
   RepositoryTransactionScope,
   MintRepository,
@@ -38,11 +41,21 @@ import {
   SqlitePaymentRequestReceiveAttemptRepository,
   SqlitePaymentRequestReceiveOperationRepository,
 } from './repositories/PaymentRequestReceiveRepository.ts';
-import { SqliteDurableEventOutboxRepository } from './repositories/DurableEventOutboxRepository.ts';
+import {
+  configureDurableEventOutboxStorageLimits,
+  SqliteDurableEventOutboxRepository,
+} from './repositories/DurableEventOutboxRepository.ts';
+import {
+  runSqliteDurableEventOutboxTransaction,
+  SqliteDurableEventOutboxTransactionPort,
+} from './DurableEventOutboxTransactionPort.ts';
 
 export interface SqlStorageRepositoriesOptions {
   database: SqlDatabase;
 }
+
+export type SqliteDurableEventOutboxTransactionScope =
+  DurableEventOutboxHostTransactionScope<RepositoryTransactionScope>;
 
 function createRepositoryScope(database: SqlDatabase): RepositoryTransactionScope {
   return {
@@ -70,6 +83,7 @@ function createRepositoryScope(database: SqlDatabase): RepositoryTransactionScop
 }
 
 export class SqlStorageRepositories implements Repositories {
+  readonly durableEventOutbox: DurableEventOutboxTransactionPort;
   readonly mintRepository: MintRepository;
   readonly keyRingRepository: KeyRingRepository;
   readonly counterRepository: CounterRepository;
@@ -90,6 +104,7 @@ export class SqlStorageRepositories implements Repositories {
 
   constructor(options: SqlStorageRepositoriesOptions) {
     this.database = options.database;
+    this.durableEventOutbox = new SqliteDurableEventOutboxTransactionPort(this.database);
     const repositories = createRepositoryScope(this.database);
     this.mintRepository = repositories.mintRepository;
     this.keyRingRepository = new SqliteKeyRingRepository(this.database);
@@ -118,6 +133,22 @@ export class SqlStorageRepositories implements Repositories {
   async withTransaction<T>(fn: (repos: RepositoryTransactionScope) => Promise<T>): Promise<T> {
     return this.database.transaction((txDatabase) => fn(createRepositoryScope(txDatabase)));
   }
+
+  /** Commit wallet repository changes and a sealed outbox mutation in one physical transaction. */
+  async withDurableEventOutboxTransaction<T>(
+    fn: (scope: SqliteDurableEventOutboxTransactionScope) => Promise<T>,
+  ): Promise<T> {
+    return runSqliteDurableEventOutboxTransaction(this.database, (database, outbox) =>
+      fn({ ...createRepositoryScope(database), durableEventOutbox: outbox }),
+    );
+  }
+
+  /** Persist finite outbox capacity limits after validating them against current storage use. */
+  async configureDurableEventOutboxStorageLimits(limits: DurableEventStorageLimits): Promise<void> {
+    await runSqliteDurableEventOutboxTransaction(this.database, (database) =>
+      configureDurableEventOutboxStorageLimits(database, limits),
+    );
+  }
 }
 
 export {
@@ -138,4 +169,5 @@ export {
   SqlitePaymentRequestReceiveOperationRepository,
   SqlitePaymentRequestReceiveAttemptRepository,
   SqliteDurableEventOutboxRepository,
+  SqliteDurableEventOutboxTransactionPort,
 };

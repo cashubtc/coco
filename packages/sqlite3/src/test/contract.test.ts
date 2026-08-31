@@ -16,12 +16,10 @@ import {
   runMeltOperationRepositoryContract,
   runMeltQuoteRepositoryContract,
   runDurableEventOutboxRepositoryContract,
+  runDurableEventOutboxHostContract,
+  createDurableEventOutboxRepositoryFromTransactionPort,
 } from '@cashu/coco-adapter-tests';
-import {
-  createTransactionalSqliteDurableEventOutboxRepository,
-  runSqlDatabaseContract,
-} from '@cashu/coco-sql-storage/test';
-import { configureDurableEventOutboxStorageLimits, ensureSchema } from '@cashu/coco-sql-storage';
+import { runSqlDatabaseContract } from '@cashu/coco-sql-storage/test';
 import type { DurableEventStorageLimits } from '@cashu/coco-core/adapter';
 import { SqliteRepositories as Repositories } from '../index.ts';
 import { SqliteDb } from '../db.ts';
@@ -93,13 +91,15 @@ runDurableEventOutboxRepositoryContract(
   {
     async createRepository(options?: { readonly limits?: DurableEventStorageLimits }) {
       const rawDatabase = new Database(':memory:');
-      const database = new SqliteDb({ database: rawDatabase });
-      await ensureSchema(database);
+      const repositories = new Repositories({ database: rawDatabase });
+      await repositories.init();
       if (options?.limits) {
-        await configureDurableEventOutboxStorageLimits(database, options.limits);
+        await repositories.configureDurableEventOutboxStorageLimits(options.limits);
       }
       return {
-        repository: createTransactionalSqliteDurableEventOutboxRepository(database),
+        repository: createDurableEventOutboxRepositoryFromTransactionPort(
+          repositories.durableEventOutbox,
+        ),
         dispose: async () => {
           rawDatabase.close();
         },
@@ -110,15 +110,19 @@ runDurableEventOutboxRepositoryContract(
       const filename = join(directory, 'wallet.sqlite');
       const firstRawDatabase = new Database(filename);
       const secondRawDatabase = new Database(filename);
-      const firstDatabase = new SqliteDb({ database: firstRawDatabase });
-      const secondDatabase = new SqliteDb({ database: secondRawDatabase });
-      await ensureSchema(firstDatabase);
-      await ensureSchema(secondDatabase);
+      const firstRepositories = new Repositories({ database: firstRawDatabase });
+      const secondRepositories = new Repositories({ database: secondRawDatabase });
+      await firstRepositories.init();
+      await secondRepositories.init();
       firstRawDatabase.pragma('busy_timeout = 0');
       secondRawDatabase.pragma('busy_timeout = 0');
       return {
-        first: createTransactionalSqliteDurableEventOutboxRepository(firstDatabase),
-        second: createTransactionalSqliteDurableEventOutboxRepository(secondDatabase),
+        first: createDurableEventOutboxRepositoryFromTransactionPort(
+          firstRepositories.durableEventOutbox,
+        ),
+        second: createDurableEventOutboxRepositoryFromTransactionPort(
+          secondRepositories.durableEventOutbox,
+        ),
         dispose: async () => {
           firstRawDatabase.close();
           secondRawDatabase.close();
@@ -130,17 +134,21 @@ runDurableEventOutboxRepositoryContract(
       const directory = await mkdtemp(join(tmpdir(), 'coco-sqlite3-outbox-restart-'));
       const filename = join(directory, 'wallet.sqlite');
       let rawDatabase = new Database(filename);
-      let database = new SqliteDb({ database: rawDatabase });
-      await ensureSchema(database);
+      let repositories = new Repositories({ database: rawDatabase });
+      await repositories.init();
       const reopen = async () => {
         rawDatabase.close();
         rawDatabase = new Database(filename);
-        database = new SqliteDb({ database: rawDatabase });
-        await ensureSchema(database);
-        return createTransactionalSqliteDurableEventOutboxRepository(database);
+        repositories = new Repositories({ database: rawDatabase });
+        await repositories.init();
+        return createDurableEventOutboxRepositoryFromTransactionPort(
+          repositories.durableEventOutbox,
+        );
       };
       return {
-        repository: createTransactionalSqliteDurableEventOutboxRepository(database),
+        repository: createDurableEventOutboxRepositoryFromTransactionPort(
+          repositories.durableEventOutbox,
+        ),
         restart: reopen,
         dispose: async () => {
           rawDatabase.close();
@@ -151,6 +159,8 @@ runDurableEventOutboxRepositoryContract(
   },
   { describe, it, expect },
 );
+
+runDurableEventOutboxHostContract({ createRepositories }, { describe, it, expect });
 
 runAuthSessionRepositoryContract({ createRepositories }, { describe, it, expect });
 
