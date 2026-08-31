@@ -168,7 +168,7 @@ function createMemoryRepositoryState() {
   const receiveOperationRepository = new MemoryReceiveOperationRepository();
   const mintQuoteRepository = new MemoryMintQuoteRepository();
 
-  return {
+  const state = {
     mintRepository: new MemoryMintRepository(),
     keyRingRepository: new MemoryKeyRingRepository(),
     counterRepository: new MemoryCounterRepository(),
@@ -192,6 +192,11 @@ function createMemoryRepositoryState() {
     paymentRequestReceiveOperationRepository: new MemoryPaymentRequestReceiveOperationRepository(),
     paymentRequestReceiveAttemptRepository: new MemoryPaymentRequestReceiveAttemptRepository(),
   };
+
+  type StateOwnerConstraint = {
+    [Key in keyof typeof state]: MemoryRepositoryStateOwner<(typeof state)[Key]>;
+  };
+  return state satisfies StateOwnerConstraint;
 }
 
 function cloneMemoryRepositoryState(source: MemoryRepositoryState): MemoryRepositoryState {
@@ -205,6 +210,7 @@ function copyMemoryRepositoryState(
   source: MemoryRepositoryState,
 ): void {
   for (const key of Object.keys(source) as (keyof MemoryRepositoryState)[]) {
+    // createMemoryRepositoryState statically enforces the protocol; this loop loses key correlation.
     const targetRepository = target[key] as MemoryRepositoryStateOwner<object>;
     targetRepository[COPY_MEMORY_REPOSITORY_STATE](source[key]);
   }

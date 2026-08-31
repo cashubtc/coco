@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import Dexie from 'dexie';
 import {
   runRepositoryTransactionContract,
+  createDummyMint,
   runKeyRingDerivationRepositoryContract,
   runAuthSessionRepositoryContract,
   runProofRepositoryContract,
@@ -70,6 +71,7 @@ runRepositoryTransactionContract(
   {
     createRepositories,
     createSharedRepositories,
+    createIsolationRepositories: createSharedRepositories,
     holdTransactionOpen: (release) => Dexie.waitFor(release),
     testConcurrentRootOperationIsolation: true,
   },
@@ -98,6 +100,45 @@ runMeltOperationRepositoryContract({ createRepositories }, { describe, it, expec
 runMeltQuoteRepositoryContract({ createRepositories }, { describe, it, expect });
 
 runPaymentRequestReceiveRepositoryContract({ createRepositories }, { describe, it, expect });
+
+describe('indexeddb Wallet transaction boundaries', () => {
+  it('does not report a nested strong scope as committed before its ambient parent', async () => {
+    const { repositories, dispose } = await createRepositories();
+    let nestedScopeResolved = false;
+    try {
+      await expect(
+        repositories.db.transaction('rw', repositories.db.tables, async () => {
+          await repositories.withTransaction(async () => {});
+          nestedScopeResolved = true;
+          throw new Error('abort ambient transaction');
+        }),
+      ).rejects.toThrow();
+
+      expect(nestedScopeResolved).toBe(false);
+    } finally {
+      await dispose();
+    }
+  });
+
+  it('keeps closed-over root repository calls in the current Wallet transaction', async () => {
+    const { repositories, dispose } = await createRepositories();
+    try {
+      await expect(
+        repositories.withTransaction(async () => {
+          await repositories.mintRepository.addOrUpdateMint({
+            ...createDummyMint(),
+            mintUrl: 'https://closed-over-root.test',
+          });
+          throw new Error('abort Wallet transaction');
+        }),
+      ).rejects.toThrow('abort Wallet transaction');
+
+      expect(await repositories.mintRepository.getAllMints()).toEqual([]);
+    } finally {
+      await dispose();
+    }
+  }, 2_000);
+});
 
 describe('indexeddb quote storage constraints', () => {
   it('rolls back the keypair and high-water mark when persistence aborts', async () => {

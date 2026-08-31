@@ -23,6 +23,7 @@ runRepositoryTransactionContract(
     createRepositories,
     createSharedRepositories,
     testConcurrentRootOperationIsolation: true,
+    testWriterOwnershipAtEntry: true,
   },
   { describe, it, expect },
 );

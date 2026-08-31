@@ -9,6 +9,10 @@
 - [x] Make SQL-backed repository transactions acquire the strong writer scope.
 - [x] Verify IndexedDB uses one read-write scope for the complete repository transaction.
 - [x] Run focused tests, typechecks, builds, and the two-axis review.
+- [x] Reconcile review findings with issue #447 and the accepted transaction design.
+- [x] Include keypair allocation in the scoped repository foundation without migrating orchestration.
+- [x] Defend IndexedDB strong scopes against ambient nesting and preserve legacy root-call behavior.
+- [x] Cover clean core test startup, serializing writers, and coded SQLite callback conflicts.
 
 ## Scope boundary
 

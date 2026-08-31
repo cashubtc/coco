@@ -59,16 +59,18 @@ function getSqliteErrorCode(error: unknown): string {
   return '';
 }
 
-function isSqliteTransactionConflict(error: unknown): boolean {
+function hasSqliteTransactionConflictCode(error: unknown): boolean {
   const code = getSqliteErrorCode(error);
-  if (
+  return (
     code === '5' ||
     code === '6' ||
     code.startsWith('SQLITE_BUSY') ||
     code.startsWith('SQLITE_LOCKED')
-  ) {
-    return true;
-  }
+  );
+}
+
+function isSqliteTransactionConflict(error: unknown): boolean {
+  if (hasSqliteTransactionConflictCode(error)) return true;
 
   const message =
     error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
@@ -157,6 +159,10 @@ export class SqlStorageRepositories implements Repositories {
           try {
             return await fn(createRepositoryScope(txDatabase));
           } catch (error) {
+            if (error instanceof RepositoryTransactionConflictError) throw error;
+            if (hasSqliteTransactionConflictCode(error)) {
+              throw new RepositoryTransactionConflictError(undefined, error);
+            }
             throw new RepositoryTransactionCallbackFailure(error);
           }
         },

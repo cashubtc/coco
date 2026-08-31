@@ -82,9 +82,25 @@ describe('MemoryKeyRingRepository derivation persistence', () => {
   });
 });
 
-function assertAtomicDerivationIsRootOnly(scope: RepositoryTransactionScope): void {
-  // @ts-expect-error A generated key must not be exposed before its own transaction commits.
+function assertAtomicDerivationIsTransactionScoped(scope: RepositoryTransactionScope): void {
   void scope.keyRingRepository.deriveAndPersistKeyPair;
 }
 
-void assertAtomicDerivationIsRootOnly;
+void assertAtomicDerivationIsTransactionScoped;
+
+describe('MemoryKeyRingRepository transaction scope', () => {
+  it('rolls key allocation back with the enclosing Wallet transaction', async () => {
+    const repositories = new MemoryRepositories();
+
+    await expect(
+      repositories.withTransaction(async (scope) => {
+        await scope.keyRingRepository.deriveAndPersistKeyPair('p2pk', (index) =>
+          derivedKeypair(index, 'p2pk'),
+        );
+        throw new Error('abort Wallet transaction');
+      }),
+    ).rejects.toThrow('abort Wallet transaction');
+
+    expect(await repositories.keyRingRepository.getAllPersistedKeyPairs('p2pk')).toEqual([]);
+  });
+});

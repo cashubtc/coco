@@ -17,7 +17,7 @@ import type {
   ReceiveOperationRepository,
   RepositoryTransactionScope,
 } from '@cashu/coco-core/adapter';
-import { IdbDb, type IdbDbOptions, runOutsideIdbTransaction } from './lib/db.ts';
+import { IdbDb, type IdbDbOptions } from './lib/db.ts';
 import { ensureSchema } from './lib/schema.ts';
 import { IdbMintRepository } from './repositories/MintRepository.ts';
 import { IdbKeysetRepository } from './repositories/KeysetRepository.ts';
@@ -62,29 +62,25 @@ export class IndexedDbRepositories implements Repositories {
 
   constructor(options: IndexedDbRepositoriesOptions) {
     this.db = new IdbDb(options);
-    this.mintRepository = this.wrapRootRepository(new IdbMintRepository(this.db));
-    this.keyRingRepository = this.wrapRootRepository(new IdbKeyRingRepository(this.db));
-    this.counterRepository = this.wrapRootRepository(new IdbCounterRepository(this.db));
-    this.keysetRepository = this.wrapRootRepository(new IdbKeysetRepository(this.db));
-    this.proofRepository = this.wrapRootRepository(new IdbProofRepository(this.db));
-    this.meltQuoteRepository = this.wrapRootRepository(new IdbMeltQuoteRepository(this.db));
-    this.mintQuoteRepository = this.wrapRootRepository(new IdbMintQuoteRepository(this.db));
-    this.legacyMintQuoteRepository = this.wrapRootRepository(
-      new IdbLegacyMintQuoteRepository(this.db),
+    this.mintRepository = new IdbMintRepository(this.db);
+    this.keyRingRepository = new IdbKeyRingRepository(this.db);
+    this.counterRepository = new IdbCounterRepository(this.db);
+    this.keysetRepository = new IdbKeysetRepository(this.db);
+    this.proofRepository = new IdbProofRepository(this.db);
+    this.meltQuoteRepository = new IdbMeltQuoteRepository(this.db);
+    this.mintQuoteRepository = new IdbMintQuoteRepository(this.db);
+    this.legacyMintQuoteRepository = new IdbLegacyMintQuoteRepository(this.db);
+    this.historyRepository = new IdbHistoryRepository(this.db);
+    this.sendOperationRepository = new IdbSendOperationRepository(this.db);
+    this.meltOperationRepository = new IdbMeltOperationRepository(this.db);
+    this.authSessionRepository = new IdbAuthSessionRepository(this.db);
+    this.mintOperationRepository = new IdbMintOperationRepository(this.db);
+    this.receiveOperationRepository = new IdbReceiveOperationRepository(this.db);
+    this.paymentRequestReceiveOperationRepository = new IdbPaymentRequestReceiveOperationRepository(
+      this.db,
     );
-    this.historyRepository = this.wrapRootRepository(new IdbHistoryRepository(this.db));
-    this.sendOperationRepository = this.wrapRootRepository(new IdbSendOperationRepository(this.db));
-    this.meltOperationRepository = this.wrapRootRepository(new IdbMeltOperationRepository(this.db));
-    this.authSessionRepository = this.wrapRootRepository(new IdbAuthSessionRepository(this.db));
-    this.mintOperationRepository = this.wrapRootRepository(new IdbMintOperationRepository(this.db));
-    this.receiveOperationRepository = this.wrapRootRepository(
-      new IdbReceiveOperationRepository(this.db),
-    );
-    this.paymentRequestReceiveOperationRepository = this.wrapRootRepository(
-      new IdbPaymentRequestReceiveOperationRepository(this.db),
-    );
-    this.paymentRequestReceiveAttemptRepository = this.wrapRootRepository(
-      new IdbPaymentRequestReceiveAttemptRepository(this.db),
+    this.paymentRequestReceiveAttemptRepository = new IdbPaymentRequestReceiveAttemptRepository(
+      this.db,
     );
   }
 
@@ -99,6 +95,10 @@ export class IndexedDbRepositories implements Repositories {
   }
 
   async withTransaction<T>(fn: (repos: RepositoryTransactionScope) => Promise<T>): Promise<T> {
+    if (this.db.hasAmbientTransaction) {
+      throw new Error('Nested IndexedDB Wallet transactions are not supported');
+    }
+
     const stores = this.db.tables.map((t) => t.name);
     return this.db.runTransaction('rw', stores, async () => {
       const scopedDb = this.db;
@@ -125,17 +125,6 @@ export class IndexedDbRepositories implements Repositories {
         ),
       };
       return fn(scopedRepositories);
-    });
-  }
-
-  private wrapRootRepository<T extends object>(repository: T): T {
-    return new Proxy(repository, {
-      get: (target, property) => {
-        const value = Reflect.get(target, property, target) as unknown;
-        if (typeof value !== 'function') return value;
-        return (...args: unknown[]) =>
-          runOutsideIdbTransaction(() => Reflect.apply(value, target, args));
-      },
     });
   }
 }
