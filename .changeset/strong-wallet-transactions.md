@@ -10,5 +10,6 @@
 
 Establish one strong Wallet repository transaction scope across memory, SQLite, Expo SQLite, and
 IndexedDB adapters. Transactions now provide atomic commit and rollback, isolate concurrent work,
-acquire SQLite writer ownership before callback reads, and report transient adapter contention with
-`RepositoryTransactionConflictError` while preserving callback failures unchanged.
+include keypair allocation in the scoped repository foundation, acquire SQLite writer ownership
+before callback reads, reject nested IndexedDB strong scopes, and report transient adapter
+contention with `RepositoryTransactionConflictError` while preserving callback failures unchanged.

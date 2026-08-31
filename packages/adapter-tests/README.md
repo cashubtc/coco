@@ -64,8 +64,20 @@ runKeyRingDerivationRepositoryContract(
 The factory is responsible for providing a fresh, isolated repositories
 instance for every test and for cleaning up via `dispose()`.
 
+Transaction contract options:
+
+- `createSharedRepositories` supplies two independent roots for one physical store and enables
+  cross-root writer contention coverage.
+- `createIsolationRepositories` supplies independent transaction/root-operation actors when an
+  adapter's ambient transaction context cannot represent a concurrent same-root call.
+- `holdTransactionOpen` adapts the release promise for stores such as IndexedDB that otherwise
+  auto-close a transaction while the contract deliberately holds it open.
+- `testConcurrentRootOperationIsolation` enables root-operation isolation cases.
+- `testWriterOwnershipAtEntry` verifies that a conflicting writer either waits or reports a typed
+  transient conflict before its callback runs. It requires `createSharedRepositories`.
+
 - `runRepositoryTransactionContract()` verifies transactional behavior across the
-  repository set.
+  repository set, including scoped keypair allocation.
 - `runKeyRingDerivationRepositoryContract()` verifies purpose isolation, concurrency,
   transactional rollback, committed-key deletion behavior, exhaustion, and—when
   `createSharedRepositories` is supplied—coordination between independent roots sharing one
