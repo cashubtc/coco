@@ -1,4 +1,10 @@
-import { Amount, type Token, type Wallet } from '@cashu/cashu-ts';
+import {
+  Amount,
+  type OutputDataCreator,
+  type OutputDataLike,
+  type Token,
+  type Wallet,
+} from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it, mock, type Mock } from 'bun:test';
 import { SendOperationService } from '../../operations/send/SendOperationService';
 import { DefaultSendHandler } from '../../infra/handlers/send/DefaultSendHandler';
@@ -19,12 +25,12 @@ import type {
   PreparedSendOperation,
   PendingSendOperation,
 } from '../../operations/send/SendOperation';
-import type { SendMethodHandler } from '../../operations/send/SendMethodHandler';
 import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
 import { CoreSendTransactions } from '../../transactions/send/SendTransactions.ts';
 import type { SendTransactions } from '../../transactions/send/SendTransactions.ts';
 import type { RepositoryTransactionScope } from '../../repositories';
 import { MintOperationError, NetworkError } from '../../models/Error.ts';
+import { makeOutputDataCreator } from '../fixtures/OutputDataCreator.ts';
 
 class CountingMemoryRepositories extends MemoryRepositories {
   transactionCount = 0;
@@ -71,7 +77,7 @@ describe('SendOperationService', () => {
     unit,
   });
 
-  const buildService = () =>
+  const buildService = (outputDataCreator?: OutputDataCreator) =>
     new SendOperationService({
       operationQueries: sendOpRepo,
       proofQueries: proofRepo,
@@ -82,6 +88,7 @@ describe('SendOperationService', () => {
       seedService,
       eventBus,
       handlerProvider,
+      outputDataCreator,
       logger,
     });
 
@@ -293,6 +300,37 @@ describe('SendOperationService', () => {
     expect(await repositories.counterRepository.getCounter(mintUrl, keysetId)).toBeNull();
   });
 
+  it('lets the P2PK handler fix randomized outputs before atomic preparation', async () => {
+    await proofRepo.saveProofs(mintUrl, [makeProof('p2pk-input', 10)]);
+    const fixedOutput = {
+      blindedMessage: { id: keysetId, amount: Amount.from(10), B_: 'p2pk-B' },
+      blindingFactor: 1n,
+      secret: new Uint8Array([1, 2, 3]),
+      toProof: () => {
+        throw new Error('not used');
+      },
+    } satisfies OutputDataLike;
+    const createP2PKData = mock(() => [fixedOutput]);
+    service = buildService(makeOutputDataCreator({ createP2PKData }));
+    const operation = await service.init(mintUrl, unitAmount(10), {
+      method: 'p2pk',
+      methodData: {
+        pubkey: '02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9',
+      },
+    });
+
+    const prepared = await service.prepare(operation);
+
+    expect(mintService.assertNutSupported).toHaveBeenCalledWith(mintUrl, 11, 'P2PK send');
+    expect(createP2PKData).toHaveBeenCalledTimes(1);
+    expect(prepared.needsSwap).toBe(true);
+    expect(prepared.outputData?.send[0]?.blindedMessage.B_).toBe('p2pk-B');
+    expect((await proofRepo.getProofBySecret(mintUrl, 'p2pk-input'))?.usedByOperationId).toBe(
+      prepared.id,
+    );
+    expect(await repositories.counterRepository.getCounter(mintUrl, keysetId)).toBeNull();
+  });
+
   it('emits send:prepared after the prepared state is persisted', async () => {
     await proofRepo.saveProofs(mintUrl, [makeProof('proof-1', 100)]);
 
@@ -387,7 +425,7 @@ describe('SendOperationService', () => {
     expect(lockedDuringEvent).toBe(false);
   });
 
-  it('executes an exact match without a wallet request or handler call', async () => {
+  it('dispatches an exact match through its handler without making a wallet request', async () => {
     await proofRepo.saveProofs(mintUrl, [makeProof('proof-1', 100)]);
     const initOp = await service.init(mintUrl, unitAmount(100));
     const preparedOp = await service.prepare(initOp);
@@ -654,17 +692,11 @@ describe('SendOperationService', () => {
       { ...makeProof('proof-1', 100), state: 'spent', usedByOperationId: pendingOp.id },
     ]);
 
-    const customHandler: SendMethodHandler<'default'> = {
-      execute: mock(async () => {
-        throw new Error('not used');
-      }),
-      finalize: mock(async () => {
-        throw new Error('legacy handler finalization must not run');
-      }),
-      recoverExecuting: mock(async () => {
-        throw new Error('not used');
-      }),
-    };
+    const customHandler = new DefaultSendHandler();
+    const finalize = mock((ctx: Parameters<DefaultSendHandler['finalize']>[0]) =>
+      ctx.completePersistedSend(),
+    );
+    customHandler.finalize = finalize;
 
     handlerProvider = new SendHandlerProvider({
       default: customHandler,
@@ -674,7 +706,7 @@ describe('SendOperationService', () => {
 
     await service.finalize(pendingOp.id);
 
-    expect(customHandler.finalize).not.toHaveBeenCalled();
+    expect(finalize).toHaveBeenCalledTimes(1);
     expect((await sendOpRepo.getById(pendingOp.id))?.state).toBe('finalized');
   });
 
@@ -697,19 +729,11 @@ describe('SendOperationService', () => {
       methodData: {},
     };
     await sendOpRepo.create(pendingOp);
-    let stateDuringReclaim: string | undefined;
-    const rollback = mock(async () => {
-      stateDuringReclaim = (await sendOpRepo.getById(pendingOp.id))?.state;
-    });
-    const customHandler: SendMethodHandler<'default'> = {
-      execute: mock(async () => {
-        throw new Error('not used');
-      }),
-      rollback,
-      recoverExecuting: mock(async () => {
-        throw new Error('not used');
-      }),
-    };
+    const customHandler = new DefaultSendHandler();
+    const rollback = mock((ctx: Parameters<DefaultSendHandler['rollback']>[0]) =>
+      ctx.reclaimPendingDefault(),
+    );
+    customHandler.rollback = rollback;
     handlerProvider = new SendHandlerProvider({
       default: customHandler,
       p2pk: new P2pkSendHandler(),
@@ -719,7 +743,6 @@ describe('SendOperationService', () => {
     await service.rollback(pendingOp.id, 'Reclaimed by user');
 
     expect(rollback).toHaveBeenCalledTimes(1);
-    expect(stateDuringReclaim).toBe('rolling_back');
     const stored = await sendOpRepo.getById(pendingOp.id);
     expect(stored?.state).toBe('rolled_back');
     expect(stored?.revision).toBe(3);
