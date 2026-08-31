@@ -80,6 +80,8 @@ import {
   mintQuoteToMethodSnapshot,
 } from './models/MintQuote.ts';
 import { assessMintQuoteClaimability } from './models/MintQuoteClaimability.ts';
+import { RepositoryCoreTransactionRunner } from './transactions/CoreTransaction.ts';
+import { CoreKeyRingTransactions } from './transactions/keypairs/KeyRingTransactions.ts';
 
 /**
  * Configuration options for initializing the Coco Cashu manager
@@ -916,9 +918,15 @@ export class Manager {
       this.eventBus,
     );
     const seedService = new SeedService(seedGetter);
+    const coreTransactionRunner = new RepositoryCoreTransactionRunner(repositories);
+    const keyRingTransactions = new CoreKeyRingTransactions(
+      coreTransactionRunner,
+      seedService,
+      keyRingLogger,
+    );
     const keyRingService = new KeyRingService(
       repositories.keyRingRepository,
-      seedService,
+      keyRingTransactions,
       keyRingLogger,
     );
     const walletService = new WalletService(
