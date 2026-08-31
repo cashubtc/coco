@@ -52,6 +52,7 @@ const EXPECTED_MIGRATION_IDS = [
   '037_mint_quote_accounting',
   '038_keypair_derivation_allocations',
   '039_send_operation_revision',
+  '040_send_execution_memo',
 ] as const;
 
 function deriveKeyPair(derivationIndex: number, purpose: 'p2pk' | 'nut20_mint_quote') {
@@ -221,6 +222,25 @@ describe('shared SQL schema migrations', () => {
         ['legacy-send'],
       ),
     ).toEqual({ revision: 0 });
+  });
+
+  itWithDatabase('keeps legacy Send execution memos empty', async (db) => {
+    await ensureSchemaUpTo(db, '040_send_execution_memo');
+    await db.run(
+      `INSERT INTO coco_cashu_send_operations
+        (id, mintUrl, amount, unit, state, createdAt, updatedAt, method, methodDataJson)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ['legacy-send-memo', 'https://mint.test', '10', 'sat', 'init', 1, 1, 'default', '{}'],
+    );
+
+    await ensureSchemaUpTo(db);
+
+    expect(
+      await db.get<{ executionMemo: string | null }>(
+        'SELECT executionMemo FROM coco_cashu_send_operations WHERE id = ?',
+        ['legacy-send-memo'],
+      ),
+    ).toEqual({ executionMemo: null });
   });
 
   itWithDatabase('backfills per-purpose keypair derivation allocations', async (db) => {

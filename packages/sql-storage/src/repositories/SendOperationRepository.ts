@@ -24,6 +24,7 @@ interface SendOperationRow {
   updatedAt: number;
   revision?: number | null;
   error: string | null;
+  executionMemo?: string | null;
   method: string;
   methodDataJson: string;
   needsSwap: number | null;
@@ -53,6 +54,7 @@ function rowToOperation(row: SendOperationRow): SendOperation {
     updatedAt: row.updatedAt * 1000,
     revision: row.revision ?? 0,
     error: row.error ?? undefined,
+    executionMemo: row.executionMemo ?? undefined,
     method: row.method as SendMethod,
     methodData: JSON.parse(row.methodDataJson),
   };
@@ -122,6 +124,7 @@ function operationToParams(op: SendOperation): SqlValue[] {
       createdAtSeconds,
       updatedAtSeconds,
       op.error ?? null,
+      op.executionMemo ?? null,
       op.method,
       stringifyJson(op.methodData),
       null, // needsSwap
@@ -144,6 +147,7 @@ function operationToParams(op: SendOperation): SqlValue[] {
     createdAtSeconds,
     updatedAtSeconds,
     op.error ?? null,
+    op.executionMemo ?? null,
     op.method,
     stringifyJson(op.methodData),
     op.needsSwap ? 1 : 0,
@@ -175,8 +179,8 @@ export class SqliteSendOperationRepository implements SendOperationRepository {
     const params = operationToParams(operation);
     await this.db.run(
       `INSERT INTO coco_cashu_send_operations 
-        (id, mintUrl, amount, unit, state, createdAt, updatedAt, error, method, methodDataJson, needsSwap, fee, inputAmount, inputProofSecretsJson, outputDataJson, tokenJson, revision)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (id, mintUrl, amount, unit, state, createdAt, updatedAt, error, executionMemo, method, methodDataJson, needsSwap, fee, inputAmount, inputProofSecretsJson, outputDataJson, tokenJson, revision)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       params,
     );
   }
@@ -195,12 +199,13 @@ export class SqliteSendOperationRepository implements SendOperationRepository {
     if (operation.state === 'init') {
       await this.db.run(
         `UPDATE coco_cashu_send_operations 
-         SET state = ?, updatedAt = ?, error = ?, unit = ?, revision = ?
+         SET state = ?, updatedAt = ?, error = ?, executionMemo = ?, unit = ?, revision = ?
          WHERE id = ?`,
         [
           operation.state,
           updatedAtSeconds,
           operation.error ?? null,
+          operation.executionMemo ?? null,
           operation.unit,
           operation.revision ?? 0,
           operation.id,
@@ -209,12 +214,13 @@ export class SqliteSendOperationRepository implements SendOperationRepository {
     } else {
       await this.db.run(
         `UPDATE coco_cashu_send_operations 
-         SET state = ?, updatedAt = ?, error = ?, unit = ?, needsSwap = ?, fee = ?, inputAmount = ?, inputProofSecretsJson = ?, outputDataJson = ?, tokenJson = ?, revision = ?
+         SET state = ?, updatedAt = ?, error = ?, executionMemo = ?, unit = ?, needsSwap = ?, fee = ?, inputAmount = ?, inputProofSecretsJson = ?, outputDataJson = ?, tokenJson = ?, revision = ?
          WHERE id = ?`,
         [
           operation.state,
           updatedAtSeconds,
           operation.error ?? null,
+          operation.executionMemo ?? null,
           operation.unit,
           operation.needsSwap ? 1 : 0,
           serializeAmount(operation.fee),
@@ -252,13 +258,14 @@ export class SqliteSendOperationRepository implements SendOperationRepository {
           ];
     const result = await this.db.run(
       `UPDATE coco_cashu_send_operations
-       SET state = ?, updatedAt = ?, error = ?, unit = ?, needsSwap = ?, fee = ?, inputAmount = ?,
+       SET state = ?, updatedAt = ?, error = ?, executionMemo = ?, unit = ?, needsSwap = ?, fee = ?, inputAmount = ?,
            inputProofSecretsJson = ?, outputDataJson = ?, tokenJson = ?, revision = ?
        WHERE id = ? AND state = ? AND revision = ?`,
       [
         next.state,
         Math.floor(next.updatedAt / 1000),
         next.error ?? null,
+        next.executionMemo ?? null,
         next.unit,
         ...prepared,
         command.expectedRevision + 1,

@@ -1,6 +1,11 @@
 import { Amount, type MintKeys, type OutputDataLike } from '@cashu/cashu-ts';
 import { describe, expect, it } from 'bun:test';
-import { createSendOperation, type PreparedSendOperation } from '../../operations/send';
+import {
+  createSendOperation,
+  type ExecutingSendOperation,
+  type PreparedSendOperation,
+} from '../../operations/send';
+import type { RepositoryTransactionScope, SendOperationRepository } from '../../repositories';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 import {
   RepositoryCoreTransactionRunner,
@@ -11,8 +16,8 @@ import type {
   ExecuteExactSendCommand,
   PrepareSendCommand,
 } from '../../transactions/send/TransactionalSendOperations.ts';
-import type { RepositoryTransactionScope, SendOperationRepository } from '../../repositories';
 import type { CoreProof } from '../../types.ts';
+import { getSecretsFromSerializedOutputData } from '../../utils.ts';
 import { makeOutputDataCreator } from '../fixtures/OutputDataCreator.ts';
 
 const mintUrl = 'https://mint.test';
@@ -387,5 +392,212 @@ describe('SendTransactions exact-match execution', () => {
     expect(
       (await repositories.proofRepository.getProofBySecret(mintUrl, 'exact-proof'))?.state,
     ).toBe('ready');
+  });
+});
+
+function swapProof(
+  operation: ExecutingSendOperation,
+  secret: string,
+  state: CoreProof['state'],
+): CoreProof {
+  return {
+    id: keysetId,
+    secret,
+    amount: operation.amount,
+    C: `C-${secret}`,
+    mintUrl: operation.mintUrl,
+    unit: operation.unit,
+    state,
+    createdByOperationId: operation.id,
+  };
+}
+
+describe('SendTransactions swap execution', () => {
+  it('commits the exact executing request and memo before transport starts', async () => {
+    const { repositories, transactions } = await setup();
+    await repositories.proofRepository.saveProofs(mintUrl, [proof('proof-1')]);
+    const prepared = (await transactions.prepare(command('send-begin'))).operation;
+
+    const begun = await transactions.beginExecution({
+      operationId: prepared.id,
+      expectedRevision: prepared.revision ?? 0,
+      updatedAt: 300,
+      memo: 'durable memo',
+    });
+
+    const stored = await repositories.sendOperationRepository.getById(prepared.id);
+    expect(stored?.state).toBe('executing');
+    expect(stored?.revision).toBe(1);
+    expect(stored?.executionMemo).toBe('durable memo');
+    expect(begun.request.inputProofs.map((candidate) => candidate.secret)).toEqual(['proof-1']);
+    expect(begun.request.outputData).toEqual(prepared.outputData!);
+    expect(
+      (await repositories.proofRepository.getProofBySecret(mintUrl, 'proof-1'))?.usedByOperationId,
+    ).toBe(prepared.id);
+  });
+
+  it('leaves the complete request executing when a response is not applied', async () => {
+    const { repositories, transactions } = await setup();
+    await repositories.proofRepository.saveProofs(mintUrl, [proof('proof-1')]);
+    const prepared = (await transactions.prepare(command('send-response-crash'))).operation;
+    const begun = await transactions.beginExecution({
+      operationId: prepared.id,
+      expectedRevision: prepared.revision ?? 0,
+      updatedAt: 300,
+    });
+    const sendSecret = getSecretsFromSerializedOutputData(begun.request.outputData).sendSecrets[0]!;
+
+    // A remote response may now exist, but no local result transaction has run.
+    const response = { send: [swapProof(begun.operation, sendSecret, 'inflight')], keep: [] };
+    expect(response.send).toHaveLength(1);
+    expect((await repositories.sendOperationRepository.getById(prepared.id))?.state).toBe(
+      'executing',
+    );
+    expect(await repositories.proofRepository.getProofBySecret(mintUrl, sendSecret)).toBeNull();
+    expect((await repositories.proofRepository.getProofBySecret(mintUrl, 'proof-1'))?.state).toBe(
+      'ready',
+    );
+  });
+
+  it('gives only one concurrent begin attempt authority to contact the mint', async () => {
+    const { repositories, transactions } = await setup();
+    await repositories.proofRepository.saveProofs(mintUrl, [proof('proof-1')]);
+    const prepared = (await transactions.prepare(command('send-concurrent-begin'))).operation;
+    const begin = () =>
+      transactions.beginExecution({
+        operationId: prepared.id,
+        expectedRevision: prepared.revision ?? 0,
+        updatedAt: 300,
+      });
+
+    const results = await Promise.allSettled([begin(), begin()]);
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    expect((await repositories.sendOperationRepository.getById(prepared.id))?.revision).toBe(1);
+  });
+
+  it('atomically saves swap proofs, spends inputs, persists the token, and becomes pending', async () => {
+    const { repositories, transactions } = await setup();
+    await repositories.proofRepository.saveProofs(mintUrl, [proof('proof-1')]);
+    const prepared = (await transactions.prepare(command('send-apply'))).operation;
+    const begun = await transactions.beginExecution({
+      operationId: prepared.id,
+      expectedRevision: prepared.revision ?? 0,
+      updatedAt: 300,
+      memo: 'memo',
+    });
+    const sendSecret = getSecretsFromSerializedOutputData(begun.request.outputData).sendSecrets[0]!;
+    const sendProof = swapProof(begun.operation, sendSecret, 'inflight');
+    const token = {
+      mint: mintUrl,
+      proofs: [sendProof],
+      unit: 'sat',
+      memo: 'memo',
+    };
+
+    await expect(
+      transactions.applyResult({
+        operationId: begun.operation.id,
+        expectedRevision: (begun.operation.revision ?? 0) - 1,
+        updatedAt: 350,
+        keepProofs: [],
+        sendProofs: [sendProof],
+        token,
+      }),
+    ).rejects.toThrow('revision changed');
+    expect((await repositories.sendOperationRepository.getById(prepared.id))?.state).toBe(
+      'executing',
+    );
+
+    const applied = await transactions.applyResult({
+      operationId: begun.operation.id,
+      expectedRevision: begun.operation.revision ?? 0,
+      updatedAt: 400,
+      keepProofs: [],
+      sendProofs: [sendProof],
+      token,
+    });
+
+    expect(applied.committed).toBe(true);
+    expect(applied.operation.state).toBe('pending');
+    expect(applied.operation.revision).toBe(2);
+    expect(applied.operation.token).toEqual(token);
+    expect((await repositories.proofRepository.getProofBySecret(mintUrl, 'proof-1'))?.state).toBe(
+      'spent',
+    );
+    expect((await repositories.proofRepository.getProofBySecret(mintUrl, sendSecret))?.state).toBe(
+      'inflight',
+    );
+
+    const duplicate = await transactions.applyResult({
+      operationId: begun.operation.id,
+      expectedRevision: begun.operation.revision ?? 0,
+      updatedAt: 500,
+      keepProofs: [],
+      sendProofs: [sendProof],
+      token,
+    });
+    expect(duplicate.committed).toBe(false);
+    expect(duplicate.operation.revision).toBe(2);
+  });
+
+  it('rolls back every local result write when output persistence conflicts', async () => {
+    const { repositories, transactions } = await setup();
+    await repositories.proofRepository.saveProofs(mintUrl, [proof('proof-1')]);
+    const prepared = (await transactions.prepare(command('send-apply-rollback'))).operation;
+    const begun = await transactions.beginExecution({
+      operationId: prepared.id,
+      expectedRevision: prepared.revision ?? 0,
+      updatedAt: 300,
+    });
+    const sendSecret = getSecretsFromSerializedOutputData(begun.request.outputData).sendSecrets[0]!;
+    const sendProof = swapProof(begun.operation, sendSecret, 'inflight');
+    await repositories.proofRepository.saveProofs(mintUrl, [proof(sendSecret, 1)]);
+
+    await expect(
+      transactions.applyResult({
+        operationId: begun.operation.id,
+        expectedRevision: begun.operation.revision ?? 0,
+        updatedAt: 400,
+        keepProofs: [],
+        sendProofs: [sendProof],
+        token: { mint: mintUrl, proofs: [sendProof], unit: 'sat' },
+      }),
+    ).rejects.toThrow('already exists');
+
+    expect((await repositories.sendOperationRepository.getById(prepared.id))?.state).toBe(
+      'executing',
+    );
+    expect((await repositories.proofRepository.getProofBySecret(mintUrl, 'proof-1'))?.state).toBe(
+      'ready',
+    );
+  });
+
+  it('atomically releases inputs on a definitive failure without reclaiming counters', async () => {
+    const { repositories, transactions } = await setup();
+    await repositories.proofRepository.saveProofs(mintUrl, [proof('proof-1')]);
+    const prepared = (await transactions.prepare(command('send-fail'))).operation;
+    const allocatedCounter = await repositories.counterRepository.getCounter(mintUrl, keysetId);
+    const begun = await transactions.beginExecution({
+      operationId: prepared.id,
+      expectedRevision: prepared.revision ?? 0,
+      updatedAt: 300,
+    });
+
+    const failed = await transactions.failExecution({
+      operationId: begun.operation.id,
+      expectedRevision: begun.operation.revision ?? 0,
+      updatedAt: 400,
+      error: 'Keyset rejected',
+    });
+
+    expect(failed.operation.state).toBe('rolled_back');
+    expect(
+      (await repositories.proofRepository.getProofBySecret(mintUrl, 'proof-1'))?.usedByOperationId,
+    ).toBeUndefined();
+    expect(await repositories.counterRepository.getCounter(mintUrl, keysetId)).toEqual(
+      allocatedCounter,
+    );
   });
 });

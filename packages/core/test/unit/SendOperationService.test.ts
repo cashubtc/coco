@@ -18,13 +18,13 @@ import type { CoreProof } from '../../types';
 import type {
   PreparedSendOperation,
   PendingSendOperation,
-  RolledBackSendOperation,
 } from '../../operations/send/SendOperation';
 import type { SendMethodHandler } from '../../operations/send/SendMethodHandler';
 import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
 import { CoreSendTransactions } from '../../transactions/send/SendTransactions.ts';
 import type { SendTransactions } from '../../transactions/send/SendTransactions.ts';
 import type { RepositoryTransactionScope } from '../../repositories';
+import { MintOperationError, NetworkError } from '../../models/Error.ts';
 
 class CountingMemoryRepositories extends MemoryRepositories {
   transactionCount = 0;
@@ -84,6 +84,49 @@ describe('SendOperationService', () => {
       handlerProvider,
       logger,
     });
+
+  const makeSwapPrepared = async (id: string): Promise<PreparedSendOperation> => {
+    const input = makeProof(`${id}-input`, 100);
+    await proofRepo.saveProofs(mintUrl, [input]);
+    await proofRepo.reserveProofs(mintUrl, [input.secret], id);
+    const prepared: PreparedSendOperation = {
+      id,
+      state: 'prepared',
+      mintUrl,
+      amount: Amount.from(100),
+      unit: 'sat',
+      createdAt: 100,
+      updatedAt: 200,
+      revision: 0,
+      needsSwap: true,
+      fee: Amount.zero(),
+      inputAmount: Amount.from(100),
+      inputProofSecrets: [input.secret],
+      outputData: {
+        keep: [],
+        send: [
+          {
+            blindedMessage: { amount: 100, id: keysetId, B_: `B-${id}` },
+            blindingFactor: '01',
+            secret: Buffer.from(`${id}-send`).toString('hex'),
+          },
+        ],
+      },
+      method: 'default',
+      methodData: { forceSwap: true },
+    };
+    await sendOpRepo.create(prepared);
+    return prepared;
+  };
+
+  const useSwapWallet = (send: (...args: any[]) => Promise<{ send: any[]; keep: any[] }>): void => {
+    (walletService.getWalletWithActiveKeysetId as Mock<any>).mockResolvedValue({
+      wallet: { send },
+      keysetId,
+      keyset: { id: keysetId },
+      keys: { keys: { 1: 'unused' }, id: keysetId, unit: 'sat', active: true },
+    });
+  };
 
   beforeEach(async () => {
     repositories = new CountingMemoryRepositories();
@@ -358,6 +401,147 @@ describe('SendOperationService', () => {
     );
   });
 
+  it('commits swap execution before transport and applies the response after transport', async () => {
+    const prepared = await makeSwapPrepared('swap-boundary');
+    let stateDuringTransport: string | undefined;
+    let revisionDuringTransport: number | undefined;
+    let memoDuringTransport: string | undefined;
+    let pendingEventLocked = true;
+    const send = mock(async (_amount, inputs, _includeFees, outputConfig) => {
+      const stored = await sendOpRepo.getById(prepared.id);
+      stateDuringTransport = stored?.state;
+      revisionDuringTransport = stored?.revision;
+      memoDuringTransport = stored?.executionMemo;
+      expect(inputs.map((proof: CoreProof) => proof.secret)).toEqual(prepared.inputProofSecrets);
+      expect(outputConfig.send.data[0]?.secret).toEqual(
+        new TextEncoder().encode(`${prepared.id}-send`),
+      );
+      return {
+        keep: [],
+        send: [
+          {
+            id: keysetId,
+            secret: `${prepared.id}-send`,
+            amount: Amount.from(100),
+            C: 'C-swap-send',
+          },
+        ],
+      };
+    });
+    useSwapWallet(send);
+    eventBus.on('send:pending', () => {
+      pendingEventLocked = service.isOperationLocked(prepared.id);
+    });
+
+    const result = await service.execute(prepared, { memo: '  durable memo  ' });
+
+    expect(stateDuringTransport).toBe('executing');
+    expect(revisionDuringTransport).toBe(1);
+    expect(memoDuringTransport).toBe('durable memo');
+    expect(pendingEventLocked).toBe(false);
+    expect(result.operation.state).toBe('pending');
+    expect(result.operation.revision).toBe(2);
+    expect(result.token.memo).toBe('durable memo');
+    expect((await proofRepo.getProofBySecret(mintUrl, prepared.inputProofSecrets[0]!))?.state).toBe(
+      'spent',
+    );
+    expect((await proofRepo.getProofBySecret(mintUrl, `${prepared.id}-send`))?.state).toBe(
+      'inflight',
+    );
+    expect(proofService.saveProofs).not.toHaveBeenCalled();
+    expect(proofService.setProofState).not.toHaveBeenCalled();
+  });
+
+  it('leaves an ambiguous swap failure executing for recovery', async () => {
+    const prepared = await makeSwapPrepared('swap-ambiguous');
+    useSwapWallet(
+      mock(async () => {
+        throw new NetworkError('connection lost');
+      }),
+    );
+
+    await expect(service.execute(prepared)).rejects.toThrow('connection lost');
+
+    const stored = await sendOpRepo.getById(prepared.id);
+    expect(stored?.state).toBe('executing');
+    expect(stored?.revision).toBe(1);
+    expect(
+      (await proofRepo.getProofBySecret(mintUrl, prepared.inputProofSecrets[0]!))
+        ?.usedByOperationId,
+    ).toBe(prepared.id);
+  });
+
+  it('does not begin or mask a definitive-looking wallet preflight failure', async () => {
+    const prepared = await makeSwapPrepared('swap-preflight-failure');
+    (walletService.getWalletWithActiveKeysetId as Mock<any>).mockRejectedValueOnce(
+      new MintOperationError(12001, 'Could not load active keyset'),
+    );
+
+    await expect(service.execute(prepared)).rejects.toThrow('Could not load active keyset');
+
+    const stored = await sendOpRepo.getById(prepared.id);
+    expect(stored?.state).toBe('prepared');
+    expect(stored?.revision).toBe(0);
+    expect(
+      (await proofRepo.getProofBySecret(mintUrl, prepared.inputProofSecrets[0]!))
+        ?.usedByOperationId,
+    ).toBe(prepared.id);
+  });
+
+  it('atomically rolls back a definitive mint rejection after the transport boundary', async () => {
+    const prepared = await makeSwapPrepared('swap-rejected');
+    useSwapWallet(
+      mock(async () => {
+        throw new MintOperationError(12001, 'Keyset is not known');
+      }),
+    );
+    let rolledBackEventLocked = true;
+    eventBus.on('send:rolled-back', () => {
+      rolledBackEventLocked = service.isOperationLocked(prepared.id);
+    });
+
+    await expect(service.execute(prepared)).rejects.toThrow('Keyset is not known');
+
+    const stored = await sendOpRepo.getById(prepared.id);
+    expect(stored?.state).toBe('rolled_back');
+    expect(stored?.error).toBe('Keyset is not known');
+    expect(rolledBackEventLocked).toBe(false);
+    expect(
+      (await proofRepo.getProofBySecret(mintUrl, prepared.inputProofSecrets[0]!))
+        ?.usedByOperationId,
+    ).toBeUndefined();
+  });
+
+  it('returns committed swap state when a live event listener fails', async () => {
+    const prepared = await makeSwapPrepared('swap-event-failure');
+    useSwapWallet(
+      mock(async () => ({
+        keep: [],
+        send: [
+          {
+            id: keysetId,
+            secret: `${prepared.id}-send`,
+            amount: Amount.from(100),
+            C: 'C-swap-send',
+          },
+        ],
+      })),
+    );
+    eventBus = new EventBus<CoreEvents>({ throwOnError: true });
+    eventBus.on('send:pending', () => {
+      throw new Error('listener failed');
+    });
+    service = buildService();
+
+    const result = await service.execute(prepared);
+
+    expect(result.operation.state).toBe('pending');
+    expect(logger.error).toHaveBeenCalledWith('Failed to publish committed Send event', {
+      event: 'send:pending',
+      error: expect.any(AggregateError),
+    });
+  });
+
   it('prepares and executes a custom-unit send without selecting sat proofs', async () => {
     await proofRepo.saveProofs(mintUrl, [
       makeProof('sat-proof', 100, 'sat'),
@@ -378,64 +562,6 @@ describe('SendOperationService', () => {
     const satProof = await proofRepo.getProofBySecret(mintUrl, 'sat-proof');
     expect(satProof?.state).toBe('ready');
     expect(satProof?.usedByOperationId).toBeUndefined();
-  });
-
-  it('persists explicit handler failures without running executing recovery', async () => {
-    const preparedOp: PreparedSendOperation = {
-      id: 'send-op-failed',
-      state: 'prepared',
-      mintUrl,
-      amount: Amount.from(100),
-      unit: 'sat',
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      needsSwap: true,
-      fee: Amount.from(0),
-      inputAmount: Amount.from(100),
-      inputProofSecrets: ['proof-1'],
-      method: 'default',
-      methodData: {},
-    };
-    await sendOpRepo.create(preparedOp);
-
-    const failedOperation: RolledBackSendOperation = {
-      ...preparedOp,
-      state: 'rolled_back',
-      updatedAt: Date.now(),
-      error: 'Explicit handler failure',
-    };
-
-    const customHandler: SendMethodHandler<'default'> = {
-      execute: mock(async () => ({
-        status: 'FAILED' as const,
-        failed: failedOperation,
-      })),
-      recoverExecuting: mock(async () => ({
-        status: 'FAILED' as const,
-        failed: failedOperation,
-      })),
-    };
-
-    handlerProvider = new SendHandlerProvider({
-      default: customHandler,
-      p2pk: new P2pkSendHandler(),
-    });
-    service = buildService();
-
-    const events: CoreEvents['send:rolled-back'][] = [];
-    eventBus.on('send:rolled-back', (event) => void events.push(event));
-
-    await expect(service.execute(preparedOp)).rejects.toThrow('Explicit handler failure');
-
-    expect(customHandler.execute).toHaveBeenCalledTimes(1);
-    expect(customHandler.recoverExecuting).not.toHaveBeenCalled();
-    expect(events).toHaveLength(1);
-    expect(events[0]?.operationId).toBe(preparedOp.id);
-    expect(events[0]?.operation.state).toBe('rolled_back');
-
-    const persisted = await sendOpRepo.getById(preparedOp.id);
-    expect(persisted?.state).toBe('rolled_back');
-    expect(persisted?.error).toBe('Explicit handler failure');
   });
 
   it('waits for an in-progress finalization to finish before returning', async () => {

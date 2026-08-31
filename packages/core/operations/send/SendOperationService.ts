@@ -1,5 +1,6 @@
 import {
   OutputData,
+  type OutputConfig,
   type OutputDataCreator,
   type Token,
   type ProofState as CashuProofState,
@@ -31,8 +32,9 @@ import type { SeedService } from '../../services/SeedService.ts';
 import type { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
-import { generateSubId } from '../../utils';
+import { deserializeOutputData, generateSubId, mapProofToCoreProof } from '../../utils';
 import {
+  MintOperationError,
   UnknownMintError,
   ProofValidationError,
   OperationInProgressError,
@@ -44,9 +46,19 @@ import { normalizeUnitAmount, type UnitAmount } from '../../amounts.ts';
 import type { SendTransactions } from '../../transactions/send/SendTransactions.ts';
 import type { PreparedSendResult } from '../../transactions/send/TransactionalSendOperations.ts';
 import type {
+  AppliedSwapResult,
+  FailedSwapExecution,
+} from '../../transactions/send/TransactionalSendOperations.ts';
+import type {
   SendOperationQueries,
   SendProofQueries,
 } from '../../transactions/send/SendOperationQueries.ts';
+
+const AMBIGUOUS_SWAP_MINT_ERROR_CODES = new Set([11001, 11002, 11003, 11004]);
+
+type SwapExecutionOutcome =
+  | { status: 'PENDING'; result: AppliedSwapResult }
+  | { status: 'FAILED'; result: FailedSwapExecution; error: MintOperationError };
 
 export interface SendOperationServiceDependencies {
   operationQueries: SendOperationQueries;
@@ -241,11 +253,9 @@ export class SendOperationService {
    * If a memo is provided, trims it and persists it on the token before saving the
    * pending operation. Whitespace-only memos are omitted.
    *
-   * If execution fails after transitioning to 'executing' state,
-   * automatically attempts to recover the operation.
+   * Swap execution commits the exact request before contacting the mint and applies a successful
+   * response in a second atomic transition. Ambiguous outcomes remain executing for recovery.
    * Throws if the operation is already in progress.
-   *
-   * Delegates to the appropriate handler based on the operation method.
    */
   async execute(
     operation: PreparedSendOperation,
@@ -274,95 +284,106 @@ export class SendOperationService {
     operation = current;
 
     const releaseLock = await this.acquireOperationLock(operation.id);
+    let outcome: SwapExecutionOutcome | undefined;
     try {
-      // Mark as executing FIRST - this must happen before any mint interaction
-      const executing: ExecutingSendOperation = {
-        ...operation,
-        state: 'executing',
-        updatedAt: Date.now(),
-      };
-      await this.transactions.updateLegacyState(executing);
-
-      let pending: PendingSendOperation | undefined;
-      let token: Token | undefined;
-      let failed: RolledBackSendOperation | undefined;
-      try {
-        const handler = this.handlerProvider.get(operation.method);
-        if (!handler) {
-          throw new Error(`No handler registered for method: ${operation.method}`);
-        }
-
-        const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
-          operation.mintUrl,
-          operation.unit,
-        );
-        const reservedProofs = await this.proofQueries.getProofsByOperationId(
-          operation.mintUrl,
+      const current = await this.operationQueries.getById(operation.id);
+      if (!current) {
+        throw new Error(`Operation ${operation.id} not found`);
+      }
+      if (current.state !== 'prepared') {
+        throw new SendOperationConflictError(
           operation.id,
+          `Cannot execute Send operation in state ${current.state}`,
         );
-
-        const ctx = {
-          operation: executing,
-          wallet,
-          reservedProofs,
-          proofRepository: this.proofQueries,
-          proofService: this.proofService,
-          walletService: this.walletService,
-          mintService: this.mintService,
-          eventBus: this.eventBus,
-          logger: this.logger,
-        };
-
-        const result = await handler.execute(ctx);
-
-        if (result.status === 'PENDING') {
-          const resolvedToken = options?.memo
-            ? this.applyTokenMemo(result.token, options.memo)
-            : result.token;
-          const pendingWithMemo: PendingSendOperation = { ...result.pending, token: resolvedToken };
-          // Save the pending operation to the repository
-          await this.transactions.updateLegacyState(pendingWithMemo);
-          pending = pendingWithMemo;
-          token = resolvedToken;
-        } else {
-          // Handler returned FAILED - persist the terminal result without re-running recovery
-          await this.transactions.updateLegacyState(result.failed);
-          await this.eventBus.emit('send:rolled-back', {
-            mintUrl: result.failed.mintUrl,
-            operationId: result.failed.id,
-            operation: result.failed,
-          });
-          failed = result.failed;
-        }
-      } catch (e) {
-        // Attempt to recover the executing operation before re-throwing
-        await this.tryRecoverExecutingOperation(executing);
-        throw e;
       }
 
-      if (failed) {
-        this.logger?.info('Send operation execution failed', {
-          operationId: failed.id,
-          error: failed.error,
-        });
-        throw new Error(failed.error || 'Handler execution failed');
-      }
-
-      if (!pending || !token) {
-        throw new Error(`Send operation ${operation.id} did not produce a pending result`);
-      }
-
-      await this.eventBus.emit('send:pending', {
-        mintUrl: pending.mintUrl,
-        operationId: pending.id,
-        operation: pending,
-        token,
-      });
-
-      return { operation: pending, token };
+      outcome = await this.executeSwap(current, options);
     } finally {
       releaseLock();
     }
+
+    if (!outcome) {
+      throw new Error(`Send operation ${operation.id} did not produce a pending result`);
+    }
+    if (outcome.status === 'FAILED') {
+      await this.publishFailedSwap(outcome.result);
+      throw outcome.error;
+    }
+    await this.publishAppliedSwap(outcome.result);
+    return { operation: outcome.result.operation, token: outcome.result.operation.token! };
+  }
+
+  private async executeSwap(
+    operation: PreparedSendOperation,
+    options?: ExecuteSendOptions,
+  ): Promise<SwapExecutionOutcome> {
+    if (!operation.outputData) {
+      throw new Error('Missing output data for swap operation');
+    }
+    if (!this.handlerProvider.get(operation.method)) {
+      throw new Error(`No handler registered for method: ${operation.method}`);
+    }
+
+    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
+      operation.mintUrl,
+      operation.unit,
+    );
+    const begun = await this.transactions.beginExecution({
+      operationId: operation.id,
+      expectedRevision: operation.revision ?? 0,
+      updatedAt: Date.now(),
+      memo: options?.memo ? this.normalizeMemo(options.memo) : undefined,
+    });
+    const outputData = deserializeOutputData(begun.request.outputData);
+    const outputConfig: OutputConfig = {
+      send: { type: 'custom', data: outputData.send },
+      keep: { type: 'custom', data: outputData.keep },
+    };
+
+    let result: Awaited<ReturnType<typeof wallet.send>>;
+    try {
+      result = await wallet.send(
+        begun.request.amount,
+        begun.request.inputProofs,
+        undefined,
+        outputConfig,
+      );
+    } catch (error) {
+      if (!this.isDefinitiveSwapFailure(error)) {
+        throw error;
+      }
+      const failed = await this.transactions.failExecution({
+        operationId: begun.operation.id,
+        expectedRevision: begun.operation.revision ?? 0,
+        updatedAt: Date.now(),
+        error: error.message,
+      });
+      return { status: 'FAILED', result: failed, error };
+    }
+    const keepProofs = mapProofToCoreProof(begun.request.mintUrl, 'ready', result.keep, {
+      unit: begun.request.unit,
+      createdByOperationId: begun.operation.id,
+    });
+    const sendProofs = mapProofToCoreProof(begun.request.mintUrl, 'inflight', result.send, {
+      unit: begun.request.unit,
+      createdByOperationId: begun.operation.id,
+    });
+    const token: Token = {
+      mint: begun.request.mintUrl,
+      proofs: result.send,
+      unit: begun.request.unit,
+      ...(begun.operation.executionMemo ? { memo: begun.operation.executionMemo } : {}),
+    };
+
+    const applied = await this.transactions.applyResult({
+      operationId: begun.operation.id,
+      expectedRevision: begun.operation.revision ?? 0,
+      updatedAt: Date.now(),
+      keepProofs,
+      sendProofs,
+      token,
+    });
+    return { status: 'PENDING', result: applied };
   }
 
   private async executeExactMatch(
@@ -913,6 +934,53 @@ export class SendOperationService {
     });
   }
 
+  private async publishAppliedSwap(result: AppliedSwapResult): Promise<void> {
+    if (!result.committed) return;
+
+    const proofsByKeyset = new Map<string, typeof result.savedProofs>();
+    for (const proof of result.savedProofs) {
+      const keysetProofs = proofsByKeyset.get(proof.id) ?? [];
+      keysetProofs.push(proof);
+      proofsByKeyset.set(proof.id, keysetProofs);
+    }
+    for (const [keysetId, proofs] of proofsByKeyset) {
+      await this.publishCommittedEvent('proofs:saved', {
+        mintUrl: result.operation.mintUrl,
+        keysetId,
+        proofs,
+      });
+    }
+    await this.publishCommittedEvent('proofs:state-changed', {
+      mintUrl: result.operation.mintUrl,
+      secrets: result.spentInputSecrets,
+      state: 'spent',
+    });
+    await this.publishCommittedEvent('send:pending', {
+      mintUrl: result.operation.mintUrl,
+      operationId: result.operation.id,
+      operation: result.operation,
+      token: result.operation.token!,
+    });
+  }
+
+  private async publishFailedSwap(result: FailedSwapExecution): Promise<void> {
+    if (!result.committed) return;
+
+    await this.publishCommittedEvent('proofs:released', {
+      mintUrl: result.operation.mintUrl,
+      secrets: result.releasedInputSecrets,
+    });
+    await this.publishCommittedEvent('send:rolled-back', {
+      mintUrl: result.operation.mintUrl,
+      operationId: result.operation.id,
+      operation: result.operation,
+    });
+  }
+
+  private isDefinitiveSwapFailure(error: unknown): error is MintOperationError {
+    return error instanceof MintOperationError && !AMBIGUOUS_SWAP_MINT_ERROR_CODES.has(error.code);
+  }
+
   private async publishCommittedEvent<E extends keyof CoreEvents>(
     event: E,
     payload: CoreEvents[E],
@@ -927,11 +995,6 @@ export class SendOperationService {
   private normalizeMemo(memo: string): string | undefined {
     const trimmed = memo.trim();
     return trimmed.length > 0 ? trimmed : undefined;
-  }
-
-  private applyTokenMemo(token: Token, memo: string): Token {
-    const normalized = this.normalizeMemo(memo);
-    return normalized ? { ...token, memo: normalized } : token;
   }
 
   /**
