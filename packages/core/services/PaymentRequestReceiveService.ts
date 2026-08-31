@@ -38,8 +38,8 @@ import type {
 import type {
   PaymentRequestReceiveAttemptRepository,
   PaymentRequestReceiveOperationRepository,
-  ReceiveOperationRepository,
 } from '../repositories';
+import type { ReceiveOperationQueries } from '../transactions/receive/ReceiveOperationQueries.ts';
 import { computeYHexForSecrets, generateSubId, normalizeMintUrl } from '../utils';
 import { OperationIdLock } from '../operations/OperationIdLock';
 import type {
@@ -91,7 +91,7 @@ export class PaymentRequestReceiveService {
     private readonly operationRepository: PaymentRequestReceiveOperationRepository,
     private readonly attemptRepository: PaymentRequestReceiveAttemptRepository,
     private readonly receiveOperationService: ReceiveOperationService,
-    private readonly receiveOperationRepository: ReceiveOperationRepository,
+    private readonly receiveOperationQueries: ReceiveOperationQueries,
     private readonly mintService: MintService,
     private readonly transportHandlerProvider: PaymentRequestReceiveTransportHandlerProvider,
     private readonly logger?: Logger,
@@ -370,7 +370,7 @@ export class PaymentRequestReceiveService {
 
         const childReceive =
           currentAttempt.state === 'validating'
-            ? await this.receiveOperationRepository.getByPaymentRequestAttemptId(currentAttempt.id)
+            ? await this.receiveOperationQueries.getByPaymentRequestAttemptId(currentAttempt.id)
             : null;
         if (childReceive) {
           const linkedAttempt = await this.updateAttempt({
@@ -610,7 +610,7 @@ export class PaymentRequestReceiveService {
     } catch (error) {
       const receiveOperation = currentAttempt.receiveOperationId
         ? await this.receiveOperationService.getOperation(currentAttempt.receiveOperationId)
-        : await this.receiveOperationRepository.getByPaymentRequestAttemptId(currentAttempt.id);
+        : await this.receiveOperationQueries.getByPaymentRequestAttemptId(currentAttempt.id);
 
       if (receiveOperation?.state === 'finalized') {
         await this.finalizeAttemptFromReceive(currentAttempt, receiveOperation, {

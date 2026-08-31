@@ -9,10 +9,15 @@ import {
   RepositoryTransactionalSendOperations,
   type TransactionalSendOperations,
 } from './send/TransactionalSendOperations.ts';
+import {
+  RepositoryTransactionalReceiveOperations,
+  type TransactionalReceiveOperations,
+} from './receive/TransactionalReceiveOperations.ts';
 
 export interface CoreTransaction {
   readonly keypairs: TransactionalKeypairOperations;
   readonly sends: TransactionalSendOperations;
+  readonly receives: TransactionalReceiveOperations;
 }
 
 export interface CoreTransactionRunner {
@@ -34,6 +39,12 @@ class RepositoryTransactionModuleFactory implements TransactionModuleFactory {
         repositories.counterRepository,
         repositories.keysetRepository,
         repositories.sendOperationRepository,
+        this.outputDataCreator,
+      ),
+      receives: new RepositoryTransactionalReceiveOperations(
+        repositories.counterRepository,
+        repositories.keysetRepository,
+        repositories.receiveOperationRepository,
         this.outputDataCreator,
       ),
     };

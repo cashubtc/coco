@@ -235,6 +235,7 @@ export interface ReceiveOperationRow {
   state: 'init' | 'prepared' | 'executing' | 'finalized' | 'rolled_back';
   createdAt: number;
   updatedAt: number;
+  revision?: number;
   error?: string | null;
   fee?: string | number | null;
   inputProofsJson?: string | null;

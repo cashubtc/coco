@@ -86,6 +86,7 @@ import {
 } from './transactions/CoreTransaction.ts';
 import { CoreKeyRingTransactions } from './transactions/keypairs/KeyRingTransactions.ts';
 import { CoreSendTransactions } from './transactions/send/SendTransactions.ts';
+import { CoreReceiveTransactions } from './transactions/receive/ReceiveTransactions.ts';
 
 /**
  * Configuration options for initializing the Coco Cashu manager
@@ -999,18 +1000,21 @@ export class Manager {
     const tokenService = new TokenService(mintService, tokenLogger);
 
     const receiveOperationLogger = this.getChildLogger('ReceiveOperationService');
-    const receiveOperationService = new ReceiveOperationService(
-      repositories.receiveOperationRepository,
-      repositories.proofRepository,
+    const receiveTransactions = new CoreReceiveTransactions(coreTransactionRunner);
+    const receiveOperationService = new ReceiveOperationService({
+      operationQueries: repositories.receiveOperationRepository,
+      proofQueries: repositories.proofRepository,
+      transactions: receiveTransactions,
       proofService,
       mintService,
       walletService,
-      this.mintAdapter,
+      mintAdapter: this.mintAdapter,
       tokenService,
-      this.eventBus,
-      receiveOperationLogger,
+      seedService,
+      eventBus: this.eventBus,
+      logger: receiveOperationLogger,
       mintScopedLock,
-    );
+    });
     const receiveOperationRepository = repositories.receiveOperationRepository;
     const paymentRequestReceiveOperationRepository =
       repositories.paymentRequestReceiveOperationRepository;
