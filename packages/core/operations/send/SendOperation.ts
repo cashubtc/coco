@@ -16,7 +16,13 @@
  * - rolled_back: Operation cancelled, proofs reclaimed
  */
 export type SendOperationState =
-  'init' | 'prepared' | 'executing' | 'pending' | 'finalized' | 'rolling_back' | 'rolled_back';
+  | 'init'
+  | 'prepared'
+  | 'executing'
+  | 'pending'
+  | 'finalized'
+  | 'rolling_back'
+  | 'rolled_back';
 
 import type { Amount, Token } from '@cashu/cashu-ts';
 import { getSecretsFromSerializedOutputData, type SerializedOutputData } from '../../utils';

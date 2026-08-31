@@ -45,7 +45,6 @@ export interface PreparedReceiveResult {
 
 export interface BeginReceiveExecutionCommand {
   operationId: string;
-  expectedRevision: number;
   updatedAt: number;
 }
 
@@ -64,7 +63,6 @@ export interface BegunReceiveExecution {
 
 export interface ApplyReceiveResultCommand {
   operationId: string;
-  expectedRevision: number;
   updatedAt: number;
   proofs: CoreProof[];
 }
@@ -78,14 +76,12 @@ export interface AppliedReceiveResult {
 
 export interface FailReceiveExecutionCommand {
   operationId: string;
-  expectedRevision: number;
   updatedAt: number;
   error: string;
 }
 
 export interface CancelPreparedReceiveCommand {
   operationId: string;
-  expectedRevision: number;
   updatedAt: number;
   error: string;
 }
@@ -122,6 +118,8 @@ export class RepositoryTransactionalReceiveOperations implements TransactionalRe
     if (operation.amount.lessThanOrEqual(command.fee)) {
       throw new ProofValidationError('Receive amount is not sufficient after fees');
     }
+    const existing = await this.receives.getById(operation.id);
+    if (existing) assertSameLegacyIntent(existing, operation);
 
     const keysets = await this.keysets.getKeysetsByMintUrl(operation.mintUrl);
     assertCurrentActiveKeys(operation, command.activeKeys, keysets);
@@ -148,11 +146,9 @@ export class RepositoryTransactionalReceiveOperations implements TransactionalRe
       outputData: serializeOutputData({ keep: outputs, send: [] }),
     };
 
-    const existing = await this.receives.getById(operation.id);
     if (!existing) {
       await this.receives.create(prepared);
     } else {
-      assertSameLegacyIntent(existing, operation);
       const revision = existing.revision ?? 0;
       const transitioned = await this.receives.transition({
         operationId: operation.id,
@@ -186,24 +182,18 @@ export class RepositoryTransactionalReceiveOperations implements TransactionalRe
         `Cannot begin Receive execution in state ${current.state}`,
       );
     }
-    if ((current.revision ?? 0) !== command.expectedRevision) {
-      throw new ReceiveOperationConflictError(
-        command.operationId,
-        'Receive preparation revision changed before execution',
-      );
-    }
-
     assertExactReceiveRequest(current);
+    const revision = current.revision ?? 0;
     const executing: ExecutingReceiveOperation = {
       ...current,
       state: 'executing',
-      revision: command.expectedRevision + 1,
+      revision: revision + 1,
       updatedAt: command.updatedAt,
     };
     const transitioned = await this.receives.transition({
       operationId: current.id,
       expectedState: 'prepared',
-      expectedRevision: command.expectedRevision,
+      expectedRevision: revision,
       next: executing,
     });
     if (!transitioned) {
@@ -230,12 +220,6 @@ export class RepositoryTransactionalReceiveOperations implements TransactionalRe
       throw new ReceiveOperationConflictError(command.operationId, 'Receive operation not found');
     }
     if (current.state === 'finalized') {
-      if ((current.revision ?? 0) !== command.expectedRevision + 1) {
-        throw new ReceiveOperationConflictError(
-          command.operationId,
-          'Receive result conflicts with the finalized operation revision',
-        );
-      }
       assertReceiveResult(current, command.proofs);
       const persisted = await this.getOperationProofs(current);
       if (!sameCoreProofSet(persisted, command.proofs)) {
@@ -252,13 +236,7 @@ export class RepositoryTransactionalReceiveOperations implements TransactionalRe
         `Cannot apply Receive result in state ${current.state}`,
       );
     }
-    if ((current.revision ?? 0) !== command.expectedRevision) {
-      throw new ReceiveOperationConflictError(
-        command.operationId,
-        'Receive execution revision changed before applying its result',
-      );
-    }
-
+    const revision = current.revision ?? 0;
     assertReceiveResult(current, command.proofs);
     const existing = await this.proofs.getProofsBySecrets(
       current.mintUrl,
@@ -291,13 +269,13 @@ export class RepositoryTransactionalReceiveOperations implements TransactionalRe
     const finalized: FinalizedReceiveOperation = {
       ...current,
       state: 'finalized',
-      revision: command.expectedRevision + 1,
+      revision: revision + 1,
       updatedAt: command.updatedAt,
     };
     const transitioned = await this.receives.transition({
       operationId: current.id,
       expectedState: 'executing',
-      expectedRevision: command.expectedRevision,
+      expectedRevision: revision,
       next: finalized,
     });
     if (!transitioned) {
@@ -315,31 +293,28 @@ export class RepositoryTransactionalReceiveOperations implements TransactionalRe
     if (!current) {
       throw new ReceiveOperationConflictError(command.operationId, 'Receive operation not found');
     }
-    if (
-      current.state === 'rolled_back' &&
-      (current.revision ?? 0) === command.expectedRevision + 1 &&
-      current.error === command.error
-    ) {
+    if (current.state === 'rolled_back' && current.error === command.error) {
       return { operation: current, committed: false };
     }
-    if (current.state !== 'executing' || (current.revision ?? 0) !== command.expectedRevision) {
+    if (current.state !== 'executing') {
       throw new ReceiveOperationConflictError(
         command.operationId,
         'Receive failure lost an executing-state or revision conflict',
       );
     }
 
+    const revision = current.revision ?? 0;
     const rolledBack: RolledBackReceiveOperation = {
       ...current,
       state: 'rolled_back',
-      revision: command.expectedRevision + 1,
+      revision: revision + 1,
       updatedAt: command.updatedAt,
       error: command.error,
     };
     const transitioned = await this.receives.transition({
       operationId: current.id,
       expectedState: 'executing',
-      expectedRevision: command.expectedRevision,
+      expectedRevision: revision,
       next: rolledBack,
     });
     if (!transitioned) {
@@ -356,31 +331,28 @@ export class RepositoryTransactionalReceiveOperations implements TransactionalRe
     if (!current) {
       throw new ReceiveOperationConflictError(command.operationId, 'Receive operation not found');
     }
-    if (
-      current.state === 'rolled_back' &&
-      (current.revision ?? 0) === command.expectedRevision + 1 &&
-      current.error === command.error
-    ) {
+    if (current.state === 'rolled_back' && current.error === command.error) {
       return { operation: current, committed: false };
     }
-    if (current.state !== 'prepared' || (current.revision ?? 0) !== command.expectedRevision) {
+    if (current.state !== 'prepared') {
       throw new ReceiveOperationConflictError(
         command.operationId,
         'Receive cancellation lost a prepared-state or revision conflict',
       );
     }
 
+    const revision = current.revision ?? 0;
     const rolledBack: RolledBackReceiveOperation = {
       ...current,
       state: 'rolled_back',
-      revision: command.expectedRevision + 1,
+      revision: revision + 1,
       updatedAt: command.updatedAt,
       error: command.error,
     };
     const transitioned = await this.receives.transition({
       operationId: current.id,
       expectedState: 'prepared',
-      expectedRevision: command.expectedRevision,
+      expectedRevision: revision,
       next: rolledBack,
     });
     if (!transitioned) {

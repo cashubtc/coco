@@ -94,8 +94,8 @@ describe('SendOperationService executing recovery', () => {
   let repositories: MemoryRepositories;
   let service: SendOperationService;
   let wallet: {
-    send: Mock<any>;
-    checkProofsStates: Mock<any>;
+    send: Mock<typeof replayResult>;
+    checkProofsStates: Mock<(proofs: CoreProof[]) => Promise<CashuProofState[]>>;
   };
   let proofService: ProofService;
   let logger: Logger;
@@ -267,7 +267,9 @@ describe('SendOperationService executing recovery', () => {
           }) as CashuProofState,
       ),
     );
-    (proofService.recoverProofsFromOutputData as Mock<any>).mockResolvedValue([
+    (
+      proofService.recoverProofsFromOutputData as Mock<ProofService['recoverProofsFromOutputData']>
+    ).mockResolvedValue([
       {
         id: keysetId,
         secret: `${operation.id}-send`,
@@ -450,6 +452,12 @@ describe('SendOperationService executing recovery', () => {
       coreProof('missing-owner-proof', { usedByOperationId: 'missing-operation' }),
       coreProof('terminal-owner-proof', { usedByOperationId: rolledBack.id }),
     ]);
+    let releasedSecrets: string[] = [];
+    const listenerError = new Error('listener failed');
+    eventBus.on('proofs:released', (payload) => {
+      releasedSecrets = payload.secrets;
+      throw listenerError;
+    });
 
     await service.recoverPendingOperations();
 
@@ -461,6 +469,13 @@ describe('SendOperationService executing recovery', () => {
       (await repositories.proofRepository.getProofBySecret(mintUrl, 'terminal-owner-proof'))
         ?.usedByOperationId,
     ).toBeUndefined();
+    expect(new Set(releasedSecrets)).toEqual(
+      new Set(['missing-owner-proof', 'terminal-owner-proof']),
+    );
+    expect(logger.error).toHaveBeenCalledWith(
+      'Failed to publish committed Send event',
+      expect.objectContaining({ event: 'proofs:released', error: expect.any(Error) }),
+    );
   });
 
   it('handles an empty repository and continues after one executing recovery fails', async () => {

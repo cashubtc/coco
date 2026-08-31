@@ -24,7 +24,7 @@ import type {
   RolledBackSendOperation,
   SendOperation,
 } from '@core/operations/send/SendOperation.ts';
-import { getSendProofSecrets } from '@core/operations/send/SendOperation.ts';
+import { getSendProofSecrets, isTerminalOperation } from '@core/operations/send/SendOperation.ts';
 import type {
   CounterRepository,
   KeysetRepository,
@@ -61,7 +61,6 @@ export interface PreparedSendResult {
 
 export interface ExecuteExactSendCommand {
   operationId: string;
-  expectedRevision: number;
   updatedAt: number;
   memo?: string;
 }
@@ -75,7 +74,6 @@ export interface ExecuteExactSendResult {
 
 export interface BeginSwapExecutionCommand {
   operationId: string;
-  expectedRevision: number;
   updatedAt: number;
   /** Normalized before entering the retried transaction. */
   memo?: string;
@@ -96,7 +94,6 @@ export interface BegunSwapExecution {
 
 export interface ApplySwapResultCommand {
   operationId: string;
-  expectedRevision: number;
   updatedAt: number;
   keepProofs: CoreProof[];
   sendProofs: CoreProof[];
@@ -113,7 +110,6 @@ export interface AppliedSwapResult {
 
 export interface FailSwapExecutionCommand {
   operationId: string;
-  expectedRevision: number;
   updatedAt: number;
   error: string;
 }
@@ -127,7 +123,6 @@ export interface FailedSwapExecution {
 
 export interface CancelPreparedSendCommand {
   operationId: string;
-  expectedRevision: number;
   updatedAt: number;
   reason: string;
 }
@@ -141,7 +136,6 @@ export interface CancelledPreparedSend {
 
 export interface CompletePendingSendCommand {
   operationId: string;
-  expectedRevision: number;
   updatedAt: number;
   /** Proof-state observations made outside the transaction. */
   spentProofSecrets?: string[];
@@ -161,16 +155,19 @@ export interface CleanupLegacyInitResult {
   releasedProofSecrets: string[];
 }
 
+export interface CleanupOrphanedSendReservationsResult {
+  released: Array<{ mintUrl: string; secrets: string[] }>;
+  count: number;
+}
+
 /** Compatibility-only seam for the existing pending default-token reclaim flow. */
 export interface BeginLegacyPendingRollbackCommand {
   operationId: string;
-  expectedRevision: number;
   updatedAt: number;
 }
 
 export interface CompleteLegacyPendingRollbackCommand {
   operationId: string;
-  expectedRevision: number;
   updatedAt: number;
   reason: string;
 }
@@ -183,6 +180,7 @@ export interface TransactionalSendOperations {
   failExecution(command: FailSwapExecutionCommand): Promise<FailedSwapExecution>;
   cancelPrepared(command: CancelPreparedSendCommand): Promise<CancelledPreparedSend>;
   completePending(command: CompletePendingSendCommand): Promise<CompletedPendingSend>;
+  cleanupOrphanedReservations(): Promise<CleanupOrphanedSendReservationsResult>;
   cleanupLegacyInit(operationId: string): Promise<CleanupLegacyInitResult>;
   beginLegacyPendingRollback(
     command: BeginLegacyPendingRollbackCommand,
@@ -204,6 +202,9 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
 
   async prepare(command: PrepareSendCommand): Promise<PreparedSendResult> {
     const operation = command.operation;
+    const existing = await this.sends.getById(operation.id);
+    if (existing) assertSameLegacyIntent(existing, operation);
+
     const available = await this.proofs.getAvailableProofs(operation.mintUrl, {
       unit: operation.unit,
     });
@@ -271,11 +272,9 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
       inputProofSecrets,
       outputData,
     };
-    const existing = await this.sends.getById(operation.id);
     if (!existing) {
       await this.sends.create(prepared);
     } else {
-      assertSameLegacyIntent(existing, operation);
       const transitioned = await this.sends.transition({
         operationId: operation.id,
         expectedState: 'init',
@@ -309,11 +308,7 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
     const idempotent = getIdempotentExactResult(current, command);
     if (idempotent) return idempotent;
 
-    if (
-      !current ||
-      current.state !== 'prepared' ||
-      (current.revision ?? 0) !== command.expectedRevision
-    ) {
+    if (!current || current.state !== 'prepared') {
       throw new SendOperationConflictError(
         command.operationId,
         'Exact Send execution lost a state or revision conflict',
@@ -324,6 +319,7 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
     }
 
     const proofs = await loadOwnedReadyProofs(this.proofs, current);
+    const revision = current.revision ?? 0;
     const normalizedMemo = normalizeMemo(command.memo);
     const token: Token = {
       mint: current.mintUrl,
@@ -342,7 +338,7 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
     const transitioned = await this.sends.transition({
       operationId: current.id,
       expectedState: 'prepared',
-      expectedRevision: command.expectedRevision,
+      expectedRevision: revision,
       next: pending,
     });
     if (!transitioned) {
@@ -351,7 +347,7 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
         'Exact Send execution lost a state or revision conflict',
       );
     }
-    pending.revision = command.expectedRevision + 1;
+    pending.revision = revision + 1;
 
     return { operation: pending, token, committed: true };
   }
@@ -367,12 +363,6 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
         `Cannot begin Send execution in state ${current.state}`,
       );
     }
-    if ((current.revision ?? 0) !== command.expectedRevision) {
-      throw new SendOperationConflictError(
-        command.operationId,
-        'Send preparation revision changed before execution',
-      );
-    }
     if (!current.needsSwap || !current.outputData) {
       throw new SendOperationConflictError(
         command.operationId,
@@ -381,17 +371,18 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
     }
 
     const inputProofs = await this.getOwnedReadyInputs(current);
+    const revision = current.revision ?? 0;
     const executing: ExecutingSendOperation = {
       ...current,
       state: 'executing',
-      revision: (current.revision ?? 0) + 1,
+      revision: revision + 1,
       updatedAt: command.updatedAt,
       executionMemo: command.memo,
     };
     const transitioned = await this.sends.transition({
       operationId: current.id,
       expectedState: 'prepared',
-      expectedRevision: command.expectedRevision,
+      expectedRevision: revision,
       next: executing,
     });
     if (!transitioned) {
@@ -422,7 +413,6 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
       if (
         !current.needsSwap ||
         !current.outputData ||
-        current.revision !== command.expectedRevision + 1 ||
         !current.token ||
         !sameToken(current.token, command.token)
       ) {
@@ -454,13 +444,7 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
         `Cannot apply Send result in state ${current.state}`,
       );
     }
-    if ((current.revision ?? 0) !== command.expectedRevision) {
-      throw new SendOperationConflictError(
-        command.operationId,
-        'Send execution revision changed before applying its result',
-      );
-    }
-
+    const revision = current.revision ?? 0;
     await this.getOwnedReadyInputs(current);
     assertSwapResult(current, command);
     const savedProofs = [...command.keepProofs, ...command.sendProofs];
@@ -479,7 +463,7 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
     const transitioned = await this.sends.transition({
       operationId: current.id,
       expectedState: 'executing',
-      expectedRevision: command.expectedRevision,
+      expectedRevision: revision,
       next: pending,
     });
     if (!transitioned) {
@@ -502,11 +486,7 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
     if (!current) {
       throw new SendOperationConflictError(command.operationId, 'Send operation not found');
     }
-    if (
-      current.state === 'rolled_back' &&
-      current.revision === command.expectedRevision + 1 &&
-      current.error === command.error
-    ) {
+    if (current.state === 'rolled_back' && current.error === command.error) {
       return {
         operation: current,
         releasedInputSecrets: [],
@@ -519,13 +499,7 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
         `Cannot fail Send execution in state ${current.state}`,
       );
     }
-    if ((current.revision ?? 0) !== command.expectedRevision) {
-      throw new SendOperationConflictError(
-        command.operationId,
-        'Send execution revision changed before applying its failure',
-      );
-    }
-
+    const revision = current.revision ?? 0;
     await this.getOwnedReadyInputs(current);
     await this.proofs.releaseProofs(current.mintUrl, current.inputProofSecrets);
     const failed: RolledBackSendOperation = {
@@ -538,7 +512,7 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
     const transitioned = await this.sends.transition({
       operationId: current.id,
       expectedState: 'executing',
-      expectedRevision: command.expectedRevision,
+      expectedRevision: revision,
       next: failed,
     });
     if (!transitioned) {
@@ -560,33 +534,30 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
     if (!current) {
       throw new SendOperationConflictError(command.operationId, 'Send operation not found');
     }
-    if (
-      current.state === 'rolled_back' &&
-      current.revision === command.expectedRevision + 1 &&
-      current.error === command.reason
-    ) {
+    if (current.state === 'rolled_back' && current.error === command.reason) {
       return { operation: current, releasedInputSecrets: [], committed: false };
     }
-    if (current.state !== 'prepared' || (current.revision ?? 0) !== command.expectedRevision) {
+    if (current.state !== 'prepared') {
       throw new SendOperationConflictError(
         command.operationId,
         'Send cancellation lost a prepared-state or revision conflict',
       );
     }
 
+    const revision = current.revision ?? 0;
     await this.getOwnedReadyInputs(current);
     await this.proofs.releaseProofs(current.mintUrl, current.inputProofSecrets);
     const rolledBack: RolledBackSendOperation = {
       ...current,
       state: 'rolled_back',
-      revision: command.expectedRevision + 1,
+      revision: revision + 1,
       updatedAt: command.updatedAt,
       error: command.reason,
     };
     const transitioned = await this.sends.transition({
       operationId: current.id,
       expectedState: 'prepared',
-      expectedRevision: command.expectedRevision,
+      expectedRevision: revision,
       next: rolledBack,
     });
     if (!transitioned) {
@@ -609,13 +580,6 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
       throw new SendOperationConflictError(command.operationId, 'Send operation not found');
     }
     if (current.state === 'finalized') {
-      const revision = current.revision ?? 0;
-      if (revision !== command.expectedRevision && revision !== command.expectedRevision + 1) {
-        throw new SendOperationConflictError(
-          command.operationId,
-          'Send completion conflicts with the finalized operation revision',
-        );
-      }
       return {
         operation: current,
         spentProofSecrets: [],
@@ -623,13 +587,14 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
         committed: false,
       };
     }
-    if (current.state !== 'pending' || (current.revision ?? 0) !== command.expectedRevision) {
+    if (current.state !== 'pending') {
       throw new SendOperationConflictError(
         command.operationId,
         'Send completion lost a pending-state or revision conflict',
       );
     }
 
+    const revision = current.revision ?? 0;
     const expectedSecrets = getSendProofSecrets(current);
     if (expectedSecrets.length === 0 || new Set(expectedSecrets).size !== expectedSecrets.length) {
       throw new ProofValidationError(`Send operation ${current.id} has invalid send proof data`);
@@ -708,13 +673,13 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
     const finalized: FinalizedSendOperation = {
       ...current,
       state: 'finalized',
-      revision: command.expectedRevision + 1,
+      revision: revision + 1,
       updatedAt: command.updatedAt,
     };
     const transitioned = await this.sends.transition({
       operationId: current.id,
       expectedState: 'pending',
-      expectedRevision: command.expectedRevision,
+      expectedRevision: revision,
       next: finalized,
     });
     if (!transitioned) {
@@ -752,31 +717,58 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
     };
   }
 
+  async cleanupOrphanedReservations(): Promise<CleanupOrphanedSendReservationsResult> {
+    const reservedProofs = await this.proofs.getReservedProofs();
+    const reservedByMint = new Map<string, CoreProof[]>();
+    for (const proof of reservedProofs) {
+      if (!proof.usedByOperationId) continue;
+      const proofs = reservedByMint.get(proof.mintUrl) ?? [];
+      proofs.push(proof);
+      reservedByMint.set(proof.mintUrl, proofs);
+    }
+
+    const released: CleanupOrphanedSendReservationsResult['released'] = [];
+    for (const [mintUrl, reserved] of reservedByMint) {
+      const operations = await this.sends.getByMintUrl(mintUrl);
+      const operationById = new Map(operations.map((operation) => [operation.id, operation]));
+      const secrets = reserved
+        .filter((proof) => {
+          const operation = operationById.get(proof.usedByOperationId!);
+          return !operation || isTerminalOperation(operation);
+        })
+        .map((proof) => proof.secret);
+      if (secrets.length > 0) released.push({ mintUrl, secrets });
+    }
+    for (const group of released) {
+      await this.proofs.releaseProofs(group.mintUrl, group.secrets);
+    }
+    return {
+      released,
+      count: released.reduce((count, group) => count + group.secrets.length, 0),
+    };
+  }
+
   async beginLegacyPendingRollback(
     command: BeginLegacyPendingRollbackCommand,
   ): Promise<RollingBackSendOperation> {
     const current = await this.sends.getById(command.operationId);
-    if (
-      !current ||
-      current.state !== 'pending' ||
-      current.method !== 'default' ||
-      (current.revision ?? 0) !== command.expectedRevision
-    ) {
+    if (!current || current.state !== 'pending' || current.method !== 'default') {
       throw new SendOperationConflictError(
         command.operationId,
         'Legacy pending Send rollback lost a state or revision conflict',
       );
     }
+    const revision = current.revision ?? 0;
     const rollingBack: RollingBackSendOperation = {
       ...current,
       state: 'rolling_back',
-      revision: command.expectedRevision + 1,
+      revision: revision + 1,
       updatedAt: command.updatedAt,
     };
     const transitioned = await this.sends.transition({
       operationId: current.id,
       expectedState: 'pending',
-      expectedRevision: command.expectedRevision,
+      expectedRevision: revision,
       next: rollingBack,
     });
     if (!transitioned) {
@@ -792,27 +784,24 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
     command: CompleteLegacyPendingRollbackCommand,
   ): Promise<RolledBackSendOperation> {
     const current = await this.sends.getById(command.operationId);
-    if (
-      !current ||
-      current.state !== 'rolling_back' ||
-      (current.revision ?? 0) !== command.expectedRevision
-    ) {
+    if (!current || current.state !== 'rolling_back') {
       throw new SendOperationConflictError(
         command.operationId,
         'Legacy pending Send rollback completion lost a state or revision conflict',
       );
     }
+    const revision = current.revision ?? 0;
     const rolledBack: RolledBackSendOperation = {
       ...current,
       state: 'rolled_back',
-      revision: command.expectedRevision + 1,
+      revision: revision + 1,
       updatedAt: command.updatedAt,
       error: command.reason,
     };
     const transitioned = await this.sends.transition({
       operationId: current.id,
       expectedState: 'rolling_back',
-      expectedRevision: command.expectedRevision,
+      expectedRevision: revision,
       next: rolledBack,
     });
     if (!transitioned) {
@@ -858,13 +847,7 @@ function getIdempotentExactResult(
   if (!current || current.state !== 'pending' || current.needsSwap || !current.token) {
     return undefined;
   }
-  const revision = current.revision ?? 0;
-  const revisionMatchesCommittedCommand =
-    revision === command.expectedRevision || revision === command.expectedRevision + 1;
-  if (
-    !revisionMatchesCommittedCommand ||
-    !isEquivalentExactToken(current, current.token, command)
-  ) {
+  if (!isEquivalentExactToken(current, current.token, command)) {
     throw new SendOperationConflictError(
       command.operationId,
       'Exact Send result differs from the already committed operation',
@@ -935,9 +918,8 @@ function assertSwapResult(
   operation: ExecutingSendOperation | PendingSendOperation,
   command: ApplySwapResultCommand,
 ): void {
-  const outputSecrets = getSecretsFromSerializedOutputData(operation.outputData!);
-  assertProofSet(operation, command.keepProofs, outputSecrets.keepSecrets, 'ready', 'keep');
-  assertProofSet(operation, command.sendProofs, outputSecrets.sendSecrets, 'inflight', 'send');
+  assertProofSet(operation, command.keepProofs, 'ready', 'keep');
+  assertProofSet(operation, command.sendProofs, 'inflight', 'send');
 
   if (
     command.token.mint !== operation.mintUrl ||
@@ -952,10 +934,11 @@ function assertSwapResult(
 function assertProofSet(
   operation: ExecutingSendOperation | PendingSendOperation,
   proofs: CoreProof[],
-  expectedSecrets: string[],
   state: CoreProof['state'],
-  kind: string,
+  kind: 'keep' | 'send',
 ): void {
+  const outputSecrets = getSecretsFromSerializedOutputData(operation.outputData!);
+  const expectedSecrets = kind === 'keep' ? outputSecrets.keepSecrets : outputSecrets.sendSecrets;
   if (
     new Set(expectedSecrets).size !== expectedSecrets.length ||
     new Set(proofs.map((proof) => proof.secret)).size !== proofs.length ||
@@ -963,10 +946,22 @@ function assertProofSet(
   ) {
     throw new ProofValidationError(`Swap ${kind} proofs do not match allocated outputs`);
   }
-  const expected = new Set(expectedSecrets);
+  const allocation = operation.outputData![kind];
+  const expected = new Map(
+    allocation.map((output, index) => [
+      expectedSecrets[index]!,
+      {
+        id: output.blindedMessage.id,
+        amount: Amount.from(output.blindedMessage.amount),
+      },
+    ]),
+  );
   for (const proof of proofs) {
+    const output = expected.get(proof.secret);
     if (
-      !expected.has(proof.secret) ||
+      !output ||
+      proof.id !== output.id ||
+      !Amount.from(proof.amount).equals(output.amount) ||
       proof.mintUrl !== operation.mintUrl ||
       normalizeUnit(proof.unit) !== normalizeUnit(operation.unit) ||
       proof.state !== state ||
