@@ -49,6 +49,20 @@ function countBlankOutputsForAmount(amount: Amount): number {
   return Math.max((value - 1n).toString(2).length, 1);
 }
 
+export type RestoreProofsObservationStatus =
+  | 'none'
+  | 'complete-unspent'
+  | 'complete-spent'
+  | 'inconclusive';
+
+/** Read-only evidence returned by the mint Restore endpoint for one exact output allocation. */
+export interface RestoreProofsObservation {
+  status: RestoreProofsObservationStatus;
+  expectedOutputCount: number;
+  restoredProofs: Proof[];
+  unspentProofs: Proof[];
+}
+
 export class ProofService {
   private readonly counterService: CounterService;
   private readonly proofRepository: ProofRepository;
@@ -1019,6 +1033,51 @@ export class ProofService {
     serializedOutputData: SerializedOutputData,
     options: { unit: string; createdByOperationId?: string; persistRecoveredProofs?: boolean },
   ): Promise<Proof[]> {
+    const observation = await this.observeRestoreProofsFromOutputData(
+      mintUrl,
+      serializedOutputData,
+      options.unit,
+    );
+    const unit = normalizeUnit(options.unit);
+    const unspentProofs = observation.unspentProofs;
+
+    if (unspentProofs.length === 0) {
+      return [];
+    }
+
+    if (options?.persistRecoveredProofs !== false) {
+      await this.saveProofs(
+        mintUrl,
+        mapProofToCoreProof(mintUrl, 'ready', unspentProofs, {
+          unit,
+          createdByOperationId: options?.createdByOperationId,
+        }),
+      );
+    }
+
+    this.logger?.info('Recovered proofs from output data', {
+      mintUrl,
+      unit,
+      totalRestored: observation.restoredProofs.length,
+      unspentCount: unspentProofs.length,
+      spentCount: observation.restoredProofs.length - unspentProofs.length,
+      persisted: options?.persistRecoveredProofs !== false,
+    });
+
+    return unspentProofs;
+  }
+
+  /**
+   * Observe Restore without persisting proofs.
+   *
+   * Unlike recoverProofsFromOutputData(), this preserves the distinction between no signatures,
+   * a complete set of spent signatures, and incomplete or mixed evidence.
+   */
+  async observeRestoreProofsFromOutputData(
+    mintUrl: string,
+    serializedOutputData: SerializedOutputData,
+    requestedUnit: string,
+  ): Promise<RestoreProofsObservation> {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
     }
@@ -1026,7 +1085,7 @@ export class ProofService {
       throw new ProofValidationError('serializedOutputData is required');
     }
 
-    const unit = normalizeUnit(options.unit);
+    const unit = normalizeUnit(requestedUnit);
     const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl, unit);
 
     // Deserialize OutputData
@@ -1034,7 +1093,12 @@ export class ProofService {
     const allOutputs = [...outputData.keep, ...outputData.send];
 
     if (allOutputs.length === 0) {
-      return [];
+      return {
+        status: 'none',
+        expectedOutputCount: 0,
+        restoredProofs: [],
+        unspentProofs: [],
+      };
     }
 
     // Build blinded messages for restore request
@@ -1052,10 +1116,11 @@ export class ProofService {
 
     // Match signatures back to outputs and unblind to construct proofs
     const restoredProofs: Proof[] = [];
+    const matchedOutputBlinds = new Set<string>();
     for (let i = 0; i < restoreResult.outputs.length; i++) {
       const output = allOutputs.find((o) => o.blindedMessage.B_ === restoreResult.outputs[i]?.B_);
       const signature = restoreResult.signatures[i];
-      if (output && signature) {
+      if (output && signature && !matchedOutputBlinds.has(output.blindedMessage.B_)) {
         const keyset = keysetMap[signature.id];
         if (!keyset) {
           this.logger?.warn('Missing keyset for restored signature', { id: signature.id });
@@ -1069,12 +1134,21 @@ export class ProofService {
         restoredProofs.push(
           output.toProof(signature, { id: keyset.id, keys: keyset.keypairs as Keys }),
         );
+        matchedOutputBlinds.add(output.blindedMessage.B_);
       }
     }
 
     if (restoredProofs.length === 0) {
       this.logger?.debug('No proofs found to restore', { mintUrl });
-      return [];
+      return {
+        status:
+          restoreResult.outputs.length === 0 && restoreResult.signatures.length === 0
+            ? 'none'
+            : 'inconclusive',
+        expectedOutputCount: allOutputs.length,
+        restoredProofs: [],
+        unspentProofs: [],
+      };
     }
 
     // Check which proofs are still unspent
@@ -1089,28 +1163,17 @@ export class ProofService {
         mintUrl,
         totalRestored: restoredProofs.length,
       });
-      return [];
     }
 
-    if (options?.persistRecoveredProofs !== false) {
-      await this.saveProofs(
-        mintUrl,
-        mapProofToCoreProof(mintUrl, 'ready', unspentProofs, {
-          unit,
-          createdByOperationId: options?.createdByOperationId,
-        }),
-      );
-    }
-
-    this.logger?.info('Recovered proofs from output data', {
-      mintUrl,
-      unit,
-      totalRestored: restoredProofs.length,
-      unspentCount: unspentProofs.length,
-      spentCount: restoredProofs.length - unspentProofs.length,
-      persisted: options?.persistRecoveredProofs !== false,
-    });
-
-    return unspentProofs;
+    const complete =
+      restoredProofs.length === allOutputs.length && proofStates.length === restoredProofs.length;
+    const allUnspent = complete && proofStates.every((state) => state?.state === 'UNSPENT');
+    const allSpent = complete && proofStates.every((state) => state?.state === 'SPENT');
+    return {
+      status: allUnspent ? 'complete-unspent' : allSpent ? 'complete-spent' : 'inconclusive',
+      expectedOutputCount: allOutputs.length,
+      restoredProofs,
+      unspentProofs,
+    };
   }
 }

@@ -134,9 +134,18 @@ describe('ReceiveOperationService', () => {
     },
     applyResult: async ({ operationId, expectedRevision, updatedAt, proofs }) => {
       const current = await receiveOpRepo.getById(operationId);
-      if (!current || current.state !== 'executing')
-        throw new Error('Receive operation not executing');
-      await proofRepo.saveProofs(current.mintUrl, proofs);
+      if (!current) throw new Error('Receive operation not found');
+      if (current.state === 'finalized') {
+        return { operation: current, savedProofs: [], committed: false };
+      }
+      if (current.state !== 'executing') throw new Error('Receive operation not executing');
+      const existing = await proofRepo.getProofsBySecrets(
+        current.mintUrl,
+        proofs.map((proof) => proof.secret),
+      );
+      const existingSecrets = new Set(existing.map((proof) => proof.secret));
+      const missing = proofs.filter((proof) => !existingSecrets.has(proof.secret));
+      if (missing.length > 0) await proofRepo.saveProofs(current.mintUrl, missing);
       const finalized = {
         ...current,
         state: 'finalized' as const,
@@ -150,7 +159,7 @@ describe('ReceiveOperationService', () => {
         next: finalized,
       });
       if (!transitioned) throw new Error('Receive result conflict');
-      return { operation: finalized, savedProofs: proofs, committed: true };
+      return { operation: finalized, savedProofs: missing, committed: true };
     },
     failExecution: async ({ operationId, expectedRevision, updatedAt, error }) => {
       const current = await receiveOpRepo.getById(operationId);
@@ -172,7 +181,26 @@ describe('ReceiveOperationService', () => {
       if (!transitioned) throw new Error('Receive failure conflict');
       return { operation: rolledBack, committed: true };
     },
-    updateLegacyOperation: (operation) => receiveOpRepo.update(operation),
+    cancelPrepared: async ({ operationId, expectedRevision, updatedAt, error }) => {
+      const current = await receiveOpRepo.getById(operationId);
+      if (!current || current.state !== 'prepared')
+        throw new Error('Receive operation not prepared');
+      const rolledBack = {
+        ...current,
+        state: 'rolled_back' as const,
+        revision: expectedRevision + 1,
+        updatedAt,
+        error,
+      };
+      const transitioned = await receiveOpRepo.transition({
+        operationId,
+        expectedState: 'prepared',
+        expectedRevision,
+        next: rolledBack,
+      });
+      if (!transitioned) throw new Error('Receive cancellation conflict');
+      return { operation: rolledBack, committed: true };
+    },
     deleteLegacyInit: (operationId) => receiveOpRepo.delete(operationId),
   });
 
@@ -476,7 +504,7 @@ describe('ReceiveOperationService', () => {
     await service.rollback(prepared.id);
 
     expect(persistedState).toBe('rolled_back');
-    expect(lockedDuringEvent).toBe(true);
+    expect(lockedDuringEvent).toBe(false);
     expect((await receiveOpRepo.getById(prepared.id))?.state).toBe('rolled_back');
   });
 
@@ -834,7 +862,7 @@ describe('ReceiveOperationService', () => {
 
     await service.finalize(executing.id);
 
-    expect(batchLookup).toHaveBeenCalledTimes(1);
+    expect(batchLookup).toHaveBeenCalledTimes(2);
     expect(batchLookup).toHaveBeenCalledWith(mintUrl, outputSecrets);
     expect((await receiveOpRepo.getById(executing.id))?.state).toBe('finalized');
   });

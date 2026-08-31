@@ -13,7 +13,6 @@ import { TokenService } from '../../services/TokenService';
 import type { ProofService } from '../../services/ProofService';
 import type { WalletService } from '../../services/WalletService';
 import type { ProofState as CashuProofState, Proof } from '@cashu/cashu-ts';
-import type { CoreProof } from '../../types';
 import { MintOperationError, ProofValidationError } from '../../models/Error';
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
 import { ReceiveOpsApi } from '../../api/ReceiveOpsApi.ts';
@@ -37,10 +36,10 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
   let eventBus: EventBus<CoreEvents>;
   let service: ReceiveOperationService;
   let api: ReceiveOpsApi;
+  let transactions: ReceiveTransactions;
 
   let mockCheckProofsStates: Mock<(mintUrl: string, ys: string[]) => Promise<CashuProofState[]>>;
   let mockWalletReceive: Mock<(...args: any[]) => Promise<Proof[]>>;
-  let mockSaveProofs: Mock<(...args: any[]) => Promise<void>>;
 
   const makeProof = (secret: string): Proof =>
     ({
@@ -109,7 +108,6 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
     );
     mintAdapter = { checkProofStates: mockCheckProofsStates } as unknown as MintAdapter;
     mockWalletReceive = mock(async () => [makeProof('r1')]);
-    mockSaveProofs = mock(async () => {});
 
     walletService = {
       getWalletWithActiveKeysetId: mock(async () => ({
@@ -121,28 +119,86 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
     } as unknown as WalletService;
 
     proofService = {
-      recoverProofsFromOutputData: mock(async () => []),
-      saveProofs: mockSaveProofs,
+      observeRestoreProofsFromOutputData: mock(async () => ({
+        status: 'none',
+        expectedOutputCount: 1,
+        restoredProofs: [],
+        unspentProofs: [],
+      })),
     } as unknown as ProofService;
 
     mintService = {} as MintService;
 
     tokenService = new TokenService(mintService);
 
-    const transactions: ReceiveTransactions = {
+    transactions = {
       prepare: async () => {
         throw new Error('Unexpected Receive preparation');
       },
       beginExecution: async () => {
         throw new Error('Unexpected normal Receive execution');
       },
-      applyResult: async () => {
-        throw new Error('Unexpected normal Receive result');
+      applyResult: async ({ operationId, expectedRevision, updatedAt, proofs }) => {
+        const current = await receiveOpRepo.getById(operationId);
+        if (!current) throw new Error('Receive operation not found');
+        if (current.state === 'finalized') {
+          return { operation: current, savedProofs: [], committed: false };
+        }
+        if (current.state !== 'executing') throw new Error('Receive operation not executing');
+        const existing = await proofRepo.getProofsBySecrets(
+          current.mintUrl,
+          proofs.map((proof) => proof.secret),
+        );
+        const existingSecrets = new Set(existing.map((proof) => proof.secret));
+        const missing = proofs.filter((proof) => !existingSecrets.has(proof.secret));
+        if (missing.length > 0) await proofRepo.saveProofs(current.mintUrl, missing);
+        const finalized = {
+          ...current,
+          state: 'finalized' as const,
+          revision: expectedRevision + 1,
+          updatedAt,
+        };
+        if (
+          !(await receiveOpRepo.transition({
+            operationId,
+            expectedState: 'executing',
+            expectedRevision,
+            next: finalized,
+          }))
+        ) {
+          throw new Error('Receive result conflict');
+        }
+        return { operation: finalized, savedProofs: missing, committed: true };
       },
-      failExecution: async () => {
-        throw new Error('Unexpected normal Receive failure');
+      failExecution: async ({ operationId, expectedRevision, updatedAt, error }) => {
+        const current = await receiveOpRepo.getById(operationId);
+        if (!current) throw new Error('Receive operation not found');
+        if (current.state === 'rolled_back') {
+          return { operation: current, committed: false };
+        }
+        if (current.state !== 'executing') throw new Error('Receive operation not executing');
+        const rolledBack = {
+          ...current,
+          state: 'rolled_back' as const,
+          revision: expectedRevision + 1,
+          updatedAt,
+          error,
+        };
+        if (
+          !(await receiveOpRepo.transition({
+            operationId,
+            expectedState: 'executing',
+            expectedRevision,
+            next: rolledBack,
+          }))
+        ) {
+          throw new Error('Receive failure conflict');
+        }
+        return { operation: rolledBack, committed: true };
       },
-      updateLegacyOperation: (operation) => receiveOpRepo.update(operation),
+      cancelPrepared: async () => {
+        throw new Error('Unexpected Receive cancellation');
+      },
       deleteLegacyInit: (operationId) => receiveOpRepo.delete(operationId),
     };
     service = new ReceiveOperationService({
@@ -192,8 +248,48 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
     const stored = await receiveOpRepo.getById(op.id);
     expect(stored?.state).toBe('finalized');
     expect(mockWalletReceive.mock.calls.length).toBe(1);
-    expect(mockSaveProofs.mock.calls.length).toBe(1);
-    expect((proofService.recoverProofsFromOutputData as Mock<any>).mock.calls.length).toBe(0);
+    expect(await proofRepo.getProofBySecret(mintUrl, 'r1')).not.toBeNull();
+    expect((proofService.observeRestoreProofsFromOutputData as Mock<any>).mock.calls.length).toBe(
+      0,
+    );
+    expect(mockWalletReceive.mock.calls[0]?.[0]?.proofs).toEqual(proofs);
+    expect(mockWalletReceive.mock.calls[0]?.[2]?.data).toHaveLength(1);
+  });
+
+  it('does not replay a finalized Receive during a repeated recovery sweep', async () => {
+    const op = makeExecutingOp('exec-op-repeat', [makeProof('p1')]);
+    await receiveOpRepo.create(op);
+
+    await service.recoverPendingOperations();
+    await service.recoverPendingOperations();
+
+    expect((await receiveOpRepo.getById(op.id))?.state).toBe('finalized');
+    expect(mockWalletReceive).toHaveBeenCalledTimes(1);
+  });
+
+  it('converges concurrent recovery from independent service instances', async () => {
+    const op = makeExecutingOp('exec-op-concurrent', [makeProof('p1')]);
+    await receiveOpRepo.create(op);
+    const otherService = new ReceiveOperationService({
+      operationQueries: receiveOpRepo,
+      proofQueries: proofRepo,
+      transactions,
+      proofService,
+      mintService,
+      walletService,
+      mintAdapter,
+      tokenService,
+      seedService: { getSeed: async () => new Uint8Array(64) } as SeedService,
+      eventBus,
+    });
+
+    await Promise.all([
+      service.recoverExecutingOperation(op),
+      otherService.recoverExecutingOperation(op),
+    ]);
+
+    expect((await receiveOpRepo.getById(op.id))?.state).toBe('finalized');
+    expect(await proofRepo.getProofsByOperationId(mintUrl, op.id)).toHaveLength(1);
   });
 
   it('finalizes executing operations when all inputs are spent and recovers proofs', async () => {
@@ -205,27 +301,32 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
       const count = Math.max(1, ys.length);
       return Array.from({ length: count }, () => ({ state: 'SPENT' }) as CashuProofState);
     });
-    (proofService.recoverProofsFromOutputData as Mock<any>).mockImplementation(async () => {
+    (proofService.observeRestoreProofsFromOutputData as Mock<any>).mockImplementation(async () => {
       const outputSecrets = getOutputProofSecrets(op);
-      const recovered: CoreProof[] = outputSecrets.map((secret) => ({
-        id: keysetId,
-        amount: Amount.from(10),
-        secret,
-        C: `C_${secret}`,
-        mintUrl,
-        unit: 'sat',
-        state: 'ready',
-        createdByOperationId: op.id,
-      }));
-      await proofRepo.saveProofs(mintUrl, recovered);
-      return recovered as unknown as Proof[];
+      const recovered: Proof[] = outputSecrets.map(
+        (secret) =>
+          ({
+            id: keysetId,
+            amount: Amount.from(10),
+            secret,
+            C: `C_${secret}`,
+          }) as Proof,
+      );
+      return {
+        status: 'complete-unspent',
+        expectedOutputCount: recovered.length,
+        restoredProofs: recovered,
+        unspentProofs: recovered,
+      };
     });
 
     await service.recoverPendingOperations();
 
     const stored = await receiveOpRepo.getById(op.id);
     expect(stored?.state).toBe('finalized');
-    expect((proofService.recoverProofsFromOutputData as Mock<any>).mock.calls.length).toBe(1);
+    expect((proofService.observeRestoreProofsFromOutputData as Mock<any>).mock.calls.length).toBe(
+      1,
+    );
     expect(mockCheckProofsStates.mock.calls.length).toBeGreaterThan(0);
     expect(mockWalletReceive.mock.calls.length).toBe(0);
   });
@@ -245,6 +346,28 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
     expect(stored?.state).toBe('rolled_back');
     expect(stored?.error).toBe('Recovered: input proofs spent without recoverable outputs');
     expect((await api.listInFlight()).map((operation) => operation.id)).not.toContain(op.id);
+  });
+
+  it('finalizes with spent proofs when exact Restore outputs exist but are already spent', async () => {
+    const op = makeExecutingOp('exec-op-restored-spent', [makeProof('p1')]);
+    await receiveOpRepo.create(op);
+    mockCheckProofsStates.mockImplementation(async (_mintUrl: string, ys: string[]) =>
+      ys.map(() => ({ state: 'SPENT' }) as CashuProofState),
+    );
+    const restored = getOutputProofSecrets(op).map(
+      (secret) => ({ id: keysetId, amount: Amount.from(10), secret, C: `C_${secret}` }) as Proof,
+    );
+    (proofService.observeRestoreProofsFromOutputData as Mock<any>).mockResolvedValue({
+      status: 'complete-spent',
+      expectedOutputCount: restored.length,
+      restoredProofs: restored,
+      unspentProofs: [],
+    });
+
+    await service.recoverPendingOperations();
+
+    expect((await receiveOpRepo.getById(op.id))?.state).toBe('finalized');
+    expect((await proofRepo.getProofsByOperationId(mintUrl, op.id))[0]?.state).toBe('spent');
   });
 
   it('properly propagates errors from checkProofsStates as executing', async () => {
@@ -278,7 +401,18 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
     expect(stored?.state).toBe('executing');
   });
 
-  it('keeps executing when recoverProofsFromOutputData fails for spent inputs', async () => {
+  it('keeps executing when the mint returns incomplete input-state evidence', async () => {
+    const op = makeExecutingOp('exec-op-incomplete-state', [makeProof('p1'), makeProof('p2')]);
+    await receiveOpRepo.create(op);
+    mockCheckProofsStates.mockResolvedValue([{ state: 'SPENT' } as CashuProofState]);
+
+    await service.recoverPendingOperations();
+
+    expect((await receiveOpRepo.getById(op.id))?.state).toBe('executing');
+    expect(proofService.observeRestoreProofsFromOutputData).not.toHaveBeenCalled();
+  });
+
+  it('keeps executing when Restore observation fails for spent inputs', async () => {
     const proofs = [makeProof('p1')];
     const op = makeExecutingOp('exec-op-error-proof', proofs);
     await receiveOpRepo.create(op);
@@ -286,7 +420,7 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
     mockCheckProofsStates.mockImplementation(async (_mintUrl: string, ys: string[]) =>
       ys.map(() => ({ state: 'SPENT' }) as CashuProofState),
     );
-    (proofService.recoverProofsFromOutputData as Mock<any>).mockImplementation(async () => {
+    (proofService.observeRestoreProofsFromOutputData as Mock<any>).mockImplementation(async () => {
       throw new Error('Mint restore failed');
     });
 
@@ -402,7 +536,7 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
     mockCheckProofsStates.mockImplementation(async (_mintUrl: string, ys: string[]) =>
       ys.map(() => ({ state: 'SPENT' }) as CashuProofState),
     );
-    (proofService.recoverProofsFromOutputData as Mock<any>).mockImplementation(async () => {
+    (proofService.observeRestoreProofsFromOutputData as Mock<any>).mockImplementation(async () => {
       throw new ProofValidationError('Invalid signature in recovered outputs');
     });
 

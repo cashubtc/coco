@@ -83,6 +83,13 @@ export interface FailReceiveExecutionCommand {
   error: string;
 }
 
+export interface CancelPreparedReceiveCommand {
+  operationId: string;
+  expectedRevision: number;
+  updatedAt: number;
+  error: string;
+}
+
 export interface FailedReceiveExecution {
   operation: RolledBackReceiveOperation;
   committed: boolean;
@@ -93,9 +100,7 @@ export interface TransactionalReceiveOperations {
   beginExecution(command: BeginReceiveExecutionCommand): Promise<BegunReceiveExecution>;
   applyResult(command: ApplyReceiveResultCommand): Promise<AppliedReceiveResult>;
   failExecution(command: FailReceiveExecutionCommand): Promise<FailedReceiveExecution>;
-
-  /** Compatibility seam retained only for Receive recovery until its dedicated migration. */
-  updateLegacyOperation(operation: ReceiveOperation): Promise<void>;
+  cancelPrepared(command: CancelPreparedReceiveCommand): Promise<FailedReceiveExecution>;
   /** Compatibility seam for cleanup of Receive init rows persisted by older Coco versions. */
   deleteLegacyInit(operationId: string): Promise<void>;
 }
@@ -274,6 +279,14 @@ export class RepositoryTransactionalReceiveOperations implements TransactionalRe
     if (missing.length > 0) {
       await this.proofs.saveProofs(current.mintUrl, missing);
     }
+    const restoredSpentSecrets = existing
+      .filter((proof) => commandBySecret.get(proof.secret)?.state === 'spent')
+      .map((proof) => proof.secret);
+    if (restoredSpentSecrets.length > 0) {
+      // A complete Restore response proves these exact outputs were issued. Preserve that
+      // authoritative spent observation when recovering a legacy partially-applied result.
+      await this.proofs.setProofState(current.mintUrl, restoredSpentSecrets, 'spent');
+    }
 
     const finalized: FinalizedReceiveOperation = {
       ...current,
@@ -338,8 +351,45 @@ export class RepositoryTransactionalReceiveOperations implements TransactionalRe
     return { operation: rolledBack, committed: true };
   }
 
-  async updateLegacyOperation(operation: ReceiveOperation): Promise<void> {
-    await this.receives.update(operation);
+  async cancelPrepared(command: CancelPreparedReceiveCommand): Promise<FailedReceiveExecution> {
+    const current = await this.receives.getById(command.operationId);
+    if (!current) {
+      throw new ReceiveOperationConflictError(command.operationId, 'Receive operation not found');
+    }
+    if (
+      current.state === 'rolled_back' &&
+      (current.revision ?? 0) === command.expectedRevision + 1 &&
+      current.error === command.error
+    ) {
+      return { operation: current, committed: false };
+    }
+    if (current.state !== 'prepared' || (current.revision ?? 0) !== command.expectedRevision) {
+      throw new ReceiveOperationConflictError(
+        command.operationId,
+        'Receive cancellation lost a prepared-state or revision conflict',
+      );
+    }
+
+    const rolledBack: RolledBackReceiveOperation = {
+      ...current,
+      state: 'rolled_back',
+      revision: command.expectedRevision + 1,
+      updatedAt: command.updatedAt,
+      error: command.error,
+    };
+    const transitioned = await this.receives.transition({
+      operationId: current.id,
+      expectedState: 'prepared',
+      expectedRevision: command.expectedRevision,
+      next: rolledBack,
+    });
+    if (!transitioned) {
+      throw new ReceiveOperationConflictError(
+        current.id,
+        'Receive cancellation lost a prepared-state or revision conflict',
+      );
+    }
+    return { operation: rolledBack, committed: true };
   }
 
   async deleteLegacyInit(operationId: string): Promise<void> {
@@ -400,7 +450,7 @@ function assertReceiveResult(
       !Amount.from(proof.amount).equals(output.amount) ||
       proof.mintUrl !== operation.mintUrl ||
       normalizeUnit(proof.unit) !== normalizeUnit(operation.unit) ||
-      proof.state !== 'ready' ||
+      (proof.state !== 'ready' && proof.state !== 'spent') ||
       proof.createdByOperationId !== operation.id
     ) {
       throw new ProofValidationError('Receive proofs do not match the allocated outputs');
