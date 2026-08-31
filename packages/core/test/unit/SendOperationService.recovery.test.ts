@@ -22,6 +22,7 @@ import type { SeedService } from '../../services/SeedService.ts';
 import type { WalletService } from '../../services/WalletService.ts';
 import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
 import { CoreSendTransactions } from '../../transactions/send/SendTransactions.ts';
+import type { SendTransactions } from '../../transactions/send/SendTransactions.ts';
 import type { CoreProof } from '../../types.ts';
 
 const mintUrl = 'https://mint.test';
@@ -100,6 +101,28 @@ describe('SendOperationService executing recovery', () => {
   let proofService: ProofService;
   let logger: Logger;
   let eventBus: EventBus<CoreEvents>;
+  let transactions: SendTransactions;
+  let mintService: MintService;
+  let walletService: WalletService;
+  let seedService: SeedService;
+
+  function buildService(serviceEvents = eventBus): SendOperationService {
+    return new SendOperationService({
+      operationQueries: repositories.sendOperationRepository,
+      proofQueries: repositories.proofRepository,
+      transactions,
+      proofService,
+      mintService,
+      walletService,
+      seedService,
+      eventBus: serviceEvents,
+      handlerProvider: new SendHandlerProvider({
+        default: new DefaultSendHandler(),
+        p2pk: new P2pkSendHandler(),
+      }),
+      logger,
+    });
+  }
 
   beforeEach(() => {
     repositories = new MemoryRepositories();
@@ -113,11 +136,11 @@ describe('SendOperationService executing recovery', () => {
       ),
       recoverProofsFromOutputData: mock(async () => []),
     } as unknown as ProofService;
-    const mintService = {
+    mintService = {
       isTrustedMint: mock(async () => true),
       assertNutSupported: mock(async () => {}),
     } as unknown as MintService;
-    const walletService = {
+    walletService = {
       getWalletWithActiveKeysetId: mock(async () => ({
         wallet,
         keysetId,
@@ -126,7 +149,7 @@ describe('SendOperationService executing recovery', () => {
       })),
       getWallet: mock(async () => wallet),
     } as unknown as WalletService;
-    const seedService = {
+    seedService = {
       getSeed: mock(async () => new Uint8Array(32)),
     } as unknown as SeedService;
     logger = {
@@ -136,24 +159,8 @@ describe('SendOperationService executing recovery', () => {
       error: mock(() => {}),
     };
     eventBus = new EventBus<CoreEvents>();
-    const transactions = new CoreSendTransactions(
-      new RepositoryCoreTransactionRunner(repositories),
-    );
-    service = new SendOperationService({
-      operationQueries: repositories.sendOperationRepository,
-      proofQueries: repositories.proofRepository,
-      transactions,
-      proofService,
-      mintService,
-      walletService,
-      seedService,
-      eventBus,
-      handlerProvider: new SendHandlerProvider({
-        default: new DefaultSendHandler(),
-        p2pk: new P2pkSendHandler(),
-      }),
-      logger,
-    });
+    transactions = new CoreSendTransactions(new RepositoryCoreTransactionRunner(repositories));
+    service = buildService();
   });
 
   async function persistExecuting(operation: ExecutingSendOperation): Promise<void> {
@@ -250,9 +257,39 @@ describe('SendOperationService executing recovery', () => {
     expect(wallet.send).toHaveBeenCalledTimes(1);
     const stored = await repositories.sendOperationRepository.getById(operation.id);
     expect(stored?.state).toBe('pending');
-    expect(stored?.revision).toBe(2);
+    expect(stored?.revision).toBe(3);
     expect(stored?.executionMemo).toBe('persisted memo');
     expect(stored && 'token' in stored ? stored.token?.memo : undefined).toBe('persisted memo');
+  });
+
+  it('allows only one Coco Session to claim and replay an executing revision', async () => {
+    const operation = executingOperation('concurrent-replay');
+    await persistExecuting(operation);
+    let releaseChecks!: () => void;
+    const bothChecked = new Promise<void>((resolve) => {
+      releaseChecks = resolve;
+    });
+    let checkCount = 0;
+    wallet.checkProofsStates.mockImplementation(async (proofs: CoreProof[]) => {
+      checkCount++;
+      if (checkCount === 2) releaseChecks();
+      await bothChecked;
+      return proofs.map(
+        (proof) => ({ state: 'UNSPENT', Y: `Y-${proof.secret}` }) as CashuProofState,
+      );
+    });
+    wallet.send.mockImplementation(replayResult);
+    const secondSession = buildService(new EventBus<CoreEvents>());
+
+    await Promise.all([
+      service.recoverPendingOperations(),
+      secondSession.recoverPendingOperations(),
+    ]);
+
+    expect(wallet.send).toHaveBeenCalledTimes(1);
+    const stored = await repositories.sendOperationRepository.getById(operation.id);
+    expect(stored?.state).toBe('pending');
+    expect(stored?.revision).toBe(3);
   });
 
   it('applies fully restored outputs through the normal result transaction', async () => {

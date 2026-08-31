@@ -6,6 +6,8 @@
 - [x] Make Receive preparation, result application, and restart recovery atomic.
 - [x] Persist exact signed requests before remote mint I/O and reuse them during recovery.
 - [x] Keep remote mint I/O outside repository transactions.
+- [x] Preserve Send method handlers as the lifecycle-policy seam without exposing writable repositories.
+- [x] Coordinate executing-send recovery with an authoritative revision claim before replaying mint I/O.
 - [x] Move revision authority and authoritative mutation reads inside domain gateways.
 - [x] Publish live events only after commit and log listener failures.
 - [x] Preserve legacy init cleanup and the existing pending default-token reclaim compatibility path.

@@ -43,8 +43,10 @@ export interface PrepareSendCommand {
   /** Active keys and seed loaded before entering the transaction. */
   activeKeys: MintKeys;
   seed: Uint8Array;
-  /** P2PK outputs are randomized once during preflight and fixed across transaction retries. */
-  p2pkSendOutputs?: readonly OutputDataLike[];
+  /** Method policy resolved before entering the transaction. */
+  forceSwap: boolean;
+  /** Randomized outputs fixed during preflight and reused across transaction retries. */
+  fixedSendOutputs?: readonly OutputDataLike[];
 }
 
 export interface PreparedSendResult {
@@ -77,6 +79,12 @@ export interface BeginSwapExecutionCommand {
   updatedAt: number;
   /** Normalized before entering the retried transaction. */
   memo?: string;
+}
+
+export interface ClaimSendRecoveryCommand {
+  operationId: string;
+  expectedRevision: number;
+  updatedAt: number;
 }
 
 export interface SwapTransportRequest {
@@ -176,6 +184,7 @@ export interface TransactionalSendOperations {
   prepare(command: PrepareSendCommand): Promise<PreparedSendResult>;
   executeExact(command: ExecuteExactSendCommand): Promise<ExecuteExactSendResult>;
   beginExecution(command: BeginSwapExecutionCommand): Promise<BegunSwapExecution>;
+  claimRecovery(command: ClaimSendRecoveryCommand): Promise<BegunSwapExecution>;
   applyResult(command: ApplySwapResultCommand): Promise<AppliedSwapResult>;
   failExecution(command: FailSwapExecutionCommand): Promise<FailedSwapExecution>;
   cancelPrepared(command: CancelPreparedSendCommand): Promise<CancelledPreparedSend>;
@@ -225,7 +234,13 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
         keys: keyset.keypairs,
       })),
     } satisfies KeyChainCache);
-    const selected = selectInputs(operation, available, keyChain, this.selectProofs);
+    const selected = selectInputs(
+      operation,
+      available,
+      keyChain,
+      this.selectProofs,
+      command.forceSwap,
+    );
     const inputAmount = sumProofs(selected.proofs);
     const inputProofSecrets = selected.proofs.map((proof) => proof.secret);
 
@@ -243,19 +258,18 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
             currentCounter,
             command.activeKeys,
           );
-      const send =
-        operation.method === 'p2pk'
-          ? [...(command.p2pkSendOutputs ?? [])]
-          : this.outputDataCreator.createDeterministicData(
-              operation.amount,
-              command.seed,
-              currentCounter + keep.length,
-              command.activeKeys,
-            );
-      if (operation.method === 'p2pk' && send.length === 0) {
-        throw new ProofValidationError('P2PK Send preflight did not produce output data');
+      const send = command.fixedSendOutputs
+        ? [...command.fixedSendOutputs]
+        : this.outputDataCreator.createDeterministicData(
+            operation.amount,
+            command.seed,
+            currentCounter + keep.length,
+            command.activeKeys,
+          );
+      if (command.fixedSendOutputs && send.length === 0) {
+        throw new ProofValidationError('Send method preflight did not produce output data');
       }
-      const allocatedPositions = keep.length + (operation.method === 'default' ? send.length : 0);
+      const allocatedPositions = keep.length + (command.fixedSendOutputs ? 0 : send.length);
       if (allocatedPositions > 0) {
         const counter = currentCounter + allocatedPositions;
         await this.counters.setCounter(operation.mintUrl, command.activeKeys.id, counter);
@@ -389,6 +403,50 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
         amount: executing.amount,
         inputProofs,
         outputData: current.outputData,
+      },
+    };
+  }
+
+  async claimRecovery(command: ClaimSendRecoveryCommand): Promise<BegunSwapExecution> {
+    const current = await this.sends.getById(command.operationId);
+    if (
+      !current ||
+      current.state !== 'executing' ||
+      !current.needsSwap ||
+      !current.outputData ||
+      (current.revision ?? 0) !== command.expectedRevision
+    ) {
+      throw new SendOperationConflictError(
+        command.operationId,
+        'Send recovery lost an executing-state or revision conflict',
+      );
+    }
+    const inputProofs = await this.getOwnedReadyInputs(current);
+    const claimed: ExecutingSendOperation = {
+      ...current,
+      revision: command.expectedRevision + 1,
+      updatedAt: command.updatedAt,
+    };
+    const transitioned = await this.sends.transition({
+      operationId: current.id,
+      expectedState: 'executing',
+      expectedRevision: command.expectedRevision,
+      next: claimed,
+    });
+    if (!transitioned) {
+      throw new SendOperationConflictError(
+        current.id,
+        'Send recovery lost an executing-state or revision conflict',
+      );
+    }
+    return {
+      operation: claimed,
+      request: {
+        mintUrl: claimed.mintUrl,
+        unit: claimed.unit,
+        amount: claimed.amount,
+        inputProofs,
+        outputData: claimed.outputData!,
       },
     };
   }
@@ -1039,6 +1097,7 @@ function selectInputs(
   available: Proof[],
   keyChain: KeyChain,
   selectProofs: SelectProofs,
+  forceSwap: boolean,
 ): { proofs: Proof[]; fee: Amount; needsSwap: boolean } {
   const unit = normalizeUnit(operation.unit);
   for (const proof of available) {
@@ -1048,10 +1107,6 @@ function selectInputs(
     throw new ProofValidationError('Not enough proofs to send');
   }
 
-  const forceSwap =
-    operation.method === 'p2pk' ||
-    (operation.method === 'default' &&
-      Boolean((operation.methodData as { forceSwap?: boolean }).forceSwap));
   if (!forceSwap) {
     const exact = selectProofs(available, operation.amount, keyChain, false).send;
     if (sumProofs(exact).equals(operation.amount)) {

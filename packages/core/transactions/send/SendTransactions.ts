@@ -8,6 +8,7 @@ import type {
   ApplySwapResultCommand,
   BegunSwapExecution,
   BeginSwapExecutionCommand,
+  ClaimSendRecoveryCommand,
   BeginLegacyPendingRollbackCommand,
   CancelledPreparedSend,
   CancelPreparedSendCommand,
@@ -28,6 +29,7 @@ export interface SendTransactions {
   prepare(command: PrepareSendCommand): Promise<PreparedSendResult>;
   executeExact(command: ExecuteExactSendCommand): Promise<ExecuteExactSendResult>;
   beginExecution(command: BeginSwapExecutionCommand): Promise<BegunSwapExecution>;
+  claimRecovery(command: ClaimSendRecoveryCommand): Promise<BegunSwapExecution>;
   applyResult(command: ApplySwapResultCommand): Promise<AppliedSwapResult>;
   failExecution(command: FailSwapExecutionCommand): Promise<FailedSwapExecution>;
   cancelPrepared(command: CancelPreparedSendCommand): Promise<CancelledPreparedSend>;
@@ -55,6 +57,10 @@ export class CoreSendTransactions implements SendTransactions {
 
   beginExecution(command: BeginSwapExecutionCommand): Promise<BegunSwapExecution> {
     return this.runner.run((transaction) => transaction.sends.beginExecution(command));
+  }
+
+  claimRecovery(command: ClaimSendRecoveryCommand): Promise<BegunSwapExecution> {
+    return this.runner.run((transaction) => transaction.sends.claimRecovery(command));
   }
 
   applyResult(command: ApplySwapResultCommand): Promise<AppliedSwapResult> {

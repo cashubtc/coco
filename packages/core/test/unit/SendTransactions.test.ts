@@ -111,6 +111,7 @@ function command(id: string, forceSwap = true): PrepareSendCommand {
     operation: operation(id, forceSwap),
     activeKeys: keys,
     seed: new Uint8Array(32).fill(1),
+    forceSwap,
   };
 }
 
@@ -472,6 +473,28 @@ describe('SendTransactions swap execution', () => {
     expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
     expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
     expect((await repositories.sendOperationRepository.getById(prepared.id))?.revision).toBe(1);
+  });
+
+  it('gives only one recovery caller authority to replay an executing revision', async () => {
+    const { repositories, transactions } = await setup();
+    await repositories.proofRepository.saveProofs(mintUrl, [proof('proof-1')]);
+    const prepared = (await transactions.prepare(command('send-recovery-claim'))).operation;
+    const begun = await transactions.beginExecution({
+      operationId: prepared.id,
+      updatedAt: 300,
+    });
+    const claim = () =>
+      transactions.claimRecovery({
+        operationId: begun.operation.id,
+        expectedRevision: begun.operation.revision ?? 0,
+        updatedAt: 400,
+      });
+
+    const results = await Promise.allSettled([claim(), claim()]);
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    expect((await repositories.sendOperationRepository.getById(prepared.id))?.revision).toBe(2);
   });
 
   it('atomically saves swap proofs, spends inputs, persists the token, and becomes pending', async () => {
