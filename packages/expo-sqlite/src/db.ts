@@ -222,20 +222,30 @@ export class ExpoSqliteDb implements SqlDatabase {
         }
       };
 
-      // Expo's transaction helpers always issue deferred BEGIN statements. Use the underlying
-      // connection directly when the caller needs the writer lock before its first read.
-      if (options?.mode === 'immediate') {
-        return await runManualTransaction('BEGIN IMMEDIATE');
-      }
-
-      // Prefer exclusive transactions when available. Expo documents withTransactionAsync as
-      // interruptible by other async queries, so transaction-scoped operations must use txn.
-      if (typeof dbAny.withExclusiveTransactionAsync === 'function' && !isWebRuntime()) {
+      const runExclusiveTransaction = async (): Promise<T> => {
         let result!: T;
         await dbAny.withExclusiveTransactionAsync(async (txn: ExpoSqliteDatabaseLike) => {
           result = await fn(new ExpoSqliteDb(root, scopeToken, txn));
         });
         return result;
+      };
+
+      // Outbox transactions require isolation from queries issued directly through the
+      // application-owned database. Expo's exclusive helper supplies a separate connection;
+      // issuing BEGIN IMMEDIATE on the shared root connection would let unrelated queries join.
+      if (options?.mode === 'immediate') {
+        if (typeof dbAny.withExclusiveTransactionAsync === 'function' && !isWebRuntime()) {
+          return await runExclusiveTransaction();
+        }
+        throw new Error(
+          'Immediate Expo SQLite transactions require native withExclusiveTransactionAsync support',
+        );
+      }
+
+      // Prefer exclusive transactions when available. Expo documents withTransactionAsync as
+      // interruptible by other async queries, so transaction-scoped operations must use txn.
+      if (typeof dbAny.withExclusiveTransactionAsync === 'function' && !isWebRuntime()) {
+        return await runExclusiveTransaction();
       }
 
       if (typeof dbAny.withTransactionAsync === 'function') {

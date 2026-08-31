@@ -58,6 +58,17 @@ class BunExpoSqliteDatabaseShim {
     return rows ?? [];
   }
 
+  async withExclusiveTransactionAsync(fn: (txn: BunExpoSqliteDatabaseShim) => Promise<void>) {
+    await this.execAsync('BEGIN');
+    try {
+      await fn(this);
+      await this.execAsync('COMMIT');
+    } catch (error) {
+      await this.execAsync('ROLLBACK');
+      throw error;
+    }
+  }
+
   async closeAsync(): Promise<void> {
     this.db.close();
   }

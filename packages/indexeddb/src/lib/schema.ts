@@ -1238,7 +1238,7 @@ export async function ensureSchema(db: IdbDb): Promise<void> {
       coco_cashu_payment_request_receive_attempts:
         '&id, requestOperationId, requestId, state, &[requestOperationId+payloadHash], [requestId+payloadHash], &transportMessageId, &receiveOperationId',
       coco_cashu_event_outbox:
-        '&id, &[streamId+streamRevision+consumerId+eventKey], [status+availableAt], status, [streamId+streamRevision], [status+publishedAt], [consumerId+eventType+envelopeVersion+payloadVersion]',
+        '&id, &[streamId+streamRevision+consumerId+eventKey], [status+availableAt], [status+availableAt+occurredAt+createdAt+id], status, [streamId+streamRevision], [status+publishedAt], [consumerId+eventType+envelopeVersion+payloadVersion]',
       coco_cashu_event_outbox_revisions: '&[streamId+streamRevision], streamId',
       coco_cashu_event_outbox_stream_checkpoints: '&streamId',
       coco_cashu_event_outbox_storage_stats: '&id',

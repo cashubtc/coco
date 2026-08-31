@@ -7,14 +7,15 @@ import {
   DurableEventValidationError,
 } from '../errors.ts';
 import { DEFAULT_DURABLE_EVENT_STORAGE_LIMITS } from '../types.ts';
-import type {
-  CompactDurableEventResult,
-  CompactDurableEventStreamOptions,
-  DurableEventClaimMutationResult,
-  DurableEventClaimOptions,
-  DurableEventOutboxRepository,
-  EnqueueDurableEventResult,
-  RequeueBlockedDurableEventOptions,
+import {
+  MAX_DURABLE_EVENT_CLAIM_CONTRACTS,
+  type CompactDurableEventResult,
+  type CompactDurableEventStreamOptions,
+  type DurableEventClaimMutationResult,
+  type DurableEventClaimOptions,
+  type DurableEventOutboxRepository,
+  type EnqueueDurableEventResult,
+  type RequeueBlockedDurableEventOptions,
 } from '../repository.ts';
 import type {
   ClaimIdentity,
@@ -247,6 +248,11 @@ export class MemoryDurableEventOutboxRepository implements DurableEventOutboxRep
     assertDurableEventTimestamp(options.now, 'claim time');
     assertPositiveLimit(options.leaseDurationMs, 'leaseDurationMs');
     if (options.contracts.length === 0) return null;
+    if (options.contracts.length > MAX_DURABLE_EVENT_CLAIM_CONTRACTS) {
+      throw new DurableEventValidationError(
+        `claim contracts must not contain more than ${MAX_DURABLE_EVENT_CLAIM_CONTRACTS} items`,
+      );
+    }
     const contractKeys = new Set(
       options.contracts.map((contract) => {
         assertDurableEventContract(contract);

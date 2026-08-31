@@ -394,6 +394,63 @@ describe('indexeddb durable event outbox transaction boundaries', () => {
     }
   });
 
+  it('blocks a corrupt payload during claim so later work can continue', async () => {
+    const dbName = `coco_cashu_outbox_corrupt_claim_${Date.now()}_${dbCounter++}`;
+    const repositories = new IndexedDbRepositories({ name: dbName });
+    await repositories.init();
+    try {
+      await repositories.durableEventOutbox.run((outbox) =>
+        outbox.enqueueRevision(outboxBatch(), 100),
+      );
+      await repositories.durableEventOutbox.run((outbox) =>
+        outbox.enqueueRevision(
+          {
+            streamId: 'operation-2',
+            expectedPreviousRevision: 0,
+            streamRevision: 1,
+            events: [
+              {
+                ...outboxBatch().events[0]!,
+                id: 'operation-2-event-1',
+                streamId: 'operation-2',
+                payload: { operationId: 'operation-2' },
+                occurredAt: 101,
+              },
+            ],
+          },
+          100,
+        ),
+      );
+      await repositories.db
+        .table(IDB_DURABLE_EVENT_OUTBOX_STORES[0])
+        .update('operation-1-event-1', { payloadJson: '{not-json' });
+
+      await expect(
+        repositories.durableEventOutbox.run((outbox) =>
+          outbox.claimNext({
+            workerId: 'worker-1',
+            leaseToken: 'corrupt-token',
+            leaseDurationMs: 1_000,
+            now: 100,
+            contracts: [outboxBatch().events[0]!],
+          }),
+        ),
+      ).resolves.toMatchObject({ id: 'operation-2-event-1' });
+
+      expect(
+        await repositories.db.table(IDB_DURABLE_EVENT_OUTBOX_STORES[0]).get('operation-1-event-1'),
+      ).toMatchObject({
+        status: 'blocked',
+        lastErrorCode: 'outbox.corrupt_record',
+        failureCount: 1,
+        totalFailureCount: 1,
+      });
+    } finally {
+      repositories.db.close();
+      await Dexie.delete(dbName);
+    }
+  });
+
   it('allows only one browser Worker to claim one stored event', async () => {
     const dbName = `coco_cashu_outbox_worker_${Date.now()}_${dbCounter++}`;
     const database = new IdbDb({ name: dbName });

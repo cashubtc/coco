@@ -1,4 +1,4 @@
-import type { Transaction } from 'dexie';
+import Dexie, { type Transaction } from 'dexie';
 import {
   DEFAULT_DURABLE_EVENT_STORAGE_LIMITS,
   DurableEventBatchConflictError,
@@ -7,6 +7,7 @@ import {
   DurableEventInvariantError,
   DurableEventRevisionAlreadyCompactedError,
   DurableEventValidationError,
+  MAX_DURABLE_EVENT_CLAIM_CONTRACTS,
   addDurableEventDelay,
   assertClaimedDurableEventIntegrity,
   assertDurableEventContract,
@@ -131,17 +132,12 @@ function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function compareClaimOrder(left: EventRow, right: EventRow): number {
-  return (
-    left.availableAt - right.availableAt ||
-    left.occurredAt - right.occurredAt ||
-    left.createdAt - right.createdAt ||
-    compareText(left.id, right.id)
-  );
-}
-
 function isConstraintError(error: unknown): boolean {
-  return error instanceof Error && error.name === 'ConstraintError';
+  if (!(error instanceof Error)) return false;
+  if (error.name === 'ConstraintError') return true;
+  if (error.name !== 'BulkError' || !('failures' in error)) return false;
+  const failures = error.failures;
+  return Array.isArray(failures) && failures.length > 0 && failures.every(isConstraintError);
 }
 
 function assertCapacity(
@@ -320,48 +316,67 @@ export class IdbDurableEventOutboxRepository implements DurableEventOutboxReposi
     assertDurableEventTimestamp(options.now, 'claim time');
     assertPositiveSafeInteger(options.leaseDurationMs, 'leaseDurationMs');
     if (options.contracts.length === 0) return null;
-    if (options.contracts.length > 128) {
-      throw new DurableEventValidationError('claim contracts must not contain more than 128 items');
+    if (options.contracts.length > MAX_DURABLE_EVENT_CLAIM_CONTRACTS) {
+      throw new DurableEventValidationError(
+        `claim contracts must not contain more than ${MAX_DURABLE_EVENT_CLAIM_CONTRACTS} items`,
+      );
     }
     const contracts = new Set<string>();
     for (const contract of options.contracts) {
       assertDurableEventContract(contract);
       contracts.add(durableEventContractKey(contract));
     }
-    const candidates = (
-      (await this.transaction
-        .table(EVENT_STORE)
-        .where('[status+availableAt]')
-        .between(['pending', 0], ['pending', options.now], true, true)
-        .toArray()) as EventRow[]
-    )
-      .filter(
-        (event) =>
-          contracts.has(durableEventContractKey(event)) &&
-          (event.leaseToken === undefined || (event.leaseExpiresAt ?? 0) <= options.now),
-      )
-      .sort(compareClaimOrder);
-    const candidate = candidates[0];
-    if (!candidate) return null;
+    const eventTable = this.transaction.table(EVENT_STORE);
+    while (true) {
+      const candidate = (await eventTable
+        .where('[status+availableAt+occurredAt+createdAt+id]')
+        .between(
+          ['pending', Dexie.minKey, Dexie.minKey, Dexie.minKey, Dexie.minKey],
+          ['pending', options.now, Dexie.maxKey, Dexie.maxKey, Dexie.maxKey],
+          true,
+          true,
+        )
+        .filter(
+          (event: EventRow) =>
+            contracts.has(durableEventContractKey(event)) &&
+            (event.leaseToken === undefined || (event.leaseExpiresAt ?? 0) <= options.now),
+        )
+        .first()) as EventRow | undefined;
+      if (!candidate) return null;
 
-    const current = (await this.transaction.table(EVENT_STORE).get(candidate.id)) as
-      | EventRow
-      | undefined;
-    if (
-      !current ||
-      current.status !== 'pending' ||
-      current.availableAt > options.now ||
-      (current.leaseToken !== undefined && (current.leaseExpiresAt ?? 0) > options.now)
-    ) {
-      return null;
+      const current = (await eventTable.get(candidate.id)) as EventRow | undefined;
+      if (
+        !current ||
+        current.status !== 'pending' ||
+        current.availableAt > options.now ||
+        (current.leaseToken !== undefined && (current.leaseExpiresAt ?? 0) > options.now)
+      ) {
+        continue;
+      }
+      current.leaseOwner = options.workerId;
+      current.leaseToken = options.leaseToken;
+      current.leaseExpiresAt = addDurableEventDelay(options.now, options.leaseDurationMs);
+      current.claimCount += 1;
+      current.lastAttemptAt = options.now;
+      let claim: ClaimedDurableEvent;
+      try {
+        claim = hydrateClaim(current);
+        assertClaimedDurableEventIntegrity(claim);
+      } catch (error) {
+        if (!(error instanceof DurableEventCorruptRecordError)) throw error;
+        current.status = 'blocked';
+        current.blockedAt = options.now;
+        current.failureCount += 1;
+        current.totalFailureCount += 1;
+        current.lastErrorCode = 'outbox.corrupt_record';
+        delete current.safeErrorMessage;
+        clearLease(current);
+        await eventTable.put(current);
+        continue;
+      }
+      await eventTable.put(current);
+      return claim;
     }
-    current.leaseOwner = options.workerId;
-    current.leaseToken = options.leaseToken;
-    current.leaseExpiresAt = addDurableEventDelay(options.now, options.leaseDurationMs);
-    current.claimCount += 1;
-    current.lastAttemptAt = options.now;
-    await this.transaction.table(EVENT_STORE).put(current);
-    return hydrateClaim(current);
   }
 
   async readAndValidateCurrentClaim(claim: ClaimIdentity): Promise<ClaimedDurableEvent | null> {

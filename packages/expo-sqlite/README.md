@@ -56,10 +56,13 @@ The generic outbox repository is enabled and opt-in. `SqliteRepositories` expose
   batch together; and
 - `configureDurableEventOutboxStorageLimits()` for persisted finite capacity limits.
 
-Outbox transactions acquire the SQLite writer lock before their first read. SQLite busy/locked
-conflicts can repeat the combined transaction callback, so create stable inputs beforehand and do
-not perform external effects inside it. A concrete Expo feature rollout should still run its
-producer/consumer transaction and competing-claim tests on the supported native devices.
+On native platforms, outbox transactions use Expo's isolated transaction connection so unrelated
+queries issued through the application-owned database cannot join the outbox commit. Expo web and
+older runtimes without `withExclusiveTransactionAsync` cannot provide that boundary, so the outbox
+transaction capability rejects there. SQLite busy/locked conflicts can repeat the combined
+transaction callback, so create stable inputs beforehand and do not perform external effects inside
+it. A concrete Expo feature rollout should still run its producer/consumer transaction and
+competing-claim tests on the supported native devices.
 
 ## Notes
 

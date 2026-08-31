@@ -1,17 +1,19 @@
-import type {
-  ClaimedDurableEvent,
-  DurableEventContract,
-  DurableEventIntent,
-  DurableEventOutboxHostTransactionScope,
-  DurableEventOutboxRepository,
-  DurableEventOutboxTransactionPort,
-  DurableEventRevisionBatch,
-  DurableEventStorageLimits,
-  Mint,
-  Repositories,
-  RepositoryTransactionScope,
+import {
+  type ClaimedDurableEvent,
+  type DurableEventContract,
+  type DurableEventIntent,
+  type DurableEventOutboxHostTransactionScope,
+  type DurableEventOutboxRepository,
+  type DurableEventOutboxTransactionPort,
+  type DurableEventRevisionBatch,
+  type DurableEventStorageLimits,
+  type Mint,
+  type Repositories,
+  type RepositoryTransactionScope,
 } from '@cashu/coco-core/adapter';
 import type { ContractRunner } from './index.ts';
+
+const MAX_DURABLE_EVENT_CLAIM_CONTRACTS = 128;
 
 export interface DurableEventOutboxRepositoryHandle {
   readonly repository: DurableEventOutboxRepository;
@@ -219,6 +221,25 @@ export function runDurableEventOutboxRepositoryContract(
       }
     });
 
+    it('normalizes an event id collision across streams as a batch conflict', async () => {
+      const { repository, dispose } = await options.createRepository();
+      try {
+        await repository.enqueueRevision(eventBatch({ id: 'shared-event-id' }), 100);
+        await expectErrorName(
+          () =>
+            repository.enqueueRevision(
+              eventBatch({ streamId: 'operation-2', id: 'shared-event-id' }),
+              101,
+            ),
+          'DurableEventBatchConflictError',
+          expect,
+        );
+        expect((await repository.getStorageStats()).eventRows).toBe(1);
+      } finally {
+        await dispose();
+      }
+    });
+
     it('claims only supported contracts in deterministic preference order', async () => {
       const { repository, dispose } = await options.createRepository();
       try {
@@ -243,6 +264,29 @@ export function runDurableEventOutboxRepositoryContract(
         expect(claimed.id).toBe('earlier-event');
         expect(claimed.claimCount).toBe(1);
         expect(claimed.leaseToken).toBe('supported-token');
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('rejects claim contract lists above the shared adapter limit', async () => {
+      const { repository, dispose } = await options.createRepository();
+      try {
+        const contracts = Array.from(
+          { length: MAX_DURABLE_EVENT_CLAIM_CONTRACTS + 1 },
+          (_, index): DurableEventContract => ({
+            ...contract,
+            consumerId: `wallet.projector.${index}`,
+          }),
+        );
+        await expectErrorName(
+          () =>
+            repository.claimNext(
+              claimOptions({ token: 'too-many-contracts', now: 100, contracts }),
+            ),
+          'DurableEventValidationError',
+          expect,
+        );
       } finally {
         await dispose();
       }

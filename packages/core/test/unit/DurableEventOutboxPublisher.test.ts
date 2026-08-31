@@ -3,6 +3,7 @@ import {
   DurableEventConsumerError,
   DurableEventOutboxPublisher,
   DurableEventTransactionConflictError,
+  MAX_DURABLE_EVENT_CLAIM_CONTRACTS,
   prepareDurableEventRevisionBatch,
 } from '../../outbox/index.ts';
 import type {
@@ -159,6 +160,32 @@ function consumer(
 }
 
 describe('DurableEventOutboxPublisher', () => {
+  it('rejects consumer configurations above the adapter claim limit', () => {
+    const event = claimedEvent();
+    const repository = new PublisherRepository(event);
+    const consumers = Array.from(
+      { length: MAX_DURABLE_EVENT_CLAIM_CONTRACTS + 1 },
+      (_, index): DurableEventConsumerExecutor => ({
+        contract: { ...event, consumerId: `wallet.projector.${index}` },
+        execute: async () => 'applied',
+      }),
+    );
+
+    expect(
+      () =>
+        new DurableEventOutboxPublisher({
+          transactionPort: { run: (work) => work(repository) },
+          consumers,
+          workerId: 'worker-1',
+          leaseDurationMs: 1_000,
+          retryPolicy: { maxFailures: 3, baseDelayMs: 100, maxDelayMs: 1_000, jitterRatio: 0 },
+          createLeaseToken: () => 'new-token',
+          now: () => 200,
+          jitter: () => 0.5,
+        }),
+    ).toThrow('durable event consumers must not contain more than 128 items');
+  });
+
   it('reuses stable claim inputs when the transaction port repeats an uncommitted callback', async () => {
     const event = claimedEvent();
     const firstAttempt = new PublisherRepository(event);
@@ -273,6 +300,26 @@ describe('DurableEventOutboxPublisher', () => {
     expect(repository.blocked).toEqual([
       { code: 'history.invalid_operation', message: 'Operation data is invalid' },
     ]);
+  });
+
+  it('sanitizes invalid deterministic consumer failure metadata before blocking', async () => {
+    const event = claimedEvent();
+    const repository = new PublisherRepository(event);
+    const worker = publisher(
+      repository,
+      consumer(event, async () => {
+        throw new DurableEventConsumerError({
+          code: 'INVALID CODE',
+          retryable: false,
+          safeMessage: 'Invalid operation\nwith a control character',
+        });
+      }),
+    );
+
+    const result = await worker.runOnce(1);
+
+    expect(result.blocked).toBe(1);
+    expect(repository.blocked).toEqual([{ code: 'outbox.consumer_failed' }]);
   });
 
   it('blocks a retryable failure at the failure limit', async () => {

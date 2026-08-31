@@ -87,6 +87,17 @@ class BunExpoSqliteDatabaseShim {
     return rows ?? [];
   }
 
+  async withExclusiveTransactionAsync(fn: (txn: BunExpoSqliteDatabaseShim) => Promise<void>) {
+    await this.execAsync('BEGIN');
+    try {
+      await fn(this);
+      await this.execAsync('COMMIT');
+    } catch (error) {
+      await this.execAsync('ROLLBACK');
+      throw error;
+    }
+  }
+
   async closeAsync(): Promise<void> {
     this.db.close();
   }
@@ -96,7 +107,7 @@ class WebExpoSqliteDatabaseShim extends BunExpoSqliteDatabaseShim {
   exclusiveTransactionCalls = 0;
   transactionCalls = 0;
 
-  async withExclusiveTransactionAsync(): Promise<void> {
+  override async withExclusiveTransactionAsync(): Promise<void> {
     this.exclusiveTransactionCalls++;
     throw new Error('withExclusiveTransactionAsync is not supported on web');
   }
@@ -124,7 +135,9 @@ class NativeExpoSqliteDatabaseShim extends BunExpoSqliteDatabaseShim {
     await super.execAsync(sql);
   }
 
-  async withExclusiveTransactionAsync(fn: (txn: BunExpoSqliteDatabaseShim) => Promise<void>) {
+  override async withExclusiveTransactionAsync(
+    fn: (txn: BunExpoSqliteDatabaseShim) => Promise<void>,
+  ) {
     this.exclusiveTransactionCalls++;
     await this.execAsync('BEGIN');
     try {
@@ -353,10 +366,39 @@ describe('expo-sqlite web transaction compatibility', () => {
       restoreGlobalProperty('document', documentDescriptor);
     }
   });
+
+  it('rejects outbox transactions when an isolated connection is unavailable on web', async () => {
+    const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'window');
+    const documentDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'document');
+    Object.defineProperty(globalThis, 'window', { value: {}, configurable: true });
+    Object.defineProperty(globalThis, 'document', { value: {}, configurable: true });
+
+    const database = new WebExpoSqliteDatabaseShim();
+    const repositories = new Repositories({
+      database: database as unknown as SqliteRepositoriesOptions['database'],
+    });
+
+    try {
+      await repositories.init();
+      database.exclusiveTransactionCalls = 0;
+      database.transactionCalls = 0;
+      await expect(
+        repositories.withDurableEventOutboxTransaction((scope) =>
+          scope.durableEventOutbox.enqueueRevision(expoOutboxBatch(), 100),
+        ),
+      ).rejects.toThrow('require native withExclusiveTransactionAsync support');
+      expect(database.exclusiveTransactionCalls).toBe(0);
+      expect(database.transactionCalls).toBe(0);
+    } finally {
+      await database.closeAsync();
+      restoreGlobalProperty('window', windowDescriptor);
+      restoreGlobalProperty('document', documentDescriptor);
+    }
+  });
 });
 
 describe('expo-sqlite native transaction compatibility', () => {
-  it('uses a writer-serialized native transaction for the public outbox capability', async () => {
+  it('uses an isolated native transaction for the public outbox capability', async () => {
     const database = new NativeExpoSqliteDatabaseShim();
     const repositories = new Repositories({
       database: database as unknown as SqliteRepositoriesOptions['database'],
@@ -365,12 +407,14 @@ describe('expo-sqlite native transaction compatibility', () => {
     try {
       await repositories.init();
       database.executedSql.length = 0;
+      database.exclusiveTransactionCalls = 0;
 
       await repositories.withDurableEventOutboxTransaction((scope) =>
         scope.durableEventOutbox.enqueueRevision(expoOutboxBatch(), 100),
       );
 
-      expect(database.executedSql).toEqual(['BEGIN IMMEDIATE', 'COMMIT']);
+      expect(database.exclusiveTransactionCalls).toBe(1);
+      expect(database.executedSql).toEqual(['BEGIN', 'COMMIT']);
       await expect(
         repositories.durableEventOutbox.run((outbox) => outbox.getStorageStats()),
       ).resolves.toMatchObject({ eventRows: 1, revisionSeals: 1 });
@@ -402,7 +446,7 @@ describe('expo-sqlite native transaction compatibility', () => {
     }
   });
 
-  it('uses BEGIN IMMEDIATE before reading when immediate mode is requested', async () => {
+  it('uses an isolated connection when immediate mode is requested', async () => {
     const database = new NativeExpoSqliteDatabaseShim();
     const wrappedDatabase = new ExpoSqliteDb({
       database: database as unknown as SqliteRepositoriesOptions['database'],
@@ -418,12 +462,49 @@ describe('expo-sqlite native transaction compatibility', () => {
         { mode: 'immediate' },
       );
 
-      expect(database.executedSql).toEqual(['BEGIN IMMEDIATE', 'COMMIT']);
-      expect(database.exclusiveTransactionCalls).toBe(0);
+      expect(database.executedSql).toEqual(['BEGIN', 'COMMIT']);
+      expect(database.exclusiveTransactionCalls).toBe(1);
       expect(database.transactionCalls).toBe(0);
     } finally {
       await database.closeAsync();
     }
+  });
+
+  it('routes immediate transaction queries through the isolated transaction handle', async () => {
+    let rootQueryCalls = 0;
+    let transactionQueryCalls = 0;
+    const transactionDatabase = {
+      async getFirstAsync() {
+        transactionQueryCalls++;
+        return { value: 1 };
+      },
+    };
+    const database = {
+      async getFirstAsync() {
+        rootQueryCalls++;
+        return { value: 1 };
+      },
+      async withExclusiveTransactionAsync(
+        fn: (transaction: typeof transactionDatabase) => Promise<void>,
+      ) {
+        await fn(transactionDatabase);
+      },
+    };
+    const wrappedDatabase = new ExpoSqliteDb({
+      database: database as unknown as SqliteRepositoriesOptions['database'],
+    });
+
+    await wrappedDatabase.transaction(
+      async (transaction) => {
+        await expect(transaction.get<{ value: number }>('SELECT 1 AS value')).resolves.toEqual({
+          value: 1,
+        });
+      },
+      { mode: 'immediate' },
+    );
+
+    expect(transactionQueryCalls).toBe(1);
+    expect(rootQueryCalls).toBe(0);
   });
 });
 

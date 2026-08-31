@@ -13,6 +13,9 @@ export interface EnqueueDurableEventResult {
   readonly eventIds: readonly string[];
 }
 
+/** Maximum number of consumer contracts accepted by one storage claim. */
+export const MAX_DURABLE_EVENT_CLAIM_CONTRACTS = 128;
+
 export interface DurableEventClaimOptions {
   readonly workerId: string;
   readonly leaseToken: string;

@@ -5,6 +5,7 @@ import {
   DurableEventInvariantError,
   DurableEventRevisionAlreadyCompactedError,
   DurableEventValidationError,
+  MAX_DURABLE_EVENT_CLAIM_CONTRACTS,
   addDurableEventDelay,
   assertClaimedDurableEventIntegrity,
   assertDurableEventContract,
@@ -158,9 +159,27 @@ function isCapacityError(error: unknown): boolean {
   return String(error).toLowerCase().includes('durable event outbox capacity exceeded');
 }
 
+function isSqliteConstraintError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const code = 'code' in error ? String(error.code).toUpperCase() : '';
+  const isSqliteDriverError =
+    error.name.toUpperCase() === 'SQLITEERROR' || code.startsWith('SQLITE_');
+  if (!isSqliteDriverError) return false;
+  if (code === 'SQLITE_CONSTRAINT' || code.startsWith('SQLITE_CONSTRAINT_')) return true;
+  if ('errno' in error) {
+    const errno = Number(error.errno);
+    if (Number.isInteger(errno) && (errno & 0xff) === 19) return true;
+  }
+  const message = error.message.toUpperCase();
+  return message.includes('UNIQUE CONSTRAINT') || message.includes('PRIMARY KEY');
+}
+
 function rethrowStorageError(error: unknown): never {
   if (isCapacityError(error)) {
     throw new DurableEventCapacityExceededError('Durable event outbox capacity is exhausted');
+  }
+  if (isSqliteConstraintError(error)) {
+    throw new DurableEventBatchConflictError('Durable event batch conflicts with stored data');
   }
   throw error;
 }
@@ -347,8 +366,10 @@ export class SqliteDurableEventOutboxRepository implements DurableEventOutboxRep
     assertDurableEventTimestamp(options.now, 'claim time');
     assertPositiveSafeInteger(options.leaseDurationMs, 'leaseDurationMs');
     if (options.contracts.length === 0) return null;
-    if (options.contracts.length > 128) {
-      throw new DurableEventValidationError('claim contracts must not contain more than 128 items');
+    if (options.contracts.length > MAX_DURABLE_EVENT_CLAIM_CONTRACTS) {
+      throw new DurableEventValidationError(
+        `claim contracts must not contain more than ${MAX_DURABLE_EVENT_CLAIM_CONTRACTS} items`,
+      );
     }
     const uniqueContracts = new Map<string, DurableEventContract>();
     for (const contract of options.contracts) {

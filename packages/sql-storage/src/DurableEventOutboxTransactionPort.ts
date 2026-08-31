@@ -2,18 +2,35 @@ import type {
   DurableEventOutboxRepository,
   DurableEventOutboxTransactionPort,
 } from '@cashu/coco-core/adapter';
+import { DurableEventTransactionConflictError } from '@cashu/coco-core/adapter';
 import type { SqlDatabase } from './index.ts';
 import { SqliteDurableEventOutboxRepository } from './repositories/DurableEventOutboxRepository.ts';
 
 const MAX_BUSY_RETRIES = 50;
 
+function sqliteErrorCode(error: Error): string {
+  return 'code' in error ? String(error.code).toUpperCase() : '';
+}
+
+function sqliteErrorNumber(error: Error): number | undefined {
+  if (!('errno' in error)) return undefined;
+  const errno = Number(error.errno);
+  return Number.isInteger(errno) ? errno : undefined;
+}
+
 function isBusyConflict(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
-  const code = 'code' in error ? String(error.code).toUpperCase() : '';
+  const code = sqliteErrorCode(error);
+  const errno = sqliteErrorNumber(error);
+  const isSqliteDriverError =
+    error.name.toUpperCase() === 'SQLITEERROR' || code.startsWith('SQLITE_');
+  if (!isSqliteDriverError) return false;
+  if (/^SQLITE_(BUSY|LOCKED)(?:_|$)/.test(code)) return true;
+  if (errno !== undefined && (errno & 0xff) === 5) return true;
+  if (errno !== undefined && (errno & 0xff) === 6) return true;
+
   const message = error.message.toUpperCase();
   return (
-    code === 'SQLITE_BUSY' ||
-    code === 'SQLITE_LOCKED' ||
     message.includes('SQLITE_BUSY') ||
     message.includes('SQLITE_LOCKED') ||
     message.includes('DATABASE IS LOCKED')
@@ -38,7 +55,12 @@ export async function runSqliteDurableEventOutboxTransaction<T>(
         { mode: 'immediate' },
       );
     } catch (error) {
-      if (!isBusyConflict(error) || remainingAttempts === 0) throw error;
+      if (!isBusyConflict(error)) throw error;
+      if (remainingAttempts === 0) {
+        throw new DurableEventTransactionConflictError(
+          'SQLite durable event transaction remained busy after bounded retries',
+        );
+      }
       await Promise.resolve();
       return attempt(remainingAttempts - 1);
     }

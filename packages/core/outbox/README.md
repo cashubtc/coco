@@ -34,7 +34,9 @@ Storage adapters expose a `DurableEventOutboxTransactionPort` for publisher and 
 transactions. `DurableEventOutboxPublisher` accepts that port rather than a repository that opens
 hidden root transactions. SQL and IndexedDB adapters also expose
 `withDurableEventOutboxTransaction()` so Wallet state and event intent can share one physical
-transaction without adding the outbox to the global `Repositories` contract.
+transaction without adding the outbox to the global `Repositories` contract. SQLite3 and Bun
+SQLite acquire the writer lock before the first read; native Expo uses its isolated transaction
+connection so unrelated application queries cannot join the outbox transaction.
 
 ## Operational defaults
 
@@ -46,6 +48,7 @@ transaction without adding the outbox to the global `Repositories` contract.
 - Retry: 5 failures, exponential delay from 1 second to 5 minutes, 20% jitter
 - Lease: 30 seconds
 - Publisher batch: 25
+- Registered consumer contracts: 128 maximum
 - Warnings: 80% of any capacity limit or 100 blocked rows
 
 Hosts can configure finite storage limits and publisher/retry values. Retention is a compaction

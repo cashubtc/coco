@@ -8,14 +8,21 @@ import {
   DurableEventValidationError,
 } from './errors.ts';
 import type { DurableEventConsumerExecutor } from './TransactionalDurableEventConsumer.ts';
-import type { DurableEventOutboxTransactionPort } from './repository.ts';
+import {
+  MAX_DURABLE_EVENT_CLAIM_CONTRACTS,
+  type DurableEventOutboxTransactionPort,
+} from './repository.ts';
 import {
   addDurableEventDelay,
   durableEventRetryDelay,
   type DurableEventRetryPolicy,
 } from './retry.ts';
 import type { SafeDurableEventFailure } from './types.ts';
-import { assertDurableEventContract, durableEventContractKey } from './validation.ts';
+import {
+  assertDurableEventContract,
+  assertSafeDurableEventFailure,
+  durableEventContractKey,
+} from './validation.ts';
 
 export interface DurableEventPublisherOptions {
   readonly transactionPort: DurableEventOutboxTransactionPort;
@@ -42,8 +49,17 @@ function safeFailure(error: unknown): { failure: SafeDurableEventFailure; retrya
     return { failure: { code: 'outbox.corrupt_record' }, retryable: false };
   }
   if (error instanceof DurableEventConsumerError) {
+    const failure = { code: error.code, message: error.safeMessage };
+    try {
+      assertSafeDurableEventFailure(failure);
+    } catch {
+      return {
+        failure: { code: 'outbox.consumer_failed' },
+        retryable: error.retryable,
+      };
+    }
     return {
-      failure: { code: error.code, message: error.safeMessage },
+      failure,
       retryable: error.retryable,
     };
   }
@@ -56,6 +72,11 @@ export class DurableEventOutboxPublisher {
   constructor(private readonly options: DurableEventPublisherOptions) {
     if (options.consumers.length === 0) {
       throw new DurableEventValidationError('at least one durable event consumer is required');
+    }
+    if (options.consumers.length > MAX_DURABLE_EVENT_CLAIM_CONTRACTS) {
+      throw new DurableEventValidationError(
+        `durable event consumers must not contain more than ${MAX_DURABLE_EVENT_CLAIM_CONTRACTS} items`,
+      );
     }
     if (!Number.isSafeInteger(options.leaseDurationMs) || options.leaseDurationMs < 1) {
       throw new DurableEventValidationError('leaseDurationMs must be a positive safe integer');
