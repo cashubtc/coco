@@ -1,10 +1,20 @@
-import type { SendOperation } from '@core/operations/send/SendOperation.ts';
+import type {
+  RollingBackSendOperation,
+  RolledBackSendOperation,
+} from '@core/operations/send/SendOperation.ts';
 import type { CoreTransactionRunner } from '../CoreTransaction.ts';
 import type {
   AppliedSwapResult,
   ApplySwapResultCommand,
   BegunSwapExecution,
   BeginSwapExecutionCommand,
+  BeginLegacyPendingRollbackCommand,
+  CancelledPreparedSend,
+  CancelPreparedSendCommand,
+  CleanupLegacyInitResult,
+  CompletedPendingSend,
+  CompletePendingSendCommand,
+  CompleteLegacyPendingRollbackCommand,
   ExecuteExactSendCommand,
   ExecuteExactSendResult,
   FailedSwapExecution,
@@ -19,10 +29,15 @@ export interface SendTransactions {
   beginExecution(command: BeginSwapExecutionCommand): Promise<BegunSwapExecution>;
   applyResult(command: ApplySwapResultCommand): Promise<AppliedSwapResult>;
   failExecution(command: FailSwapExecutionCommand): Promise<FailedSwapExecution>;
-  /** Temporary runner-backed compatibility seam for lifecycle slices #450-#452. */
-  updateLegacyState(operation: SendOperation): Promise<void>;
-  /** Temporary runner-backed compatibility seam for persisted legacy init cleanup. */
-  deleteLegacyOperation(operationId: string): Promise<void>;
+  cancelPrepared(command: CancelPreparedSendCommand): Promise<CancelledPreparedSend>;
+  completePending(command: CompletePendingSendCommand): Promise<CompletedPendingSend>;
+  cleanupLegacyInit(operationId: string): Promise<CleanupLegacyInitResult>;
+  beginLegacyPendingRollback(
+    command: BeginLegacyPendingRollbackCommand,
+  ): Promise<RollingBackSendOperation>;
+  completeLegacyPendingRollback(
+    command: CompleteLegacyPendingRollbackCommand,
+  ): Promise<RolledBackSendOperation>;
 }
 
 export class CoreSendTransactions implements SendTransactions {
@@ -48,11 +63,29 @@ export class CoreSendTransactions implements SendTransactions {
     return this.runner.run((transaction) => transaction.sends.failExecution(command));
   }
 
-  updateLegacyState(operation: SendOperation): Promise<void> {
-    return this.runner.run((transaction) => transaction.sends.updateLegacy(operation));
+  cancelPrepared(command: CancelPreparedSendCommand): Promise<CancelledPreparedSend> {
+    return this.runner.run((transaction) => transaction.sends.cancelPrepared(command));
   }
 
-  deleteLegacyOperation(operationId: string): Promise<void> {
-    return this.runner.run((transaction) => transaction.sends.deleteLegacy(operationId));
+  completePending(command: CompletePendingSendCommand): Promise<CompletedPendingSend> {
+    return this.runner.run((transaction) => transaction.sends.completePending(command));
+  }
+
+  cleanupLegacyInit(operationId: string): Promise<CleanupLegacyInitResult> {
+    return this.runner.run((transaction) => transaction.sends.cleanupLegacyInit(operationId));
+  }
+
+  beginLegacyPendingRollback(
+    command: BeginLegacyPendingRollbackCommand,
+  ): Promise<RollingBackSendOperation> {
+    return this.runner.run((transaction) => transaction.sends.beginLegacyPendingRollback(command));
+  }
+
+  completeLegacyPendingRollback(
+    command: CompleteLegacyPendingRollbackCommand,
+  ): Promise<RolledBackSendOperation> {
+    return this.runner.run((transaction) =>
+      transaction.sends.completeLegacyPendingRollback(command),
+    );
   }
 }
