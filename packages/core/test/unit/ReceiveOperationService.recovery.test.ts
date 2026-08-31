@@ -133,6 +133,15 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
       prepare: async () => {
         throw new Error('Unexpected Receive preparation');
       },
+      beginExecution: async () => {
+        throw new Error('Unexpected normal Receive execution');
+      },
+      applyResult: async () => {
+        throw new Error('Unexpected normal Receive result');
+      },
+      failExecution: async () => {
+        throw new Error('Unexpected normal Receive failure');
+      },
       updateLegacyOperation: (operation) => receiveOpRepo.update(operation),
       deleteLegacyInit: (operationId) => receiveOpRepo.delete(operationId),
     };
@@ -366,7 +375,7 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
     { code: 11002, message: 'Proofs are pending' },
     { code: 11004, message: 'Outputs are pending' },
   ]) {
-    it(`rolls back when re-execution hits non-spendable NUT-03 state ${code}`, async () => {
+    it(`keeps executing when re-execution hits ambiguous NUT-03 state ${code}`, async () => {
       const proofs = [makeProof('p1')];
       const op = makeExecutingOp(`exec-op-pending-${code}`, proofs);
       await receiveOpRepo.create(op);
@@ -381,8 +390,7 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
       await service.recoverPendingOperations();
 
       const stored = await receiveOpRepo.getById(op.id);
-      expect(stored?.state).toBe('rolled_back');
-      expect(stored?.error).toBe(message);
+      expect(stored?.state).toBe('executing');
     });
   }
 

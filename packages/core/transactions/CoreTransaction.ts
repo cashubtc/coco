@@ -42,6 +42,7 @@ class RepositoryTransactionModuleFactory implements TransactionModuleFactory {
         this.outputDataCreator,
       ),
       receives: new RepositoryTransactionalReceiveOperations(
+        repositories.proofRepository,
         repositories.counterRepository,
         repositories.keysetRepository,
         repositories.receiveOperationRepository,

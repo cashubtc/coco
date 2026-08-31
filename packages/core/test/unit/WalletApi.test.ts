@@ -188,6 +188,79 @@ describe('WalletApi - Trust Enforcement', () => {
           counter: { mintUrl: operation.mintUrl, keysetId, counter: outputs.keep.length },
         };
       },
+      beginExecution: async ({ operationId, expectedRevision, updatedAt }) => {
+        const current = await receiveOpRepo.getById(operationId);
+        if (!current || current.state !== 'prepared') throw new Error('Receive not prepared');
+        const executing = {
+          ...current,
+          state: 'executing' as const,
+          revision: expectedRevision + 1,
+          updatedAt,
+        };
+        if (
+          !(await receiveOpRepo.transition({
+            operationId,
+            expectedState: 'prepared',
+            expectedRevision,
+            next: executing,
+          }))
+        ) {
+          throw new Error('Receive execution conflict');
+        }
+        return {
+          operation: executing,
+          request: {
+            mintUrl: executing.mintUrl,
+            unit: executing.unit,
+            inputProofs: executing.inputProofs,
+            outputData: executing.outputData,
+          },
+        };
+      },
+      applyResult: async ({ operationId, expectedRevision, updatedAt, proofs }) => {
+        const current = await receiveOpRepo.getById(operationId);
+        if (!current || current.state !== 'executing') throw new Error('Receive not executing');
+        await proofReceiveRepo.saveProofs(current.mintUrl, proofs);
+        const finalized = {
+          ...current,
+          state: 'finalized' as const,
+          revision: expectedRevision + 1,
+          updatedAt,
+        };
+        if (
+          !(await receiveOpRepo.transition({
+            operationId,
+            expectedState: 'executing',
+            expectedRevision,
+            next: finalized,
+          }))
+        ) {
+          throw new Error('Receive result conflict');
+        }
+        return { operation: finalized, savedProofs: proofs, committed: true };
+      },
+      failExecution: async ({ operationId, expectedRevision, updatedAt, error }) => {
+        const current = await receiveOpRepo.getById(operationId);
+        if (!current || current.state !== 'executing') throw new Error('Receive not executing');
+        const rolledBack = {
+          ...current,
+          state: 'rolled_back' as const,
+          revision: expectedRevision + 1,
+          updatedAt,
+          error,
+        };
+        if (
+          !(await receiveOpRepo.transition({
+            operationId,
+            expectedState: 'executing',
+            expectedRevision,
+            next: rolledBack,
+          }))
+        ) {
+          throw new Error('Receive failure conflict');
+        }
+        return { operation: rolledBack, committed: true };
+      },
       updateLegacyOperation: (operation) => receiveOpRepo.update(operation),
       deleteLegacyInit: (operationId) => receiveOpRepo.delete(operationId),
     };

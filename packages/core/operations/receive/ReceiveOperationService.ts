@@ -47,18 +47,22 @@ import type {
   ReceiveOperationQueries,
   ReceiveProofQueries,
 } from '../../transactions/receive/ReceiveOperationQueries.ts';
-import type { PreparedReceiveResult } from '../../transactions/receive/TransactionalReceiveOperations.ts';
+import type {
+  AppliedReceiveResult,
+  FailedReceiveExecution,
+  PreparedReceiveResult,
+  ReceiveTransportRequest,
+} from '../../transactions/receive/TransactionalReceiveOperations.ts';
 
 const NON_TERMINAL_RECEIVE_MINT_ERROR_CODES = new Set([
-  // 11003 is special for receive recovery: the mint may already have accepted and
-  // signed our outputs even though the client saw an error, so we keep executing
-  // and let recovery reconcile persisted outputs.
-  //
-  // We intentionally do not treat 11002/11004 as recoverable here. In the receive
-  // flow they indicate inputs or outputs that are not currently spendable, so the
-  // operation is rejected and a fresh receive should be started if the user retries.
-  11003,
+  // Pending inputs or outputs and already-signed outputs do not prove the exact persisted
+  // request had no effect. Keep the operation executing so recovery can reconcile it.
+  11002, 11003, 11004,
 ]);
+
+type ReceiveExecutionOutcome =
+  | { status: 'FINALIZED'; result: AppliedReceiveResult }
+  | { status: 'FAILED'; result: FailedReceiveExecution; error: MintOperationError };
 
 export interface ReceiveOperationServiceDependencies {
   operationQueries: ReceiveOperationQueries;
@@ -269,6 +273,7 @@ export class ReceiveOperationService {
    */
   async execute(operation: PreparedReceiveOperation): Promise<FinalizedReceiveOperation> {
     const releaseLock = await this.acquireOperationLock(operation.id);
+    let outcome: ReceiveExecutionOutcome | undefined;
     try {
       const current = await this.operationQueries.getById(operation.id);
       if (!current) {
@@ -280,32 +285,122 @@ export class ReceiveOperationService {
         );
       }
 
-      const prepared = current as PreparedReceiveOperation;
-      const executing: ExecutingReceiveOperation = {
-        ...prepared,
-        state: 'executing',
-        updatedAt: Date.now(),
-      };
-      await this.transactions.updateLegacyOperation(executing);
-
-      try {
-        return await this.executeInternal(executing);
-      } catch (e) {
-        const rollbackReason = this.getRollbackReasonForReceiveFailure(e);
-        if (rollbackReason) {
-          await this.markAsRolledBack(executing, rollbackReason);
-          throw e;
-        }
-
-        await this.tryRecoverExecutingOperation(executing);
-        throw e;
-      }
+      outcome = await this.executePrepared(current as PreparedReceiveOperation);
     } finally {
       releaseLock();
     }
+
+    if (!outcome) {
+      throw new Error(`Receive operation ${operation.id} did not produce a result`);
+    }
+    if (outcome.status === 'FAILED') {
+      await this.publishFailedExecution(outcome.result);
+      throw outcome.error;
+    }
+    await this.publishAppliedResult(outcome.result);
+    return outcome.result.operation;
   }
 
-  /** Internal execute logic used by execute(), separated for error handling. */
+  private async executePrepared(
+    operation: PreparedReceiveOperation,
+  ): Promise<ReceiveExecutionOutcome> {
+    if (!operation.outputData) {
+      throw new Error('Missing output data for receive operation');
+    }
+    const begun = await this.transactions.beginExecution({
+      operationId: operation.id,
+      expectedRevision: operation.revision ?? 0,
+      updatedAt: Date.now(),
+    });
+    return this.submitPersistedReceive(begun.operation, begun.request);
+  }
+
+  private async submitPersistedReceive(
+    operation: ExecutingReceiveOperation,
+    request: ReceiveTransportRequest,
+  ): Promise<ReceiveExecutionOutcome> {
+    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
+      request.mintUrl,
+      request.unit,
+    );
+    const outputData = deserializeOutputData(request.outputData);
+
+    this.logger?.info('Receiving token', {
+      operationId: operation.id,
+      mintUrl: request.mintUrl,
+      proofs: request.inputProofs.length,
+      amount: operation.amount,
+    });
+
+    let received: Proof[];
+    try {
+      received = await wallet.receive(
+        { mint: request.mintUrl, proofs: request.inputProofs, unit: request.unit },
+        undefined,
+        { type: 'custom', data: outputData.keep },
+      );
+    } catch (error) {
+      const rollbackReason = this.getRollbackReasonForReceiveFailure(error);
+      if (!rollbackReason || !(error instanceof MintOperationError)) {
+        throw error;
+      }
+      const failed = await this.transactions.failExecution({
+        operationId: operation.id,
+        expectedRevision: operation.revision ?? 0,
+        updatedAt: Date.now(),
+        error: rollbackReason,
+      });
+      return { status: 'FAILED', result: failed, error };
+    }
+
+    // Response mapping and local validation happen outside the repository transaction. If either
+    // fails after submission, the durable executing request remains available to recovery.
+    const proofs = mapProofToCoreProof(request.mintUrl, 'ready', received, {
+      unit: request.unit,
+      createdByOperationId: operation.id,
+    });
+    const applied = await this.transactions.applyResult({
+      operationId: operation.id,
+      expectedRevision: operation.revision ?? 0,
+      updatedAt: Date.now(),
+      proofs,
+    });
+    return { status: 'FINALIZED', result: applied };
+  }
+
+  private async publishAppliedResult(result: AppliedReceiveResult): Promise<void> {
+    if (!result.committed) return;
+
+    const proofsByKeyset = new Map<string, CoreEvents['proofs:saved']['proofs']>();
+    for (const proof of result.savedProofs) {
+      const group = proofsByKeyset.get(proof.id) ?? [];
+      group.push(proof);
+      proofsByKeyset.set(proof.id, group);
+    }
+    for (const [keysetId, proofs] of proofsByKeyset) {
+      await this.publishCommittedEvent('proofs:saved', {
+        mintUrl: result.operation.mintUrl,
+        keysetId,
+        proofs,
+      });
+    }
+    await this.publishCommittedEvent('receive-op:finalized', {
+      mintUrl: result.operation.mintUrl,
+      operationId: result.operation.id,
+      operation: result.operation,
+    });
+  }
+
+  private async publishFailedExecution(result: FailedReceiveExecution): Promise<void> {
+    if (!result.committed) return;
+    await this.publishCommittedEvent('receive-op:rolled-back', {
+      mintUrl: result.operation.mintUrl,
+      operationId: result.operation.id,
+      operation: result.operation,
+    });
+  }
+
+  /** Compatibility execution path retained only for Receive recovery until #455. */
   private async executeInternal(
     executing: ExecutingReceiveOperation,
   ): Promise<FinalizedReceiveOperation> {
@@ -624,21 +719,6 @@ export class ReceiveOperationService {
       if (releaseLock) {
         releaseLock();
       }
-    }
-  }
-
-  /** Best-effort executing recovery used when execute fails. */
-  private async tryRecoverExecutingOperation(op: ExecutingReceiveOperation): Promise<void> {
-    try {
-      await this.recoverExecutingOperation(op, { skipLock: true });
-      this.logger?.info('Recovered executing receive operation after failure', {
-        operationId: op.id,
-      });
-    } catch (recoveryError) {
-      this.logger?.warn('Failed to recover executing receive operation, will retry on startup', {
-        operationId: op.id,
-        error: recoveryError instanceof Error ? recoveryError.message : String(recoveryError),
-      });
     }
   }
 
