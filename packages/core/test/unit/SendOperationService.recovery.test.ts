@@ -11,6 +11,7 @@ import type { CoreEvents } from '../../events/types';
 import type { ProofService } from '../../services/ProofService';
 import type { MintService } from '../../services/MintService';
 import type { WalletService } from '../../services/WalletService';
+import type { SeedService } from '../../services/SeedService.ts';
 import type { Logger } from '../../logging/Logger';
 import type { CoreProof } from '../../types';
 import type {
@@ -21,6 +22,7 @@ import type {
 } from '../../operations/send/SendOperation';
 import { serializeOutputData } from '../../utils';
 import { OutputData, type Proof, type ProofState as CashuProofState } from '@cashu/cashu-ts';
+import type { SendTransactions } from '../../transactions/send/SendTransactions.ts';
 
 describe('SendOperationService - recoverPendingOperations', () => {
   const mintUrl = 'https://mint.test';
@@ -35,6 +37,22 @@ describe('SendOperationService - recoverPendingOperations', () => {
   let logger: Logger;
   let handlerProvider: SendHandlerProvider;
   let service: SendOperationService;
+  let seedService: SeedService;
+  let sendTransactions: SendTransactions;
+
+  const buildService = () =>
+    new SendOperationService({
+      operationQueries: sendOpRepo,
+      proofQueries: proofRepo,
+      transactions: sendTransactions,
+      proofService,
+      mintService,
+      walletService,
+      seedService,
+      eventBus,
+      handlerProvider,
+      logger,
+    });
 
   // Mock wallet with checkProofsStates
   let mockCheckProofsStates: Mock<(proofs: { secret: string }[]) => Promise<CashuProofState[]>>;
@@ -252,17 +270,16 @@ describe('SendOperationService - recoverPendingOperations', () => {
       default: new DefaultSendHandler(),
       p2pk: new P2pkSendHandler(),
     });
+    seedService = { getSeed: mock(async () => new Uint8Array(32)) } as unknown as SeedService;
+    sendTransactions = {
+      prepare: mock(async () => {
+        throw new Error('not used');
+      }),
+      updateLegacyState: mock((operation) => sendOpRepo.update(operation)),
+      deleteLegacyOperation: mock((operationId) => sendOpRepo.delete(operationId)),
+    };
 
-    service = new SendOperationService(
-      sendOpRepo,
-      proofRepo,
-      proofService,
-      mintService,
-      walletService,
-      eventBus,
-      handlerProvider,
-      logger,
-    );
+    service = buildService();
   });
 
   // ============================================================================
@@ -968,16 +985,7 @@ describe('SendOperationService - recoverPendingOperations', () => {
       } as Logger;
 
       // Recreate service with tracking logger
-      service = new SendOperationService(
-        sendOpRepo,
-        proofRepo,
-        proofService,
-        mintService,
-        walletService,
-        eventBus,
-        handlerProvider,
-        logger,
-      );
+      service = buildService();
 
       await sendOpRepo.create(makeInitOp('init-1'));
       await sendOpRepo.create(

@@ -1,16 +1,15 @@
 import type { Wallet, Proof, Token, P2PKOptions, P2PKTag, SigFlag } from '@cashu/cashu-ts';
-import type { ProofRepository } from '../../repositories';
+import type { SendProofQueries } from '../../transactions/send/SendOperationQueries.ts';
 import type { ProofService } from '../../services/ProofService';
 import type { WalletService } from '../../services/WalletService';
 import type { MintService } from '../../services/MintService';
 import type { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
+import { ProofValidationError } from '../../models/Error.ts';
 import type {
   ExecutingSendOperation,
-  InitSendOperation,
   PendingSendOperation,
-  PreparedSendOperation,
   PreparedOrLaterOperation,
   RolledBackSendOperation,
 } from './SendOperation';
@@ -83,27 +82,52 @@ export type SendMethod = keyof SendMethodDefinitions;
 
 export type SendMethodData<M extends SendMethod = SendMethod> = SendMethodDefinitions[M];
 
+export function resolveP2pkOptions(methodData: SendMethodData<'p2pk'>): P2PKOptions {
+  if ('options' in methodData && methodData.options) {
+    if ((methodData.options as { hashlock?: unknown }).hashlock !== undefined) {
+      throw new ProofValidationError('P2PK send does not support hashlock/HTLC options');
+    }
+    if ('kind' in methodData.options) {
+      if (methodData.options.kind !== 'P2PK') {
+        throw new ProofValidationError('P2PK send does not support hashlock/HTLC options');
+      }
+      return methodData.options;
+    }
+
+    const pubkeys = Array.isArray(methodData.options.pubkey)
+      ? methodData.options.pubkey
+      : [methodData.options.pubkey];
+    const [data, ...additionalPubkeys] = pubkeys;
+    if (!data) {
+      throw new ProofValidationError('P2PK send requires at least one lock pubkey');
+    }
+    const { pubkey: _pubkey, hashlock: _hashlock, ...conditions } = methodData.options;
+    return {
+      kind: 'P2PK',
+      data,
+      ...conditions,
+      ...(additionalPubkeys.length > 0 ? { pubkeys: additionalPubkeys } : {}),
+    };
+  }
+
+  if ('pubkey' in methodData && methodData.pubkey) {
+    return { kind: 'P2PK', data: methodData.pubkey };
+  }
+
+  throw new ProofValidationError('P2PK send requires P2PK options or a pubkey in methodData');
+}
+
 // ---------------------------------------------------------------------------
 // Contexts / Results
 // ---------------------------------------------------------------------------
 
 export interface BaseHandlerDeps {
-  proofRepository: ProofRepository;
+  proofRepository: SendProofQueries;
   proofService: ProofService;
   walletService: WalletService;
   mintService: MintService;
   eventBus: EventBus<CoreEvents>;
   logger?: Logger;
-}
-
-export interface BasePrepareContext extends BaseHandlerDeps {
-  operation: InitSendOperation;
-  wallet: Wallet;
-}
-
-export interface PreparedContext extends BaseHandlerDeps {
-  operation: PreparedSendOperation;
-  wallet: Wallet;
 }
 
 export interface ExecuteContext extends BaseHandlerDeps {
@@ -164,7 +188,6 @@ export type RecoveryResult =
 export type PendingCheckResult = 'finalize' | 'stay_pending' | 'rollback';
 
 export interface SendMethodHandler<M extends SendMethod = SendMethod> {
-  prepare(ctx: BasePrepareContext): Promise<PreparedSendOperation>;
   execute(ctx: ExecuteContext): Promise<ExecutionResult>;
   finalize?(ctx: FinalizeContext): Promise<void>;
   rollback?(ctx: RollbackContext): Promise<void>;

@@ -1,24 +1,20 @@
 import { Amount, sumProofs, type Token, type Proof, type OutputConfig } from '@cashu/cashu-ts';
 import type {
   SendMethodHandler,
-  BasePrepareContext,
   ExecuteContext,
   FinalizeContext,
   RollbackContext,
   RecoverExecutingContext,
   ExecutionResult,
   RecoveryResult,
-  SendMethodData,
 } from '../../../operations/send/SendMethodHandler';
 import type {
-  PreparedSendOperation,
   PendingSendOperation,
   RolledBackSendOperation,
 } from '../../../operations/send/SendOperation';
 import { getSendProofSecrets, getKeepProofSecrets } from '../../../operations/send/SendOperation';
 import {
   mapProofToCoreProof,
-  serializeOutputData,
   deserializeOutputData,
   getSecretsFromSerializedOutputData,
 } from '../../../utils';
@@ -27,111 +23,9 @@ import { ProofValidationError } from '../../../models/Error';
 
 /**
  * Default send handler for standard (unlocked) token sends.
- * Handles the prepare and execute phases for sending cashu tokens.
+ * Handles execution and recovery for standard cashu token sends.
  */
 export class DefaultSendHandler implements SendMethodHandler<'default'> {
-  /**
-   * Prepare the send operation by selecting proofs and creating outputs.
-   */
-  async prepare(ctx: BasePrepareContext): Promise<PreparedSendOperation> {
-    const { operation, wallet, proofService, logger } = ctx;
-    const { mintUrl, amount, unit } = operation;
-    const { forceSwap = false } = operation.methodData as SendMethodData<'default'>;
-
-    // Try exact match first unless the caller requested fresh send proofs.
-    const exactProofs = forceSwap
-      ? []
-      : await proofService.selectProofsToSend(mintUrl, { amount, unit }, false);
-    const exactAmount = sumProofs(exactProofs);
-    const needsSwap = forceSwap || !exactAmount.equals(amount);
-
-    let selectedProofs: Proof[];
-    let fee = Amount.zero();
-    let serializedOutputData: PreparedSendOperation['outputData'];
-
-    if (!needsSwap && exactProofs.length > 0) {
-      // Exact match - no swap needed, no OutputData
-      selectedProofs = exactProofs;
-      logger?.debug('Exact match found for send', {
-        operationId: operation.id,
-        amount,
-        proofCount: selectedProofs.length,
-      });
-    } else {
-      // Need to swap - select proofs including fees
-
-      const selected = await proofService.selectProofsToSend(mintUrl, { amount, unit }, true);
-      selectedProofs = selected;
-      const selectedAmount = sumProofs(selectedProofs);
-      fee = wallet.getFeesForProofs(selectedProofs);
-      const requiredAmount = amount.add(fee);
-      if (selectedAmount.lessThan(requiredAmount)) {
-        throw new ProofValidationError('Send amount is not sufficient after fees');
-      }
-      const keepAmount = selectedAmount.subtract(requiredAmount);
-
-      // Use ProofService to create outputs and increment counters
-      const outputResult = await proofService.createOutputsAndIncrementCounters(
-        mintUrl,
-        {
-          keep: { amount: keepAmount, unit },
-          send: { amount, unit },
-        },
-        {},
-      );
-
-      // Serialize for storage
-      serializedOutputData = serializeOutputData({
-        keep: outputResult.keep,
-        send: outputResult.send,
-      });
-
-      logger?.debug('Swap required for send', {
-        operationId: operation.id,
-        amount,
-        fee,
-        keepAmount,
-        selectedAmount,
-        proofCount: selectedProofs.length,
-        keepOutputs: outputResult.keep.length,
-        sendOutputs: outputResult.send.length,
-        forceSwap,
-      });
-    }
-
-    // Reserve the selected proofs
-    const inputSecrets = selectedProofs.map((p: Proof) => p.secret);
-    await proofService.reserveProofs(mintUrl, inputSecrets, operation.id, { unit });
-
-    // Build prepared operation
-    const prepared: PreparedSendOperation = {
-      id: operation.id,
-      state: 'prepared',
-      mintUrl: operation.mintUrl,
-      amount: operation.amount,
-      unit: operation.unit,
-      createdAt: operation.createdAt,
-      updatedAt: Date.now(),
-      error: operation.error,
-      needsSwap,
-      fee,
-      inputAmount: sumProofs(selectedProofs),
-      inputProofSecrets: inputSecrets,
-      outputData: serializedOutputData,
-      method: operation.method,
-      methodData: operation.methodData,
-    };
-
-    logger?.info('Send operation prepared', {
-      operationId: operation.id,
-      needsSwap,
-      fee,
-      inputProofCount: inputSecrets.length,
-    });
-
-    return prepared;
-  }
-
   /**
    * Execute the send operation by performing the swap and creating the token.
    */

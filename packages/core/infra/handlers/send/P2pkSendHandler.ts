@@ -1,15 +1,6 @@
-import {
-  OutputData,
-  sumProofs,
-  type Token,
-  type Proof,
-  type OutputConfig,
-  type P2PKOptions,
-  type OutputDataCreator,
-} from '@cashu/cashu-ts';
+import { type Token, type Proof, type OutputConfig } from '@cashu/cashu-ts';
 import type {
   SendMethodHandler,
-  BasePrepareContext,
   ExecuteContext,
   FinalizeContext,
   RollbackContext,
@@ -18,8 +9,8 @@ import type {
   RecoveryResult,
   SendMethodData,
 } from '../../../operations/send/SendMethodHandler';
+import { resolveP2pkOptions } from '../../../operations/send/SendMethodHandler';
 import type {
-  PreparedSendOperation,
   PendingSendOperation,
   RolledBackSendOperation,
 } from '../../../operations/send/SendOperation';
@@ -27,7 +18,6 @@ import { getSendProofSecrets, getKeepProofSecrets } from '../../../operations/se
 import { ProofValidationError } from '../../../models/Error';
 import {
   mapProofToCoreProof,
-  serializeOutputData,
   deserializeOutputData,
   getSecretsFromSerializedOutputData,
   getProofStateInputsFromSerializedOutputs,
@@ -39,99 +29,6 @@ import type { CoreProof } from '../../../types';
  * The recipient must have the corresponding private key to spend the tokens.
  */
 export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
-  private readonly outputDataCreator: OutputDataCreator;
-
-  constructor(outputDataCreator?: OutputDataCreator) {
-    this.outputDataCreator = outputDataCreator ?? OutputData;
-  }
-
-  /**
-   * Prepare the send operation by selecting proofs and creating outputs.
-   * P2PK sends always require a swap to lock the proofs to the pubkey.
-   */
-  async prepare(ctx: BasePrepareContext): Promise<PreparedSendOperation> {
-    const { operation, wallet, proofService, mintService, logger } = ctx;
-    const { mintUrl, amount, unit } = operation;
-
-    const p2pkOptions = this.getP2pkOptions(operation.methodData as SendMethodData<'p2pk'>);
-    await mintService.assertNutSupported(mintUrl, 11, 'P2PK send');
-
-    // P2PK always requires a swap to lock proofs to the pubkey
-    // Select proofs including fees
-    const selected = await proofService.selectProofsToSend(mintUrl, { amount, unit }, true);
-    const selectedAmount = sumProofs(selected);
-    const fee = wallet.getFeesForProofs(selected);
-    const requiredAmount = amount.add(fee);
-    if (selectedAmount.lessThan(requiredAmount)) {
-      throw new ProofValidationError('Send amount is not sufficient after fees');
-    }
-    const keepAmount = selectedAmount.subtract(requiredAmount);
-
-    // Use ProofService to create outputs and increment counters
-    const outputResult = await proofService.createOutputsAndIncrementCounters(
-      mintUrl,
-      {
-        keep: { amount: keepAmount, unit },
-        send: { amount: keepAmount.subtract(keepAmount), unit },
-      },
-      {},
-    );
-
-    const keyset = wallet.getKeyset();
-
-    const sendOT = this.outputDataCreator.createP2PKData(p2pkOptions, amount, keyset);
-
-    // Serialize for storage
-    const serializedOutputData = serializeOutputData({
-      keep: outputResult.keep,
-      send: sendOT,
-    });
-
-    logger?.debug('P2PK send prepared', {
-      operationId: operation.id,
-      amount,
-      fee,
-      keepAmount,
-      selectedAmount,
-      proofCount: selected.length,
-      keepOutputs: outputResult.keep.length,
-      sendOutputs: sendOT.length,
-      p2pkPubkey: p2pkOptions.data,
-    });
-
-    // Reserve the selected proofs
-    const inputSecrets = selected.map((p: Proof) => p.secret);
-    await proofService.reserveProofs(mintUrl, inputSecrets, operation.id, { unit });
-
-    // Build prepared operation
-    const prepared: PreparedSendOperation = {
-      id: operation.id,
-      state: 'prepared',
-      mintUrl: operation.mintUrl,
-      amount: operation.amount,
-      unit: operation.unit,
-      createdAt: operation.createdAt,
-      updatedAt: Date.now(),
-      error: operation.error,
-      needsSwap: true, // P2PK always needs swap
-      fee,
-      inputAmount: selectedAmount,
-      inputProofSecrets: inputSecrets,
-      outputData: serializedOutputData,
-      method: operation.method,
-      methodData: operation.methodData,
-    };
-
-    logger?.info('P2PK send operation prepared', {
-      operationId: operation.id,
-      fee,
-      inputProofCount: inputSecrets.length,
-      p2pkPubkey: p2pkOptions.data,
-    });
-
-    return prepared;
-  }
-
   /**
    * Execute the send operation by performing the swap with P2PK locking.
    */
@@ -139,7 +36,7 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
     const { operation, wallet, reservedProofs, proofService, logger } = ctx;
     const { mintUrl, amount, inputProofSecrets } = operation;
 
-    const p2pkOptions = this.getP2pkOptions(operation.methodData as SendMethodData<'p2pk'>);
+    const p2pkOptions = resolveP2pkOptions(operation.methodData as SendMethodData<'p2pk'>);
 
     const inputProofs = reservedProofs.filter((p: Proof) => inputProofSecrets.includes(p.secret));
 
@@ -211,41 +108,6 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
     });
 
     return { status: 'PENDING', pending, token };
-  }
-
-  private getP2pkOptions(methodData: SendMethodData<'p2pk'>): P2PKOptions {
-    if ('options' in methodData && methodData.options) {
-      if ((methodData.options as { hashlock?: unknown }).hashlock !== undefined) {
-        throw new ProofValidationError('P2PK send does not support hashlock/HTLC options');
-      }
-      if ('kind' in methodData.options) {
-        if (methodData.options.kind !== 'P2PK') {
-          throw new ProofValidationError('P2PK send does not support hashlock/HTLC options');
-        }
-        return methodData.options;
-      }
-
-      const pubkeys = Array.isArray(methodData.options.pubkey)
-        ? methodData.options.pubkey
-        : [methodData.options.pubkey];
-      const [data, ...additionalPubkeys] = pubkeys;
-      if (!data) {
-        throw new ProofValidationError('P2PK send requires at least one lock pubkey');
-      }
-      const { pubkey: _pubkey, hashlock: _hashlock, ...conditions } = methodData.options;
-      return {
-        kind: 'P2PK',
-        data,
-        ...conditions,
-        ...(additionalPubkeys.length > 0 ? { pubkeys: additionalPubkeys } : {}),
-      };
-    }
-
-    if ('pubkey' in methodData && methodData.pubkey) {
-      return { kind: 'P2PK', data: methodData.pubkey };
-    }
-
-    throw new ProofValidationError('P2PK send requires P2PK options or a pubkey in methodData');
   }
 
   /**
