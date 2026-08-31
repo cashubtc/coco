@@ -61,6 +61,14 @@ interface SendOperationBase<M extends SendMethod = SendMethod> {
   /** Timestamp when the operation was last updated */
   updatedAt: number;
 
+  /**
+   * Monotonic persistence revision used by conditional state transitions.
+   *
+   * This remains optional at the public type boundary so operation objects created by older Coco
+   * versions remain source-compatible. Repositories normalize a missing legacy revision to 0.
+   */
+  revision?: number;
+
   /** Error message if the operation failed */
   error?: string;
 }
@@ -306,5 +314,6 @@ export function createSendOperation<M extends SendMethod = SendMethod>(
     methodData: options.methodData,
     createdAt: now,
     updatedAt: now,
+    revision: 0,
   };
 }

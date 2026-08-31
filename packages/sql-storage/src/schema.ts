@@ -1506,6 +1506,13 @@ const MIGRATIONS: readonly Migration[] = [
       GROUP BY purpose;
     `,
   },
+  {
+    id: '039_send_operation_revision',
+    sql: `
+      ALTER TABLE coco_cashu_send_operations
+        ADD COLUMN revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0);
+    `,
+  },
 ];
 
 // Export for testing

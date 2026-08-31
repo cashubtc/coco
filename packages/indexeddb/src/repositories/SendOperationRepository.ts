@@ -47,6 +47,7 @@ function rowToOperation(row: SendOperationRow): SendOperation {
     unit: normalizeUnit(row.unit ?? 'sat'),
     createdAt: row.createdAt * 1000, // Convert seconds to milliseconds
     updatedAt: row.updatedAt * 1000,
+    revision: row.revision ?? 0,
     error: row.error ?? undefined,
     method: row.method as SendMethod,
     methodData: parseMethodData(row),
@@ -116,6 +117,7 @@ function operationToRow(op: SendOperation): SendOperationRow {
       state: op.state,
       createdAt: createdAtSeconds,
       updatedAt: updatedAtSeconds,
+      revision: op.revision ?? 0,
       error: op.error ?? null,
       method: op.method,
       methodDataJson: stringifyJson(op.methodData),
@@ -137,6 +139,7 @@ function operationToRow(op: SendOperation): SendOperationRow {
     state: op.state,
     createdAt: createdAtSeconds,
     updatedAt: updatedAtSeconds,
+    revision: op.revision ?? 0,
     error: op.error ?? null,
     method: op.method,
     methodDataJson: stringifyJson(op.methodData),
@@ -178,6 +181,30 @@ export class IdbSendOperationRepository implements SendOperationRepository {
       const row = operationToRow(operation);
       row.updatedAt = getUnixTimeSeconds();
       await table.put(row);
+    });
+  }
+
+  async transition(command: {
+    operationId: string;
+    expectedState: SendOperationState;
+    expectedRevision: number;
+    next: SendOperation;
+  }): Promise<boolean> {
+    return this.db.runTransaction('rw', [this.storeName], async (tx) => {
+      const table = tx.table(this.storeName);
+      const existing = (await table.get(command.operationId)) as SendOperationRow | undefined;
+      if (
+        !existing ||
+        existing.state !== command.expectedState ||
+        (existing.revision ?? 0) !== command.expectedRevision
+      ) {
+        return false;
+      }
+      if (command.next.id !== command.operationId) {
+        throw new Error('Send operation transition cannot change the operation id');
+      }
+      await table.put(operationToRow({ ...command.next, revision: command.expectedRevision + 1 }));
+      return true;
     });
   }
 

@@ -6,11 +6,13 @@ import { P2pkSendHandler } from '../../infra/handlers/send/P2pkSendHandler';
 import { SendHandlerProvider } from '../../infra/handlers/send/SendHandlerProvider';
 import { MemorySendOperationRepository } from '../../repositories/memory/MemorySendOperationRepository';
 import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepository';
+import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { ProofService } from '../../services/ProofService';
 import type { MintService } from '../../services/MintService';
 import type { WalletService } from '../../services/WalletService';
+import type { SeedService } from '../../services/SeedService.ts';
 import type { Logger } from '../../logging/Logger';
 import type { CoreProof } from '../../types';
 import type {
@@ -19,10 +21,26 @@ import type {
   RolledBackSendOperation,
 } from '../../operations/send/SendOperation';
 import type { SendMethodHandler } from '../../operations/send/SendMethodHandler';
+import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
+import { CoreSendTransactions } from '../../transactions/send/SendTransactions.ts';
+import type { SendTransactions } from '../../transactions/send/SendTransactions.ts';
+import type { RepositoryTransactionScope } from '../../repositories';
+
+class CountingMemoryRepositories extends MemoryRepositories {
+  transactionCount = 0;
+
+  override withTransaction<T>(
+    fn: (repositories: RepositoryTransactionScope) => Promise<T>,
+  ): Promise<T> {
+    this.transactionCount++;
+    return super.withTransaction(fn);
+  }
+}
 
 describe('SendOperationService', () => {
   const mintUrl = 'https://mint.test';
   const keysetId = 'keyset-1';
+  const usdKeysetId = 'keyset-usd';
 
   let sendOpRepo: MemorySendOperationRepository;
   let proofRepo: MemoryProofRepository;
@@ -33,12 +51,15 @@ describe('SendOperationService', () => {
   let logger: Logger;
   let handlerProvider: SendHandlerProvider;
   let service: SendOperationService;
+  let seedService: SeedService;
+  let sendTransactions: SendTransactions;
+  let repositories: CountingMemoryRepositories;
 
   const makeProof = (secret: string, amount: number, unit = 'sat'): CoreProof =>
     ({
       amount: Amount.from(amount),
       C: `C_${secret}`,
-      id: keysetId,
+      id: unit === 'sat' ? keysetId : usdKeysetId,
       secret,
       mintUrl,
       unit,
@@ -50,14 +71,53 @@ describe('SendOperationService', () => {
     unit,
   });
 
-  beforeEach(() => {
-    sendOpRepo = new MemorySendOperationRepository();
-    proofRepo = new MemoryProofRepository();
+  const buildService = () =>
+    new SendOperationService({
+      operationQueries: sendOpRepo,
+      proofQueries: proofRepo,
+      transactions: sendTransactions,
+      proofService,
+      mintService,
+      walletService,
+      seedService,
+      eventBus,
+      handlerProvider,
+      logger,
+    });
+
+  beforeEach(async () => {
+    repositories = new CountingMemoryRepositories();
+    sendOpRepo = repositories.sendOperationRepository as MemorySendOperationRepository;
+    proofRepo = repositories.proofRepository as MemoryProofRepository;
+    sendTransactions = new CoreSendTransactions(new RepositoryCoreTransactionRunner(repositories));
+    await repositories.keysetRepository.addKeyset({
+      mintUrl,
+      id: keysetId,
+      unit: 'sat',
+      keypairs: { 1: 'unused' },
+      active: true,
+      feePpk: 0,
+    });
+    await repositories.keysetRepository.addKeyset({
+      mintUrl,
+      id: usdKeysetId,
+      unit: 'usd',
+      keypairs: { 1: 'unused' },
+      active: true,
+      feePpk: 0,
+    });
     eventBus = new EventBus<CoreEvents>();
 
     mintService = {
       isTrustedMint: mock(async () => true),
       assertNutSupported: mock(async () => {}),
+      ensureUpdatedMint: mock(async () => ({
+        mint: { mintUrl },
+        keysets: [
+          { id: keysetId, unit: 'sat', feePpk: 0 },
+          { id: usdKeysetId, unit: 'usd', feePpk: 0 },
+        ],
+      })),
     } as unknown as MintService;
 
     const wallet = {
@@ -89,14 +149,25 @@ describe('SendOperationService', () => {
     };
 
     walletService = {
-      getWalletWithActiveKeysetId: mock(async () => ({
-        wallet,
-        keysetId,
-        keyset: { id: keysetId },
-        keys: { keys: { 1: 'pubkey' }, id: keysetId },
-      })),
+      getWalletWithActiveKeysetId: mock(async (_mintUrl: string, unit: string) => {
+        const selectedKeysetId = unit.toLowerCase() === 'sat' ? keysetId : usdKeysetId;
+        return {
+          wallet,
+          keysetId: selectedKeysetId,
+          keyset: { id: selectedKeysetId },
+          keys: {
+            keys: { 1: 'unused' },
+            id: selectedKeysetId,
+            unit: unit.toLowerCase(),
+            active: true,
+          },
+        };
+      }),
       getWallet: mock(async () => wallet),
     } as unknown as WalletService;
+    seedService = {
+      getSeed: mock(async () => new Uint8Array(32).fill(1)),
+    } as unknown as SeedService;
 
     proofService = {
       selectProofsToSend: mock(
@@ -139,57 +210,39 @@ describe('SendOperationService', () => {
       p2pk: new P2pkSendHandler(),
     });
 
-    service = new SendOperationService(
-      sendOpRepo,
-      proofRepo,
-      proofService,
-      mintService,
-      walletService,
-      eventBus,
-      handlerProvider,
-      logger,
-    );
+    service = buildService();
   });
 
-  it('serializes prepare calls for the same mint', async () => {
+  it('prepares concurrent sends from the same mint without reusing proofs', async () => {
     await proofRepo.saveProofs(mintUrl, [makeProof('proof-1', 10), makeProof('proof-2', 10)]);
 
     const firstInit = await service.init(mintUrl, unitAmount(10));
     const secondInit = await service.init(mintUrl, unitAmount(10));
 
-    let releaseFirstReservation: () => void;
-    const firstReservationBlocked = new Promise<void>((resolve) => {
-      releaseFirstReservation = resolve;
-    });
-    (proofService.reserveProofs as Mock<any>).mockImplementation(
-      async (selectedMintUrl: string, secrets: string[], operationId: string) => {
-        if (operationId === firstInit.id) {
-          await firstReservationBlocked;
-        }
-        await proofRepo.reserveProofs(selectedMintUrl, secrets, operationId);
-        return { amount: Amount.from(0) };
-      },
-    );
-
-    const first = service.prepare(firstInit);
-    await Promise.resolve();
-
-    let secondResolved = false;
-    const second = service.prepare(secondInit).then((operation) => {
-      secondResolved = true;
-      return operation;
-    });
-
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(secondResolved).toBe(false);
-
-    releaseFirstReservation!();
-
-    const [firstPrepared, secondPrepared] = await Promise.all([first, second]);
+    const [firstPrepared, secondPrepared] = await Promise.all([
+      service.prepare(firstInit),
+      service.prepare(secondInit),
+    ]);
     expect(firstPrepared.state).toBe('prepared');
     expect(secondPrepared.state).toBe('prepared');
-    expect(secondResolved).toBe(true);
+    expect(firstPrepared.inputProofSecrets).not.toEqual(secondPrepared.inputProofSecrets);
+  });
+
+  it('completes asynchronous preflight before opening a repository transaction', async () => {
+    await proofRepo.saveProofs(mintUrl, [makeProof('proof-1', 10)]);
+    const init = await service.init(mintUrl, unitAmount(10));
+    (seedService.getSeed as Mock<any>).mockImplementationOnce(async () => {
+      throw new Error('seed unavailable');
+    });
+
+    await expect(service.prepare(init)).rejects.toThrow('seed unavailable');
+
+    expect(repositories.transactionCount).toBe(0);
+    expect(
+      (await proofRepo.getProofBySecret(mintUrl, 'proof-1'))?.usedByOperationId,
+    ).toBeUndefined();
+    expect(await sendOpRepo.getById(init.id)).toBeNull();
+    expect(await repositories.counterRepository.getCounter(mintUrl, keysetId)).toBeNull();
   });
 
   it('emits send:prepared after the prepared state is persisted', async () => {
@@ -208,7 +261,24 @@ describe('SendOperationService', () => {
 
     expect(preparedOp.state).toBe('prepared');
     expect(persistedState).toBe('prepared');
-    expect(lockedDuringEvent).toBe(true);
+    expect(lockedDuringEvent).toBe(false);
+  });
+
+  it('releases the mint lock before publishing committed preparation events', async () => {
+    await proofRepo.saveProofs(mintUrl, [makeProof('proof-1', 10), makeProof('proof-2', 10)]);
+    const first = await service.init(mintUrl, unitAmount(10));
+    const second = await service.init(mintUrl, unitAmount(10));
+    let nested: PreparedSendOperation | undefined;
+
+    eventBus.once('send:prepared', async () => {
+      nested = await service.prepare(second);
+    });
+
+    const prepared = await service.prepare(first);
+
+    expect(prepared.state).toBe('prepared');
+    expect(nested?.state).toBe('prepared');
+    expect(prepared.inputProofSecrets).not.toEqual(nested?.inputProofSecrets);
   });
 
   it('emits send:pending after the pending state is persisted', async () => {
@@ -279,15 +349,6 @@ describe('SendOperationService', () => {
     };
 
     const customHandler: SendMethodHandler<'default'> = {
-      prepare: mock(async (ctx) => ({
-        ...ctx.operation,
-        state: 'prepared',
-        updatedAt: Date.now(),
-        needsSwap: false,
-        fee: Amount.from(0),
-        inputAmount: ctx.operation.amount,
-        inputProofSecrets: [],
-      })),
       execute: mock(async () => ({
         status: 'FAILED' as const,
         failed: failedOperation,
@@ -302,16 +363,7 @@ describe('SendOperationService', () => {
       default: customHandler,
       p2pk: new P2pkSendHandler(),
     });
-    service = new SendOperationService(
-      sendOpRepo,
-      proofRepo,
-      proofService,
-      mintService,
-      walletService,
-      eventBus,
-      handlerProvider,
-      logger,
-    );
+    service = buildService();
 
     const events: CoreEvents['send:rolled-back'][] = [];
     eventBus.on('send:rolled-back', (event) => void events.push(event));
@@ -407,15 +459,6 @@ describe('SendOperationService', () => {
 
     let persistedStateDuringFinalize: string | undefined;
     const customHandler: SendMethodHandler<'default'> = {
-      prepare: mock(async (ctx) => ({
-        ...ctx.operation,
-        state: 'prepared',
-        updatedAt: Date.now(),
-        needsSwap: false,
-        fee: Amount.from(0),
-        inputAmount: ctx.operation.amount,
-        inputProofSecrets: [],
-      })),
       execute: mock(async () => {
         throw new Error('not used');
       }),
@@ -431,16 +474,7 @@ describe('SendOperationService', () => {
       default: customHandler,
       p2pk: new P2pkSendHandler(),
     });
-    service = new SendOperationService(
-      sendOpRepo,
-      proofRepo,
-      proofService,
-      mintService,
-      walletService,
-      eventBus,
-      handlerProvider,
-      logger,
-    );
+    service = buildService();
 
     await service.finalize(pendingOp.id);
 

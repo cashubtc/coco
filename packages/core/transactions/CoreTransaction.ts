@@ -1,26 +1,41 @@
 import type { Repositories, RepositoryTransactionScope } from '@core/repositories';
 import { RepositoryTransactionConflictError } from '@core/repositories';
+import { OutputData, type OutputDataCreator } from '@cashu/cashu-ts';
 import {
   RepositoryTransactionalKeypairOperations,
   type TransactionalKeypairOperations,
 } from './keypairs/TransactionalKeypairOperations.ts';
+import {
+  RepositoryTransactionalSendOperations,
+  type TransactionalSendOperations,
+} from './send/TransactionalSendOperations.ts';
 
 export interface CoreTransaction {
   readonly keypairs: TransactionalKeypairOperations;
+  readonly sends: TransactionalSendOperations;
 }
 
 export interface CoreTransactionRunner {
   run<T>(command: (transaction: CoreTransaction) => Promise<T>): Promise<T>;
 }
 
-interface TransactionModuleFactory {
+export interface TransactionModuleFactory {
   create(repositories: RepositoryTransactionScope): CoreTransaction;
 }
 
 class RepositoryTransactionModuleFactory implements TransactionModuleFactory {
+  constructor(private readonly outputDataCreator: OutputDataCreator = OutputData) {}
+
   create(repositories: RepositoryTransactionScope): CoreTransaction {
     return {
       keypairs: new RepositoryTransactionalKeypairOperations(repositories.keyRingRepository),
+      sends: new RepositoryTransactionalSendOperations(
+        repositories.proofRepository,
+        repositories.counterRepository,
+        repositories.keysetRepository,
+        repositories.sendOperationRepository,
+        this.outputDataCreator,
+      ),
     };
   }
 }
@@ -54,4 +69,10 @@ export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
       }
     }
   }
+}
+
+export function createCoreTransactionModuleFactory(
+  outputDataCreator?: OutputDataCreator,
+): TransactionModuleFactory {
+  return new RepositoryTransactionModuleFactory(outputDataCreator);
 }

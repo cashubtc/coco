@@ -80,8 +80,12 @@ import {
   mintQuoteToMethodSnapshot,
 } from './models/MintQuote.ts';
 import { assessMintQuoteClaimability } from './models/MintQuoteClaimability.ts';
-import { RepositoryCoreTransactionRunner } from './transactions/CoreTransaction.ts';
+import {
+  RepositoryCoreTransactionRunner,
+  createCoreTransactionModuleFactory,
+} from './transactions/CoreTransaction.ts';
 import { CoreKeyRingTransactions } from './transactions/keypairs/KeyRingTransactions.ts';
+import { CoreSendTransactions } from './transactions/send/SendTransactions.ts';
 
 /**
  * Configuration options for initializing the Coco Cashu manager
@@ -918,7 +922,10 @@ export class Manager {
       this.eventBus,
     );
     const seedService = new SeedService(seedGetter);
-    const coreTransactionRunner = new RepositoryCoreTransactionRunner(repositories);
+    const coreTransactionRunner = new RepositoryCoreTransactionRunner(
+      repositories,
+      createCoreTransactionModuleFactory(this.outputDataCreator),
+    );
     const keyRingTransactions = new CoreKeyRingTransactions(
       coreTransactionRunner,
       seedService,
@@ -970,19 +977,23 @@ export class Manager {
     const sendOperationLogger = this.getChildLogger('SendOperationService');
     const sendHandlerProvider = new SendHandlerProvider({
       default: new DefaultSendHandler(),
-      p2pk: new P2pkSendHandler(this.outputDataCreator),
+      p2pk: new P2pkSendHandler(),
     });
-    const sendOperationService = new SendOperationService(
-      repositories.sendOperationRepository,
-      repositories.proofRepository,
+    const sendTransactions = new CoreSendTransactions(coreTransactionRunner);
+    const sendOperationService = new SendOperationService({
+      operationQueries: repositories.sendOperationRepository,
+      proofQueries: repositories.proofRepository,
+      transactions: sendTransactions,
       proofService,
       mintService,
       walletService,
-      this.eventBus,
-      sendHandlerProvider,
-      sendOperationLogger,
+      seedService,
+      eventBus: this.eventBus,
+      handlerProvider: sendHandlerProvider,
+      outputDataCreator: this.outputDataCreator,
+      logger: sendOperationLogger,
       mintScopedLock,
-    );
+    });
     const sendOperationRepository = repositories.sendOperationRepository;
 
     const tokenService = new TokenService(mintService, tokenLogger);

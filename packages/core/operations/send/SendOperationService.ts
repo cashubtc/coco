@@ -1,5 +1,9 @@
-import type { Token, ProofState as CashuProofState } from '@cashu/cashu-ts';
-import type { SendOperationRepository, ProofRepository } from '../../repositories';
+import {
+  OutputData,
+  type OutputDataCreator,
+  type Token,
+  type ProofState as CashuProofState,
+} from '@cashu/cashu-ts';
 import type {
   SendOperation,
   InitSendOperation,
@@ -18,11 +22,12 @@ import {
   isTerminalOperation,
   type CreateSendOperationOptions,
 } from './SendOperation';
-import type { SendMethod, SendMethodData } from './SendMethodHandler';
+import { resolveP2pkOptions, type SendMethod, type SendMethodData } from './SendMethodHandler';
 import { SendHandlerProvider } from '../../infra/handlers/send/SendHandlerProvider';
 import type { MintService } from '../../services/MintService';
 import type { WalletService } from '../../services/WalletService';
 import type { ProofService } from '../../services/ProofService';
+import type { SeedService } from '../../services/SeedService.ts';
 import type { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
@@ -35,6 +40,27 @@ import {
 import { MintScopedLock } from '../MintScopedLock';
 import { OperationIdLock } from '../OperationIdLock';
 import { normalizeUnitAmount, type UnitAmount } from '../../amounts.ts';
+import type { SendTransactions } from '../../transactions/send/SendTransactions.ts';
+import type { PreparedSendResult } from '../../transactions/send/TransactionalSendOperations.ts';
+import type {
+  SendOperationQueries,
+  SendProofQueries,
+} from '../../transactions/send/SendOperationQueries.ts';
+
+export interface SendOperationServiceDependencies {
+  operationQueries: SendOperationQueries;
+  proofQueries: SendProofQueries;
+  transactions: SendTransactions;
+  proofService: ProofService;
+  mintService: MintService;
+  walletService: WalletService;
+  seedService: SeedService;
+  eventBus: EventBus<CoreEvents>;
+  handlerProvider: SendHandlerProvider;
+  outputDataCreator?: OutputDataCreator;
+  logger?: Logger;
+  mintScopedLock?: MintScopedLock;
+}
 
 /**
  * Options applied when a prepared send operation is executed.
@@ -51,14 +77,17 @@ export interface ExecuteSendOptions {
  * by breaking them into discrete steps: init → prepare → execute → finalize/rollback.
  */
 export class SendOperationService {
-  private readonly sendOperationRepository: SendOperationRepository;
-  private readonly proofRepository: ProofRepository;
+  private readonly operationQueries: SendOperationQueries;
+  private readonly proofQueries: SendProofQueries;
+  private readonly transactions: SendTransactions;
   private readonly proofService: ProofService;
   private readonly mintService: MintService;
   private readonly walletService: WalletService;
+  private readonly seedService: SeedService;
   private readonly eventBus: EventBus<CoreEvents>;
   private readonly handlerProvider: SendHandlerProvider;
   private readonly logger?: Logger;
+  private readonly outputDataCreator: OutputDataCreator;
 
   /** In-memory lock to prevent concurrent operations on the same operation ID */
   private readonly operationIdLock = new OperationIdLock();
@@ -67,31 +96,24 @@ export class SendOperationService {
   /** In-memory lock to serialize proof selection/reservation per mint */
   private readonly mintScopedLock: MintScopedLock;
 
-  constructor(
-    sendOperationRepository: SendOperationRepository,
-    proofRepository: ProofRepository,
-    proofService: ProofService,
-    mintService: MintService,
-    walletService: WalletService,
-    eventBus: EventBus<CoreEvents>,
-    handlerProvider: SendHandlerProvider,
-    logger?: Logger,
-    mintScopedLock?: MintScopedLock,
-  ) {
-    this.sendOperationRepository = sendOperationRepository;
-    this.proofRepository = proofRepository;
-    this.proofService = proofService;
-    this.mintService = mintService;
-    this.walletService = walletService;
-    this.eventBus = eventBus;
-    this.handlerProvider = handlerProvider;
-    this.logger = logger;
-    this.mintScopedLock = mintScopedLock ?? new MintScopedLock();
+  constructor(dependencies: SendOperationServiceDependencies) {
+    this.operationQueries = dependencies.operationQueries;
+    this.proofQueries = dependencies.proofQueries;
+    this.transactions = dependencies.transactions;
+    this.proofService = dependencies.proofService;
+    this.mintService = dependencies.mintService;
+    this.walletService = dependencies.walletService;
+    this.seedService = dependencies.seedService;
+    this.eventBus = dependencies.eventBus;
+    this.handlerProvider = dependencies.handlerProvider;
+    this.logger = dependencies.logger;
+    this.outputDataCreator = dependencies.outputDataCreator ?? OutputData;
+    this.mintScopedLock = dependencies.mintScopedLock ?? new MintScopedLock();
   }
 
   private buildDeps() {
     return {
-      proofRepository: this.proofRepository,
+      proofRepository: this.proofQueries,
       proofService: this.proofService,
       walletService: this.walletService,
       mintService: this.mintService,
@@ -148,8 +170,7 @@ export class SendOperationService {
     const id = generateSubId();
     const operation = createSendOperation(id, mintUrl, parsed, options);
 
-    await this.sendOperationRepository.create(operation);
-    this.logger?.debug('Send operation created', {
+    this.logger?.debug('Send operation initialized in memory', {
       operationId: id,
       mintUrl,
       amount: parsed.amount,
@@ -164,62 +185,53 @@ export class SendOperationService {
    * Prepare the operation by reserving proofs and creating outputs.
    * After this step, the operation can be executed or rolled back.
    *
-   * If preparation fails, automatically attempts to recover the init operation.
    * Throws if the operation is already in progress.
-   *
-   * Delegates to the appropriate handler based on the operation method.
    */
   async prepare(operation: InitSendOperation): Promise<PreparedSendOperation> {
-    if (!this.handlerProvider) {
-      throw new Error('SendHandlerProvider is required');
-    }
-
     const releaseLock = await this.acquireOperationLock(operation.id);
+    let result: PreparedSendResult;
     try {
       const releaseMintLock = await this.mintScopedLock.acquire(operation.mintUrl);
-      let prepared: PreparedSendOperation;
       try {
-        const handler = this.handlerProvider.get(operation.method);
-        if (!handler) {
+        if (!this.handlerProvider.get(operation.method)) {
           throw new Error(`No handler registered for method: ${operation.method}`);
         }
-
-        const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
+        if (!(await this.mintService.isTrustedMint(operation.mintUrl))) {
+          throw new UnknownMintError(`Mint ${operation.mintUrl} is not trusted`);
+        }
+        const { keys } = await this.walletService.getWalletWithActiveKeysetId(
           operation.mintUrl,
           operation.unit,
         );
-        const ctx = {
-          operation,
-          wallet,
-          proofRepository: this.proofRepository,
-          proofService: this.proofService,
-          walletService: this.walletService,
-          mintService: this.mintService,
-          eventBus: this.eventBus,
-          logger: this.logger,
-        };
-
-        prepared = await handler.prepare(ctx);
-        // Save the prepared operation to the repository
-        await this.sendOperationRepository.update(prepared);
-      } catch (e) {
-        // Attempt to clean up the init operation before re-throwing
-        await this.tryRecoverInitOperation(operation);
-        throw e;
+        const seed = await this.seedService.getSeed();
+        if (operation.method === 'p2pk') {
+          await this.mintService.assertNutSupported(operation.mintUrl, 11, 'P2PK send');
+        }
+        const p2pkSendOutputs =
+          operation.method === 'p2pk'
+            ? (() => {
+                const methodData = operation.methodData as SendMethodData<'p2pk'>;
+                return this.outputDataCreator.createP2PKData(
+                  resolveP2pkOptions(methodData),
+                  operation.amount,
+                  keys,
+                );
+              })()
+            : undefined;
+        result = await this.transactions.prepare({
+          operation: { ...operation, updatedAt: Date.now() },
+          activeKeys: keys,
+          seed,
+          p2pkSendOutputs,
+        });
       } finally {
         releaseMintLock();
       }
-
-      await this.eventBus.emit('send:prepared', {
-        mintUrl: prepared.mintUrl,
-        operationId: prepared.id,
-        operation: prepared,
-      });
-
-      return prepared;
     } finally {
       releaseLock();
     }
+    await this.publishPrepared(result);
+    return result.operation;
   }
 
   /**
@@ -250,7 +262,7 @@ export class SendOperationService {
         state: 'executing',
         updatedAt: Date.now(),
       };
-      await this.sendOperationRepository.update(executing);
+      await this.transactions.updateLegacyState(executing);
 
       let pending: PendingSendOperation | undefined;
       let token: Token | undefined;
@@ -265,7 +277,7 @@ export class SendOperationService {
           operation.mintUrl,
           operation.unit,
         );
-        const reservedProofs = await this.proofRepository.getProofsByOperationId(
+        const reservedProofs = await this.proofQueries.getProofsByOperationId(
           operation.mintUrl,
           operation.id,
         );
@@ -274,7 +286,7 @@ export class SendOperationService {
           operation: executing,
           wallet,
           reservedProofs,
-          proofRepository: this.proofRepository,
+          proofRepository: this.proofQueries,
           proofService: this.proofService,
           walletService: this.walletService,
           mintService: this.mintService,
@@ -290,12 +302,12 @@ export class SendOperationService {
             : result.token;
           const pendingWithMemo: PendingSendOperation = { ...result.pending, token: resolvedToken };
           // Save the pending operation to the repository
-          await this.sendOperationRepository.update(pendingWithMemo);
+          await this.transactions.updateLegacyState(pendingWithMemo);
           pending = pendingWithMemo;
           token = resolvedToken;
         } else {
           // Handler returned FAILED - persist the terminal result without re-running recovery
-          await this.sendOperationRepository.update(result.failed);
+          await this.transactions.updateLegacyState(result.failed);
           await this.eventBus.emit('send:rolled-back', {
             mintUrl: result.failed.mintUrl,
             operationId: result.failed.id,
@@ -353,7 +365,7 @@ export class SendOperationService {
    */
   async finalize(operationId: string): Promise<void> {
     // Check terminal states before acquiring lock to allow idempotent calls
-    const preCheck = await this.sendOperationRepository.getById(operationId);
+    const preCheck = await this.operationQueries.getById(operationId);
     if (!preCheck) {
       throw new Error(`Operation ${operationId} not found`);
     }
@@ -379,7 +391,7 @@ export class SendOperationService {
 
         await this.operationIdLock.waitForUnlock(operationId);
 
-        const latest = await this.sendOperationRepository.getById(operationId);
+        const latest = await this.operationQueries.getById(operationId);
         if (!latest) {
           throw new Error(`Operation ${operationId} not found`);
         }
@@ -401,7 +413,7 @@ export class SendOperationService {
       }
 
       // Re-fetch after acquiring lock to ensure state hasn't changed
-      const operation = await this.sendOperationRepository.getById(operationId);
+      const operation = await this.operationQueries.getById(operationId);
       if (!operation) {
         throw new Error(`Operation ${operationId} not found`);
       }
@@ -437,7 +449,7 @@ export class SendOperationService {
         state: 'finalized',
         updatedAt: Date.now(),
       };
-      await this.sendOperationRepository.update(finalized);
+      await this.transactions.updateLegacyState(finalized);
 
       await this.eventBus.emit('send:finalized', {
         mintUrl: pendingOp.mintUrl,
@@ -459,7 +471,7 @@ export class SendOperationService {
   async rollback(operationId: string, reason = 'Rolled back by user action'): Promise<void> {
     const releaseLock = await this.acquireOperationLock(operationId);
     try {
-      const operation = await this.sendOperationRepository.getById(operationId);
+      const operation = await this.operationQueries.getById(operationId);
       if (!operation) {
         throw new Error(`Operation ${operationId} not found`);
       }
@@ -500,7 +512,7 @@ export class SendOperationService {
           state: 'rolling_back',
           updatedAt: Date.now(),
         };
-        await this.sendOperationRepository.update(rollingBack);
+        await this.transactions.updateLegacyState(rollingBack);
         opForRollback = rollingBack;
       }
 
@@ -539,14 +551,14 @@ export class SendOperationService {
       let orphanCount = 0;
 
       // 1. Clean up failed init operations
-      const initOps = await this.sendOperationRepository.getByState('init');
+      const initOps = await this.operationQueries.getByState('init');
       for (const op of initOps) {
         await this.recoverInitOperation(op as InitSendOperation);
         initCount++;
       }
 
       // 2. Log warnings for prepared operations (leave for user to decide)
-      const preparedOps = await this.sendOperationRepository.getByState('prepared');
+      const preparedOps = await this.operationQueries.getByState('prepared');
       for (const op of preparedOps) {
         this.logger?.warn('Found stale prepared operation, user can rollback manually', {
           operationId: op.id,
@@ -554,7 +566,7 @@ export class SendOperationService {
       }
 
       // 3. Recover executing operations
-      const executingOps = await this.sendOperationRepository.getByState('executing');
+      const executingOps = await this.operationQueries.getByState('executing');
       for (const op of executingOps) {
         try {
           await this.recoverExecutingOperation(op as ExecutingSendOperation);
@@ -568,7 +580,7 @@ export class SendOperationService {
       }
 
       // 4. Check pending operations
-      const pendingOps = await this.sendOperationRepository.getByState('pending');
+      const pendingOps = await this.operationQueries.getByState('pending');
       for (const op of pendingOps) {
         try {
           await this.checkPendingOperation(op as PendingSendOperation);
@@ -587,7 +599,7 @@ export class SendOperationService {
       // recover proofs via the mint's restore endpoint if the swap succeeded
       // but we crashed before saving the reclaimed proofs.
       // For now, users need to manually recover via seed restore if this happens.
-      const rollingBackOps = await this.sendOperationRepository.getByState('rolling_back');
+      const rollingBackOps = await this.operationQueries.getByState('rolling_back');
       for (const op of rollingBackOps) {
         this.logger?.warn(
           'Found operation stuck in rolling_back state. ' +
@@ -623,7 +635,7 @@ export class SendOperationService {
    */
   private async recoverInitOperation(op: InitSendOperation): Promise<void> {
     // Find any proofs that might have been reserved for this operation
-    const reservedProofs = await this.proofRepository.getReservedProofs();
+    const reservedProofs = await this.proofQueries.getReservedProofs();
     const orphanedForOp = reservedProofs.filter((p) => p.usedByOperationId === op.id);
 
     if (orphanedForOp.length > 0) {
@@ -633,24 +645,8 @@ export class SendOperationService {
       );
     }
 
-    await this.sendOperationRepository.delete(op.id);
+    await this.transactions.deleteLegacyOperation(op.id);
     this.logger?.info('Cleaned up failed init operation', { operationId: op.id });
-  }
-
-  /**
-   * Attempts to recover an init operation, swallowing recovery errors.
-   * If recovery fails, logs warning and leaves for startup recovery.
-   */
-  private async tryRecoverInitOperation(op: InitSendOperation): Promise<void> {
-    try {
-      await this.recoverInitOperation(op);
-      this.logger?.info('Recovered init operation after failure', { operationId: op.id });
-    } catch (recoveryError) {
-      this.logger?.warn('Failed to recover init operation, will retry on next startup', {
-        operationId: op.id,
-        error: recoveryError instanceof Error ? recoveryError.message : String(recoveryError),
-      });
-    }
   }
 
   /**
@@ -668,7 +664,7 @@ export class SendOperationService {
     });
 
     if (result.status === 'PENDING') {
-      await this.sendOperationRepository.update(result.pending);
+      await this.transactions.updateLegacyState(result.pending);
       if (result.token) {
         await this.eventBus.emit('send:pending', {
           mintUrl: result.pending.mintUrl,
@@ -691,7 +687,7 @@ export class SendOperationService {
    */
   private async tryRecoverExecutingOperation(op: ExecutingSendOperation): Promise<void> {
     try {
-      const latest = await this.sendOperationRepository.getById(op.id);
+      const latest = await this.operationQueries.getById(op.id);
       if (!latest || latest.state !== 'executing') {
         this.logger?.debug('Skipping executing operation recovery because state changed', {
           operationId: op.id,
@@ -764,7 +760,7 @@ export class SendOperationService {
     unit: string,
   ): Promise<CashuProofState[]> {
     const wallet = await this.walletService.getWallet(mintUrl, unit);
-    const proofInputs = await this.proofRepository.getProofsBySecrets(mintUrl, secrets);
+    const proofInputs = await this.proofQueries.getProofsBySecrets(mintUrl, secrets);
     if (proofInputs.length !== secrets.length) {
       throw new ProofValidationError('Cannot check proof states: missing proof metadata');
     }
@@ -784,7 +780,7 @@ export class SendOperationService {
       updatedAt: Date.now(),
       error,
     };
-    await this.sendOperationRepository.update(rolledBack);
+    await this.transactions.updateLegacyState(rolledBack);
 
     await this.eventBus.emit('send:rolled-back', {
       mintUrl: op.mintUrl,
@@ -805,13 +801,13 @@ export class SendOperationService {
    * Finds proofs that are reserved but point to non-existent or terminal operations.
    */
   private async cleanupOrphanedReservations(): Promise<number> {
-    const reservedProofs = await this.proofRepository.getReservedProofs();
+    const reservedProofs = await this.proofQueries.getReservedProofs();
     const orphanedProofs: typeof reservedProofs = [];
 
     for (const proof of reservedProofs) {
       if (!proof.usedByOperationId) continue;
 
-      const operation = await this.sendOperationRepository.getById(proof.usedByOperationId);
+      const operation = await this.operationQueries.getById(proof.usedByOperationId);
 
       // Orphaned if operation doesn't exist or is in terminal state
       if (!operation || isTerminalOperation(operation)) {
@@ -838,6 +834,37 @@ export class SendOperationService {
     return orphanedProofs.length;
   }
 
+  private async publishPrepared(result: PreparedSendResult): Promise<void> {
+    if (result.counter) {
+      await this.publishCommittedEvent('counter:updated', result.counter);
+    }
+    await this.publishCommittedEvent('proofs:reserved', {
+      mintUrl: result.reservation.mintUrl,
+      operationId: result.reservation.operationId,
+      secrets: result.reservation.secrets,
+      amount: {
+        amount: result.reservation.amount,
+        unit: result.reservation.unit,
+      },
+    });
+    await this.publishCommittedEvent('send:prepared', {
+      mintUrl: result.operation.mintUrl,
+      operationId: result.operation.id,
+      operation: result.operation,
+    });
+  }
+
+  private async publishCommittedEvent<E extends keyof CoreEvents>(
+    event: E,
+    payload: CoreEvents[E],
+  ): Promise<void> {
+    try {
+      await this.eventBus.emit(event, payload);
+    } catch (error) {
+      this.logger?.error('Failed to publish committed Send event', { event, error });
+    }
+  }
+
   private normalizeMemo(memo: string): string | undefined {
     const trimmed = memo.trim();
     return trimmed.length > 0 ? trimmed : undefined;
@@ -852,21 +879,21 @@ export class SendOperationService {
    * Get an operation by ID.
    */
   async getOperation(operationId: string): Promise<SendOperation | null> {
-    return this.sendOperationRepository.getById(operationId);
+    return this.operationQueries.getById(operationId);
   }
 
   /**
    * Get all pending operations.
    */
   async getPendingOperations(): Promise<SendOperation[]> {
-    return this.sendOperationRepository.getPending();
+    return this.operationQueries.getPending();
   }
 
   /**
    * Get all prepared operations.
    */
   async getPreparedOperations(): Promise<PreparedSendOperation[]> {
-    const ops = await this.sendOperationRepository.getByState('prepared');
+    const ops = await this.operationQueries.getByState('prepared');
     return ops.filter((op): op is PreparedSendOperation => op.state === 'prepared');
   }
 }

@@ -233,6 +233,17 @@ export interface SendOperationRepository {
   /** Update an existing send operation */
   update(operation: SendOperation): Promise<void>;
 
+  /**
+   * Conditionally replace an operation when its state and revision still match.
+   * Implementations persist `next` with `expectedRevision + 1` and return false on contention.
+   */
+  transition(command: {
+    operationId: string;
+    expectedState: SendOperationState;
+    expectedRevision: number;
+    next: SendOperation;
+  }): Promise<boolean>;
+
   /** Get a send operation by ID */
   getById(id: string): Promise<SendOperation | null>;
 

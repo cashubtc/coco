@@ -11,19 +11,16 @@ import type { MintService } from '../../services/MintService';
 import type { WalletService } from '../../services/WalletService';
 import type { CoreProof } from '../../types';
 import type {
-  InitSendOperation,
   PreparedSendOperation,
   ExecutingSendOperation,
   PendingSendOperation,
 } from '../../operations/send/SendOperation';
 import type {
-  BasePrepareContext,
   ExecuteContext,
   FinalizeContext,
   RollbackContext,
   RecoverExecutingContext,
 } from '../../operations/send/SendMethodHandler';
-import { ProofValidationError } from '../../models/Error';
 
 describe('DefaultSendHandler', () => {
   const mintUrl = 'https://mint.test';
@@ -70,19 +67,6 @@ describe('DefaultSendHandler', () => {
       blindingFactor: 'abcdef1234567890',
       secret: Buffer.from(secret).toString('hex'),
     })),
-  });
-
-  const makeInitOp = (id: string, overrides?: Partial<InitSendOperation>): InitSendOperation => ({
-    id,
-    state: 'init',
-    mintUrl,
-    amount: Amount.from(100),
-    method: 'default',
-    methodData: {},
-    createdAt: Date.now() - 10000,
-    updatedAt: Date.now() - 10000,
-    ...overrides,
-    unit: overrides?.unit ?? 'sat',
   });
 
   const makePreparedOp = (
@@ -226,17 +210,6 @@ describe('DefaultSendHandler', () => {
     } as Logger;
   });
 
-  const buildPrepareContext = (operation: InitSendOperation): BasePrepareContext => ({
-    operation,
-    wallet: mockWallet,
-    proofRepository,
-    proofService,
-    walletService,
-    mintService,
-    eventBus,
-    logger,
-  });
-
   const buildExecuteContext = (
     operation: ExecutingSendOperation,
     reservedProofs: Proof[] = [],
@@ -284,98 +257,6 @@ describe('DefaultSendHandler', () => {
     mintService,
     eventBus,
     logger,
-  });
-
-  describe('prepare', () => {
-    it('prepares an exact-match send without swap data', async () => {
-      const operation = makeInitOp('op-exact');
-
-      const result = await handler.prepare(buildPrepareContext(operation));
-
-      expect(result.state).toBe('prepared');
-      expect(result.needsSwap).toBe(false);
-      expect(result.fee).toEqual(Amount.zero());
-      expect(result.outputData).toBe(undefined);
-      expect(result.inputProofSecrets).toEqual(['proof-100']);
-      expect(proofService.createOutputsAndIncrementCounters).not.toHaveBeenCalled();
-      expect(proofService.reserveProofs).toHaveBeenCalledWith(mintUrl, ['proof-100'], 'op-exact', {
-        unit: 'sat',
-      });
-    });
-
-    it('prepares a swap send when forceSwap is true and an exact match exists', async () => {
-      (proofService.selectProofsToSend as Mock<any>).mockImplementation(
-        (_mintUrl: string, _intent: { amount: Amount; unit: string }, includeFees: boolean) =>
-          Promise.resolve(
-            includeFees ? [makeProof('proof-100', 100), makeProof('proof-5', 5)] : [],
-          ),
-      );
-
-      const operation = makeInitOp('op-force-swap', { methodData: { forceSwap: true } });
-      const result = await handler.prepare(buildPrepareContext(operation));
-
-      expect(result.needsSwap).toBe(true);
-      expect(result.fee).toEqual(Amount.from(1));
-      expect(result.methodData).toEqual({ forceSwap: true });
-      expect(result.inputProofSecrets).toEqual(['proof-100', 'proof-5']);
-      expect(result.outputData).toBeDefined();
-      expect(proofService.selectProofsToSend).toHaveBeenCalledTimes(1);
-      expect(proofService.selectProofsToSend).toHaveBeenCalledWith(
-        mintUrl,
-        { amount: Amount.from(100), unit: 'sat' },
-        true,
-      );
-      expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalledWith(
-        mintUrl,
-        {
-          keep: { amount: Amount.from(4), unit: 'sat' },
-          send: { amount: Amount.from(100), unit: 'sat' },
-        },
-        {},
-      );
-    });
-
-    it('prepares a swap send when no exact match exists', async () => {
-      (proofRepository.getAvailableProofs as Mock<any>).mockImplementation(() =>
-        Promise.resolve([makeCoreProof('input-1', 60), makeCoreProof('input-2', 50)]),
-      );
-
-      const result = await handler.prepare(buildPrepareContext(makeInitOp('op-swap')));
-
-      expect(result.needsSwap).toBe(true);
-      expect(result.fee).toEqual(Amount.from(1));
-      expect(result.outputData).toBeDefined();
-      expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalledWith(
-        mintUrl,
-        {
-          keep: { amount: Amount.from(9), unit: 'sat' },
-          send: { amount: Amount.from(100), unit: 'sat' },
-        },
-        {},
-      );
-    });
-
-    it('throws ProofValidationError when selected proofs do not cover fees', async () => {
-      (proofService.selectProofsToSend as Mock<any>).mockImplementation(
-        (
-          _mintUrl: string,
-          _intent: { amount: Amount; unit: string },
-          includeFees: boolean = true,
-        ) => {
-          return Promise.resolve(
-            includeFees ? [makeProof('input-1', 60), makeProof('input-2', 40)] : [],
-          );
-        },
-      );
-
-      await expect(
-        handler.prepare(buildPrepareContext(makeInitOp('op-underfunded'))),
-      ).rejects.toThrow(ProofValidationError);
-      await expect(
-        handler.prepare(buildPrepareContext(makeInitOp('op-underfunded'))),
-      ).rejects.toThrow('Send amount is not sufficient after fees');
-      expect(proofService.reserveProofs).not.toHaveBeenCalled();
-    });
   });
 
   describe('execute', () => {
