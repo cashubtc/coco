@@ -1947,10 +1947,13 @@ describe('MintOperationService', () => {
   });
 
   it('fails a stale mint claim as retryable without replaying its output allocation', async () => {
+    const callOrder: string[] = [];
     await persistQuote();
     const pending = await service.prepare({ mintUrl, method: 'bolt11', quoteId }, Amount.from(10));
     (handler.execute as Mock<any>).mockRejectedValue(new CashuStaleKeysetError(false));
-    const invalidateMintSnapshot = mock(async () => {});
+    const invalidateMintSnapshot = mock(async () => {
+      callOrder.push('invalidate');
+    });
     walletService = {
       ...walletService,
       invalidateMintSnapshot,
@@ -1969,6 +1972,9 @@ describe('MintOperationService', () => {
       logger,
       mintScopedLock,
     );
+    eventBus.on('mint-op:failed', () => {
+      callOrder.push('failed');
+    });
 
     await expect(service.execute(pending.id)).rejects.toBeInstanceOf(CashuStaleKeysetError);
 
@@ -1980,6 +1986,7 @@ describe('MintOperationService', () => {
       retryable: true,
     });
     expect(invalidateMintSnapshot).toHaveBeenCalledWith(mintUrl);
+    expect(callOrder).toEqual(['invalidate', 'failed']);
   });
 
   it('execute rejects missing and init operations', async () => {

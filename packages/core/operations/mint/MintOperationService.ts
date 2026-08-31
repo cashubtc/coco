@@ -480,11 +480,11 @@ export class MintOperationService {
     executing: ExecutingMintOperation,
     cause: StaleKeysetError,
   ): Promise<never> {
+    await this.walletService.invalidateMintSnapshot(executing.mintUrl);
     await this.failOperation(executing, 'Mint rejected stale output keyset', {
       code: 'stale_keyset',
       retryable: true,
     });
-    await this.walletService.invalidateMintSnapshot(executing.mintUrl);
     throw cause;
   }
 

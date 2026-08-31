@@ -332,6 +332,7 @@ describe('SendOperationService', () => {
   });
 
   it('rolls back a rejected stale send and requires a caller-created operation', async () => {
+    const callOrder: string[] = [];
     const preparedOp: PreparedSendOperation = {
       id: 'send-op-stale',
       state: 'prepared',
@@ -366,11 +367,19 @@ describe('SendOperationService', () => {
         failed: failedOperation,
       })),
     };
-    const invalidateMintSnapshot = mock(async () => {});
+    const invalidateMintSnapshot = mock(async () => {
+      callOrder.push('invalidate');
+    });
     walletService = {
       ...walletService,
       invalidateMintSnapshot,
     } as unknown as WalletService;
+    proofService = {
+      ...proofService,
+      restoreProofsToReady: mock(async () => {
+        callOrder.push('restore-proofs');
+      }),
+    } as unknown as ProofService;
     const mintScopedLock = new MintScopedLock();
     handlerProvider = new SendHandlerProvider({
       default: customHandler,
@@ -387,6 +396,9 @@ describe('SendOperationService', () => {
       logger,
       mintScopedLock,
     );
+    eventBus.on('send:rolled-back', () => {
+      callOrder.push('rolled-back');
+    });
 
     await expect(service.execute(preparedOp)).rejects.toBeInstanceOf(CashuStaleKeysetError);
     expect(customHandler.execute).toHaveBeenCalledTimes(1);
@@ -394,6 +406,68 @@ describe('SendOperationService', () => {
     expect(proofService.restoreProofsToReady).toHaveBeenCalledWith(mintUrl, ['proof-1']);
     expect((await sendOpRepo.getById(preparedOp.id))?.state).toBe('rolled_back');
     expect(invalidateMintSnapshot).toHaveBeenCalledWith(mintUrl);
+    expect(callOrder).toEqual(['invalidate', 'restore-proofs', 'rolled-back']);
+  });
+
+  it('keeps a stale send executing and reserved when snapshot invalidation fails', async () => {
+    const preparedOp: PreparedSendOperation = {
+      id: 'send-op-stale-invalidation-failed',
+      state: 'prepared',
+      mintUrl,
+      amount: Amount.from(100),
+      unit: 'sat',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      needsSwap: true,
+      fee: Amount.zero(),
+      inputAmount: Amount.from(100),
+      inputProofSecrets: ['proof-1'],
+      outputData: { keep: [], send: [] },
+      method: 'default',
+      methodData: {},
+    };
+    await sendOpRepo.create(preparedOp);
+
+    const customHandler: SendMethodHandler<'default'> = {
+      prepare: mock(async () => preparedOp),
+      execute: mock(async () => {
+        throw new CashuStaleKeysetError(false);
+      }),
+      recoverExecuting: mock(async () => {
+        throw new Error('recovery must not run for a stale-keyset rejection');
+      }),
+    };
+    walletService = {
+      ...walletService,
+      invalidateMintSnapshot: mock(async () => {
+        throw new Error('Could not persist stale Known Mint');
+      }),
+    } as unknown as WalletService;
+    handlerProvider = new SendHandlerProvider({
+      default: customHandler,
+      p2pk: new P2pkSendHandler(),
+    });
+    service = new SendOperationService(
+      sendOpRepo,
+      proofRepo,
+      proofService,
+      mintService,
+      walletService,
+      eventBus,
+      handlerProvider,
+      logger,
+      new MintScopedLock(),
+    );
+    const rolledBackEvents: CoreEvents['send:rolled-back'][] = [];
+    eventBus.on('send:rolled-back', (event) => {
+      rolledBackEvents.push(event);
+    });
+
+    await expect(service.execute(preparedOp)).rejects.toThrow('Could not persist stale Known Mint');
+
+    expect(proofService.restoreProofsToReady).not.toHaveBeenCalled();
+    expect((await sendOpRepo.getById(preparedOp.id))?.state).toBe('executing');
+    expect(rolledBackEvents).toHaveLength(0);
   });
 
   it('waits for an in-progress finalization to finish before returning', async () => {

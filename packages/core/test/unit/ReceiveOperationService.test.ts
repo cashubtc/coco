@@ -168,10 +168,13 @@ describe('ReceiveOperationService', () => {
   });
 
   it('rolls back stale receive outputs without replaying them and invalidates the mint', async () => {
+    const callOrder: string[] = [];
     mockWalletReceive.mockImplementation(async () => {
       throw new CashuStaleKeysetError(false);
     });
-    const invalidateMintSnapshot = mock(async () => {});
+    const invalidateMintSnapshot = mock(async () => {
+      callOrder.push('invalidate');
+    });
     walletService = {
       ...walletService,
       invalidateMintSnapshot,
@@ -189,6 +192,9 @@ describe('ReceiveOperationService', () => {
       undefined,
       mintScopedLock,
     );
+    eventBus.on('receive-op:rolled-back', () => {
+      callOrder.push('rolled-back');
+    });
 
     const init = await service.init({ mint: mintUrl, proofs: [makeProof('p1')] } as Token);
     const prepared = await service.prepare(init);
@@ -198,6 +204,7 @@ describe('ReceiveOperationService', () => {
     expect(mintAdapter.checkProofStates).not.toHaveBeenCalled();
     expect((await receiveOpRepo.getById(prepared.id))?.state).toBe('rolled_back');
     expect(invalidateMintSnapshot).toHaveBeenCalledWith(mintUrl);
+    expect(callOrder).toEqual(['invalidate', 'rolled-back']);
   });
 
   it('serializes concurrent prepare() on the same mint so deterministic outputs cannot collide', async () => {

@@ -322,8 +322,8 @@ export class ReceiveOperationService {
     executing: ExecutingReceiveOperation,
     cause: StaleKeysetError,
   ): Promise<never> {
-    await this.markAsRolledBack(executing, 'Mint rejected stale receive outputs');
     await this.walletService.invalidateMintSnapshot(executing.mintUrl);
+    await this.markAsRolledBack(executing, 'Mint rejected stale receive outputs');
     throw cause;
   }
 

@@ -462,6 +462,7 @@ export class MeltOperationService {
     executing: ExecutingMeltOperation,
     cause: StaleKeysetError,
   ): Promise<never> {
+    await this.walletService.invalidateMintSnapshot(executing.mintUrl);
     if (executing.needsSwap && executing.swapOutputData) {
       const swapSendSecrets = getSwapSendSecrets(executing.swapOutputData);
       const savedSwapProofs = await this.proofRepository.getProofsBySecrets(
@@ -482,7 +483,6 @@ export class MeltOperationService {
     }
 
     await this.markAsRolledBack(executing, 'Mint rejected stale melt outputs');
-    await this.walletService.invalidateMintSnapshot(executing.mintUrl);
     throw cause;
   }
 

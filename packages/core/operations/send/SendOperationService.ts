@@ -346,9 +346,9 @@ export class SendOperationService {
     executing: ExecutingSendOperation,
     cause: StaleKeysetError,
   ): Promise<never> {
+    await this.walletService.invalidateMintSnapshot(executing.mintUrl);
     await this.proofService.restoreProofsToReady(executing.mintUrl, executing.inputProofSecrets);
     await this.markAsRolledBack(executing, 'Mint rejected stale send outputs');
-    await this.walletService.invalidateMintSnapshot(executing.mintUrl);
     throw cause;
   }
 

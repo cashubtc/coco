@@ -929,8 +929,10 @@ describe('MeltOperationService', () => {
   });
 
   describe('execute', () => {
-    const configureKeysetRecovery = () => {
-      const invalidateMintSnapshot = mock(async () => {});
+    const configureKeysetRecovery = (callOrder?: string[]) => {
+      const invalidateMintSnapshot = mock(async () => {
+        callOrder?.push('invalidate');
+      });
       walletService = {
         ...walletService,
         invalidateMintSnapshot,
@@ -1013,10 +1015,17 @@ describe('MeltOperationService', () => {
     });
 
     it('rolls back a stale pre-melt swap without remote reconciliation', async () => {
+      const callOrder: string[] = [];
       const prepared = makePreparedOp('op-stale-melt');
       await meltOperationRepository.create(prepared);
       (handler.execute as Mock<any>).mockRejectedValue(new CashuStaleKeysetError(false));
-      const { invalidateMintSnapshot } = configureKeysetRecovery();
+      (proofService.restoreProofsToReady as Mock<any>).mockImplementation(async () => {
+        callOrder.push('restore-proofs');
+      });
+      const { invalidateMintSnapshot } = configureKeysetRecovery(callOrder);
+      eventBus.on('melt-op:rolled-back', () => {
+        callOrder.push('rolled-back');
+      });
 
       await expect(service.execute(prepared.id)).rejects.toBeInstanceOf(CashuStaleKeysetError);
 
@@ -1027,6 +1036,7 @@ describe('MeltOperationService', () => {
         prepared.inputProofSecrets,
       );
       expect(invalidateMintSnapshot).toHaveBeenCalledWith(mintUrl);
+      expect(callOrder).toEqual(['invalidate', 'restore-proofs', 'rolled-back']);
     });
 
     it('normalizes a raw direct-melt keyset rejection and lazily invalidates the snapshot', async () => {
