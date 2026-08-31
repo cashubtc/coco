@@ -7,7 +7,11 @@ import {
   createCoreTransactionModuleFactory,
 } from '../../transactions/CoreTransaction.ts';
 import { CoreSendTransactions } from '../../transactions/send/SendTransactions.ts';
-import type { PrepareSendCommand } from '../../transactions/send/TransactionalSendOperations.ts';
+import type {
+  ExecuteExactSendCommand,
+  PrepareSendCommand,
+} from '../../transactions/send/TransactionalSendOperations.ts';
+import type { RepositoryTransactionScope, SendOperationRepository } from '../../repositories';
 import type { CoreProof } from '../../types.ts';
 import { makeOutputDataCreator } from '../fixtures/OutputDataCreator.ts';
 
@@ -54,8 +58,7 @@ function output(amount: Amount, counter: number): OutputDataLike {
   };
 }
 
-async function setup() {
-  const repositories = new MemoryRepositories();
+async function setup(repositories = new MemoryRepositories()) {
   await repositories.keysetRepository.addKeyset({
     mintUrl,
     id: keysetId,
@@ -72,6 +75,29 @@ async function setup() {
     createCoreTransactionModuleFactory(outputDataCreator),
   );
   return { repositories, transactions: new CoreSendTransactions(runner) };
+}
+
+class RejectingSendTransitionRepositories extends MemoryRepositories {
+  override withTransaction<T>(
+    fn: (repositories: RepositoryTransactionScope) => Promise<T>,
+  ): Promise<T> {
+    return super.withTransaction((repositories) =>
+      fn({
+        ...repositories,
+        sendOperationRepository: rejectTransitions(repositories.sendOperationRepository),
+      }),
+    );
+  }
+}
+
+function rejectTransitions(repository: SendOperationRepository): SendOperationRepository {
+  return new Proxy(repository, {
+    get(target, property) {
+      if (property === 'transition') return async () => false;
+      const value = Reflect.get(target, property, target) as unknown;
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
 }
 
 function command(id: string, forceSwap = true): PrepareSendCommand {
@@ -248,5 +274,118 @@ describe('SendTransactions preparation', () => {
     ).toBeUndefined();
     expect(await repositories.counterRepository.getCounter(mintUrl, keysetId)).toBeNull();
     expect(await repositories.sendOperationRepository.getById('stale-keyset-send')).toBeNull();
+  });
+});
+
+describe('SendTransactions exact-match execution', () => {
+  async function prepareExact(
+    id: string,
+    repositories = new MemoryRepositories(),
+  ): Promise<Awaited<ReturnType<typeof setup>>> {
+    const environment = await setup(repositories);
+    await environment.repositories.proofRepository.saveProofs(mintUrl, [proof('exact-proof')]);
+    await environment.transactions.prepare(command(id, false));
+    return environment;
+  }
+
+  function executeCommand(
+    operationId: string,
+    overrides: Partial<ExecuteExactSendCommand> = {},
+  ): ExecuteExactSendCommand {
+    return {
+      operationId,
+      expectedRevision: 0,
+      updatedAt: 300,
+      ...overrides,
+    };
+  }
+
+  it('commits proof state, complete token data, and prepared-to-pending together', async () => {
+    const { repositories, transactions } = await prepareExact('exact-send');
+
+    const result = await transactions.executeExact(
+      executeCommand('exact-send', { memo: '  exact memo  ' }),
+    );
+
+    expect(result.committed).toBe(true);
+    expect(result.operation.state).toBe('pending');
+    expect(result.operation.revision).toBe(1);
+    expect(result.token.memo).toBe('exact memo');
+    expect(result.token.proofs.map((candidate) => candidate.secret)).toEqual(['exact-proof']);
+    const stored = await repositories.sendOperationRepository.getById('exact-send');
+    expect(stored?.state).toBe('pending');
+    expect(stored?.revision).toBe(1);
+    expect((stored as typeof result.operation).token.proofs).toHaveLength(1);
+    const storedProof = await repositories.proofRepository.getProofBySecret(mintUrl, 'exact-proof');
+    expect(storedProof?.state).toBe('inflight');
+    expect(storedProof?.usedByOperationId).toBe('exact-send');
+    expect(await repositories.sendOperationRepository.getByState('executing')).toEqual([]);
+  });
+
+  it('rejects a stale revision without changing the prepared operation or proof', async () => {
+    const { repositories, transactions } = await prepareExact('stale-exact-send');
+
+    await expect(
+      transactions.executeExact(executeCommand('stale-exact-send', { expectedRevision: 41 })),
+    ).rejects.toThrow('state or revision conflict');
+
+    expect((await repositories.sendOperationRepository.getById('stale-exact-send'))?.state).toBe(
+      'prepared',
+    );
+    const storedProof = await repositories.proofRepository.getProofBySecret(mintUrl, 'exact-proof');
+    expect(storedProof?.state).toBe('ready');
+    expect(storedProof?.usedByOperationId).toBe('stale-exact-send');
+  });
+
+  it('rolls back the inflight proof write when the final operation transition loses', async () => {
+    const repositories = new RejectingSendTransitionRepositories();
+    const environment = await prepareExact('rejected-exact-send', repositories);
+
+    await expect(
+      environment.transactions.executeExact(executeCommand('rejected-exact-send')),
+    ).rejects.toThrow('state or revision conflict');
+
+    expect((await repositories.sendOperationRepository.getById('rejected-exact-send'))?.state).toBe(
+      'prepared',
+    );
+    const storedProof = await repositories.proofRepository.getProofBySecret(mintUrl, 'exact-proof');
+    expect(storedProof?.state).toBe('ready');
+    expect(storedProof?.usedByOperationId).toBe('rejected-exact-send');
+  });
+
+  it('has one transition winner and returns the identical committed result to a duplicate', async () => {
+    const { repositories, transactions } = await prepareExact('concurrent-exact-send');
+    const request = executeCommand('concurrent-exact-send', { memo: 'same memo' });
+
+    const results = await Promise.all([
+      transactions.executeExact(request),
+      transactions.executeExact(request),
+    ]);
+
+    expect(results.filter((result) => result.committed)).toHaveLength(1);
+    expect(results.filter((result) => !result.committed)).toHaveLength(1);
+    expect(results[0]?.token).toEqual(results[1]?.token);
+    expect(
+      (await repositories.sendOperationRepository.getById('concurrent-exact-send'))?.revision,
+    ).toBe(1);
+    expect(
+      (await repositories.proofRepository.getProofBySecret(mintUrl, 'exact-proof'))?.state,
+    ).toBe('inflight');
+  });
+
+  it('rejects execution when a prepared input is no longer ready and owned', async () => {
+    const { repositories, transactions } = await prepareExact('unowned-exact-send');
+    await repositories.proofRepository.releaseProofs(mintUrl, ['exact-proof']);
+
+    await expect(transactions.executeExact(executeCommand('unowned-exact-send'))).rejects.toThrow(
+      'does not own every ready input proof',
+    );
+
+    expect((await repositories.sendOperationRepository.getById('unowned-exact-send'))?.state).toBe(
+      'prepared',
+    );
+    expect(
+      (await repositories.proofRepository.getProofBySecret(mintUrl, 'exact-proof'))?.state,
+    ).toBe('ready');
   });
 });

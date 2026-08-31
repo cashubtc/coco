@@ -275,6 +275,9 @@ describe('SendOperationService - recoverPendingOperations', () => {
       prepare: mock(async () => {
         throw new Error('not used');
       }),
+      executeExact: mock(async () => {
+        throw new Error('not used');
+      }),
       updateLegacyState: mock((operation) => sendOpRepo.update(operation)),
       deleteLegacyOperation: mock((operationId) => sendOpRepo.delete(operationId)),
     };
