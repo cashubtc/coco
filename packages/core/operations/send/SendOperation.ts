@@ -7,7 +7,7 @@
  *   │         │            │                      │
  *   └─────────┴────────────┴──────────────────────┴──► rolled_back
  *
- * - init: Operation created, nothing reserved yet
+ * - init: Transient operation intent; persisted rows exist only for legacy cleanup
  * - prepared: Proofs reserved, outputs created, ready to execute
  * - executing: Swap/token creation in progress
  * - pending: Token returned to consumer, awaiting confirmation (proofs spent)

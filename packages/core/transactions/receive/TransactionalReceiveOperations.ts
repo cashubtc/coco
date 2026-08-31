@@ -13,7 +13,6 @@ import type {
   FinalizedReceiveOperation,
   InitReceiveOperation,
   PreparedReceiveOperation,
-  ReceiveOperation,
   RolledBackReceiveOperation,
 } from '@core/operations/receive/ReceiveOperation.ts';
 import type {
@@ -119,7 +118,12 @@ export class RepositoryTransactionalReceiveOperations implements TransactionalRe
       throw new ProofValidationError('Receive amount is not sufficient after fees');
     }
     const existing = await this.receives.getById(operation.id);
-    if (existing) assertSameLegacyIntent(existing, operation);
+    if (existing) {
+      throw new ReceiveOperationConflictError(
+        operation.id,
+        `Receive operation id ${operation.id} already exists`,
+      );
+    }
 
     const keysets = await this.keysets.getKeysetsByMintUrl(operation.mintUrl);
     assertCurrentActiveKeys(operation, command.activeKeys, keysets);
@@ -146,24 +150,7 @@ export class RepositoryTransactionalReceiveOperations implements TransactionalRe
       outputData: serializeOutputData({ keep: outputs, send: [] }),
     };
 
-    if (!existing) {
-      await this.receives.create(prepared);
-    } else {
-      const revision = existing.revision ?? 0;
-      const transitioned = await this.receives.transition({
-        operationId: operation.id,
-        expectedState: 'init',
-        expectedRevision: revision,
-        next: prepared,
-      });
-      if (!transitioned) {
-        throw new ReceiveOperationConflictError(
-          operation.id,
-          'Receive preparation lost a state or revision conflict',
-        );
-      }
-      prepared.revision = revision + 1;
-    }
+    await this.receives.create(prepared);
 
     return {
       operation: prepared,
@@ -476,25 +463,6 @@ function assertCurrentActiveKeys(
     throw new ReceiveOperationConflictError(
       operation.id,
       `Active keyset ${activeKeys.id} changed after Receive preflight`,
-    );
-  }
-}
-
-function assertSameLegacyIntent(
-  existing: ReceiveOperation,
-  requested: InitReceiveOperation,
-): asserts existing is InitReceiveOperation {
-  if (
-    existing.state !== 'init' ||
-    existing.mintUrl !== requested.mintUrl ||
-    normalizeUnit(existing.unit) !== normalizeUnit(requested.unit) ||
-    !existing.amount.equals(requested.amount) ||
-    JSON.stringify(existing.inputProofs) !== JSON.stringify(requested.inputProofs) ||
-    JSON.stringify(existing.source) !== JSON.stringify(requested.source)
-  ) {
-    throw new ReceiveOperationConflictError(
-      requested.id,
-      `Receive operation id ${requested.id} already exists with a different intent`,
     );
   }
 }

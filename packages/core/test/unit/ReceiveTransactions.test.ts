@@ -195,16 +195,21 @@ describe('ReceiveTransactions preparation', () => {
     expect((await repositories.counterRepository.getCounter(mintUrl, keysetId))?.counter).toBe(2);
   });
 
-  it('prepares a persisted legacy init row with a monotonic conditional revision', async () => {
+  it('rejects a persisted legacy init row before advancing the counter', async () => {
     const { repositories, transactions } = await setup();
+    await repositories.counterRepository.setCounter(mintUrl, keysetId, 5);
     const legacy = operation('legacy-receive');
     delete legacy.revision;
     await repositories.receiveOperationRepository.create(legacy);
 
-    const result = await transactions.prepare({ ...command(legacy.id), operation: legacy });
+    await expect(
+      transactions.prepare({ ...command(legacy.id), operation: legacy }),
+    ).rejects.toThrow(`Receive operation id ${legacy.id} already exists`);
 
-    expect(result.operation.revision).toBe(1);
-    expect((await repositories.receiveOperationRepository.getById(legacy.id))?.revision).toBe(1);
+    expect((await repositories.counterRepository.getCounter(mintUrl, keysetId))?.counter).toBe(5);
+    const stored = await repositories.receiveOperationRepository.getById(legacy.id);
+    expect(stored?.state).toBe('init');
+    expect(stored?.revision).toBe(0);
   });
 });
 
@@ -230,19 +235,17 @@ describe('ReceiveTransactions execution', () => {
 
   it('advances the authoritative revision without accepting one from the caller', async () => {
     const environment = await setup();
-    const legacy = { ...operation('legacy-receive-execution'), revision: 4 };
-    await environment.repositories.receiveOperationRepository.create(legacy);
-    const prepared = await environment.transactions.prepare({
-      ...command(legacy.id),
-      operation: legacy,
+    const prepared = await environment.transactions.prepare(command('revisioned-receive'));
+    await environment.repositories.receiveOperationRepository.update({
+      ...prepared.operation,
+      revision: 5,
     });
 
     const begun = await environment.transactions.beginExecution({
-      operationId: legacy.id,
+      operationId: prepared.operation.id,
       updatedAt: 300,
     });
 
-    expect(prepared.operation.revision).toBe(5);
     expect(begun.operation.revision).toBe(6);
   });
 

@@ -149,7 +149,7 @@ describe('SendTransactions preparation', () => {
     await repositories.sendOperationRepository.create(existing);
 
     await expect(transactions.prepare(command('send-conflict'))).rejects.toThrow(
-      'Send operation id already exists',
+      'Send operation id send-conflict already exists',
     );
 
     expect(
@@ -180,22 +180,26 @@ describe('SendTransactions preparation', () => {
     expect(['send-a', 'send-b']).toContain(storedProof!.usedByOperationId!);
   });
 
-  it('prepares a persisted legacy init row with a monotonic conditional revision', async () => {
+  it('rejects a persisted legacy init row before mutating proofs or counters', async () => {
     const { repositories, transactions } = await setup();
     await repositories.proofRepository.saveProofs(mintUrl, [proof('legacy-proof')]);
-    const legacy = operation('legacy-send', false);
+    await repositories.counterRepository.setCounter(mintUrl, keysetId, 5);
+    const legacy = operation('legacy-send');
     delete legacy.revision;
     await repositories.sendOperationRepository.create(legacy);
 
-    const result = await transactions.prepare({
-      ...command('legacy-send', false),
-      operation: legacy,
-    });
+    await expect(
+      transactions.prepare({ ...command('legacy-send'), operation: legacy }),
+    ).rejects.toThrow('Send operation id legacy-send already exists');
 
-    expect(result.operation.revision).toBe(1);
+    expect(
+      (await repositories.proofRepository.getProofBySecret(mintUrl, 'legacy-proof'))
+        ?.usedByOperationId,
+    ).toBeUndefined();
+    expect((await repositories.counterRepository.getCounter(mintUrl, keysetId))?.counter).toBe(5);
     const stored = await repositories.sendOperationRepository.getById('legacy-send');
-    expect(stored?.state).toBe('prepared');
-    expect(stored?.revision).toBe(1);
+    expect(stored?.state).toBe('init');
+    expect(stored?.revision).toBe(0);
   });
 
   it('allocates distinct counter positions across concurrent preparations', async () => {
@@ -328,18 +332,13 @@ describe('SendTransactions exact-match execution', () => {
   });
 
   it('advances the authoritative revision without accepting one from the caller', async () => {
-    const { repositories, transactions } = await setup();
-    await repositories.proofRepository.saveProofs(mintUrl, [proof('legacy-exact-proof')]);
-    const legacy = { ...operation('legacy-exact-send', false), revision: 4 };
-    await repositories.sendOperationRepository.create(legacy);
-    const prepared = await transactions.prepare({
-      ...command(legacy.id, false),
-      operation: legacy,
-    });
+    const { repositories, transactions } = await prepareExact('revisioned-exact-send');
+    const prepared = await repositories.sendOperationRepository.getById('revisioned-exact-send');
+    if (!prepared || prepared.state !== 'prepared') throw new Error('prepared operation missing');
+    await repositories.sendOperationRepository.update({ ...prepared, revision: 5 });
 
-    const result = await transactions.executeExact(executeCommand(legacy.id));
+    const result = await transactions.executeExact(executeCommand(prepared.id));
 
-    expect(prepared.operation.revision).toBe(5);
     expect(result.operation.revision).toBe(6);
   });
 
