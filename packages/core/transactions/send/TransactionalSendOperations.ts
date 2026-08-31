@@ -10,11 +10,13 @@ import {
   type OutputDataLike,
   type Proof,
   type SelectProofs,
+  type Token,
 } from '@cashu/cashu-ts';
 import { assertSameUnit, normalizeUnit } from '@core/amounts.ts';
 import { SendOperationConflictError, ProofValidationError } from '@core/models/Error.ts';
 import type {
   InitSendOperation,
+  PendingSendOperation,
   PreparedSendOperation,
   SendOperation,
 } from '@core/operations/send/SendOperation.ts';
@@ -47,8 +49,23 @@ export interface PreparedSendResult {
   counter?: { mintUrl: string; keysetId: string; counter: number };
 }
 
+export interface ExecuteExactSendCommand {
+  operationId: string;
+  expectedRevision: number;
+  updatedAt: number;
+  memo?: string;
+}
+
+export interface ExecuteExactSendResult {
+  operation: PendingSendOperation & { token: Token };
+  token: Token;
+  /** False when an equivalent pending result had already committed. */
+  committed: boolean;
+}
+
 export interface TransactionalSendOperations {
   prepare(command: PrepareSendCommand): Promise<PreparedSendResult>;
+  executeExact(command: ExecuteExactSendCommand): Promise<ExecuteExactSendResult>;
   updateLegacy(operation: SendOperation): Promise<void>;
   deleteLegacy(operationId: string): Promise<void>;
 }
@@ -165,6 +182,58 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
     };
   }
 
+  async executeExact(command: ExecuteExactSendCommand): Promise<ExecuteExactSendResult> {
+    const current = await this.sends.getById(command.operationId);
+    const idempotent = getIdempotentExactResult(current, command);
+    if (idempotent) return idempotent;
+
+    if (
+      !current ||
+      current.state !== 'prepared' ||
+      (current.revision ?? 0) !== command.expectedRevision
+    ) {
+      throw new SendOperationConflictError(
+        command.operationId,
+        'Exact Send execution lost a state or revision conflict',
+      );
+    }
+    if (current.needsSwap || current.method !== 'default') {
+      throw new ProofValidationError(`Send operation ${command.operationId} requires a mint swap`);
+    }
+
+    const proofs = await loadOwnedReadyProofs(this.proofs, current);
+    const normalizedMemo = normalizeMemo(command.memo);
+    const token: Token = {
+      mint: current.mintUrl,
+      proofs,
+      unit: current.unit,
+      ...(normalizedMemo ? { memo: normalizedMemo } : {}),
+    };
+    const pending: ExecuteExactSendResult['operation'] = {
+      ...current,
+      state: 'pending',
+      updatedAt: command.updatedAt,
+      token,
+    };
+
+    await this.proofs.setProofState(current.mintUrl, current.inputProofSecrets, 'inflight');
+    const transitioned = await this.sends.transition({
+      operationId: current.id,
+      expectedState: 'prepared',
+      expectedRevision: command.expectedRevision,
+      next: pending,
+    });
+    if (!transitioned) {
+      throw new SendOperationConflictError(
+        current.id,
+        'Exact Send execution lost a state or revision conflict',
+      );
+    }
+    pending.revision = command.expectedRevision + 1;
+
+    return { operation: pending, token, committed: true };
+  }
+
   updateLegacy(operation: SendOperation) {
     return this.sends.update(operation);
   }
@@ -172,6 +241,86 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
   deleteLegacy(operationId: string) {
     return this.sends.delete(operationId);
   }
+}
+
+function getIdempotentExactResult(
+  current: SendOperation | null,
+  command: ExecuteExactSendCommand,
+): ExecuteExactSendResult | undefined {
+  if (!current || current.state !== 'pending' || current.needsSwap || !current.token) {
+    return undefined;
+  }
+  const revision = current.revision ?? 0;
+  const revisionMatchesCommittedCommand =
+    revision === command.expectedRevision || revision === command.expectedRevision + 1;
+  if (
+    !revisionMatchesCommittedCommand ||
+    !isEquivalentExactToken(current, current.token, command)
+  ) {
+    throw new SendOperationConflictError(
+      command.operationId,
+      'Exact Send result differs from the already committed operation',
+    );
+  }
+  return {
+    operation: current as ExecuteExactSendResult['operation'],
+    token: current.token,
+    committed: false,
+  };
+}
+
+function isEquivalentExactToken(
+  operation: PendingSendOperation,
+  token: Token,
+  command: ExecuteExactSendCommand,
+): boolean {
+  return (
+    token.mint === operation.mintUrl &&
+    normalizeUnit(token.unit) === normalizeUnit(operation.unit) &&
+    normalizeMemo(token.memo) === normalizeMemo(command.memo) &&
+    token.proofs.length === operation.inputProofSecrets.length &&
+    token.proofs.every((proof, index) => proof.secret === operation.inputProofSecrets[index])
+  );
+}
+
+async function loadOwnedReadyProofs(
+  proofs: ProofRepository,
+  operation: PreparedSendOperation,
+): Promise<Proof[]> {
+  const uniqueSecrets = new Set(operation.inputProofSecrets);
+  if (uniqueSecrets.size !== operation.inputProofSecrets.length) {
+    throw new ProofValidationError(`Send operation ${operation.id} contains duplicate inputs`);
+  }
+  const stored = await proofs.getProofsBySecrets(operation.mintUrl, operation.inputProofSecrets);
+  const bySecret = new Map(stored.map((proof) => [proof.secret, proof]));
+  const ordered = operation.inputProofSecrets.map((secret) => bySecret.get(secret));
+  for (const proof of ordered) {
+    if (
+      !proof ||
+      proof.mintUrl !== operation.mintUrl ||
+      normalizeUnit(proof.unit) !== normalizeUnit(operation.unit) ||
+      proof.state !== 'ready' ||
+      proof.usedByOperationId !== operation.id
+    ) {
+      throw new ProofValidationError(
+        `Send operation ${operation.id} does not own every ready input proof`,
+      );
+    }
+  }
+  const resolved = ordered as Proof[];
+  if (
+    !sumProofs(resolved).equals(operation.amount) ||
+    !operation.inputAmount.equals(operation.amount) ||
+    !operation.fee.isZero()
+  ) {
+    throw new ProofValidationError(`Send operation ${operation.id} is not an exact proof match`);
+  }
+  return resolved;
+}
+
+function normalizeMemo(memo: string | undefined): string | undefined {
+  const trimmed = memo?.trim();
+  return trimmed ? trimmed : undefined;
 }
 
 function assertCurrentActiveKeys(

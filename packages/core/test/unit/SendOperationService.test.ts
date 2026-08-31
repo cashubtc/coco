@@ -288,17 +288,74 @@ describe('SendOperationService', () => {
     const preparedOp = await service.prepare(initOp);
     let persistedState: string | undefined;
     let lockedDuringEvent = false;
+    let proofStateDuringEvent: string | undefined;
 
     eventBus.on('send:pending', async ({ operationId }) => {
       persistedState = (await sendOpRepo.getById(operationId))?.state;
       lockedDuringEvent = service.isOperationLocked(operationId);
+    });
+    eventBus.on('proofs:state-changed', async ({ secrets, state }) => {
+      if (state !== 'inflight') return;
+      proofStateDuringEvent = (await proofRepo.getProofBySecret(mintUrl, secrets[0]!))?.state;
+      lockedDuringEvent ||= service.isOperationLocked(preparedOp.id);
     });
 
     const result = await service.execute(preparedOp);
 
     expect(result.operation.state).toBe('pending');
     expect(persistedState).toBe('pending');
-    expect(lockedDuringEvent).toBe(true);
+    expect(proofStateDuringEvent).toBe('inflight');
+    expect(lockedDuringEvent).toBe(false);
+  });
+
+  it('executes an exact match without a wallet request or handler call', async () => {
+    await proofRepo.saveProofs(mintUrl, [makeProof('proof-1', 100)]);
+    const initOp = await service.init(mintUrl, unitAmount(100));
+    const preparedOp = await service.prepare(initOp);
+    const walletCallsAfterPreparation = (walletService.getWalletWithActiveKeysetId as Mock<any>)
+      .mock.calls.length;
+
+    const result = await service.execute(preparedOp);
+
+    expect(result.operation.state).toBe('pending');
+    expect(result.operation.revision).toBe(1);
+    expect(result.token.proofs.map((proof) => proof.secret)).toEqual(['proof-1']);
+    expect((walletService.getWalletWithActiveKeysetId as Mock<any>).mock.calls).toHaveLength(
+      walletCallsAfterPreparation,
+    );
+  });
+
+  it('uses only the caller operation id and reloads authoritative exact-send data', async () => {
+    await proofRepo.saveProofs(mintUrl, [makeProof('proof-1', 100)]);
+    const initOp = await service.init(mintUrl, unitAmount(100));
+    const preparedOp = await service.prepare(initOp);
+
+    const result = await service.execute({
+      ...preparedOp,
+      inputProofSecrets: ['stale-caller-secret'],
+      revision: 999,
+    });
+
+    expect(result.token.proofs.map((proof) => proof.secret)).toEqual(['proof-1']);
+    expect(result.operation.inputProofSecrets).toEqual(['proof-1']);
+  });
+
+  it('logs a post-commit listener failure without misreporting the exact Send', async () => {
+    await proofRepo.saveProofs(mintUrl, [makeProof('proof-1', 100)]);
+    const initOp = await service.init(mintUrl, unitAmount(100));
+    const preparedOp = await service.prepare(initOp);
+    eventBus.on('send:pending', () => {
+      throw new Error('listener failed');
+    });
+
+    const result = await service.execute(preparedOp);
+
+    expect(result.operation.state).toBe('pending');
+    expect((await sendOpRepo.getById(preparedOp.id))?.state).toBe('pending');
+    expect(logger.error).toHaveBeenCalledWith(
+      'Failed to publish committed Send event',
+      expect.objectContaining({ event: 'send:pending' }),
+    );
   });
 
   it('prepares and executes a custom-unit send without selecting sat proofs', async () => {
@@ -332,7 +389,7 @@ describe('SendOperationService', () => {
       unit: 'sat',
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      needsSwap: false,
+      needsSwap: true,
       fee: Amount.from(0),
       inputAmount: Amount.from(100),
       inputProofSecrets: ['proof-1'],

@@ -36,6 +36,7 @@ import {
   UnknownMintError,
   ProofValidationError,
   OperationInProgressError,
+  SendOperationConflictError,
 } from '../../models/Error';
 import { MintScopedLock } from '../MintScopedLock';
 import { OperationIdLock } from '../OperationIdLock';
@@ -254,6 +255,24 @@ export class SendOperationService {
       throw new Error('SendHandlerProvider is required');
     }
 
+    const current = await this.operationQueries.getById(operation.id);
+    if (!current) {
+      throw new SendOperationConflictError(
+        operation.id,
+        `Send operation ${operation.id} not found`,
+      );
+    }
+    if ((current.state === 'prepared' || current.state === 'pending') && !current.needsSwap) {
+      return this.executeExactMatch(current.id, current.revision ?? 0, options?.memo);
+    }
+    if (current.state !== 'prepared') {
+      throw new SendOperationConflictError(
+        operation.id,
+        `Cannot execute Send operation in state ${current.state}`,
+      );
+    }
+    operation = current;
+
     const releaseLock = await this.acquireOperationLock(operation.id);
     try {
       // Mark as executing FIRST - this must happen before any mint interaction
@@ -344,6 +363,46 @@ export class SendOperationService {
     } finally {
       releaseLock();
     }
+  }
+
+  private async executeExactMatch(
+    operationId: string,
+    expectedRevision: number,
+    memo?: string,
+  ): Promise<{ operation: PendingSendOperation; token: Token }> {
+    const releaseLock = await this.acquireOperationLock(operationId);
+    let result: Awaited<ReturnType<SendTransactions['executeExact']>>;
+    try {
+      result = await this.transactions.executeExact({
+        operationId,
+        expectedRevision,
+        updatedAt: Date.now(),
+        memo,
+      });
+    } finally {
+      releaseLock();
+    }
+
+    if (result.committed) {
+      await this.publishCommittedEvent('proofs:state-changed', {
+        mintUrl: result.operation.mintUrl,
+        secrets: result.operation.inputProofSecrets,
+        state: 'inflight',
+      });
+      await this.publishCommittedEvent('send:pending', {
+        mintUrl: result.operation.mintUrl,
+        operationId: result.operation.id,
+        operation: result.operation,
+        token: result.token,
+      });
+    }
+
+    this.logger?.info('Exact-match Send operation executed', {
+      operationId,
+      proofCount: result.token.proofs.length,
+      committed: result.committed,
+    });
+    return result;
   }
 
   /**
@@ -859,7 +918,7 @@ export class SendOperationService {
     payload: CoreEvents[E],
   ): Promise<void> {
     try {
-      await this.eventBus.emit(event, payload);
+      await this.eventBus.emit(event, payload, { throwOnError: true });
     } catch (error) {
       this.logger?.error('Failed to publish committed Send event', { event, error });
     }
