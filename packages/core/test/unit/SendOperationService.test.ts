@@ -1,4 +1,4 @@
-import { Amount, type Token } from '@cashu/cashu-ts';
+import { Amount, type Token, type Wallet } from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it, mock, type Mock } from 'bun:test';
 import { SendOperationService } from '../../operations/send/SendOperationService';
 import { DefaultSendHandler } from '../../infra/handlers/send/DefaultSendHandler';
@@ -119,12 +119,17 @@ describe('SendOperationService', () => {
     return prepared;
   };
 
-  const useSwapWallet = (send: (...args: any[]) => Promise<{ send: any[]; keep: any[] }>): void => {
-    (walletService.getWalletWithActiveKeysetId as Mock<any>).mockResolvedValue({
-      wallet: { send },
+  const useSwapWallet = (send: Wallet['send']): void => {
+    (
+      walletService.getWalletWithActiveKeysetId as Mock<
+        WalletService['getWalletWithActiveKeysetId']
+      >
+    ).mockResolvedValue({
+      wallet: { send } as Wallet,
       keysetId,
-      keyset: { id: keysetId },
+      keyset: { id: keysetId, unit: 'sat', active: true },
       keys: { keys: { 1: 'unused' }, id: keysetId, unit: 'sat', active: true },
+      unit: 'sat',
     });
   };
 
@@ -165,7 +170,7 @@ describe('SendOperationService', () => {
 
     const wallet = {
       unit: 'sat',
-      selectProofsToSend(proofs: any[], amount: Amount, includeFees: boolean) {
+      selectProofsToSend(proofs: CoreProof[], amount: Amount, includeFees: boolean) {
         if (!includeFees) {
           const exact = proofs.find((p) => p.amount.equals(amount));
           if (exact) {
@@ -173,7 +178,7 @@ describe('SendOperationService', () => {
           }
         }
 
-        const send: any[] = [];
+        const send: CoreProof[] = [];
         let total = Amount.zero();
         for (const proof of proofs) {
           if (total.greaterThanOrEqual(amount)) break;
@@ -274,7 +279,7 @@ describe('SendOperationService', () => {
   it('completes asynchronous preflight before opening a repository transaction', async () => {
     await proofRepo.saveProofs(mintUrl, [makeProof('proof-1', 10)]);
     const init = await service.init(mintUrl, unitAmount(10));
-    (seedService.getSeed as Mock<any>).mockImplementationOnce(async () => {
+    (seedService.getSeed as Mock<SeedService['getSeed']>).mockImplementationOnce(async () => {
       throw new Error('seed unavailable');
     });
 
@@ -305,6 +310,37 @@ describe('SendOperationService', () => {
     expect(preparedOp.state).toBe('prepared');
     expect(persistedState).toBe('prepared');
     expect(lockedDuringEvent).toBe(false);
+  });
+
+  it('does not publish a prepared event until the transaction gateway resolves', async () => {
+    await proofRepo.saveProofs(mintUrl, [makeProof('event-boundary-proof', 10)]);
+    const operation = await service.init(mintUrl, unitAmount(10));
+    const realPrepare = sendTransactions.prepare.bind(sendTransactions);
+    let releaseGateway!: () => void;
+    let markCommitted!: () => void;
+    const holdGateway = new Promise<void>((resolve) => {
+      releaseGateway = resolve;
+    });
+    const committed = new Promise<void>((resolve) => {
+      markCommitted = resolve;
+    });
+    sendTransactions.prepare = async (command) => {
+      const result = await realPrepare(command);
+      markCommitted();
+      await holdGateway;
+      return result;
+    };
+    let eventCount = 0;
+    eventBus.on('send:prepared', () => {
+      eventCount++;
+    });
+
+    const preparation = service.prepare(operation);
+    await committed;
+    expect(eventCount).toBe(0);
+    releaseGateway();
+    await preparation;
+    expect(eventCount).toBe(1);
   });
 
   it('releases the mint lock before publishing committed preparation events', async () => {
@@ -355,17 +391,17 @@ describe('SendOperationService', () => {
     await proofRepo.saveProofs(mintUrl, [makeProof('proof-1', 100)]);
     const initOp = await service.init(mintUrl, unitAmount(100));
     const preparedOp = await service.prepare(initOp);
-    const walletCallsAfterPreparation = (walletService.getWalletWithActiveKeysetId as Mock<any>)
-      .mock.calls.length;
+    const getWalletWithActiveKeysetId = walletService.getWalletWithActiveKeysetId as Mock<
+      WalletService['getWalletWithActiveKeysetId']
+    >;
+    const walletCallsAfterPreparation = getWalletWithActiveKeysetId.mock.calls.length;
 
     const result = await service.execute(preparedOp);
 
     expect(result.operation.state).toBe('pending');
     expect(result.operation.revision).toBe(1);
     expect(result.token.proofs.map((proof) => proof.secret)).toEqual(['proof-1']);
-    expect((walletService.getWalletWithActiveKeysetId as Mock<any>).mock.calls).toHaveLength(
-      walletCallsAfterPreparation,
-    );
+    expect(getWalletWithActiveKeysetId.mock.calls).toHaveLength(walletCallsAfterPreparation);
   });
 
   it('uses only the caller operation id and reloads authoritative exact-send data', async () => {
@@ -473,9 +509,11 @@ describe('SendOperationService', () => {
 
   it('does not begin or mask a definitive-looking wallet preflight failure', async () => {
     const prepared = await makeSwapPrepared('swap-preflight-failure');
-    (walletService.getWalletWithActiveKeysetId as Mock<any>).mockRejectedValueOnce(
-      new MintOperationError(12001, 'Could not load active keyset'),
-    );
+    (
+      walletService.getWalletWithActiveKeysetId as Mock<
+        WalletService['getWalletWithActiveKeysetId']
+      >
+    ).mockRejectedValueOnce(new MintOperationError(12001, 'Could not load active keyset'));
 
     await expect(service.execute(prepared)).rejects.toThrow('Could not load active keyset');
 

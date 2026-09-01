@@ -18,7 +18,6 @@ import type {
 import {
   createSendOperation,
   getSendProofSecrets,
-  isTerminalOperation,
   type CreateSendOperationOptions,
 } from './SendOperation';
 import { resolveP2pkOptions, type SendMethod, type SendMethodData } from './SendMethodHandler';
@@ -279,7 +278,7 @@ export class SendOperationService {
       );
     }
     if ((current.state === 'prepared' || current.state === 'pending') && !current.needsSwap) {
-      return this.executeExactMatch(current.id, current.revision ?? 0, options?.memo);
+      return this.executeExactMatch(current.id, options?.memo);
     }
     if (current.state !== 'prepared') {
       throw new SendOperationConflictError(
@@ -336,7 +335,6 @@ export class SendOperationService {
     );
     const begun = await this.transactions.beginExecution({
       operationId: operation.id,
-      expectedRevision: operation.revision ?? 0,
       updatedAt: Date.now(),
       memo: options?.memo ? this.normalizeMemo(options.memo) : undefined,
     });
@@ -363,7 +361,6 @@ export class SendOperationService {
       }
       const failed = await this.transactions.failExecution({
         operationId: operation.id,
-        expectedRevision: operation.revision ?? 0,
         updatedAt: Date.now(),
         error: error.message,
       });
@@ -386,7 +383,6 @@ export class SendOperationService {
 
     const applied = await this.transactions.applyResult({
       operationId: operation.id,
-      expectedRevision: operation.revision ?? 0,
       updatedAt: Date.now(),
       keepProofs,
       sendProofs,
@@ -397,7 +393,6 @@ export class SendOperationService {
 
   private async executeExactMatch(
     operationId: string,
-    expectedRevision: number,
     memo?: string,
   ): Promise<{ operation: PendingSendOperation; token: Token }> {
     const releaseLock = await this.acquireOperationLock(operationId);
@@ -405,7 +400,6 @@ export class SendOperationService {
     try {
       result = await this.transactions.executeExact({
         operationId,
-        expectedRevision,
         updatedAt: Date.now(),
         memo,
       });
@@ -527,7 +521,6 @@ export class SendOperationService {
       }
       result = await this.transactions.completePending({
         operationId,
-        expectedRevision: operation.revision ?? 0,
         updatedAt: Date.now(),
         spentProofSecrets: observedSpentSecrets,
       });
@@ -554,7 +547,6 @@ export class SendOperationService {
       if (operation.state === 'prepared') {
         cancelled = await this.transactions.cancelPrepared({
           operationId,
-          expectedRevision: operation.revision ?? 0,
           updatedAt: Date.now(),
           reason,
         });
@@ -569,13 +561,11 @@ export class SendOperationService {
         );
         const rollingBack = await this.transactions.beginLegacyPendingRollback({
           operationId,
-          expectedRevision: operation.revision ?? 0,
           updatedAt: Date.now(),
         });
         await handler.rollback({ ...this.buildDeps(), operation: rollingBack, wallet });
         legacyRolledBack = await this.transactions.completeLegacyPendingRollback({
           operationId,
-          expectedRevision: rollingBack.revision ?? 0,
           updatedAt: Date.now(),
           reason,
         });
@@ -827,7 +817,6 @@ export class SendOperationService {
     };
     const applied = await this.transactions.applyResult({
       operationId: latest.id,
-      expectedRevision: latest.revision ?? 0,
       updatedAt: Date.now(),
       keepProofs,
       sendProofs,
@@ -866,7 +855,6 @@ export class SendOperationService {
 
     const result = await this.transactions.completePending({
       operationId: latest.id,
-      expectedRevision: latest.revision ?? 0,
       updatedAt: Date.now(),
       spentProofSecrets: sendSecrets,
     });
@@ -883,7 +871,6 @@ export class SendOperationService {
     if (!operation || operation.state !== 'pending') return false;
     const result = await this.transactions.completePending({
       operationId,
-      expectedRevision: operation.revision ?? 0,
       updatedAt: Date.now(),
       spentProofSecrets: [secret],
     });
@@ -916,37 +903,14 @@ export class SendOperationService {
    * Finds proofs that are reserved but point to non-existent or terminal operations.
    */
   private async cleanupOrphanedReservations(): Promise<number> {
-    const reservedProofs = await this.proofQueries.getReservedProofs();
-    const orphanedProofs: typeof reservedProofs = [];
-
-    for (const proof of reservedProofs) {
-      if (!proof.usedByOperationId) continue;
-
-      const operation = await this.operationQueries.getById(proof.usedByOperationId);
-
-      // Orphaned if operation doesn't exist or is in terminal state
-      if (!operation || isTerminalOperation(operation)) {
-        orphanedProofs.push(proof);
-      }
+    const result = await this.transactions.cleanupOrphanedReservations();
+    for (const group of result.released) {
+      await this.publishCommittedEvent('proofs:released', group);
     }
-
-    // Group by mintUrl and release
-    const byMint = new Map<string, string[]>();
-    for (const proof of orphanedProofs) {
-      const secrets = byMint.get(proof.mintUrl) || [];
-      secrets.push(proof.secret);
-      byMint.set(proof.mintUrl, secrets);
+    if (result.count > 0) {
+      this.logger?.info('Released orphaned proof reservations', { count: result.count });
     }
-
-    for (const [mintUrl, secrets] of byMint) {
-      await this.proofService.releaseProofs(mintUrl, secrets);
-    }
-
-    if (orphanedProofs.length > 0) {
-      this.logger?.info('Released orphaned proof reservations', { count: orphanedProofs.length });
-    }
-
-    return orphanedProofs.length;
+    return result.count;
   }
 
   private async publishPrepared(result: PreparedSendResult): Promise<void> {

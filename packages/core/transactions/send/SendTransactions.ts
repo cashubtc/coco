@@ -12,6 +12,7 @@ import type {
   CancelledPreparedSend,
   CancelPreparedSendCommand,
   CleanupLegacyInitResult,
+  CleanupOrphanedSendReservationsResult,
   CompletedPendingSend,
   CompletePendingSendCommand,
   CompleteLegacyPendingRollbackCommand,
@@ -31,6 +32,7 @@ export interface SendTransactions {
   failExecution(command: FailSwapExecutionCommand): Promise<FailedSwapExecution>;
   cancelPrepared(command: CancelPreparedSendCommand): Promise<CancelledPreparedSend>;
   completePending(command: CompletePendingSendCommand): Promise<CompletedPendingSend>;
+  cleanupOrphanedReservations(): Promise<CleanupOrphanedSendReservationsResult>;
   cleanupLegacyInit(operationId: string): Promise<CleanupLegacyInitResult>;
   beginLegacyPendingRollback(
     command: BeginLegacyPendingRollbackCommand,
@@ -69,6 +71,10 @@ export class CoreSendTransactions implements SendTransactions {
 
   completePending(command: CompletePendingSendCommand): Promise<CompletedPendingSend> {
     return this.runner.run((transaction) => transaction.sends.completePending(command));
+  }
+
+  cleanupOrphanedReservations(): Promise<CleanupOrphanedSendReservationsResult> {
+    return this.runner.run((transaction) => transaction.sends.cleanupOrphanedReservations());
   }
 
   cleanupLegacyInit(operationId: string): Promise<CleanupLegacyInitResult> {
