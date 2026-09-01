@@ -1806,6 +1806,46 @@ export async function runReceiveOperationRepositoryContract(
         await dispose();
       }
     });
+
+    it('normalizes legacy revisions and allows one conditional transition winner', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = createDummyReceiveOperation();
+        delete operation.revision;
+        await repositories.receiveOperationRepository.create(operation);
+
+        const stored = await repositories.receiveOperationRepository.getById(operation.id);
+        expect(stored?.revision).toBe(0);
+        const next = {
+          ...operation,
+          state: 'prepared',
+          fee: Amount.zero(),
+          outputData: { keep: [], send: [] },
+        } satisfies ReceiveOperation;
+
+        const results = await Promise.all([
+          repositories.receiveOperationRepository.transition({
+            operationId: operation.id,
+            expectedState: 'init',
+            expectedRevision: 0,
+            next,
+          }),
+          repositories.receiveOperationRepository.transition({
+            operationId: operation.id,
+            expectedState: 'init',
+            expectedRevision: 0,
+            next,
+          }),
+        ]);
+
+        expect(results.filter(Boolean)).toHaveLength(1);
+        const transitioned = await repositories.receiveOperationRepository.getById(operation.id);
+        expect(transitioned?.state).toBe('prepared');
+        expect(transitioned?.revision).toBe(1);
+      } finally {
+        await dispose();
+      }
+    });
   });
 }
 

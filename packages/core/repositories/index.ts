@@ -328,6 +328,17 @@ export interface ReceiveOperationRepository {
   /** Update an existing receive operation */
   update(operation: ReceiveOperation): Promise<void>;
 
+  /**
+   * Conditionally replace an operation when its state and revision still match.
+   * Implementations persist `next` with `expectedRevision + 1` and return false on contention.
+   */
+  transition(command: {
+    operationId: string;
+    expectedState: ReceiveOperationState;
+    expectedRevision: number;
+    next: ReceiveOperation;
+  }): Promise<boolean>;
+
   /** Get a receive operation by ID */
   getById(id: string): Promise<ReceiveOperation | null>;
 

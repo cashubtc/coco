@@ -4,14 +4,12 @@ import {
   type Proof,
   type ProofState as CashuProofState,
   type Token,
-  Amount,
 } from '@cashu/cashu-ts';
 
 import {
   generateSubId,
   normalizeMintUrl,
   mapProofToCoreProof,
-  serializeOutputData,
   deserializeOutputData,
   computeYHexForSecrets,
 } from '../../utils';
@@ -29,7 +27,6 @@ import type {
   PreparedOrLaterOperation,
   ExecutingReceiveOperation,
   FinalizedReceiveOperation,
-  RolledBackReceiveOperation,
 } from './ReceiveOperation';
 import type { Logger } from '../../logging/Logger';
 import type { CoreEvents } from '../../events/types';
@@ -39,22 +36,47 @@ import type { MintService } from '../../services/MintService';
 import type { ProofService } from '../../services/ProofService';
 import type { TokenService } from '../../services/TokenService';
 import type { WalletService } from '../../services/WalletService';
+import type { SeedService } from '../../services/SeedService.ts';
 import { createReceiveOperation, getOutputProofSecrets } from './ReceiveOperation';
-import type { ReceiveOperationRepository, ProofRepository } from '../../repositories';
 import { OperationIdLock } from '../OperationIdLock';
 import { MintScopedLock } from '../MintScopedLock';
 import { DEFAULT_UNIT, normalizeUnit } from '../../amounts.ts';
+import type { ReceiveTransactions } from '../../transactions/receive/ReceiveTransactions.ts';
+import type {
+  ReceiveOperationQueries,
+  ReceiveProofQueries,
+} from '../../transactions/receive/ReceiveOperationQueries.ts';
+import type {
+  AppliedReceiveResult,
+  FailedReceiveExecution,
+  PreparedReceiveResult,
+  ReceiveTransportRequest,
+} from '../../transactions/receive/TransactionalReceiveOperations.ts';
 
 const NON_TERMINAL_RECEIVE_MINT_ERROR_CODES = new Set([
-  // 11003 is special for receive recovery: the mint may already have accepted and
-  // signed our outputs even though the client saw an error, so we keep executing
-  // and let recovery reconcile persisted outputs.
-  //
-  // We intentionally do not treat 11002/11004 as recoverable here. In the receive
-  // flow they indicate inputs or outputs that are not currently spendable, so the
-  // operation is rejected and a fresh receive should be started if the user retries.
-  11003,
+  // Pending inputs or outputs and already-signed outputs do not prove the exact persisted
+  // request had no effect. Keep the operation executing so recovery can reconcile it.
+  11002, 11003, 11004,
 ]);
+
+type ReceiveExecutionOutcome =
+  | { status: 'FINALIZED'; result: AppliedReceiveResult }
+  | { status: 'FAILED'; result: FailedReceiveExecution; error: MintOperationError };
+
+export interface ReceiveOperationServiceDependencies {
+  operationQueries: ReceiveOperationQueries;
+  proofQueries: ReceiveProofQueries;
+  transactions: ReceiveTransactions;
+  proofService: ProofService;
+  mintService: MintService;
+  walletService: WalletService;
+  mintAdapter: MintAdapter;
+  tokenService: TokenService;
+  seedService: SeedService;
+  eventBus: EventBus<CoreEvents>;
+  logger?: Logger;
+  mintScopedLock?: MintScopedLock;
+}
 
 /**
  * Service that manages receive operations as sagas.
@@ -64,13 +86,15 @@ const NON_TERMINAL_RECEIVE_MINT_ERROR_CODES = new Set([
  * rolledback for failure state
  */
 export class ReceiveOperationService {
-  private readonly receiveOperationRepository: ReceiveOperationRepository;
-  private readonly proofRepository: ProofRepository;
+  private readonly operationQueries: ReceiveOperationQueries;
+  private readonly proofQueries: ReceiveProofQueries;
+  private readonly transactions: ReceiveTransactions;
   private readonly proofService: ProofService;
   private readonly mintService: MintService;
   private readonly walletService: WalletService;
   private readonly mintAdapter: MintAdapter;
   private readonly tokenService: TokenService;
+  private readonly seedService: SeedService;
   private readonly eventBus: EventBus<CoreEvents>;
   private readonly logger?: Logger;
 
@@ -81,28 +105,19 @@ export class ReceiveOperationService {
   /** In-memory lock to serialize deterministic-output derivation (counter) per mint */
   private readonly mintScopedLock: MintScopedLock;
 
-  constructor(
-    receiveOperationRepository: ReceiveOperationRepository,
-    proofRepository: ProofRepository,
-    proofService: ProofService,
-    mintService: MintService,
-    walletService: WalletService,
-    mintAdapter: MintAdapter,
-    tokenService: TokenService,
-    eventBus: EventBus<CoreEvents>,
-    logger?: Logger,
-    mintScopedLock?: MintScopedLock,
-  ) {
-    this.receiveOperationRepository = receiveOperationRepository;
-    this.proofRepository = proofRepository;
-    this.proofService = proofService;
-    this.mintService = mintService;
-    this.walletService = walletService;
-    this.mintAdapter = mintAdapter;
-    this.tokenService = tokenService;
-    this.eventBus = eventBus;
-    this.logger = logger;
-    this.mintScopedLock = mintScopedLock ?? new MintScopedLock();
+  constructor(dependencies: ReceiveOperationServiceDependencies) {
+    this.operationQueries = dependencies.operationQueries;
+    this.proofQueries = dependencies.proofQueries;
+    this.transactions = dependencies.transactions;
+    this.proofService = dependencies.proofService;
+    this.mintService = dependencies.mintService;
+    this.walletService = dependencies.walletService;
+    this.mintAdapter = dependencies.mintAdapter;
+    this.tokenService = dependencies.tokenService;
+    this.seedService = dependencies.seedService;
+    this.eventBus = dependencies.eventBus;
+    this.logger = dependencies.logger;
+    this.mintScopedLock = dependencies.mintScopedLock ?? new MintScopedLock();
   }
 
   /**
@@ -126,7 +141,7 @@ export class ReceiveOperationService {
 
   /**
    * Create a new receive operation by decoding and validating the token.
-   * Persists the init state so recovery can reason about this operation.
+   * The returned intent is not persisted. Preparation creates the first durable row atomically.
    */
   async init(
     token: Token | string,
@@ -157,8 +172,7 @@ export class ReceiveOperationService {
     const id = generateSubId();
     const operation = createReceiveOperation(id, mintUrl, { amount, unit }, preparedProofs, source);
 
-    await this.receiveOperationRepository.create(operation);
-    this.logger?.debug('Receive operation created', {
+    this.logger?.debug('Receive operation initialized in memory', {
       operationId: id,
       mintUrl,
       amount,
@@ -174,57 +188,37 @@ export class ReceiveOperationService {
    */
   async prepare(operation: InitReceiveOperation): Promise<PreparedReceiveOperation> {
     const releaseLock = await this.acquireOperationLock(operation.id);
+    let result: PreparedReceiveResult;
     try {
       // Serialize per-mint so concurrent receives on the same keyset cannot read the
       // same NUT-13 counter and derive colliding deterministic outputs. Mirrors the
       // send/melt/mint services, which already hold this lock across counter usage.
       const releaseMintLock = await this.mintScopedLock.acquire(operation.mintUrl);
-      let prepared: PreparedReceiveOperation;
       try {
-        const current = await this.receiveOperationRepository.getById(operation.id);
-        if (!current) {
-          throw new Error(`Operation ${operation.id} not found`);
-        }
-        if (current.state !== 'init') {
+        const current = await this.operationQueries.getById(operation.id);
+        if (current && current.state !== 'init') {
           throw new Error(`Cannot prepare operation in state '${current.state}'. Expected 'init'.`);
         }
-
-        try {
-          prepared = await this.prepareInternal(current as InitReceiveOperation);
-        } catch (e) {
-          if (current.state === 'init') {
-            await this.tryRecoverInitOperation(current as InitReceiveOperation);
-          }
-          throw e;
-        }
+        const intent = current ? (current as InitReceiveOperation) : operation;
+        result = await this.prepareInternal(intent);
       } finally {
         releaseMintLock();
       }
-
-      // Emit outside the mint lock so a listener cannot extend or re-enter the
-      // per-mint critical section. Mirrors the send service.
-      await this.eventBus.emit('receive-op:prepared', {
-        mintUrl: prepared.mintUrl,
-        operationId: prepared.id,
-        operation: prepared,
-      });
-
-      return prepared;
     } finally {
       releaseLock();
     }
+    await this.publishPrepared(result);
+    return result.operation;
   }
 
   /** Internal prepare logic used by prepare(), separated for error handling. */
-  private async prepareInternal(
-    operation: InitReceiveOperation,
-  ): Promise<PreparedReceiveOperation> {
+  private async prepareInternal(operation: InitReceiveOperation): Promise<PreparedReceiveResult> {
     if (!operation.inputProofs || operation.inputProofs.length === 0) {
       throw new ProofValidationError('Receive operation has no input proofs');
     }
 
     const { mintUrl } = operation;
-    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
+    const { wallet, keys } = await this.walletService.getWalletWithActiveKeysetId(
       mintUrl,
       operation.unit,
     );
@@ -234,32 +228,13 @@ export class ReceiveOperationService {
       throw new ProofValidationError('Receive amount is not sufficient after fees');
     }
 
-    const keepAmount = operation.amount.subtract(fee);
-
-    const outputResult = await this.proofService.createOutputsAndIncrementCounters(
-      mintUrl,
-      {
-        keep: { amount: keepAmount, unit: operation.unit },
-        send: { amount: Amount.zero(), unit: operation.unit },
-      },
-      {},
-    );
-
-    if (!outputResult.keep || outputResult.keep.length === 0) {
-      throw new Error('Failed to create deterministic outputs for receive');
-    }
-
-    const outputData = serializeOutputData({ keep: outputResult.keep, send: [] });
-
-    const prepared: PreparedReceiveOperation = {
-      ...operation,
-      state: 'prepared',
-      updatedAt: Date.now(),
+    const seed = await this.seedService.getSeed();
+    const result = await this.transactions.prepare({
+      operation: { ...operation, updatedAt: Date.now() },
+      activeKeys: keys,
+      seed,
       fee,
-      outputData,
-    };
-
-    await this.receiveOperationRepository.update(prepared);
+    });
 
     this.logger?.info('Receive operation prepared', {
       operationId: operation.id,
@@ -268,7 +243,27 @@ export class ReceiveOperationService {
       proofCount: operation.inputProofs.length,
     });
 
-    return prepared;
+    return result;
+  }
+
+  private async publishPrepared(result: PreparedReceiveResult): Promise<void> {
+    await this.publishCommittedEvent('counter:updated', result.counter);
+    await this.publishCommittedEvent('receive-op:prepared', {
+      mintUrl: result.operation.mintUrl,
+      operationId: result.operation.id,
+      operation: result.operation,
+    });
+  }
+
+  private async publishCommittedEvent<E extends keyof CoreEvents>(
+    event: E,
+    payload: CoreEvents[E],
+  ): Promise<void> {
+    try {
+      await this.eventBus.emit(event, payload, { throwOnError: true });
+    } catch (error) {
+      this.logger?.error('Failed to publish committed Receive event', { event, error });
+    }
   }
 
   /**
@@ -277,8 +272,9 @@ export class ReceiveOperationService {
    */
   async execute(operation: PreparedReceiveOperation): Promise<FinalizedReceiveOperation> {
     const releaseLock = await this.acquireOperationLock(operation.id);
+    let outcome: ReceiveExecutionOutcome | undefined;
     try {
-      const current = await this.receiveOperationRepository.getById(operation.id);
+      const current = await this.operationQueries.getById(operation.id);
       if (!current) {
         throw new Error(`Operation ${operation.id} not found`);
       }
@@ -288,67 +284,121 @@ export class ReceiveOperationService {
         );
       }
 
-      const prepared = current as PreparedReceiveOperation;
-      const executing: ExecutingReceiveOperation = {
-        ...prepared,
-        state: 'executing',
-        updatedAt: Date.now(),
-      };
-      await this.receiveOperationRepository.update(executing);
-
-      try {
-        return await this.executeInternal(executing);
-      } catch (e) {
-        const rollbackReason = this.getRollbackReasonForReceiveFailure(e);
-        if (rollbackReason) {
-          await this.markAsRolledBack(executing, rollbackReason);
-          throw e;
-        }
-
-        await this.tryRecoverExecutingOperation(executing);
-        throw e;
-      }
+      outcome = await this.executePrepared(current as PreparedReceiveOperation);
     } finally {
       releaseLock();
     }
+
+    if (!outcome) {
+      throw new Error(`Receive operation ${operation.id} did not produce a result`);
+    }
+    if (outcome.status === 'FAILED') {
+      await this.publishFailedExecution(outcome.result);
+      throw outcome.error;
+    }
+    await this.publishAppliedResult(outcome.result);
+    return outcome.result.operation;
   }
 
-  /** Internal execute logic used by execute(), separated for error handling. */
-  private async executeInternal(
-    executing: ExecutingReceiveOperation,
-  ): Promise<FinalizedReceiveOperation> {
-    if (!executing.outputData) {
+  private async executePrepared(
+    operation: PreparedReceiveOperation,
+  ): Promise<ReceiveExecutionOutcome> {
+    if (!operation.outputData) {
       throw new Error('Missing output data for receive operation');
     }
+    const begun = await this.transactions.beginExecution({
+      operationId: operation.id,
+      updatedAt: Date.now(),
+    });
+    return this.submitPersistedReceive(begun.operation, begun.request);
+  }
 
+  private async submitPersistedReceive(
+    operation: ExecutingReceiveOperation,
+    request: ReceiveTransportRequest,
+    options: { failDefinitiveRejection?: boolean } = {},
+  ): Promise<ReceiveExecutionOutcome> {
     const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
-      executing.mintUrl,
-      executing.unit,
+      request.mintUrl,
+      request.unit,
     );
-    const outputData = deserializeOutputData(executing.outputData);
+    const outputData = deserializeOutputData(request.outputData);
 
     this.logger?.info('Receiving token', {
-      operationId: executing.id,
-      mintUrl: executing.mintUrl,
-      proofs: executing.inputProofs.length,
-      amount: executing.amount,
+      operationId: operation.id,
+      mintUrl: request.mintUrl,
+      proofs: request.inputProofs.length,
+      amount: operation.amount,
     });
 
-    const newProofs = await wallet.receive(
-      { mint: executing.mintUrl, proofs: executing.inputProofs, unit: executing.unit },
-      undefined,
-      { type: 'custom', data: outputData.keep },
-    );
+    let received: Proof[];
+    try {
+      received = await wallet.receive(
+        { mint: request.mintUrl, proofs: request.inputProofs, unit: request.unit },
+        undefined,
+        { type: 'custom', data: outputData.keep },
+      );
+    } catch (error) {
+      const rollbackReason = this.getRollbackReasonForReceiveFailure(error);
+      if (
+        !rollbackReason ||
+        !(error instanceof MintOperationError) ||
+        options.failDefinitiveRejection === false
+      ) {
+        throw error;
+      }
+      const failed = await this.transactions.failExecution({
+        operationId: operation.id,
+        updatedAt: Date.now(),
+        error: rollbackReason,
+      });
+      return { status: 'FAILED', result: failed, error };
+    }
 
-    await this.proofService.saveProofs(
-      executing.mintUrl,
-      mapProofToCoreProof(executing.mintUrl, 'ready', newProofs, {
-        unit: executing.unit,
-        createdByOperationId: executing.id,
-      }),
-    );
+    // Response mapping and local validation happen outside the repository transaction. If either
+    // fails after submission, the durable executing request remains available to recovery.
+    const proofs = mapProofToCoreProof(request.mintUrl, 'ready', received, {
+      unit: request.unit,
+      createdByOperationId: operation.id,
+    });
+    const applied = await this.transactions.applyResult({
+      operationId: operation.id,
+      updatedAt: Date.now(),
+      proofs,
+    });
+    return { status: 'FINALIZED', result: applied };
+  }
 
-    return await this.markAsFinalized(executing);
+  private async publishAppliedResult(result: AppliedReceiveResult): Promise<void> {
+    if (!result.committed) return;
+
+    const proofsByKeyset = new Map<string, CoreEvents['proofs:saved']['proofs']>();
+    for (const proof of result.savedProofs) {
+      const group = proofsByKeyset.get(proof.id) ?? [];
+      group.push(proof);
+      proofsByKeyset.set(proof.id, group);
+    }
+    for (const [keysetId, proofs] of proofsByKeyset) {
+      await this.publishCommittedEvent('proofs:saved', {
+        mintUrl: result.operation.mintUrl,
+        keysetId,
+        proofs,
+      });
+    }
+    await this.publishCommittedEvent('receive-op:finalized', {
+      mintUrl: result.operation.mintUrl,
+      operationId: result.operation.id,
+      operation: result.operation,
+    });
+  }
+
+  private async publishFailedExecution(result: FailedReceiveExecution): Promise<void> {
+    if (!result.committed) return;
+    await this.publishCommittedEvent('receive-op:rolled-back', {
+      mintUrl: result.operation.mintUrl,
+      operationId: result.operation.id,
+      operation: result.operation,
+    });
   }
 
   /**
@@ -366,7 +416,7 @@ export class ReceiveOperationService {
    * Used by recovery when outputs are already saved.
    */
   async finalize(operationId: string): Promise<void> {
-    const preCheck = await this.receiveOperationRepository.getById(operationId);
+    const preCheck = await this.operationQueries.getById(operationId);
     if (!preCheck) {
       throw new Error(`Operation ${operationId} not found`);
     }
@@ -380,8 +430,9 @@ export class ReceiveOperationService {
     }
 
     const releaseLock = await this.acquireOperationLock(operationId);
+    let result: AppliedReceiveResult | undefined;
     try {
-      const operation = await this.receiveOperationRepository.getById(operationId);
+      const operation = await this.operationQueries.getById(operationId);
       if (!operation) {
         throw new Error(`Operation ${operationId} not found`);
       }
@@ -397,15 +448,19 @@ export class ReceiveOperationService {
       }
 
       const executing = operation as ExecutingReceiveOperation;
-      const outputsSaved = await this.hasSavedOutputs(executing);
-      if (!outputsSaved) {
+      const savedOutputs = await this.getSavedOutputs(executing);
+      if (!savedOutputs) {
         throw new Error('Cannot finalize receive operation: outputs not persisted');
       }
-
-      await this.markAsFinalized(executing);
+      result = await this.transactions.applyResult({
+        operationId: executing.id,
+        updatedAt: Date.now(),
+        proofs: savedOutputs,
+      });
     } finally {
       releaseLock();
     }
+    if (result) await this.publishAppliedResult(result);
   }
 
   /**
@@ -426,13 +481,13 @@ export class ReceiveOperationService {
       let initCount = 0;
       let executingCount = 0;
 
-      const initOps = await this.receiveOperationRepository.getByState('init');
+      const initOps = await this.operationQueries.getByState('init');
       for (const op of initOps) {
         let didRecover = false;
         try {
           const releaseLock = await this.acquireOperationLock(op.id);
           try {
-            const current = await this.receiveOperationRepository.getById(op.id);
+            const current = await this.operationQueries.getById(op.id);
             if (current && current.state === 'init') {
               await this.recoverInitOperation(current as InitReceiveOperation);
               didRecover = true;
@@ -454,18 +509,18 @@ export class ReceiveOperationService {
         }
       }
 
-      const preparedOps = await this.receiveOperationRepository.getByState('prepared');
+      const preparedOps = await this.operationQueries.getByState('prepared');
       for (const op of preparedOps) {
         this.logger?.warn('Found stale prepared receive operation, user can rollback manually', {
           operationId: op.id,
         });
       }
 
-      const executingOps = await this.receiveOperationRepository.getByState('executing');
+      const executingOps = await this.operationQueries.getByState('executing');
       for (const op of executingOps) {
         let didRecover = false;
         try {
-          const current = await this.receiveOperationRepository.getById(op.id);
+          const current = await this.operationQueries.getById(op.id);
           if (current && current.state === 'executing') {
             await this.recoverExecutingOperation(current as ExecutingReceiveOperation);
             didRecover = true;
@@ -499,34 +554,19 @@ export class ReceiveOperationService {
 
   /** Cleanup for failed init operations with no external side effects. */
   private async recoverInitOperation(op: InitReceiveOperation): Promise<void> {
-    await this.receiveOperationRepository.delete(op.id);
+    await this.transactions.deleteLegacyInit(op.id);
     this.logger?.info('Cleaned up failed receive init operation', { operationId: op.id });
-  }
-
-  /** Init recovery when prepare fails. */
-  private async tryRecoverInitOperation(op: InitReceiveOperation): Promise<void> {
-    try {
-      await this.recoverInitOperation(op);
-      this.logger?.info('Recovered init receive operation after failure', { operationId: op.id });
-    } catch (recoveryError) {
-      this.logger?.warn('Failed to recover init receive operation, will retry on next startup', {
-        operationId: op.id,
-        error: recoveryError instanceof Error ? recoveryError.message : String(recoveryError),
-      });
-    }
   }
 
   /**
    * Recover an executing operation by checking mint state and restoring outputs.
    * Uses outputData to recover proofs if inputs were spent at the mint.
    */
-  async recoverExecutingOperation(
-    op: ExecutingReceiveOperation,
-    options?: { skipLock?: boolean },
-  ): Promise<void> {
-    const releaseLock = options?.skipLock ? undefined : await this.acquireOperationLock(op.id);
+  async recoverExecutingOperation(op: ExecutingReceiveOperation): Promise<void> {
+    const releaseLock = await this.acquireOperationLock(op.id);
+    let outcome: ReceiveExecutionOutcome | undefined;
     try {
-      const current = await this.receiveOperationRepository.getById(op.id);
+      const current = await this.operationQueries.getById(op.id);
       if (!current) {
         this.logger?.warn('Receive operation missing during recovery', { operationId: op.id });
         return;
@@ -544,123 +584,160 @@ export class ReceiveOperationService {
 
       const executing = current as ExecutingReceiveOperation;
 
-      if (await this.hasSavedOutputs(executing)) {
-        await this.markAsFinalized(executing);
+      const savedOutputs = await this.getSavedOutputs(executing);
+      if (savedOutputs) {
+        const result = await this.transactions.applyResult({
+          operationId: executing.id,
+          updatedAt: Date.now(),
+          proofs: savedOutputs,
+        });
+        outcome = { status: 'FINALIZED', result };
         this.logger?.info('Receive operation finalized during recovery (outputs already saved)', {
           operationId: executing.id,
         });
-        return;
-      }
-
-      let inputStates: CashuProofState[];
-      try {
-        inputStates = await this.checkProofStatesWithMint(executing.mintUrl, executing.inputProofs);
-      } catch (e) {
-        this.logger?.warn('Could not reach mint for receive recovery, will retry later', {
-          operationId: executing.id,
-          mintUrl: executing.mintUrl,
-        });
-        return; // Leave in executing state
-      }
-
-      const allUnspent = inputStates.every((s) => s.state === 'UNSPENT');
-      const allSpent = inputStates.every((s) => s.state === 'SPENT');
-
-      if (allUnspent) {
-        if (!executing.outputData) {
-          await this.markAsRolledBack(executing, 'Recovered: missing output data for receive');
-          return;
-        }
-
-        try {
-          await this.executeInternal(executing);
-        } catch (e) {
-          const rollbackReason = this.getRollbackReasonForReceiveFailure(e);
-          if (rollbackReason) {
-            await this.markAsRolledBack(executing, rollbackReason);
-            return;
-          }
-
-          this.logger?.warn('Receive re-execution failed, will retry later', {
-            operationId: executing.id,
-            mintUrl: executing.mintUrl,
-            error: e instanceof Error ? e.message : String(e),
-          });
-        }
-        return;
-      }
-
-      if (!allSpent) {
-        this.logger?.warn('Receive operation inputs not conclusively spent, retry later', {
-          operationId: executing.id,
-        });
-        return;
-      }
-
-      if (!executing.outputData) {
-        await this.markAsRolledBack(executing, 'Recovered: missing output data for receive');
-        return;
-      }
-
-      try {
-        const recovered = await this.proofService.recoverProofsFromOutputData(
-          executing.mintUrl,
-          executing.outputData,
-          {
-            unit: executing.unit,
-            createdByOperationId: executing.id,
-          },
-        );
-        const outputsSaved = await this.hasSavedOutputs(executing);
-        if (outputsSaved) {
-          await this.markAsFinalized(executing);
-          return;
-        }
-        if (recovered.length === 0) {
-          await this.markAsRolledBack(
-            executing,
-            'Recovered: input proofs spent without recoverable outputs',
-          );
-          return;
-        }
-        this.logger?.warn('Receive outputs not persisted after recovery attempt', {
-          operationId: executing.id,
-          mintUrl: executing.mintUrl,
-          recoveredCount: recovered.length,
-        });
-      } catch (e) {
-        const rollbackReason = this.getRollbackReasonForReceiveFailure(e);
-        if (rollbackReason) {
-          await this.markAsRolledBack(executing, rollbackReason);
-          return;
-        }
-
-        this.logger?.warn('Recovering receive outputs failed, will retry later', {
-          operationId: executing.id,
-          mintUrl: executing.mintUrl,
-          error: e instanceof Error ? e.message : String(e),
-        });
+      } else {
+        outcome = await this.recoverExecutingRequest(executing);
       }
     } finally {
-      if (releaseLock) {
-        releaseLock();
-      }
+      releaseLock();
+    }
+    if (outcome?.status === 'FINALIZED') {
+      await this.publishAppliedResult(outcome.result);
+    } else if (outcome?.status === 'FAILED') {
+      await this.publishFailedExecution(outcome.result);
     }
   }
 
-  /** Best-effort executing recovery used when execute fails. */
-  private async tryRecoverExecutingOperation(op: ExecutingReceiveOperation): Promise<void> {
+  private async recoverExecutingRequest(
+    executing: ExecutingReceiveOperation,
+  ): Promise<ReceiveExecutionOutcome | undefined> {
+    let inputStates: CashuProofState[];
     try {
-      await this.recoverExecutingOperation(op, { skipLock: true });
-      this.logger?.info('Recovered executing receive operation after failure', {
-        operationId: op.id,
+      inputStates = await this.checkProofStatesWithMint(executing.mintUrl, executing.inputProofs);
+    } catch {
+      this.logger?.warn('Could not reach mint for receive recovery, will retry later', {
+        operationId: executing.id,
+        mintUrl: executing.mintUrl,
       });
-    } catch (recoveryError) {
-      this.logger?.warn('Failed to recover executing receive operation, will retry on startup', {
-        operationId: op.id,
-        error: recoveryError instanceof Error ? recoveryError.message : String(recoveryError),
+      return;
+    }
+
+    if (inputStates.length !== executing.inputProofs.length) {
+      this.logger?.warn('Receive operation input-state evidence is incomplete, retry later', {
+        operationId: executing.id,
+        expectedCount: executing.inputProofs.length,
+        observedCount: inputStates.length,
+      });
+      return;
+    }
+
+    const allUnspent = inputStates.every((state) => state.state === 'UNSPENT');
+    const allSpent = inputStates.every((state) => state.state === 'SPENT');
+    if (allUnspent) {
+      try {
+        return await this.submitPersistedReceive(executing, this.toTransportRequest(executing), {
+          failDefinitiveRejection: false,
+        });
+      } catch (error) {
+        if (error instanceof MintOperationError) {
+          try {
+            const restored = await this.recoverFromRestore(
+              executing,
+              this.getRollbackReasonForReceiveFailure(error),
+            );
+            if (restored) return restored;
+          } catch (restoreError) {
+            this.logger?.warn('Restore after Receive replay rejection failed', {
+              operationId: executing.id,
+              mintUrl: executing.mintUrl,
+              error: restoreError instanceof Error ? restoreError.message : String(restoreError),
+            });
+          }
+        }
+        this.logger?.warn('Receive re-execution failed, will retry later', {
+          operationId: executing.id,
+          mintUrl: executing.mintUrl,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return;
+      }
+    }
+    if (!allSpent) {
+      this.logger?.warn('Receive operation inputs not conclusively spent, retry later', {
+        operationId: executing.id,
+      });
+      return;
+    }
+
+    try {
+      return await this.recoverFromRestore(
+        executing,
+        'Recovered: input proofs spent without recoverable outputs',
+      );
+    } catch (error) {
+      this.logger?.warn('Recovering receive outputs failed, will retry later', {
+        operationId: executing.id,
+        mintUrl: executing.mintUrl,
+        error: error instanceof Error ? error.message : String(error),
       });
     }
+    return;
+  }
+
+  private async recoverFromRestore(
+    executing: ExecutingReceiveOperation,
+    definitiveFailure: string | null,
+  ): Promise<ReceiveExecutionOutcome | undefined> {
+    const observation = await this.proofService.observeRestoreProofsFromOutputData(
+      executing.mintUrl,
+      executing.outputData,
+      executing.unit,
+    );
+    if (observation.status === 'complete-unspent' || observation.status === 'complete-spent') {
+      const state = observation.status === 'complete-unspent' ? 'ready' : 'spent';
+      const restored =
+        observation.status === 'complete-unspent'
+          ? observation.unspentProofs
+          : observation.restoredProofs;
+      const proofs = mapProofToCoreProof(executing.mintUrl, state, restored, {
+        unit: executing.unit,
+        createdByOperationId: executing.id,
+      });
+      const result = await this.transactions.applyResult({
+        operationId: executing.id,
+        updatedAt: Date.now(),
+        proofs,
+      });
+      return { status: 'FINALIZED', result };
+    }
+    if (observation.status === 'none' && definitiveFailure) {
+      const result = await this.transactions.failExecution({
+        operationId: executing.id,
+        updatedAt: Date.now(),
+        error: definitiveFailure,
+      });
+      return {
+        status: 'FAILED',
+        result,
+        error: new MintOperationError(11001, definitiveFailure),
+      };
+    }
+    this.logger?.warn('Restore evidence for Receive remains inconclusive', {
+      operationId: executing.id,
+      mintUrl: executing.mintUrl,
+      restoredCount: observation.restoredProofs.length,
+      expectedCount: observation.expectedOutputCount,
+    });
+    return;
+  }
+
+  private toTransportRequest(executing: ExecutingReceiveOperation): ReceiveTransportRequest {
+    return {
+      mintUrl: executing.mintUrl,
+      unit: executing.unit,
+      inputProofs: executing.inputProofs,
+      outputData: executing.outputData,
+    };
   }
 
   private getRollbackReasonForReceiveFailure(error: unknown): string | null {
@@ -694,82 +771,15 @@ export class ReceiveOperationService {
   }
 
   /**
-   * Persist finalized state and emit the operation finalized event.
-   */
-  private async markAsFinalized(op: ExecutingReceiveOperation): Promise<FinalizedReceiveOperation> {
-    const current = await this.receiveOperationRepository.getById(op.id);
-    if (!current) {
-      throw new Error(`Operation ${op.id} not found`);
-    }
-    if (current.state === 'finalized') {
-      return current as FinalizedReceiveOperation;
-    }
-    if (current.state === 'rolled_back') {
-      throw new Error(`Cannot finalize operation in state ${current.state}`);
-    }
-    if (current.state !== 'executing') {
-      throw new Error(`Cannot finalize operation in state ${current.state}`);
-    }
-
-    const finalized: FinalizedReceiveOperation = {
-      ...(current as ExecutingReceiveOperation),
-      state: 'finalized',
-      updatedAt: Date.now(),
-    };
-    await this.receiveOperationRepository.update(finalized);
-    await this.eventBus.emit('receive-op:finalized', {
-      mintUrl: finalized.mintUrl,
-      operationId: finalized.id,
-      operation: finalized,
-    });
-
-    this.logger?.info('Receive operation finalized', {
-      operationId: finalized.id,
-      mintUrl: finalized.mintUrl,
-      proofCount: finalized.inputProofs.length,
-    });
-
-    return finalized;
-  }
-
-  /**
-   * Persist rolled back state with error context.
-   */
-  private async markAsRolledBack(
-    op: PreparedOrLaterOperation,
-    error: string,
-  ): Promise<RolledBackReceiveOperation> {
-    const rolledBack: RolledBackReceiveOperation = {
-      ...op,
-      state: 'rolled_back',
-      updatedAt: Date.now(),
-      error,
-    };
-    await this.receiveOperationRepository.update(rolledBack);
-    await this.eventBus.emit('receive-op:rolled-back', {
-      mintUrl: rolledBack.mintUrl,
-      operationId: rolledBack.id,
-      operation: rolledBack,
-    });
-
-    this.logger?.info('Receive operation rolled back', {
-      operationId: op.id,
-      error,
-    });
-
-    return rolledBack;
-  }
-
-  /**
    * Check if any output proofs already exist locally.
    * Used to avoid unnecessary recovery work.
    */
-  private async hasSavedOutputs(op: PreparedOrLaterOperation): Promise<boolean> {
+  private async getSavedOutputs(op: PreparedOrLaterOperation) {
     const outputSecrets = getOutputProofSecrets(op);
-    if (outputSecrets.length === 0) return false;
+    if (outputSecrets.length === 0) return null;
 
-    const existingProofs = await this.proofRepository.getProofsBySecrets(op.mintUrl, outputSecrets);
-    return existingProofs.length === new Set(outputSecrets).size;
+    const existingProofs = await this.proofQueries.getProofsBySecrets(op.mintUrl, outputSecrets);
+    return existingProofs.length === new Set(outputSecrets).size ? existingProofs : null;
   }
 
   /** Extract and normalize mint URL from token, with validation. */
@@ -787,21 +797,21 @@ export class ReceiveOperationService {
    * Get an operation by ID.
    */
   async getOperation(operationId: string): Promise<ReceiveOperation | null> {
-    return this.receiveOperationRepository.getById(operationId);
+    return this.operationQueries.getById(operationId);
   }
 
   /**
    * Get all pending operations.
    */
   async getPendingOperations(): Promise<ReceiveOperation[]> {
-    return this.receiveOperationRepository.getPending();
+    return this.operationQueries.getPending();
   }
 
   /**
    * Get all prepared operations.
    */
   async getPreparedOperations(): Promise<PreparedReceiveOperation[]> {
-    const ops = await this.receiveOperationRepository.getByState('prepared');
+    const ops = await this.operationQueries.getByState('prepared');
     return ops.filter((op): op is PreparedReceiveOperation => op.state === 'prepared');
   }
 
@@ -811,8 +821,9 @@ export class ReceiveOperationService {
    */
   async rollback(operationId: string, reason?: string): Promise<void> {
     const releaseLock = await this.acquireOperationLock(operationId);
+    let result: FailedReceiveExecution | undefined;
     try {
-      const operation = await this.receiveOperationRepository.getById(operationId);
+      const operation = await this.operationQueries.getById(operationId);
       if (!operation) {
         throw new Error(`Operation ${operationId} not found`);
       }
@@ -828,7 +839,7 @@ export class ReceiveOperationService {
           throw new Error(`Cannot rollback operation in state ${operation.state}`);
 
         case 'init':
-          await this.receiveOperationRepository.delete(operation.id);
+          await this.transactions.deleteLegacyInit(operation.id);
           this.logger?.info('Receive operation cancelled', {
             operationId,
             reason: reason ?? 'User cancelled receive operation',
@@ -836,16 +847,18 @@ export class ReceiveOperationService {
           return;
 
         case 'prepared':
-          await this.markAsRolledBack(
-            operation as PreparedReceiveOperation,
-            reason ?? 'User cancelled receive operation',
-          );
-          return;
+          result = await this.transactions.cancelPrepared({
+            operationId: operation.id,
+            updatedAt: Date.now(),
+            error: reason ?? 'User cancelled receive operation',
+          });
+          break;
         default:
           throw new Error(`Cannot rollback operation in unknown state`);
       }
     } finally {
       releaseLock();
     }
+    if (result) await this.publishFailedExecution(result);
   }
 }

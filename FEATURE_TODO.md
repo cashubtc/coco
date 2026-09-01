@@ -1,17 +1,17 @@
-# Core Transaction Hardening: Send (#449–#452)
+# Core Transaction Hardening: Receive (#453–#455)
 
-- [x] Build Send transaction operations on the strong Wallet scope and shared runner.
-- [x] Make Send preparation reserve proofs, allocate outputs, and persist prepared atomically.
-- [x] Execute exact-match Sends as one local prepared-to-pending transition.
-- [x] Persist executing before swap mint I/O and apply swap results atomically.
-- [x] Make completion, cancellation, legacy rollback, and Operation Recovery transaction-safe.
-- [x] Preserve Send method handlers as the lifecycle-policy seam.
-- [x] Claim executing-send recovery through an authoritative revision before replaying mint I/O.
+- [x] Build Receive transaction operations on the strong Wallet scope and shared runner.
+- [x] Complete token validation and P2PK signing before opening the repository transaction.
+- [x] Persist signed inputs and Output Allocation atomically in prepared.
+- [x] Commit executing before mint I/O and apply successful results atomically.
+- [x] Treat explicit spent-input rejection as definitive and transport failure as ambiguous.
+- [x] Reuse the Exact Operation Request for replay and Restore-based Operation Recovery.
+- [x] Make result application and recovery idempotent through authoritative revisions.
 - [x] Keep remote mint I/O outside transactions and publish events only after commit.
-- [x] Preserve legacy init cleanup and pending default-token reclaim compatibility.
-- [x] Cover crash boundaries, conflicts, replay, idempotence, and post-commit events.
+- [x] Preserve legacy init cleanup and Payment Request source metadata.
+- [x] Cover crash boundaries, replay, Restore, conflicts, and post-commit events.
 
 ## Scope boundary
 
-Do not migrate Receive, Mint Swap, or Payment Request parent/attempt atomicity in this slice. The
-durable outbox, general fault injection, and pending default-token reclaim redesign remain separate.
+Payment Request parent/attempt atomicity, Mint Swap migration, the durable outbox, and general fault
+injection remain separate follow-up work.

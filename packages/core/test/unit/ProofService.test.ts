@@ -1481,6 +1481,7 @@ describe('ProofService', () => {
         },
       };
 
+      let restoredState = 'UNSPENT';
       const localWalletService = {
         async getWalletWithActiveKeysetId() {
           return {
@@ -1494,7 +1495,7 @@ describe('ProofService', () => {
                 },
               },
               async checkProofsStates(_proofs: any[]) {
-                return [{ state: 'UNSPENT' }];
+                return [{ state: restoredState }];
               },
             },
           };
@@ -1514,6 +1515,25 @@ describe('ProofService', () => {
         undefined,
         bus,
       );
+
+      const observation = await service.observeRestoreProofsFromOutputData(
+        mintUrl,
+        serializedOutputData,
+        'sat',
+      );
+      expect(observation.status).toBe('complete-unspent');
+      expect(observation.restoredProofs[0]?.C).toBe(unblindedC);
+
+      restoredState = 'SPENT';
+      const spentObservation = await service.observeRestoreProofsFromOutputData(
+        mintUrl,
+        serializedOutputData,
+        'sat',
+      );
+      expect(spentObservation.status).toBe('complete-spent');
+      expect(spentObservation.unspentProofs).toEqual([]);
+
+      restoredState = 'UNSPENT';
 
       const recovered = await service.recoverProofsFromOutputData(mintUrl, serializedOutputData, {
         unit: 'sat',

@@ -53,6 +53,7 @@ const EXPECTED_MIGRATION_IDS = [
   '038_keypair_derivation_allocations',
   '039_send_operation_revision',
   '040_send_execution_memo',
+  '041_receive_operation_revision',
 ] as const;
 
 function deriveKeyPair(derivationIndex: number, purpose: 'p2pk' | 'nut20_mint_quote') {
@@ -241,6 +242,25 @@ describe('shared SQL schema migrations', () => {
         ['legacy-send-memo'],
       ),
     ).toEqual({ executionMemo: null });
+  });
+
+  itWithDatabase('backfills legacy Receive operation revisions to zero', async (db) => {
+    await ensureSchemaUpTo(db, '041_receive_operation_revision');
+    await db.run(
+      `INSERT INTO coco_cashu_receive_operations
+        (id, mintUrl, amount, unit, state, createdAt, updatedAt, inputProofsJson)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ['legacy-receive', 'https://mint.test', '10', 'sat', 'init', 1, 1, '[]'],
+    );
+
+    await ensureSchemaUpTo(db);
+
+    expect(
+      await db.get<{ revision: number }>(
+        'SELECT revision FROM coco_cashu_receive_operations WHERE id = ?',
+        ['legacy-receive'],
+      ),
+    ).toEqual({ revision: 0 });
   });
 
   itWithDatabase('backfills per-purpose keypair derivation allocations', async (db) => {

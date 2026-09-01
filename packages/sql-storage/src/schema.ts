@@ -1520,6 +1520,13 @@ const MIGRATIONS: readonly Migration[] = [
         ADD COLUMN executionMemo TEXT;
     `,
   },
+  {
+    id: '041_receive_operation_revision',
+    sql: `
+      ALTER TABLE coco_cashu_receive_operations
+        ADD COLUMN revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0);
+    `,
+  },
 ];
 
 // Export for testing
