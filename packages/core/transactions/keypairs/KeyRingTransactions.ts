@@ -1,11 +1,11 @@
+import { schnorr, secp256k1 } from '@noble/curves/secp256k1.js';
+import { bytesToHex } from '@noble/curves/utils.js';
+import { HDKey } from '@scure/bip32';
 import type { Logger } from '@core/logging';
 import type { Keypair, KeypairPurpose } from '@core/models/Keypair';
 import type { SeedService } from '@core/services/SeedService.ts';
 import type { CoreTransactionRunner } from '../CoreTransaction.ts';
 import type { PurposeBoundKeyDeriver } from './TransactionalKeypairOperations.ts';
-import { schnorr, secp256k1 } from '@noble/curves/secp256k1.js';
-import { bytesToHex } from '@noble/curves/utils.js';
-import { HDKey } from '@scure/bip32';
 
 const DERIVATION_PURPOSES: Record<KeypairPurpose, number> = {
   p2pk: 10,
