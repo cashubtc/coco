@@ -121,6 +121,45 @@ describe('indexeddb Wallet transaction boundaries', () => {
     }
   });
 
+  it('treats another connection to the same Wallet database as ambient', async () => {
+    const { first, second, dispose } = await createSharedRepositories();
+    try {
+      await first.db.transaction('rw', first.db.tables, () => {
+        expect(second.db.hasAmbientTransaction).toBe(true);
+      });
+    } finally {
+      await dispose();
+    }
+  });
+
+  it('allows a Wallet transaction inside an unrelated Dexie database transaction', async () => {
+    const { repositories, dispose } = await createRepositories();
+    const unrelatedName = `unrelated_${Date.now()}_${dbCounter++}`;
+    const unrelated = new Dexie(unrelatedName);
+    unrelated.version(1).stores({ items: '++id' });
+    await unrelated.open();
+    const walletMint = {
+      ...createDummyMint(),
+      mintUrl: 'https://unrelated-ambient.test',
+    };
+
+    try {
+      await unrelated.transaction('rw', unrelated.table('items'), async () => {
+        await Dexie.waitFor(
+          repositories.withTransaction(async ({ mintRepository }) => {
+            await mintRepository.addOrUpdateMint(walletMint);
+          }),
+        );
+      });
+
+      expect(await repositories.mintRepository.getAllMints()).toContainEqual(walletMint);
+    } finally {
+      unrelated.close();
+      await Dexie.delete(unrelatedName);
+      await dispose();
+    }
+  }, 2_000);
+
   it('keeps closed-over root repository calls in the current Wallet transaction', async () => {
     const { repositories, dispose } = await createRepositories();
     try {

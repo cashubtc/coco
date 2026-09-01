@@ -105,9 +105,10 @@ export class IdbDb extends Dexie {
     return Dexie.currentTransaction ?? this.activeTransaction;
   }
 
-  /** Whether this call context already belongs to a Dexie transaction. */
+  /** Whether this call context already belongs to this logical IndexedDB database. */
   get hasAmbientTransaction(): boolean {
-    return Boolean(Dexie.currentTransaction?.active);
+    const transaction = Dexie.currentTransaction;
+    return Boolean(transaction?.active && transaction.db.name === this.name);
   }
 }
 
