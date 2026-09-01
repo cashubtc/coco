@@ -5,7 +5,7 @@
  *   │         │            │
  *   └─────────┴────────────┴──► rolled_back
  *
- * - init: Operation created, token decoded/validated
+ * - init: Transient operation intent; persisted rows exist only for legacy cleanup
  * - prepared: Fees calculated, outputs created, ready to execute
  * - executing: Receive in progress (mint interaction)
  * - finalized: Proofs saved, operation complete
