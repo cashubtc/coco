@@ -253,7 +253,16 @@ export class ProofStateWatcherService {
         if (this.inflightByKey.has(key)) return;
         this.inflightByKey.add(key);
         try {
-          await this.proofs.setProofState(mintUrl, [secret], 'spent');
+          const sendOperationId = this.sendOperationService
+            ? await this.getSendOperationIdForSpentProof(mintUrl, secret)
+            : undefined;
+          const handledBySend =
+            sendOperationId && this.sendOperationService
+              ? await this.sendOperationService.recordProofSpent(sendOperationId, secret)
+              : false;
+          if (!handledBySend) {
+            await this.proofs.setProofState(mintUrl, [secret], 'spent');
+          }
           this.logger?.info('Marked inflight proof as spent from mint notification', {
             mintUrl,
             subId,

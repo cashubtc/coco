@@ -2046,6 +2046,50 @@ export async function runSendOperationRepositoryContract(
         await dispose();
       }
     });
+
+    it('normalizes legacy revisions and allows only one conditional transition winner', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const prepared = createDummyPreparedSendOperation({
+          id: 'send-cas',
+          revision: undefined,
+        });
+        await repositories.sendOperationRepository.create(prepared);
+
+        const legacy = await repositories.sendOperationRepository.getById(prepared.id);
+        expect(legacy?.revision).toBe(0);
+
+        const next = {
+          ...prepared,
+          state: 'executing',
+          updatedAt: 1234,
+          executionMemo: 'persisted before transport',
+        } as SendOperation;
+        const winners = await Promise.all([
+          repositories.sendOperationRepository.transition({
+            operationId: prepared.id,
+            expectedState: 'prepared',
+            expectedRevision: 0,
+            next,
+          }),
+          repositories.sendOperationRepository.transition({
+            operationId: prepared.id,
+            expectedState: 'prepared',
+            expectedRevision: 0,
+            next,
+          }),
+        ]);
+        expect(winners.filter(Boolean)).toHaveLength(1);
+
+        const stored = await repositories.sendOperationRepository.getById(prepared.id);
+        expect(stored?.state).toBe('executing');
+        expect(stored?.revision).toBe(1);
+        expect(stored?.updatedAt).toBe(1000);
+        expect(stored?.executionMemo).toBe('persisted before transport');
+      } finally {
+        await dispose();
+      }
+    });
   });
 }
 

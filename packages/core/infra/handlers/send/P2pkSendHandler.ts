@@ -1,413 +1,45 @@
 import {
-  OutputData,
-  sumProofs,
-  type Token,
-  type Proof,
-  type OutputConfig,
-  type P2PKOptions,
-  type OutputDataCreator,
-} from '@cashu/cashu-ts';
-import type {
-  SendMethodHandler,
-  BasePrepareContext,
-  ExecuteContext,
-  FinalizeContext,
-  RollbackContext,
-  RecoverExecutingContext,
-  ExecutionResult,
-  RecoveryResult,
-  SendMethodData,
-} from '../../../operations/send/SendMethodHandler';
-import type {
-  PreparedSendOperation,
-  PendingSendOperation,
-  RolledBackSendOperation,
-} from '../../../operations/send/SendOperation';
-import { getSendProofSecrets, getKeepProofSecrets } from '../../../operations/send/SendOperation';
-import { ProofValidationError } from '../../../models/Error';
-import {
-  mapProofToCoreProof,
-  serializeOutputData,
-  deserializeOutputData,
-  getSecretsFromSerializedOutputData,
-  getProofStateInputsFromSerializedOutputs,
-} from '../../../utils';
-import type { CoreProof } from '../../../types';
+  resolveP2pkOptions,
+  type ExecuteContext,
+  type FinalizeContext,
+  type PendingContext,
+  type PrepareContext,
+  type RecoverExecutingContext,
+  type RollbackContext,
+  type SendMethodHandler,
+} from '../../../operations/send/SendMethodHandler.ts';
 
-/**
- * P2PK send handler for sending tokens locked to a recipient's public key.
- * The recipient must have the corresponding private key to spend the tokens.
- */
+/** Lifecycle policy for tokens locked to a recipient's NUT-11 P2PK condition. */
 export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
-  private readonly outputDataCreator: OutputDataCreator;
-
-  constructor(outputDataCreator?: OutputDataCreator) {
-    this.outputDataCreator = outputDataCreator ?? OutputData;
-  }
-
-  /**
-   * Prepare the send operation by selecting proofs and creating outputs.
-   * P2PK sends always require a swap to lock the proofs to the pubkey.
-   */
-  async prepare(ctx: BasePrepareContext): Promise<PreparedSendOperation> {
-    const { operation, wallet, proofService, mintService, logger } = ctx;
-    const { mintUrl, amount, unit } = operation;
-
-    const p2pkOptions = this.getP2pkOptions(operation.methodData as SendMethodData<'p2pk'>);
-    await mintService.assertNutSupported(mintUrl, 11, 'P2PK send');
-
-    // P2PK always requires a swap to lock proofs to the pubkey
-    // Select proofs including fees
-    const selected = await proofService.selectProofsToSend(mintUrl, { amount, unit }, true);
-    const selectedAmount = sumProofs(selected);
-    const fee = wallet.getFeesForProofs(selected);
-    const requiredAmount = amount.add(fee);
-    if (selectedAmount.lessThan(requiredAmount)) {
-      throw new ProofValidationError('Send amount is not sufficient after fees');
-    }
-    const keepAmount = selectedAmount.subtract(requiredAmount);
-
-    // Use ProofService to create outputs and increment counters
-    const outputResult = await proofService.createOutputsAndIncrementCounters(
-      mintUrl,
-      {
-        keep: { amount: keepAmount, unit },
-        send: { amount: keepAmount.subtract(keepAmount), unit },
-      },
-      {},
+  async prepare(ctx: PrepareContext<'p2pk'>) {
+    const options = resolveP2pkOptions(ctx.operation.methodData);
+    await ctx.assertNutSupported(11, 'P2PK send');
+    const fixedSendOutputs = ctx.outputDataCreator.createP2PKData(
+      options,
+      ctx.operation.amount,
+      ctx.activeKeys,
     );
-
-    const keyset = wallet.getKeyset();
-
-    const sendOT = this.outputDataCreator.createP2PKData(p2pkOptions, amount, keyset);
-
-    // Serialize for storage
-    const serializedOutputData = serializeOutputData({
-      keep: outputResult.keep,
-      send: sendOT,
-    });
-
-    logger?.debug('P2PK send prepared', {
-      operationId: operation.id,
-      amount,
-      fee,
-      keepAmount,
-      selectedAmount,
-      proofCount: selected.length,
-      keepOutputs: outputResult.keep.length,
-      sendOutputs: sendOT.length,
-      p2pkPubkey: p2pkOptions.data,
-    });
-
-    // Reserve the selected proofs
-    const inputSecrets = selected.map((p: Proof) => p.secret);
-    await proofService.reserveProofs(mintUrl, inputSecrets, operation.id, { unit });
-
-    // Build prepared operation
-    const prepared: PreparedSendOperation = {
-      id: operation.id,
-      state: 'prepared',
-      mintUrl: operation.mintUrl,
-      amount: operation.amount,
-      unit: operation.unit,
-      createdAt: operation.createdAt,
-      updatedAt: Date.now(),
-      error: operation.error,
-      needsSwap: true, // P2PK always needs swap
-      fee,
-      inputAmount: selectedAmount,
-      inputProofSecrets: inputSecrets,
-      outputData: serializedOutputData,
-      method: operation.method,
-      methodData: operation.methodData,
-    };
-
-    logger?.info('P2PK send operation prepared', {
-      operationId: operation.id,
-      fee,
-      inputProofCount: inputSecrets.length,
-      p2pkPubkey: p2pkOptions.data,
-    });
-
-    return prepared;
+    return ctx.commit({ forceSwap: true, fixedSendOutputs });
   }
 
-  /**
-   * Execute the send operation by performing the swap with P2PK locking.
-   */
-  async execute(ctx: ExecuteContext): Promise<ExecutionResult> {
-    const { operation, wallet, reservedProofs, proofService, logger } = ctx;
-    const { mintUrl, amount, inputProofSecrets } = operation;
-
-    const p2pkOptions = this.getP2pkOptions(operation.methodData as SendMethodData<'p2pk'>);
-
-    const inputProofs = reservedProofs.filter((p: Proof) => inputProofSecrets.includes(p.secret));
-
-    if (inputProofs.length !== inputProofSecrets.length) {
-      throw new Error('Could not find all reserved proofs');
-    }
-
-    // Perform swap using stored OutputData with P2PK locking
-    if (!operation.outputData) {
-      throw new Error('Missing output data for P2PK swap operation');
-    }
-
-    // Deserialize OutputData
-    const outputData = deserializeOutputData(operation.outputData);
-
-    logger?.debug('Executing P2PK swap', {
-      operationId: operation.id,
-      keepOutputs: outputData.keep.length,
-      sendOutputs: outputData.send.length,
-      p2pkPubkey: p2pkOptions.data,
-    });
-
-    const outputConfig: OutputConfig = {
-      send: { type: 'custom', data: outputData.send },
-      keep: { type: 'custom', data: outputData.keep },
-    };
-
-    // Perform the swap with the mint
-    const result = await wallet.send(amount, inputProofs, undefined, outputConfig);
-    const sendProofs = result.send;
-    const keepProofs = result.keep;
-
-    // Persist keep proofs as ready and P2PK send proofs as inflight so the
-    // existing proof watcher/finalization flow can track them uniformly.
-    const keepCoreProofs = mapProofToCoreProof(mintUrl, 'ready', keepProofs, {
-      unit: operation.unit,
-      createdByOperationId: operation.id,
-    });
-    const sendCoreProofs = mapProofToCoreProof(mintUrl, 'inflight', sendProofs, {
-      unit: operation.unit,
-      createdByOperationId: operation.id,
-    });
-    if (keepCoreProofs.length > 0 || sendCoreProofs.length > 0) {
-      await proofService.saveProofs(mintUrl, [...keepCoreProofs, ...sendCoreProofs]);
-    }
-
-    // Mark input proofs as spent (use proofService to emit events)
-    await proofService.setProofState(mintUrl, inputProofSecrets, 'spent');
-
-    const token: Token = {
-      mint: mintUrl,
-      proofs: sendProofs,
-      unit: operation.unit,
-    };
-
-    // Build pending operation
-    const pending: PendingSendOperation = {
-      ...operation,
-      state: 'pending',
-      updatedAt: Date.now(),
-      token,
-    };
-
-    logger?.info('P2PK send operation executed', {
-      operationId: operation.id,
-      sendProofCount: sendProofs.length,
-      keepProofCount: keepProofs.length,
-      p2pkPubkey: p2pkOptions.data,
-    });
-
-    return { status: 'PENDING', pending, token };
+  execute(ctx: ExecuteContext) {
+    return ctx.executeSwap();
   }
 
-  private getP2pkOptions(methodData: SendMethodData<'p2pk'>): P2PKOptions {
-    if ('options' in methodData && methodData.options) {
-      if ((methodData.options as { hashlock?: unknown }).hashlock !== undefined) {
-        throw new ProofValidationError('P2PK send does not support hashlock/HTLC options');
-      }
-      if ('kind' in methodData.options) {
-        if (methodData.options.kind !== 'P2PK') {
-          throw new ProofValidationError('P2PK send does not support hashlock/HTLC options');
-        }
-        return methodData.options;
-      }
-
-      const pubkeys = Array.isArray(methodData.options.pubkey)
-        ? methodData.options.pubkey
-        : [methodData.options.pubkey];
-      const [data, ...additionalPubkeys] = pubkeys;
-      if (!data) {
-        throw new ProofValidationError('P2PK send requires at least one lock pubkey');
-      }
-      const { pubkey: _pubkey, hashlock: _hashlock, ...conditions } = methodData.options;
-      return {
-        kind: 'P2PK',
-        data,
-        ...conditions,
-        ...(additionalPubkeys.length > 0 ? { pubkeys: additionalPubkeys } : {}),
-      };
-    }
-
-    if ('pubkey' in methodData && methodData.pubkey) {
-      return { kind: 'P2PK', data: methodData.pubkey };
-    }
-
-    throw new ProofValidationError('P2PK send requires P2PK options or a pubkey in methodData');
+  finalize(ctx: FinalizeContext) {
+    return ctx.completePersistedSend();
   }
 
-  /**
-   * Finalize the send operation after proofs are confirmed spent.
-   */
-  async finalize(ctx: FinalizeContext): Promise<void> {
-    const { operation, proofService } = ctx;
-
-    // Release proof reservations (they're already spent)
-    const sendSecrets = getSendProofSecrets(operation);
-    const keepSecrets = getKeepProofSecrets(operation);
-
-    await proofService.releaseProofs(operation.mintUrl, operation.inputProofSecrets);
-    if (sendSecrets.length > 0) {
-      await proofService.releaseProofs(operation.mintUrl, sendSecrets);
-    }
-    if (keepSecrets.length > 0) {
-      await proofService.releaseProofs(operation.mintUrl, keepSecrets);
-    }
+  rollback(ctx: RollbackContext) {
+    if (ctx.operation.state === 'prepared') return ctx.cancelPrepared();
+    throw new Error(`P2PK Send Operation in ${ctx.operation.state} state can not be rolled back.`);
   }
 
-  /**
-   * Rollback the send operation.
-   * Note: P2PK tokens sent to an external pubkey cannot be reclaimed without the private key.
-   * This rollback only handles the prepared state (before swap) and releases reservations.
-   */
-  async rollback(ctx: RollbackContext): Promise<void> {
-    const { operation, proofService, logger } = ctx;
-    const { mintUrl, inputProofSecrets } = operation;
-
-    if (operation.state === 'prepared') {
-      // Simple case: just release the reserved proofs - no swap was done yet
-      await proofService.releaseProofs(mintUrl, inputProofSecrets);
-      logger?.info('Rolling back prepared P2PK operation - released reserved proofs', {
-        operationId: operation.id,
-      });
-    } else {
-      throw new Error(`P2PK Send Operation in ${operation.state} state can not be rolled back.`);
-    }
+  checkPending(ctx: PendingContext) {
+    return ctx.checkPersistedSend();
   }
 
-  /**
-   * Recover an executing operation that failed mid-execution.
-   */
-  async recoverExecuting(ctx: RecoverExecutingContext): Promise<RecoveryResult> {
-    const { operation, wallet, proofRepository, proofService, logger } = ctx;
-
-    // P2PK always requires swap - check with mint
-    const proofInputs = await proofRepository.getProofsBySecrets(
-      operation.mintUrl,
-      operation.inputProofSecrets,
-    );
-    if (proofInputs.length !== operation.inputProofSecrets.length) {
-      throw new ProofValidationError(
-        'Cannot recover P2PK send operation: missing input proof metadata',
-      );
-    }
-    let inputStates;
-    try {
-      inputStates = await wallet.checkProofsStates(proofInputs);
-    } catch (error) {
-      logger?.warn('Could not reach mint for recovery, will retry later', {
-        operationId: operation.id,
-        mintUrl: operation.mintUrl,
-      });
-      throw error;
-    }
-    const allSpent = inputStates.every((s: { state: string }) => s.state === 'SPENT');
-
-    if (!allSpent) {
-      // Swap never happened - simple rollback
-      await proofService.releaseProofs(operation.mintUrl, operation.inputProofSecrets);
-      const failed: RolledBackSendOperation = {
-        ...operation,
-        state: 'rolled_back',
-        updatedAt: Date.now(),
-        error: 'Recovered: P2PK swap never executed',
-      };
-      return { status: 'FAILED', failed };
-    }
-
-    if (!operation.outputData) {
-      throw new Error('Missing output data for P2PK recovery after swap execution');
-    }
-
-    const existingProofs = await proofRepository.getProofsByOperationId(
-      operation.mintUrl,
-      operation.id,
-    );
-    const outputSecrets = getSecretsFromSerializedOutputData(operation.outputData);
-    const keepOutputData = {
-      keep: operation.outputData.keep,
-      send: [],
-    };
-
-    const existingKeepProofs = existingProofs.filter((p: CoreProof) =>
-      outputSecrets.keepSecrets.includes(p.secret),
-    );
-    if (existingKeepProofs.length === 0 && keepOutputData.keep.length > 0) {
-      await proofService.recoverProofsFromOutputData(operation.mintUrl, keepOutputData, {
-        unit: operation.unit,
-        createdByOperationId: operation.id,
-      });
-    }
-
-    let sendProofs: Proof[] = existingProofs.filter((p: CoreProof) =>
-      outputSecrets.sendSecrets.includes(p.secret),
-    );
-    if (sendProofs.length === 0 && operation.outputData.send.length > 0) {
-      const recoveredSendProofs = await proofService.recoverProofsFromOutputData(
-        operation.mintUrl,
-        {
-          keep: [],
-          send: operation.outputData.send,
-        },
-        {
-          unit: operation.unit,
-          persistRecoveredProofs: false,
-        },
-      );
-
-      if (recoveredSendProofs.length > 0) {
-        await proofService.saveProofs(
-          operation.mintUrl,
-          mapProofToCoreProof(operation.mintUrl, 'inflight', recoveredSendProofs, {
-            unit: operation.unit,
-            createdByOperationId: operation.id,
-          }),
-        );
-      }
-      sendProofs = recoveredSendProofs;
-    }
-
-    // Mark input proofs as spent
-    await proofService.setProofState(operation.mintUrl, operation.inputProofSecrets, 'spent');
-
-    let token: Token | undefined;
-    if (sendProofs.length > 0) {
-      token = {
-        mint: operation.mintUrl,
-        proofs: sendProofs,
-        unit: operation.unit,
-      };
-    } else if (outputSecrets.sendSecrets.length > 0) {
-      const sendStates = await wallet.checkProofsStates(
-        getProofStateInputsFromSerializedOutputs(operation.outputData.send),
-      );
-      const allSendProofsSpent = sendStates.every((state) => state.state === 'SPENT');
-      if (!allSendProofsSpent) {
-        throw new Error('Recovered P2PK swap succeeded but token could not be reconstructed');
-      }
-    }
-
-    const pending: PendingSendOperation = {
-      ...operation,
-      state: 'pending',
-      updatedAt: Date.now(),
-      token,
-    };
-
-    logger?.info('Recovered P2PK executing operation', { operationId: operation.id });
-
-    return { status: 'PENDING', pending, token };
+  recoverExecuting(ctx: RecoverExecutingContext) {
+    return ctx.recoverPersistedSend();
   }
 }

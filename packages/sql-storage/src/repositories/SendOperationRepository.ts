@@ -22,7 +22,9 @@ interface SendOperationRow {
   state: SendOperationState;
   createdAt: number;
   updatedAt: number;
+  revision?: number | null;
   error: string | null;
+  executionMemo?: string | null;
   method: string;
   methodDataJson: string;
   needsSwap: number | null;
@@ -50,7 +52,9 @@ function rowToOperation(row: SendOperationRow): SendOperation {
     unit: normalizeUnit(row.unit ?? 'sat'),
     createdAt: row.createdAt * 1000, // Convert seconds to milliseconds
     updatedAt: row.updatedAt * 1000,
+    revision: row.revision ?? 0,
     error: row.error ?? undefined,
+    executionMemo: row.executionMemo ?? undefined,
     method: row.method as SendMethod,
     methodData: JSON.parse(row.methodDataJson),
   };
@@ -120,6 +124,7 @@ function operationToParams(op: SendOperation): SqlValue[] {
       createdAtSeconds,
       updatedAtSeconds,
       op.error ?? null,
+      op.executionMemo ?? null,
       op.method,
       stringifyJson(op.methodData),
       null, // needsSwap
@@ -128,6 +133,7 @@ function operationToParams(op: SendOperation): SqlValue[] {
       null, // inputProofSecretsJson
       null, // outputDataJson
       null, // tokenJson
+      op.revision ?? 0,
     ];
   }
 
@@ -141,6 +147,7 @@ function operationToParams(op: SendOperation): SqlValue[] {
     createdAtSeconds,
     updatedAtSeconds,
     op.error ?? null,
+    op.executionMemo ?? null,
     op.method,
     stringifyJson(op.methodData),
     op.needsSwap ? 1 : 0,
@@ -149,6 +156,7 @@ function operationToParams(op: SendOperation): SqlValue[] {
     JSON.stringify(op.inputProofSecrets),
     op.outputData ? JSON.stringify(op.outputData) : null,
     serializeToken(op),
+    op.revision ?? 0,
   ];
 }
 
@@ -171,8 +179,8 @@ export class SqliteSendOperationRepository implements SendOperationRepository {
     const params = operationToParams(operation);
     await this.db.run(
       `INSERT INTO coco_cashu_send_operations 
-        (id, mintUrl, amount, unit, state, createdAt, updatedAt, error, method, methodDataJson, needsSwap, fee, inputAmount, inputProofSecretsJson, outputDataJson, tokenJson)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (id, mintUrl, amount, unit, state, createdAt, updatedAt, error, executionMemo, method, methodDataJson, needsSwap, fee, inputAmount, inputProofSecretsJson, outputDataJson, tokenJson, revision)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       params,
     );
   }
@@ -191,19 +199,28 @@ export class SqliteSendOperationRepository implements SendOperationRepository {
     if (operation.state === 'init') {
       await this.db.run(
         `UPDATE coco_cashu_send_operations 
-         SET state = ?, updatedAt = ?, error = ?, unit = ?
-         WHERE id = ?`,
-        [operation.state, updatedAtSeconds, operation.error ?? null, operation.unit, operation.id],
-      );
-    } else {
-      await this.db.run(
-        `UPDATE coco_cashu_send_operations 
-         SET state = ?, updatedAt = ?, error = ?, unit = ?, needsSwap = ?, fee = ?, inputAmount = ?, inputProofSecretsJson = ?, outputDataJson = ?, tokenJson = ?
+         SET state = ?, updatedAt = ?, error = ?, executionMemo = ?, unit = ?, revision = ?
          WHERE id = ?`,
         [
           operation.state,
           updatedAtSeconds,
           operation.error ?? null,
+          operation.executionMemo ?? null,
+          operation.unit,
+          operation.revision ?? 0,
+          operation.id,
+        ],
+      );
+    } else {
+      await this.db.run(
+        `UPDATE coco_cashu_send_operations 
+         SET state = ?, updatedAt = ?, error = ?, executionMemo = ?, unit = ?, needsSwap = ?, fee = ?, inputAmount = ?, inputProofSecretsJson = ?, outputDataJson = ?, tokenJson = ?, revision = ?
+         WHERE id = ?`,
+        [
+          operation.state,
+          updatedAtSeconds,
+          operation.error ?? null,
+          operation.executionMemo ?? null,
           operation.unit,
           operation.needsSwap ? 1 : 0,
           serializeAmount(operation.fee),
@@ -211,10 +228,53 @@ export class SqliteSendOperationRepository implements SendOperationRepository {
           JSON.stringify(operation.inputProofSecrets),
           operation.outputData ? JSON.stringify(operation.outputData) : null,
           serializeToken(operation),
+          operation.revision ?? 0,
           operation.id,
         ],
       );
     }
+  }
+
+  async transition(command: {
+    operationId: string;
+    expectedState: SendOperationState;
+    expectedRevision: number;
+    next: SendOperation;
+  }): Promise<boolean> {
+    if (command.next.id !== command.operationId) {
+      throw new Error('Send operation transition cannot change the operation id');
+    }
+    const next = command.next;
+    const prepared: SqlValue[] =
+      next.state === 'init'
+        ? [null, null, null, null, null, null]
+        : [
+            next.needsSwap ? 1 : 0,
+            serializeAmount(next.fee),
+            serializeAmount(next.inputAmount),
+            JSON.stringify(next.inputProofSecrets),
+            next.outputData ? JSON.stringify(next.outputData) : null,
+            serializeToken(next),
+          ];
+    const result = await this.db.run(
+      `UPDATE coco_cashu_send_operations
+       SET state = ?, updatedAt = ?, error = ?, executionMemo = ?, unit = ?, needsSwap = ?, fee = ?, inputAmount = ?,
+           inputProofSecretsJson = ?, outputDataJson = ?, tokenJson = ?, revision = ?
+       WHERE id = ? AND state = ? AND revision = ?`,
+      [
+        next.state,
+        Math.floor(next.updatedAt / 1000),
+        next.error ?? null,
+        next.executionMemo ?? null,
+        next.unit,
+        ...prepared,
+        command.expectedRevision + 1,
+        command.operationId,
+        command.expectedState,
+        command.expectedRevision,
+      ],
+    );
+    return result.changes === 1;
   }
 
   async getById(id: string): Promise<SendOperation | null> {

@@ -214,7 +214,9 @@ export interface SendOperationRow {
     | 'rolled_back';
   createdAt: number;
   updatedAt: number;
+  revision?: number;
   error?: string | null;
+  executionMemo?: string | null;
   method: string;
   methodDataJson: string;
   needsSwap?: number | null;
