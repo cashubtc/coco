@@ -203,7 +203,12 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
   async prepare(command: PrepareSendCommand): Promise<PreparedSendResult> {
     const operation = command.operation;
     const existing = await this.sends.getById(operation.id);
-    if (existing) assertSameLegacyIntent(existing, operation);
+    if (existing) {
+      throw new SendOperationConflictError(
+        operation.id,
+        `Send operation id ${operation.id} already exists`,
+      );
+    }
 
     const available = await this.proofs.getAvailableProofs(operation.mintUrl, {
       unit: operation.unit,
@@ -272,23 +277,7 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
       inputProofSecrets,
       outputData,
     };
-    if (!existing) {
-      await this.sends.create(prepared);
-    } else {
-      const transitioned = await this.sends.transition({
-        operationId: operation.id,
-        expectedState: 'init',
-        expectedRevision: existing.revision ?? 0,
-        next: prepared,
-      });
-      if (!transitioned) {
-        throw new SendOperationConflictError(
-          operation.id,
-          'Send preparation lost a state conflict',
-        );
-      }
-      prepared.revision = (existing.revision ?? 0) + 1;
-    }
+    await this.sends.create(prepared);
 
     return {
       operation: prepared,
@@ -1089,17 +1078,4 @@ function calculateFee(proofs: readonly Proof[], keyChain: KeyChain): Amount {
     return sum + BigInt(fee);
   }, 0n);
   return Amount.from((ppk + 999n) / 1000n);
-}
-
-function assertSameLegacyIntent(existing: SendOperation, operation: InitSendOperation): void {
-  if (
-    existing.state !== 'init' ||
-    existing.mintUrl !== operation.mintUrl ||
-    !existing.amount.equals(operation.amount) ||
-    existing.unit !== operation.unit ||
-    existing.method !== operation.method ||
-    JSON.stringify(existing.methodData) !== JSON.stringify(operation.methodData)
-  ) {
-    throw new SendOperationConflictError(operation.id, 'Send operation id already exists');
-  }
 }
