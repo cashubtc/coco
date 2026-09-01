@@ -145,7 +145,6 @@ async function prepareAndBegin(
   const prepared = await environment.transactions.prepare(command(operationId));
   const begun = await environment.transactions.beginExecution({
     operationId,
-    expectedRevision: prepared.operation.revision ?? 0,
     updatedAt: 300,
   });
   return { prepared, begun };
@@ -217,7 +216,6 @@ describe('ReceiveTransactions execution', () => {
 
     const begun = await environment.transactions.beginExecution({
       operationId: prepared.operation.id,
-      expectedRevision: prepared.operation.revision ?? 0,
       updatedAt: 300,
     });
 
@@ -230,6 +228,43 @@ describe('ReceiveTransactions execution', () => {
     expect(begun.request.outputData).toEqual(prepared.operation.outputData);
   });
 
+  it('advances the authoritative revision without accepting one from the caller', async () => {
+    const environment = await setup();
+    const legacy = { ...operation('legacy-receive-execution'), revision: 4 };
+    await environment.repositories.receiveOperationRepository.create(legacy);
+    const prepared = await environment.transactions.prepare({
+      ...command(legacy.id),
+      operation: legacy,
+    });
+
+    const begun = await environment.transactions.beginExecution({
+      operationId: legacy.id,
+      updatedAt: 300,
+    });
+
+    expect(prepared.operation.revision).toBe(5);
+    expect(begun.operation.revision).toBe(6);
+  });
+
+  it('gives only one concurrent begin attempt authority to contact the mint', async () => {
+    const environment = await setup();
+    const prepared = await environment.transactions.prepare(command('receive-concurrent-begin'));
+    const begin = () =>
+      environment.transactions.beginExecution({
+        operationId: prepared.operation.id,
+        updatedAt: 300,
+      });
+
+    const results = await Promise.allSettled([begin(), begin()]);
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    expect(
+      (await environment.repositories.receiveOperationRepository.getById(prepared.operation.id))
+        ?.revision,
+    ).toBe(1);
+  });
+
   it('rolls back proof insertion when the final operation transition fails', async () => {
     const repositories = new RejectingReceiveFinalizeRepositories();
     const environment = await setup(repositories);
@@ -239,7 +274,6 @@ describe('ReceiveTransactions execution', () => {
     await expect(
       environment.transactions.applyResult({
         operationId: begun.operation.id,
-        expectedRevision: begun.operation.revision ?? 0,
         updatedAt: 400,
         proofs: [receivedProof(secret, begun.operation.id)],
       }),
@@ -257,7 +291,6 @@ describe('ReceiveTransactions execution', () => {
 
     const failed = await environment.transactions.failExecution({
       operationId: begun.operation.id,
-      expectedRevision: begun.operation.revision ?? 0,
       updatedAt: 400,
       error: 'Proofs already spent',
     });
@@ -280,7 +313,6 @@ describe('ReceiveTransactions execution', () => {
 
     const applied = await environment.transactions.applyResult({
       operationId: begun.operation.id,
-      expectedRevision: begun.operation.revision ?? 0,
       updatedAt: 400,
       proofs: [{ ...receivedProof(secret, begun.operation.id), state: 'spent' }],
     });
@@ -300,7 +332,6 @@ describe('ReceiveTransactions execution', () => {
 
     await environment.transactions.applyResult({
       operationId: begun.operation.id,
-      expectedRevision: begun.operation.revision ?? 0,
       updatedAt: 400,
       proofs: [{ ...restoredProof, state: 'spent' }],
     });
@@ -316,13 +347,11 @@ describe('ReceiveTransactions execution', () => {
 
     const cancelled = await environment.transactions.cancelPrepared({
       operationId: prepared.operation.id,
-      expectedRevision: prepared.operation.revision ?? 0,
       updatedAt: 300,
       error: 'User cancelled receive operation',
     });
     const duplicate = await environment.transactions.cancelPrepared({
       operationId: prepared.operation.id,
-      expectedRevision: prepared.operation.revision ?? 0,
       updatedAt: 300,
       error: 'User cancelled receive operation',
     });
@@ -341,7 +370,6 @@ describe('ReceiveTransactions execution', () => {
     await expect(
       environment.transactions.applyResult({
         operationId: begun.operation.id,
-        expectedRevision: begun.operation.revision ?? 0,
         updatedAt: 400,
         proofs: [proof],
       }),
@@ -370,7 +398,6 @@ describe('ReceiveTransactions execution', () => {
     await expect(
       environment.transactions.applyResult({
         operationId: begun.operation.id,
-        expectedRevision: begun.operation.revision ?? 0,
         updatedAt: 400,
         proofs: [
           { ...receivedProof(secrets[0]!, begun.operation.id), amount: Amount.from(8) },
@@ -412,7 +439,6 @@ describe('ReceiveTransactions execution', () => {
     const apply = () =>
       environment.transactions.applyResult({
         operationId: begun.operation.id,
-        expectedRevision: begun.operation.revision ?? 0,
         updatedAt: 400,
         proofs: [proof],
       });

@@ -188,20 +188,21 @@ describe('WalletApi - Trust Enforcement', () => {
           counter: { mintUrl: operation.mintUrl, keysetId, counter: outputs.keep.length },
         };
       },
-      beginExecution: async ({ operationId, expectedRevision, updatedAt }) => {
+      beginExecution: async ({ operationId, updatedAt }) => {
         const current = await receiveOpRepo.getById(operationId);
         if (!current || current.state !== 'prepared') throw new Error('Receive not prepared');
+        const revision = current.revision ?? 0;
         const executing = {
           ...current,
           state: 'executing' as const,
-          revision: expectedRevision + 1,
+          revision: revision + 1,
           updatedAt,
         };
         if (
           !(await receiveOpRepo.transition({
             operationId,
             expectedState: 'prepared',
-            expectedRevision,
+            expectedRevision: revision,
             next: executing,
           }))
         ) {
@@ -217,21 +218,22 @@ describe('WalletApi - Trust Enforcement', () => {
           },
         };
       },
-      applyResult: async ({ operationId, expectedRevision, updatedAt, proofs }) => {
+      applyResult: async ({ operationId, updatedAt, proofs }) => {
         const current = await receiveOpRepo.getById(operationId);
         if (!current || current.state !== 'executing') throw new Error('Receive not executing');
+        const revision = current.revision ?? 0;
         await proofReceiveRepo.saveProofs(current.mintUrl, proofs);
         const finalized = {
           ...current,
           state: 'finalized' as const,
-          revision: expectedRevision + 1,
+          revision: revision + 1,
           updatedAt,
         };
         if (
           !(await receiveOpRepo.transition({
             operationId,
             expectedState: 'executing',
-            expectedRevision,
+            expectedRevision: revision,
             next: finalized,
           }))
         ) {
@@ -239,13 +241,14 @@ describe('WalletApi - Trust Enforcement', () => {
         }
         return { operation: finalized, savedProofs: proofs, committed: true };
       },
-      failExecution: async ({ operationId, expectedRevision, updatedAt, error }) => {
+      failExecution: async ({ operationId, updatedAt, error }) => {
         const current = await receiveOpRepo.getById(operationId);
         if (!current || current.state !== 'executing') throw new Error('Receive not executing');
+        const revision = current.revision ?? 0;
         const rolledBack = {
           ...current,
           state: 'rolled_back' as const,
-          revision: expectedRevision + 1,
+          revision: revision + 1,
           updatedAt,
           error,
         };
@@ -253,7 +256,7 @@ describe('WalletApi - Trust Enforcement', () => {
           !(await receiveOpRepo.transition({
             operationId,
             expectedState: 'executing',
-            expectedRevision,
+            expectedRevision: revision,
             next: rolledBack,
           }))
         ) {
@@ -261,13 +264,14 @@ describe('WalletApi - Trust Enforcement', () => {
         }
         return { operation: rolledBack, committed: true };
       },
-      cancelPrepared: async ({ operationId, expectedRevision, updatedAt, error }) => {
+      cancelPrepared: async ({ operationId, updatedAt, error }) => {
         const current = await receiveOpRepo.getById(operationId);
         if (!current || current.state !== 'prepared') throw new Error('Receive not prepared');
+        const revision = current.revision ?? 0;
         const rolledBack = {
           ...current,
           state: 'rolled_back' as const,
-          revision: expectedRevision + 1,
+          revision: revision + 1,
           updatedAt,
           error,
         };
@@ -275,7 +279,7 @@ describe('WalletApi - Trust Enforcement', () => {
           !(await receiveOpRepo.transition({
             operationId,
             expectedState: 'prepared',
-            expectedRevision,
+            expectedRevision: revision,
             next: rolledBack,
           }))
         ) {

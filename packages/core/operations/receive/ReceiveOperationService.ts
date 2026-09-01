@@ -308,7 +308,6 @@ export class ReceiveOperationService {
     }
     const begun = await this.transactions.beginExecution({
       operationId: operation.id,
-      expectedRevision: operation.revision ?? 0,
       updatedAt: Date.now(),
     });
     return this.submitPersistedReceive(begun.operation, begun.request);
@@ -350,7 +349,6 @@ export class ReceiveOperationService {
       }
       const failed = await this.transactions.failExecution({
         operationId: operation.id,
-        expectedRevision: operation.revision ?? 0,
         updatedAt: Date.now(),
         error: rollbackReason,
       });
@@ -365,7 +363,6 @@ export class ReceiveOperationService {
     });
     const applied = await this.transactions.applyResult({
       operationId: operation.id,
-      expectedRevision: operation.revision ?? 0,
       updatedAt: Date.now(),
       proofs,
     });
@@ -457,7 +454,6 @@ export class ReceiveOperationService {
       }
       result = await this.transactions.applyResult({
         operationId: executing.id,
-        expectedRevision: executing.revision ?? 0,
         updatedAt: Date.now(),
         proofs: savedOutputs,
       });
@@ -592,7 +588,6 @@ export class ReceiveOperationService {
       if (savedOutputs) {
         const result = await this.transactions.applyResult({
           operationId: executing.id,
-          expectedRevision: executing.revision ?? 0,
           updatedAt: Date.now(),
           proofs: savedOutputs,
         });
@@ -710,7 +705,6 @@ export class ReceiveOperationService {
       });
       const result = await this.transactions.applyResult({
         operationId: executing.id,
-        expectedRevision: executing.revision ?? 0,
         updatedAt: Date.now(),
         proofs,
       });
@@ -719,7 +713,6 @@ export class ReceiveOperationService {
     if (observation.status === 'none' && definitiveFailure) {
       const result = await this.transactions.failExecution({
         operationId: executing.id,
-        expectedRevision: executing.revision ?? 0,
         updatedAt: Date.now(),
         error: definitiveFailure,
       });
@@ -856,7 +849,6 @@ export class ReceiveOperationService {
         case 'prepared':
           result = await this.transactions.cancelPrepared({
             operationId: operation.id,
-            expectedRevision: operation.revision ?? 0,
             updatedAt: Date.now(),
             error: reason ?? 'User cancelled receive operation',
           });
