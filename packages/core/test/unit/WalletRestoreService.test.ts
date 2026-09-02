@@ -2,6 +2,7 @@ import {
   Amount,
   deriveKeysetId,
   OutputData,
+  StaleKeysetError,
   Wallet,
   type OutputDataLike,
   type Proof,
@@ -68,6 +69,7 @@ describe('WalletRestoreService', () => {
           },
         }),
       ),
+      invalidateMintSnapshot: mock(() => Promise.resolve()),
     } as unknown as WalletService;
 
     // Mock Logger
@@ -214,6 +216,31 @@ describe('WalletRestoreService', () => {
         sweptAmount: Amount.from(100),
         fee: Amount.from(1),
       });
+    });
+
+    it('invalidates the cached mint snapshot when the cached wallet rejects a stale keyset', async () => {
+      const proofs = [makeProof(100, 'proof1')];
+      const staleKeysetError = new StaleKeysetError(false);
+      const send = mock(() => Promise.reject(staleKeysetError));
+
+      walletService.getWalletWithActiveKeysetId = mock(() =>
+        Promise.resolve({ wallet: { send } } as unknown as Awaited<
+          ReturnType<WalletService['getWalletWithActiveKeysetId']>
+        >),
+      );
+      Wallet.prototype.batchRestore = mock(() => Promise.resolve({ proofs }));
+      Wallet.prototype.checkProofsStates = mock(() =>
+        Promise.resolve([{ state: 'UNSPENT' } as ProofState]),
+      );
+      Wallet.prototype.getFeesForProofs = mock(() => Amount.zero());
+
+      await expect(service.sweepKeyset(mintUrl, keysetId, bip39seed)).rejects.toBe(
+        staleKeysetError,
+      );
+
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(walletService.invalidateMintSnapshot).toHaveBeenCalledWith(mintUrl);
+      expect(proofService.saveProofs).not.toHaveBeenCalled();
     });
 
     it('should sweep with a unit-scoped wallet and persist swept proofs with that unit', async () => {
