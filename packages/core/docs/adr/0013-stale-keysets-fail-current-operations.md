@@ -28,6 +28,10 @@ state. Send, receive, and melt operations use their existing `rolled_back` state
 use their existing structured terminal-failure field. No operation states, lineage fields, or
 repository migrations are added.
 
+A failed mint operation is a definitive non-issued outcome and no longer owns its fixed quote.
+Creating a successor remains blocked while any sibling operation for that quote is `init`, `pending`,
+`executing`, or `finalized`; the duplication rule does not inspect operation-specific failure codes.
+
 After local rollback, Coco sets the Known Mint's freshness timestamp to a stale value and clears its
 Wallet Instance cache. The next operation reaches the existing time-to-live refresh path and builds
 from the new Wallet Keyset Snapshot. A cache generation prevents a Wallet Instance build that began

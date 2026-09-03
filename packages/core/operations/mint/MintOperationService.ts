@@ -192,10 +192,13 @@ export class MintOperationService {
     quoteId: string,
     intent: UnitAmount,
   ): Promise<MintQuote> {
-    const quote = await this.quoteLifecycle.getMintQuote(mintUrl, method, quoteId);
-    if (!quote) {
-      throw new Error(`Mint quote ${quoteId} for ${method} at ${mintUrl} was not found`);
-    }
+    // Quote state may advance while the caller waits for the mint-scoped lock.
+    const quote = await this.quoteLifecycle.requireMintQuoteForPrepare(
+      mintUrl,
+      method,
+      quoteId,
+      intent.unit,
+    );
 
     const fixedAmount = getMintQuoteAmount(quote);
     if (fixedAmount && !fixedAmount.equals(intent.amount)) {
@@ -203,17 +206,16 @@ export class MintOperationService {
         `Mint quote ${quote.quoteId} amount ${fixedAmount} does not match requested amount ${intent.amount}`,
       );
     }
-    if (quote.unit !== intent.unit) {
-      throw new Error(
-        `Mint quote ${quote.quoteId} unit ${quote.unit} does not match requested unit ${intent.unit}`,
-      );
-    }
-
     if (fixedAmount) {
-      const existing = await this.getOperationByQuote(quote.mintUrl, method, quote.quoteId);
-      if (existing) {
+      const quoteOperations = await this.getOperationsForQuote(
+        quote.mintUrl,
+        method,
+        quote.quoteId,
+      );
+      const blockingOperation = quoteOperations.find((operation) => operation.state !== 'failed');
+      if (blockingOperation) {
         throw new Error(
-          `Mint quote ${quote.quoteId} is already tracked by operation ${existing.id} in state ${existing.state}`,
+          `Mint quote ${quote.quoteId} is already tracked by operation ${blockingOperation.id} in state ${blockingOperation.state}`,
         );
       }
     }
