@@ -1,6 +1,7 @@
+import { Effect, Exit, FiberMap, FiberSet, RateLimiter, Schedule, Scope } from 'effect';
 import type { EventBus, CoreEvents } from '@core/events';
-import type { Logger } from '../../logging/Logger.ts';
 import type { MintMethod, MintOperationService } from '@core/operations/mint';
+import type { Logger } from '../../logging/Logger.ts';
 import { MintOperationError, NetworkError } from '../../models/Error';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
 
@@ -8,12 +9,18 @@ interface QueueItem {
   mintUrl: string;
   operationId: string;
   method: string;
-  retryCount: number;
-  nextRetryAt: number;
 }
 
 interface OperationHandler {
   process(mintUrl: string, operationId: string): Promise<void>;
+}
+
+interface ProcessorRuntime {
+  readonly scope: Scope.CloseableScope;
+  readonly operationFibers: FiberMap.FiberMap<string, void, never>;
+  readonly claimFibers: FiberSet.FiberSet<void, never>;
+  readonly operationSemaphore: Effect.Semaphore;
+  readonly rateLimitOperation: RateLimiter.RateLimiter;
 }
 
 class DefaultMintOperationHandler implements OperationHandler {
@@ -32,6 +39,36 @@ export interface MintOperationProcessorOptions {
   autoClaimMintQuotes?: boolean;
 }
 
+function operationKey(mintUrl: string, operationId: string): string {
+  return JSON.stringify([mintUrl, operationId]);
+}
+
+function mintUrlFromOperationKey(key: string): string | undefined {
+  try {
+    const parsed = JSON.parse(key);
+    return Array.isArray(parsed) && typeof parsed[0] === 'string' ? parsed[0] : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function quoteKey(mintUrl: string, method: MintMethod, quoteId: string): string {
+  return JSON.stringify([mintUrl, method, quoteId]);
+}
+
+function isNetworkError(error: unknown): boolean {
+  return (
+    error instanceof NetworkError || (error instanceof Error && error.message.includes('network'))
+  );
+}
+
+function waitForPromise<A>(evaluate: () => Promise<A>): Effect.Effect<A, unknown> {
+  return Effect.tryPromise({
+    try: evaluate,
+    catch: (error) => error,
+  }).pipe(Effect.uninterruptible);
+}
+
 export class MintOperationProcessor {
   private readonly mintOperations: MintOperationService;
   private readonly quoteLifecycle: QuoteLifecycle;
@@ -39,18 +76,10 @@ export class MintOperationProcessor {
   private readonly logger?: Logger;
 
   private running = false;
-  private queue: QueueItem[] = [];
-  private processing = false;
-  private processingTimer?: ReturnType<typeof setTimeout>;
-  private offQuoteUpdated?: () => void;
-  private offPending?: () => void;
-  private offRequeue?: () => void;
-  private offUntrusted?: () => void;
-  private claimingQuotes = new Set<string>();
-  private quoteClaimsNeedingFollowUp = new Set<string>();
-  private claimTasks = new Set<Promise<void>>();
-
-  private handlers = new Map<string, OperationHandler>();
+  private runtime?: ProcessorRuntime;
+  private readonly claimingQuotes = new Set<string>();
+  private readonly quoteClaimsNeedingFollowUp = new Set<string>();
+  private readonly handlers = new Map<string, OperationHandler>();
   private readonly processIntervalMs: number;
   private readonly maxRetries: number;
   private readonly baseRetryDelayMs: number;
@@ -68,8 +97,6 @@ export class MintOperationProcessor {
     this.quoteLifecycle = quoteLifecycle;
     this.bus = bus;
     this.logger = logger;
-
-    // Apply options with defaults
     this.processIntervalMs = options?.processIntervalMs ?? 3000;
     this.maxRetries = options?.maxRetries ?? 3;
     this.baseRetryDelayMs = options?.baseRetryDelayMs ?? 5000;
@@ -94,371 +121,390 @@ export class MintOperationProcessor {
   async start(): Promise<void> {
     if (this.running) return;
     this.running = true;
-    this.logger?.info('MintOperationProcessor started');
 
-    // Subscribe to canonical quote updates and resolve all affected local operations.
-    this.offQuoteUpdated = this.bus.on(
-      'mint-quote:updated',
-      async ({ mintUrl, method, quoteId }) => {
-        this.scheduleQuoteClaim(mintUrl, method, quoteId);
-      },
-    );
+    const scope = Effect.runSync(Scope.make());
+    try {
+      const runtime = Effect.runSync(
+        Effect.gen(this, function* () {
+          const operationFibers = yield* FiberMap.make<string, void, never>();
+          const claimFibers = yield* FiberSet.make<void, never>();
+          const operationSemaphore = yield* Effect.makeSemaphore(1);
+          const rateLimitOperation = yield* RateLimiter.make({
+            limit: 1,
+            interval: Math.max(1, this.processIntervalMs),
+          });
 
-    // Subscribe to pending operations so newly created operations reassess their canonical quote.
-    this.offPending = this.bus.on('mint-op:pending', async ({ operation }) => {
-      if (operation.state !== 'pending') {
-        return;
-      }
-
-      const quote = await this.quoteLifecycle.getMintQuote(
-        operation.mintUrl,
-        operation.method,
-        operation.quoteId,
+          return {
+            scope,
+            operationFibers,
+            claimFibers,
+            operationSemaphore,
+            rateLimitOperation,
+          } satisfies ProcessorRuntime;
+        }).pipe(Scope.extend(scope)),
       );
-      if (quote) {
-        this.scheduleQuoteClaim(operation.mintUrl, operation.method, operation.quoteId);
+
+      this.runtime = runtime;
+      const unsubscribe = this.subscribeToEvents(runtime);
+      Effect.runSync(Scope.addFinalizer(scope, Effect.sync(unsubscribe)));
+
+      if (this.autoClaimMintQuotes) {
+        this.schedulePendingQuoteClaims(runtime);
       }
-    });
 
-    // Subscribe to explicit operation requeue events.
-    this.offRequeue = this.bus.on('mint-op:requeue', ({ mintUrl, operationId, operation }) => {
-      this.enqueue(mintUrl, operationId, operation.method);
-    });
-
-    // Clear queue items when mint is untrusted
-    this.offUntrusted = this.bus.on('mint:untrusted', ({ mintUrl }) => {
-      this.clearMintFromQueue(mintUrl);
-    });
-
-    if (this.autoClaimMintQuotes) {
-      this.schedulePendingQuoteClaims();
+      this.logger?.info('MintOperationProcessor started');
+    } catch (error) {
+      this.runtime = undefined;
+      this.running = false;
+      await Effect.runPromise(Scope.close(scope, Exit.fail(error)));
+      throw error;
     }
-
-    // Start processing loop
-    this.scheduleNextProcess();
   }
 
   async stop(): Promise<void> {
     if (!this.running) return;
     this.running = false;
 
-    // Unsubscribe from events
-    if (this.offQuoteUpdated) {
-      try {
-        this.offQuoteUpdated();
-      } catch {
-        // ignore
-      } finally {
-        this.offQuoteUpdated = undefined;
-      }
+    const runtime = this.runtime;
+    this.runtime = undefined;
+    const pendingItems = runtime ? Array.from(runtime.operationFibers).length : 0;
+
+    if (runtime) {
+      await Effect.runPromise(Scope.close(runtime.scope, Exit.void));
     }
 
-    if (this.offPending) {
-      try {
-        this.offPending();
-      } catch {
-        // ignore
-      } finally {
-        this.offPending = undefined;
-      }
-    }
-
-    if (this.offRequeue) {
-      try {
-        this.offRequeue();
-      } catch {
-        // ignore
-      } finally {
-        this.offRequeue = undefined;
-      }
-    }
-
-    if (this.offUntrusted) {
-      try {
-        this.offUntrusted();
-      } catch {
-        // ignore
-      } finally {
-        this.offUntrusted = undefined;
-      }
-    }
-
-    // Clear processing timer
-    if (this.processingTimer) {
-      clearTimeout(this.processingTimer);
-      this.processingTimer = undefined;
-    }
-
-    // Wait for current processing to complete
-    while (this.processing || this.claimTasks.size > 0) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-
-    this.logger?.info('MintOperationProcessor stopped', { pendingItems: this.queue.length });
+    this.claimingQuotes.clear();
+    this.quoteClaimsNeedingFollowUp.clear();
+    this.logger?.info('MintOperationProcessor stopped', { pendingItems });
   }
 
   /**
-   * Wait for the queue to be empty and all processing to complete.
-   * Useful for CLI applications that want to ensure all queued operations are processed before exiting.
+   * Wait for all scheduled operations and quote claims to complete.
+   * Useful for CLI applications that want to drain processor work before exiting.
    */
   async waitForCompletion(): Promise<void> {
-    while (this.queue.length > 0 || this.processing || this.claimTasks.size > 0) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
+    const runtime = this.runtime;
+    if (!runtime) return;
+
+    while (this.runtime === runtime) {
+      await Effect.runPromise(
+        Effect.all(
+          [FiberMap.awaitEmpty(runtime.operationFibers), FiberSet.awaitEmpty(runtime.claimFibers)],
+          { concurrency: 'unbounded' },
+        ),
+      );
+
+      if (
+        this.runtime !== runtime ||
+        (Array.from(runtime.operationFibers).length === 0 &&
+          Array.from(runtime.claimFibers).length === 0 &&
+          this.claimingQuotes.size === 0)
+      ) {
+        return;
+      }
+
+      await Effect.runPromise(Effect.yieldNow());
     }
   }
 
   /**
-   * Remove all queued items for a specific mint.
+   * Remove all scheduled work for a specific mint.
    * Called when a mint is untrusted to stop processing its operations.
    */
   clearMintFromQueue(mintUrl: string): void {
-    const before = this.queue.length;
-    this.queue = this.queue.filter((item) => item.mintUrl !== mintUrl);
-    const removed = before - this.queue.length;
-    if (removed > 0) {
-      this.logger?.info('Cleared mint operations from processor queue', { mintUrl, removed });
-    }
-  }
+    const runtime = this.runtime;
+    if (!runtime) return;
 
-  // TODO: Improve deduplication by tracking an "active" set keyed by `${mintUrl}::${operationId}`
-  // to prevent re-enqueueing while an item is currently being processed. Today we only
-  // deduplicate within the queue, so an item can be enqueued again if a new event arrives
-  // during in-flight processing.
-  private enqueue(mintUrl: string, operationId: string, method: string): void {
-    // Check if already in queue
-    const existing = this.queue.find(
-      (item) => item.mintUrl === mintUrl && item.operationId === operationId,
+    const keys = Array.from(runtime.operationFibers, ([key]) => key).filter(
+      (key) => mintUrlFromOperationKey(key) === mintUrl,
     );
-    if (existing) {
-      this.logger?.debug('Mint operation already in queue', { mintUrl, operationId });
-      return;
-    }
+    if (keys.length === 0) return;
 
-    const wasEmpty = this.queue.length === 0;
-
-    this.queue.push({
+    Effect.runFork(
+      Effect.forEach(keys, (key) => FiberMap.remove(runtime.operationFibers, key), {
+        discard: true,
+      }),
+    );
+    this.logger?.info('Cleared mint operations from processor queue', {
       mintUrl,
-      operationId,
-      method,
-      retryCount: 0,
-      nextRetryAt: 0,
+      removed: keys.length,
     });
+  }
 
-    this.logger?.debug('Mint operation enqueued for processing', {
-      mintUrl,
-      operationId,
-      method,
-      queueLength: this.queue.length,
-    });
+  private subscribeToEvents(runtime: ProcessorRuntime): () => void {
+    const unsubscribe = [
+      this.bus.on('mint-quote:updated', ({ mintUrl, method, quoteId }) => {
+        this.scheduleQuoteClaim(runtime, mintUrl, method, quoteId);
+      }),
+      this.bus.on('mint-op:pending', ({ operation }) => {
+        if (operation.state !== 'pending') return;
+        this.schedulePendingOperationClaim(runtime, operation);
+      }),
+      this.bus.on('mint-op:requeue', ({ mintUrl, operationId, operation }) => {
+        this.enqueue(runtime, mintUrl, operationId, operation.method);
+      }),
+      this.bus.on('mint:untrusted', ({ mintUrl }) => {
+        this.clearMintFromQueue(mintUrl);
+      }),
+    ];
 
-    // If queue was empty and processor is idle, schedule a faster first run
-    if (wasEmpty && this.running && !this.processing) {
-      if (this.processingTimer) {
-        clearTimeout(this.processingTimer);
-        this.processingTimer = undefined;
+    return () => {
+      for (const off of unsubscribe) {
+        try {
+          off();
+        } catch {
+          // Event cleanup is best effort; the Effect scope still owns all scheduled work.
+        }
       }
-      this.processingTimer = setTimeout(() => {
-        this.processingTimer = undefined;
-        this.processNext();
-      }, this.initialEnqueueDelayMs);
-    }
+    };
   }
 
-  private scheduleNextProcess(): void {
-    if (!this.running || this.processingTimer) return;
+  private enqueue(
+    runtime: ProcessorRuntime,
+    mintUrl: string,
+    operationId: string,
+    method: string,
+  ): void {
+    if (this.runtime !== runtime) return;
 
-    this.processingTimer = setTimeout(() => {
-      this.processingTimer = undefined;
-      this.processNext();
-    }, this.processIntervalMs);
-  }
-
-  private scheduleQuoteClaim(mintUrl: string, method: MintMethod, quoteId: string): void {
-    if (!this.autoClaimMintQuotes) {
+    const key = operationKey(mintUrl, operationId);
+    if (FiberMap.unsafeHas(runtime.operationFibers, key)) {
+      this.logger?.debug('Mint operation already scheduled', { mintUrl, operationId });
       return;
     }
 
-    const key = `${mintUrl}::${method}::${quoteId}`;
+    const item = { mintUrl, operationId, method } satisfies QueueItem;
+    Effect.runSync(
+      FiberMap.run(runtime.operationFibers, key, this.processOperation(runtime, item), {
+        onlyIfMissing: true,
+      }),
+    );
+
+    this.logger?.debug('Mint operation scheduled for processing', {
+      mintUrl,
+      operationId,
+      method,
+      queueLength: Array.from(runtime.operationFibers).length,
+    });
+  }
+
+  private scheduleQuoteClaim(
+    runtime: ProcessorRuntime,
+    mintUrl: string,
+    method: MintMethod,
+    quoteId: string,
+  ): void {
+    if (!this.autoClaimMintQuotes || this.runtime !== runtime) return;
+
+    const key = quoteKey(mintUrl, method, quoteId);
     if (this.claimingQuotes.has(key)) {
       this.quoteClaimsNeedingFollowUp.add(key);
-      this.logger?.debug('Mint quote claim already in progress', {
-        mintUrl,
-        method,
-        quoteId,
-      });
+      this.logger?.debug('Mint quote claim already in progress', { mintUrl, method, quoteId });
       return;
     }
 
     this.claimingQuotes.add(key);
-    const task = (async () => {
-      try {
-        const assessment = await this.mintOperations.getMintQuoteClaimability(
-          mintUrl,
-          method,
-          quoteId,
-        );
-        if (assessment?.status !== 'claimable' && assessment?.status !== 'complete') {
-          this.logger?.debug('Mint quote has no locally claimable value', {
+    const claim = this.claimMintQuote(mintUrl, method, quoteId).pipe(
+      Effect.catchAll((error) =>
+        Effect.sync(() => {
+          this.logger?.warn('Failed to check or claim mint quote', {
             mintUrl,
             method,
             quoteId,
+            error: error instanceof Error ? error.message : String(error),
           });
-          return;
-        }
+        }),
+      ),
+      Effect.ensuring(
+        Effect.sync(() => {
+          this.claimingQuotes.delete(key);
+          const needsFollowUp = this.quoteClaimsNeedingFollowUp.delete(key);
+          if (needsFollowUp && this.runtime === runtime) {
+            this.scheduleQuoteClaim(runtime, mintUrl, method, quoteId);
+          }
+        }),
+      ),
+    );
 
-        await this.mintOperations.claimMintQuote(mintUrl, method, quoteId, {
-          autoClaimRemaining: true,
-        });
-      } catch (error) {
-        this.logger?.warn('Failed to check or claim mint quote', {
+    Effect.runSync(FiberSet.run(runtime.claimFibers, claim));
+  }
+
+  private claimMintQuote(
+    mintUrl: string,
+    method: MintMethod,
+    quoteId: string,
+  ): Effect.Effect<void, unknown> {
+    return Effect.gen(this, function* () {
+      const assessment = yield* waitForPromise(() =>
+        this.mintOperations.getMintQuoteClaimability(mintUrl, method, quoteId),
+      );
+      if (assessment?.status !== 'claimable' && assessment?.status !== 'complete') {
+        this.logger?.debug('Mint quote has no locally claimable value', {
           mintUrl,
           method,
           quoteId,
-          error: error instanceof Error ? error.message : String(error),
         });
-      } finally {
-        this.claimingQuotes.delete(key);
-        const needsFollowUp = this.quoteClaimsNeedingFollowUp.delete(key);
-        if (needsFollowUp && this.running) {
-          this.scheduleQuoteClaim(mintUrl, method, quoteId);
-        }
-      }
-    })();
-
-    this.claimTasks.add(task);
-    task.finally(() => {
-      this.claimTasks.delete(task);
-    });
-  }
-
-  private schedulePendingQuoteClaims(): void {
-    const task = (async () => {
-      try {
-        await this.mintOperations.claimPendingMintQuotes({ autoClaimRemaining: true });
-      } catch (error) {
-        this.logger?.warn('Failed to claim pending mint quotes on startup', {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    })();
-
-    this.claimTasks.add(task);
-    task.finally(() => {
-      this.claimTasks.delete(task);
-    });
-  }
-
-  private async processNext(): Promise<void> {
-    if (!this.running || this.processing || this.queue.length === 0) {
-      if (this.running) {
-        this.scheduleNextProcess();
-      }
-      return;
-    }
-
-    // Find next item that's ready to process
-    const now = Date.now();
-    const readyIndex = this.queue.findIndex((item) => item.nextRetryAt <= now);
-
-    if (readyIndex === -1) {
-      // No items ready yet, schedule for when the next one will be
-      const nextReady = Math.min(...this.queue.map((item) => item.nextRetryAt));
-      const delay = Math.max(this.processIntervalMs, nextReady - now);
-      this.processingTimer = setTimeout(() => {
-        this.processingTimer = undefined;
-        this.processNext();
-      }, delay);
-      return;
-    }
-
-    // Remove item from queue
-    const [item] = this.queue.splice(readyIndex, 1);
-    if (!item) {
-      // This shouldn't happen, but handle it gracefully
-      return;
-    }
-    this.processing = true;
-
-    try {
-      await this.processItem(item);
-    } catch (err) {
-      this.handleProcessingError(item, err);
-    } finally {
-      this.processing = false;
-      if (this.running) {
-        this.scheduleNextProcess();
-      }
-    }
-  }
-
-  private async processItem(item: QueueItem): Promise<void> {
-    const { mintUrl, operationId, method } = item;
-
-    const handler = this.handlers.get(method);
-    if (!handler) {
-      this.logger?.warn('No handler registered for mint method', {
-        method,
-        mintUrl,
-        operationId,
-      });
-      return;
-    }
-
-    this.logger?.info('Processing mint operation', {
-      mintUrl,
-      operationId,
-      method,
-      attempt: item.retryCount + 1,
-    });
-
-    await handler.process(mintUrl, operationId);
-    this.logger?.info('Successfully processed mint operation', { mintUrl, operationId, method });
-  }
-
-  private handleProcessingError(item: QueueItem, err: unknown): void {
-    const { mintUrl, operationId } = item;
-
-    if (err instanceof MintOperationError) {
-      if (err.code === 20002) {
-        this.logger?.info('Mint operation quote already issued', { mintUrl, operationId });
         return;
       }
 
-      this.logger?.error('Mint operation error, not retrying', {
-        mintUrl,
-        operationId,
-        code: err.code,
-        detail: err.message,
-      });
-      return;
-    }
+      yield* waitForPromise(() =>
+        this.mintOperations.claimMintQuote(mintUrl, method, quoteId, {
+          autoClaimRemaining: true,
+        }),
+      );
+    });
+  }
 
-    if (err instanceof NetworkError || (err instanceof Error && err.message.includes('network'))) {
-      item.retryCount++;
-      if (item.retryCount <= this.maxRetries) {
-        const delay = this.baseRetryDelayMs * Math.pow(2, item.retryCount - 1);
-        item.nextRetryAt = Date.now() + delay;
+  private schedulePendingOperationClaim(
+    runtime: ProcessorRuntime,
+    operation: { mintUrl: string; method: MintMethod; quoteId: string },
+  ): void {
+    const task = waitForPromise(() =>
+      this.quoteLifecycle.getMintQuote(operation.mintUrl, operation.method, operation.quoteId),
+    ).pipe(
+      Effect.tap((quote) =>
+        Effect.sync(() => {
+          if (quote) {
+            this.scheduleQuoteClaim(
+              runtime,
+              operation.mintUrl,
+              operation.method,
+              operation.quoteId,
+            );
+          }
+        }),
+      ),
+      Effect.catchAll((error) =>
+        Effect.sync(() => {
+          this.logger?.warn('Failed to check mint quote for pending operation', {
+            mintUrl: operation.mintUrl,
+            method: operation.method,
+            quoteId: operation.quoteId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }),
+      ),
+    );
 
-        this.logger?.warn('Network error, will retry', {
+    Effect.runSync(FiberSet.run(runtime.claimFibers, task));
+  }
+
+  private schedulePendingQuoteClaims(runtime: ProcessorRuntime): void {
+    const task = waitForPromise(() =>
+      this.mintOperations.claimPendingMintQuotes({ autoClaimRemaining: true }),
+    ).pipe(
+      Effect.asVoid,
+      Effect.catchAll((error) =>
+        Effect.sync(() => {
+          this.logger?.warn('Failed to claim pending mint quotes on startup', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }),
+      ),
+    );
+
+    Effect.runSync(FiberSet.run(runtime.claimFibers, task));
+  }
+
+  private processOperation(runtime: ProcessorRuntime, item: QueueItem): Effect.Effect<void, never> {
+    let attemptNumber = 0;
+    const retrySchedule = Schedule.exponential(Math.max(1, this.baseRetryDelayMs)).pipe(
+      Schedule.intersect(Schedule.recurs(this.maxRetries)),
+      Schedule.tapInput((error) =>
+        Effect.sync(() => {
+          if (!isNetworkError(error) || attemptNumber > this.maxRetries) return;
+          const retryInMs = this.baseRetryDelayMs * Math.pow(2, attemptNumber - 1);
+          this.logger?.warn('Network error, will retry', {
+            mintUrl: item.mintUrl,
+            operationId: item.operationId,
+            attempt: attemptNumber,
+            maxRetries: this.maxRetries,
+            retryInMs,
+          });
+        }),
+      ),
+    );
+
+    const attempt = Effect.suspend(() => {
+      const { mintUrl, operationId, method } = item;
+      const handler = this.handlers.get(method);
+      if (!handler) {
+        this.logger?.warn('No handler registered for mint method', {
+          method,
           mintUrl,
           operationId,
-          attempt: item.retryCount,
-          maxRetries: this.maxRetries,
-          retryInMs: delay,
         });
+        return Effect.void;
+      }
 
-        this.queue.push(item);
+      attemptNumber++;
+      this.logger?.info('Processing mint operation', {
+        mintUrl,
+        operationId,
+        method,
+        attempt: attemptNumber,
+      });
+
+      return waitForPromise(() => handler.process(mintUrl, operationId)).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            this.logger?.info('Successfully processed mint operation', {
+              mintUrl,
+              operationId,
+              method,
+            });
+          }),
+        ),
+      );
+    });
+
+    const serializedAttempt = runtime.operationSemaphore.withPermits(1)(
+      runtime.rateLimitOperation(attempt),
+    );
+
+    return Effect.sleep(Math.max(0, this.initialEnqueueDelayMs)).pipe(
+      Effect.andThen(
+        Effect.retry(serializedAttempt, {
+          while: isNetworkError,
+          schedule: retrySchedule,
+        }),
+      ),
+      Effect.catchAll((error) => this.logTerminalProcessingError(item, error)),
+    );
+  }
+
+  private logTerminalProcessingError(item: QueueItem, error: unknown): Effect.Effect<void> {
+    return Effect.sync(() => {
+      const { mintUrl, operationId } = item;
+      if (error instanceof MintOperationError) {
+        if (error.code === 20002) {
+          this.logger?.info('Mint operation quote already issued', { mintUrl, operationId });
+          return;
+        }
+
+        this.logger?.error('Mint operation error, not retrying', {
+          mintUrl,
+          operationId,
+          code: error.code,
+          detail: error.message,
+        });
         return;
       }
 
-      this.logger?.error('Max retries exceeded for network error', {
+      if (isNetworkError(error)) {
+        this.logger?.error('Max retries exceeded for network error', {
+          mintUrl,
+          operationId,
+          maxRetries: this.maxRetries,
+        });
+        return;
+      }
+
+      this.logger?.error('Failed to process mint operation', {
         mintUrl,
         operationId,
-        maxRetries: this.maxRetries,
+        err: error,
       });
-      return;
-    }
-
-    this.logger?.error('Failed to process mint operation', { mintUrl, operationId, err });
+    });
   }
 }

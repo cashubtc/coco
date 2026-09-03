@@ -400,6 +400,127 @@ describe('MintOperationProcessor', () => {
     },
   );
 
+  it('deduplicates explicit requeues while an operation is being processed', async () => {
+    let releaseFinalize!: () => void;
+    let markStarted!: () => void;
+    const finalizeGate = new Promise<void>((resolve) => {
+      releaseFinalize = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    let attemptCount = 0;
+    mockMintOperationService = {
+      ...mockMintOperationService,
+      async finalize() {
+        attemptCount++;
+        markStarted();
+        await finalizeGate;
+      },
+    } as unknown as MintOperationService;
+    processor = new MintOperationProcessor(
+      mockMintOperationService,
+      mockQuoteLifecycle,
+      bus,
+      undefined,
+      {
+        processIntervalMs: TEST_PROCESS_INTERVAL,
+        baseRetryDelayMs: TEST_RETRY_DELAY,
+        maxRetries: 3,
+        initialEnqueueDelayMs: TEST_INITIAL_DELAY,
+      },
+    );
+    await processor.start();
+
+    const event = {
+      mintUrl: 'https://mint.test',
+      operationId: 'mint-op-deduplicated',
+      operation: {
+        id: 'mint-op-deduplicated',
+        mintUrl: 'https://mint.test',
+        method: 'bolt11',
+      } as any,
+    };
+    await bus.emit('mint-op:requeue', event);
+    await started;
+    await bus.emit('mint-op:requeue', event);
+
+    releaseFinalize();
+    await processor.waitForCompletion();
+
+    expect(attemptCount).toBe(1);
+  });
+
+  it('cancels scheduled operations when their mint becomes untrusted', async () => {
+    await processor.start();
+    await bus.emit('mint-op:requeue', {
+      mintUrl: 'https://mint.test',
+      operationId: 'mint-op-untrusted',
+      operation: {
+        id: 'mint-op-untrusted',
+        mintUrl: 'https://mint.test',
+        method: 'bolt11',
+      } as any,
+    });
+    await bus.emit('mint:untrusted', { mintUrl: 'https://mint.test' });
+
+    await sleep(TEST_INITIAL_DELAY + TEST_PROCESS_INTERVAL + 20);
+
+    expect(finalizeCalls).toEqual([]);
+  });
+
+  it('waits for an active operation to finish before stopping', async () => {
+    let releaseFinalize!: () => void;
+    let markStarted!: () => void;
+    const finalizeGate = new Promise<void>((resolve) => {
+      releaseFinalize = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    mockMintOperationService = {
+      ...mockMintOperationService,
+      async finalize() {
+        markStarted();
+        await finalizeGate;
+      },
+    } as unknown as MintOperationService;
+    processor = new MintOperationProcessor(
+      mockMintOperationService,
+      mockQuoteLifecycle,
+      bus,
+      undefined,
+      {
+        processIntervalMs: TEST_PROCESS_INTERVAL,
+        baseRetryDelayMs: TEST_RETRY_DELAY,
+        maxRetries: 3,
+        initialEnqueueDelayMs: TEST_INITIAL_DELAY,
+      },
+    );
+    await processor.start();
+    await bus.emit('mint-op:requeue', {
+      mintUrl: 'https://mint.test',
+      operationId: 'mint-op-active-stop',
+      operation: {
+        id: 'mint-op-active-stop',
+        mintUrl: 'https://mint.test',
+        method: 'bolt11',
+      } as any,
+    });
+    await started;
+
+    let stopped = false;
+    const stopping = processor.stop().then(() => {
+      stopped = true;
+    });
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+
+    releaseFinalize();
+    await stopping;
+    expect(stopped).toBe(true);
+  });
+
   it('skips quote updates with no locally claimable value', async () => {
     mockMintOperationService = {
       ...mockMintOperationService,
