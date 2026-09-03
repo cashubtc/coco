@@ -522,11 +522,27 @@ export class SendOperationService {
         opForRollback = rollingBack;
       }
 
-      await handler.rollback({
-        ...this.buildDeps(),
-        operation: opForRollback,
-        wallet,
-      });
+      try {
+        await handler.rollback({
+          ...this.buildDeps(),
+          operation: opForRollback,
+          wallet,
+        });
+      } catch (error) {
+        const staleKeysetError = asStaleKeysetError(error);
+        if (!staleKeysetError || operation.state !== 'pending') {
+          throw error;
+        }
+
+        // The structured rejection proves the reclaim swap was not applied. Return the operation
+        // to pending so a later rollback can build fresh outputs from a refreshed Wallet Instance.
+        await this.walletService.invalidateMintSnapshot(operation.mintUrl);
+        await this.sendOperationRepository.update({
+          ...operation,
+          updatedAt: Date.now(),
+        });
+        throw staleKeysetError;
+      }
 
       await this.markAsRolledBack(opForRollback, reason);
     } finally {

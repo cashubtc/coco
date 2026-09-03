@@ -470,6 +470,83 @@ describe('SendOperationService', () => {
     expect(rolledBackEvents).toHaveLength(0);
   });
 
+  it('invalidates a stale rollback snapshot and leaves the pending send retryable', async () => {
+    const operationId = 'send-op-stale-rollback';
+    const pendingOp: PendingSendOperation = {
+      id: operationId,
+      state: 'pending',
+      mintUrl,
+      amount: Amount.from(100),
+      unit: 'sat',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      needsSwap: false,
+      fee: Amount.zero(),
+      inputAmount: Amount.from(100),
+      inputProofSecrets: ['proof-1'],
+      method: 'default',
+      methodData: {},
+    };
+    await sendOpRepo.create(pendingOp);
+    await proofRepo.saveProofs(mintUrl, [
+      {
+        ...makeProof('proof-1', 100),
+        state: 'inflight',
+        usedByOperationId: operationId,
+      },
+    ]);
+
+    const staleKeysetError = new CashuStaleKeysetError(false);
+    const staleWallet = {
+      getFeesForProofs: () => Amount.zero(),
+      receive: mock(async () => {
+        throw staleKeysetError;
+      }),
+    };
+    const refreshedWallet = {
+      getFeesForProofs: () => Amount.zero(),
+      receive: mock(async () => [
+        {
+          amount: Amount.from(100),
+          C: 'C_reclaimed',
+          id: keysetId,
+          secret: 'reclaimed-proof',
+        },
+      ]),
+    };
+    let walletAccessCount = 0;
+    const invalidateMintSnapshot = mock(async () => {});
+    walletService = {
+      ...walletService,
+      invalidateMintSnapshot,
+      getWalletWithActiveKeysetId: mock(async () => ({
+        wallet: walletAccessCount++ === 0 ? staleWallet : refreshedWallet,
+        keysetId,
+        keyset: { id: keysetId },
+        keys: { keys: { 1: 'pubkey' }, id: keysetId },
+      })),
+    } as unknown as WalletService;
+    service = new SendOperationService(
+      sendOpRepo,
+      proofRepo,
+      proofService,
+      mintService,
+      walletService,
+      eventBus,
+      handlerProvider,
+      logger,
+    );
+
+    await expect(service.rollback(operationId)).rejects.toBe(staleKeysetError);
+    expect(invalidateMintSnapshot).toHaveBeenCalledWith(mintUrl);
+    expect((await sendOpRepo.getById(operationId))?.state).toBe('pending');
+
+    await expect(service.rollback(operationId)).resolves.toBeUndefined();
+    expect(staleWallet.receive).toHaveBeenCalledTimes(1);
+    expect(refreshedWallet.receive).toHaveBeenCalledTimes(1);
+    expect((await sendOpRepo.getById(operationId))?.state).toBe('rolled_back');
+  });
+
   it('waits for an in-progress finalization to finish before returning', async () => {
     const pendingOp: PendingSendOperation = {
       id: 'send-op-pending',
