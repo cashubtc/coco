@@ -61,7 +61,6 @@ export class WalletRestoreService {
       bip39seed,
       unit: normalizedUnit,
       outputDataCreator: this.outputDataCreator,
-      strictCachedKeysets: true,
     });
     await sweepWallet.loadMint();
 

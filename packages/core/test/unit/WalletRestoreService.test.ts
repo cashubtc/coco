@@ -99,6 +99,69 @@ describe('WalletRestoreService', () => {
   });
 
   describe('sweepKeyset', () => {
+    it('loads missing keys for an inactive keyset while sweeping', async () => {
+      const inactiveKeypairs = {
+        '1': '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798',
+      };
+      const inactiveKeysetId = deriveKeysetId(inactiveKeypairs, { unit: 'sat' });
+      const activeKeypairs = {
+        '1': '02c6047f9441ed7d6d3045406e95c07cd85a43f9b8b7dc3e7d3b8f2f7f6f5d5f6a',
+      };
+      const activeKeysetId = deriveKeysetId(activeKeypairs, { unit: 'sat' });
+      const getKeys = mock(async () => ({
+        keysets: [{ id: inactiveKeysetId, unit: 'sat', keys: inactiveKeypairs }],
+      }));
+
+      Wallet.prototype.loadMint = mock(async function (this: Wallet) {
+        this.loadMintFromCache(
+          {
+            name: 'Sweep Mint',
+            version: '1.0.0',
+            pubkey: 'test-pubkey',
+            contact: [],
+            nuts: {},
+          } as any,
+          {
+            mintUrl,
+            keysets: [
+              {
+                id: activeKeysetId,
+                unit: 'sat',
+                active: true,
+                input_fee_ppk: 0,
+                keys: activeKeypairs,
+              },
+              {
+                id: inactiveKeysetId,
+                unit: 'sat',
+                active: false,
+                input_fee_ppk: 0,
+              },
+            ],
+          },
+        );
+        this.mint.getKeys = getKeys;
+        this.mint.restore = mock(async () => ({ outputs: [], signatures: [] }));
+      });
+      Wallet.prototype.batchRestore = mock(async function (this: Wallet, config) {
+        const restored = await this.restore(config?.counter ?? 0, 1, {
+          keysetId: config?.keysetId,
+        });
+        return {
+          proofs: restored.proofs,
+          lastCounterWithSignature: restored.lastCounterWithSignature,
+        };
+      });
+
+      await service.sweepKeyset(mintUrl, inactiveKeysetId, bip39seed);
+
+      expect(getKeys).toHaveBeenCalledTimes(1);
+      expect(logger.warn).toHaveBeenCalledWith('No proofs to sweep', {
+        mintUrl,
+        keysetId: inactiveKeysetId,
+      });
+    });
+
     it('uses the supplied creator for the sweep-specific Wallet Instance', async () => {
       const keypairs = {
         '1': '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798',
