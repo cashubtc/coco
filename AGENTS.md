@@ -46,15 +46,14 @@ relevant glossary and ADR. See `docs/agents/domain.md`.
 ## Workflow
 
 1. Identify the affected packages and inspect their `package.json`, README, and relevant tests.
-2. Check the working tree and preserve changes outside the requested scope. If `FEATURE_TODO.md`
-   applies to the active feature, keep its plan and progress current.
+2. Check the working tree and preserve changes outside the requested scope.
 3. Before implementation, load every document required by the applicable `Agent skills` pointer.
 4. Keep changes focused. Update public exports, documentation, and tests when the changed behavior
    requires them. Edit source files rather than generated `dist/` output.
 5. Run the smallest relevant verification from the affected package scripts. For shared or
    cross-package changes, also run the root build and typecheck when practical.
-6. Before handoff, assess whether the change needs a changeset under `CONTRIBUTING.md`, update an
-   applicable `FEATURE_TODO.md`, and report the verification run or any unresolved failure.
+6. Before handoff, assess whether the change needs a changeset under `CONTRIBUTING.md`, and report
+   the verification run or any unresolved failure.
 
 ## Repository-specific constraints
 
@@ -66,5 +65,5 @@ relevant glossary and ADR. See `docs/agents/domain.md`.
   their `dist/` exports; consult its README for the current command sequence.
 
 Work is complete when the requested outcome is implemented, relevant verification passes (or its
-failure is clearly reported), and exports, tests, documentation, changesets, and active feature
-tracking have each been considered.
+failure is clearly reported), and exports, tests, documentation, and changesets have each been
+considered.
