@@ -21,6 +21,7 @@ import type { MintOperation } from '@core/operations/mint';
 import type { MemoryMeltOperationRepository } from './MemoryMeltOperationRepository';
 import type { MemoryMintOperationRepository } from './MemoryMintOperationRepository';
 import type { MemoryReceiveOperationRepository } from './MemoryReceiveOperationRepository';
+import { cloneMemoryValue, COPY_MEMORY_REPOSITORY_STATE } from './MemoryRepositoryTransaction.ts';
 import type { MemorySendOperationRepository } from './MemorySendOperationRepository';
 
 type OperationRepositories = {
@@ -32,9 +33,13 @@ type OperationRepositories = {
 };
 
 export class MemoryHistoryRepository implements HistoryProjectionRepository {
-  private readonly legacyEntries: LegacyHistoryEntry[] = [];
+  private legacyEntries: LegacyHistoryEntry[] = [];
 
   constructor(private readonly operationRepositories: OperationRepositories = {}) {}
+
+  [COPY_MEMORY_REPOSITORY_STATE](source: MemoryHistoryRepository): void {
+    this.legacyEntries = cloneMemoryValue(source.legacyEntries);
+  }
 
   async getPaginatedHistoryEntries(limit: number, offset: number): Promise<HistoryEntry[]> {
     const entries = await this.getProjectedEntries();

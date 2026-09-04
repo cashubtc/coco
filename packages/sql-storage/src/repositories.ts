@@ -18,6 +18,7 @@ import type {
   PaymentRequestReceiveAttemptRepository,
   PaymentRequestReceiveOperationRepository,
 } from '@cashu/coco-core/adapter';
+import { RepositoryTransactionConflictError } from '@cashu/coco-core/adapter';
 import type { SqlDatabase } from './index.ts';
 import { ensureSchema } from './schema.ts';
 import { SqliteMintRepository } from './repositories/MintRepository.ts';
@@ -41,6 +42,43 @@ import {
 
 export interface SqlStorageRepositoriesOptions {
   database: SqlDatabase;
+}
+
+class RepositoryTransactionCallbackFailure extends Error {
+  constructor(readonly error: unknown) {
+    super('Repository transaction callback failed');
+    this.name = 'RepositoryTransactionCallbackFailure';
+    (this as unknown as { cause?: unknown }).cause = error;
+  }
+}
+
+function getSqliteErrorCode(error: unknown): string {
+  if (typeof error !== 'object' || error === null) return '';
+  if ('code' in error) return String((error as { code?: unknown }).code).toUpperCase();
+  if ('errno' in error) return String((error as { errno?: unknown }).errno).toUpperCase();
+  return '';
+}
+
+function hasSqliteTransactionConflictCode(error: unknown): boolean {
+  const code = getSqliteErrorCode(error);
+  return (
+    code === '5' ||
+    code === '6' ||
+    code.startsWith('SQLITE_BUSY') ||
+    code.startsWith('SQLITE_LOCKED')
+  );
+}
+
+function isSqliteTransactionConflict(error: unknown): boolean {
+  if (hasSqliteTransactionConflictCode(error)) return true;
+
+  const message =
+    error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  return (
+    message.includes('database is locked') ||
+    message.includes('database table is locked') ||
+    message.includes('database is busy')
+  );
 }
 
 function createRepositoryScope(database: SqlDatabase): RepositoryTransactionScope {
@@ -115,7 +153,29 @@ export class SqlStorageRepositories implements Repositories {
   }
 
   async withTransaction<T>(fn: (repos: RepositoryTransactionScope) => Promise<T>): Promise<T> {
-    return this.database.transaction((txDatabase) => fn(createRepositoryScope(txDatabase)));
+    try {
+      return await this.database.transaction(
+        async (txDatabase) => {
+          try {
+            return await fn(createRepositoryScope(txDatabase));
+          } catch (error) {
+            if (error instanceof RepositoryTransactionConflictError) throw error;
+            if (hasSqliteTransactionConflictCode(error)) {
+              throw new RepositoryTransactionConflictError(undefined, error);
+            }
+            throw new RepositoryTransactionCallbackFailure(error);
+          }
+        },
+        { mode: 'immediate' },
+      );
+    } catch (error) {
+      if (error instanceof RepositoryTransactionCallbackFailure) throw error.error;
+      if (error instanceof RepositoryTransactionConflictError) throw error;
+      if (isSqliteTransactionConflict(error)) {
+        throw new RepositoryTransactionConflictError(undefined, error);
+      }
+      throw error;
+    }
   }
 }
 

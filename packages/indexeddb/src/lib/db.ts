@@ -58,6 +58,10 @@ export class IdbDb extends Dexie {
     // NESTED TRANSACTION DETECTION:
     // Check if we're already inside a Dexie transaction context
     const currentTx = Dexie.currentTransaction as DexieTransaction | undefined;
+    if (currentTx && !currentTx.active) {
+      // A completed Dexie zone can echo through a promise continuation; start from its transless PSD.
+      return Dexie.ignoreTransaction(() => this.runTransaction(mode, stores, fn));
+    }
     if (currentTx && currentTx === this.activeTransaction && currentTx.active) {
       // We're nested and transaction is still active - safe to reuse
       return fn(currentTx);
@@ -99,6 +103,12 @@ export class IdbDb extends Dexie {
 
   get currentTransaction(): DexieTransaction | null {
     return Dexie.currentTransaction ?? this.activeTransaction;
+  }
+
+  /** Whether this call context already belongs to this logical IndexedDB database. */
+  get hasAmbientTransaction(): boolean {
+    const transaction = Dexie.currentTransaction;
+    return Boolean(transaction?.active && transaction.db.name === this.name);
   }
 }
 

@@ -3,6 +3,7 @@ import { Amount } from '@cashu/cashu-ts';
 import Dexie from 'dexie';
 import {
   runRepositoryTransactionContract,
+  createDummyMint,
   runKeyRingDerivationRepositoryContract,
   runAuthSessionRepositoryContract,
   runProofRepositoryContract,
@@ -70,6 +71,10 @@ async function expectRejects(fn: () => Promise<void>) {
 runRepositoryTransactionContract(
   {
     createRepositories,
+    createSharedRepositories,
+    createIsolationRepositories: createSharedRepositories,
+    holdTransactionOpen: (release) => Dexie.waitFor(release),
+    testConcurrentRootOperationIsolation: true,
   },
   { describe, it, expect },
 );
@@ -96,6 +101,84 @@ runMeltOperationRepositoryContract({ createRepositories }, { describe, it, expec
 runMeltQuoteRepositoryContract({ createRepositories }, { describe, it, expect });
 
 runPaymentRequestReceiveRepositoryContract({ createRepositories }, { describe, it, expect });
+
+describe('indexeddb Wallet transaction boundaries', () => {
+  it('does not report a nested strong scope as committed before its ambient parent', async () => {
+    const { repositories, dispose } = await createRepositories();
+    let nestedScopeResolved = false;
+    try {
+      await expect(
+        repositories.db.transaction('rw', repositories.db.tables, async () => {
+          await repositories.withTransaction(async () => {});
+          nestedScopeResolved = true;
+          throw new Error('abort ambient transaction');
+        }),
+      ).rejects.toThrow();
+
+      expect(nestedScopeResolved).toBe(false);
+    } finally {
+      await dispose();
+    }
+  });
+
+  it('treats another connection to the same Wallet database as ambient', async () => {
+    const { first, second, dispose } = await createSharedRepositories();
+    try {
+      await first.db.transaction('rw', first.db.tables, () => {
+        expect(second.db.hasAmbientTransaction).toBe(true);
+      });
+    } finally {
+      await dispose();
+    }
+  });
+
+  it('allows a Wallet transaction inside an unrelated Dexie database transaction', async () => {
+    const { repositories, dispose } = await createRepositories();
+    const unrelatedName = `unrelated_${Date.now()}_${dbCounter++}`;
+    const unrelated = new Dexie(unrelatedName);
+    unrelated.version(1).stores({ items: '++id' });
+    await unrelated.open();
+    const walletMint = {
+      ...createDummyMint(),
+      mintUrl: 'https://unrelated-ambient.test',
+    };
+
+    try {
+      await unrelated.transaction('rw', unrelated.table('items'), async () => {
+        await Dexie.waitFor(
+          repositories.withTransaction(async ({ mintRepository }) => {
+            await mintRepository.addOrUpdateMint(walletMint);
+          }),
+        );
+      });
+
+      expect(await repositories.mintRepository.getAllMints()).toContainEqual(walletMint);
+    } finally {
+      unrelated.close();
+      await Dexie.delete(unrelatedName);
+      await dispose();
+    }
+  }, 2_000);
+
+  it('keeps closed-over root repository calls in the current Wallet transaction', async () => {
+    const { repositories, dispose } = await createRepositories();
+    try {
+      await expect(
+        repositories.withTransaction(async () => {
+          await repositories.mintRepository.addOrUpdateMint({
+            ...createDummyMint(),
+            mintUrl: 'https://closed-over-root.test',
+          });
+          throw new Error('abort Wallet transaction');
+        }),
+      ).rejects.toThrow('abort Wallet transaction');
+
+      expect(await repositories.mintRepository.getAllMints()).toEqual([]);
+    } finally {
+      await dispose();
+    }
+  }, 2_000);
+});
 
 describe('indexeddb quote storage constraints', () => {
   it('rolls back the keypair and high-water mark when persistence aborts', async () => {

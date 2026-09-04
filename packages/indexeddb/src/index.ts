@@ -95,6 +95,10 @@ export class IndexedDbRepositories implements Repositories {
   }
 
   async withTransaction<T>(fn: (repos: RepositoryTransactionScope) => Promise<T>): Promise<T> {
+    if (this.db.hasAmbientTransaction) {
+      throw new Error('Nested IndexedDB Wallet transactions are not supported');
+    }
+
     const stores = this.db.tables.map((t) => t.name);
     return this.db.runTransaction('rw', stores, async () => {
       const scopedDb = this.db;

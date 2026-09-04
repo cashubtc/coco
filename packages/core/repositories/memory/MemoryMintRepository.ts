@@ -1,8 +1,13 @@
 import type { Mint } from '../../models/Mint';
 import type { MintRepository } from '..';
+import { cloneMemoryValue, COPY_MEMORY_REPOSITORY_STATE } from './MemoryRepositoryTransaction.ts';
 
 export class MemoryMintRepository implements MintRepository {
   private mints: Map<string, Mint> = new Map();
+
+  [COPY_MEMORY_REPOSITORY_STATE](source: MemoryMintRepository): void {
+    this.mints = cloneMemoryValue(source.mints);
+  }
 
   async isTrustedMint(mintUrl: string): Promise<boolean> {
     const mint = this.mints.get(mintUrl);
