@@ -7,9 +7,14 @@ const REPOSITORY_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 export type TransactionArchitectureRule =
   | 'application-gateway-application-gateway'
+  | 'application-gateway-live-event-bus'
+  | 'application-gateway-remote-infrastructure'
   | 'application-gateway-repository'
+  | 'application-gateway-service'
+  | 'operation-service-foreign-application-gateway'
   | 'operation-service-repository'
   | 'operation-service-runner'
+  | 'operation-service-service'
   | 'transaction-scope-application-gateway'
   | 'transaction-scope-live-event-bus'
   | 'transaction-scope-remote-infrastructure'
@@ -54,12 +59,22 @@ interface ImportEdge {
 const RULE_REASONS: Record<TransactionArchitectureRule, string> = {
   'application-gateway-application-gateway':
     'An application-scoped transaction gateway cannot compose another domain gateway.',
+  'application-gateway-live-event-bus':
+    'An application-scoped transaction gateway must return after commit, not publish live events.',
+  'application-gateway-remote-infrastructure':
+    'An application-scoped transaction gateway cannot perform remote infrastructure I/O.',
   'application-gateway-repository':
     'An application-scoped transaction gateway must use its CoreTransactionRunner, not repositories.',
+  'application-gateway-service':
+    'An application-scoped transaction gateway is a leaf adapter and cannot depend on an application-scoped Service.',
+  'operation-service-foreign-application-gateway':
+    "An Operation Service can use only its own domain's application-scoped transaction gateway.",
   'operation-service-repository':
     'An Operation Service must use Queries and its own transaction gateway, not repositories.',
   'operation-service-runner':
     'An Operation Service must not receive the raw CoreTransactionRunner.',
+  'operation-service-service':
+    'An Operation Service must use narrow Queries, local capabilities, and remote interfaces instead of broad Services.',
   'transaction-scope-application-gateway':
     'A transaction-scoped module cannot open or compose an application-scoped transaction gateway.',
   'transaction-scope-live-event-bus':
@@ -73,16 +88,45 @@ const RULE_REASONS: Record<TransactionArchitectureRule, string> = {
 };
 
 /**
- * Exact legacy imports that remain until their Operation Services migrate. Binding names are part
- * of each entry so extending an existing import is still a new architecture violation.
+ * Exact legacy imports that remain until their owning modules migrate. Binding names are part of
+ * each entry so extending an existing import is still a new architecture violation.
  */
 export const TRANSACTION_ARCHITECTURE_ALLOWLIST: readonly AllowlistedTransactionImport[] = [
+  {
+    rule: 'application-gateway-service',
+    importer: 'packages/core/transactions/keypairs/KeyRingTransactions.ts',
+    importSource: '@core/services/SeedService.ts',
+    importedNames: ['SeedService'],
+    reason:
+      'Legacy Keyring seed preflight; remove when derivation preparation moves outside the transaction gateway.',
+  },
   {
     rule: 'operation-service-repository',
     importer: 'packages/core/operations/melt/MeltOperationService.ts',
     importSource: '../../repositories',
     importedNames: ['MeltOperationRepository', 'ProofRepository'],
     reason: 'Legacy Melt Operation persistence; remove when MeltOperationService is migrated.',
+  },
+  {
+    rule: 'operation-service-service',
+    importer: 'packages/core/operations/melt/MeltOperationService.ts',
+    importSource: '../../services/MintService',
+    importedNames: ['MintService'],
+    reason: 'Legacy broad Mint dependency; replace with narrow interfaces during Melt migration.',
+  },
+  {
+    rule: 'operation-service-service',
+    importer: 'packages/core/operations/melt/MeltOperationService.ts',
+    importSource: '../../services/ProofService',
+    importedNames: ['ProofService'],
+    reason: 'Legacy broad Proof dependency; replace with narrow interfaces during Melt migration.',
+  },
+  {
+    rule: 'operation-service-service',
+    importer: 'packages/core/operations/melt/MeltOperationService.ts',
+    importSource: '../../services/WalletService',
+    importedNames: ['WalletService'],
+    reason: 'Legacy broad Wallet dependency; replace with narrow interfaces during Melt migration.',
   },
   {
     rule: 'operation-service-repository',
@@ -92,6 +136,27 @@ export const TRANSACTION_ARCHITECTURE_ALLOWLIST: readonly AllowlistedTransaction
     reason: 'Legacy Mint Operation persistence; remove when MintOperationService is migrated.',
   },
   {
+    rule: 'operation-service-service',
+    importer: 'packages/core/operations/mint/MintOperationService.ts',
+    importSource: '../../services/MintService',
+    importedNames: ['MintService'],
+    reason: 'Legacy broad Mint dependency; replace with narrow interfaces during Mint migration.',
+  },
+  {
+    rule: 'operation-service-service',
+    importer: 'packages/core/operations/mint/MintOperationService.ts',
+    importSource: '../../services/ProofService',
+    importedNames: ['ProofService'],
+    reason: 'Legacy broad Proof dependency; replace with narrow interfaces during Mint migration.',
+  },
+  {
+    rule: 'operation-service-service',
+    importer: 'packages/core/operations/mint/MintOperationService.ts',
+    importSource: '../../services/WalletService',
+    importedNames: ['WalletService'],
+    reason: 'Legacy broad Wallet dependency; replace with narrow interfaces during Mint migration.',
+  },
+  {
     rule: 'operation-service-repository',
     importer: 'packages/core/operations/receive/ReceiveOperationService.ts',
     importSource: '../../repositories',
@@ -99,11 +164,64 @@ export const TRANSACTION_ARCHITECTURE_ALLOWLIST: readonly AllowlistedTransaction
     reason: 'Legacy Receive persistence; remove with the Receive transaction migration.',
   },
   {
+    rule: 'operation-service-service',
+    importer: 'packages/core/operations/receive/ReceiveOperationService.ts',
+    importSource: '../../services/MintService',
+    importedNames: ['MintService'],
+    reason:
+      'Legacy broad Mint dependency; replace with narrow interfaces during Receive migration.',
+  },
+  {
+    rule: 'operation-service-service',
+    importer: 'packages/core/operations/receive/ReceiveOperationService.ts',
+    importSource: '../../services/ProofService',
+    importedNames: ['ProofService'],
+    reason:
+      'Legacy broad Proof dependency; replace with narrow interfaces during Receive migration.',
+  },
+  {
+    rule: 'operation-service-service',
+    importer: 'packages/core/operations/receive/ReceiveOperationService.ts',
+    importSource: '../../services/TokenService',
+    importedNames: ['TokenService'],
+    reason:
+      'Legacy broad Token dependency; replace with a narrow capability during Receive migration.',
+  },
+  {
+    rule: 'operation-service-service',
+    importer: 'packages/core/operations/receive/ReceiveOperationService.ts',
+    importSource: '../../services/WalletService',
+    importedNames: ['WalletService'],
+    reason:
+      'Legacy broad Wallet dependency; replace with narrow interfaces during Receive migration.',
+  },
+  {
     rule: 'operation-service-repository',
     importer: 'packages/core/operations/send/SendOperationService.ts',
     importSource: '../../repositories',
     importedNames: ['ProofRepository', 'SendOperationRepository'],
     reason: 'Legacy Send persistence; remove with the Send transaction migration.',
+  },
+  {
+    rule: 'operation-service-service',
+    importer: 'packages/core/operations/send/SendOperationService.ts',
+    importSource: '../../services/MintService',
+    importedNames: ['MintService'],
+    reason: 'Legacy broad Mint dependency; replace with narrow interfaces during Send migration.',
+  },
+  {
+    rule: 'operation-service-service',
+    importer: 'packages/core/operations/send/SendOperationService.ts',
+    importSource: '../../services/ProofService',
+    importedNames: ['ProofService'],
+    reason: 'Legacy broad Proof dependency; replace with narrow interfaces during Send migration.',
+  },
+  {
+    rule: 'operation-service-service',
+    importer: 'packages/core/operations/send/SendOperationService.ts',
+    importSource: '../../services/WalletService',
+    importedNames: ['WalletService'],
+    reason: 'Legacy broad Wallet dependency; replace with narrow interfaces during Send migration.',
   },
 ];
 
@@ -218,6 +336,37 @@ function importsCoreTransactionRunner(edge: ImportEdge): boolean {
   );
 }
 
+function operationServiceDomain(importer: string): string | null {
+  return importer.match(/^packages\/core\/operations\/([^/]+)\//)?.[1] ?? null;
+}
+
+function transactionGatewayDomain(edge: ImportEdge): string | null {
+  return edge.target?.match(/^packages\/core\/transactions\/([^/]+)(?:\/|$)/)?.[1] ?? null;
+}
+
+function operationGatewayName(domain: string): string {
+  const normalizedDomain = domain
+    .split(/[-_]/)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join('');
+  return `${normalizedDomain}Transactions`;
+}
+
+function importsForeignApplicationTransactionGateway(edge: ImportEdge): boolean {
+  if (!importsApplicationTransactionGateway(edge)) return false;
+
+  const operationDomain = operationServiceDomain(edge.importer);
+  if (!operationDomain) return true;
+
+  const gatewayDomain = transactionGatewayDomain(edge);
+  if (gatewayDomain) return gatewayDomain !== operationDomain;
+
+  const ownGatewayName = operationGatewayName(operationDomain);
+  return edge.importedNames.some(
+    (name) => name === '*' || (name.endsWith('Transactions') && name !== ownGatewayName),
+  );
+}
+
 function addViolation(
   violations: TransactionArchitectureViolation[],
   rule: TransactionArchitectureRule,
@@ -254,6 +403,15 @@ function violationsForEdge(edge: ImportEdge): TransactionArchitectureViolation[]
   }
 
   if (isApplicationTransactionImplementation(edge.importer)) {
+    if (isPathWithin(edge.target, 'packages/core/services')) {
+      addViolation(violations, 'application-gateway-service', edge);
+    }
+    if (isPathWithin(edge.target, 'packages/core/infra')) {
+      addViolation(violations, 'application-gateway-remote-infrastructure', edge);
+    }
+    if (importsLiveEventBus(edge)) {
+      addViolation(violations, 'application-gateway-live-event-bus', edge);
+    }
     if (isPathWithin(edge.target, 'packages/core/repositories')) {
       addViolation(violations, 'application-gateway-repository', edge);
     }
@@ -263,6 +421,12 @@ function violationsForEdge(edge: ImportEdge): TransactionArchitectureViolation[]
   }
 
   if (isOperationService(edge.importer)) {
+    if (isPathWithin(edge.target, 'packages/core/services')) {
+      addViolation(violations, 'operation-service-service', edge);
+    }
+    if (importsForeignApplicationTransactionGateway(edge)) {
+      addViolation(violations, 'operation-service-foreign-application-gateway', edge);
+    }
     if (isPathWithin(edge.target, 'packages/core/repositories')) {
       addViolation(violations, 'operation-service-repository', edge);
     }

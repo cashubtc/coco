@@ -28,6 +28,8 @@ suffix. Established names such as `SendOperationService` and `ReceiveOperationSe
 - The composition root owns one application-scoped `CoreTransactionRunner` for a Coco Session.
 - Each method on an application-scoped `*Transactions` interface opens exactly one adapter
   transaction through that runner and returns only after commit.
+- An application-scoped `*Transactions` implementation is a leaf adapter; its caller completes
+  preflight, and the gateway does not depend on Services or other effectful application modules.
 - An Operation Service receives its own domain's `*Transactions` interface, not the raw runner or
   repositories.
 - An Operation Service must not use another domain's application-scoped `*Transactions` interface
@@ -148,10 +150,12 @@ The method resolves only after its adapter transaction commits. It rejects if th
 not commit. Callers can therefore publish a corresponding live event after a successful return
 without exposing uncommitted state.
 
-The implementation may perform local preflight before opening its one transaction when needed. For
-example, keypair allocation loads the Wallet Seed and creates a synchronous, purpose-bound deriver
-before calling the runner. A transaction gateway must not perform remote mint I/O, access root
-repositories directly, or call another application-scoped transaction gateway.
+The implementation is a leaf adapter around its runner. Callers complete preflight before invoking
+it and pass stable, transaction-ready command data. For example, the Keyring management
+coordinator or a narrow keypair capability loads the Wallet Seed and creates a synchronous,
+purpose-bound deriver before asking the keyring gateway to allocate a keypair. A transaction
+gateway must not depend on regular Services, perform remote mint I/O, publish live events, access
+root repositories directly, or call another application-scoped transaction gateway.
 
 Cross-domain writes use modules from one `CoreTransaction`:
 
@@ -220,7 +224,8 @@ The standard remote-effect shape is:
 preflight -> authorize transaction -> remote I/O -> apply transaction -> publish
 ```
 
-Preflight resolves dependencies that are unsafe or unnecessary to await inside an adapter
+Preflight is owned by the Operation Service or narrow local capability that coordinates the use
+case. It resolves dependencies that are unsafe or unnecessary to await inside an adapter
 transaction. It may normalize input, load a Wallet Seed, build a synchronous signer or deriver, or
 prepare stable identifiers and timestamps. Any value that must remain unchanged across a bounded
 transaction retry is fixed here.
@@ -301,10 +306,11 @@ repeated.
 Committed counter positions and derivation indexes are never reclaimed, including after an
 operation aborts or a keypair is deleted. This prevents accidental deterministic reuse.
 
-The keyring gateway performs asynchronous Wallet Seed loading before the transaction and gives the
-transaction-scoped keypair module only a synchronous, purpose-bound deriver. Inside the transaction,
-the module reads the durable high-water mark, chooses the next index, derives the keypair, and
-persists the keypair and high-water mark atomically.
+The Keyring management coordinator or a narrow keypair capability performs asynchronous Wallet
+Seed loading and gives the keyring gateway a synchronous, purpose-bound deriver. The gateway passes
+that deriver into its one transaction. Inside the transaction, the transaction-scoped keypair
+module reads the durable high-water mark, chooses the next index, derives the keypair, and persists
+the keypair and high-water mark atomically.
 
 ## Remote Outcomes and Recovery
 
@@ -347,20 +353,21 @@ roles recognizable:
 
 The check enforces these edges:
 
-| Importer                                          | Forbidden dependencies                                                                           |
-| ------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| Transaction-scoped implementation                 | regular Services, remote infrastructure, live event bus, raw runner, application-scoped gateways |
-| Application-scoped `*Transactions` implementation | repositories and another application-scoped gateway                                              |
-| Operation Service                                 | repositories and `CoreTransactionRunner`                                                         |
+| Importer                                          | Forbidden dependencies                                                                             |
+| ------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Transaction-scoped implementation                 | regular Services, remote infrastructure, live event bus, raw runner, application-scoped gateways   |
+| Application-scoped `*Transactions` implementation | regular Services, remote infrastructure, live event bus, repositories, application-scoped gateways |
+| Operation Service                                 | regular Services, repositories, `CoreTransactionRunner`, another domain's transaction gateway      |
 
 Repository interfaces remain visible to repository adapters, Query implementations,
 transaction-scoped implementations, and composition-root wiring. They are not orchestration
 dependencies.
 
 The check uses an exact legacy allowlist including importer, import source, and imported binding
-names. Adding a binding to an allowlisted import is a new violation. Removing a legacy edge makes
-its allowlist entry stale and fails the check until the exception is deleted, so the allowlist must
-shrink with each migration.
+names. This includes the current Operation Service dependencies on broad Services and the keyring
+gateway's temporary dependency on `SeedService`. Adding a binding to an allowlisted import is a new
+violation. Removing a legacy edge makes its allowlist entry stale and fails the check until the
+exception is deleted, so the allowlist must shrink with each migration.
 
 ## Incremental Migration
 
@@ -370,7 +377,8 @@ rewrite.
 
 1. Establish the runner, transaction-scoped module factory, keypair allocation, architecture
    contract, and executable dependency guard.
-2. Replace broad Keyring dependencies used internally with purpose-specific Queries and local
+2. Move Wallet Seed loading and derivation preparation out of the keyring transaction gateway;
+   replace broad Keyring dependencies used internally with purpose-specific Queries and local
    capabilities while retaining `KeyRingService` as the user-facing management module.
 3. Migrate Send transitions through `SendTransactions` and remove its allowlisted repository edge.
 4. Migrate core Receive transitions through `ReceiveTransactions` and remove its allowlisted edge.

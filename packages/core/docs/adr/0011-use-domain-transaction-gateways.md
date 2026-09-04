@@ -15,3 +15,9 @@ Cross-domain writes compose through transaction-scoped modules created from the 
 remote mint I/O remain outside transactions, authoritative reads are repeated inside them, and live
 events are published only after commit. [Transaction Design](../../../../TRANSACTION_DESIGN.md)
 defines the detailed dependency, lifetime, retry, and incremental-migration contract.
+
+An application-scoped `*Transactions` implementation is a leaf adapter around its
+`CoreTransactionRunner`. Its caller completes preflight and supplies transaction-ready command
+data. The gateway does not depend on regular Services, remote infrastructure, the live `EventBus`,
+root repositories, or another application-scoped transaction gateway. Existing dependencies that
+violate this boundary remain only as exact, shrinking migration exceptions.

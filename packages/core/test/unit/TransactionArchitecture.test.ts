@@ -52,6 +52,27 @@ describe('transaction architecture imports', () => {
       {
         module: {
           path: 'packages/core/transactions/send/SendTransactions.ts',
+          sourceText: "import type { ProofService } from '@core/services/ProofService.ts';",
+        },
+        rule: 'application-gateway-service',
+      },
+      {
+        module: {
+          path: 'packages/core/transactions/send/SendTransactions.ts',
+          sourceText: "import type { MintAdapter } from '@core/infra';",
+        },
+        rule: 'application-gateway-remote-infrastructure',
+      },
+      {
+        module: {
+          path: 'packages/core/transactions/send/SendTransactions.ts',
+          sourceText: "import type { EventBus } from '@core/events';",
+        },
+        rule: 'application-gateway-live-event-bus',
+      },
+      {
+        module: {
+          path: 'packages/core/transactions/send/SendTransactions.ts',
           sourceText: "import type { ProofRepository } from '@core/repositories';",
         },
         rule: 'application-gateway-repository',
@@ -63,6 +84,21 @@ describe('transaction architecture imports', () => {
             "import type { ProofTransactions } from '@core/transactions/proofs/index.ts';",
         },
         rule: 'application-gateway-application-gateway',
+      },
+      {
+        module: {
+          path: 'packages/core/operations/send/SendOperationService.ts',
+          sourceText: "import type { ProofService } from '@core/services/ProofService.ts';",
+        },
+        rule: 'operation-service-service',
+      },
+      {
+        module: {
+          path: 'packages/core/operations/send/SendOperationService.ts',
+          sourceText:
+            "import type { ReceiveTransactions } from '@core/transactions/receive/index.ts';",
+        },
+        rule: 'operation-service-foreign-application-gateway',
       },
       {
         module: {
@@ -90,6 +126,17 @@ describe('transaction architecture imports', () => {
         }),
       ]);
     }
+  });
+
+  it("accepts an Operation Service's own transaction gateway", () => {
+    const module: SourceModule = {
+      path: 'packages/core/operations/send/SendOperationService.ts',
+      sourceText: "import type { SendTransactions } from '@core/transactions/send/index.ts';",
+    };
+
+    const result = checkTransactionArchitecture([module], []);
+
+    expect(result.violations).toEqual([]);
   });
 
   it('accepts an exact allowlisted legacy repository import', () => {
