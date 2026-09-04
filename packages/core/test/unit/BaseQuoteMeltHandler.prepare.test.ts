@@ -119,6 +119,9 @@ describe('BaseQuoteMeltHandler prepare', () => {
     expect(result.needsSwap).toBe(true);
     expect(result.swap_fee).toEqual(Amount.from(1));
     expect(h.mocks.selectProofsToSend).toHaveBeenCalledTimes(2);
+    expect(h.mocks.reserveProofs).toHaveBeenCalledWith(f.mintUrl, ['input-1', 'input-2'], 'swap', {
+      unit: 'sat',
+    });
     expect(h.mocks.createOutputsAndIncrementCounters).toHaveBeenCalledWith(
       f.mintUrl,
       {

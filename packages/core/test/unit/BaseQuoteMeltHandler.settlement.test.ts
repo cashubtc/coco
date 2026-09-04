@@ -1,5 +1,6 @@
 import { Amount } from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it } from 'bun:test';
+import { deserializeOutputData } from '../../utils';
 import {
   createQuoteMeltHandlerHarness,
   makeQuoteMeltChange,
@@ -89,6 +90,8 @@ describe('BaseQuoteMeltHandler settlement', () => {
           expect.objectContaining({ secret: 'send-1', state: 'inflight' }),
         ]),
       );
+      expect(h.mocks.setProofState).toHaveBeenCalledWith(f.mintUrl, ['input-1'], 'inflight');
+      expect(h.mocks.setProofState).toHaveBeenCalledWith(f.mintUrl, ['input-1'], 'spent');
       expect(h.hooks.executeMelt.mock.calls[0]?.[1]).toEqual([makeQuoteMeltProof('send-1', 60)]);
     });
 
@@ -162,16 +165,25 @@ describe('BaseQuoteMeltHandler settlement', () => {
       ['missing', undefined],
       ['partial', 'canonical'],
     ] as const)('fetches %s settlement data', async (_label, canonical) => {
+      const operation = h.makePendingOperation();
+      const change = [makeQuoteMeltChange(5)];
       const result = await h.finalize({
+        operation,
         quote: canonical ? h.makeCanonicalQuote({ state: 'PAID', change: undefined }) : undefined,
         response: {
           state: 'PAID',
-          change: [makeQuoteMeltChange(5)],
+          change,
           payment_preimage: 'preimage-remote',
         },
       });
 
       expect(h.hooks.checkMeltQuote).toHaveBeenCalledTimes(1);
+      expect(h.mocks.unblindAndSaveChangeProofs).toHaveBeenCalledWith(
+        f.mintUrl,
+        deserializeOutputData(operation.changeOutputData).keep,
+        change,
+        { unit: 'sat', createdByOperationId: operation.id },
+      );
       expect(result).toMatchObject({
         changeAmount: Amount.from(5),
         finalizedData: { preimage: 'preimage-remote' },

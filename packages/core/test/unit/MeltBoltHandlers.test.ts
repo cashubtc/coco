@@ -93,6 +93,7 @@ for (const config of methods) {
         msats && Amount.from(msats),
       );
       expect(quote).toMatchObject({ method: config.method, quoteId: f.quoteId });
+      expect(quote.amount).toEqual(Amount.from(100));
     });
 
     it('fetches through its full-quote endpoint', async () => {
