@@ -1,8 +1,13 @@
 import type { SendOperationRepository } from '..';
 import type { SendOperation, SendOperationState } from '../../operations/send/SendOperation';
+import { cloneMemoryValue, COPY_MEMORY_REPOSITORY_STATE } from './MemoryRepositoryTransaction.ts';
 
 export class MemorySendOperationRepository implements SendOperationRepository {
-  private readonly operations = new Map<string, SendOperation>();
+  private operations = new Map<string, SendOperation>();
+
+  [COPY_MEMORY_REPOSITORY_STATE](source: MemorySendOperationRepository): void {
+    this.operations = cloneMemoryValue(source.operations);
+  }
 
   async create(operation: SendOperation): Promise<void> {
     if (this.operations.has(operation.id)) {

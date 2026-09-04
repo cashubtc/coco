@@ -5,6 +5,7 @@ import {
   type AmountLike,
   type OutputDataLike,
   type Proof,
+  type SerializedBlindedSignature,
   type Token,
 } from '@cashu/cashu-ts';
 import type { CoreProof, ProofState } from './types';
@@ -47,6 +48,13 @@ export interface ProofStateInput {
   id: string;
   secret: string;
 }
+
+/**
+ * JSON-safe form of a blinded signature for repository persistence.
+ */
+export type StoredBlindedSignature = Omit<SerializedBlindedSignature, 'amount'> & {
+  amount: string;
+};
 
 // ============================================================================
 // OutputData Serialization Functions
@@ -201,6 +209,68 @@ export function stringifyJson(value: unknown): string {
 
 export function deserializeAmount(value: string | number | bigint | Amount): Amount {
   return Amount.from(value);
+}
+
+function deserializeStoredAmount(value: unknown): Amount {
+  if (
+    value instanceof Amount ||
+    typeof value === 'string' ||
+    typeof value === 'number' ||
+    typeof value === 'bigint'
+  ) {
+    return deserializeAmount(value);
+  }
+
+  // IndexedDB structured cloning removed the Amount prototype from legacy rows while retaining
+  // its private TypeScript field as an own property.
+  if (value && typeof value === 'object' && 'value' in value) {
+    const legacyValue = (value as { value: unknown }).value;
+    if (
+      typeof legacyValue === 'string' ||
+      typeof legacyValue === 'number' ||
+      typeof legacyValue === 'bigint'
+    ) {
+      return deserializeAmount(legacyValue);
+    }
+  }
+
+  throw new TypeError('Stored amount is invalid');
+}
+
+/**
+ * Convert blinded signatures to a repository-safe form.
+ */
+export function serializeBlindedSignatures(
+  signatures: SerializedBlindedSignature[] | undefined,
+): StoredBlindedSignature[] | undefined {
+  return signatures?.map((signature) => ({
+    ...signature,
+    amount: serializeAmount(signature.amount),
+  }));
+}
+
+/**
+ * Restore blinded signature Amount instances after repository hydration.
+ */
+export function deserializeBlindedSignatures(
+  value: unknown,
+): SerializedBlindedSignature[] | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    throw new TypeError('Stored blinded signatures must be an array');
+  }
+
+  return value.map((signature, index) => {
+    if (!signature || typeof signature !== 'object' || !('amount' in signature)) {
+      throw new TypeError(`Stored blinded signature ${index} is invalid`);
+    }
+    return {
+      ...(signature as Omit<SerializedBlindedSignature, 'amount'>),
+      amount: deserializeStoredAmount((signature as { amount: unknown }).amount),
+    };
+  });
 }
 
 export function deserializeToken(value: unknown): Token | undefined {

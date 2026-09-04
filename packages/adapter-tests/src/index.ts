@@ -20,25 +20,42 @@ import {
   type KeyRingRepository,
   DerivationIndexExhaustedError,
   QuoteIdentityConflictError,
+  RepositoryTransactionConflictError,
 } from '@cashu/coco-core/adapter';
 
-type TransactionFactory<TRepositories extends Repositories = Repositories> = () => Promise<{
+/** Creates one initialized, isolated repository root for a contract test. */
+export type TransactionFactory<TRepositories extends Repositories = Repositories> = () => Promise<{
   repositories: TRepositories;
   dispose(): Promise<void>;
 }>;
 
-type ContractOptions<TRepositories extends Repositories = Repositories> = {
-  createRepositories: TransactionFactory<TRepositories>;
-  testConcurrentRootOperationIsolation?: boolean;
-};
-
-export type KeyRingDerivationContractOptions<TRepositories extends Repositories = Repositories> = {
-  createRepositories: TransactionFactory<TRepositories>;
-  createSharedRepositories?: () => Promise<{
+/** Creates two independent repository roots backed by the same physical Wallet store. */
+export type SharedTransactionFactory<TRepositories extends Repositories = Repositories> =
+  () => Promise<{
     first: TRepositories;
     second: TRepositories;
     dispose(): Promise<void>;
   }>;
+
+/** Configuration shared by repository adapter contract suites. */
+export type ContractOptions<TRepositories extends Repositories = Repositories> = {
+  /** Creates a fresh repository root for each contract case. */
+  createRepositories: TransactionFactory<TRepositories>;
+  /** Enables cross-root concurrency cases against one physical Wallet store. */
+  createSharedRepositories?: SharedTransactionFactory<TRepositories>;
+  /** Supplies independent roots when same-root ambient context cannot model root-operation probes. */
+  createIsolationRepositories?: SharedTransactionFactory<TRepositories>;
+  /** Keeps adapters with auto-closing transactions alive until the supplied release settles. */
+  holdTransactionOpen?: (release: Promise<void>) => Promise<void>;
+  /** Enables cases asserting that root operations cannot observe or join staged transaction work. */
+  testConcurrentRootOperationIsolation?: boolean;
+  /** Enables the case asserting writer ownership is acquired before callback entry. */
+  testWriterOwnershipAtEntry?: boolean;
+};
+
+export type KeyRingDerivationContractOptions<TRepositories extends Repositories = Repositories> = {
+  createRepositories: TransactionFactory<TRepositories>;
+  createSharedRepositories?: SharedTransactionFactory<TRepositories>;
 };
 
 function sortedIndexes(indexes: number[]): number[] {
@@ -228,11 +245,18 @@ export async function runRepositoryTransactionContract(
       const { repositories, dispose } = await options.createRepositories();
       try {
         let committed = false;
+        let committedPublicKey = '';
         await repositories.withTransaction(async (tx) => {
           await tx.mintRepository.addOrUpdateMint(createDummyMint());
           await tx.keysetRepository.addKeyset(createDummyKeyset());
           await tx.proofRepository.saveProofs('https://mint.test', [createDummyProof()]);
           await tx.meltOperationRepository.create(createDummyMeltOperation());
+          await tx.counterRepository.setCounter('https://mint.test', 'keyset-id', 7);
+          committedPublicKey = (
+            await tx.keyRingRepository.deriveAndPersistKeyPair('p2pk', (index) =>
+              derivedKeypair(index, 'p2pk'),
+            )
+          ).publicKeyHex;
           committed = true;
         });
 
@@ -242,6 +266,19 @@ export async function runRepositoryTransactionContract(
         const operation = await repositories.meltOperationRepository.getById('melt-op');
         expect(operation).toBeDefined();
         expect(operation?.methodData.amountSats?.toString()).toBe('1');
+        const counter = await repositories.counterRepository.getCounter(
+          'https://mint.test',
+          'keyset-id',
+        );
+        expect(counter?.counter).toBe(7);
+        const keypair = await repositories.keyRingRepository.getPersistedKeyPair(
+          committedPublicKey,
+          'p2pk',
+        );
+        expect(keypair).toBeDefined();
+        await repositories.keyRingRepository.deletePersistedKeyPair(committedPublicKey, 'p2pk');
+        const nextKeypair = await deriveNext(repositories.keyRingRepository, 'p2pk');
+        expect(nextKeypair.derivationIndex).toBe(1);
       } finally {
         await dispose();
       }
@@ -253,20 +290,102 @@ export async function runRepositoryTransactionContract(
         await expectThrows(async () => {
           await repositories.withTransaction(async (tx) => {
             await tx.mintRepository.addOrUpdateMint(createDummyMint());
+            await tx.keysetRepository.addKeyset(createDummyKeyset());
+            await tx.proofRepository.saveProofs('https://mint.test', [createDummyProof()]);
+            await tx.meltOperationRepository.create(createDummyMeltOperation());
+            await tx.counterRepository.setCounter('https://mint.test', 'keyset-id', 7);
+            await tx.keyRingRepository.deriveAndPersistKeyPair('p2pk', (index) =>
+              derivedKeypair(index, 'p2pk'),
+            );
             throw new Error('boom');
           });
         }, expect);
 
         const mints = await repositories.mintRepository.getAllMints();
         expect(mints.length).toBe(0);
+        const keysets =
+          await repositories.keysetRepository.getKeysetsByMintUrl('https://mint.test');
+        expect(keysets.length).toBe(0);
+        const proofs = await repositories.proofRepository.getAllReadyProofs();
+        expect(proofs.length).toBe(0);
+        const operation = await repositories.meltOperationRepository.getById('melt-op');
+        expect(operation).toBe(null);
+        const counter = await repositories.counterRepository.getCounter(
+          'https://mint.test',
+          'keyset-id',
+        );
+        expect(counter).toBe(null);
+        const keypairs = await repositories.keyRingRepository.getAllPersistedKeyPairs('p2pk');
+        expect(keypairs).toHaveLength(0);
+        const reallocated = await deriveNext(repositories.keyRingRepository, 'p2pk');
+        expect(reallocated.derivationIndex).toBe(0);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('preserves callback failures as non-conflict errors', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      const invariantError = new Error('database is locked by a domain invariant');
+      try {
+        let thrown: unknown;
+        try {
+          await repositories.withTransaction(async () => {
+            throw invariantError;
+          });
+        } catch (error) {
+          thrown = error;
+        }
+
+        expect(thrown).toBe(invariantError);
+        expect(thrown instanceof RepositoryTransactionConflictError).toBe(false);
       } finally {
         await dispose();
       }
     });
 
     if (options.testConcurrentRootOperationIsolation) {
+      it('does not expose writes from an active transaction that rolls back', async () => {
+        const { transactionRepositories, rootRepositories, dispose } =
+          await createIsolationRepositories(options);
+        const transactionEntered = createDeferred();
+        const releaseTransaction = createDeferred();
+        try {
+          const stagedMint = {
+            ...createDummyMint(),
+            mintUrl: 'https://staged-mint.test',
+          };
+          const transactionOutcomePromise = settle(
+            transactionRepositories.withTransaction(async (tx) => {
+              await tx.mintRepository.addOrUpdateMint(stagedMint);
+              transactionEntered.resolve();
+              await (options.holdTransactionOpen?.(releaseTransaction.promise) ??
+                releaseTransaction.promise);
+              throw new Error('rollback staged mint');
+            }),
+          );
+          await transactionEntered.promise;
+
+          const rootReadPromise = rootRepositories.mintRepository.getAllMints();
+          releaseTransaction.resolve();
+          const [transactionOutcome, observedMints] = await Promise.all([
+            transactionOutcomePromise,
+            rootReadPromise,
+          ]);
+          expect(transactionOutcome.status).toBe('rejected');
+          expect(observedMints.some((mint) => mint.mintUrl === stagedMint.mintUrl)).toBe(false);
+
+          const storedMints = await rootRepositories.mintRepository.getAllMints();
+          expect(storedMints.some((mint) => mint.mintUrl === stagedMint.mintUrl)).toBe(false);
+        } finally {
+          releaseTransaction.resolve();
+          await dispose();
+        }
+      });
+
       it('does not include concurrent root repository writes in active transactions', async () => {
-        const { repositories, dispose } = await options.createRepositories();
+        const { transactionRepositories, rootRepositories, dispose } =
+          await createIsolationRepositories(options);
         try {
           const transactionEntered = createDeferred();
           const releaseTransaction = createDeferred();
@@ -279,36 +398,178 @@ export async function runRepositoryTransactionContract(
             mintUrl: 'https://outside-mint.test',
           };
 
-          const transactionPromise = repositories.withTransaction(async (tx) => {
-            await tx.mintRepository.addOrUpdateMint(mintInTransaction);
-            transactionEntered.resolve();
-            await releaseTransaction.promise;
-            throw new Error('rollback transaction');
-          });
+          const transactionOutcomePromise = settle(
+            transactionRepositories.withTransaction(async (tx) => {
+              await tx.mintRepository.addOrUpdateMint(mintInTransaction);
+              transactionEntered.resolve();
+              await (options.holdTransactionOpen?.(releaseTransaction.promise) ??
+                releaseTransaction.promise);
+              throw new Error('rollback transaction');
+            }),
+          );
 
           await transactionEntered.promise;
 
-          let outsideWriteResolved = false;
-          const outsideWritePromise = repositories.mintRepository
-            .addOrUpdateMint(outsideMint)
-            .then(() => {
-              outsideWriteResolved = true;
-            });
-
-          await Promise.race([
-            outsideWritePromise,
-            new Promise((resolve) => setTimeout(resolve, 25)),
-          ]);
-          expect(outsideWriteResolved).toBe(false);
+          const outsideWritePromise = rootRepositories.mintRepository.addOrUpdateMint(outsideMint);
 
           releaseTransaction.resolve();
-          await expectThrows(() => transactionPromise, expect);
-          await outsideWritePromise;
+          const [transactionOutcome] = await Promise.all([
+            transactionOutcomePromise,
+            outsideWritePromise,
+          ]);
+          expect(transactionOutcome.status).toBe('rejected');
 
-          const mints = await repositories.mintRepository.getAllMints();
+          const mints = await rootRepositories.mintRepository.getAllMints();
           expect(mints).toHaveLength(1);
           expect(mints[0]?.mintUrl).toBe(outsideMint.mintUrl);
         } finally {
+          await dispose();
+        }
+      });
+
+      it('does not clobber concurrent root writes when a transaction commits', async () => {
+        const { transactionRepositories, rootRepositories, dispose } =
+          await createIsolationRepositories(options);
+        const transactionEntered = createDeferred();
+        const releaseTransaction = createDeferred();
+        try {
+          const mintInTransaction = {
+            ...createDummyMint(),
+            mintUrl: 'https://committed-transaction-mint.test',
+          };
+          const outsideMint = {
+            ...createDummyMint(),
+            mintUrl: 'https://outside-committed-transaction.test',
+          };
+
+          const transactionPromise = transactionRepositories.withTransaction(async (tx) => {
+            await tx.mintRepository.addOrUpdateMint(mintInTransaction);
+            transactionEntered.resolve();
+            await (options.holdTransactionOpen?.(releaseTransaction.promise) ??
+              releaseTransaction.promise);
+          });
+          await transactionEntered.promise;
+
+          const outsideWritePromise = rootRepositories.mintRepository.addOrUpdateMint(outsideMint);
+          releaseTransaction.resolve();
+          await Promise.all([transactionPromise, outsideWritePromise]);
+
+          const mints = await rootRepositories.mintRepository.getAllMints();
+          expect(mints).toHaveLength(2);
+          expect(mints.some((mint) => mint.mintUrl === mintInTransaction.mintUrl)).toBe(true);
+          expect(mints.some((mint) => mint.mintUrl === outsideMint.mintUrl)).toBe(true);
+        } finally {
+          releaseTransaction.resolve();
+          await dispose();
+        }
+      });
+    }
+
+    if (options.createSharedRepositories) {
+      it('serializes or reports typed conflicts for concurrent Wallet writers', async () => {
+        const { first, second, dispose } = await options.createSharedRepositories!();
+        try {
+          const mintUrl = 'https://transaction-contention.test';
+          const keysetId = 'contention-keyset';
+          await first.counterRepository.setCounter(mintUrl, keysetId, 0);
+
+          const increment = (repositories: Repositories) =>
+            settle(
+              repositories.withTransaction(async (tx) => {
+                const current = await tx.counterRepository.getCounter(mintUrl, keysetId);
+                await tx.counterRepository.setCounter(
+                  mintUrl,
+                  keysetId,
+                  (current?.counter ?? 0) + 1,
+                );
+              }),
+            );
+
+          const outcomes = await Promise.all([increment(first), increment(second)]);
+          const fulfilledCount = outcomes.filter(
+            (outcome) => outcome.status === 'fulfilled',
+          ).length;
+          expect(fulfilledCount > 0).toBe(true);
+          for (const outcome of outcomes) {
+            if (outcome.status === 'rejected') {
+              expect(outcome.reason instanceof RepositoryTransactionConflictError).toBe(true);
+            }
+          }
+
+          const counter = await first.counterRepository.getCounter(mintUrl, keysetId);
+          expect(counter?.counter).toBe(fulfilledCount);
+        } finally {
+          await dispose();
+        }
+      });
+    }
+
+    if (options.createSharedRepositories && options.testWriterOwnershipAtEntry) {
+      it('acquires write ownership before entering a conflicting callback', async () => {
+        const { first, second, dispose } = await options.createSharedRepositories!();
+        const releaseFirst = createDeferred();
+        try {
+          const firstEntered = createDeferred();
+          const firstMint = {
+            ...createDummyMint(),
+            mintUrl: 'https://first-writer.test',
+          };
+          const secondMint = {
+            ...createDummyMint(),
+            mintUrl: 'https://second-writer.test',
+          };
+          let firstWriterHeld = true;
+
+          const firstOutcomePromise = settle(
+            first.withTransaction(async (tx) => {
+              await tx.mintRepository.addOrUpdateMint(firstMint);
+              firstEntered.resolve();
+              await releaseFirst.promise;
+              firstWriterHeld = false;
+            }),
+          );
+          await firstEntered.promise;
+
+          const secondEntered = createDeferred();
+          let secondEnteredWhileFirstHeld = false;
+          const secondOutcomePromise = settle(
+            second.withTransaction(async (tx) => {
+              secondEnteredWhileFirstHeld = firstWriterHeld;
+              secondEntered.resolve();
+              await tx.mintRepository.addOrUpdateMint(secondMint);
+            }),
+          );
+
+          const acquisitionOutcome = await Promise.race([
+            secondEntered.promise.then(() => 'callback-entered' as const),
+            secondOutcomePromise.then(() => 'transaction-settled' as const),
+            new Promise<'pending'>((resolve) => setTimeout(() => resolve('pending'), 0)),
+          ]);
+          expect(acquisitionOutcome === 'callback-entered').toBe(false);
+
+          releaseFirst.resolve();
+          const [firstOutcome, secondOutcome] = await Promise.all([
+            firstOutcomePromise,
+            secondOutcomePromise,
+          ]);
+          expect(secondEnteredWhileFirstHeld).toBe(false);
+          expect(firstOutcome.status).toBe('fulfilled');
+          if (secondOutcome.status === 'rejected') {
+            expect(secondOutcome.reason instanceof RepositoryTransactionConflictError).toBe(true);
+            expect(
+              secondOutcome.reason instanceof RepositoryTransactionConflictError
+                ? secondOutcome.reason.transient
+                : false,
+            ).toBe(true);
+          }
+
+          const mints = await first.mintRepository.getAllMints();
+          expect(mints.some((mint) => mint.mintUrl === firstMint.mintUrl)).toBe(true);
+          expect(mints.some((mint) => mint.mintUrl === secondMint.mintUrl)).toBe(
+            secondOutcome.status === 'fulfilled',
+          );
+        } finally {
+          releaseFirst.resolve();
           await dispose();
         }
       });
@@ -321,6 +582,24 @@ export type ContractRunner = {
   it(name: string, fn: () => Promise<void> | void): void;
   expect: Expectation;
 };
+
+async function createIsolationRepositories(options: ContractOptions): Promise<{
+  transactionRepositories: Repositories;
+  rootRepositories: Repositories;
+  dispose(): Promise<void>;
+}> {
+  if (options.createIsolationRepositories) {
+    const { first, second, dispose } = await options.createIsolationRepositories();
+    return { transactionRepositories: first, rootRepositories: second, dispose };
+  }
+
+  const { repositories, dispose } = await options.createRepositories();
+  return {
+    transactionRepositories: repositories,
+    rootRepositories: repositories,
+    dispose,
+  };
+}
 
 type Expectation = {
   (value: unknown): ExpectApi;
@@ -379,6 +658,13 @@ function createDeferred<T = void>() {
     reject = rej;
   });
   return { promise, resolve, reject } as const;
+}
+
+function settle<T>(promise: Promise<T>) {
+  return promise.then(
+    (value) => ({ status: 'fulfilled' as const, value }),
+    (reason: unknown) => ({ status: 'rejected' as const, reason }),
+  );
 }
 
 export function createDummyMint(): Mint {
@@ -1300,6 +1586,36 @@ export async function runMeltQuoteRepositoryContract(
         expect(stored!.state).toBe('PENDING');
         expect(stored!.lastObservedRemoteState).toBe('PENDING');
         expect(stored!.lastObservedRemoteStateAt).toBe(20);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('rehydrates cached melt change signature amounts', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const quote = createDummyMeltQuote({
+          quoteId: 'paid-melt-with-change',
+          quote: 'paid-melt-with-change',
+          state: 'PAID',
+          change: [
+            {
+              id: 'keyset-1',
+              amount: Amount.from(2),
+              C_: '02'.padEnd(66, '1'),
+            },
+          ],
+        });
+
+        await repositories.meltQuoteRepository.upsertMeltQuote(quote);
+        const stored = await repositories.meltQuoteRepository.getMeltQuote(
+          quote.mintUrl,
+          quote.method,
+          quote.quoteId,
+        );
+
+        expect(stored?.change).toHaveLength(1);
+        expect(stored?.change?.[0]?.amount.equals(Amount.from(2))).toBe(true);
       } finally {
         await dispose();
       }

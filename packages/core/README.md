@@ -205,34 +205,11 @@ If you prefer manual wiring, construct `Manager` directly and call `initPlugins(
 - `manager.on(...)` exposes typed `CoreEvents`, including subscription,
   operation, proof, quote, history, mint, and auth-session events.
 
-### Repositories
+### Storage
 
-Repository contracts for storage adapters are exported from `@cashu/coco-core/adapter`:
-
-```ts
-import { type Repositories, serializeAmount } from '@cashu/coco-core/adapter';
-```
-
-- `MintRepository`
-- `KeysetRepository`
-- `CounterRepository`
-- `ProofRepository`
-- `MintQuoteRepository`
-- `HistoryRepository`
-- `KeyRingRepository`
-- `AuthSessionRepository`
-- `SendOperationRepository`
-- `MeltOperationRepository`
-- `MintOperationRepository`
-- `ReceiveOperationRepository`
-
-The package root exports `MemoryRepositories` as an in-memory test/example repository bundle.
-
-`KeyRingRepository.deriveAndPersistKeyPair(purpose, derive)` selects the next purpose-scoped
-derivation index, invokes the synchronous derivation callback, and atomically commits the keypair
-with its durable high-water mark. It returns the keypair only after commit. See the
-[storage adapter contract](../docs/pages/storage-adapters.md) for transaction and backup
-requirements.
+Initialize Coco with the built-in storage adapter for your runtime. The package root also exports
+`MemoryRepositories` for in-memory tests and examples. See [Storage Adapters](../docs/pages/storage-adapters.md)
+for setup and storage-security guidance.
 
 ## Public API surface
 

@@ -20,6 +20,7 @@ export type {
   RepositoryTransactionScope,
   SendOperationRepository,
 } from './repositories/index.ts';
+export { RepositoryTransactionConflictError } from './repositories/index.ts';
 export type {
   AuthSession,
   Counter,
@@ -80,14 +81,21 @@ export type { BalanceQuery, CoreProof, ProofState } from './types.ts';
 export { DEFAULT_UNIT, normalizeUnit } from './amounts.ts';
 export {
   deserializeAmount,
+  deserializeBlindedSignatures,
   deserializeOutput,
   deserializeOutputData,
   deserializeToken,
   getSecretsFromSerializedOutputData,
   normalizeMintUrl,
   serializeAmount,
+  serializeBlindedSignatures,
   serializeOutput,
   serializeOutputData,
   stringifyJson,
 } from './utils.ts';
-export type { SerializedOutput, SerializedOutputData, StoredBlindedMessage } from './utils.ts';
+export type {
+  SerializedOutput,
+  SerializedOutputData,
+  StoredBlindedMessage,
+  StoredBlindedSignature,
+} from './utils.ts';

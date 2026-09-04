@@ -1,8 +1,13 @@
 import type { MintOperationRepository } from '..';
 import type { MintOperation, MintOperationState } from '../../operations/mint/MintOperation';
+import { cloneMemoryValue, COPY_MEMORY_REPOSITORY_STATE } from './MemoryRepositoryTransaction.ts';
 
 export class MemoryMintOperationRepository implements MintOperationRepository {
-  private readonly operations = new Map<string, MintOperation>();
+  private operations = new Map<string, MintOperation>();
+
+  [COPY_MEMORY_REPOSITORY_STATE](source: MemoryMintOperationRepository): void {
+    this.operations = cloneMemoryValue(source.operations);
+  }
 
   async create(operation: MintOperation): Promise<void> {
     if (this.operations.has(operation.id)) {

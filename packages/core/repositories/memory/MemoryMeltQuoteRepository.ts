@@ -3,9 +3,14 @@ import type { MeltQuote } from '@core/models/MeltQuote';
 import type { QuoteIdentity } from '@core/models/QuoteIdentity';
 import type { MeltQuoteRepository } from '..';
 import { normalizeMintUrl } from '../../utils';
+import { cloneMemoryValue, COPY_MEMORY_REPOSITORY_STATE } from './MemoryRepositoryTransaction.ts';
 
 export class MemoryMeltQuoteRepository implements MeltQuoteRepository {
-  private readonly quotes = new Map<string, MeltQuote>();
+  private quotes = new Map<string, MeltQuote>();
+
+  [COPY_MEMORY_REPOSITORY_STATE](source: MemoryMeltQuoteRepository): void {
+    this.quotes = cloneMemoryValue(source.quotes);
+  }
 
   private makeKey(mintUrl: string, method: string, quoteId: string): string {
     return `${normalizeMintUrl(mintUrl)}::${method}::${quoteId}`;

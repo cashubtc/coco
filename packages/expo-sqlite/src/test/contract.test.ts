@@ -15,7 +15,6 @@ import {
   runSendOperationRepositoryContract,
   runMeltOperationRepositoryContract,
   runMeltQuoteRepositoryContract,
-  createDummyMint,
 } from '@cashu/coco-adapter-tests';
 import { runSqlDatabaseContract } from '@cashu/coco-sql-storage/test';
 import { SqliteRepositories as Repositories } from '../index.ts';
@@ -191,7 +190,9 @@ runSqlDatabaseContract(
 runRepositoryTransactionContract(
   {
     createRepositories,
+    createSharedRepositories,
     testConcurrentRootOperationIsolation: true,
+    testWriterOwnershipAtEntry: true,
   },
   { describe, it, expect },
 );
@@ -227,22 +228,22 @@ describe('expo-sqlite web transaction compatibility', () => {
     Object.defineProperty(globalThis, 'document', { value: {}, configurable: true });
 
     const database = new WebExpoSqliteDatabaseShim();
-    const repositories = new Repositories({
+    const wrappedDatabase = new ExpoSqliteDb({
       database: database as unknown as SqliteRepositoriesOptions['database'],
     });
 
     try {
-      await repositories.init();
       database.exclusiveTransactionCalls = 0;
       database.transactionCalls = 0;
 
-      await repositories.withTransaction(async (tx) => {
-        await tx.mintRepository.addOrUpdateMint(createDummyMint());
+      await wrappedDatabase.transaction(async (transaction) => {
+        await expect(transaction.get<{ value: number }>('SELECT 1 AS value')).resolves.toEqual({
+          value: 1,
+        });
       });
 
       expect(database.exclusiveTransactionCalls).toBe(0);
       expect(database.transactionCalls).toBe(1);
-      await expect(repositories.mintRepository.getAllMints()).resolves.toHaveLength(1);
     } finally {
       await database.closeAsync();
       restoreGlobalProperty('window', windowDescriptor);
@@ -254,22 +255,22 @@ describe('expo-sqlite web transaction compatibility', () => {
 describe('expo-sqlite native transaction compatibility', () => {
   it('uses exclusive transactions when available outside web', async () => {
     const database = new NativeExpoSqliteDatabaseShim();
-    const repositories = new Repositories({
+    const wrappedDatabase = new ExpoSqliteDb({
       database: database as unknown as SqliteRepositoriesOptions['database'],
     });
 
     try {
-      await repositories.init();
       database.exclusiveTransactionCalls = 0;
       database.transactionCalls = 0;
 
-      await repositories.withTransaction(async (tx) => {
-        await tx.mintRepository.addOrUpdateMint(createDummyMint());
+      await wrappedDatabase.transaction(async (transaction) => {
+        await expect(transaction.get<{ value: number }>('SELECT 1 AS value')).resolves.toEqual({
+          value: 1,
+        });
       });
 
       expect(database.exclusiveTransactionCalls).toBe(1);
       expect(database.transactionCalls).toBe(0);
-      await expect(repositories.mintRepository.getAllMints()).resolves.toHaveLength(1);
     } finally {
       await database.closeAsync();
     }
