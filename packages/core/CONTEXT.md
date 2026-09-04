@@ -144,3 +144,24 @@ _Avoid_: Recovery, Wallet Import, restored mint, restored wallet
 **Operation Recovery**:
 The act of reconciling persisted in-flight wallet operations after interruption so local operation state, proof state, and mint state agree again.
 _Avoid_: Restore, restart, resume
+
+**Exact Operation Request**:
+Immutable mint request material owned by a durable operation and reused for both initial submission
+and Operation Recovery.
+_Avoid_: Retry request, regenerated request, execution attempt
+
+**Ambiguous Operation Outcome**:
+An operation outcome for which Coco cannot prove whether its Exact Operation Request affected the
+mint. The operation retains its locally owned resources until Operation Recovery establishes a safe
+result.
+_Avoid_: Failed operation, timed-out operation
+
+**Output Allocation**:
+A durable commitment of deterministic counter positions to planned Cashu outputs. Output derivation
+inside a transaction that does not commit is not an Output Allocation.
+_Avoid_: Output generation, tentative outputs, counter increment
+
+**Keypair Allocation**:
+A durable commitment of one purpose-specific Wallet derivation index and its derived keypair. Key
+derivation inside a transaction that does not commit is not a Keypair Allocation.
+_Avoid_: Key generation, tentative key, high-water-mark increment
