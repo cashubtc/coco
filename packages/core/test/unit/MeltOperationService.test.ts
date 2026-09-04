@@ -4,6 +4,7 @@ import { MeltOperationService } from '../../operations/melt/MeltOperationService
 import { MemoryMeltOperationRepository } from '../../repositories/memory/MemoryMeltOperationRepository.ts';
 import { MemoryMeltQuoteRepository } from '../../repositories/memory/MemoryMeltQuoteRepository.ts';
 import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepository.ts';
+import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 import { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
 import type { ProofService } from '../../services/ProofService.ts';
@@ -37,6 +38,7 @@ import {
   UnknownMintError,
   ProofValidationError,
   OperationInProgressError,
+  ParentOwnedOperationError,
   QuoteIdentityConflictError,
 } from '../../models/Error.ts';
 
@@ -259,6 +261,26 @@ describe('MeltOperationService', () => {
           state: 'pending',
         } as PendingMeltOperation,
       })),
+      executeOwnedRemote: mock(async ({ operation }) => ({
+        operationId: operation.id,
+        phase: 'melt',
+        response: { state: 'PENDING' },
+      })),
+      applyOwnedRemote: mock(async ({ operation }, result) =>
+        result.phase === 'pre_swap'
+          ? {
+              ...operation,
+              parentExecutionPhase: 'melt_authorized',
+              updatedAt: Date.now(),
+            }
+          : {
+              status: 'PENDING',
+              pending: {
+                ...operation,
+                state: 'pending',
+              },
+            },
+      ),
     } as MeltMethodHandler;
 
     handlerProvider = {
@@ -267,6 +289,40 @@ describe('MeltOperationService', () => {
 
     proofService = {
       releaseProofs: mock(async () => {}),
+      selectProofsToSend: mock(async () => [makeProof('planned-input')]),
+      createBlankOutputs: mock(async () => []),
+      createOutputsAndIncrementCounters: mock(async () => ({
+        keep: [],
+        send: [],
+        keepAmount: Amount.zero(),
+        sendAmount: Amount.zero(),
+      })),
+      forTransaction: mock((repositories) => ({
+        setProofState: mock(
+          async (
+            proofMintUrl: string,
+            secrets: string[],
+            state: 'inflight' | 'ready' | 'spent',
+          ) => {
+            await repositories.proofRepository.setProofState(proofMintUrl, secrets, state);
+          },
+        ),
+        saveProofs: mock(async (proofMintUrl: string, proofs: CoreProof[]) => {
+          await repositories.proofRepository.saveProofs(proofMintUrl, proofs);
+        }),
+        restoreProofsToReady: mock(async (proofMintUrl: string, secrets: string[]) => {
+          await repositories.proofRepository.setProofState(proofMintUrl, secrets, 'ready');
+        }),
+        reserveProofs: mock(
+          async (proofMintUrl: string, secrets: string[], operationId: string) => {
+            await repositories.proofRepository.reserveProofs(proofMintUrl, secrets, operationId);
+            return { amount: Amount.from(secrets.length), unit: 'sat' };
+          },
+        ),
+        releaseProofs: mock(async (proofMintUrl: string, secrets: string[]) => {
+          await repositories.proofRepository.releaseProofs(proofMintUrl, secrets);
+        }),
+      })),
     } as unknown as ProofService;
 
     mintService = {
@@ -366,6 +422,412 @@ describe('MeltOperationService', () => {
     it('throws for invalid amount', async () => {
       expect(service.init(mintUrl, 'bolt11', { invoice, amountSats: -1 })).rejects.toThrow(
         ProofValidationError,
+      );
+    });
+  });
+
+  describe('parent-owned orchestration commands', () => {
+    const parentSwapOperationId = 'mint-swap-parent';
+    const parent = { kind: 'mint-swap', id: parentSwapOperationId } as const;
+
+    it('keeps standalone execution from advancing a parent-owned child', async () => {
+      const operation = makePreparedOp('owned-direct-execute', {
+        parent,
+      });
+      await meltOperationRepository.create(operation);
+
+      await expect(service.execute(operation.id)).rejects.toBeInstanceOf(ParentOwnedOperationError);
+
+      expect((await meltOperationRepository.getById(operation.id))?.state).toBe('prepared');
+      expect(handler.execute).not.toHaveBeenCalled();
+    });
+
+    it('plans outside the transaction and reserves source proofs only while persisting', async () => {
+      const repositories = new MemoryRepositories();
+      const quote = meltQuoteFromBolt11Response(mintUrl, {
+        quote: 'owned-plan-quote',
+        request: invoice,
+        amount: Amount.from(100),
+        unit: 'sat',
+        fee_reserve: Amount.from(1),
+        expiry: Math.floor(Date.now() / 1_000) + 3_600,
+        state: 'UNPAID',
+        payment_preimage: null,
+      });
+      const plannedInput = makeProof('planned-input', { amount: Amount.from(101) });
+      await repositories.proofRepository.saveProofs(mintUrl, [plannedInput]);
+      const ownedService = new MeltOperationService(
+        handlerProvider,
+        repositories.meltOperationRepository,
+        quoteLifecycle,
+        repositories.proofRepository,
+        proofService,
+        mintService,
+        walletService,
+        mintAdapter,
+        eventBus,
+        logger,
+      );
+      (handler.prepare as Mock<any>).mockImplementationOnce(async ({ operation }: any) =>
+        makePreparedOp(operation.id, {
+          mintUrl,
+          quoteId: quote.quoteId,
+          parent,
+          inputAmount: plannedInput.amount,
+          inputProofSecrets: [plannedInput.secret],
+        }),
+      );
+
+      const planned = await ownedService.planOwnedPreparation({
+        operationId: 'owned-planned-source',
+        parentSwapOperationId,
+        quote,
+        wallet: {} as never,
+      });
+      expect(
+        (await repositories.proofRepository.getProofBySecret(mintUrl, plannedInput.secret))
+          ?.usedByOperationId,
+      ).toBe(undefined);
+
+      await repositories.withTransaction((transaction) =>
+        ownedService.prepareOwnedInTransaction({
+          operationId: planned.id,
+          parentSwapOperationId,
+          quote,
+          preparedOperation: planned,
+          repositories: transaction,
+        }),
+      );
+
+      expect(
+        (await repositories.proofRepository.getProofBySecret(mintUrl, plannedInput.secret))
+          ?.usedByOperationId,
+      ).toBe(planned.id);
+      expect((await repositories.meltOperationRepository.getById(planned.id))?.state).toBe(
+        'prepared',
+      );
+    });
+
+    it('persists each authorization checkpoint before starting its repository-free remote phase', async () => {
+      const repositories = new MemoryRepositories();
+      const operation = makePreparedOp('owned-pre-swap-checkpoint', {
+        parent,
+        needsSwap: true,
+        inputProofSecrets: ['owned-input'],
+        swapOutputData: {
+          keep: [],
+          send: [
+            {
+              blindedMessage: { amount: 101, id: keysetId, B_: 'swap-send-B' },
+              blindingFactor: '01',
+              secret: '737761702d73656e64',
+            },
+          ],
+        },
+      });
+      await repositories.proofRepository.saveProofs(mintUrl, [
+        makeProof('owned-input', { amount: Amount.from(101) }),
+      ]);
+      await repositories.proofRepository.reserveProofs(
+        mintUrl,
+        operation.inputProofSecrets,
+        operation.id,
+      );
+      await repositories.meltOperationRepository.create(operation);
+      const ownedService = new MeltOperationService(
+        handlerProvider,
+        repositories.meltOperationRepository,
+        quoteLifecycle,
+        repositories.proofRepository,
+        proofService,
+        mintService,
+        walletService,
+        mintAdapter,
+        eventBus,
+        logger,
+      );
+      let authorizationTransactionReturned = false;
+      let applyTransactionReturned = false;
+
+      const authorized = await repositories.withTransaction((transaction) =>
+        ownedService.authorizeOwnedExecutionInTransaction(
+          operation.id,
+          parentSwapOperationId,
+          transaction,
+        ),
+      );
+      authorizationTransactionReturned = true;
+
+      expect((await repositories.meltOperationRepository.getById(operation.id))?.state).toBe(
+        'executing',
+      );
+      expect(authorized.parentExecutionPhase).toBe('pre_swap_authorized');
+      expect(handler.executeOwnedRemote).not.toHaveBeenCalled();
+
+      (handler.executeOwnedRemote as Mock<any>).mockImplementationOnce(
+        async (context: Record<string, unknown>) => {
+          expect(authorizationTransactionReturned).toBe(true);
+          expect('proofRepository' in context).toBe(false);
+          expect('proofService' in context).toBe(false);
+          expect('meltOperationRepository' in context).toBe(false);
+          expect(
+            (await repositories.meltOperationRepository.getById(operation.id))
+              ?.parentExecutionPhase,
+          ).toBe('pre_swap_authorized');
+          return {
+            operationId: operation.id,
+            phase: 'pre_swap',
+            keepProofs: [],
+            sendProofs: [makeProof('swap-send', { amount: Amount.from(101) })],
+          };
+        },
+      );
+
+      (handler.applyOwnedRemote as Mock<any>).mockImplementationOnce(
+        async (context: any, result: any) => {
+          const { operation: current, proofService: scopedProofService } = context;
+          await scopedProofService.setProofState(
+            current.mintUrl,
+            current.inputProofSecrets,
+            'spent',
+          );
+          await scopedProofService.saveProofs(current.mintUrl, [
+            {
+              ...result.sendProofs[0],
+              mintUrl: current.mintUrl,
+              unit: current.unit,
+              state: 'inflight',
+              createdByOperationId: current.id,
+            },
+          ]);
+          return {
+            ...current,
+            parentExecutionPhase: 'melt_authorized',
+            updatedAt: Date.now(),
+          };
+        },
+      );
+
+      const preSwapResult = await ownedService.executeOwnedRemoteStep(
+        authorized,
+        parentSwapOperationId,
+      );
+      const meltAuthorized = await repositories.withTransaction((transaction) =>
+        ownedService.applyOwnedRemoteStepInTransaction(
+          authorized,
+          parentSwapOperationId,
+          preSwapResult,
+          transaction,
+        ),
+      );
+      applyTransactionReturned = true;
+
+      expect(meltAuthorized.state).toBe('executing');
+      expect(
+        meltAuthorized.state === 'executing' ? meltAuthorized.parentExecutionPhase : undefined,
+      ).toBe('melt_authorized');
+      expect(
+        (await repositories.meltOperationRepository.getById(operation.id))?.parentExecutionPhase,
+      ).toBe('melt_authorized');
+      await expect(
+        repositories.meltOperationRepository.update({
+          ...(meltAuthorized as ExecutingMeltOperation),
+          parentExecutionPhase: 'pre_swap_authorized',
+          updatedAt: Date.now() + 1,
+        }),
+      ).rejects.toThrow('authorization cannot regress');
+
+      (handler.executeOwnedRemote as Mock<any>).mockImplementationOnce(
+        async ({ operation: remoteOperation, ...context }: Record<string, any>) => {
+          expect(applyTransactionReturned).toBe(true);
+          expect(remoteOperation.parentExecutionPhase).toBe('melt_authorized');
+          expect('proofRepository' in context).toBe(false);
+          expect('proofService' in context).toBe(false);
+          return {
+            operationId: operation.id,
+            phase: 'melt',
+            response: { state: 'PENDING' },
+          };
+        },
+      );
+
+      await ownedService.executeOwnedRemoteStep(
+        meltAuthorized as ExecutingMeltOperation,
+        parentSwapOperationId,
+      );
+    });
+
+    it('persists the canonical source observation before advancing the owned child', async () => {
+      const repositories = new MemoryRepositories();
+      const operation = {
+        ...makePreparedOp('owned-canonical-observation', { parent }),
+        state: 'executing' as const,
+        parentExecutionPhase: 'melt_authorized' as const,
+      };
+      await repositories.meltOperationRepository.create(operation);
+      await repositories.meltQuoteRepository.upsertMeltQuote(
+        meltQuoteFromBolt11Response(mintUrl, {
+          quote: operation.quoteId,
+          request: invoice,
+          amount: operation.amount,
+          unit: operation.unit,
+          fee_reserve: operation.fee_reserve,
+          expiry: Math.floor(Date.now() / 1_000) + 3_600,
+          state: 'UNPAID',
+          payment_preimage: null,
+        }),
+      );
+      const ownedService = new MeltOperationService(
+        handlerProvider,
+        repositories.meltOperationRepository,
+        quoteLifecycle,
+        repositories.proofRepository,
+        proofService,
+        mintService,
+        walletService,
+        mintAdapter,
+        eventBus,
+        logger,
+      );
+      const observedAt = Date.now() + 1;
+
+      const applied = await repositories.withTransaction((transaction) =>
+        ownedService.applyOwnedRemoteStepInTransaction(
+          operation.id,
+          parentSwapOperationId,
+          {
+            operationId: operation.id,
+            phase: 'melt',
+            observedAt,
+            response: { state: 'PENDING' },
+          },
+          transaction,
+        ),
+      );
+
+      expect(applied.state).toBe('pending');
+      const quote = await repositories.meltQuoteRepository.getMeltQuote(
+        mintUrl,
+        'bolt11',
+        operation.quoteId,
+      );
+      expect(quote?.state).toBe('PENDING');
+      expect(quote?.lastObservedRemoteStateAt).toBe(observedAt);
+    });
+
+    it('does not let a stale owned result downgrade a canonical paid quote', async () => {
+      const repositories = new MemoryRepositories();
+      const operation = {
+        ...makePreparedOp('owned-stale-observation', { parent }),
+        state: 'executing' as const,
+        parentExecutionPhase: 'melt_authorized' as const,
+      };
+      await repositories.meltOperationRepository.create(operation);
+      await repositories.meltQuoteRepository.upsertMeltQuote(
+        meltQuoteFromBolt11Response(mintUrl, {
+          quote: operation.quoteId,
+          request: invoice,
+          amount: operation.amount,
+          unit: operation.unit,
+          fee_reserve: operation.fee_reserve,
+          expiry: Math.floor(Date.now() / 1_000) + 3_600,
+          state: 'PAID',
+          payment_preimage: 'paid-preimage',
+          change: [],
+        }),
+      );
+      const ownedService = new MeltOperationService(
+        handlerProvider,
+        repositories.meltOperationRepository,
+        quoteLifecycle,
+        repositories.proofRepository,
+        proofService,
+        mintService,
+        walletService,
+        mintAdapter,
+        eventBus,
+        logger,
+      );
+
+      await expect(
+        repositories.withTransaction((transaction) =>
+          ownedService.applyOwnedRemoteStepInTransaction(
+            operation.id,
+            parentSwapOperationId,
+            {
+              operationId: operation.id,
+              phase: 'melt',
+              observedAt: Date.now() + 1,
+              response: { state: 'UNPAID' },
+            },
+            transaction,
+          ),
+        ),
+      ).rejects.toThrow('conflicts with canonical PAID');
+      expect((await repositories.meltOperationRepository.getById(operation.id))?.state).toBe(
+        'executing',
+      );
+      expect(
+        (await repositories.meltQuoteRepository.getMeltQuote(mintUrl, 'bolt11', operation.quoteId))
+          ?.state,
+      ).toBe('PAID');
+    });
+
+    it('rejects paid owned results that contradict canonical settlement evidence', async () => {
+      const repositories = new MemoryRepositories();
+      const operation = {
+        ...makePreparedOp('owned-conflicting-settlement', { parent }),
+        state: 'executing' as const,
+        parentExecutionPhase: 'melt_authorized' as const,
+      };
+      await repositories.meltOperationRepository.create(operation);
+      await repositories.meltQuoteRepository.upsertMeltQuote(
+        meltQuoteFromBolt11Response(mintUrl, {
+          quote: operation.quoteId,
+          request: invoice,
+          amount: operation.amount,
+          unit: operation.unit,
+          fee_reserve: operation.fee_reserve,
+          expiry: Math.floor(Date.now() / 1_000) + 3_600,
+          state: 'PAID',
+          payment_preimage: 'canonical-preimage',
+          change: [],
+        }),
+      );
+      const ownedService = new MeltOperationService(
+        handlerProvider,
+        repositories.meltOperationRepository,
+        quoteLifecycle,
+        repositories.proofRepository,
+        proofService,
+        mintService,
+        walletService,
+        mintAdapter,
+        eventBus,
+        logger,
+      );
+
+      await expect(
+        repositories.withTransaction((transaction) =>
+          ownedService.applyOwnedRemoteStepInTransaction(
+            operation.id,
+            parentSwapOperationId,
+            {
+              operationId: operation.id,
+              phase: 'melt',
+              observedAt: Date.now() + 1,
+              response: {
+                state: 'PAID',
+                change: [],
+                payment_preimage: 'conflicting-preimage',
+              },
+            },
+            transaction,
+          ),
+        ),
+      ).rejects.toThrow('preimage conflicts with canonical quote');
+      expect((await repositories.meltOperationRepository.getById(operation.id))?.state).toBe(
+        'executing',
       );
     });
   });
@@ -1771,6 +2233,42 @@ describe('MeltOperationService', () => {
       expect(handler.execute).not.toHaveBeenCalled();
       expect(handler.checkPending).not.toHaveBeenCalled();
       expect(handler.finalize).not.toHaveBeenCalled();
+      expect(handler.recoverExecuting).not.toHaveBeenCalled();
+    });
+
+    it('leaves parent-owned children for Mint Swap recovery', async () => {
+      const parent = (id: string) => ({ kind: 'mint-swap' as const, id });
+      const ownedInit = makeInitOp('owned-init-recovery', {
+        quoteId: 'owned-init-quote',
+        parent: parent('init-parent'),
+      });
+      const ownedPrepared = makePreparedOp('owned-prepared-recovery', {
+        quoteId: 'owned-prepared-quote',
+        parent: parent('prepared-parent'),
+      });
+      const ownedExecuting = makeExecutingOp('owned-executing-recovery', {
+        quoteId: 'owned-executing-quote',
+        parent: parent('executing-parent'),
+        parentExecutionPhase: 'melt_authorized',
+      });
+      const ownedPending = makePendingOp('owned-pending-recovery', {
+        quoteId: 'owned-pending-quote',
+        parent: parent('pending-parent'),
+        parentExecutionPhase: 'melt_authorized',
+      });
+      for (const operation of [ownedInit, ownedPrepared, ownedExecuting, ownedPending]) {
+        await meltOperationRepository.create(operation);
+      }
+
+      await service.recoverPendingOperations();
+
+      for (const operation of [ownedInit, ownedPrepared, ownedExecuting, ownedPending]) {
+        expect((await meltOperationRepository.getById(operation.id))?.state).toBe(operation.state);
+      }
+      expect(await service.getPendingOperations()).toHaveLength(0);
+      expect(await service.getPreparedOperations()).toHaveLength(0);
+      expect(proofService.releaseProofs).not.toHaveBeenCalled();
+      expect(handler.checkPending).not.toHaveBeenCalled();
       expect(handler.recoverExecuting).not.toHaveBeenCalled();
     });
   });

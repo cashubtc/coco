@@ -1,4 +1,10 @@
 export type { MeltOperation, MeltOperationState } from './melt/MeltOperation.ts';
+export type { MintSwapOperationParent } from './MintSwapOperationParent.ts';
+export {
+  assertMintSwapOperationParent,
+  createMintSwapOperationParent,
+  isMintSwapOperationParent,
+} from './MintSwapOperationParent.ts';
 export type { MeltMethod, MeltMethodData, MeltMethodInputData } from './melt/MeltMethodHandler.ts';
 export { normalizeMeltMethodData } from './melt/MeltMethodHandler.ts';
 export { MeltOperationService } from './melt/MeltOperationService.ts';

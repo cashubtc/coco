@@ -7,6 +7,10 @@ import type { QuoteIdentity } from '@core/models/QuoteIdentity';
 import type { MeltOperation, MeltOperationState } from '@core/operations/melt/MeltOperation';
 import type { MintOperation, MintOperationState } from '@core/operations/mint/MintOperation';
 import type {
+  MintSwapOperation,
+  MintSwapOperationState,
+} from '@core/operations/mintSwap/MintSwapOperation';
+import type {
   ReceiveOperation,
   ReceiveOperationState,
 } from '../operations/receive/ReceiveOperation';
@@ -22,6 +26,7 @@ import type { Mint } from '../models/Mint';
 import type { SendOperation, SendOperationState } from '../operations/send/SendOperation';
 import type { CoreProof, ProofState } from '../types';
 import type { MintMethodRemoteState } from '../operations/mint/MintMethodHandler';
+import type { OperationEventOutboxRecord } from '../models/OperationEventOutbox';
 
 export interface ProofUnitFilter {
   unit?: string;
@@ -253,7 +258,7 @@ export interface MeltOperationRepository {
   /** Create a new melt operation */
   create(operation: MeltOperation): Promise<void>;
 
-  /** Update an existing melt operation */
+  /** Update an existing melt operation without changing its durable parent ownership. */
   update(operation: MeltOperation): Promise<void>;
 
   /** Get a melt operation by ID */
@@ -271,7 +276,7 @@ export interface MeltOperationRepository {
   /** Get all operations for a mint/quote pair */
   getByQuoteId(mintUrl: string, quoteId: string): Promise<MeltOperation[]>;
 
-  /** Delete a melt operation */
+  /** Delete a standalone melt operation; parent-owned children must be retained. */
   delete(id: string): Promise<void>;
 }
 export interface AuthSessionRepository {
@@ -288,7 +293,7 @@ export interface MintOperationRepository {
   /** Create a new mint operation */
   create(operation: MintOperation): Promise<void>;
 
-  /** Update an existing mint operation */
+  /** Update an existing mint operation without changing its durable parent ownership. */
   update(operation: MintOperation): Promise<void>;
 
   /** Get a mint operation by ID */
@@ -306,7 +311,7 @@ export interface MintOperationRepository {
   /** Get all operations for a mint/method/quote tuple */
   getByQuoteId(mintUrl: string, method: string, quoteId: string): Promise<MintOperation[]>;
 
-  /** Delete a mint operation */
+  /** Delete a standalone mint operation; parent-owned children must be retained. */
   delete(id: string): Promise<void>;
 }
 
@@ -364,6 +369,46 @@ export interface PaymentRequestReceiveAttemptRepository {
   delete(id: string): Promise<void>;
 }
 
+export interface MintSwapOperationRepository {
+  create(operation: MintSwapOperation): Promise<void>;
+  getById(id: string): Promise<MintSwapOperation | null>;
+  getByState(state: MintSwapOperationState): Promise<MintSwapOperation[]>;
+  getActive(): Promise<MintSwapOperation[]>;
+  getDue(now: number, limit: number): Promise<MintSwapOperation[]>;
+  getByDestinationMintOperationId(id: string): Promise<MintSwapOperation | null>;
+  getBySourceMeltOperationId(id: string): Promise<MintSwapOperation | null>;
+  compareAndSet(operation: MintSwapOperation, expectedRevision: number): Promise<boolean>;
+}
+
+export interface OperationEventOutboxRepository {
+  enqueue(event: OperationEventOutboxRecord): Promise<void>;
+  getById(id: string): Promise<OperationEventOutboxRecord | null>;
+  getUnpublished(limit: number, now?: number): Promise<OperationEventOutboxRecord[]>;
+  markPublished(id: string, publishedAt: number): Promise<void>;
+  recordPublishFailure(id: string, nextAttemptAt: number, lastError: string): Promise<void>;
+}
+
+/**
+ * Optional durable storage used by the Mint Swap feature.
+ *
+ * Keeping the repositories together as one capability prevents a runtime from
+ * observing a partially configured parent/outbox persistence boundary.
+ */
+export interface MintSwapRepositoryCapability {
+  mintSwapOperationRepository: MintSwapOperationRepository;
+  operationEventOutboxRepository: OperationEventOutboxRepository;
+}
+
+/** Fail a Mint Swap command before it can reserve value or perform remote I/O. */
+export function requireMintSwapRepositoryCapability(
+  repositories: Pick<RepositoryTransactionScope, 'mintSwap'>,
+): MintSwapRepositoryCapability {
+  if (!repositories.mintSwap) {
+    throw new Error('Mint Swap requires the optional durable repository capability');
+  }
+  return repositories.mintSwap;
+}
+
 interface RepositoriesBase {
   mintRepository: MintRepository;
   keyRingRepository: KeyRingRepository;
@@ -381,6 +426,7 @@ interface RepositoriesBase {
   receiveOperationRepository: ReceiveOperationRepository;
   paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
   paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
+  mintSwap?: MintSwapRepositoryCapability;
 }
 
 export interface Repositories extends RepositoriesBase {
