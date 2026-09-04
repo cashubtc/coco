@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import type { EventBus, CoreEvents } from '@core/events';
 import type { Logger } from '../../logging/Logger.ts';
 import type { SubscriptionManager, UnsubscribeHandler } from '@core/infra/SubscriptionManager.ts';
@@ -7,6 +8,7 @@ import type { SendOperationService } from '../../operations/send/SendOperationSe
 import { getSendProofSecrets, hasPreparedData } from '../../operations/send/SendOperation';
 import type { ProofRepository } from '../../repositories';
 import { buildYHexMapsForSecrets } from '../../utils.ts';
+import { BackgroundTaskRuntime, uninterruptiblePromise } from './BackgroundTaskRuntime.ts';
 
 type ProofKey = string; // `${mintUrl}::${secret}`
 
@@ -37,12 +39,9 @@ export class ProofStateWatcherService {
   private readonly options: ProofStateWatcherOptions;
   private sendOperationService?: SendOperationService;
 
-  private running = false;
+  private runtime?: BackgroundTaskRuntime;
   private unsubscribeByKey = new Map<ProofKey, UnsubscribeHandler>();
   private inflightByKey = new Set<ProofKey>();
-  private offProofsStateChanged?: () => void;
-  private offProofsSaved?: () => void;
-  private offUntrusted?: () => void;
 
   constructor(
     subs: SubscriptionManager,
@@ -71,162 +70,166 @@ export class ProofStateWatcherService {
   }
 
   isRunning(): boolean {
-    return this.running;
+    return this.runtime?.isActive ?? false;
   }
 
   async start(): Promise<void> {
-    if (this.running) return;
-    this.running = true;
-    this.logger?.info('ProofStateWatcherService started');
+    if (this.isRunning()) return;
 
-    // React to proofs being marked inflight via state change
-    this.offProofsStateChanged = this.bus.on(
-      'proofs:state-changed',
-      async ({ mintUrl, secrets, state }) => {
-        try {
-          if (!this.running) return;
-          if (state === 'inflight') {
-            try {
-              await this.watchProof(mintUrl, secrets);
-            } catch (err) {
-              this.logger?.warn('Failed to watch inflight proofs', {
+    const runtime = BackgroundTaskRuntime.make();
+    this.runtime = runtime;
+    try {
+      runtime.addFinalizer(
+        this.bus.on('proofs:state-changed', (event) =>
+          this.runTask(
+            runtime,
+            () => this.handleProofStateChanged(runtime, event),
+            (err) => this.logger?.error('Error handling proofs:state-changed', { err }),
+          ),
+        ),
+      );
+      runtime.addFinalizer(
+        this.bus.on('proofs:saved', (event) =>
+          this.runTask(
+            runtime,
+            () => this.handleProofsSaved(runtime, event),
+            (err) => this.logger?.error('Error handling proofs:saved', { err }),
+          ),
+        ),
+      );
+      runtime.addFinalizer(
+        this.bus.on('mint:untrusted', ({ mintUrl }) =>
+          this.runTask(
+            runtime,
+            () => this.stopWatchingMint(mintUrl),
+            (err) =>
+              this.logger?.error('Failed to stop watching mint proofs on untrust', {
                 mintUrl,
-                count: secrets.length,
                 err,
-              });
-            }
-          } else if (state === 'spent') {
-            const operationIds = new Set<string>();
+              }),
+          ),
+        ),
+      );
 
-            // Stop watching if we already are
-            for (const secret of secrets) {
-              const key = toKey(mintUrl, secret);
-              try {
-                await this.stopWatching(key);
-              } catch (err) {
-                this.logger?.warn('Failed to stop watcher on spent proof', {
-                  mintUrl,
-                  secret,
-                  err,
-                });
-              }
-
-              if (!this.sendOperationService) continue;
-
-              try {
-                const operationId = await this.getSendOperationIdForSpentProof(mintUrl, secret);
-                if (operationId) {
-                  operationIds.add(operationId);
-                }
-              } catch (err) {
-                this.logger?.warn('Failed to resolve send operation from spent proof event', {
-                  mintUrl,
-                  secret,
-                  err,
-                });
-              }
-            }
-
-            for (const operationId of operationIds) {
-              await this.tryFinalizeSendOperation(mintUrl, operationId);
-            }
-          }
-        } catch (err) {
-          this.logger?.error('Error handling proofs:state-changed', { err });
-        }
-      },
-    );
-
-    // React to proofs being saved with inflight state (e.g., from swap operations)
-    this.offProofsSaved = this.bus.on('proofs:saved', async ({ mintUrl, proofs }) => {
-      try {
-        if (!this.running) return;
-        const inflightSecrets = proofs.filter((p) => p.state === 'inflight').map((p) => p.secret);
-        if (inflightSecrets.length > 0) {
-          try {
-            await this.watchProof(mintUrl, inflightSecrets);
-          } catch (err) {
-            this.logger?.warn('Failed to watch inflight proofs from saved event', {
-              mintUrl,
-              count: inflightSecrets.length,
-              err,
-            });
-          }
-        }
-      } catch (err) {
-        this.logger?.error('Error handling proofs:saved', { err });
+      if (this.options.watchExistingInflightOnStart) {
+        void this.runTask(
+          runtime,
+          () => this.bootstrapInflightProofs(runtime),
+          (err) => this.logger?.warn('Failed to bootstrap inflight proof watchers', { err }),
+        );
       }
-    });
 
-    // Stop watching proofs when mint is untrusted
-    this.offUntrusted = this.bus.on('mint:untrusted', async ({ mintUrl }) => {
-      try {
-        await this.stopWatchingMint(mintUrl);
-      } catch (err) {
-        this.logger?.error('Failed to stop watching mint proofs on untrust', { mintUrl, err });
-      }
-    });
-
-    if (this.options.watchExistingInflightOnStart) {
-      void this.bootstrapInflightProofs().catch((err) => {
-        this.logger?.warn('Failed to bootstrap inflight proof watchers', { err });
-      });
+      this.logger?.info('ProofStateWatcherService started');
+    } catch (error) {
+      this.runtime = undefined;
+      await runtime.close();
+      throw error;
     }
   }
 
   async stop(): Promise<void> {
-    if (!this.running) return;
-    this.running = false;
+    const runtime = this.runtime;
+    if (!runtime) return;
+    this.runtime = undefined;
 
-    if (this.offProofsStateChanged) {
-      try {
-        this.offProofsStateChanged();
-      } catch {
-        // ignore
-      } finally {
-        this.offProofsStateChanged = undefined;
-      }
-    }
-
-    if (this.offProofsSaved) {
-      try {
-        this.offProofsSaved();
-      } catch {
-        // ignore
-      } finally {
-        this.offProofsSaved = undefined;
-      }
-    }
-
-    if (this.offUntrusted) {
-      try {
-        this.offUntrusted();
-      } catch {
-        // ignore
-      } finally {
-        this.offUntrusted = undefined;
-      }
-    }
-
-    const entries = Array.from(this.unsubscribeByKey.entries());
+    await runtime.close();
     this.unsubscribeByKey.clear();
-    for (const [key, unsub] of entries) {
-      try {
-        await unsub();
-        this.logger?.debug('Stopped watching proof', { key });
-      } catch (err) {
-        this.logger?.warn('Failed to unsubscribe proof watcher', { key, err });
-      }
-    }
     this.inflightByKey.clear();
     this.logger?.info('ProofStateWatcherService stopped');
   }
 
+  private runTask(
+    runtime: BackgroundTaskRuntime,
+    task: () => Promise<void>,
+    onError: (error: unknown) => void,
+  ): Promise<void> {
+    if (this.runtime !== runtime) return Promise.resolve();
+
+    return runtime.run(
+      uninterruptiblePromise(task).pipe(
+        Effect.catchAll((error) => Effect.sync(() => onError(error))),
+      ),
+    );
+  }
+
+  private async handleProofStateChanged(
+    runtime: BackgroundTaskRuntime,
+    { mintUrl, secrets, state }: CoreEvents['proofs:state-changed'],
+  ): Promise<void> {
+    if (this.runtime !== runtime) return;
+
+    if (state === 'inflight') {
+      try {
+        await this.watchProof(mintUrl, secrets);
+      } catch (err) {
+        this.logger?.warn('Failed to watch inflight proofs', {
+          mintUrl,
+          count: secrets.length,
+          err,
+        });
+      }
+      return;
+    }
+
+    if (state !== 'spent') return;
+
+    const operationIds = new Set<string>();
+    for (const secret of secrets) {
+      const key = toKey(mintUrl, secret);
+      try {
+        await this.stopWatching(key);
+      } catch (err) {
+        this.logger?.warn('Failed to stop watcher on spent proof', { mintUrl, secret, err });
+      }
+
+      if (!this.sendOperationService) continue;
+
+      try {
+        const operationId = await this.getSendOperationIdForSpentProof(mintUrl, secret);
+        if (operationId) operationIds.add(operationId);
+      } catch (err) {
+        this.logger?.warn('Failed to resolve send operation from spent proof event', {
+          mintUrl,
+          secret,
+          err,
+        });
+      }
+    }
+
+    for (const operationId of operationIds) {
+      await this.tryFinalizeSendOperation(mintUrl, operationId);
+    }
+  }
+
+  private async handleProofsSaved(
+    runtime: BackgroundTaskRuntime,
+    { mintUrl, proofs }: CoreEvents['proofs:saved'],
+  ): Promise<void> {
+    if (this.runtime !== runtime) return;
+
+    const inflightSecrets = proofs
+      .filter((proof) => proof.state === 'inflight')
+      .map((p) => p.secret);
+    if (inflightSecrets.length === 0) return;
+
+    try {
+      await this.watchProof(mintUrl, inflightSecrets);
+    } catch (err) {
+      this.logger?.warn('Failed to watch inflight proofs from saved event', {
+        mintUrl,
+        count: inflightSecrets.length,
+        err,
+      });
+    }
+  }
+
   async watchProof(mintUrl: string, secrets: string[]): Promise<void> {
-    if (!this.running) return;
+    const runtime = this.runtime;
+    if (!runtime?.isActive) return;
 
     // Only watch proofs for trusted mints
     const trusted = await this.mintService.isTrustedMint(mintUrl);
+    if (this.runtime !== runtime) return;
     if (!trusted) {
       this.logger?.debug('Skipping watch for untrusted mint', { mintUrl });
       return;
@@ -241,31 +244,24 @@ export class ProofStateWatcherService {
     const { secretByYHex, yHexBySecret } = buildYHexMapsForSecrets(toWatch);
     const filters = Array.from(secretByYHex.keys());
 
+    let callbackSubId: string | undefined;
     const { subId, unsubscribe } = await this.subs.subscribe<ProofStateNotification>(
       mintUrl,
       'proof_state',
       filters,
-      async (payload) => {
-        if (payload.state !== 'SPENT') return;
-        const secret = secretByYHex.get(payload.Y);
-        if (!secret) return;
-        const key = toKey(mintUrl, secret);
-        if (this.inflightByKey.has(key)) return;
-        this.inflightByKey.add(key);
-        try {
-          await this.proofs.setProofState(mintUrl, [secret], 'spent');
-          this.logger?.info('Marked inflight proof as spent from mint notification', {
-            mintUrl,
-            subId,
-          });
-          await this.stopWatching(key);
-        } catch (err) {
-          this.logger?.error('Failed to mark inflight proof as spent', { mintUrl, subId, err });
-        } finally {
-          this.inflightByKey.delete(key);
-        }
-      },
+      (payload) =>
+        this.runTask(
+          runtime,
+          () => this.handleProofStateNotification(mintUrl, callbackSubId, secretByYHex, payload),
+          (err) =>
+            this.logger?.error('Error handling proof state notification', {
+              mintUrl,
+              subId: callbackSubId,
+              err,
+            }),
+        ),
     );
+    callbackSubId = subId;
 
     // Wrap a group unsubscribe to be idempotent
     let didUnsubscribe = false;
@@ -276,6 +272,22 @@ export class ProofStateWatcherService {
       await unsubscribe();
       this.logger?.debug('Unsubscribed watcher for inflight proof group', { mintUrl, subId });
     };
+
+    if (this.runtime !== runtime) {
+      await groupUnsubscribeOnce();
+      return;
+    }
+    runtime.addFinalizer(async () => {
+      try {
+        await groupUnsubscribeOnce();
+      } catch (err) {
+        this.logger?.warn('Failed to unsubscribe proof watcher during shutdown', {
+          mintUrl,
+          subId,
+          err,
+        });
+      }
+    });
 
     // For each secret, register a per-key stopper that shrinks the remaining set and
     // unsubscribes the group when the last filter is removed
@@ -298,15 +310,42 @@ export class ProofStateWatcherService {
     });
   }
 
-  private async bootstrapInflightProofs(): Promise<void> {
-    if (!this.running) return;
+  private async handleProofStateNotification(
+    mintUrl: string,
+    subId: string | undefined,
+    secretByYHex: Map<string, string>,
+    payload: ProofStateNotification,
+  ): Promise<void> {
+    if (payload.state !== 'SPENT') return;
+    const secret = secretByYHex.get(payload.Y);
+    if (!secret) return;
+
+    const key = toKey(mintUrl, secret);
+    if (this.inflightByKey.has(key)) return;
+    this.inflightByKey.add(key);
+    try {
+      await this.proofs.setProofState(mintUrl, [secret], 'spent');
+      this.logger?.info('Marked inflight proof as spent from mint notification', {
+        mintUrl,
+        subId,
+      });
+      await this.stopWatching(key);
+    } catch (err) {
+      this.logger?.error('Failed to mark inflight proof as spent', { mintUrl, subId, err });
+    } finally {
+      this.inflightByKey.delete(key);
+    }
+  }
+
+  private async bootstrapInflightProofs(runtime: BackgroundTaskRuntime): Promise<void> {
+    if (this.runtime !== runtime) return;
     this.logger?.info('Bootstrapping inflight proof watchers');
 
     await this.proofs.checkInflightProofs();
-    if (!this.running) return;
+    if (this.runtime !== runtime) return;
 
     const inflightProofs = await this.proofRepository.getInflightProofs();
-    if (!this.running || inflightProofs.length === 0) return;
+    if (this.runtime !== runtime || inflightProofs.length === 0) return;
 
     const byMint = new Map<string, string[]>();
     for (const proof of inflightProofs) {
@@ -317,7 +356,7 @@ export class ProofStateWatcherService {
     }
 
     for (const [mintUrl, secrets] of byMint.entries()) {
-      if (!this.running) return;
+      if (this.runtime !== runtime) return;
       if (secrets.length === 0) continue;
       try {
         await this.watchProof(mintUrl, secrets);

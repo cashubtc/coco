@@ -1,9 +1,10 @@
-import { Effect, Exit, FiberMap, FiberSet, RateLimiter, Schedule, Scope } from 'effect';
+import { Effect, RateLimiter, Schedule } from 'effect';
 import type { EventBus, CoreEvents } from '@core/events';
 import type { MintMethod, MintOperationService } from '@core/operations/mint';
 import type { Logger } from '../../logging/Logger.ts';
 import { MintOperationError, NetworkError } from '../../models/Error';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
+import { BackgroundTaskRuntime, uninterruptiblePromise } from './BackgroundTaskRuntime.ts';
 
 interface QueueItem {
   mintUrl: string;
@@ -16,9 +17,7 @@ interface OperationHandler {
 }
 
 interface ProcessorRuntime {
-  readonly scope: Scope.CloseableScope;
-  readonly operationFibers: FiberMap.FiberMap<string, void, never>;
-  readonly claimFibers: FiberSet.FiberSet<void, never>;
+  readonly tasks: BackgroundTaskRuntime;
   readonly operationSemaphore: Effect.Semaphore;
   readonly rateLimitOperation: RateLimiter.RateLimiter;
 }
@@ -62,20 +61,12 @@ function isNetworkError(error: unknown): boolean {
   );
 }
 
-function waitForPromise<A>(evaluate: () => Promise<A>): Effect.Effect<A, unknown> {
-  return Effect.tryPromise({
-    try: evaluate,
-    catch: (error) => error,
-  }).pipe(Effect.uninterruptible);
-}
-
 export class MintOperationProcessor {
   private readonly mintOperations: MintOperationService;
   private readonly quoteLifecycle: QuoteLifecycle;
   private readonly bus: EventBus<CoreEvents>;
   private readonly logger?: Logger;
 
-  private running = false;
   private runtime?: ProcessorRuntime;
   private readonly claimingQuotes = new Set<string>();
   private readonly quoteClaimsNeedingFollowUp = new Set<string>();
@@ -115,38 +106,28 @@ export class MintOperationProcessor {
   }
 
   isRunning(): boolean {
-    return this.running;
+    return this.runtime?.tasks.isActive ?? false;
   }
 
   async start(): Promise<void> {
-    if (this.running) return;
-    this.running = true;
+    if (this.isRunning()) return;
 
-    const scope = Effect.runSync(Scope.make());
+    const tasks = BackgroundTaskRuntime.make();
     try {
-      const runtime = Effect.runSync(
-        Effect.gen(this, function* () {
-          const operationFibers = yield* FiberMap.make<string, void, never>();
-          const claimFibers = yield* FiberSet.make<void, never>();
-          const operationSemaphore = yield* Effect.makeSemaphore(1);
-          const rateLimitOperation = yield* RateLimiter.make({
+      const runtime = {
+        tasks,
+        operationSemaphore: Effect.runSync(Effect.makeSemaphore(1)),
+        rateLimitOperation: tasks.acquire(
+          RateLimiter.make({
             limit: 1,
             interval: Math.max(1, this.processIntervalMs),
-          });
-
-          return {
-            scope,
-            operationFibers,
-            claimFibers,
-            operationSemaphore,
-            rateLimitOperation,
-          } satisfies ProcessorRuntime;
-        }).pipe(Scope.extend(scope)),
-      );
+          }),
+        ),
+      } satisfies ProcessorRuntime;
 
       this.runtime = runtime;
       const unsubscribe = this.subscribeToEvents(runtime);
-      Effect.runSync(Scope.addFinalizer(scope, Effect.sync(unsubscribe)));
+      tasks.addFinalizer(unsubscribe);
 
       if (this.autoClaimMintQuotes) {
         this.schedulePendingQuoteClaims(runtime);
@@ -155,23 +136,18 @@ export class MintOperationProcessor {
       this.logger?.info('MintOperationProcessor started');
     } catch (error) {
       this.runtime = undefined;
-      this.running = false;
-      await Effect.runPromise(Scope.close(scope, Exit.fail(error)));
+      await tasks.close();
       throw error;
     }
   }
 
   async stop(): Promise<void> {
-    if (!this.running) return;
-    this.running = false;
-
     const runtime = this.runtime;
+    if (!runtime) return;
     this.runtime = undefined;
-    const pendingItems = runtime ? Array.from(runtime.operationFibers).length : 0;
+    const pendingItems = runtime.tasks.keyedTaskCount;
 
-    if (runtime) {
-      await Effect.runPromise(Scope.close(runtime.scope, Exit.void));
-    }
+    await runtime.tasks.close();
 
     this.claimingQuotes.clear();
     this.quoteClaimsNeedingFollowUp.clear();
@@ -187,18 +163,11 @@ export class MintOperationProcessor {
     if (!runtime) return;
 
     while (this.runtime === runtime) {
-      await Effect.runPromise(
-        Effect.all(
-          [FiberMap.awaitEmpty(runtime.operationFibers), FiberSet.awaitEmpty(runtime.claimFibers)],
-          { concurrency: 'unbounded' },
-        ),
-      );
+      await runtime.tasks.waitForIdle();
 
       if (
         this.runtime !== runtime ||
-        (Array.from(runtime.operationFibers).length === 0 &&
-          Array.from(runtime.claimFibers).length === 0 &&
-          this.claimingQuotes.size === 0)
+        (runtime.tasks.keyedTaskCount === 0 && this.claimingQuotes.size === 0)
       ) {
         return;
       }
@@ -215,20 +184,12 @@ export class MintOperationProcessor {
     const runtime = this.runtime;
     if (!runtime) return;
 
-    const keys = Array.from(runtime.operationFibers, ([key]) => key).filter(
-      (key) => mintUrlFromOperationKey(key) === mintUrl,
-    );
-    if (keys.length === 0) return;
-
-    Effect.runFork(
-      Effect.forEach(keys, (key) => FiberMap.remove(runtime.operationFibers, key), {
-        discard: true,
-      }),
-    );
-    this.logger?.info('Cleared mint operations from processor queue', {
-      mintUrl,
-      removed: keys.length,
-    });
+    void runtime.tasks
+      .cancelWhere((key) => mintUrlFromOperationKey(key) === mintUrl)
+      .then((removed) => {
+        if (removed === 0) return;
+        this.logger?.info('Cleared mint operations from processor queue', { mintUrl, removed });
+      });
   }
 
   private subscribeToEvents(runtime: ProcessorRuntime): () => void {
@@ -265,26 +226,21 @@ export class MintOperationProcessor {
     operationId: string,
     method: string,
   ): void {
-    if (this.runtime !== runtime) return;
+    if (this.runtime !== runtime || !runtime.tasks.isActive) return;
 
     const key = operationKey(mintUrl, operationId);
-    if (FiberMap.unsafeHas(runtime.operationFibers, key)) {
+    const item = { mintUrl, operationId, method } satisfies QueueItem;
+    const scheduled = runtime.tasks.runKeyed(key, this.processOperation(runtime, item));
+    if (!scheduled) {
       this.logger?.debug('Mint operation already scheduled', { mintUrl, operationId });
       return;
     }
-
-    const item = { mintUrl, operationId, method } satisfies QueueItem;
-    Effect.runSync(
-      FiberMap.run(runtime.operationFibers, key, this.processOperation(runtime, item), {
-        onlyIfMissing: true,
-      }),
-    );
 
     this.logger?.debug('Mint operation scheduled for processing', {
       mintUrl,
       operationId,
       method,
-      queueLength: Array.from(runtime.operationFibers).length,
+      queueLength: runtime.tasks.keyedTaskCount,
     });
   }
 
@@ -326,7 +282,7 @@ export class MintOperationProcessor {
       ),
     );
 
-    Effect.runSync(FiberSet.run(runtime.claimFibers, claim));
+    void runtime.tasks.run(claim);
   }
 
   private claimMintQuote(
@@ -335,7 +291,7 @@ export class MintOperationProcessor {
     quoteId: string,
   ): Effect.Effect<void, unknown> {
     return Effect.gen(this, function* () {
-      const assessment = yield* waitForPromise(() =>
+      const assessment = yield* uninterruptiblePromise(() =>
         this.mintOperations.getMintQuoteClaimability(mintUrl, method, quoteId),
       );
       if (assessment?.status !== 'claimable' && assessment?.status !== 'complete') {
@@ -347,7 +303,7 @@ export class MintOperationProcessor {
         return;
       }
 
-      yield* waitForPromise(() =>
+      yield* uninterruptiblePromise(() =>
         this.mintOperations.claimMintQuote(mintUrl, method, quoteId, {
           autoClaimRemaining: true,
         }),
@@ -359,7 +315,7 @@ export class MintOperationProcessor {
     runtime: ProcessorRuntime,
     operation: { mintUrl: string; method: MintMethod; quoteId: string },
   ): void {
-    const task = waitForPromise(() =>
+    const task = uninterruptiblePromise(() =>
       this.quoteLifecycle.getMintQuote(operation.mintUrl, operation.method, operation.quoteId),
     ).pipe(
       Effect.tap((quote) =>
@@ -386,11 +342,11 @@ export class MintOperationProcessor {
       ),
     );
 
-    Effect.runSync(FiberSet.run(runtime.claimFibers, task));
+    void runtime.tasks.run(task);
   }
 
   private schedulePendingQuoteClaims(runtime: ProcessorRuntime): void {
-    const task = waitForPromise(() =>
+    const task = uninterruptiblePromise(() =>
       this.mintOperations.claimPendingMintQuotes({ autoClaimRemaining: true }),
     ).pipe(
       Effect.asVoid,
@@ -403,7 +359,7 @@ export class MintOperationProcessor {
       ),
     );
 
-    Effect.runSync(FiberSet.run(runtime.claimFibers, task));
+    void runtime.tasks.run(task);
   }
 
   private processOperation(runtime: ProcessorRuntime, item: QueueItem): Effect.Effect<void, never> {
@@ -445,7 +401,7 @@ export class MintOperationProcessor {
         attempt: attemptNumber,
       });
 
-      return waitForPromise(() => handler.process(mintUrl, operationId)).pipe(
+      return uninterruptiblePromise(() => handler.process(mintUrl, operationId)).pipe(
         Effect.tap(() =>
           Effect.sync(() => {
             this.logger?.info('Successfully processed mint operation', {

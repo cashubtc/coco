@@ -417,4 +417,28 @@ describe('ProofStateWatcherService', () => {
 
     await watcher.stop();
   });
+
+  it('unsubscribes active proof groups when stopped', async () => {
+    const unsubscribe = mock(async () => {});
+    const subscribe = mock(async () => ({ subId: 'sub-1', unsubscribe }));
+    const watcher = new ProofStateWatcherService(
+      { subscribe } as unknown as SubscriptionManager,
+      {
+        isTrustedMint: mock(async () => true),
+      } as unknown as MintService,
+      {} as ProofService,
+      {} as ProofRepository,
+      bus,
+      new NullLogger(),
+      { watchExistingInflightOnStart: false },
+    );
+
+    await watcher.start();
+    await watcher.watchProof(mintUrlA, ['secret-1', 'secret-2']);
+    await watcher.stop();
+    await watcher.stop();
+
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    expect(watcher.isRunning()).toBe(false);
+  });
 });
