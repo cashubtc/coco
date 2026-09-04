@@ -5,6 +5,7 @@ import {
   type ProofState as CashuProofState,
   type Token,
   Amount,
+  type StaleKeysetError,
 } from '@cashu/cashu-ts';
 
 import {
@@ -35,7 +36,7 @@ import type { Logger } from '../../logging/Logger';
 import type { CoreEvents } from '../../events/types';
 import type { EventBus } from '../../events/EventBus';
 import type { MintAdapter } from '../../infra/MintAdapter';
-import type { MintService } from '../../services/MintService';
+import { asStaleKeysetError, type MintService } from '../../services/MintService';
 import type { ProofService } from '../../services/ProofService';
 import type { TokenService } from '../../services/TokenService';
 import type { WalletService } from '../../services/WalletService';
@@ -299,6 +300,10 @@ export class ReceiveOperationService {
       try {
         return await this.executeInternal(executing);
       } catch (e) {
+        const staleKeysetError = asStaleKeysetError(e);
+        if (staleKeysetError) {
+          return await this.handleStaleKeyset(executing, staleKeysetError);
+        }
         const rollbackReason = this.getRollbackReasonForReceiveFailure(e);
         if (rollbackReason) {
           await this.markAsRolledBack(executing, rollbackReason);
@@ -311,6 +316,15 @@ export class ReceiveOperationService {
     } finally {
       releaseLock();
     }
+  }
+
+  private async handleStaleKeyset(
+    executing: ExecutingReceiveOperation,
+    cause: StaleKeysetError,
+  ): Promise<never> {
+    await this.walletService.invalidateMintSnapshot(executing.mintUrl);
+    await this.markAsRolledBack(executing, 'Mint rejected stale receive outputs');
+    throw cause;
   }
 
   /** Internal execute logic used by execute(), separated for error handling. */

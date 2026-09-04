@@ -13,6 +13,7 @@ import type { Logger } from '../logging/Logger.ts';
 import type { WalletService } from './WalletService.ts';
 import type { MintRequestProvider } from '../infra/MintRequestProvider.ts';
 import { DEFAULT_UNIT, normalizeUnit } from '../amounts.ts';
+import { asStaleKeysetError } from './MintService.ts';
 
 export class WalletRestoreService {
   private readonly proofService: ProofService;
@@ -156,12 +157,23 @@ export class WalletRestoreService {
       send: { type: 'custom', data: outputResults.send },
       keep: { type: 'custom', data: outputResults.keep },
     };
-    const { send, keep } = await wallet.send(
-      sweepTotalAmount,
-      checkedProofs.ready,
-      undefined,
-      outputConfig,
-    );
+    let send: Proof[];
+    let keep: Proof[];
+    try {
+      ({ send, keep } = await wallet.send(
+        sweepTotalAmount,
+        checkedProofs.ready,
+        undefined,
+        outputConfig,
+      ));
+    } catch (error) {
+      const staleKeysetError = asStaleKeysetError(error);
+      if (staleKeysetError) {
+        await this.walletService.invalidateMintSnapshot(mintUrl);
+        throw staleKeysetError;
+      }
+      throw error;
+    }
     await this.proofService.saveProofs(
       mintUrl,
       mapProofToCoreProof(mintUrl, 'ready', [...keep, ...send], { unit: normalizedUnit }),

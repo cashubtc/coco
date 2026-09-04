@@ -1,4 +1,4 @@
-import { Amount, type Proof } from '@cashu/cashu-ts';
+import { Amount, type StaleKeysetError, type Proof } from '@cashu/cashu-ts';
 import type { MintOperationRepository, ProofRepository } from '../../repositories';
 import type {
   ExecutingMintOperation,
@@ -22,7 +22,7 @@ import type {
   MintMethodMeta,
   PendingMintCheckResult,
 } from './MintMethodHandler';
-import type { MintService } from '../../services/MintService';
+import { asStaleKeysetError, type MintService } from '../../services/MintService';
 import type { WalletService } from '../../services/WalletService';
 import type { ProofService } from '../../services/ProofService';
 import type { EventBus } from '../../events/EventBus';
@@ -192,10 +192,13 @@ export class MintOperationService {
     quoteId: string,
     intent: UnitAmount,
   ): Promise<MintQuote> {
-    const quote = await this.quoteLifecycle.getMintQuote(mintUrl, method, quoteId);
-    if (!quote) {
-      throw new Error(`Mint quote ${quoteId} for ${method} at ${mintUrl} was not found`);
-    }
+    // Quote state may advance while the caller waits for the mint-scoped lock.
+    const quote = await this.quoteLifecycle.requireMintQuoteForPrepare(
+      mintUrl,
+      method,
+      quoteId,
+      intent.unit,
+    );
 
     const fixedAmount = getMintQuoteAmount(quote);
     if (fixedAmount && !fixedAmount.equals(intent.amount)) {
@@ -203,17 +206,16 @@ export class MintOperationService {
         `Mint quote ${quote.quoteId} amount ${fixedAmount} does not match requested amount ${intent.amount}`,
       );
     }
-    if (quote.unit !== intent.unit) {
-      throw new Error(
-        `Mint quote ${quote.quoteId} unit ${quote.unit} does not match requested unit ${intent.unit}`,
-      );
-    }
-
     if (fixedAmount) {
-      const existing = await this.getOperationByQuote(quote.mintUrl, method, quote.quoteId);
-      if (existing) {
+      const quoteOperations = await this.getOperationsForQuote(
+        quote.mintUrl,
+        method,
+        quote.quoteId,
+      );
+      const blockingOperation = quoteOperations.find((operation) => operation.state !== 'failed');
+      if (blockingOperation) {
         throw new Error(
-          `Mint quote ${quote.quoteId} is already tracked by operation ${existing.id} in state ${existing.state}`,
+          `Mint quote ${quote.quoteId} is already tracked by operation ${blockingOperation.id} in state ${blockingOperation.state}`,
         );
       }
     }
@@ -458,6 +460,10 @@ export class MintOperationService {
             throw new Error(result.error ?? 'Mint execution failed');
         }
       } catch (e) {
+        const staleKeysetError = asStaleKeysetError(e);
+        if (staleKeysetError) {
+          return await this.handleStaleKeyset(executing, staleKeysetError);
+        }
         await this.tryRecoverExecutingOperation(executing);
 
         const current = await this.mintOperationRepository.getById(operationId);
@@ -470,6 +476,18 @@ export class MintOperationService {
     } finally {
       releaseLock();
     }
+  }
+
+  private async handleStaleKeyset(
+    executing: ExecutingMintOperation,
+    cause: StaleKeysetError,
+  ): Promise<never> {
+    await this.walletService.invalidateMintSnapshot(executing.mintUrl);
+    await this.failOperation(executing, 'Mint rejected stale output keyset', {
+      code: 'stale_keyset',
+      retryable: true,
+    });
+    throw cause;
   }
 
   async finalize(operationId: string): Promise<MintOperation> {
@@ -1095,6 +1113,7 @@ export class MintOperationService {
   private async failOperation(
     op: ExecutingMintOperation,
     error: string,
+    failure?: { code?: string; retryable?: boolean },
   ): Promise<FailedMintOperation> {
     const current = await this.mintOperationRepository.getById(op.id);
     if (!current) {
@@ -1120,6 +1139,8 @@ export class MintOperationService {
       error,
       terminalFailure: {
         reason: error,
+        code: failure?.code,
+        retryable: failure?.retryable,
         observedAt: Date.now(),
       },
     };

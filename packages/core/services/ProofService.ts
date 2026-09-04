@@ -776,12 +776,59 @@ export class ProofService {
     }
     const wallet = await this.walletService.getWallet(mintUrl, unit);
     const selectedProofs = wallet.selectProofsToSend(proofs, requestedAmount, includeFees);
+    let persistedKeysets: Keyset[] = [];
+    try {
+      persistedKeysets = await this.mintService.getPersistedKeysets(mintUrl);
+    } catch (error) {
+      this.logger?.warn('Could not load cached keyset diagnostics for proof selection', {
+        mintUrl,
+        unit,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    const persistedKeysetsById = new Map(persistedKeysets.map((keyset) => [keyset.id, keyset]));
+    const selectedProofsByKeysetId = new Map<string, Proof[]>();
+    for (const proof of selectedProofs.send) {
+      selectedProofsByKeysetId.set(proof.id, [
+        ...(selectedProofsByKeysetId.get(proof.id) ?? []),
+        proof,
+      ]);
+    }
+    const selectedKeysets = [...selectedProofsByKeysetId].map(([keysetId, keysetProofs]) => {
+      const keyset = persistedKeysetsById.get(keysetId);
+      return {
+        keysetId,
+        versionPrefix: keysetId.slice(0, 2),
+        active: keyset?.active,
+        updatedAt: keyset?.updatedAt,
+        ageSeconds:
+          keyset === undefined
+            ? undefined
+            : Math.max(0, Math.floor(Date.now() / 1000) - keyset.updatedAt),
+        proofCount: keysetProofs.length,
+        amount: sumProofs(keysetProofs).toString(),
+      };
+    });
+    let inputFee: string | undefined;
+    try {
+      inputFee = wallet.getFeesForProofs(selectedProofs.send).toString();
+    } catch (error) {
+      this.logger?.warn('Could not calculate proof selection fee diagnostics', {
+        mintUrl,
+        unit,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     this.logger?.debug('Selected proofs to send', {
       mintUrl,
       unit,
       amount: requestedAmount.toString(),
-      selectedProofs,
-      count: selectedProofs.send.length,
+      includeFees,
+      availableCount: proofs.length,
+      selectedCount: selectedProofs.send.length,
+      selectedAmount: sumProofs(selectedProofs.send).toString(),
+      inputFee,
+      selectedKeysets,
     });
     return selectedProofs.send;
   }

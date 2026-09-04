@@ -1,6 +1,6 @@
-import { Amount } from '@cashu/cashu-ts';
+import { Amount, MintOperationError, StaleKeysetError } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect, mock } from 'bun:test';
-import { MintService } from '../../services/MintService';
+import { asStaleKeysetError, MintService } from '../../services/MintService';
 import { ProofValidationError } from '../../models/Error';
 import { MemoryMintRepository } from '../../repositories/memory/MemoryMintRepository';
 import { MemoryKeysetRepository } from '../../repositories/memory/MemoryKeysetRepository';
@@ -194,6 +194,26 @@ describe('MintService', () => {
   });
 
   describe('ensureUpdatedMint', () => {
+    it('durably marks a known mint as requiring refresh', async () => {
+      await service.addMintByUrl(testMintUrl);
+      expect((await mintRepo.getMintByUrl(testMintUrl)).updatedAt).toBeGreaterThan(0);
+
+      await service.markMintSnapshotStale(testMintUrl);
+      await service.markMintSnapshotStale(testMintUrl);
+
+      expect((await mintRepo.getMintByUrl(testMintUrl)).updatedAt).toBe(0);
+    });
+
+    it('normalizes raw 12xxx mint responses to the cashu-ts stale-keyset signal', () => {
+      const rejection = new MintOperationError(12002, 'Keyset is inactive');
+
+      const error = asStaleKeysetError(rejection);
+
+      expect(error).toBeInstanceOf(StaleKeysetError);
+      expect(error?.cause).toBe(rejection);
+      expect(asStaleKeysetError(new MintOperationError(11001, 'Other failure'))).toBeNull();
+    });
+
     it('should create mint if it does not exist', async () => {
       const result = await service.ensureUpdatedMint(testMintUrl);
 

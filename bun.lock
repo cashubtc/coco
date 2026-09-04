@@ -25,7 +25,7 @@
         "@cashu/coco-core": "1.0.0",
       },
       "peerDependencies": {
-        "@cashu/cashu-ts": "5.0.0-rc.4",
+        "@cashu/cashu-ts": "5.0.0-rc.7",
         "@cashu/coco-core": "^1.0.0",
         "typescript": "^5",
       },
@@ -52,7 +52,7 @@
       "name": "@cashu/coco-core",
       "version": "1.0.0",
       "dependencies": {
-        "@cashu/cashu-ts": "5.0.0-rc.4",
+        "@cashu/cashu-ts": "5.0.0-rc.7",
         "@noble/curves": "^2.0.1",
         "@noble/hashes": "^2.0.1",
         "@scure/bip32": "^2.0.1",
@@ -80,7 +80,7 @@
         "@types/node": "^25.0.9",
       },
       "peerDependencies": {
-        "@cashu/cashu-ts": "5.0.0-rc.4",
+        "@cashu/cashu-ts": "5.0.0-rc.7",
         "@cashu/coco-core": "1.0.0",
         "expo-sqlite": "*",
         "typescript": "^5",
@@ -99,7 +99,7 @@
         "vitest": "^3.2.4",
       },
       "peerDependencies": {
-        "@cashu/cashu-ts": "5.0.0-rc.4",
+        "@cashu/cashu-ts": "5.0.0-rc.7",
         "@cashu/coco-core": "1.0.0",
         "typescript": "^5",
       },
@@ -135,7 +135,7 @@
       "name": "@cashu/coco-sql-storage",
       "version": "1.0.0",
       "peerDependencies": {
-        "@cashu/cashu-ts": "5.0.0-rc.4",
+        "@cashu/cashu-ts": "5.0.0-rc.7",
         "@cashu/coco-core": "1.0.0",
         "typescript": "^5",
       },
@@ -149,7 +149,7 @@
         "@types/node": "^25.0.9",
       },
       "peerDependencies": {
-        "@cashu/cashu-ts": "5.0.0-rc.4",
+        "@cashu/cashu-ts": "5.0.0-rc.7",
         "@cashu/coco-core": "1.0.0",
         "typescript": "^5",
       },
@@ -168,7 +168,7 @@
         "vitest": "^2.1.9",
       },
       "peerDependencies": {
-        "@cashu/cashu-ts": "5.0.0-rc.4",
+        "@cashu/cashu-ts": "5.0.0-rc.7",
         "@cashu/coco-core": "1.0.0",
         "typescript": "^5",
       },
@@ -414,7 +414,7 @@
 
     "@babel/types": ["@babel/types@8.0.0-beta.4", "", { "dependencies": { "@babel/helper-string-parser": "^8.0.0-beta.4", "@babel/helper-validator-identifier": "^8.0.0-beta.4" } }, "sha512-xjk2xqYp25ePzAs0I08hN2lrbUDDQFfCjwq6MIEa8HwHa0WK8NfNtdvtXod8Ku2CbE1iui7qwWojGvjQiyrQeA=="],
 
-    "@cashu/cashu-ts": ["@cashu/cashu-ts@5.0.0-rc.4", "", { "dependencies": { "@noble/curves": "^2.2.0", "@noble/hashes": "^2.2.0", "@scure/base": "^2.2.0", "@scure/bip32": "^2.2.0" } }, "sha512-6ck7cHdGnvg+ZNGQduaJ5YyNMrLh9Qf1534GR6IxEXX1OuF0SS7I2qXo8p6zD3kRaemynnjJPqjaHgs1EJhAWg=="],
+    "@cashu/cashu-ts": ["@cashu/cashu-ts@5.0.0-rc.7", "", { "dependencies": { "@noble/curves": "^2.2.0", "@noble/hashes": "^2.2.0", "@scure/base": "^2.2.0", "@scure/bip32": "^2.2.0" } }, "sha512-MAleg1lAZiVxiYiWQoMKj/Cmn77+/ZFRnAxTELWLVuN3reAqE7CyYGz1e8kwWYLyn2XA/s/5pQh8GXy5gg/98w=="],
 
     "@cashu/coco-adapter-tests": ["@cashu/coco-adapter-tests@workspace:packages/adapter-tests"],
 

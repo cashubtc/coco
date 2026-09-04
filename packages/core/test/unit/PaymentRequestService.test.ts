@@ -99,13 +99,13 @@ describe('PaymentRequestService', () => {
         : [];
 
     return {
-      paymentRequest: new PaymentRequest(
-        paymentRequestTransport,
-        'test-id',
-        options.amount,
-        options.unit ?? 'sat',
-        allowedMints,
-      ),
+      paymentRequest: new PaymentRequest({
+        transport: paymentRequestTransport,
+        id: 'test-id',
+        amount: options.amount,
+        unit: options.unit ?? 'sat',
+        mints: allowedMints,
+      }),
       payableMints: [...allowedMints],
       allowedMints,
       amount: options.amount,
@@ -125,16 +125,16 @@ describe('PaymentRequestService', () => {
     const resolved = createResolvedRequest(options);
     return {
       ...resolved,
-      paymentRequest: new PaymentRequest(
-        resolved.paymentRequest.transport,
-        resolved.paymentRequest.id,
-        resolved.amount,
-        resolved.unit,
-        resolved.allowedMints,
-        resolved.paymentRequest.description,
-        resolved.paymentRequest.singleUse,
-        p2pkNut10(),
-      ),
+      paymentRequest: new PaymentRequest({
+        transport: resolved.paymentRequest.transport,
+        id: resolved.paymentRequest.id,
+        amount: resolved.amount,
+        unit: resolved.unit,
+        mints: resolved.allowedMints,
+        description: resolved.paymentRequest.description,
+        singleUse: resolved.paymentRequest.singleUse,
+        nut10: p2pkNut10(),
+      }),
       spendingCondition: {
         kind: 'P2PK',
         p2pk: {
@@ -243,7 +243,14 @@ describe('PaymentRequestService', () => {
 
   describe('parse', () => {
     it('should decode an inband payment request', async () => {
-      const pr = new PaymentRequest([], 'request-id-1', 100, 'sat', [testMintUrl], 'Test payment');
+      const pr = new PaymentRequest({
+        transport: [],
+        id: 'request-id-1',
+        amount: 100,
+        unit: 'sat',
+        mints: [testMintUrl],
+        description: 'Test payment',
+      });
       const encoded = pr.toEncodedRequest();
 
       const result = await service.parse(encoded);
@@ -254,15 +261,60 @@ describe('PaymentRequestService', () => {
       expect(result.payableMints).toContain(testMintUrl);
     });
 
-    it('should decode an HTTP POST payment request', async () => {
-      const pr = new PaymentRequest(
-        [{ type: PaymentRequestTransportType.POST, target: testHttpTarget }],
-        'request-id-2',
-        200,
-        'sat',
-        [testMintUrl, testMintUrl2],
-        'HTTP payment',
+    it('rejects advisory mint lists before resolving payable mints', async () => {
+      const pr = new PaymentRequest({
+        id: 'request-id-advisory',
+        amount: 100,
+        unit: 'sat',
+        mints: [testMintUrl],
+        mintsPreferred: true,
+      });
+
+      await expect(service.parse(pr.toEncodedRequest())).rejects.toThrow(
+        'Payment requests with advisory mint lists are not supported yet',
       );
+      expect(mockProofService.getBalancesByMint).not.toHaveBeenCalled();
+    });
+
+    it('rejects supported melt methods before resolving payable mints', async () => {
+      const pr = new PaymentRequest({
+        id: 'request-id-supported-methods',
+        amount: 100,
+        unit: 'sat',
+        mints: [testMintUrl],
+        supportedMethods: [{ method: 'bolt11', fee: 2 }],
+      });
+
+      await expect(service.parse(pr.toEncodedRequest())).rejects.toThrow(
+        'Payment requests with supported melt methods are not supported yet',
+      );
+      expect(mockProofService.getBalancesByMint).not.toHaveBeenCalled();
+    });
+
+    it('accepts an explicitly strict mint list', async () => {
+      const pr = new PaymentRequest({
+        id: 'request-id-strict',
+        amount: 100,
+        unit: 'sat',
+        mints: [testMintUrl],
+        mintsPreferred: false,
+      });
+
+      const result = await service.parse(pr.toEncodedRequest());
+
+      expect(result.allowedMints).toEqual([testMintUrl]);
+      expect(result.payableMints).toEqual([testMintUrl]);
+    });
+
+    it('should decode an HTTP POST payment request', async () => {
+      const pr = new PaymentRequest({
+        transport: [{ type: PaymentRequestTransportType.POST, target: testHttpTarget }],
+        id: 'request-id-2',
+        amount: 200,
+        unit: 'sat',
+        mints: [testMintUrl, testMintUrl2],
+        description: 'HTTP payment',
+      });
       const encoded = pr.toEncodedRequest();
 
       const result = await service.parse(encoded);
@@ -276,7 +328,13 @@ describe('PaymentRequestService', () => {
     });
 
     it('should decode a payment request without amount', async () => {
-      const pr = new PaymentRequest([], 'request-id-3', undefined, 'sat', [testMintUrl]);
+      const pr = new PaymentRequest({
+        transport: [],
+        id: 'request-id-3',
+        amount: undefined,
+        unit: 'sat',
+        mints: [testMintUrl],
+      });
       const encoded = pr.toEncodedRequest();
 
       const result = await service.parse(encoded);
@@ -286,16 +344,16 @@ describe('PaymentRequestService', () => {
     });
 
     it('should expose a normalized P2PK spending condition requirement', async () => {
-      const pr = new PaymentRequest(
-        [],
-        'request-id-p2pk',
-        100,
-        'sat',
-        [testMintUrl],
-        'P2PK payment',
-        false,
-        p2pkNut10(),
-      );
+      const pr = new PaymentRequest({
+        transport: [],
+        id: 'request-id-p2pk',
+        amount: 100,
+        unit: 'sat',
+        mints: [testMintUrl],
+        description: 'P2PK payment',
+        singleUse: false,
+        nut10: p2pkNut10(),
+      });
       const encoded = pr.toEncodedRequest();
 
       const result = await service.parse(encoded);
@@ -312,16 +370,16 @@ describe('PaymentRequestService', () => {
     });
 
     it('filters P2PK payable mints to trusted sufficient allowed mints with NUT-11 support', async () => {
-      const pr = new PaymentRequest(
-        [],
-        'request-id-p2pk-filter',
-        100,
-        'sat',
-        [testMintUrl, testMintUrl2],
-        undefined,
-        false,
-        p2pkNut10(),
-      );
+      const pr = new PaymentRequest({
+        transport: [],
+        id: 'request-id-p2pk-filter',
+        amount: 100,
+        unit: 'sat',
+        mints: [testMintUrl, testMintUrl2],
+        description: undefined,
+        singleUse: false,
+        nut10: p2pkNut10(),
+      });
       const encoded = pr.toEncodedRequest();
 
       const result = await service.parse(encoded);
@@ -341,16 +399,16 @@ describe('PaymentRequestService', () => {
           return mintUrl === testMintUrl2;
         },
       );
-      const pr = new PaymentRequest(
-        [],
-        'request-id-p2pk-filter-offline-mint',
-        100,
-        'sat',
-        [testMintUrl, testMintUrl2],
-        undefined,
-        false,
-        p2pkNut10(),
-      );
+      const pr = new PaymentRequest({
+        transport: [],
+        id: 'request-id-p2pk-filter-offline-mint',
+        amount: 100,
+        unit: 'sat',
+        mints: [testMintUrl, testMintUrl2],
+        description: undefined,
+        singleUse: false,
+        nut10: p2pkNut10(),
+      });
       const encoded = pr.toEncodedRequest();
 
       const result = await service.parse(encoded);
@@ -365,16 +423,16 @@ describe('PaymentRequestService', () => {
       (mockMintService.supportsNut as unknown as ReturnType<typeof mock>).mockImplementation(
         async () => false,
       );
-      const pr = new PaymentRequest(
-        [],
-        'request-id-p2pk-no-mints',
-        100,
-        'sat',
-        [testMintUrl, testMintUrl2],
-        undefined,
-        false,
-        p2pkNut10(),
-      );
+      const pr = new PaymentRequest({
+        transport: [],
+        id: 'request-id-p2pk-no-mints',
+        amount: 100,
+        unit: 'sat',
+        mints: [testMintUrl, testMintUrl2],
+        description: undefined,
+        singleUse: false,
+        nut10: p2pkNut10(),
+      });
       const encoded = pr.toEncodedRequest();
 
       const result = await service.parse(encoded);
@@ -389,16 +447,16 @@ describe('PaymentRequestService', () => {
         data: 'value',
         tags: [],
       };
-      const pr = new PaymentRequest(
-        [],
-        'request-id-unsupported',
-        100,
-        'sat',
-        [testMintUrl],
-        undefined,
-        false,
-        unsupportedNut10,
-      );
+      const pr = new PaymentRequest({
+        transport: [],
+        id: 'request-id-unsupported',
+        amount: 100,
+        unit: 'sat',
+        mints: [testMintUrl],
+        description: undefined,
+        singleUse: false,
+        nut10: unsupportedNut10,
+      });
       const encoded = pr.toEncodedRequest();
 
       const result = await service.parse(encoded);
@@ -415,16 +473,16 @@ describe('PaymentRequestService', () => {
 
     it('keeps malformed P2PK requirements as diagnostics and returns no payable mints', async () => {
       const malformedNut10 = p2pkNut10({ data: '' });
-      const pr = new PaymentRequest(
-        [],
-        'request-id-malformed',
-        100,
-        'sat',
-        [testMintUrl],
-        undefined,
-        false,
-        malformedNut10,
-      );
+      const pr = new PaymentRequest({
+        transport: [],
+        id: 'request-id-malformed',
+        amount: 100,
+        unit: 'sat',
+        mints: [testMintUrl],
+        description: undefined,
+        singleUse: false,
+        nut10: malformedNut10,
+      });
       const encoded = pr.toEncodedRequest();
 
       const result = await service.parse(encoded);
@@ -440,12 +498,12 @@ describe('PaymentRequestService', () => {
     });
 
     it('should decode a Nostr payment request for plugin delivery', async () => {
-      const pr = new PaymentRequest(
-        [{ type: PaymentRequestTransportType.NOSTR, target: 'npub123...' }],
-        'request-id-4',
-        100,
-        'sat',
-      );
+      const pr = new PaymentRequest({
+        transport: [{ type: PaymentRequestTransportType.NOSTR, target: 'npub123...' }],
+        id: 'request-id-4',
+        amount: 100,
+        unit: 'sat',
+      });
       const encoded = pr.toEncodedRequest();
 
       const result = await service.parse(encoded);
@@ -495,7 +553,13 @@ describe('PaymentRequestService', () => {
         }),
       );
 
-      const pr = new PaymentRequest([], 'request-id-6', 100, 'sat', [testMintUrl]);
+      const pr = new PaymentRequest({
+        transport: [],
+        id: 'request-id-6',
+        amount: 100,
+        unit: 'sat',
+        mints: [testMintUrl],
+      });
       const encoded = pr.toEncodedRequest();
 
       const result = await service.parse(encoded);
@@ -506,7 +570,13 @@ describe('PaymentRequestService', () => {
     });
 
     it('matches custom-unit payment requests against balances for that unit only', async () => {
-      const pr = new PaymentRequest([], 'request-id-usd', 100, 'USD', [testMintUrl]);
+      const pr = new PaymentRequest({
+        transport: [],
+        id: 'request-id-usd',
+        amount: 100,
+        unit: 'USD',
+        mints: [testMintUrl],
+      });
       const encoded = pr.toEncodedRequest();
 
       const result = await service.parse(encoded);
@@ -566,16 +636,18 @@ describe('PaymentRequestService', () => {
     });
 
     it('recomputes P2PK-aware payable mints when preparing amountless requests', async () => {
-      const paymentRequest = new PaymentRequest(
-        [],
-        'request-id-amountless-p2pk',
-        undefined,
-        'sat',
-        [testMintUrl, testMintUrl2],
-        undefined,
-        false,
-        p2pkNut10(),
-      );
+      const paymentRequest = new PaymentRequest({
+        transport: [],
+        id: 'request-id-amountless-p2pk',
+        amount: undefined,
+        unit: 'sat',
+        mints: [testMintUrl, testMintUrl2],
+        description: undefined,
+        singleUse: false,
+        nut10: p2pkNut10(),
+        mintsPreferred: false,
+        supportedMethods: [],
+      });
       const request: ResolvedPaymentRequest = {
         paymentRequest,
         payableMints: [],
@@ -599,6 +671,8 @@ describe('PaymentRequestService', () => {
 
       expect(transaction.request).not.toBe(request);
       expect(transaction.request.amount).toEqual(Amount.from(100));
+      expect(transaction.request.paymentRequest.mintsPreferred).toBe(false);
+      expect(transaction.request.paymentRequest.supportedMethods).toEqual([]);
       expect(transaction.request.spendingCondition).toEqual(request.spendingCondition);
       expect(transaction.request.payableMints).toEqual([testMintUrl]);
       expect(mockMintService.supportsNut).toHaveBeenCalledWith(testMintUrl, 11);
@@ -624,16 +698,16 @@ describe('PaymentRequestService', () => {
     });
 
     it('initializes P2PK send operations for valid P2PK payment requests', async () => {
-      const paymentRequest = new PaymentRequest(
-        [],
-        'request-id-prepare-p2pk',
-        100,
-        'sat',
-        [testMintUrl],
-        undefined,
-        false,
-        p2pkNut10(),
-      );
+      const paymentRequest = new PaymentRequest({
+        transport: [],
+        id: 'request-id-prepare-p2pk',
+        amount: 100,
+        unit: 'sat',
+        mints: [testMintUrl],
+        description: undefined,
+        singleUse: false,
+        nut10: p2pkNut10(),
+      });
       const request: ResolvedPaymentRequest = {
         paymentRequest,
         payableMints: [testMintUrl],
@@ -676,16 +750,16 @@ describe('PaymentRequestService', () => {
     });
 
     it('re-derives P2PK requirements during prepare when the cached condition is missing', async () => {
-      const paymentRequest = new PaymentRequest(
-        [],
-        'request-id-prepare-p2pk-missing-condition',
-        100,
-        'sat',
-        [testMintUrl],
-        undefined,
-        false,
-        p2pkNut10(),
-      );
+      const paymentRequest = new PaymentRequest({
+        transport: [],
+        id: 'request-id-prepare-p2pk-missing-condition',
+        amount: 100,
+        unit: 'sat',
+        mints: [testMintUrl],
+        description: undefined,
+        singleUse: false,
+        nut10: p2pkNut10(),
+      });
       const request: ResolvedPaymentRequest = {
         paymentRequest,
         payableMints: [testMintUrl],
@@ -750,16 +824,16 @@ describe('PaymentRequestService', () => {
     it('rejects unsupported NUT-10 requirements before initializing a send operation', async () => {
       const unsupportedNut10: NUT10Option = { kind: 'UNKNOWN', data: 'value', tags: [] };
       const request: ResolvedPaymentRequest = {
-        paymentRequest: new PaymentRequest(
-          [],
-          'request-id-unsupported-prepare',
-          100,
-          'sat',
-          [testMintUrl],
-          undefined,
-          false,
-          unsupportedNut10,
-        ),
+        paymentRequest: new PaymentRequest({
+          transport: [],
+          id: 'request-id-unsupported-prepare',
+          amount: 100,
+          unit: 'sat',
+          mints: [testMintUrl],
+          description: undefined,
+          singleUse: false,
+          nut10: unsupportedNut10,
+        }),
         payableMints: [],
         allowedMints: [testMintUrl],
         amount: Amount.from(100),
@@ -783,16 +857,16 @@ describe('PaymentRequestService', () => {
     it('rejects HTLC requirements before initializing a send operation', async () => {
       const htlcNut10: NUT10Option = { kind: 'HTLC', data: 'hash', tags: [] };
       const request: ResolvedPaymentRequest = {
-        paymentRequest: new PaymentRequest(
-          [],
-          'request-id-htlc-prepare',
-          100,
-          'sat',
-          [testMintUrl],
-          undefined,
-          false,
-          htlcNut10,
-        ),
+        paymentRequest: new PaymentRequest({
+          transport: [],
+          id: 'request-id-htlc-prepare',
+          amount: 100,
+          unit: 'sat',
+          mints: [testMintUrl],
+          description: undefined,
+          singleUse: false,
+          nut10: htlcNut10,
+        }),
         payableMints: [],
         allowedMints: [testMintUrl],
         amount: Amount.from(100),
@@ -810,16 +884,16 @@ describe('PaymentRequestService', () => {
     it('rejects malformed P2PK requirements before initializing a send operation', async () => {
       const malformedNut10 = p2pkNut10({ data: '' });
       const request: ResolvedPaymentRequest = {
-        paymentRequest: new PaymentRequest(
-          [],
-          'request-id-malformed-prepare',
-          100,
-          'sat',
-          [testMintUrl],
-          undefined,
-          false,
-          malformedNut10,
-        ),
+        paymentRequest: new PaymentRequest({
+          transport: [],
+          id: 'request-id-malformed-prepare',
+          amount: 100,
+          unit: 'sat',
+          mints: [testMintUrl],
+          description: undefined,
+          singleUse: false,
+          nut10: malformedNut10,
+        }),
         payableMints: [],
         allowedMints: [testMintUrl],
         amount: Amount.from(100),
@@ -843,16 +917,16 @@ describe('PaymentRequestService', () => {
     it('wraps malformed P2PK helper failures as PaymentRequestError causes during prepare', async () => {
       const malformedNut10 = p2pkNut10({ data: '' });
       const request: ResolvedPaymentRequest = {
-        paymentRequest: new PaymentRequest(
-          [],
-          'request-id-malformed-helper',
-          100,
-          'sat',
-          [testMintUrl],
-          undefined,
-          false,
-          malformedNut10,
-        ),
+        paymentRequest: new PaymentRequest({
+          transport: [],
+          id: 'request-id-malformed-helper',
+          amount: 100,
+          unit: 'sat',
+          mints: [testMintUrl],
+          description: undefined,
+          singleUse: false,
+          nut10: malformedNut10,
+        }),
         payableMints: [testMintUrl],
         allowedMints: [testMintUrl],
         amount: Amount.from(100),
@@ -888,16 +962,16 @@ describe('PaymentRequestService', () => {
       (mockMintService.assertNutSupported as unknown as ReturnType<typeof mock>).mockRejectedValue(
         unsupportedError,
       );
-      const paymentRequest = new PaymentRequest(
-        [],
-        'request-id-p2pk-mint-unsupported',
-        100,
-        'sat',
-        [testMintUrl],
-        undefined,
-        false,
-        p2pkNut10(),
-      );
+      const paymentRequest = new PaymentRequest({
+        transport: [],
+        id: 'request-id-p2pk-mint-unsupported',
+        amount: 100,
+        unit: 'sat',
+        mints: [testMintUrl],
+        description: undefined,
+        singleUse: false,
+        nut10: p2pkNut10(),
+      });
       const request: ResolvedPaymentRequest = {
         paymentRequest,
         payableMints: [testMintUrl],

@@ -1,4 +1,4 @@
-import { Amount } from '@cashu/cashu-ts';
+import { Amount, StaleKeysetError as CashuStaleKeysetError } from '@cashu/cashu-ts';
 import type {
   FinalizedReceiveOperation,
   InitReceiveOperation,
@@ -93,6 +93,7 @@ describe('ReceiveOperationService', () => {
       getWallet: mock(async () => ({
         checkProofsStates: mock(async () => []),
       })),
+      invalidateMintSnapshot: mock(async () => {}),
     } as unknown as WalletService;
 
     proofService = {
@@ -164,6 +165,46 @@ describe('ReceiveOperationService', () => {
     expect(prepared.state).toBe('prepared');
     expect(prepared.fee).toEqual(Amount.from(0));
     expect(prepared.outputData).toBeDefined();
+  });
+
+  it('rolls back stale receive outputs without replaying them and invalidates the mint', async () => {
+    const callOrder: string[] = [];
+    mockWalletReceive.mockImplementation(async () => {
+      throw new CashuStaleKeysetError(false);
+    });
+    const invalidateMintSnapshot = mock(async () => {
+      callOrder.push('invalidate');
+    });
+    walletService = {
+      ...walletService,
+      invalidateMintSnapshot,
+    } as unknown as WalletService;
+    const mintScopedLock = new MintScopedLock();
+    service = new ReceiveOperationService(
+      receiveOpRepo,
+      proofRepo,
+      proofService,
+      mintService,
+      walletService,
+      mintAdapter,
+      tokenService,
+      eventBus,
+      undefined,
+      mintScopedLock,
+    );
+    eventBus.on('receive-op:rolled-back', () => {
+      callOrder.push('rolled-back');
+    });
+
+    const init = await service.init({ mint: mintUrl, proofs: [makeProof('p1')] } as Token);
+    const prepared = await service.prepare(init);
+
+    await expect(service.execute(prepared)).rejects.toBeInstanceOf(CashuStaleKeysetError);
+    expect(mockWalletReceive).toHaveBeenCalledTimes(1);
+    expect(mintAdapter.checkProofStates).not.toHaveBeenCalled();
+    expect((await receiveOpRepo.getById(prepared.id))?.state).toBe('rolled_back');
+    expect(invalidateMintSnapshot).toHaveBeenCalledWith(mintUrl);
+    expect(callOrder).toEqual(['invalidate', 'rolled-back']);
   });
 
   it('serializes concurrent prepare() on the same mint so deterministic outputs cannot collide', async () => {
@@ -449,15 +490,19 @@ describe('ReceiveOperationService', () => {
     const initOp = await service.init({ mint: mintUrl, proofs } as Token);
     const prepared = await service.prepare(initOp);
 
+    const rejection = new MintOperationError(12001, 'Keyset is not known');
     mockWalletReceive.mockImplementation(async () => {
-      throw new MintOperationError(12001, 'Keyset is not known');
+      throw rejection;
     });
 
-    await expect(service.execute(prepared)).rejects.toThrow('Keyset is not known');
+    const error = await service.execute(prepared).catch((cause: unknown) => cause);
 
+    expect(error).toBeInstanceOf(CashuStaleKeysetError);
+    expect((error as CashuStaleKeysetError).cause).toBe(rejection);
     const stored = await receiveOpRepo.getById(prepared.id);
     expect(stored?.state).toBe('rolled_back');
-    expect(stored?.error).toBe('Keyset is not known');
+    expect(stored?.error).toBe('Mint rejected stale receive outputs');
+    expect(walletService.invalidateMintSnapshot).toHaveBeenCalledWith(mintUrl);
   });
 
   it('rolls back executing receive operations on generic mint protocol errors', async () => {

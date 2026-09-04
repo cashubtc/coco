@@ -16,7 +16,13 @@ describe('PaymentRequestsApi', () => {
   let incomingService: PaymentRequestReceiveService;
 
   const resolvedRequest: ResolvedPaymentRequest = {
-    paymentRequest: new PaymentRequest([], 'request-id', 100, 'sat', ['https://mint.test']),
+    paymentRequest: new PaymentRequest({
+      transport: [],
+      id: 'request-id',
+      amount: 100,
+      unit: 'sat',
+      mints: ['https://mint.test'],
+    }),
     payableMints: ['https://mint.test'],
     allowedMints: ['https://mint.test'],
     amount: Amount.from(100),

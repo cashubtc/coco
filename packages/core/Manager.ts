@@ -958,7 +958,6 @@ export class Manager {
     // send, receive, melt, and mint serialize their per-mint deterministic-output
     // derivation against each other. Passing separate instances would break that.
     const mintScopedLock = new MintScopedLock();
-
     const sendOperationLogger = this.getChildLogger('SendOperationService');
     const sendHandlerProvider = new SendHandlerProvider({
       default: new DefaultSendHandler(),
