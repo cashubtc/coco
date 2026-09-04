@@ -29,6 +29,7 @@ describe('BaseQuoteMeltHandler prepare', () => {
       quoteId: f.quoteId,
       inputProofSecrets: ['input-1', 'input-2', 'input-3'],
     });
+    expect(result.amount).toEqual(Amount.from(100));
     expect(result.inputAmount).toEqual(Amount.from(111));
     expect(result.swap_fee).toEqual(Amount.zero());
     expect(h.mocks.selectProofsToSend).toHaveBeenCalledWith(
@@ -77,6 +78,11 @@ describe('BaseQuoteMeltHandler prepare', () => {
     });
 
     expect(result).toMatchObject({ unit: 'usd', quoteId: 'quote-usd' });
+    expect(h.mocks.selectProofsToSend).toHaveBeenCalledWith(
+      f.mintUrl,
+      { amount: Amount.from(110), unit: 'usd' },
+      true,
+    );
     expect(h.mocks.reserveProofs).toHaveBeenCalledWith(f.mintUrl, ['input-1'], 'usd', {
       unit: 'usd',
     });
@@ -118,7 +124,11 @@ describe('BaseQuoteMeltHandler prepare', () => {
 
     expect(result.needsSwap).toBe(true);
     expect(result.swap_fee).toEqual(Amount.from(1));
-    expect(h.mocks.selectProofsToSend).toHaveBeenCalledTimes(2);
+    expect(result.swapOutputData).toEqual({ keep: [], send: [] });
+    expect(h.mocks.selectProofsToSend.mock.calls).toEqual([
+      [f.mintUrl, { amount: Amount.from(110), unit: 'sat' }, true],
+      [f.mintUrl, { amount: Amount.from(110), unit: 'sat' }, true],
+    ]);
     expect(h.mocks.reserveProofs).toHaveBeenCalledWith(f.mintUrl, ['input-1', 'input-2'], 'swap', {
       unit: 'sat',
     });

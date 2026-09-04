@@ -53,6 +53,12 @@ describe('BaseQuoteMeltHandler settlement', () => {
 
       expect(result.status).toBe(status);
       expect(h.mocks.restoreProofsToReady).toHaveBeenCalledTimes(restores ? 1 : 0);
+      if (restores) {
+        expect(h.mocks.restoreProofsToReady).toHaveBeenCalledWith(f.mintUrl, [
+          'input-1',
+          'input-2',
+        ]);
+      }
     });
 
     it('requires every reserved input proof', async () => {

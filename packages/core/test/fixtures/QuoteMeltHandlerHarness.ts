@@ -192,7 +192,7 @@ export function createQuoteMeltTestDeps() {
       send: [makeQuoteMeltProof('send-1', 60)],
     })),
     getProofsByOperationId: mock(async () => [] as CoreProof[]),
-    selectProofsToSend: mock(async () => [
+    selectProofsToSend: mock(async (..._args: Parameters<ProofService['selectProofsToSend']>) => [
       makeQuoteMeltProof('input-1', 60),
       makeQuoteMeltProof('input-2', 50),
     ]),
