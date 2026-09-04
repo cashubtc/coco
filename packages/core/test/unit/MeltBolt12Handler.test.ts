@@ -21,7 +21,7 @@ import type { MintService } from '../../services/MintService';
 import type { ProofService } from '../../services/ProofService';
 import type { WalletService } from '../../services/WalletService';
 
-describe('MeltBolt12Handler', () => {
+describe('MeltBolt12Handler adapter contract', () => {
   const mintUrl = 'https://mint.test';
   const offer = 'lno1offer';
   const quoteId = 'melt-quote-12';
