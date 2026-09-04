@@ -1,6 +1,7 @@
 import { Amount } from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it } from 'bun:test';
 import { MeltOnchainHandler } from '../../infra/handlers/melt/MeltOnchainHandler';
+import { meltQuoteFromOnchainResponse } from '../../models/MeltQuote';
 import type { MeltMethodMeta } from '../../operations/melt/MeltMethodHandler';
 import type {
   ExecutingMeltOperation,
@@ -75,6 +76,7 @@ describe('MeltOnchainHandler adapter contract', () => {
     });
 
     expect(prepared.fee_reserve).toEqual(Amount.from(2));
+    expect(prepared.methodData.feeIndex).toBe(7);
     expect(fixture.mocks.selectProofsToSend).toHaveBeenCalledWith(
       f.mintUrl,
       { amount: Amount.from(23), unit: 'sat' },
@@ -148,5 +150,24 @@ describe('MeltOnchainHandler adapter contract', () => {
 
     expect(fixture.mocks.checkMeltQuoteOnchain).toHaveBeenCalledWith(f.mintUrl, f.quoteId);
     expect(result.finalizedData).toBeUndefined();
+  });
+
+  it('finalizes persisted paid quotes without dropping their outpoint or refetching', async () => {
+    const canonicalQuote = meltQuoteFromOnchainResponse(f.mintUrl, {
+      ...fixture.onchainQuote(),
+      state: 'PAID',
+      outpoint: 'txid:0',
+      change: [],
+    });
+
+    const result = await handler.finalize({
+      ...fixture.deps,
+      operation: pendingOperation(),
+      canonicalQuote,
+    });
+
+    expect(fixture.mocks.checkMeltQuoteOnchain).not.toHaveBeenCalled();
+    expect(fixture.mocks.setProofState).toHaveBeenCalledWith(f.mintUrl, ['input-1'], 'spent');
+    expect(result.finalizedData).toEqual({ outpoint: 'txid:0' });
   });
 });
