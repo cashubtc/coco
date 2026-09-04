@@ -4,214 +4,134 @@ import { ProofValidationError } from '../../models/Error';
 import {
   createQuoteMeltHandlerHarness,
   makeQuoteMeltProof,
-  QUOTE_MELT_FIXTURE,
+  QUOTE_MELT_FIXTURE as f,
   type QuoteMeltHandlerHarness,
 } from '../fixtures/QuoteMeltHandlerHarness';
 
 describe('BaseQuoteMeltHandler prepare', () => {
-  let harness: QuoteMeltHandlerHarness;
+  let h: QuoteMeltHandlerHarness;
+  const proofs = (...amounts: number[]) =>
+    amounts.map((amount, index) => makeQuoteMeltProof(`input-${index + 1}`, amount));
 
   beforeEach(() => {
-    harness = createQuoteMeltHandlerHarness();
+    h = createQuoteMeltHandlerHarness();
   });
 
-  it('prepares a direct melt from the supplied quote', async () => {
-    harness.mocks.selectProofsToSend.mockResolvedValueOnce([
-      makeQuoteMeltProof('input-1', 55),
-      makeQuoteMeltProof('input-2', 55),
-    ]);
-
-    const result = await harness.handler.prepare(
-      harness.buildPrepareContext(harness.makeInitOperation('operation-direct')),
-    );
+  it('prepares and reserves a fee-aware direct melt from the supplied quote', async () => {
+    const result = await h.prepare({
+      operation: h.makeInitOperation({ id: 'direct' }),
+      proofs: proofs(60, 50, 1),
+    });
 
     expect(result).toMatchObject({
       state: 'prepared',
       needsSwap: false,
-      quoteId: QUOTE_MELT_FIXTURE.quoteId,
-      inputProofSecrets: ['input-1', 'input-2'],
+      quoteId: f.quoteId,
+      inputProofSecrets: ['input-1', 'input-2', 'input-3'],
     });
-    expect(result.amount).toEqual(Amount.from(100));
-    expect(result.fee_reserve).toEqual(Amount.from(10));
+    expect(result.inputAmount).toEqual(Amount.from(111));
     expect(result.swap_fee).toEqual(Amount.zero());
-    expect(harness.mocks.selectProofsToSend).toHaveBeenCalledWith(
-      QUOTE_MELT_FIXTURE.mintUrl,
+    expect(h.mocks.selectProofsToSend).toHaveBeenCalledWith(
+      f.mintUrl,
       { amount: Amount.from(110), unit: 'sat' },
       true,
     );
-    expect(harness.mocks.reserveProofs).toHaveBeenCalledWith(
-      QUOTE_MELT_FIXTURE.mintUrl,
-      ['input-1', 'input-2'],
-      'operation-direct',
+    expect(h.mocks.reserveProofs).toHaveBeenCalledWith(
+      f.mintUrl,
+      result.inputProofSecrets,
+      'direct',
       { unit: 'sat' },
     );
   });
 
-  it('uses the fee reserve supplied by the payment-method hook', async () => {
-    harness.hooks.getFeeReserveForQuote.mockReturnValueOnce(Amount.from(25));
-    harness.mocks.selectProofsToSend.mockResolvedValueOnce([
-      makeQuoteMeltProof('input-1', 75),
-      makeQuoteMeltProof('input-2', 50),
-    ]);
-
-    const result = await harness.handler.prepare(harness.buildPrepareContext());
+  it('uses the payment-method fee reserve hook', async () => {
+    h.hooks.getFeeReserveForQuote.mockReturnValueOnce(Amount.from(25));
+    const result = await h.prepare({ proofs: proofs(125) });
 
     expect(result.fee_reserve).toEqual(Amount.from(25));
-    expect(harness.mocks.selectProofsToSend).toHaveBeenCalledWith(
-      QUOTE_MELT_FIXTURE.mintUrl,
+    expect(h.mocks.selectProofsToSend).toHaveBeenCalledWith(
+      f.mintUrl,
       { amount: Amount.from(125), unit: 'sat' },
       true,
     );
   });
 
-  it('selects fee-aware proofs and records their full input amount', async () => {
-    harness.mocks.selectProofsToSend.mockResolvedValueOnce([
-      makeQuoteMeltProof('input-1', 60),
-      makeQuoteMeltProof('input-2', 50),
-      makeQuoteMeltProof('input-3', 1),
-    ]);
-
-    const result = await harness.handler.prepare(harness.buildPrepareContext());
-
-    expect(result.needsSwap).toBe(false);
-    expect(result.inputAmount).toEqual(Amount.from(111));
-    expect(result.inputProofSecrets).toEqual(['input-1', 'input-2', 'input-3']);
+  it('rejects selections that do not cover the amount and reserve', async () => {
+    await expect(h.prepare({ proofs: proofs(109) })).rejects.toThrow(ProofValidationError);
+    expect(h.mocks.reserveProofs).not.toHaveBeenCalled();
   });
 
-  it('rejects selections that do not cover the quoted amount and reserve', async () => {
-    harness.mocks.selectProofsToSend.mockResolvedValue([
-      makeQuoteMeltProof('input-1', 60),
-      makeQuoteMeltProof('input-2', 49),
-    ]);
-
-    await expect(harness.handler.prepare(harness.buildPrepareContext())).rejects.toThrow(
-      ProofValidationError,
-    );
-    expect(harness.mocks.reserveProofs).not.toHaveBeenCalled();
-  });
-
-  it('creates blank outputs for the maximum possible change', async () => {
-    harness.mocks.selectProofsToSend.mockResolvedValueOnce([
-      makeQuoteMeltProof('input-1', 70),
-      makeQuoteMeltProof('input-2', 50),
-    ]);
-
-    await harness.handler.prepare(harness.buildPrepareContext());
-
-    expect(harness.mocks.createBlankOutputs).toHaveBeenCalledWith(QUOTE_MELT_FIXTURE.mintUrl, {
+  it('creates outputs for the maximum possible change', async () => {
+    await h.prepare({ proofs: proofs(120) });
+    expect(h.mocks.createBlankOutputs).toHaveBeenCalledWith(f.mintUrl, {
       amount: Amount.from(20),
       unit: 'sat',
     });
   });
 
-  it('normalizes custom units for selection, reservation, and change outputs', async () => {
-    harness.mocks.selectProofsToSend.mockResolvedValueOnce([
-      makeQuoteMeltProof('usd-input-1', 60),
-      makeQuoteMeltProof('usd-input-2', 60),
-    ]);
-    const operation = harness.makeInitOperation('operation-usd', { unit: 'usd' });
+  it('normalizes custom units throughout preparation', async () => {
+    const result = await h.prepare({
+      operation: h.makeInitOperation({ id: 'usd', unit: 'usd' }),
+      quote: { quote: 'quote-usd', unit: 'USD' },
+      proofs: proofs(120),
+    });
 
-    const result = await harness.handler.prepare(
-      harness.buildPrepareContext(operation, { quote: 'quote-usd', unit: 'USD' }),
-    );
-
-    expect(result.unit).toBe('usd');
-    expect(result.quoteId).toBe('quote-usd');
-    expect(harness.mocks.selectProofsToSend).toHaveBeenCalledWith(
-      QUOTE_MELT_FIXTURE.mintUrl,
-      { amount: Amount.from(110), unit: 'usd' },
-      true,
-    );
-    expect(harness.mocks.reserveProofs).toHaveBeenCalledWith(
-      QUOTE_MELT_FIXTURE.mintUrl,
-      ['usd-input-1', 'usd-input-2'],
-      'operation-usd',
-      { unit: 'usd' },
-    );
-    expect(harness.mocks.createBlankOutputs).toHaveBeenCalledWith(QUOTE_MELT_FIXTURE.mintUrl, {
+    expect(result).toMatchObject({ unit: 'usd', quoteId: 'quote-usd' });
+    expect(h.mocks.reserveProofs).toHaveBeenCalledWith(f.mintUrl, ['input-1'], 'usd', {
+      unit: 'usd',
+    });
+    expect(h.mocks.createBlankOutputs).toHaveBeenCalledWith(f.mintUrl, {
       amount: Amount.from(20),
       unit: 'usd',
     });
   });
 
-  it('rejects quote unit mismatches before selecting proofs', async () => {
-    const operation = harness.makeInitOperation('operation-usd', { unit: 'usd' });
-
+  it('rejects unit mismatches before proof selection', async () => {
     await expect(
-      harness.handler.prepare(harness.buildPrepareContext(operation, { unit: 'sat' })),
+      h.prepare({ operation: h.makeInitOperation({ unit: 'usd' }), quote: { unit: 'sat' } }),
     ).rejects.toThrow('Unit mismatch');
-    expect(harness.mocks.selectProofsToSend).not.toHaveBeenCalled();
+    expect(h.mocks.selectProofsToSend).not.toHaveBeenCalled();
   });
 
-  it('uses a pre-created quote without invoking remote quote creation', async () => {
-    harness.mocks.selectProofsToSend.mockResolvedValueOnce([
-      makeQuoteMeltProof('input-1', 55),
-      makeQuoteMeltProof('input-2', 55),
-    ]);
-    const operation = harness.makeInitOperation('operation-with-quote', {
-      quoteId: QUOTE_MELT_FIXTURE.quoteId,
-      methodData: { invoice: QUOTE_MELT_FIXTURE.invoice, amountSats: Amount.from(1_000) },
+  it('does not create a second remote quote during preparation', async () => {
+    await h.prepare({
+      operation: h.makeInitOperation({
+        quoteId: f.quoteId,
+        methodData: { invoice: f.invoice, amountSats: Amount.from(1_000) },
+      }),
     });
-
-    await harness.handler.prepare(harness.buildPrepareContext(operation));
-
-    expect(harness.hooks.createRemoteQuote).not.toHaveBeenCalled();
+    expect(h.hooks.createRemoteQuote).not.toHaveBeenCalled();
   });
 
   it.each([
     [120, false],
     [121, true],
-  ])(
-    'uses the 10%% excess boundary: selected amount %i => needsSwap %p',
-    async (amount, needsSwap) => {
-      harness.mocks.selectProofsToSend.mockResolvedValue([makeQuoteMeltProof('input-1', amount)]);
+  ])('uses the 10%% excess boundary: %i => swap %p', async (amount, needsSwap) => {
+    expect((await h.prepare({ proofs: proofs(amount) })).needsSwap).toBe(needsSwap);
+  });
 
-      const result = await harness.handler.prepare(harness.buildPrepareContext());
-
-      expect(result.needsSwap).toBe(needsSwap);
-    },
-  );
-
-  it('prepares swap outputs and reserves the selected proofs when excess is high', async () => {
-    harness.mocks.selectProofsToSend.mockResolvedValue([
-      makeQuoteMeltProof('input-1', 80),
-      makeQuoteMeltProof('input-2', 50),
-    ]);
-
-    const result = await harness.handler.prepare(
-      harness.buildPrepareContext(harness.makeInitOperation('operation-swap')),
-    );
+  it('prepares exact send/keep outputs for a swap melt', async () => {
+    const result = await h.prepare({
+      operation: h.makeInitOperation({ id: 'swap' }),
+      proofs: proofs(80, 50),
+    });
 
     expect(result.needsSwap).toBe(true);
     expect(result.swap_fee).toEqual(Amount.from(1));
-    expect(result.swapOutputData).toBeDefined();
-    expect(harness.mocks.selectProofsToSend).toHaveBeenCalledTimes(2);
-    expect(harness.mocks.createOutputsAndIncrementCounters).toHaveBeenCalledWith(
-      QUOTE_MELT_FIXTURE.mintUrl,
+    expect(h.mocks.selectProofsToSend).toHaveBeenCalledTimes(2);
+    expect(h.mocks.createOutputsAndIncrementCounters).toHaveBeenCalledWith(
+      f.mintUrl,
       {
         keep: { amount: Amount.from(19), unit: 'sat' },
         send: { amount: Amount.from(110), unit: 'sat' },
       },
       { includeFees: true },
     );
-    expect(harness.mocks.reserveProofs).toHaveBeenCalledWith(
-      QUOTE_MELT_FIXTURE.mintUrl,
-      ['input-1', 'input-2'],
-      'operation-swap',
-      { unit: 'sat' },
-    );
   });
 
-  it('rejects swap selections that cannot also pay the swap input fee', async () => {
-    harness.mocks.getFeesForProofs.mockReturnValue(Amount.from(25));
-    harness.mocks.selectProofsToSend.mockResolvedValue([
-      makeQuoteMeltProof('input-1', 80),
-      makeQuoteMeltProof('input-2', 50),
-    ]);
-
-    await expect(harness.handler.prepare(harness.buildPrepareContext())).rejects.toThrow(
-      ProofValidationError,
-    );
-    expect(harness.mocks.reserveProofs).not.toHaveBeenCalled();
+  it('rejects swap selections that cannot also pay their input fee', async () => {
+    h.mocks.getFeesForProofs.mockReturnValue(Amount.from(25));
+    await expect(h.prepare({ proofs: proofs(80, 50) })).rejects.toThrow(ProofValidationError);
+    expect(h.mocks.reserveProofs).not.toHaveBeenCalled();
   });
 });

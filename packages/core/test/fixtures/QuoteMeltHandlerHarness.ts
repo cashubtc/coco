@@ -3,6 +3,7 @@ import {
   type OutputDataLike,
   type Proof,
   type SerializedBlindedSignature,
+  type Wallet,
 } from '@cashu/cashu-ts';
 import { mock } from 'bun:test';
 import { EventBus } from '../../events/EventBus';
@@ -41,26 +42,31 @@ import type { ProofService } from '../../services/ProofService';
 import type { WalletService } from '../../services/WalletService';
 import type { CoreProof } from '../../types';
 import type { SerializedOutputData } from '../../utils';
-import type { Wallet } from '@cashu/cashu-ts';
 
 const NOW = 1_700_000_000_000;
 
 export const QUOTE_MELT_FIXTURE = {
-  invoice: 'lnbc1000n1...',
-  keysetId: 'keyset-1',
   mintUrl: 'https://mint.test',
+  keysetId: 'keyset-1',
+  invoice: 'lnbc1000n1...',
+  offer: 'lno1offer',
+  address: 'bc1ptest',
   quoteId: 'quote-123',
 } as const;
 
-type Bolt11Quote = MeltMethodQuoteSnapshot<'bolt11'>;
+type Quote = MeltMethodQuoteSnapshot<'bolt11'>;
+type InitOperation = InitMeltOperation & MeltMethodMeta<'bolt11'>;
+type PreparedOperation = PreparedMeltOperation & MeltMethodMeta<'bolt11'>;
+type ExecutingOperation = ExecutingMeltOperation & MeltMethodMeta<'bolt11'>;
+type PendingOperation = PendingMeltOperation & MeltMethodMeta<'bolt11'>;
 
 interface HandlerHooks {
-  createRemoteQuote(ctx: CreateMeltQuoteContext<'bolt11'>): Promise<Bolt11Quote>;
-  fetchRemoteMeltQuote(ctx: FetchRemoteMeltQuoteContext<'bolt11'>): Promise<Bolt11Quote>;
+  createRemoteQuote(ctx: CreateMeltQuoteContext<'bolt11'>): Promise<Quote>;
+  fetchRemoteMeltQuote(ctx: FetchRemoteMeltQuoteContext<'bolt11'>): Promise<Quote>;
   executeMelt(
     ctx: ExecuteContext<'bolt11'>,
-    proofsToMelt: Proof[],
-    changeOutputs: OutputDataLike[],
+    proofs: Proof[],
+    change: OutputDataLike[],
     quoteId: string,
   ): Promise<QuoteMeltResponse<'bolt11'>>;
   checkMeltQuote(
@@ -68,17 +74,14 @@ interface HandlerHooks {
   ): Promise<QuoteMeltResponse<'bolt11'>>;
   checkMeltQuoteState(
     ctx: PendingContext<'bolt11'> | RecoverExecutingContext<'bolt11'>,
-  ): Promise<Bolt11Quote['state']>;
-  getFeeReserveForQuote(
-    quote: Bolt11Quote,
-    operation: BasePrepareContext<'bolt11'>['operation'],
-  ): Amount;
+  ): Promise<Quote['state']>;
+  getFeeReserveForQuote(quote: Quote, operation: InitOperation): Amount;
   buildFinalizedData(
     response: QuoteMeltResponse<'bolt11'>,
   ): FinalizeResult<'bolt11'>['finalizedData'];
 }
 
-class HarnessQuoteMeltHandler extends BaseQuoteMeltHandler<'bolt11'> {
+class TestQuoteMeltHandler extends BaseQuoteMeltHandler<'bolt11'> {
   protected readonly method = 'bolt11' as const;
 
   constructor(private readonly hooks: HandlerHooks) {
@@ -88,69 +91,50 @@ class HarnessQuoteMeltHandler extends BaseQuoteMeltHandler<'bolt11'> {
   protected createRemoteQuote(ctx: CreateMeltQuoteContext<'bolt11'>) {
     return this.hooks.createRemoteQuote(ctx);
   }
-
   protected fetchRemoteMeltQuote(ctx: FetchRemoteMeltQuoteContext<'bolt11'>) {
     return this.hooks.fetchRemoteMeltQuote(ctx);
   }
-
   protected executeMelt(
     ctx: ExecuteContext<'bolt11'>,
-    proofsToMelt: Proof[],
-    changeOutputs: OutputDataLike[],
+    proofs: Proof[],
+    change: OutputDataLike[],
     quoteId: string,
   ) {
-    return this.hooks.executeMelt(ctx, proofsToMelt, changeOutputs, quoteId);
+    return this.hooks.executeMelt(ctx, proofs, change, quoteId);
   }
-
   protected checkMeltQuote(ctx: FinalizeContext<'bolt11'> | RecoverExecutingContext<'bolt11'>) {
     return this.hooks.checkMeltQuote(ctx);
   }
-
   protected checkMeltQuoteState(ctx: PendingContext<'bolt11'> | RecoverExecutingContext<'bolt11'>) {
     return this.hooks.checkMeltQuoteState(ctx);
   }
-
-  protected getFeeReserveForQuote(
-    quote: Bolt11Quote,
-    operation: BasePrepareContext<'bolt11'>['operation'],
-  ) {
+  protected getFeeReserveForQuote(quote: Quote, operation: InitOperation) {
     return this.hooks.getFeeReserveForQuote(quote, operation);
   }
-
   protected buildFinalizedData(response: QuoteMeltResponse<'bolt11'>) {
     return this.hooks.buildFinalizedData(response);
   }
 }
 
-export function makeQuoteMeltProof(secret: string, amount = 10, overrides?: Partial<Proof>): Proof {
-  return {
-    amount: Amount.from(amount),
-    C: `C_${secret}`,
-    id: QUOTE_MELT_FIXTURE.keysetId,
-    secret,
-    ...overrides,
-  } as Proof;
-}
+export const makeQuoteMeltProof = (secret: string, amount = 10): Proof => ({
+  amount: Amount.from(amount),
+  C: `C_${secret}`,
+  id: QUOTE_MELT_FIXTURE.keysetId,
+  secret,
+});
 
-export function makeQuoteMeltCoreProof(
-  secret: string,
-  amount = 10,
-  overrides?: Partial<CoreProof>,
-): CoreProof {
-  return {
-    ...makeQuoteMeltProof(secret, amount),
-    mintUrl: QUOTE_MELT_FIXTURE.mintUrl,
-    unit: 'sat',
-    state: 'ready',
-    ...overrides,
-  } as CoreProof;
-}
+export const makeQuoteMeltCoreProof = (secret: string, amount = 10): CoreProof => ({
+  ...makeQuoteMeltProof(secret, amount),
+  mintUrl: QUOTE_MELT_FIXTURE.mintUrl,
+  unit: 'sat',
+  state: 'ready',
+});
 
 export function makeQuoteMeltOutputData(
   keep: Array<{ secret: string; amount?: number }> = [],
   send: Array<{ secret: string; amount?: number }> = [],
 ): SerializedOutputData {
-  const makeOutput = (side: 'keep' | 'send', value: { secret: string; amount?: number }) => ({
+  const output = (side: string, value: { secret: string; amount?: number }) => ({
     blindedMessage: {
       amount: value.amount ?? 10,
       id: QUOTE_MELT_FIXTURE.keysetId,
@@ -159,46 +143,156 @@ export function makeQuoteMeltOutputData(
     blindingFactor: side === 'keep' ? '1234567890abcdef' : 'abcdef1234567890',
     secret: Buffer.from(value.secret).toString('hex'),
   });
-
   return {
-    keep: keep.map((value) => makeOutput('keep', value)),
-    send: send.map((value) => makeOutput('send', value)),
+    keep: keep.map((value) => output('keep', value)),
+    send: send.map((value) => output('send', value)),
   } as SerializedOutputData;
 }
 
-export function makeQuoteMeltChange(amount: number, suffix = 'change'): SerializedBlindedSignature {
-  return {
-    amount: Amount.from(amount),
-    id: QUOTE_MELT_FIXTURE.keysetId,
-    C_: `C_${suffix}`,
+export const makeQuoteMeltChange = (amount: number): SerializedBlindedSignature => ({
+  amount: Amount.from(amount),
+  id: QUOTE_MELT_FIXTURE.keysetId,
+  C_: 'C_change',
+});
+
+export function createQuoteMeltTestDeps() {
+  const f = QUOTE_MELT_FIXTURE;
+  const boltQuote = (request: string, fee = 10) => ({
+    quote: f.quoteId,
+    request,
+    amount: Amount.from(100),
+    fee_reserve: Amount.from(fee),
+    unit: 'sat',
+    expiry: Math.floor(NOW / 1000) + 3600,
+    state: 'UNPAID' as const,
+    payment_preimage: null,
+  });
+  const onchainQuote = () => ({
+    quote: f.quoteId,
+    request: f.address,
+    amount: Amount.from(21),
+    unit: 'sat',
+    fee_options: [
+      { fee_index: 1, fee_reserve: Amount.from(1), estimated_blocks: 12 },
+      { fee_index: 7, fee_reserve: Amount.from(2), estimated_blocks: 3 },
+    ],
+    selected_fee_index: null,
+    expiry: Math.floor(NOW / 1000) + 3600,
+    state: 'UNPAID' as const,
+    outpoint: null as string | null,
+  });
+
+  const mocks = {
+    createMeltQuoteBolt11: mock(async () => boltQuote(f.invoice)),
+    createMeltQuoteBolt12: mock(async () => boltQuote(f.offer, 12)),
+    createMeltQuoteOnchain: mock(async () => onchainQuote()),
+    getFeesForProofs: mock(() => Amount.from(1)),
+    send: mock(async () => ({
+      keep: [makeQuoteMeltProof('keep-1', 50)],
+      send: [makeQuoteMeltProof('send-1', 60)],
+    })),
+    getProofsByOperationId: mock(async () => [] as CoreProof[]),
+    selectProofsToSend: mock(async () => [
+      makeQuoteMeltProof('input-1', 60),
+      makeQuoteMeltProof('input-2', 50),
+    ]),
+    reserveProofs: mock(async () => ({ amount: Amount.from(110) })),
+    createBlankOutputs: mock(async () => [] as OutputDataLike[]),
+    createOutputsAndIncrementCounters: mock(async () => ({ keep: [], send: [] })),
+    setProofState: mock(async () => undefined),
+    saveProofs: mock(async () => undefined),
+    restoreProofsToReady: mock(async () => undefined),
+    releaseProofs: mock(async () => undefined),
+    unblindAndSaveChangeProofs: mock(async () => undefined),
+    recoverProofsFromOutputData: mock(async () => [] as CoreProof[]),
+    customMeltBolt11: mock(async () => ({
+      state: 'PAID' as const,
+      change: [],
+      payment_preimage: 'preimage-123',
+    })),
+    checkMeltQuote: mock(async () => ({
+      ...boltQuote(f.invoice),
+      state: 'PAID' as const,
+      change: [],
+      payment_preimage: 'preimage-123',
+    })),
+    checkMeltQuoteState: mock(async () => 'PAID' as const),
+    customMeltBolt12: mock(async () => ({
+      state: 'PAID' as const,
+      change: [],
+      payment_preimage: 'preimage-12',
+    })),
+    checkMeltQuoteBolt12: mock(async () => ({
+      ...boltQuote(f.offer, 12),
+      state: 'PAID' as const,
+      change: [],
+      payment_preimage: 'preimage-12',
+    })),
+    checkMeltQuoteBolt12State: mock(async () => 'PAID' as const),
+    customMeltOnchain: mock(async () => ({ ...onchainQuote(), state: 'PAID' as const })),
+    checkMeltQuoteOnchain: mock(async () => ({ ...onchainQuote(), state: 'PAID' as const })),
+    checkMeltQuoteOnchainState: mock(async () => 'PAID' as const),
+    checkProofStates: mock(
+      async (): Promise<Array<{ state: 'UNSPENT' | 'SPENT'; Y: string }>> => [
+        { state: 'UNSPENT', Y: 'y1' },
+      ],
+    ),
+    debug: mock(() => undefined),
+    info: mock(() => undefined),
+    warn: mock(() => undefined),
+    error: mock(() => undefined),
   };
+  const wallet = {
+    createMeltQuoteBolt11: mocks.createMeltQuoteBolt11,
+    createMeltQuoteBolt12: mocks.createMeltQuoteBolt12,
+    createMeltQuoteOnchain: mocks.createMeltQuoteOnchain,
+    getFeesForProofs: mocks.getFeesForProofs,
+    send: mocks.send,
+  } as unknown as Wallet;
+  const deps: BaseHandlerDeps = {
+    proofRepository: {
+      getProofsByOperationId: mocks.getProofsByOperationId,
+    } as unknown as ProofRepository,
+    proofService: {
+      selectProofsToSend: mocks.selectProofsToSend,
+      reserveProofs: mocks.reserveProofs,
+      createBlankOutputs: mocks.createBlankOutputs,
+      createOutputsAndIncrementCounters: mocks.createOutputsAndIncrementCounters,
+      setProofState: mocks.setProofState,
+      saveProofs: mocks.saveProofs,
+      restoreProofsToReady: mocks.restoreProofsToReady,
+      releaseProofs: mocks.releaseProofs,
+      unblindAndSaveChangeProofs: mocks.unblindAndSaveChangeProofs,
+      recoverProofsFromOutputData: mocks.recoverProofsFromOutputData,
+    } as unknown as ProofService,
+    walletService: {
+      getWalletWithActiveKeysetId: mock(async () => ({ wallet, keysetId: f.keysetId })),
+      getWallet: mock(async () => wallet),
+    } as unknown as WalletService,
+    mintService: {} as MintService,
+    mintAdapter: mocks as unknown as MintAdapter,
+    eventBus: new EventBus<CoreEvents>(),
+    logger: mocks as unknown as Logger,
+  };
+  return { deps, wallet, mocks, boltQuote, onchainQuote };
 }
 
 export function createQuoteMeltHandlerHarness() {
-  const { invoice, keysetId, mintUrl, quoteId } = QUOTE_MELT_FIXTURE;
-
-  const makeQuoteSnapshot = (overrides: Partial<Bolt11Quote> = {}): Bolt11Quote => ({
-    quote: quoteId,
-    request: invoice,
-    amount: Amount.from(100),
-    unit: 'sat',
-    fee_reserve: Amount.from(10),
-    expiry: Math.floor(NOW / 1000) + 3600,
-    state: 'UNPAID',
-    payment_preimage: null,
+  const shared = createQuoteMeltTestDeps();
+  const { deps, wallet, mocks } = shared;
+  const f = QUOTE_MELT_FIXTURE;
+  const makeQuote = (overrides: Partial<Quote> = {}): Quote => ({
+    ...shared.boltQuote(f.invoice),
     ...overrides,
   });
-
   const hooks = {
-    createRemoteQuote: mock(async (_ctx: CreateMeltQuoteContext<'bolt11'>) => makeQuoteSnapshot()),
-    fetchRemoteMeltQuote: mock(async (_ctx: FetchRemoteMeltQuoteContext<'bolt11'>) =>
-      makeQuoteSnapshot(),
-    ),
+    createRemoteQuote: mock(async (_ctx: CreateMeltQuoteContext<'bolt11'>) => makeQuote()),
+    fetchRemoteMeltQuote: mock(async (_ctx: FetchRemoteMeltQuoteContext<'bolt11'>) => makeQuote()),
     executeMelt: mock(
       async (
         _ctx: ExecuteContext<'bolt11'>,
-        _proofsToMelt: Proof[],
-        _changeOutputs: OutputDataLike[],
+        _proofs: Proof[],
+        _change: OutputDataLike[],
         _quoteId: string,
       ): Promise<QuoteMeltResponse<'bolt11'>> => ({
         state: 'PAID',
@@ -207,132 +301,33 @@ export function createQuoteMeltHandlerHarness() {
       }),
     ),
     checkMeltQuote: mock(
-      async (
-        _ctx: FinalizeContext<'bolt11'> | RecoverExecutingContext<'bolt11'>,
-      ): Promise<QuoteMeltResponse<'bolt11'>> => ({
+      async (): Promise<QuoteMeltResponse<'bolt11'>> => ({
         state: 'PAID',
         change: [],
         payment_preimage: 'preimage-123',
       }),
     ),
-    checkMeltQuoteState: mock(
-      async (
-        _ctx: PendingContext<'bolt11'> | RecoverExecutingContext<'bolt11'>,
-      ): Promise<Bolt11Quote['state']> => 'PAID',
-    ),
-    getFeeReserveForQuote: mock(
-      (quote: Bolt11Quote, _operation: BasePrepareContext<'bolt11'>['operation']) =>
-        Amount.from(quote.fee_reserve),
-    ),
+    checkMeltQuoteState: mock(async (): Promise<Quote['state']> => 'PAID'),
+    getFeeReserveForQuote: mock((quote: Quote) => Amount.from(quote.fee_reserve)),
     buildFinalizedData: mock((response: QuoteMeltResponse<'bolt11'>) =>
       response.payment_preimage ? { preimage: response.payment_preimage } : undefined,
     ),
   } satisfies HandlerHooks;
+  const handler = new TestQuoteMeltHandler(hooks);
 
-  const walletMocks = {
-    getFeesForProofs: mock((_proofs: Proof[]) => Amount.from(1)),
-    send: mock(async () => ({
-      keep: [makeQuoteMeltProof('keep-1', 50)],
-      send: [makeQuoteMeltProof('send-1', 60)],
-    })),
-  };
-  const wallet = walletMocks as unknown as Wallet;
-
-  const proofRepositoryMocks = {
-    getProofsByOperationId: mock(
-      async (_mintUrl: string, _operationId: string) => [] as CoreProof[],
-    ),
-  };
-  const proofRepository = proofRepositoryMocks as unknown as ProofRepository;
-
-  const proofServiceMocks = {
-    selectProofsToSend: mock(async () => [
-      makeQuoteMeltProof('input-1', 60),
-      makeQuoteMeltProof('input-2', 50),
-    ]),
-    reserveProofs: mock(async () => ({ amount: Amount.from(110) })),
-    createBlankOutputs: mock(async () => [] as OutputDataLike[]),
-    createOutputsAndIncrementCounters: mock(async () => ({
-      keep: [] as OutputDataLike[],
-      send: [] as OutputDataLike[],
-      sendAmount: Amount.zero(),
-      keepAmount: Amount.zero(),
-    })),
-    setProofState: mock(async () => undefined),
-    saveProofs: mock(async () => undefined),
-    restoreProofsToReady: mock(async () => undefined),
-    releaseProofs: mock(async () => undefined),
-    unblindAndSaveChangeProofs: mock(async () => undefined),
-    recoverProofsFromOutputData: mock(async () => [] as CoreProof[]),
-  };
-  const proofService = proofServiceMocks as unknown as ProofService;
-
-  const walletServiceMocks = {
-    getWalletWithActiveKeysetId: mock(async () => ({
-      wallet,
-      keysetId,
-      keyset: { id: keysetId },
-      keys: { keys: { 1: 'pubkey' }, id: keysetId },
-    })),
-    getWallet: mock(async () => wallet),
-  };
-  const walletService = walletServiceMocks as unknown as WalletService;
-
-  const mintServiceMocks = {
-    isTrustedMint: mock(async () => true),
-  };
-  const mintService = mintServiceMocks as unknown as MintService;
-
-  const mintAdapterMocks = {
-    checkProofStates: mock(
-      async (): Promise<Array<{ state: 'UNSPENT' | 'SPENT'; Y: string }>> => [
-        { state: 'UNSPENT', Y: 'y1' },
-      ],
-    ),
-  };
-  const mintAdapter = mintAdapterMocks as unknown as MintAdapter;
-
-  const loggerMocks = {
-    debug: mock(() => undefined),
-    info: mock(() => undefined),
-    warn: mock(() => undefined),
-    error: mock(() => undefined),
-  };
-  const logger = loggerMocks as unknown as Logger;
-  const eventBus = new EventBus<CoreEvents>();
-
-  const deps: BaseHandlerDeps = {
-    proofRepository,
-    proofService,
-    walletService,
-    mintService,
-    mintAdapter,
-    eventBus,
-    logger,
-  };
-
-  const makeInitOperation = (
-    id = 'operation-1',
-    overrides: Partial<InitMeltOperation & MeltMethodMeta<'bolt11'>> = {},
-  ): InitMeltOperation & MeltMethodMeta<'bolt11'> => ({
-    id,
+  const makeInitOperation = (overrides: Partial<InitOperation> = {}): InitOperation => ({
+    id: 'operation-1',
     state: 'init',
-    mintUrl,
+    mintUrl: f.mintUrl,
+    unit: 'sat',
     method: 'bolt11',
-    methodData: { invoice },
-    createdAt: NOW - 10_000,
-    updatedAt: NOW - 10_000,
+    methodData: { invoice: f.invoice },
+    createdAt: NOW,
+    updatedAt: NOW,
     ...overrides,
-    unit: overrides.unit ?? 'sat',
   });
-
-  const makePreparedOperation = (
-    id = 'operation-1',
-    overrides: Partial<PreparedMeltOperation & MeltMethodMeta<'bolt11'>> = {},
-  ): PreparedMeltOperation & MeltMethodMeta<'bolt11'> => ({
-    ...makeInitOperation(id),
-    state: 'prepared',
-    quoteId,
+  const preparedData = {
+    quoteId: f.quoteId,
     amount: Amount.from(100),
     fee_reserve: Amount.from(10),
     swap_fee: Amount.zero(),
@@ -340,115 +335,125 @@ export function createQuoteMeltHandlerHarness() {
     inputAmount: Amount.from(110),
     inputProofSecrets: ['input-1', 'input-2'],
     changeOutputData: makeQuoteMeltOutputData([{ secret: 'change-1' }]),
+  };
+  const makePreparedOperation = (
+    overrides: Partial<PreparedOperation> = {},
+  ): PreparedOperation => ({
+    ...makeInitOperation(),
+    ...preparedData,
+    state: 'prepared',
     ...overrides,
-    unit: overrides.unit ?? 'sat',
   });
-
   const makeExecutingOperation = (
-    id = 'operation-1',
-    overrides: Partial<ExecutingMeltOperation & MeltMethodMeta<'bolt11'>> = {},
-  ): ExecutingMeltOperation & MeltMethodMeta<'bolt11'> => ({
-    ...makePreparedOperation(id),
-    state: 'executing',
-    ...overrides,
-    unit: overrides.unit ?? 'sat',
-  });
-
-  const makePendingOperation = (
-    id = 'operation-1',
-    overrides: Partial<PendingMeltOperation & MeltMethodMeta<'bolt11'>> = {},
-  ): PendingMeltOperation & MeltMethodMeta<'bolt11'> => ({
-    ...makePreparedOperation(id),
+    overrides: Partial<ExecutingOperation> = {},
+  ): ExecutingOperation => ({ ...makePreparedOperation(), state: 'executing', ...overrides });
+  const makePendingOperation = (overrides: Partial<PendingOperation> = {}): PendingOperation => ({
+    ...makePreparedOperation(),
     state: 'pending',
     ...overrides,
-    unit: overrides.unit ?? 'sat',
   });
-
   const makeCanonicalQuote = (
     overrides: Partial<MeltQuote<'bolt11'>> = {},
   ): MeltQuote<'bolt11'> => ({
-    ...meltQuoteFromBolt11Response(mintUrl, makeQuoteSnapshot()),
+    ...meltQuoteFromBolt11Response(f.mintUrl, makeQuote()),
     createdAt: NOW,
     updatedAt: NOW,
     lastObservedRemoteStateAt: NOW,
     ...overrides,
   });
+  const context = { ...deps, wallet };
 
-  const buildCreateQuoteContext = (
-    methodData: CreateMeltQuoteContext<'bolt11'>['methodData'] = { invoice },
-  ): CreateMeltQuoteContext<'bolt11'> => ({
-    ...deps,
-    mintUrl,
-    methodData,
-    unit: 'sat',
-    wallet,
-  });
-
-  const buildFetchRemoteQuoteContext = (
-    quote: MeltQuote<'bolt11'> = makeCanonicalQuote(),
-  ): FetchRemoteMeltQuoteContext<'bolt11'> => ({ ...deps, quote });
-
-  const buildPrepareContext = (
-    operation: InitMeltOperation & MeltMethodMeta<'bolt11'> = makeInitOperation(),
-    quote: Partial<Bolt11Quote> = {},
-  ): BasePrepareContext<'bolt11'> => ({
-    ...deps,
-    operation,
-    wallet,
-    quote: makeQuoteSnapshot(quote),
-  });
-
-  const buildExecuteContext = (
-    operation: ExecutingMeltOperation & MeltMethodMeta<'bolt11'> = makeExecutingOperation(),
-    reservedProofs: Proof[] = [],
-  ): ExecuteContext<'bolt11'> => ({ ...deps, operation, wallet, reservedProofs });
-
-  const buildFinalizeContext = (
-    operation: PendingMeltOperation & MeltMethodMeta<'bolt11'> = makePendingOperation(),
-    canonicalQuote?: MeltQuote<'bolt11'>,
-  ): FinalizeContext<'bolt11'> => ({ ...deps, operation, canonicalQuote });
-
-  const buildPendingContext = (
-    operation: PendingMeltOperation & MeltMethodMeta<'bolt11'> = makePendingOperation(),
-    canonicalQuote?: MeltQuote<'bolt11'>,
-  ): PendingContext<'bolt11'> => ({ ...deps, operation, wallet, canonicalQuote });
-
-  const buildRollbackContext = (
-    operation: PreparedOrLaterOperation & MeltMethodMeta<'bolt11'> = makePreparedOperation(),
-  ): RollbackContext<'bolt11'> => ({ ...deps, operation, wallet });
-
-  const buildRecoverContext = (
-    operation: ExecutingMeltOperation & MeltMethodMeta<'bolt11'> = makeExecutingOperation(),
-  ): RecoverExecutingContext<'bolt11'> => ({ ...deps, operation, wallet });
+  const prepare = async (
+    options: {
+      operation?: InitOperation;
+      quote?: Partial<Quote>;
+      proofs?: Proof[];
+    } = {},
+  ) => {
+    if (options.proofs) mocks.selectProofsToSend.mockResolvedValue(options.proofs);
+    return handler.prepare({
+      ...context,
+      operation: options.operation ?? makeInitOperation(),
+      quote: makeQuote(options.quote),
+    });
+  };
+  const execute = async (
+    options: {
+      operation?: ExecutingOperation;
+      proofs?: CoreProof[];
+      response?: QuoteMeltResponse<'bolt11'>;
+    } = {},
+  ) => {
+    const proofs = options.proofs ?? [
+      makeQuoteMeltCoreProof('input-1', 60),
+      makeQuoteMeltCoreProof('input-2', 50),
+    ];
+    mocks.getProofsByOperationId.mockResolvedValueOnce(proofs);
+    if (options.response) hooks.executeMelt.mockResolvedValueOnce(options.response);
+    return handler.execute({
+      ...context,
+      operation: options.operation ?? makeExecutingOperation(),
+      reservedProofs: proofs,
+    });
+  };
+  const finalize = async (
+    options: {
+      operation?: PendingOperation;
+      quote?: MeltQuote<'bolt11'>;
+      response?: QuoteMeltResponse<'bolt11'>;
+    } = {},
+  ) => {
+    if (options.response) hooks.checkMeltQuote.mockResolvedValueOnce(options.response);
+    return handler.finalize({
+      ...deps,
+      operation: options.operation ?? makePendingOperation(),
+      canonicalQuote: options.quote,
+    });
+  };
+  const checkPending = async (state: string, quote?: MeltQuote<'bolt11'>) => {
+    if (!quote) hooks.checkMeltQuoteState.mockResolvedValueOnce(state as Quote['state']);
+    return handler.checkPending({
+      ...context,
+      operation: makePendingOperation(),
+      canonicalQuote: quote,
+    });
+  };
+  const rollback = (operation: PreparedOrLaterOperation & MeltMethodMeta<'bolt11'>) =>
+    handler.rollback({ ...context, operation } as RollbackContext<'bolt11'>);
+  const recover = async (
+    options: {
+      operation?: ExecutingOperation;
+      state?: string;
+      response?: QuoteMeltResponse<'bolt11'>;
+    } = {},
+  ) => {
+    if (options.state)
+      hooks.checkMeltQuoteState.mockResolvedValueOnce(options.state as Quote['state']);
+    if (options.response) hooks.checkMeltQuote.mockResolvedValueOnce(options.response);
+    return handler.recoverExecuting({
+      ...context,
+      operation: options.operation ?? makeExecutingOperation(),
+    });
+  };
 
   return {
-    handler: new HarnessQuoteMeltHandler(hooks),
+    handler,
     hooks,
-    mocks: {
-      ...walletMocks,
-      ...proofRepositoryMocks,
-      ...proofServiceMocks,
-      ...walletServiceMocks,
-      ...mintServiceMocks,
-      ...mintAdapterMocks,
-      ...loggerMocks,
-    },
-    wallet,
+    mocks,
     deps,
-    makeQuoteSnapshot,
+    wallet,
+    makeQuote,
     makeCanonicalQuote,
     makeInitOperation,
     makePreparedOperation,
     makeExecutingOperation,
     makePendingOperation,
-    buildCreateQuoteContext,
-    buildFetchRemoteQuoteContext,
-    buildPrepareContext,
-    buildExecuteContext,
-    buildFinalizeContext,
-    buildPendingContext,
-    buildRollbackContext,
-    buildRecoverContext,
+    prepare,
+    execute,
+    finalize,
+    checkPending,
+    rollback,
+    recover,
   };
 }
 

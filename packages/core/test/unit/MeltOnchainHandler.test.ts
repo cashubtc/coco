@@ -1,240 +1,152 @@
 import { Amount } from '@cashu/cashu-ts';
-import { describe, expect, it, mock } from 'bun:test';
-import { MeltOnchainHandler } from '../../infra/handlers/melt/MeltOnchainHandler.ts';
-import type {
-  BasePrepareContext,
-  CreateMeltQuoteContext,
-  ExecuteContext,
-  FinalizeContext,
-  PendingContext,
-} from '../../operations/melt/MeltMethodHandler.ts';
+import { beforeEach, describe, expect, it } from 'bun:test';
+import { MeltOnchainHandler } from '../../infra/handlers/melt/MeltOnchainHandler';
+import type { MeltMethodMeta } from '../../operations/melt/MeltMethodHandler';
 import type {
   ExecutingMeltOperation,
   InitMeltOperation,
   PendingMeltOperation,
-} from '../../operations/melt';
-
-const mintUrl = 'https://mint.test';
-const quoteId = 'onchain-quote';
-
-const remoteQuote = {
-  quote: quoteId,
-  request: 'bc1ptest',
-  amount: Amount.from(21),
-  unit: 'sat',
-  fee_options: [
-    { fee_index: 1, fee_reserve: Amount.from(1), estimated_blocks: 12 },
-    { fee_index: 7, fee_reserve: Amount.from(2), estimated_blocks: 3 },
-  ],
-  selected_fee_index: null,
-  expiry: Math.floor(Date.now() / 1000) + 3600,
-  state: 'UNPAID' as const,
-  outpoint: null as string | null,
-};
-
-const baseDeps = (): any => ({
-  proofRepository: {
-    getProofsByOperationId: mock(async () => []),
-  },
-  proofService: {
-    selectProofsToSend: mock(async () => []),
-    reserveProofs: mock(async () => undefined),
-    createBlankOutputs: mock(async () => []),
-    createOutputsAndIncrementCounters: mock(async () => ({ keep: [], send: [] })),
-    setProofState: mock(async () => undefined),
-    restoreProofsToReady: mock(async () => undefined),
-    unblindAndSaveChangeProofs: mock(async () => undefined),
-  },
-  walletService: {
-    getWalletWithActiveKeysetId: mock(async () => ({ wallet: {} })),
-  },
-  mintService: {},
-  mintAdapter: {
-    customMeltOnchain: mock(async () => ({ ...remoteQuote, state: 'PAID' as const })),
-    checkMeltQuoteOnchain: mock(async () => ({ ...remoteQuote, state: 'PAID' as const })),
-    checkMeltQuoteOnchainState: mock(async () => 'PAID' as const),
-    checkProofStates: mock(async () => []),
-  },
-  eventBus: {
-    emit: mock(async () => undefined),
-  },
-});
-
-const buildInitOperation = (): InitMeltOperation & { method: 'onchain'; quoteId: string } => ({
-  id: 'op-1',
-  state: 'init',
-  mintUrl,
-  method: 'onchain',
-  methodData: { address: 'bc1ptest', amountSats: Amount.from(21), feeIndex: 7 },
-  unit: 'sat',
-  quoteId,
-  createdAt: 0,
-  updatedAt: 0,
-});
-
-const buildExecutingOperation = (): ExecutingMeltOperation & { method: 'onchain' } => ({
-  ...buildInitOperation(),
-  state: 'executing',
-  amount: Amount.from(21),
-  fee_reserve: Amount.from(2),
-  swap_fee: Amount.zero(),
-  needsSwap: false,
-  inputAmount: Amount.from(23),
-  inputProofSecrets: ['secret-1'],
-  changeOutputData: { keep: [], send: [] },
-});
-
-const buildPendingOperation = (): PendingMeltOperation & { method: 'onchain' } => ({
-  ...buildExecutingOperation(),
-  state: 'pending',
-});
+} from '../../operations/melt/MeltOperation';
+import {
+  createQuoteMeltTestDeps,
+  makeQuoteMeltCoreProof,
+  QUOTE_MELT_FIXTURE as f,
+} from '../fixtures/QuoteMeltHandlerHarness';
 
 describe('MeltOnchainHandler adapter contract', () => {
-  it('creates canonical onchain melt quotes with fee options', async () => {
-    const handler = new MeltOnchainHandler();
-    const wallet = {
-      createMeltQuoteOnchain: mock(async () => remoteQuote),
-    };
-    const ctx = {
-      ...baseDeps(),
-      mintUrl,
-      methodData: { address: 'bc1ptest', amountSats: Amount.from(21) },
-      unit: 'sat',
-      wallet,
-    } as unknown as CreateMeltQuoteContext<'onchain'>;
-
-    const quote = await handler.createQuote(ctx);
-
-    expect(wallet.createMeltQuoteOnchain).toHaveBeenCalledWith('bc1ptest', Amount.from(21));
-    expect(quote.method).toBe('onchain');
-    if (quote.method !== 'onchain') throw new Error('Expected onchain quote');
-    expect(quote.fee_options).toHaveLength(2);
-    expect(quote.fee_options[1]!.fee_index).toBe(7);
+  let handler: MeltOnchainHandler;
+  let fixture: ReturnType<typeof createQuoteMeltTestDeps>;
+  const input = makeQuoteMeltCoreProof('input-1', 23);
+  const initOperation = (): InitMeltOperation & MeltMethodMeta<'onchain'> => ({
+    id: 'operation-onchain',
+    state: 'init',
+    mintUrl: f.mintUrl,
+    unit: 'sat',
+    method: 'onchain',
+    methodData: { address: f.address, amountSats: Amount.from(21), feeIndex: 7 },
+    quoteId: f.quoteId,
+    createdAt: 0,
+    updatedAt: 0,
+  });
+  const executingOperation = (): ExecutingMeltOperation & MeltMethodMeta<'onchain'> => ({
+    ...initOperation(),
+    state: 'executing',
+    quoteId: f.quoteId,
+    amount: Amount.from(21),
+    fee_reserve: Amount.from(2),
+    swap_fee: Amount.zero(),
+    needsSwap: false,
+    inputAmount: Amount.from(23),
+    inputProofSecrets: ['input-1'],
+    changeOutputData: { keep: [], send: [] },
+  });
+  const pendingOperation = (): PendingMeltOperation & MeltMethodMeta<'onchain'> => ({
+    ...executingOperation(),
+    state: 'pending',
   });
 
-  it('prepares using the selected fee option reserve', async () => {
-    const handler = new MeltOnchainHandler();
-    const deps = baseDeps();
-    const inputProof = { amount: 23, secret: 'secret-1' };
-    deps.proofService.selectProofsToSend = mock(async () => [inputProof]);
-    const ctx = {
-      ...deps,
-      operation: buildInitOperation(),
-      wallet: {},
-      quote: remoteQuote,
-    } as unknown as BasePrepareContext<'onchain'>;
+  beforeEach(() => {
+    handler = new MeltOnchainHandler();
+    fixture = createQuoteMeltTestDeps();
+    fixture.mocks.getProofsByOperationId.mockResolvedValue([input]);
+    fixture.mocks.selectProofsToSend.mockResolvedValue([input]);
+  });
 
-    const prepared = await handler.prepare(ctx);
+  it('creates canonical quotes with fee options', async () => {
+    const quote = await handler.createQuote({
+      ...fixture.deps,
+      mintUrl: f.mintUrl,
+      methodData: { address: f.address, amountSats: Amount.from(21) },
+      unit: 'sat',
+      wallet: fixture.wallet,
+    });
+
+    expect(fixture.mocks.createMeltQuoteOnchain).toHaveBeenCalledWith(f.address, Amount.from(21));
+    expect(quote).toMatchObject({ method: 'onchain', quoteId: f.quoteId });
+    expect(quote.fee_options[1]?.fee_index).toBe(7);
+  });
+
+  it('prepares with the selected fee option', async () => {
+    const prepared = await handler.prepare({
+      ...fixture.deps,
+      operation: initOperation(),
+      quote: fixture.onchainQuote(),
+      wallet: fixture.wallet,
+    });
 
     expect(prepared.fee_reserve).toEqual(Amount.from(2));
-    expect(prepared.methodData.feeIndex).toBe(7);
-    expect(deps.proofService.selectProofsToSend).toHaveBeenCalledWith(
-      mintUrl,
+    expect(fixture.mocks.selectProofsToSend).toHaveBeenCalledWith(
+      f.mintUrl,
       { amount: Amount.from(23), unit: 'sat' },
       true,
     );
   });
 
-  it('executes with the selected fee index and stores optional outpoint finalized data', async () => {
-    const handler = new MeltOnchainHandler();
-    const deps = baseDeps();
-    const proof = { amount: 23, secret: 'secret-1' };
-    deps.proofRepository.getProofsByOperationId = mock(async () => [proof]);
-    deps.mintAdapter.customMeltOnchain = mock(async () => ({
-      ...remoteQuote,
-      state: 'PAID' as const,
+  it('executes with the fee index and maps a returned outpoint', async () => {
+    fixture.mocks.customMeltOnchain.mockResolvedValueOnce({
+      ...fixture.onchainQuote(),
+      state: 'PAID',
       outpoint: 'txid:0',
-    }));
-    const operation = buildExecutingOperation();
-    const ctx = {
-      ...deps,
-      operation,
-      wallet: {},
-      reservedProofs: [proof],
-    } as unknown as ExecuteContext<'onchain'>;
+    });
 
-    const result = await handler.execute(ctx);
+    const result = await handler.execute({
+      ...fixture.deps,
+      operation: executingOperation(),
+      wallet: fixture.wallet,
+      reservedProofs: [input],
+    });
 
-    expect(deps.mintAdapter.customMeltOnchain).toHaveBeenCalledWith(
-      mintUrl,
-      [proof],
+    expect(fixture.mocks.customMeltOnchain).toHaveBeenCalledWith(
+      f.mintUrl,
+      [input],
       [],
-      quoteId,
+      f.quoteId,
       7,
     );
-    expect(result.status).toBe('PAID');
     if (result.status !== 'PAID') throw new Error('Expected paid result');
     expect(result.finalized.finalizedData).toEqual({ outpoint: 'txid:0' });
   });
 
-  it('allows synchronous PAID settlement without an outpoint', async () => {
-    const handler = new MeltOnchainHandler();
-    const deps = baseDeps();
-    const proof = { amount: 23, secret: 'secret-1' };
-    deps.proofRepository.getProofsByOperationId = mock(async () => [proof]);
-    deps.mintAdapter.customMeltOnchain = mock(async () => ({
-      ...remoteQuote,
-      state: 'PAID' as const,
-      outpoint: null,
-    }));
-    const ctx = {
-      ...deps,
-      operation: buildExecutingOperation(),
-      wallet: {},
-      reservedProofs: [proof],
-    } as unknown as ExecuteContext<'onchain'>;
+  it('allows synchronous settlement without an outpoint', async () => {
+    const result = await handler.execute({
+      ...fixture.deps,
+      operation: executingOperation(),
+      wallet: fixture.wallet,
+      reservedProofs: [input],
+    });
 
-    const result = await handler.execute(ctx);
-
-    expect(result.status).toBe('PAID');
     if (result.status !== 'PAID') throw new Error('Expected paid result');
     expect(result.finalized.finalizedData).toBeUndefined();
   });
 
-  it('fetches remote onchain melt quotes through the adapter', async () => {
-    const handler = new MeltOnchainHandler();
-    const deps = baseDeps();
-
+  it('fetches through the onchain full-quote endpoint', async () => {
     const quote = await handler.fetchRemoteQuote({
-      ...deps,
-      quote: {
-        mintUrl,
-        method: 'onchain',
-        quoteId,
-        quote: quoteId,
-      },
+      ...fixture.deps,
+      quote: { mintUrl: f.mintUrl, quoteId: f.quoteId },
     } as never);
 
-    expect(deps.mintAdapter.checkMeltQuoteOnchain).toHaveBeenCalledWith(mintUrl, quoteId);
+    expect(fixture.mocks.checkMeltQuoteOnchain).toHaveBeenCalledWith(f.mintUrl, f.quoteId);
     expect(quote.method).toBe('onchain');
-    expect(quote.quoteId).toBe(quoteId);
   });
 
-  it('checks pending onchain melt quotes with the state-only adapter call', async () => {
-    const handler = new MeltOnchainHandler();
-    const deps = baseDeps();
-
-    const result = await handler.checkPending({
-      ...deps,
-      operation: buildPendingOperation(),
-      wallet: {},
-    } as unknown as PendingContext<'onchain'>);
-
-    expect(deps.mintAdapter.checkMeltQuoteOnchainState).toHaveBeenCalledWith(mintUrl, quoteId);
-    expect(result).toBe('finalize');
+  it('uses the state-only endpoint for pending checks', async () => {
+    await expect(
+      handler.checkPending({
+        ...fixture.deps,
+        operation: pendingOperation(),
+        wallet: fixture.wallet,
+      }),
+    ).resolves.toBe('finalize');
+    expect(fixture.mocks.checkMeltQuoteOnchainState).toHaveBeenCalledWith(f.mintUrl, f.quoteId);
   });
 
-  it('finalizes pending onchain melt quotes by checking the full remote quote', async () => {
-    const handler = new MeltOnchainHandler();
-    const deps = baseDeps();
-
+  it('uses the full-quote endpoint when finalizing', async () => {
     const result = await handler.finalize({
-      ...deps,
-      operation: buildPendingOperation(),
-      wallet: {},
-    } as unknown as FinalizeContext<'onchain'>);
+      ...fixture.deps,
+      operation: pendingOperation(),
+    });
 
-    expect(deps.mintAdapter.checkMeltQuoteOnchain).toHaveBeenCalledWith(mintUrl, quoteId);
+    expect(fixture.mocks.checkMeltQuoteOnchain).toHaveBeenCalledWith(f.mintUrl, f.quoteId);
     expect(result.finalizedData).toBeUndefined();
   });
 });

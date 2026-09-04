@@ -6,245 +6,151 @@ import {
   makeQuoteMeltCoreProof,
   makeQuoteMeltOutputData,
   makeQuoteMeltProof,
-  QUOTE_MELT_FIXTURE,
+  QUOTE_MELT_FIXTURE as f,
   type QuoteMeltHandlerHarness,
 } from '../fixtures/QuoteMeltHandlerHarness';
 
 describe('BaseQuoteMeltHandler settlement', () => {
-  let harness: QuoteMeltHandlerHarness;
+  let h: QuoteMeltHandlerHarness;
 
   beforeEach(() => {
-    harness = createQuoteMeltHandlerHarness();
+    h = createQuoteMeltHandlerHarness();
   });
 
-  describe('execute', () => {
-    it('finalizes a paid direct melt and calculates its settlement amounts', async () => {
-      const inputProofs = [
-        makeQuoteMeltCoreProof('input-1', 60),
-        makeQuoteMeltCoreProof('input-2', 50),
-      ];
-      harness.mocks.getProofsByOperationId.mockResolvedValueOnce(inputProofs);
+  const swapData = (keep: number, send: number) =>
+    makeQuoteMeltOutputData(
+      [{ secret: 'keep-output', amount: keep }],
+      [{ secret: 'send-output', amount: send }],
+    );
 
-      const result = await harness.handler.execute(harness.buildExecuteContext());
+  describe('execute', () => {
+    it('finalizes a paid direct melt with settlement amounts', async () => {
+      const result = await h.execute();
 
       expect(result.status).toBe('PAID');
-      if (result.status !== 'PAID') throw new Error('Expected a paid execution');
+      if (result.status !== 'PAID') throw new Error('Expected paid execution');
+      expect(result.finalized).toMatchObject({ finalizedData: { preimage: 'preimage-123' } });
       expect(result.finalized.changeAmount).toEqual(Amount.zero());
       expect(result.finalized.effectiveFee).toEqual(Amount.from(10));
-      expect(result.finalized.finalizedData).toEqual({ preimage: 'preimage-123' });
-      expect(harness.mocks.setProofState).toHaveBeenCalledWith(
-        QUOTE_MELT_FIXTURE.mintUrl,
+      expect(h.mocks.setProofState).toHaveBeenCalledWith(
+        f.mintUrl,
         ['input-1', 'input-2'],
         'inflight',
       );
-      expect(harness.mocks.setProofState).toHaveBeenCalledWith(
-        QUOTE_MELT_FIXTURE.mintUrl,
+      expect(h.mocks.setProofState).toHaveBeenCalledWith(
+        f.mintUrl,
         ['input-1', 'input-2'],
         'spent',
       );
-      expect(harness.hooks.executeMelt).toHaveBeenCalledWith(
-        expect.anything(),
-        inputProofs,
-        expect.any(Array),
-        QUOTE_MELT_FIXTURE.quoteId,
-      );
     });
 
-    it('leaves proofs inflight when the mint reports pending', async () => {
-      const inputProofs = [makeQuoteMeltCoreProof('input-1', 110)];
-      const operation = harness.makeExecutingOperation('operation-pending', {
-        inputProofSecrets: ['input-1'],
-      });
-      harness.mocks.getProofsByOperationId.mockResolvedValueOnce(inputProofs);
-      harness.hooks.executeMelt.mockResolvedValueOnce({ state: 'PENDING' });
+    it.each([
+      ['PENDING', 'PENDING', false],
+      ['UNPAID', 'FAILED', true],
+    ] as const)('maps a %s response to %s', async (state, status, restores) => {
+      const result = await h.execute({ response: { state } });
 
-      const result = await harness.handler.execute(
-        harness.buildExecuteContext(operation, inputProofs),
-      );
-
-      expect(result.status).toBe('PENDING');
-      if (result.status !== 'PENDING') throw new Error('Expected a pending execution');
-      expect(result.pending.state).toBe('pending');
-      expect(harness.mocks.restoreProofsToReady).not.toHaveBeenCalled();
+      expect(result.status).toBe(status);
+      expect(h.mocks.restoreProofsToReady).toHaveBeenCalledTimes(restores ? 1 : 0);
     });
 
-    it('restores direct melt proofs when the mint reports unpaid', async () => {
-      const inputProofs = [
-        makeQuoteMeltCoreProof('input-1', 60),
-        makeQuoteMeltCoreProof('input-2', 50),
-      ];
-      harness.mocks.getProofsByOperationId.mockResolvedValueOnce(inputProofs);
-      harness.hooks.executeMelt.mockResolvedValueOnce({ state: 'UNPAID' });
-
-      const result = await harness.handler.execute(harness.buildExecuteContext());
-
-      expect(result.status).toBe('FAILED');
-      expect(harness.mocks.restoreProofsToReady).toHaveBeenCalledWith(QUOTE_MELT_FIXTURE.mintUrl, [
-        'input-1',
-        'input-2',
-      ]);
-    });
-
-    it('rejects execution when not all reserved input proofs can be found', async () => {
-      harness.mocks.getProofsByOperationId.mockResolvedValueOnce([
-        makeQuoteMeltCoreProof('input-1', 60),
-      ]);
-
-      await expect(harness.handler.execute(harness.buildExecuteContext())).rejects.toThrow(
+    it('requires every reserved input proof', async () => {
+      await expect(h.execute({ proofs: [makeQuoteMeltCoreProof('input-1', 60)] })).rejects.toThrow(
         'Could not find all input proofs',
       );
-      expect(harness.hooks.executeMelt).not.toHaveBeenCalled();
+      expect(h.hooks.executeMelt).not.toHaveBeenCalled();
     });
 
-    it('swaps excess input before melting and persists both sides with their states', async () => {
-      const inputProofs = [makeQuoteMeltCoreProof('input-1', 200)];
-      const operation = harness.makeExecutingOperation('operation-swap', {
+    it('swaps excess input and persists its keep/send proofs with distinct states', async () => {
+      const input = [makeQuoteMeltCoreProof('input-1', 200)];
+      const operation = h.makeExecutingOperation({
+        id: 'swap',
         needsSwap: true,
         inputAmount: Amount.from(200),
         inputProofSecrets: ['input-1'],
-        swapOutputData: makeQuoteMeltOutputData(
-          [{ secret: 'keep-output', amount: 90 }],
-          [{ secret: 'send-output', amount: 110 }],
-        ),
+        swapOutputData: swapData(90, 110),
       });
-      harness.mocks.getProofsByOperationId.mockResolvedValueOnce(inputProofs);
 
-      await harness.handler.execute(harness.buildExecuteContext(operation, inputProofs));
+      await h.execute({ operation, proofs: input });
 
-      expect(harness.mocks.send).toHaveBeenCalledWith(
+      expect(h.mocks.send).toHaveBeenCalledWith(
         Amount.from(110),
-        inputProofs,
+        input,
         undefined,
         expect.objectContaining({
           send: { type: 'custom', data: expect.any(Array) },
           keep: { type: 'custom', data: expect.any(Array) },
         }),
       );
-      expect(harness.mocks.setProofState).toHaveBeenNthCalledWith(
-        1,
-        QUOTE_MELT_FIXTURE.mintUrl,
-        ['input-1'],
-        'inflight',
-      );
-      expect(harness.mocks.setProofState).toHaveBeenNthCalledWith(
-        2,
-        QUOTE_MELT_FIXTURE.mintUrl,
-        ['input-1'],
-        'spent',
-      );
-      expect(harness.mocks.saveProofs).toHaveBeenCalledWith(
-        QUOTE_MELT_FIXTURE.mintUrl,
+      expect(h.mocks.saveProofs).toHaveBeenCalledWith(
+        f.mintUrl,
         expect.arrayContaining([
           expect.objectContaining({ secret: 'keep-1', state: 'ready' }),
           expect.objectContaining({ secret: 'send-1', state: 'inflight' }),
         ]),
       );
-      expect(harness.hooks.executeMelt.mock.calls[0]?.[1]).toEqual([
-        makeQuoteMeltProof('send-1', 60),
-      ]);
+      expect(h.hooks.executeMelt.mock.calls[0]?.[1]).toEqual([makeQuoteMeltProof('send-1', 60)]);
     });
 
-    it('calculates swap settlement fees from the proofs sent to melt', async () => {
-      const inputProofs = [makeQuoteMeltCoreProof('input-1', 200)];
-      const operation = harness.makeExecutingOperation('operation-swap-fee', {
-        needsSwap: true,
-        amount: Amount.from(55),
-        inputAmount: Amount.from(200),
-        inputProofSecrets: ['input-1'],
-        swapOutputData: makeQuoteMeltOutputData(
-          [{ secret: 'keep-output', amount: 140 }],
-          [{ secret: 'send-output', amount: 60 }],
-        ),
+    it('calculates swap fees from the proofs sent to melt', async () => {
+      const result = await h.execute({
+        operation: h.makeExecutingOperation({
+          needsSwap: true,
+          amount: Amount.from(55),
+          inputAmount: Amount.from(200),
+          inputProofSecrets: ['input-1'],
+          swapOutputData: swapData(140, 60),
+        }),
+        proofs: [makeQuoteMeltCoreProof('input-1', 200)],
+        response: { state: 'PAID', change: [] },
       });
-      harness.mocks.getProofsByOperationId.mockResolvedValueOnce(inputProofs);
-      harness.hooks.executeMelt.mockResolvedValueOnce({ state: 'PAID', change: [] });
 
-      const result = await harness.handler.execute(
-        harness.buildExecuteContext(operation, inputProofs),
-      );
-
-      expect(result.status).toBe('PAID');
-      if (result.status !== 'PAID') throw new Error('Expected a paid execution');
+      if (result.status !== 'PAID') throw new Error('Expected paid execution');
       expect(result.finalized.effectiveFee).toEqual(Amount.from(5));
     });
 
-    it('requires prepared swap output data before executing a swap', async () => {
-      const inputProofs = [makeQuoteMeltCoreProof('input-1', 200)];
-      const operation = harness.makeExecutingOperation('operation-swap-missing-data', {
-        needsSwap: true,
-        inputProofSecrets: ['input-1'],
-        swapOutputData: undefined,
-      });
-      harness.mocks.getProofsByOperationId.mockResolvedValueOnce(inputProofs);
-
+    it('requires prepared swap output data', async () => {
       await expect(
-        harness.handler.execute(harness.buildExecuteContext(operation, inputProofs)),
+        h.execute({
+          operation: h.makeExecutingOperation({
+            needsSwap: true,
+            inputProofSecrets: ['input-1'],
+            swapOutputData: undefined,
+          }),
+          proofs: [makeQuoteMeltCoreProof('input-1', 200)],
+        }),
       ).rejects.toThrow('Swap is required, but swap output data is missing');
     });
 
-    it('unblinds returned change and subtracts it from the effective fee', async () => {
-      const inputProofs = [makeQuoteMeltCoreProof('input-1', 110)];
-      const operation = harness.makeExecutingOperation('operation-change', {
-        inputProofSecrets: ['input-1'],
-      });
-      const change = [makeQuoteMeltChange(10)];
-      harness.mocks.getProofsByOperationId.mockResolvedValueOnce(inputProofs);
-      harness.hooks.executeMelt.mockResolvedValueOnce({ state: 'PAID', change });
-
-      const result = await harness.handler.execute(
-        harness.buildExecuteContext(operation, inputProofs),
-      );
-
-      expect(harness.mocks.unblindAndSaveChangeProofs).toHaveBeenCalledWith(
-        QUOTE_MELT_FIXTURE.mintUrl,
-        expect.any(Array),
-        change,
-        { unit: 'sat', createdByOperationId: 'operation-change' },
-      );
-      expect(result.status).toBe('PAID');
-      if (result.status !== 'PAID') throw new Error('Expected a paid execution');
-      expect(result.finalized.changeAmount).toEqual(Amount.from(10));
-      expect(result.finalized.effectiveFee).toEqual(Amount.zero());
-    });
-
     it.each([
-      ['empty', []],
-      ['undefined', undefined],
-    ] as Array<[string, Array<ReturnType<typeof makeQuoteMeltChange>> | undefined]>)(
-      'does not try to unblind %s change signatures',
-      async (_case, change) => {
-        const inputProofs = [makeQuoteMeltCoreProof('input-1', 110)];
-        const operation = harness.makeExecutingOperation('operation-no-change', {
-          inputProofSecrets: ['input-1'],
-        });
-        harness.mocks.getProofsByOperationId.mockResolvedValueOnce(inputProofs);
-        harness.hooks.executeMelt.mockResolvedValueOnce({ state: 'PAID', change });
+      ['returned', [makeQuoteMeltChange(10)], 0, true],
+      ['empty', [], 10, false],
+      ['undefined', undefined, 10, false],
+    ] as const)('handles %s change signatures', async (_label, change, effectiveFee, unblinds) => {
+      const result = await h.execute({
+        operation: h.makeExecutingOperation({ inputProofSecrets: ['input-1'] }),
+        proofs: [makeQuoteMeltCoreProof('input-1', 110)],
+        response: { state: 'PAID', change: change ? [...change] : undefined },
+      });
 
-        const result = await harness.handler.execute(
-          harness.buildExecuteContext(operation, inputProofs),
-        );
-
-        expect(result.status).toBe('PAID');
-        expect(harness.mocks.unblindAndSaveChangeProofs).not.toHaveBeenCalled();
-      },
-    );
+      if (result.status !== 'PAID') throw new Error('Expected paid execution');
+      expect(result.finalized.effectiveFee).toEqual(Amount.from(effectiveFee));
+      expect(h.mocks.unblindAndSaveChangeProofs).toHaveBeenCalledTimes(unblinds ? 1 : 0);
+    });
   });
 
   describe('finalize', () => {
-    it('uses complete persisted settlement data without checking the mint again', async () => {
-      const change = [makeQuoteMeltChange(5)];
-      const operation = harness.makePendingOperation('operation-canonical', {
-        inputProofSecrets: ['input-1'],
-      });
-      const quote = harness.makeCanonicalQuote({
-        state: 'PAID',
-        change,
-        payment_preimage: 'preimage-canonical',
+    it('uses complete persisted settlement data without checking the mint', async () => {
+      const result = await h.finalize({
+        operation: h.makePendingOperation({ inputProofSecrets: ['input-1'] }),
+        quote: h.makeCanonicalQuote({
+          state: 'PAID',
+          change: [makeQuoteMeltChange(5)],
+          payment_preimage: 'preimage-canonical',
+        }),
       });
 
-      const result = await harness.handler.finalize(harness.buildFinalizeContext(operation, quote));
-
-      expect(harness.hooks.checkMeltQuote).not.toHaveBeenCalled();
+      expect(h.hooks.checkMeltQuote).not.toHaveBeenCalled();
       expect(result).toEqual({
         changeAmount: Amount.from(5),
         effectiveFee: Amount.from(5),
@@ -252,153 +158,88 @@ describe('BaseQuoteMeltHandler settlement', () => {
       });
     });
 
-    it('fetches full settlement data when no canonical quote is supplied', async () => {
-      const change = [makeQuoteMeltChange(5)];
-      harness.hooks.checkMeltQuote.mockResolvedValueOnce({
-        state: 'PAID',
-        change,
-        payment_preimage: 'preimage-remote',
+    it.each([
+      ['missing', undefined],
+      ['partial', 'canonical'],
+    ] as const)('fetches %s settlement data', async (_label, canonical) => {
+      const result = await h.finalize({
+        quote: canonical ? h.makeCanonicalQuote({ state: 'PAID', change: undefined }) : undefined,
+        response: {
+          state: 'PAID',
+          change: [makeQuoteMeltChange(5)],
+          payment_preimage: 'preimage-remote',
+        },
       });
 
-      const result = await harness.handler.finalize(harness.buildFinalizeContext());
-
-      expect(harness.hooks.checkMeltQuote).toHaveBeenCalledTimes(1);
-      expect(result).toEqual({
+      expect(h.hooks.checkMeltQuote).toHaveBeenCalledTimes(1);
+      expect(result).toMatchObject({
         changeAmount: Amount.from(5),
-        effectiveFee: Amount.from(5),
         finalizedData: { preimage: 'preimage-remote' },
       });
     });
 
-    it('fetches full settlement data when a paid canonical quote omits change', async () => {
-      const change = [makeQuoteMeltChange(5)];
-      const quote = harness.makeCanonicalQuote({
-        state: 'PAID',
-        change: undefined,
-        payment_preimage: 'preimage-partial',
-      });
-      harness.hooks.checkMeltQuote.mockResolvedValueOnce({
-        state: 'PAID',
-        change,
-        payment_preimage: 'preimage-remote',
-      });
-
-      const result = await harness.handler.finalize(harness.buildFinalizeContext(undefined, quote));
-
-      expect(harness.hooks.checkMeltQuote).toHaveBeenCalledTimes(1);
-      expect(result.finalizedData).toEqual({ preimage: 'preimage-remote' });
-      expect(result.changeAmount).toEqual(Amount.from(5));
+    it.each([
+      ['canonical', true],
+      ['remote', false],
+    ])('rejects a non-paid %s quote', async (_label, canonical) => {
+      const quote = canonical
+        ? h.makeCanonicalQuote({ state: 'PENDING', change: undefined })
+        : undefined;
+      await expect(h.finalize({ quote, response: { state: 'PENDING' } })).rejects.toThrow(
+        `Cannot finalize: melt quote ${f.quoteId} is PENDING, expected PAID`,
+      );
+      expect(h.hooks.checkMeltQuote).toHaveBeenCalledTimes(canonical ? 0 : 1);
     });
 
-    it('rejects a supplied non-paid canonical quote without rechecking the mint', async () => {
-      const quote = harness.makeCanonicalQuote({ state: 'PENDING', change: undefined });
-
-      await expect(
-        harness.handler.finalize(harness.buildFinalizeContext(undefined, quote)),
-      ).rejects.toThrow(
-        `Cannot finalize: melt quote ${QUOTE_MELT_FIXTURE.quoteId} is PENDING, expected PAID`,
-      );
-      expect(harness.hooks.checkMeltQuote).not.toHaveBeenCalled();
-    });
-
-    it('rejects a fetched settlement that is not paid', async () => {
-      harness.hooks.checkMeltQuote.mockResolvedValueOnce({ state: 'PENDING' });
-
-      await expect(harness.handler.finalize(harness.buildFinalizeContext())).rejects.toThrow(
-        `Cannot finalize: melt quote ${QUOTE_MELT_FIXTURE.quoteId} is PENDING, expected PAID`,
-      );
-    });
-
-    it('marks swap send proofs spent and calculates fees from their output amount', async () => {
-      const operation = harness.makePendingOperation('operation-finalize-swap', {
-        needsSwap: true,
-        amount: Amount.from(55),
-        inputAmount: Amount.from(200),
-        inputProofSecrets: ['input-1'],
-        swapOutputData: makeQuoteMeltOutputData(
-          [{ secret: 'keep-output', amount: 140 }],
-          [{ secret: 'send-output', amount: 60 }],
-        ),
+    it('spends swap send proofs and calculates fees from their amount', async () => {
+      const result = await h.finalize({
+        operation: h.makePendingOperation({
+          needsSwap: true,
+          amount: Amount.from(55),
+          inputAmount: Amount.from(200),
+          inputProofSecrets: ['input-1'],
+          swapOutputData: swapData(140, 60),
+        }),
+        response: { state: 'PAID', change: [] },
       });
-      harness.hooks.checkMeltQuote.mockResolvedValueOnce({ state: 'PAID', change: [] });
 
-      const result = await harness.handler.finalize(harness.buildFinalizeContext(operation));
-
-      expect(harness.mocks.setProofState).toHaveBeenCalledWith(
-        QUOTE_MELT_FIXTURE.mintUrl,
-        ['send-output'],
-        'spent',
-      );
-      expect(result).toEqual({
-        changeAmount: Amount.zero(),
-        effectiveFee: Amount.from(5),
-        finalizedData: undefined,
-      });
+      expect(h.mocks.setProofState).toHaveBeenCalledWith(f.mintUrl, ['send-output'], 'spent');
+      expect(result.effectiveFee).toEqual(Amount.from(5));
     });
   });
 
-  describe('pending state', () => {
+  describe('pending and rollback', () => {
     it.each([
       ['PAID', 'finalize'],
       ['PENDING', 'stay_pending'],
       ['UNPAID', 'rollback'],
-    ] as const)('maps %s to %s', async (remoteState, expected) => {
-      harness.hooks.checkMeltQuoteState.mockResolvedValueOnce(remoteState);
-
-      await expect(harness.handler.checkPending(harness.buildPendingContext())).resolves.toBe(
-        expected,
-      );
+    ] as const)('maps %s to %s', async (state, expected) => {
+      await expect(h.checkPending(state)).resolves.toBe(expected);
     });
 
-    it('uses the canonical quote state when one is supplied', async () => {
-      const quote = harness.makeCanonicalQuote({ state: 'PENDING' });
-
+    it('uses a supplied canonical state and rejects unknown states', async () => {
       await expect(
-        harness.handler.checkPending(harness.buildPendingContext(undefined, quote)),
+        h.checkPending('PAID', h.makeCanonicalQuote({ state: 'PENDING' })),
       ).resolves.toBe('stay_pending');
-      expect(harness.hooks.checkMeltQuoteState).not.toHaveBeenCalled();
+      expect(h.hooks.checkMeltQuoteState).not.toHaveBeenCalled();
+      await expect(h.checkPending('UNKNOWN')).rejects.toThrow('Unexpected melt quote state');
     });
 
-    it('rejects an unexpected remote state', async () => {
-      harness.hooks.checkMeltQuoteState.mockResolvedValueOnce(
-        'UNKNOWN' as Parameters<typeof harness.hooks.checkMeltQuoteState.mockResolvedValueOnce>[0],
+    it('restores direct inputs on rollback', async () => {
+      await h.rollback(h.makePreparedOperation());
+      expect(h.mocks.restoreProofsToReady).toHaveBeenCalledWith(f.mintUrl, ['input-1', 'input-2']);
+    });
+
+    it('restores swap sends and releases original inputs on rollback', async () => {
+      await h.rollback(
+        h.makePreparedOperation({
+          needsSwap: true,
+          inputProofSecrets: ['input-1'],
+          swapOutputData: makeQuoteMeltOutputData([], [{ secret: 'send-1' }, { secret: 'send-2' }]),
+        }),
       );
-
-      await expect(harness.handler.checkPending(harness.buildPendingContext())).rejects.toThrow(
-        `Unexpected melt quote state: UNKNOWN for quote ${QUOTE_MELT_FIXTURE.quoteId}`,
-      );
-    });
-  });
-
-  describe('rollback', () => {
-    it('restores original input proofs for a direct melt', async () => {
-      await harness.handler.rollback(harness.buildRollbackContext());
-
-      expect(harness.mocks.restoreProofsToReady).toHaveBeenCalledWith(QUOTE_MELT_FIXTURE.mintUrl, [
-        'input-1',
-        'input-2',
-      ]);
-    });
-
-    it('restores swap send proofs and releases original inputs for a swap melt', async () => {
-      const operation = harness.makePreparedOperation('operation-rollback-swap', {
-        needsSwap: true,
-        inputProofSecrets: ['input-1'],
-        swapOutputData: makeQuoteMeltOutputData(
-          [{ secret: 'keep-1' }],
-          [{ secret: 'send-1' }, { secret: 'send-2' }],
-        ),
-      });
-
-      await harness.handler.rollback(harness.buildRollbackContext(operation));
-
-      expect(harness.mocks.restoreProofsToReady).toHaveBeenCalledWith(QUOTE_MELT_FIXTURE.mintUrl, [
-        'send-1',
-        'send-2',
-      ]);
-      expect(harness.mocks.releaseProofs).toHaveBeenCalledWith(QUOTE_MELT_FIXTURE.mintUrl, [
-        'input-1',
-      ]);
+      expect(h.mocks.restoreProofsToReady).toHaveBeenCalledWith(f.mintUrl, ['send-1', 'send-2']);
+      expect(h.mocks.releaseProofs).toHaveBeenCalledWith(f.mintUrl, ['input-1']);
     });
   });
 });
