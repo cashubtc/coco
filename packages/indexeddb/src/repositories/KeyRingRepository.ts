@@ -1,10 +1,9 @@
-import { DerivationIndexExhaustedError } from '@cashu/coco-core/adapter';
+import Dexie from 'dexie';
 import type { KeyRingRepository, Keypair, KeypairPurpose } from '@cashu/coco-core/adapter';
 import type { IdbDb } from '../lib/db.ts';
 import { hexToBytes, bytesToHex } from '../utils.ts';
 
 const DEFAULT_KEYPAIR_PURPOSE: KeypairPurpose = 'p2pk';
-const MAX_DERIVATION_INDEX = 0x7fffffff;
 const KEYPAIR_STORE = 'coco_cashu_keypairs';
 const ALLOCATION_STORE = 'coco_cashu_keypair_derivation_allocations';
 
@@ -109,41 +108,23 @@ export class IdbKeyRingRepository implements KeyRingRepository {
     };
   }
 
-  async deriveAndPersistKeyPair(
-    purpose: KeypairPurpose,
-    derive: (derivationIndex: number) => Pick<Keypair, 'publicKeyHex' | 'secretKey'>,
-  ): Promise<Keypair> {
-    return this.db.runTransaction('rw', [ALLOCATION_STORE, KEYPAIR_STORE], async (transaction) => {
-      const allocationTable = transaction.table(ALLOCATION_STORE);
-      const keypairTable = transaction.table(KEYPAIR_STORE);
-      const allocation = (await allocationTable.get(purpose)) as
-        | KeypairDerivationAllocationRow
-        | undefined;
-      const greatestStoredKeypair = (await keypairTable
-        .where('[purpose+derivationIndex]')
-        .between([purpose, 0], [purpose, MAX_DERIVATION_INDEX], true, true)
-        .last()) as KeypairRow | undefined;
-      const baseIndex = Math.max(
-        allocation?.lastAllocatedIndex ?? -1,
-        greatestStoredKeypair?.derivationIndex ?? -1,
-      );
+  async getLastAllocatedIndex(purpose: KeypairPurpose): Promise<number | null> {
+    const row = (await this.db.table(ALLOCATION_STORE).get(purpose)) as
+      | KeypairDerivationAllocationRow
+      | undefined;
+    return row?.lastAllocatedIndex ?? null;
+  }
 
-      if (baseIndex >= MAX_DERIVATION_INDEX) {
-        throw new DerivationIndexExhaustedError(purpose);
-      }
+  async getHighestStoredDerivationIndex(purpose: KeypairPurpose): Promise<number | null> {
+    const row = (await this.db
+      .table(KEYPAIR_STORE)
+      .where('[purpose+derivationIndex]')
+      .between([purpose, Dexie.minKey], [purpose, Dexie.maxKey])
+      .last()) as KeypairRow | undefined;
+    return row?.derivationIndex ?? null;
+  }
 
-      const nextIndex = baseIndex + 1;
-      const keyPair = { ...derive(nextIndex), derivationIndex: nextIndex, purpose };
-
-      await keypairTable.put({
-        publicKey: keyPair.publicKeyHex,
-        secretKey: bytesToHex(keyPair.secretKey),
-        createdAt: Date.now(),
-        derivationIndex: nextIndex,
-        purpose,
-      });
-      await allocationTable.put({ purpose, lastAllocatedIndex: nextIndex });
-      return keyPair;
-    });
+  async setLastAllocatedIndex(purpose: KeypairPurpose, derivationIndex: number): Promise<void> {
+    await this.db.table(ALLOCATION_STORE).put({ purpose, lastAllocatedIndex: derivationIndex });
   }
 }

@@ -2,12 +2,20 @@ import { Amount } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect } from 'bun:test';
 import { KeyRingService } from '../../services/KeyRingService.ts';
 import { SeedService } from '../../services/SeedService.ts';
-import { MemoryKeyRingRepository } from '../../repositories/memory/MemoryKeyRingRepository.ts';
+import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 import { DerivationIndexExhaustedError } from '../../models/Error.ts';
 import { bytesToHex } from '@noble/curves/utils.js';
 import { schnorr, secp256k1 } from '@noble/curves/secp256k1.js';
 import type { Proof } from '@cashu/cashu-ts';
-import type { Keypair, KeypairPurpose } from '../../models/Keypair.ts';
+import type {
+  KeyRingRepository,
+  Repositories,
+  RepositoryTransactionScope,
+} from '../../repositories';
+import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
+import { CoreKeyRingTransactions } from '../../transactions/keypairs/KeyRingTransactions.ts';
+import { KeypairDerivation } from '../../keypairs/KeypairDerivation.ts';
+import { KeypairP2pkSigner } from '../../keypairs/P2pkSigner.ts';
 
 // Mock seed for deterministic testing
 const MOCK_SEED = new Uint8Array(64);
@@ -16,14 +24,41 @@ for (let i = 0; i < 64; i++) {
 }
 
 describe('KeyRingService', () => {
-  let repo: MemoryKeyRingRepository;
+  let repositories: MemoryRepositories;
+  let repo: KeyRingRepository;
   let seedService: SeedService;
   let service: KeyRingService;
 
+  function createService(transactionRepositories: Repositories, seed: SeedService): KeyRingService {
+    const transactions = new CoreKeyRingTransactions(
+      new RepositoryCoreTransactionRunner(transactionRepositories),
+    );
+    return new KeyRingService(
+      transactionRepositories.keyRingRepository,
+      transactions,
+      new KeypairDerivation(() => seed.getSeed()),
+      new KeypairP2pkSigner(transactionRepositories.keyRingRepository),
+    );
+  }
+
+  function overrideTransactions(
+    base: Repositories,
+    withTransaction: Repositories['withTransaction'],
+  ): Repositories {
+    return new Proxy(base, {
+      get(target, property, receiver) {
+        if (property === 'withTransaction') return withTransaction;
+        const value = Reflect.get(target, property, receiver) as unknown;
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+  }
+
   beforeEach(() => {
-    repo = new MemoryKeyRingRepository();
+    repositories = new MemoryRepositories();
+    repo = repositories.keyRingRepository;
     seedService = new SeedService(async () => MOCK_SEED);
-    service = new KeyRingService(repo, seedService);
+    service = createService(repositories, seedService);
   });
 
   describe('generateNewKeyPair', () => {
@@ -89,9 +124,9 @@ describe('KeyRingService', () => {
       const kp1 = await service.generateNewKeyPair({ dumpSecretKey: true });
 
       // Create a new service with the same seed
-      const repo2 = new MemoryKeyRingRepository();
+      const repositories2 = new MemoryRepositories();
       const seedService2 = new SeedService(async () => MOCK_SEED);
-      const service2 = new KeyRingService(repo2, seedService2);
+      const service2 = createService(repositories2, seedService2);
 
       const kp2 = await service2.generateNewKeyPair({ dumpSecretKey: true });
 
@@ -145,7 +180,7 @@ describe('KeyRingService', () => {
     });
 
     it('coordinates concurrent services sharing one repository', async () => {
-      const secondService = new KeyRingService(repo, new SeedService(async () => MOCK_SEED));
+      const secondService = createService(repositories, new SeedService(async () => MOCK_SEED));
       const keyPairs = await Promise.all([
         ...Array.from({ length: 16 }, () => service.generateMintQuoteKeyPair()),
         ...Array.from({ length: 16 }, () => secondService.generateMintQuoteKeyPair()),
@@ -179,23 +214,20 @@ describe('KeyRingService', () => {
     });
 
     it('does not expose or consume an index when atomic persistence fails', async () => {
-      class FailBeforeCommitRepository extends MemoryKeyRingRepository {
-        private failNextCommit = true;
-
-        override deriveAndPersistKeyPair(
-          purpose: KeypairPurpose,
-          derive: (derivationIndex: number) => Pick<Keypair, 'publicKeyHex' | 'secretKey'>,
-        ): Promise<Keypair> {
-          if (this.failNextCommit) {
-            this.failNextCommit = false;
-            return Promise.reject(new Error('commit failed'));
-          }
-          return super.deriveAndPersistKeyPair(purpose, derive);
-        }
-      }
-
-      const failingRepository = new FailBeforeCommitRepository();
-      const failingService = new KeyRingService(failingRepository, seedService);
+      let failNextCommit = true;
+      const failingRepositories = overrideTransactions(
+        repositories,
+        async <T>(fn: (scope: RepositoryTransactionScope) => Promise<T>) =>
+          repositories.withTransaction(async (scope) => {
+            const result = await fn(scope);
+            if (failNextCommit) {
+              failNextCommit = false;
+              throw new Error('commit failed');
+            }
+            return result;
+          }),
+      );
+      const failingService = createService(failingRepositories, seedService);
 
       await expect(failingService.generateMintQuoteKeyPair()).rejects.toThrow('commit failed');
       await expect(failingService.generateMintQuoteKeyPair()).resolves.toMatchObject({
@@ -212,13 +244,20 @@ describe('KeyRingService', () => {
         }
         return MOCK_SEED;
       });
-      const failingService = new KeyRingService(repo, failingSeedService);
+      let transactionCalls = 0;
+      const trackingRepositories = overrideTransactions(repositories, async (fn) => {
+        transactionCalls++;
+        return repositories.withTransaction(fn);
+      });
+      const failingService = createService(trackingRepositories, failingSeedService);
 
       await expect(failingService.generateMintQuoteKeyPair()).rejects.toThrow('seed unavailable');
+      expect(transactionCalls).toBe(0);
       expect(await repo.getAllPersistedKeyPairs('nut20_mint_quote')).toEqual([]);
       await expect(failingService.generateMintQuoteKeyPair()).resolves.toMatchObject({
         derivationIndex: 0,
       });
+      expect(transactionCalls).toBe(1);
     });
 
     it('does not return the keypair before the repository commit completes', async () => {
@@ -231,20 +270,17 @@ describe('KeyRingService', () => {
         reportPersistenceStarted = resolve;
       });
 
-      class BlockingPersistenceRepository extends MemoryKeyRingRepository {
-        override async deriveAndPersistKeyPair(
-          purpose: KeypairPurpose,
-          derive: (derivationIndex: number) => Pick<Keypair, 'publicKeyHex' | 'secretKey'>,
-        ): Promise<Keypair> {
-          const keyPair = await super.deriveAndPersistKeyPair(purpose, derive);
-          reportPersistenceStarted();
-          await persistenceGate;
-          return keyPair;
-        }
-      }
-
-      const blockingRepository = new BlockingPersistenceRepository();
-      const blockingService = new KeyRingService(blockingRepository, seedService);
+      const blockingRepositories = overrideTransactions(
+        repositories,
+        async <T>(fn: (scope: RepositoryTransactionScope) => Promise<T>) =>
+          repositories.withTransaction(async (scope) => {
+            const keyPair = await fn(scope);
+            reportPersistenceStarted();
+            await persistenceGate;
+            return keyPair;
+          }),
+      );
+      const blockingService = createService(blockingRepositories, seedService);
       let generationSettled = false;
       const generation = blockingService.generateMintQuoteKeyPair().then((keyPair) => {
         generationSettled = true;
@@ -258,7 +294,7 @@ describe('KeyRingService', () => {
       releasePersistence();
       const keyPair = await generation;
       expect(
-        await blockingRepository.getPersistedKeyPair(keyPair.publicKeyHex, 'nut20_mint_quote'),
+        await repo.getPersistedKeyPair(keyPair.publicKeyHex, 'nut20_mint_quote'),
       ).not.toBeNull();
     });
 
@@ -307,9 +343,10 @@ describe('KeyRingService', () => {
       ];
 
       // Wipe the database by creating a fresh repository
-      repo = new MemoryKeyRingRepository();
+      repositories = new MemoryRepositories();
+      repo = repositories.keyRingRepository;
       // Create a new service with the same seed
-      service = new KeyRingService(repo, seedService);
+      service = createService(repositories, seedService);
 
       // Generate 3 keys again with the new service
       const key1Again = await service.generateNewKeyPair({ dumpSecretKey: true });

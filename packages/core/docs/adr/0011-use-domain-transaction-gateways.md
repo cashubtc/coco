@@ -4,9 +4,50 @@ status: accepted
 
 # Use domain transaction gateways for critical Wallet mutations
 
-Coco uses one composition-root-owned transaction runner behind narrow domain transaction gateways
-for critical Wallet mutations. Orchestration performs preflight, remote mint I/O, and post-commit
-events, while each authoritative local transition uses one adapter transaction; this avoids
-repository access and transaction-scoped service clones in orchestration while remaining portable
-to IndexedDB. Send and core Receive validate the seam incrementally, while durable outbox delivery
-and systematic network fault injection remain separate work.
+Coco uses Operation Services as the coordinators for durable operations. A migrated Operation
+Service depends on narrow Queries, local capabilities, remote interfaces, and its own
+application-scoped `*Transactions` interface; it does not receive repositories, the raw
+`CoreTransactionRunner`, or another domain's transaction gateway.
+
+Each `*Transactions` method owns exactly one adapter transaction and returns only after commit.
+Cross-domain writes compose through transaction-scoped modules created from the same short-lived
+`CoreTransaction`; those modules never open transactions or perform remote I/O. Preflight and
+remote mint I/O remain outside transactions, authoritative reads are repeated inside them, and live
+events are published only after commit. [Transaction Design](../../../../TRANSACTION_DESIGN.md)
+defines the detailed dependency, lifetime, retry, and incremental-migration contract.
+
+An application-scoped `*Transactions` implementation is a leaf adapter around its
+`CoreTransactionRunner`. Its caller completes preflight and supplies transaction-ready command
+data. The gateway does not depend on regular Services, remote infrastructure, the live `EventBus`,
+root repositories, or another application-scoped transaction gateway. Existing dependencies that
+violate this boundary are removed in their owning workflow migrations; new transaction-aware work
+follows the contract immediately.
+
+Shared domain modules own reusable invariants and algorithms; operation-specific modules compose
+them into atomic transitions. Shared implementations receive repositories from the current
+transaction scope and never receive a runner, root repository container, or gateway, including
+through helpers. Standalone use wraps the same commands in a gateway; composed use invokes those
+commands within the owning transaction. Optional transaction parameters with implicit transaction
+creation are forbidden. This preserves reuse without permitting nested transactions.
+
+For Keypair Allocation, the scoped command reads the durable high-water mark and greatest stored
+index, chooses and validates the next index, invokes the synchronous deriver, and persists the key
+and high-water mark. Repositories expose only the underlying reads and writes; derivation and
+allocation retries do not belong in adapters. The runner retries the whole owning transaction.
+
+Queries and preflight capabilities cannot hide Wallet writes. Narrow interfaces may share one
+implementation, and no domain is required to reproduce every architectural layer. Use
+`<Domain>Queries` consistently for read-only state interfaces, without equivalent `*ReadPort`
+aliases or extra wrapper layers. Reserve
+`Operation` for durable sagas and use `Scoped*Commands` for in-transaction behavior.
+Reserve `*Transactions` for gateways; keep scoped implementations and helpers under
+`transactions/scoped/**`. The [naming convention](../../../../TRANSACTION_DESIGN.md#naming-convention)
+distinguishes coordinators, gateways, scoped commands, the scope, and the runner without an ambiguous
+`Transactional*` prefix. The keypair implementation is the initial baseline; later proof, output,
+counter, and handler migrations reuse these rules.
+
+The team relies on mandatory agent review of the documented contract, human code review, scoped
+types, and behavior tests. A custom architecture guard is not maintained: its partial static
+analysis adds maintenance cost without establishing effect safety. Agents follow the
+[review steps](../../../../TRANSACTION_DESIGN.md#agent-review), inspect indirect dependencies and
+composition-root wiring, and report the boundaries checked and remaining deviations before handoff.
