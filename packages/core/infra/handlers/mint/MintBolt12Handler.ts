@@ -1,17 +1,10 @@
 import { Amount, type MintQuoteBolt12Response, type Wallet } from '@cashu/cashu-ts';
 import { assertSameUnit, normalizeUnitAmount } from '@core/amounts';
 import type { KeyRingService } from '@core/services';
-import { deserializeOutputData, mapProofToCoreProof, serializeOutputData } from '@core/utils';
-import { bytesToHex } from '@noble/curves/utils.js';
-import {
-  MintOperationError,
-  MintQuoteKeyError,
-  MintQuoteValidationError,
-} from '../../../models/Error';
+import { MintQuoteValidationError } from '../../../models/Error';
 import { mintQuoteFromBolt12Response, type MintQuote } from '../../../models/MintQuote';
 import { mintQuoteObservationFromBolt12Response } from '../../../models/MintQuoteObservationFactory';
-import { assessMintQuoteClaimability } from '../../../models/MintQuoteClaimability.ts';
-import { getReusableMintQuoteValidationError } from './ReusableMintQuoteValidation.ts';
+import { ReusableMintLifecycle } from './ReusableMintLifecycle';
 import type {
   CreateMintQuoteContext,
   ExecuteContext,
@@ -27,7 +20,24 @@ import type {
 } from '../../../operations/mint';
 
 export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
-  constructor(private readonly keyRingService: KeyRingService) {}
+  private readonly lifecycle: ReusableMintLifecycle<'bolt12'>;
+
+  constructor(private readonly keyRingService: KeyRingService) {
+    this.lifecycle = new ReusableMintLifecycle(keyRingService, {
+      method: 'bolt12',
+      quoteLabel: 'BOLT12',
+      recoveryLabel: 'BOLT12',
+      initialAlreadyIssued: 'return',
+      assertQuoteMatchesRequest: (quote, pubkey, unit) =>
+        this.assertQuoteMatchesRequest(quote, pubkey, unit),
+      toObservation: mintQuoteObservationFromBolt12Response,
+      mintProofs: (wallet, amount, quote, secretKey, outputs) =>
+        wallet.mintProofsBolt12(amount, quote, secretKey, undefined, {
+          type: 'custom',
+          data: outputs,
+        }),
+    });
+  }
 
   async createQuote(ctx: CreateMintQuoteContext<'bolt12'>): Promise<MintQuote<'bolt12'>> {
     const quoteKey = await this.keyRingService.generateMintQuoteKeyPair();
@@ -69,248 +79,25 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
   }
 
   async validateQuoteForPrepare(quote: MintQuote<'bolt12'>): Promise<void> {
-    await this.requireQuoteKey(quote.quoteData.pubkey);
+    return this.lifecycle.validateQuoteForPrepare(quote);
   }
 
   async prepare(ctx: PrepareContext<'bolt12'>): Promise<PendingMintOperation<'bolt12'>> {
-    const quote = ctx.importedQuote;
-    if (!quote) {
-      throw new Error(`Mint quote ${ctx.operation.quoteId ?? '(missing)'} was not provided`);
-    }
-
-    if (ctx.operation.quoteId !== quote.quote) {
-      throw new MintQuoteValidationError(
-        `Mint quote ${quote.quote} does not match operation quote ${ctx.operation.quoteId}`,
-      );
-    }
-
-    assertSameUnit(quote.unit, ctx.operation.unit, `BOLT12 mint quote ${quote.quote}`);
-    await this.requireQuoteKey(quote.pubkey);
-
-    const outputData = await ctx.proofService.createOutputsAndIncrementCounters(
-      ctx.operation.mintUrl,
-      {
-        keep: { amount: ctx.operation.amount, unit: ctx.operation.unit },
-        send: { amount: Amount.zero(), unit: ctx.operation.unit },
-      },
-      {},
-    );
-
-    if (outputData.keep.length === 0) {
-      throw new Error('Failed to create deterministic outputs for BOLT12 mint operation');
-    }
-
-    return {
-      ...ctx.operation,
-      quoteId: quote.quote,
-      request: quote.request,
-      expiry: quote.expiry,
-      pubkey: quote.pubkey,
-      outputData: serializeOutputData({ keep: outputData.keep, send: [] }),
-      state: 'pending',
-    };
+    return this.lifecycle.prepare(ctx);
   }
 
   async execute(ctx: ExecuteContext<'bolt12'>): Promise<MintExecutionResult> {
-    const quoteKey = await this.keyRingService.getMintQuoteKeyPair(ctx.operation.pubkey ?? '');
-    if (!quoteKey) {
-      throw new MintQuoteKeyError(
-        `Missing NUT-20 mint quote key for pubkey ${ctx.operation.pubkey ?? '(missing)'}`,
-      );
-    }
-
-    const outputData = deserializeOutputData(ctx.operation.outputData);
-    const remoteQuote = await ctx.mintAdapter.checkMintQuote(
-      ctx.operation.mintUrl,
-      'bolt12',
-      ctx.operation.quoteId,
-    );
-    this.assertQuoteMatchesRequest(remoteQuote, ctx.operation.pubkey ?? '', ctx.operation.unit);
-    const assessment = assessMintQuoteClaimability(
-      mintQuoteObservationFromBolt12Response(ctx.operation.mintUrl, remoteQuote),
-      { requestedAmount: ctx.operation.amount },
-    );
-    if (assessment.status === 'invalid') {
-      throw new MintQuoteValidationError(
-        `BOLT12 mint quote ${ctx.operation.quoteId} is not claimable: ${assessment.status}`,
-      );
-    }
-
-    try {
-      const proofs = await ctx.wallet.mintProofsBolt12(
-        ctx.operation.amount,
-        remoteQuote,
-        bytesToHex(quoteKey.secretKey),
-        undefined,
-        { type: 'custom', data: outputData.keep },
-      );
-
-      return { status: 'ISSUED', proofs };
-    } catch (error) {
-      if (this.isAlreadyIssuedError(error)) {
-        return { status: 'ALREADY_ISSUED' };
-      }
-      throw error;
-    }
+    return this.lifecycle.execute(ctx);
   }
 
   async recoverExecuting(ctx: RecoverExecutingContext<'bolt12'>): Promise<RecoverExecutingResult> {
-    const restored = await this.recoverSignedOutputs(ctx);
-    if (restored) {
-      return restored;
-    }
-
-    const { operation } = ctx;
-    const expectedPubkey = operation.pubkey;
-    if (!expectedPubkey) {
-      return {
-        status: 'TERMINAL',
-        error: `Recovered: BOLT12 mint operation ${operation.id} is missing NUT-20 quote pubkey`,
-      };
-    }
-
-    let remoteQuote: MintQuoteBolt12Response;
-    try {
-      remoteQuote = await ctx.mintAdapter.checkMintQuote(
-        operation.mintUrl,
-        'bolt12',
-        operation.quoteId,
-      );
-    } catch (error) {
-      ctx.logger?.warn('Failed to check BOLT12 mint quote during recovery', {
-        mintUrl: operation.mintUrl,
-        quoteId: operation.quoteId,
-        operationId: operation.id,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return {
-        status: 'PENDING',
-        error: error instanceof Error ? error.message : String(error),
-      };
-    }
-
-    const validationError = this.getQuoteValidationError(
-      remoteQuote,
-      expectedPubkey,
-      operation.unit,
-    );
-    if (validationError) {
-      return {
-        status: 'TERMINAL',
-        error: validationError.message,
-      };
-    }
-
-    const quoteKey = await this.keyRingService.getMintQuoteKeyPair(expectedPubkey);
-    if (!quoteKey) {
-      return {
-        status: 'TERMINAL',
-        error: `Missing NUT-20 mint quote key for pubkey ${expectedPubkey}`,
-      };
-    }
-
-    const assessment = assessMintQuoteClaimability(
-      mintQuoteObservationFromBolt12Response(operation.mintUrl, remoteQuote),
-      { ...ctx.localClaimabilityFacts, requestedAmount: operation.amount },
-    );
-    if (assessment.status === 'invalid') {
-      return {
-        status: 'TERMINAL',
-        error: `Recovered: BOLT12 quote ${operation.quoteId} has invalid claimability accounting`,
-      };
-    }
-    if (assessment.status !== 'claimable') {
-      return {
-        status: 'PENDING',
-        error: `Recovered: BOLT12 quote ${operation.quoteId} has ${assessment.remoteAvailable} remotely available, requested ${operation.amount}`,
-      };
-    }
-
-    const outputData = deserializeOutputData(operation.outputData);
-    try {
-      const proofs = await ctx.wallet.mintProofsBolt12(
-        operation.amount,
-        remoteQuote,
-        bytesToHex(quoteKey.secretKey),
-        undefined,
-        { type: 'custom', data: outputData.keep },
-      );
-
-      await ctx.proofService.saveProofs(
-        operation.mintUrl,
-        mapProofToCoreProof(operation.mintUrl, 'ready', proofs, {
-          unit: operation.unit,
-          createdByOperationId: operation.id,
-        }),
-      );
-
-      return { status: 'FINALIZED' };
-    } catch (error) {
-      if (this.isAlreadyIssuedError(error)) {
-        return (
-          (await this.recoverSignedOutputs(ctx)) ?? {
-            status: 'PENDING',
-            error: `Recovered: BOLT12 quote ${operation.quoteId} was already issued but proofs were not recoverable`,
-          }
-        );
-      }
-
-      if (error instanceof MintOperationError && error.code === 20007) {
-        return {
-          status: 'TERMINAL',
-          error: `Recovered: BOLT12 quote ${operation.quoteId} expired while executing mint`,
-        };
-      }
-
-      return {
-        status: 'PENDING',
-        error: error instanceof Error ? error.message : String(error),
-      };
-    }
+    return this.lifecycle.recoverExecuting(ctx);
   }
 
   async checkPending(
     ctx: PendingContext<'bolt12'>,
   ): Promise<PendingMintObservationResult<'bolt12'>> {
-    const { operation } = ctx;
-    const observedAt = Date.now();
-    const remoteQuote = await ctx.mintAdapter.checkMintQuote(
-      operation.mintUrl,
-      'bolt12',
-      operation.quoteId,
-    );
-    const expectedPubkey = operation.pubkey;
-
-    const validationError = getReusableMintQuoteValidationError(remoteQuote, operation);
-    if (validationError) {
-      return {
-        observedAt,
-        validationFailure: {
-          reason: validationError.message,
-          code: 'invalid_quote',
-          retryable: false,
-          observedAt,
-        },
-      };
-    }
-
-    if (!expectedPubkey) {
-      return {
-        observedAt,
-        quoteSnapshot: remoteQuote,
-        validationFailure: {
-          reason: `BOLT12 mint operation ${operation.id} is missing NUT-20 quote pubkey`,
-          code: 'missing_quote_pubkey',
-          retryable: false,
-          observedAt,
-        },
-      };
-    }
-
-    return {
-      observedAt,
-      quoteSnapshot: remoteQuote,
-    };
+    return this.lifecycle.checkPending(ctx);
   }
 
   private async createRemoteQuote(
@@ -328,13 +115,6 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
     });
     assertSameUnit(quote.unit, payload.unit, `BOLT12 mint quote ${quote.quote}`);
     return quote;
-  }
-
-  private async requireQuoteKey(pubkey: string): Promise<void> {
-    const quoteKey = await this.keyRingService.getMintQuoteKeyPair(pubkey);
-    if (!quoteKey) {
-      throw new MintQuoteKeyError(`Missing NUT-20 mint quote key for pubkey ${pubkey}`);
-    }
   }
 
   private assertQuoteMatchesRequest(
@@ -365,55 +145,5 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
           `does not match requested amount ${expectedAmount}`,
       );
     }
-  }
-
-  private async recoverSignedOutputs(
-    ctx: RecoverExecutingContext<'bolt12'>,
-  ): Promise<RecoverExecutingResult | null> {
-    try {
-      const recovered = await ctx.proofService.recoverProofsFromOutputData(
-        ctx.operation.mintUrl,
-        ctx.operation.outputData,
-        {
-          unit: ctx.operation.unit,
-          createdByOperationId: ctx.operation.id,
-        },
-      );
-
-      return recovered.length > 0 ? { status: 'FINALIZED' } : null;
-    } catch (error) {
-      ctx.logger?.warn('Failed to recover BOLT12 mint outputs from output data', {
-        mintUrl: ctx.operation.mintUrl,
-        quoteId: ctx.operation.quoteId,
-        operationId: ctx.operation.id,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return {
-        status: 'PENDING',
-        error: error instanceof Error ? error.message : String(error),
-      };
-    }
-  }
-
-  private getQuoteValidationError(
-    quote: MintQuoteBolt12Response,
-    expectedPubkey: string,
-    expectedUnit: string,
-  ): Error | null {
-    try {
-      this.assertQuoteMatchesRequest(quote, expectedPubkey, expectedUnit);
-      return null;
-    } catch (error) {
-      return error instanceof Error ? error : new Error(String(error));
-    }
-  }
-
-  private isAlreadyIssuedError(error: unknown): boolean {
-    if (error instanceof MintOperationError && (error.code === 20002 || error.code === 11003)) {
-      return true;
-    }
-
-    const message = error instanceof Error ? error.message : String(error);
-    return /already (issued|signed)|outputs? already/i.test(message);
   }
 }

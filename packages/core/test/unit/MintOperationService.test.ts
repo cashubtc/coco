@@ -25,11 +25,16 @@ import type {
   PendingMintObservationResult,
   RecoverExecutingResult,
 } from '../../operations/mint/MintMethodHandler';
-import type { MintHandlerProvider } from '../../infra/handlers/mint';
+import {
+  MintHandlerProvider,
+  MintBolt12Handler,
+  MintOnchainHandler,
+} from '../../infra/handlers/mint';
+import type { KeyRingService } from '../../services/KeyRingService';
 import { MemoryMintOperationRepository } from '../../repositories/memory/MemoryMintOperationRepository';
 import { MemoryMintQuoteRepository } from '../../repositories/memory/MemoryMintQuoteRepository';
 import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepository';
-import { getMintQuoteAvailableAmount } from '../../models/MintQuote';
+import { getMintQuoteAvailableAmount, mintQuoteToMethodSnapshot } from '../../models/MintQuote';
 import { mintQuoteObservationFromOnchainResponse } from '../../models/MintQuoteObservationFactory';
 import {
   cashuNormalizedBolt11Fixture,
@@ -46,7 +51,11 @@ import type { MintAdapter } from '../../infra/MintAdapter';
 import type { Logger } from '../../logging/Logger';
 import { serializeOutputData } from '../../utils';
 import type { CoreProof } from '../../types';
-import { MintQuoteValidationError, QuoteIdentityConflictError } from '../../models/Error';
+import {
+  MintOperationError,
+  MintQuoteValidationError,
+  QuoteIdentityConflictError,
+} from '../../models/Error';
 
 describe('MintOperationService', () => {
   const mintUrl = 'https://mint.test';
@@ -2645,6 +2654,78 @@ describe('MintOperationService', () => {
       `Recovered issued quote ${pendingOp.quoteId} but no proofs could be restored`,
     );
   });
+
+  it.each(['bolt12', 'onchain'] as const)(
+    'preserves the durable %s outcome when issuance was already completed but Restore is empty',
+    async (method) => {
+      if (method === 'bolt12') {
+        await persistBolt12Quote(quoteId, { paid: Amount.from(10) });
+      } else {
+        await persistOnchainQuote(quoteId, { paid: Amount.from(10) });
+      }
+      const quote = await quoteRepo.getMintQuote(mintUrl, method, quoteId);
+      if (!quote || quote.method === 'bolt11') throw new Error('Expected reusable quote');
+      const quoteKey = {
+        publicKeyHex: quote.quoteData.pubkey,
+        secretKey: new Uint8Array(32),
+      };
+      const keyRing = {
+        getMintQuoteKeyPair: mock(async () => quoteKey),
+      } as unknown as KeyRingService;
+      const realHandlers = new MintHandlerProvider({
+        bolt12: new MintBolt12Handler(keyRing),
+        onchain: new MintOnchainHandler(keyRing),
+      });
+      (handlerProvider.get as Mock<typeof handlerProvider.get>).mockImplementation(
+        realHandlers.get.bind(realHandlers),
+      );
+      const error = new MintOperationError(20002, 'already issued');
+      const walletResult = await walletService.getWalletWithActiveKeysetId(mintUrl, 'sat');
+      walletResult.wallet.mintProofsBolt12 = mock(async () => {
+        throw error;
+      });
+      walletResult.wallet.mintProofsOnchain = mock(async () => {
+        throw error;
+      });
+      (
+        walletService.getWalletWithActiveKeysetId as Mock<
+          typeof walletService.getWalletWithActiveKeysetId
+        >
+      ).mockResolvedValue(walletResult);
+      (mintAdapter.checkMintQuote as Mock<typeof mintAdapter.checkMintQuote>).mockResolvedValue({
+        ...mintQuoteToMethodSnapshot(quote),
+        amount_issued: Amount.from(10),
+      });
+      (
+        proofService.recoverProofsFromOutputData as Mock<
+          typeof proofService.recoverProofsFromOutputData
+        >
+      ).mockResolvedValue([]);
+      const pending: PendingMintOperation<typeof method> = {
+        ...makePendingOp(`already-issued-${method}`),
+        method,
+        pubkey: quote.quoteData.pubkey,
+        request: quote.request,
+      };
+      await operationRepo.create(pending);
+      const finalizedEvent = mock(() => {});
+      eventBus.on('mint-op:finalized', finalizedEvent);
+
+      if (method === 'bolt12') {
+        expect((await service.execute(pending.id)).state).toBe('finalized');
+        expect(await operationRepo.getById(pending.id)).toMatchObject({
+          state: 'finalized',
+          error: `Recovered issued quote ${quoteId} but no proofs could be restored`,
+        });
+        expect(finalizedEvent).toHaveBeenCalledTimes(1);
+      } else {
+        await expect(service.execute(pending.id)).rejects.toBe(error);
+        expect(await operationRepo.getById(pending.id)).toMatchObject({ state: 'pending' });
+        expect(finalizedEvent).not.toHaveBeenCalled();
+      }
+      expect(await proofRepo.getProofsByOperationId(mintUrl, pending.id)).toEqual([]);
+    },
+  );
 
   it('recoverPendingOperations cleans init operations and reconciles stale pending ones', async () => {
     const initOp = makeInitOp('init-1');

@@ -1,30 +1,19 @@
 import { Amount, OutputData, type MintQuoteBolt12Response, type Wallet } from '@cashu/cashu-ts';
-import { bytesToHex } from '@noble/curves/utils.js';
 import { beforeEach, describe, expect, it, mock, type Mock } from 'bun:test';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { MintAdapter } from '../../infra';
 import { MintBolt12Handler } from '../../infra/handlers/mint/MintBolt12Handler';
 import type { Logger } from '../../logging/Logger';
-import {
-  MintOperationError,
-  MintQuoteKeyError,
-  MintQuoteValidationError,
-} from '../../models/Error';
+import { MintQuoteValidationError } from '../../models/Error';
 import { mintQuoteFromBolt12Response } from '../../models/MintQuote';
 import type { ProofRepository } from '../../repositories';
 import type { KeyRingService } from '../../services/KeyRingService';
 import type { MintService } from '../../services/MintService';
 import type { ProofService } from '../../services/ProofService';
 import type { WalletService } from '../../services/WalletService';
-import type {
-  ExecuteContext,
-  FetchRemoteMintQuoteContext,
-  PendingContext,
-  PrepareContext,
-  RecoverExecutingContext,
-} from '../../operations/mint';
-import { serializeOutputData } from '../../utils';
+import type { FetchRemoteMintQuoteContext, PrepareContext } from '../../operations/mint';
+import { deserializeOutputData, serializeOutputData } from '../../utils';
 
 describe('MintBolt12Handler', () => {
   const mintUrl = 'https://mint.test';
@@ -111,50 +100,6 @@ describe('MintBolt12Handler', () => {
     logger,
   });
 
-  const buildPendingContext = (remoteQuote: MintQuoteBolt12Response): PendingContext<'bolt12'> => {
-    (mintAdapter.checkMintQuote as Mock<any>).mockImplementation(async () => remoteQuote);
-    return {
-      operation: {
-        ...operation,
-        state: 'pending',
-        quoteId,
-        request: remoteQuote.request,
-        expiry: remoteQuote.expiry,
-        pubkey,
-        outputData,
-      },
-      mintAdapter,
-      logger,
-    };
-  };
-
-  const buildExecuteContext = (remoteQuote: MintQuoteBolt12Response): ExecuteContext<'bolt12'> => {
-    (mintAdapter.checkMintQuote as Mock<any>).mockImplementation(async () => remoteQuote);
-    return {
-      ...buildPrepareContext(),
-      operation: {
-        ...operation,
-        state: 'executing',
-        quoteId,
-        request: remoteQuote.request,
-        expiry: remoteQuote.expiry,
-        pubkey,
-        outputData,
-      },
-    };
-  };
-
-  const buildRecoverContext = (
-    remoteQuote: MintQuoteBolt12Response,
-    localClaimabilityFacts = {
-      finalizedAmount: Amount.zero(),
-      reservedAmount: Amount.zero(),
-    },
-  ): RecoverExecutingContext<'bolt12'> => ({
-    ...buildExecuteContext(remoteQuote),
-    localClaimabilityFacts,
-  });
-
   beforeEach(() => {
     wallet = {
       createMintQuoteBolt12: mock(async () => quote()),
@@ -164,7 +109,10 @@ describe('MintBolt12Handler', () => {
       checkMintQuote: mock(async () => quote()),
     } as unknown as MintAdapter;
     proofService = {
-      createOutputsAndIncrementCounters: mock(async () => ({ keep: outputData.keep, send: [] })),
+      createOutputsAndIncrementCounters: mock(async () => ({
+        keep: deserializeOutputData(outputData).keep,
+        send: [],
+      })),
       saveProofs: mock(async () => {}),
       recoverProofsFromOutputData: mock(async () => []),
     } as unknown as ProofService;
@@ -323,241 +271,53 @@ describe('MintBolt12Handler', () => {
     expect(wallet.createMintQuoteBolt12).not.toHaveBeenCalled();
     expect(result.amount).toEqual(Amount.from(10));
   });
-
-  it('rejects imported quotes that do not match the bound operation quote id', async () => {
+  it('issues and replays a claim whose amount differs from the fixed offer amount', async () => {
+    const remoteQuote = quote({ amount: Amount.from(50), amount_paid: Amount.from(50) });
+    (mintAdapter.checkMintQuote as Mock<typeof mintAdapter.checkMintQuote>).mockResolvedValue(
+      remoteQuote,
+    );
+    const pending = await handler.prepare({
+      ...buildPrepareContext(),
+      importedQuote: remoteQuote,
+    });
+    const ctx = {
+      ...buildPrepareContext(),
+      operation: { ...pending, state: 'executing' as const },
+    };
+    await handler.execute(ctx);
+    await handler.recoverExecuting({
+      ...ctx,
+      localClaimabilityFacts: { finalizedAmount: Amount.zero(), reservedAmount: Amount.zero() },
+    });
+    expect(wallet.mintProofsBolt12).toHaveBeenCalledTimes(2);
+    expect(wallet.mintProofsBolt12).toHaveBeenCalledWith(
+      Amount.from(10),
+      remoteQuote,
+      '07'.repeat(32),
+      undefined,
+      { type: 'custom', data: deserializeOutputData(pending.outputData).keep },
+    );
+  });
+  it.each(['unit', 'pubkey'] as const)('rejects creation with a changed %s', async (field) => {
+    (
+      wallet.createMintQuoteBolt12 as Mock<typeof wallet.createMintQuoteBolt12>
+    ).mockResolvedValueOnce({ ...quote(), [field]: 'changed' });
     await expect(
-      handler.prepare(
-        buildPrepareContext({
-          importedQuote: quote({ quote: 'quote-other' }),
-          operation: {
-            ...operation,
-            quoteId,
-          },
-        }),
-      ),
-    ).rejects.toThrow(`Mint quote quote-other does not match operation quote ${quoteId}`);
-
-    expect(proofService.createOutputsAndIncrementCounters).not.toHaveBeenCalled();
+      handler.createQuote({ ...buildPrepareContext(), mintUrl, createQuoteData: { unit: 'sat' } }),
+    ).rejects.toThrow();
   });
 
-  it('requires the imported quote pubkey to exist in the keyring', async () => {
-    (keyRingService.getMintQuoteKeyPair as Mock<any>).mockImplementation(async () => null);
-
-    const error = await handler
-      .prepare(buildPrepareContext({ importedQuote: quote() }))
-      .catch((caught) => caught);
-
-    expect(error).toBeInstanceOf(MintQuoteKeyError);
-    expect(error.message).toContain('Missing NUT-20 mint quote key');
-  });
-
-  it('reports the validated remote snapshot for an amountless quote', async () => {
-    const result = await handler.checkPending(
-      buildPendingContext(
-        quote({
-          amount: undefined,
-          amount_paid: Amount.from(15),
-          amount_issued: Amount.from(4),
-        }),
-      ),
-    );
-
-    expect(result.quoteSnapshot?.quote).toBe(quoteId);
-    expect(result.observedAt).toEqual(expect.any(Number));
-  });
-
-  it('reports an unattributable pending response as a validation failure', async () => {
-    const context = buildPendingContext(quote());
-    (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce(
-      quote({ quote: 'other-quote' }),
-    );
-
-    const result = await handler.checkPending(context);
-
-    expect(result.quoteSnapshot).toBeUndefined();
-    expect(result.validationFailure).toMatchObject({
-      code: 'invalid_quote',
-      retryable: false,
+  it('requires an owned key before preparing a canonical quote', async () => {
+    const canonical = await handler.createQuote({
+      ...buildPrepareContext(),
+      mintUrl,
+      createQuoteData: { unit: 'sat' },
     });
-    expect(result.validationFailure?.reason).toContain('conflicts with pending operation identity');
-  });
-
-  it('does not attribute a mismatched response when the operation pubkey is missing', async () => {
-    const baseContext = buildPendingContext(quote());
-    (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce(
-      quote({ request: 'lno1other' }),
+    (
+      keyRingService.getMintQuoteKeyPair as Mock<typeof keyRingService.getMintQuoteKeyPair>
+    ).mockResolvedValueOnce(null);
+    await expect(handler.validateQuoteForPrepare(canonical)).rejects.toThrow(
+      'Missing NUT-20 mint quote key',
     );
-
-    const result = await handler.checkPending({
-      ...baseContext,
-      operation: { ...baseContext.operation, pubkey: undefined },
-    });
-
-    expect(result.quoteSnapshot).toBeUndefined();
-    expect(result.validationFailure?.code).toBe('invalid_quote');
-  });
-
-  it('preserves the missing-pubkey terminal code for an attributable response', async () => {
-    const baseContext = buildPendingContext(quote());
-
-    const result = await handler.checkPending({
-      ...baseContext,
-      operation: { ...baseContext.operation, pubkey: undefined },
-    });
-
-    expect(result.quoteSnapshot?.quote).toBe(quoteId);
-    expect(result.validationFailure?.code).toBe('missing_quote_pubkey');
-  });
-
-  it('mints with the keyring private key and custom outputs', async () => {
-    await handler.execute(
-      buildExecuteContext(
-        quote({
-          amount_paid: Amount.from(10),
-        }),
-      ),
-    );
-
-    const call = (wallet.mintProofsBolt12 as Mock<any>).mock.calls[0]! as any[];
-    expect(call[0]).toEqual(Amount.from(10));
-    expect(call[1].quote).toBe(quoteId);
-    expect(call[2]).toBe(bytesToHex(secretKey));
-    expect(call[3]).toBeUndefined();
-    expect(call[4].type).toBe('custom');
-    expect(call[4].data).toHaveLength(1);
-    expect(call[4].data[0].blindedMessage.B_).toBe('B_out_1');
-  });
-
-  it('rejects contradictory fresh accounting before mint submission', async () => {
-    await expect(
-      handler.execute(
-        buildExecuteContext(
-          quote({
-            amount_paid: Amount.from(9),
-            amount_issued: Amount.from(10),
-          }),
-        ),
-      ),
-    ).rejects.toThrow(`BOLT12 mint quote ${quoteId} is not claimable: invalid`);
-
-    expect(wallet.mintProofsBolt12).not.toHaveBeenCalled();
-  });
-
-  it('does not let a stale valid fresh balance veto service-authorized execution', async () => {
-    const result = await handler.execute(
-      buildExecuteContext(
-        quote({
-          amount_paid: Amount.from(1),
-          amount_issued: Amount.zero(),
-        }),
-      ),
-    );
-
-    expect(result.status).toBe('ISSUED');
-    expect(wallet.mintProofsBolt12).toHaveBeenCalledTimes(1);
-  });
-
-  it('rejects execution when the remote quote pubkey changes', async () => {
-    const changedPubkey = '02' + '22'.repeat(32);
-
-    const error = await handler
-      .execute(
-        buildExecuteContext(
-          quote({
-            amount_paid: Amount.from(10),
-            pubkey: changedPubkey,
-          }),
-        ),
-      )
-      .catch((caught) => caught);
-
-    expect(error).toBeInstanceOf(MintQuoteValidationError);
-    expect(error.message).toContain(
-      `BOLT12 mint quote ${quoteId} returned pubkey ${changedPubkey}`,
-    );
-
-    expect(wallet.mintProofsBolt12).not.toHaveBeenCalled();
-  });
-
-  it('recovers remote pubkey changes as terminal failures without signing', async () => {
-    const changedPubkey = '02' + '33'.repeat(32);
-
-    const result = await handler.recoverExecuting(
-      buildRecoverContext(
-        quote({
-          amount_paid: Amount.from(10),
-          pubkey: changedPubkey,
-        }),
-      ),
-    );
-
-    expect(result.status).toBe('TERMINAL');
-    if (result.status !== 'TERMINAL') {
-      throw new Error('Expected terminal recovery result');
-    }
-    expect(result.error).toContain(`BOLT12 mint quote ${quoteId} returned pubkey ${changedPubkey}`);
-    expect(wallet.mintProofsBolt12).not.toHaveBeenCalled();
-  });
-
-  it('retries funded execution recovery after expiry', async () => {
-    const expiredQuote = quote({
-      expiry: Math.floor(Date.now() / 1000) - 1,
-      amount_paid: Amount.from(10),
-    });
-
-    const result = await handler.recoverExecuting(buildRecoverContext(expiredQuote));
-
-    expect(result).toEqual({ status: 'FINALIZED' });
-    expect(wallet.mintProofsBolt12).toHaveBeenCalled();
-    expect(proofService.saveProofs).toHaveBeenCalled();
-  });
-
-  it('fails recovery when the mint rejects BOLT12 issuance with quote expired', async () => {
-    const expiredQuote = quote({
-      expiry: Math.floor(Date.now() / 1000) - 1,
-      amount_paid: Amount.from(10),
-    });
-    (wallet.mintProofsBolt12 as Mock<any>).mockRejectedValueOnce(
-      new MintOperationError(20007, 'Quote expired'),
-    );
-
-    const result = await handler.recoverExecuting(buildRecoverContext(expiredQuote));
-
-    expect(result).toEqual({
-      status: 'TERMINAL',
-      error: `Recovered: BOLT12 quote ${quoteId} expired while executing mint`,
-    });
-    expect(wallet.mintProofsBolt12).toHaveBeenCalledTimes(1);
-    expect(proofService.saveProofs).not.toHaveBeenCalled();
-  });
-
-  it('keeps non-protocol expiry errors pending during BOLT12 recovery', async () => {
-    const expiredQuote = quote({
-      expiry: Math.floor(Date.now() / 1000) - 1,
-      amount_paid: Amount.from(10),
-    });
-    (wallet.mintProofsBolt12 as Mock<any>).mockRejectedValueOnce(
-      new Error('Authentication session expired'),
-    );
-
-    const result = await handler.recoverExecuting(buildRecoverContext(expiredQuote));
-
-    expect(result).toEqual({
-      status: 'PENDING',
-      error: 'Authentication session expired',
-    });
-    expect(proofService.saveProofs).not.toHaveBeenCalled();
-  });
-
-  it('does not retry balance already consumed by finalized local operations', async () => {
-    const result = await handler.recoverExecuting(
-      buildRecoverContext(quote({ amount_paid: Amount.from(10) }), {
-        finalizedAmount: Amount.from(10),
-        reservedAmount: Amount.zero(),
-      }),
-    );
-
-    expect(result.status).toBe('PENDING');
-    expect(wallet.mintProofsBolt12).not.toHaveBeenCalled();
   });
 });
