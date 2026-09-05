@@ -1506,6 +1506,10 @@ const MIGRATIONS: readonly Migration[] = [
       GROUP BY purpose;
     `,
   },
+  {
+    id: '039_mint_recovery',
+    sql: `CREATE TABLE coco_cashu_mint_recovery (operationId TEXT PRIMARY KEY, data TEXT NOT NULL);`,
+  },
 ];
 
 // Export for testing

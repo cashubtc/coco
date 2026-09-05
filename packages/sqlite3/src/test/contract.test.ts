@@ -1,24 +1,25 @@
-import { describe, it, expect } from 'vitest';
+import {
+  runAuthSessionRepositoryContract,
+  runKeyRingDerivationRepositoryContract,
+  runMeltOperationRepositoryContract,
+  runMeltQuoteRepositoryContract,
+  runMintOperationRepositoryContract,
+  runMintQuoteRepositoryContract,
+  runMintRecoveryRepositoryContract,
+  runPaymentRequestReceiveRepositoryContract,
+  runProofRepositoryContract,
+  runReceiveOperationRepositoryContract,
+  runRepositoryTransactionContract,
+  runSendOperationRepositoryContract,
+} from '@cashu/coco-adapter-tests';
+import { runSqlDatabaseContract } from '@cashu/coco-sql-storage/test';
 import Database from 'better-sqlite3';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import {
-  runRepositoryTransactionContract,
-  runKeyRingDerivationRepositoryContract,
-  runAuthSessionRepositoryContract,
-  runProofRepositoryContract,
-  runMintOperationRepositoryContract,
-  runMintQuoteRepositoryContract,
-  runPaymentRequestReceiveRepositoryContract,
-  runReceiveOperationRepositoryContract,
-  runSendOperationRepositoryContract,
-  runMeltOperationRepositoryContract,
-  runMeltQuoteRepositoryContract,
-} from '@cashu/coco-adapter-tests';
-import { runSqlDatabaseContract } from '@cashu/coco-sql-storage/test';
-import { SqliteRepositories as Repositories } from '../index.ts';
+import { describe, expect, it } from 'vitest';
 import { SqliteDb } from '../db.ts';
+import { SqliteRepositories as Repositories } from '../index.ts';
 
 async function createRepositories() {
   const rawDatabase = new Database(':memory:');
@@ -200,3 +201,5 @@ describe('hydration corruption guard', () => {
     }
   });
 });
+
+runMintRecoveryRepositoryContract({ createRepositories }, { describe, it, expect });

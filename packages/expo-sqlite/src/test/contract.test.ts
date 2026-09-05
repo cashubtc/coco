@@ -1,25 +1,26 @@
-import { describe, it, expect } from 'bun:test';
+import {
+  runAuthSessionRepositoryContract,
+  runKeyRingDerivationRepositoryContract,
+  runMeltOperationRepositoryContract,
+  runMeltQuoteRepositoryContract,
+  runMintOperationRepositoryContract,
+  runMintQuoteRepositoryContract,
+  runMintRecoveryRepositoryContract,
+  runPaymentRequestReceiveRepositoryContract,
+  runProofRepositoryContract,
+  runReceiveOperationRepositoryContract,
+  runRepositoryTransactionContract,
+  runSendOperationRepositoryContract,
+} from '@cashu/coco-adapter-tests';
+import { runSqlDatabaseContract } from '@cashu/coco-sql-storage/test';
 import { Database } from 'bun:sqlite';
+import { describe, expect, it } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import {
-  runRepositoryTransactionContract,
-  runKeyRingDerivationRepositoryContract,
-  runAuthSessionRepositoryContract,
-  runProofRepositoryContract,
-  runMintOperationRepositoryContract,
-  runMintQuoteRepositoryContract,
-  runPaymentRequestReceiveRepositoryContract,
-  runReceiveOperationRepositoryContract,
-  runSendOperationRepositoryContract,
-  runMeltOperationRepositoryContract,
-  runMeltQuoteRepositoryContract,
-} from '@cashu/coco-adapter-tests';
-import { runSqlDatabaseContract } from '@cashu/coco-sql-storage/test';
-import { SqliteRepositories as Repositories } from '../index.ts';
-import type { SqliteRepositoriesOptions } from '../index.ts';
 import { ExpoSqliteDb } from '../db.ts';
+import type { SqliteRepositoriesOptions } from '../index.ts';
+import { SqliteRepositories as Repositories } from '../index.ts';
 
 type RunResult = { changes: number; lastInsertRowId: number; lastInsertRowid: number };
 
@@ -406,3 +407,5 @@ describe('hydration corruption guard', () => {
     }
   });
 });
+
+runMintRecoveryRepositoryContract({ createRepositories }, { describe, it, expect });

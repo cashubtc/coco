@@ -292,20 +292,8 @@ export class MintOperationProcessor {
     this.claimingQuotes.add(key);
     const task = (async () => {
       try {
-        const assessment = await this.mintOperations.getMintQuoteClaimability(
-          mintUrl,
-          method,
-          quoteId,
-        );
-        if (assessment?.status !== 'claimable' && assessment?.status !== 'complete') {
-          this.logger?.debug('Mint quote has no locally claimable value', {
-            mintUrl,
-            method,
-            quoteId,
-          });
-          return;
-        }
-
+        // A quote with no new claimable balance may still have an unresolved exact issuance.
+        // The coordinator recovers those outputs before deciding whether to authorize new value.
         await this.mintOperations.claimMintQuote(mintUrl, method, quoteId, {
           autoClaimRemaining: true,
         });

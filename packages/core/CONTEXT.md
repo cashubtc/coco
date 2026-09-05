@@ -105,8 +105,8 @@ _Avoid_: Payment status, melt lifecycle
 
 **Mint Quote Claimability**:
 Whether Mint Quote Accounting leaves paid value that Coco may claim into proofs after accounting
-for completed local issuance and Mint Quote Reservations. Fixed BOLT11 quotes are all-or-nothing;
-BOLT12 and on-chain quotes can remain claimable across partial balance claims.
+for completed local issuance and Mint Quote Reservations. BOLT11, BOLT12, and on-chain quotes
+use the same balance rules; the payment request amount does not determine every claim amount.
 _Avoid_: Mint quote paid state, payment status
 
 **Mint Quote Accounting**:
@@ -120,9 +120,9 @@ Claimability because reusable mint quotes can already be claimable before anothe
 _Avoid_: Mint quote paid state, payment status
 
 **Mint Quote Reservation**:
-Paid value from a Mint Quote that Coco has committed to an active issuance but the mint has not yet
-reported as issued. A pending Mint Operation does not reserve value; several reservations may
-coexist for a reusable Mint Quote within its claimable balance.
+Paid value from a Mint Quote committed to an issuance whose outcome remains unresolved. A Mint
+Operation known never to have been submitted does not reserve value; an Ambiguous Operation Outcome
+retains its full reservation.
 _Avoid_: Remote issued amount, proof reservation, quote ownership
 
 **Quote Expiry**:
@@ -165,3 +165,8 @@ _Avoid_: Output generation, tentative outputs, counter increment
 A durable commitment of one purpose-specific Wallet derivation index and its derived keypair. Key
 derivation inside a transaction that does not commit is not a Keypair Allocation.
 _Avoid_: Key generation, tentative key, high-water-mark increment
+
+**Mint Issuance Evidence**:
+Validated evidence that a Mint Operation's exact outputs were signed. It proves issuance independently
+of whether the resulting proofs are currently spendable.
+_Avoid_: Quote state, available balance

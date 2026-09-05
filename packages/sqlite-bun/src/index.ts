@@ -1,6 +1,6 @@
-import type { Database } from 'bun:sqlite';
 import type { Repositories, RepositoryTransactionScope } from '@cashu/coco-core/adapter';
 import { SqlStorageRepositories } from '@cashu/coco-sql-storage';
+import type { Database } from 'bun:sqlite';
 import { SqliteDb } from './db.ts';
 
 export interface SqliteRepositoriesOptions {
@@ -20,6 +20,7 @@ export class SqliteRepositories implements Repositories {
   readonly sendOperationRepository: Repositories['sendOperationRepository'];
   readonly meltOperationRepository: Repositories['meltOperationRepository'];
   readonly authSessionRepository: Repositories['authSessionRepository'];
+  readonly mintRecoveryRepository: Repositories['mintRecoveryRepository'];
   readonly mintOperationRepository: Repositories['mintOperationRepository'];
   readonly receiveOperationRepository: Repositories['receiveOperationRepository'];
   readonly paymentRequestReceiveOperationRepository: Repositories['paymentRequestReceiveOperationRepository'];
@@ -43,6 +44,7 @@ export class SqliteRepositories implements Repositories {
     this.sendOperationRepository = this.repositories.sendOperationRepository;
     this.meltOperationRepository = this.repositories.meltOperationRepository;
     this.authSessionRepository = this.repositories.authSessionRepository;
+    this.mintRecoveryRepository = this.repositories.mintRecoveryRepository;
     this.mintOperationRepository = this.repositories.mintOperationRepository;
     this.receiveOperationRepository = this.repositories.receiveOperationRepository;
     this.paymentRequestReceiveOperationRepository =

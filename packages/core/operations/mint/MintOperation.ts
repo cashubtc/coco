@@ -1,23 +1,19 @@
 /**
- * State machine for mint operations:
+ * init -> pending -> executing -> finalized | failed
  *
- * init -> pending -> executing -> finalized
- *          ^         |
- *          +---------+-> failed
- *
- * - init: Quote-bound local mint intent persisted before prepare has attached output data
- * - pending: Deterministic outputData persisted; quote may now settle remotely
- * - executing: Mint or recovery call in progress
- * - finalized: Quote reached terminal ISSUED state; proofs were saved when recoverable
- * - failed: Operation reached a terminal non-issued state (for example, invalid quote data)
+ * pending: Immutable outputs are prepared, with durable no-submission provenance.
+ * executing: Issuance was authorized and may have reached the mint; retain its reservation.
+ * finalized: Complete evidence proves these exact outputs were issued. Spendability is separate.
+ * failed: Definitive rejection, with no earlier unresolved submission.
+ * Legacy pending operations with unknown submission history migrate to executing.
  */
 export type MintOperationState = 'init' | 'pending' | 'executing' | 'finalized' | 'failed';
 
 import type { Amount } from '@cashu/cashu-ts';
+import { normalizeUnit, type UnitAmount } from '../../amounts.ts';
 import type { SerializedOutputData } from '../../utils';
 import { getSecretsFromSerializedOutputData } from '../../utils';
 import type { MintMethod, MintMethodMeta } from './MintMethodHandler';
-import { normalizeUnit, type UnitAmount } from '../../amounts.ts';
 
 interface MintOperationBase<M extends MintMethod = MintMethod> extends MintMethodMeta<M> {
   id: string;

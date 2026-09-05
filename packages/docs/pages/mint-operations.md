@@ -7,6 +7,9 @@ after crashes, and avoid losing issued proofs.
 Bare quote creation is durable quote state, not a value movement. It does not
 create history; history starts when an operation exists.
 
+See [Mint claiming and recovery](./mint-reconciliation.md) for partial accounting, ambiguous
+requests, and the storage upgrade contract.
+
 ## API Surface (`coco.ops.mint`)
 
 The operation lifecycle API is exposed through `coco.ops.mint`:
@@ -14,7 +17,7 @@ The operation lifecycle API is exposed through `coco.ops.mint`:
 - `prepare({ quote, amount })` prepares a pending mint operation from an
   existing canonical quote or quote ref. Reusable onchain quotes require
   `amount` because one quote can fund multiple operations.
-- `execute(operationOrId)` redeems a paid quote and returns the terminal state
+- `execute(operationOrId)` redeems a funded claim or recovers its latest durable state
 - `checkPayment(operationId)` checks the remote quote state for a pending
   operation
 - `refresh(operationId)` checks or recovers an operation and returns the latest
@@ -98,18 +101,18 @@ quote.amountIssued`.
 
 Mint operations progress through the following states:
 
-| State       | Description                                                                    |
-| ----------- | ------------------------------------------------------------------------------ |
-| `init`      | Local mint intent exists before a quote snapshot is attached                   |
-| `pending`   | Quote and deterministic output data are persisted; payment may settle remotely |
-| `executing` | Quote redemption or recovery is in progress                                    |
-| `finalized` | Quote was issued and proofs were saved or recovered                            |
-| `failed`    | Quote reached a terminal non-issued state, such as expiry                      |
+| State       | Description                                                              |
+| ----------- | ------------------------------------------------------------------------ |
+| `init`      | Local mint intent exists before a quote snapshot is attached             |
+| `pending`   | Deterministic outputs are persisted; no issuance has been submitted      |
+| `executing` | Quote redemption or recovery is in progress                              |
+| `finalized` | Complete exact-output evidence proves issuance; spendability is separate |
+| `failed`    | Definitive request rejection with no earlier unresolved submission       |
 
 ```
 init -> pending -> executing -> finalized
-          ^          |
-          +----------+-> failed
+                        |
+                        +-----> failed
 ```
 
 ## Lifecycle Actions
@@ -118,7 +121,7 @@ init -> pending -> executing -> finalized
 | --------------------------- | ------------------------------------------------------- | ----------------------------------------------- | -------------------------------------------------------------- |
 | `prepare(...)`              | canonical quote                                         | `pending`                                       | You are ready to track a quote as a mint operation.            |
 | `checkPayment(operationId)` | `pending`                                               | latest remote observation; may queue redemption | You want to update UI after the invoice may have been paid.    |
-| `execute(operationOrId)`    | `pending`                                               | `finalized` or `failed`                         | You know the quote is payable and want to redeem it now.       |
+| `execute(operationOrId)`    | `pending`                                               | latest durable state                            | You know the quote is payable and want to redeem it now.       |
 | `refresh(operationId)`      | any, actively checks `pending` and recovers `executing` | latest stored state                             | You are showing stale persisted state or a recovery screen.    |
 | `finalize(operationId)`     | `pending`, `executing`, or terminal                     | terminal state when possible                    | You want one explicit call to settle or recover the operation. |
 
