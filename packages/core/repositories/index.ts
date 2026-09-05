@@ -6,22 +6,23 @@ import type { MintQuote } from '@core/models/MintQuote';
 import type { QuoteIdentity } from '@core/models/QuoteIdentity';
 import type { MeltOperation, MeltOperationState } from '@core/operations/melt/MeltOperation';
 import type { MintOperation, MintOperationState } from '@core/operations/mint/MintOperation';
-import type {
-  ReceiveOperation,
-  ReceiveOperationState,
-} from '../operations/receive/ReceiveOperation';
+import type { Counter } from '../models/Counter';
+import type { Keyset } from '../models/Keyset';
+import type { Mint } from '../models/Mint';
+import type { MintMethodRemoteState } from '../operations/mint/MintMethodHandler';
+import type { MintRecoveryRecord } from '../operations/mint/MintRecovery.ts';
 import type {
   PaymentRequestReceiveAttempt,
   PaymentRequestReceiveAttemptState,
   PaymentRequestReceiveOperation,
   PaymentRequestReceiveState,
 } from '../operations/paymentRequestReceive/PaymentRequestReceiveOperation';
-import type { Counter } from '../models/Counter';
-import type { Keyset } from '../models/Keyset';
-import type { Mint } from '../models/Mint';
+import type {
+  ReceiveOperation,
+  ReceiveOperationState,
+} from '../operations/receive/ReceiveOperation';
 import type { SendOperation, SendOperationState } from '../operations/send/SendOperation';
 import type { CoreProof, ProofState } from '../types';
-import type { MintMethodRemoteState } from '../operations/mint/MintMethodHandler';
 
 export interface ProofUnitFilter {
   unit?: string;
@@ -364,7 +365,14 @@ export interface PaymentRequestReceiveAttemptRepository {
   delete(id: string): Promise<void>;
 }
 
+export interface MintRecoveryRepository {
+  get(operationId: string): Promise<MintRecoveryRecord | null>;
+  set(record: MintRecoveryRecord): Promise<void>;
+  getAll(): Promise<MintRecoveryRecord[]>;
+}
+
 interface RepositoriesBase {
+  mintRecoveryRepository: MintRecoveryRepository;
   mintRepository: MintRepository;
   keyRingRepository: KeyRingRepository;
   counterRepository: CounterRepository;
@@ -400,5 +408,5 @@ export interface Repositories extends RepositoriesBase {
 
 export type RepositoryTransactionScope = RepositoriesBase;
 
-export { RepositoryTransactionConflictError } from './RepositoryTransactionError.ts';
 export * from './memory';
+export { RepositoryTransactionConflictError } from './RepositoryTransactionError.ts';

@@ -1206,4 +1206,5 @@ export async function ensureSchema(db: IdbDb): Promise<void> {
         });
       }
     });
+  db.version(34).stores({ coco_cashu_mint_recovery: '&operationId' });
 }

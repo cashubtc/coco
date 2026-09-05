@@ -1,23 +1,23 @@
 import { Amount } from '@cashu/cashu-ts';
 import {
-  type Mint,
-  type Keyset,
-  type CoreProof,
-  type Repositories,
-  type MeltOperation,
-  type MintQuote,
-  type MeltQuote,
-  type QuoteIdentity,
-  type MintQuoteRef,
-  type MeltQuoteRef,
-  type MintOperation,
-  type PaymentRequestReceiveAttempt,
-  type PaymentRequestReceiveOperation,
-  type ReceiveOperation,
-  type SendOperation,
   type AuthSession,
+  type CoreProof,
   type KeypairPurpose,
   type KeyRingRepository,
+  type Keyset,
+  type MeltOperation,
+  type MeltQuote,
+  type MeltQuoteRef,
+  type Mint,
+  type MintOperation,
+  type MintQuote,
+  type MintQuoteRef,
+  type PaymentRequestReceiveAttempt,
+  type PaymentRequestReceiveOperation,
+  type QuoteIdentity,
+  type ReceiveOperation,
+  type Repositories,
+  type SendOperation,
   DerivationIndexExhaustedError,
   QuoteIdentityConflictError,
   RepositoryTransactionConflictError,
@@ -2418,9 +2418,107 @@ export async function runProofRepositoryContract(
 }
 
 export { runIntegrationTests } from './integration.ts';
-export type { IntegrationTestRunner, IntegrationTestOptions } from './integration.ts';
+export type { IntegrationTestOptions, IntegrationTestRunner } from './integration.ts';
 // Migration tests temporarily disabled - architecture being reconsidered
 // export { runMigrationTests } from './migrations.ts';
 // export type { MigrationTestRunner, MigrationTestOptions } from './migrations.ts';
 export { createFakeInvoice } from 'fake-bolt11';
 export type { FakeInvoiceOptions } from 'fake-bolt11';
+
+/** Exact Mint requests and held issuance evidence share every Wallet transaction scope. */
+export function runMintRecoveryRepositoryContract(
+  options: ContractOptions,
+  runner: ContractRunner,
+): void {
+  const { describe, it, expect } = runner;
+  describe('Mint recovery persistence contract', () => {
+    it('round-trips lossless request variants and held evidence without changing legacy operations', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = createDummyMintOperation();
+        await repositories.mintOperationRepository.create(operation);
+        const record = {
+          version: 1 as const,
+          operationId: operation.id,
+          revision: 7,
+          provenance: 'authorized' as const,
+          variant: 'legacy' as const,
+          transmission: 'ambiguous' as const,
+          issuanceBaseline: '9007199254740993',
+          request: {
+            quote: operation.quoteId,
+            outputs: [{ id: 'keyset', amount: '9007199254740993', B_: 'blinded' }],
+            signature: 'legacy-signature',
+          },
+          rejectedRequest: {
+            quote: operation.quoteId,
+            outputs: [{ id: 'keyset', amount: '9007199254740993', B_: 'blinded' }],
+            signature: 'current-signature',
+          },
+          receipts: [
+            {
+              B_: 'blinded',
+              proof: { id: 'keyset', amount: '9007199254740993', secret: 'secret', C: 'signature' },
+              state: 'UNKNOWN' as const,
+            },
+          ],
+        };
+        expect(await repositories.mintRecoveryRepository.get(operation.id)).toBe(null);
+        await repositories.withTransaction(async (scope) => {
+          await scope.mintRecoveryRepository.set(record);
+        });
+        expect(JSON.stringify(await repositories.mintRecoveryRepository.get(operation.id))).toBe(
+          JSON.stringify(record),
+        );
+        expect((await repositories.mintOperationRepository.getById(operation.id))!.state).toBe(
+          'pending',
+        );
+        expect((await repositories.mintRecoveryRepository.getAll()).length).toBe(1);
+      } finally {
+        await dispose();
+      }
+    });
+    it('rolls back operation, counter, proof, and recovery writes as one unit', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = createDummyMintOperation();
+        await repositories.mintOperationRepository.create(operation);
+        await expectThrows(
+          () =>
+            repositories.withTransaction(async (scope) => {
+              await scope.counterRepository.setCounter(operation.mintUrl, 'keyset', 15);
+              await scope.mintRecoveryRepository.set({
+                version: 1,
+                operationId: operation.id,
+                revision: 1,
+                provenance: 'settled',
+                variant: 'current',
+                receipts: [],
+              });
+              await scope.proofRepository.saveProofs(operation.mintUrl, [
+                createDummyProof({ mintUrl: operation.mintUrl, secret: 'mint-recovery-proof' }),
+              ]);
+              await scope.mintOperationRepository.update({ ...operation, state: 'finalized' });
+              throw new Error('injected failure before commit');
+            }),
+          expect,
+        );
+        expect(await repositories.counterRepository.getCounter(operation.mintUrl, 'keyset')).toBe(
+          null,
+        );
+        expect(await repositories.mintRecoveryRepository.get(operation.id)).toBe(null);
+        expect(
+          await repositories.proofRepository.getProofBySecret(
+            operation.mintUrl,
+            'mint-recovery-proof',
+          ),
+        ).toBe(null);
+        expect((await repositories.mintOperationRepository.getById(operation.id))!.state).toBe(
+          'pending',
+        );
+      } finally {
+        await dispose();
+      }
+    });
+  });
+}

@@ -9,8 +9,8 @@ import { MintQuoteValidationError } from '../../models/Error';
 import {
   applyBolt11MintQuoteStateFallback,
   deriveBolt11MintQuoteState,
-  getMintQuoteAvailableAmount,
   getMintQuoteAmount,
+  getMintQuoteAvailableAmount,
   getMintQuoteRemoteState,
   isMintQuotePending,
   mintQuoteFromBolt11Response,
@@ -59,7 +59,7 @@ describe('MintQuote model', () => {
     expect(quote.amountIssued.equals(Amount.from(40))).toBe(true);
     expect(quote.remoteUpdatedAt).toBe(55);
     expect(getMintQuoteAvailableAmount(quote).equals(Amount.from(60))).toBe(true);
-    expect(isMintQuotePending(quote)).toBe(false);
+    expect(isMintQuotePending(quote)).toBe(true);
   });
 
   it('rejects contradictory BOLT11 accounting', () => {

@@ -2,27 +2,27 @@ import type {
   Amount,
   MintQuoteBaseResponse,
   MintQuoteBolt11Response,
-  MintQuoteOnchainResponse,
   MintQuoteBolt12Response,
+  MintQuoteOnchainResponse,
   Proof,
   Wallet,
 } from '@cashu/cashu-ts';
-import type { ProofRepository } from '../../repositories';
-import type { ProofService } from '../../services/ProofService';
-import type { WalletService } from '../../services/WalletService';
-import type { MintService } from '../../services/MintService';
+import type { UnitAmount } from '../../amounts.ts';
 import type { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
+import type { MintAdapter } from '../../infra/MintAdapter';
 import type { Logger } from '../../logging/Logger';
+import type { MintQuote } from '../../models/MintQuote';
+import type { ProofRepository } from '../../repositories';
+import type { MintService } from '../../services/MintService';
+import type { ProofService } from '../../services/ProofService';
+import type { WalletService } from '../../services/WalletService';
 import type {
   ExecutingMintOperation,
   InitMintOperation,
   MintOperationFailure,
   PendingMintOperation,
 } from './MintOperation';
-import type { MintAdapter } from '../../infra/MintAdapter';
-import type { UnitAmount } from '../../amounts.ts';
-import type { MintQuote } from '../../models/MintQuote';
 
 type OptionalImportQuoteMetadata<T extends MintQuoteBaseResponse> = Omit<
   T,
@@ -225,10 +225,6 @@ export interface MintMethodHandler<M extends MintMethod = MintMethod> {
   createQuote(ctx: CreateMintQuoteContext<M>): Promise<MintQuote<M>>;
   fetchRemoteQuote(ctx: FetchRemoteMintQuoteContext<M>): Promise<MintQuote<M>>;
   validateQuoteForPrepare?(quote: MintQuote<M>): Promise<void> | void;
-  prepare(ctx: PrepareContext<M>): Promise<PendingMintOperation<M>>;
-  execute(ctx: ExecuteContext<M>): Promise<MintExecutionResult>;
-  recoverExecuting(ctx: RecoverExecutingContext<M>): Promise<RecoverExecutingResult>;
-  checkPending(ctx: PendingContext<M>): Promise<PendingMintObservationResult<M>>;
 }
 
 export type MintMethodHandlerRegistry = {

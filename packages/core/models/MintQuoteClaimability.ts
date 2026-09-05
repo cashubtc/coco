@@ -24,38 +24,8 @@ function waiting(remoteAvailable: Amount): MintQuoteClaimabilityAssessment {
   return { status: 'waiting', remoteAvailable };
 }
 
-function assessAtomicClaimability(
-  quote: MintQuote<'bolt11'>,
-  facts: MintQuoteClaimabilityFacts,
-  remoteAvailable: Amount,
-): MintQuoteClaimabilityAssessment {
-  if (
-    (!quote.amountIssued.isZero() && !quote.amountIssued.equals(quote.amount)) ||
-    (facts.requestedAmount !== undefined && !facts.requestedAmount.equals(quote.amount))
-  ) {
-    return invalid(remoteAvailable);
-  }
-
-  if (
-    quote.amountIssued.equals(quote.amount) ||
-    facts.finalizedAmount?.greaterThanOrEqual(quote.amount)
-  ) {
-    return { status: 'complete', remoteAvailable };
-  }
-
-  if (quote.amountPaid.lessThan(quote.amount)) {
-    return waiting(remoteAvailable);
-  }
-
-  return {
-    status: 'claimable',
-    remoteAvailable,
-    claimAmount: quote.amount,
-  };
-}
-
 function assessBalanceClaimability(
-  quote: MintQuote<'bolt12' | 'onchain'>,
+  quote: MintQuote,
   facts: MintQuoteClaimabilityFacts,
   remoteAvailable: Amount,
 ): MintQuoteClaimabilityAssessment {
@@ -83,7 +53,7 @@ function assessBalanceClaimability(
  * Assesses canonical Mint Quote Accounting for one local claim.
  *
  * Quote expiry and deprecated BOLT11 compatibility state are deliberately absent from the facts
- * consumed by this module. Atomic-versus-balance policy is private to this implementation.
+ * consumed by this module. All built-in methods use the same balance policy.
  */
 export function assessMintQuoteClaimability(
   quote: MintQuote,
@@ -96,10 +66,6 @@ export function assessMintQuoteClaimability(
   const remoteAvailable = quote.amountPaid.subtract(quote.amountIssued);
   if (facts.requestedAmount?.isZero()) {
     return invalid(remoteAvailable);
-  }
-
-  if (quote.method === 'bolt11') {
-    return assessAtomicClaimability(quote, facts, remoteAvailable);
   }
 
   return assessBalanceClaimability(quote, facts, remoteAvailable);
