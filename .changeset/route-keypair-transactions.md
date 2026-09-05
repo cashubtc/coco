@@ -11,3 +11,4 @@ transaction architecture as the baseline for later operation refactors.
 
 Distinguish transaction gateways (`*Transactions`) from in-transaction command interfaces
 (`Scoped*Commands`), and check dependency boundaries through selected type re-exports.
+Use `*Queries` consistently for read-only state interfaces.

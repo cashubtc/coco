@@ -30,7 +30,9 @@ commands within the owning transaction. Optional transaction parameters with imp
 creation are forbidden. This preserves reuse without permitting nested transactions.
 
 Queries and preflight capabilities cannot hide Wallet writes. Narrow interfaces may share one
-implementation, and no domain is required to reproduce every architectural layer. Reserve
+implementation, and no domain is required to reproduce every architectural layer. Use
+`<Domain>Queries` consistently for read-only state interfaces, without equivalent `*ReadPort`
+aliases or extra wrapper layers. Reserve
 `Operation` for durable sagas and use `Scoped*Commands` for in-transaction behavior.
 Reserve `*Transactions` for gateways; keep scoped implementations and helpers under
 `transactions/scoped/**`. The [naming convention](../../../../TRANSACTION_DESIGN.md#naming-convention)

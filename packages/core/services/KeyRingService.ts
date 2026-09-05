@@ -8,11 +8,9 @@ import type { KeypairQueries } from '../keypairs/KeypairQueries.ts';
 import type { KeypairDerivation } from '../keypairs/KeypairDerivation.ts';
 import type { P2pkSigner } from '../keypairs/P2pkSigner.ts';
 
-export type KeyRingReadPort = KeypairQueries;
-
 export class KeyRingService {
   constructor(
-    private readonly keyRingReads: KeyRingReadPort,
+    private readonly keypairQueries: KeypairQueries,
     private readonly transactions: KeyRingTransactions,
     private readonly derivation: KeypairDerivation,
     private readonly signer: P2pkSigner,
@@ -73,22 +71,22 @@ export class KeyRingService {
     if (!publicKey || typeof publicKey !== 'string') {
       throw new Error('Public key is required and must be a string');
     }
-    return this.keyRingReads.getPersistedKeyPair(publicKey, 'p2pk');
+    return this.keypairQueries.getPersistedKeyPair(publicKey, 'p2pk');
   }
 
   async getMintQuoteKeyPair(publicKey: string): Promise<Keypair | null> {
     if (!publicKey || typeof publicKey !== 'string') {
       throw new Error('Public key is required and must be a string');
     }
-    return this.keyRingReads.getPersistedKeyPair(publicKey, 'nut20_mint_quote');
+    return this.keypairQueries.getPersistedKeyPair(publicKey, 'nut20_mint_quote');
   }
 
   async getLatestKeyPair(): Promise<Keypair | null> {
-    return this.keyRingReads.getLatestKeyPair('p2pk');
+    return this.keypairQueries.getLatestKeyPair('p2pk');
   }
 
   async getAllKeyPairs(): Promise<Keypair[]> {
-    return this.keyRingReads.getAllPersistedKeyPairs('p2pk');
+    return this.keypairQueries.getAllPersistedKeyPairs('p2pk');
   }
 
   async signProof(proof: Proof, publicKey: string): Promise<Proof> {

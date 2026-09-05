@@ -30,6 +30,7 @@ Names distinguish transaction ownership from work performed within an existing t
 | Role                          | Name                    | Responsibility                                                    |
 | ----------------------------- | ----------------------- | ----------------------------------------------------------------- |
 | Workflow coordinator          | `SendOperationService`  | Orders preflight, committed transitions, remote calls, and events |
+| Read-only state interface     | `KeypairQueries`        | Reads existing state without creating or changing it              |
 | Transaction gateway           | `SendTransactions`      | Each method opens and commits one transaction through the runner  |
 | Commands within a transaction | `ScopedSendCommands`    | Reads and writes within the supplied transaction scope            |
 | Transaction scope             | `CoreTransaction`       | Provides scoped commands for one transaction attempt              |
@@ -39,6 +40,11 @@ Reserve `*Transactions` for application-scoped gateways and `Scoped*Commands` fo
 inside a transaction. Concrete implementations may describe their backing mechanism, such as
 `CoreKeyRingTransactions` and `RepositoryKeypairCommands`. Use these role-specific names instead of
 the ambiguous `Transactional*` prefix.
+
+Use `<Domain>Queries` for read-only state interfaces and the same name at each consumer. A Query
+interface is already a read-only dependency boundary; an equivalent `*ReadPort` alias adds no role
+or layer. A repository can implement the Query interface directly. Name other local capabilities
+for their behavior, such as `P2pkSigner` and `KeypairDerivation`.
 
 Keep scoped implementations and helpers under `transactions/scoped/**`; that directory determines
 their restrictions regardless of filename. Outside that directory, every `*Transactions.ts` file
