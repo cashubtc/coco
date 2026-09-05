@@ -1,14 +1,16 @@
 # Shared Mint accounting and reconciliation
 
-Status: **Implementation reference**  
+Status: **Temporary review reference — remove before merging PR #481**
+
 Date: 2026-09-05  
 Supersedes the implementation approach in [PR #480](https://github.com/cashubtc/coco/pull/480)
 and the behavior-preserving scope of [issue #469](https://github.com/cashubtc/coco/issues/469).  
-Evidence: [specification and implementation research](../research/mint-quote-reconciliation.md).
+Evidence: pinned Cashu specifications linked throughout this document.
 
 The replacement implementation follows this reference with the concrete decisions recorded in
 [implementation choices](#18-implementation-choices). Accepted outcome and transaction contracts
-are recorded in ADR-0012 and TRANSACTION_DESIGN.md. PR #480 is a source of reusable code and tests,
+are recorded in [ADR-0012][adr12] and [ADR-0011][adr11]. This document is retained only for
+review and must be removed before merge; permanent documentation must not depend on it. PR #480 is a source of reusable code and tests,
 not a prerequisite to merge. The original issue's requirements to exclude BOLT11, preserve every
 existing recovery outcome, and avoid persistence changes are explicitly superseded here.
 
@@ -197,8 +199,9 @@ localAvailable  = max(0, P - max(I, F) - R)
 The persisted baseline accounts for issuance observed before local claims. For example, starting
 at 100 paid / 40 issued, then finalizing a local 60 claim, must establish `F = 100`, not `F = 60`.
 Otherwise stale remote accounting can incorrectly authorize another 40. Authorization advances the
-baseline only when no unresolved sibling could already be represented in that observation; see the
-[maintained baseline rules](../../TRANSACTION_DESIGN.md#accounting-baseline).
+baseline only when no unresolved sibling could already be represented in that observation, using
+`max(previousBaseline, remoteIssued - finalizedOperationAmounts)`. Otherwise it retains the prior
+baseline. The reason for this conservative floor is recorded in [ADR-0012][adr12].
 
 `max(I, F)` prevents counting the same observed issuance twice. Reservations can conservatively
 understate availability when remote totals already include an unresolved operation; exact-output
@@ -334,7 +337,7 @@ claim; lease expiry permits another worker to recover the same request, never a 
 or release of its financial reservation. A stale worker may contribute valid exact-output evidence
 through a fresh transaction, but cannot overwrite a newer outcome.
 
-Follow [Transaction Design](../../TRANSACTION_DESIGN.md) and [ADR-0011][adr11]. No remote I/O inside
+Follow [ADR-0011][adr11]. No remote I/O inside
 transactions, no nested application gateways, and no new legacy dependency exceptions. Shared
 scoped allocation/proof commands may be extracted for this Mint slice without migrating every
 ProofService consumer. Memory rollback behavior must satisfy the same contract as persistent
@@ -566,7 +569,7 @@ mixed-version safe. No reset, destructive migration, or counter reuse is an acce
 | `packages/sqlite3`, `packages/sqlite-bun`, `packages/expo-sqlite`, `packages/adapter-tests` | Bindings, conformance, rollback, concurrency and upgrade fixtures                                            |
 | Core APIs/events/history and affected React/cocod consumers                                 | Preserve entry points; update interpretation of pending/executing/finalized and diagnostics                  |
 | `packages/core/CONTEXT.md`                                                                  | Common claimability wording, reservation semantics and accepted issuance-evidence term                       |
-| ADRs and `TRANSACTION_DESIGN.md`                                                            | Record the accepted Mint outcome decision and maintained Mint transaction contract in implementation PRs     |
+| Context-scoped ADRs                                                                         | Record essential outcome decisions and their trade-offs; keep implementation plans temporary                 |
 | `packages/docs` and changesets                                                              | Explain compatibility, recovery, diagnostics, and actual release impact                                      |
 
 ADR-0007's normalization ownership and ADR-0008's expiry policy remain in force. ADR-0010 has explicit
@@ -677,12 +680,13 @@ Clearly report unavailable runtime/browser environments instead of substituting 
    operations without logging recovery material.
 
 Prefer small reviewable PRs against `master` once their actual prerequisites are merged. Do not
-inherit unrelated commits just because #480's worktree was based on #461. The transaction slice
-requires the accepted transaction baseline (currently represented by #461) or its merged equivalent;
-it does not require the unrelated Send/Receive implementation branches. If a dependency is still
-unmerged, make any temporary stack explicit in the PR body and retarget after merge.
+inherit unrelated commits just because #480's worktree was based on #461. PR #481 builds its Mint-specific
+transactions on the repository foundation merged in #460. It also introduces a composition-root
+runner at the same path as #461, which owns the shared transaction baseline and keypair migration.
+The runners and composition-root wiring must be combined when these branches meet; independent
+compilation does not remove that integration requirement. Send/Receive migrations remain separate.
 
-This draft and its research note have no runtime effect and need no published-package changeset.
+This temporary review document has no runtime effect and needs no published-package changeset.
 The implementation does: storage and semantic changes require a fresh per-package assessment.
 Normal API entry points can remain stable, but an incompatible repository/adapter contract may
 require a breaking release or an explicit compatibility bridge. Do not carry #480's patch-only
@@ -725,12 +729,15 @@ conservative and the limitation is reported; it is not replaced by method-specif
 [adr04]: ../../packages/core/docs/adr/0004-quote-observations-precede-operation-advancement.md
 [adr10]: ../../packages/core/docs/adr/0010-persist-exact-batch-issuance-before-submission.md
 [adr11]: ../../packages/core/docs/adr/0011-use-domain-transaction-gateways.md
+[adr12]: ../../packages/core/docs/adr/0012-reconcile-standalone-mints-from-exact-evidence.md
 
 ## 18. Implementation choices
 
 The implementation is based directly on `master` and the strong repository transactions merged in
 PR #460. It introduces the Mint-owned runner/gateway/scoped commands without importing the separate
-keyring migration from PR #461. The maintained contract is [TRANSACTION_DESIGN.md](../../TRANSACTION_DESIGN.md).
+keyring migration from PR #461. Both PRs introduce `CoreTransaction.ts`; their domain commands
+and composition-root wiring need integration when the branches meet. Permanent decisions live in
+[ADR-0011][adr11] and [ADR-0012][adr12], with domain terms in the Coco Cashu glossary.
 
 - The installed cashu-ts 5.0.0-rc.4 public `prepareMint` quote-reference input accepts real quote
   identity and ownership without expiry/accounting metadata. Coco performs canonical admission in
