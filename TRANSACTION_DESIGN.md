@@ -23,6 +23,28 @@ The design separates four roles:
 `Coordinator` describes the architectural role of an Operation Service. It is not a required class
 suffix. Established names such as `SendOperationService` and `ReceiveOperationService` remain.
 
+## Naming Convention
+
+Names distinguish transaction ownership from work performed within an existing transaction:
+
+| Role                          | Name                    | Responsibility                                                    |
+| ----------------------------- | ----------------------- | ----------------------------------------------------------------- |
+| Workflow coordinator          | `SendOperationService`  | Orders preflight, committed transitions, remote calls, and events |
+| Transaction gateway           | `SendTransactions`      | Each method opens and commits one transaction through the runner  |
+| Commands within a transaction | `ScopedSendCommands`    | Reads and writes within the supplied transaction scope            |
+| Transaction scope             | `CoreTransaction`       | Provides scoped commands for one transaction attempt              |
+| Transaction runner            | `CoreTransactionRunner` | Creates the scope and manages commit, rollback, and retries       |
+
+Reserve `*Transactions` for application-scoped gateways and `Scoped*Commands` for interfaces used
+inside a transaction. Concrete implementations may describe their backing mechanism, such as
+`CoreKeyRingTransactions` and `RepositoryKeypairCommands`. Use these role-specific names instead of
+the ambiguous `Transactional*` prefix.
+
+Keep scoped implementations and helpers under `transactions/scoped/**`; that directory determines
+their restrictions regardless of filename. Outside that directory, every `*Transactions.ts` file
+under `transactions/` is a gateway, with no prefix exemptions. A misleading name never exempts a
+module from its architectural restrictions.
+
 ## Decision Summary
 
 > Organize modules around domain invariants, make their effects explicit, and give each atomic
@@ -95,10 +117,10 @@ transaction-scoped module after `run()` completes.
 
 ```ts
 export interface CoreTransaction {
-  readonly proofs: TransactionScopedProofCommands;
-  readonly keypairs: TransactionScopedKeypairCommands;
-  readonly sends: TransactionScopedSendCommands;
-  readonly receives: TransactionScopedReceiveCommands;
+  readonly proofs: ScopedProofCommands;
+  readonly keypairs: ScopedKeypairCommands;
+  readonly sends: ScopedSendCommands;
+  readonly receives: ScopedReceiveCommands;
 }
 
 export interface CoreTransactionRunner {
@@ -220,7 +242,7 @@ not need a private copy of each Query or capability. Multiple narrow interfaces 
 implementation, and a repository adapter may satisfy a read interface directly.
 
 Reserve `Operation` for durable sagas. Name transaction-scoped interfaces
-`TransactionScoped*Commands`, with implementations such as `RepositoryKeypairCommands`. Callers
+`Scoped*Commands`, with implementations such as `RepositoryKeypairCommands`. Callers
 still use small domain methods: `transaction.keypairs.allocate(command)`. Keep all scoped
 implementations and their private scoped helpers under `transactions/scoped/` so the architecture
 guard applies independently of class names. Do not add interfaces or pass-through classes solely
@@ -240,7 +262,7 @@ The first slice implements this separation without changing the user-facing KeyR
   calling its own gateway. Existing management and signing methods remain available for callers.
 - `transactions/keypairs/KeyRingTransactions.ts` receives only the runner and forwards prepared
   commands into one transaction.
-- `transactions/scoped/keypairs/TransactionScopedKeypairCommands.ts` receives only a scoped
+- `transactions/scoped/keypairs/ScopedKeypairCommands.ts` receives only a scoped
   key-ring repository. Standalone and composed key allocations use this same implementation.
 
 No keypair dependency exception remains. Other legacy key-management consumers, including mint
@@ -284,7 +306,7 @@ interfaces should make invalid state transitions difficult to express and should
 invariant local to the domain concept that owns it.
 
 ```ts
-interface TransactionScopedProofCommands {
+interface ScopedProofCommands {
   selectAndReserve(command: SelectAndReserveProofs): Promise<ProofReservation>;
   settleSpend(command: SettleProofSpend): Promise<void>;
   releaseAfterNonEffect(command: ReleaseProofReservation): Promise<void>;
@@ -481,7 +503,9 @@ exception is deleted, so the allowlist must shrink with each migration.
 The guard parses imports, re-exports, import types, literal dynamic imports, and require calls with
 TypeScript. It follows runtime helper dependencies and type re-exports. Type-only imports do not
 grant access to the imported module's implementation; they are checked directly and through
-re-export chains. Permitted architectural seams such as a coordinator's own gateway are checked
+re-export chains, including bindings imported and then exported in separate statements. Follow the
+specific imported bindings, including aliases, rather than unrelated exports from the same barrel.
+Permitted architectural seams such as a coordinator's own gateway are checked
 separately rather than inheriting the consumer's role. Root runner imports and explicit
 `withTransaction` access are limited to gateways and declared transaction infrastructure; gateways
 must use the runner rather than `withTransaction` directly. Coordinators cannot receive live scoped

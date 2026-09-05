@@ -2,11 +2,12 @@ import type { Repositories, RepositoryTransactionScope } from '@core/repositorie
 import { RepositoryTransactionConflictError } from '@core/repositories';
 import {
   RepositoryKeypairCommands,
-  type TransactionScopedKeypairCommands,
-} from './scoped/keypairs/TransactionScopedKeypairCommands.ts';
+  type ScopedKeypairCommands,
+} from './scoped/keypairs/ScopedKeypairCommands.ts';
 
+/** Scoped commands sharing one adapter transaction attempt. */
 export interface CoreTransaction {
-  readonly keypairs: TransactionScopedKeypairCommands;
+  readonly keypairs: ScopedKeypairCommands;
 }
 
 export interface CoreTransactionRunner {

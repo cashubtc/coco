@@ -2,6 +2,7 @@ import type { Keypair } from '@core/models/Keypair';
 import type { AllocateKeypairCommand } from '../../keypairs/types.ts';
 import type { CoreTransactionRunner } from '../CoreTransaction.ts';
 
+/** Each key-management command owns one transaction and resolves after commit. */
 export interface KeyRingTransactions {
   allocate(command: AllocateKeypairCommand): Promise<Keypair>;
   importP2pkKey(keypair: Keypair): Promise<void>;

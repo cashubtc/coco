@@ -31,7 +31,11 @@ creation are forbidden. This preserves reuse without permitting nested transacti
 
 Queries and preflight capabilities cannot hide Wallet writes. Narrow interfaces may share one
 implementation, and no domain is required to reproduce every architectural layer. Reserve
-`Operation` for durable sagas and use `TransactionScoped*Commands` for in-transaction behavior.
+`Operation` for durable sagas and use `Scoped*Commands` for in-transaction behavior.
+Reserve `*Transactions` for gateways; keep scoped implementations and helpers under
+`transactions/scoped/**`. The [naming convention](../../../../TRANSACTION_DESIGN.md#naming-convention)
+distinguishes coordinators, gateways, scoped commands, the scope, and the runner without an ambiguous
+`Transactional*` prefix. Dependency checks apply by role and directory, with no prefix exemptions.
 The keypair implementation is the initial baseline; later proof, output, counter, and handler
 migrations reuse these rules. Import/effect guards, scoped types, composition review, and atomicity
 tests jointly enforce the contract; a filename check alone does not establish effect safety.

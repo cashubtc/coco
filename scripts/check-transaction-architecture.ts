@@ -65,6 +65,7 @@ interface ImportEdge {
   target: string | null;
   typeOnly?: boolean;
   reExport?: boolean;
+  exportBindings?: Array<{ importedName: string; exportedName: string }>;
 }
 
 const RULE_REASONS: Record<TransactionArchitectureRule, string> = {
@@ -310,14 +311,48 @@ function resolveCoreImport(importer: string, importSource: string): string | nul
 function collectImportEdges(module: SourceModule): ImportEdge[] {
   const edges: ImportEdge[] = [];
   const source = ts.createSourceFile(module.path, module.sourceText, ts.ScriptTarget.Latest, true);
-  const add = (specifier: string, names: string[], typeOnly = false, reExport = false) =>
+  const localImports = new Map<
+    string,
+    { specifier: string; importedName: string; typeOnly: boolean }
+  >();
+  // Resolve local exports even when their import declaration appears later in the file.
+  for (const statement of source.statements) {
+    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier))
+      continue;
+    const clause = statement.importClause;
+    if (!clause) continue;
+    const specifier = statement.moduleSpecifier.text;
+    const remember = (localName: string, importedName: string, typeOnly = clause.isTypeOnly) =>
+      localImports.set(localName, {
+        specifier,
+        importedName,
+        typeOnly,
+      });
+    if (clause.name) remember(clause.name.text, 'default');
+    const bindings = clause.namedBindings;
+    if (bindings && ts.isNamedImports(bindings)) {
+      for (const item of bindings.elements)
+        remember(
+          item.name.text,
+          (item.propertyName ?? item.name).text,
+          clause.isTypeOnly || item.isTypeOnly,
+        );
+    } else if (bindings) remember(bindings.name.text, '*');
+  }
+  const add = (
+    specifier: string,
+    names: string[],
+    typeOnly = false,
+    exportBindings?: ImportEdge['exportBindings'],
+  ) =>
     edges.push({
       importer: normalizeRepositoryPath(module.path),
       importSource: specifier,
       importedNames: [...new Set(names)].sort(),
       target: resolveCoreImport(module.path, specifier),
       typeOnly,
-      reExport,
+      reExport: exportBindings !== undefined,
+      exportBindings,
     });
   const visit = (node: ts.Node): void => {
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
@@ -337,23 +372,37 @@ function collectImportEdges(module: SourceModule): ImportEdge[] {
             !clause?.name &&
             bindings.elements.every((item) => item.isTypeOnly)),
       );
-    } else if (
-      ts.isExportDeclaration(node) &&
-      node.moduleSpecifier &&
-      ts.isStringLiteral(node.moduleSpecifier)
-    ) {
+    } else if (ts.isExportDeclaration(node)) {
       const bindings = node.exportClause;
-      add(
-        node.moduleSpecifier.text,
-        bindings && ts.isNamedExports(bindings)
-          ? bindings.elements.map((item) => (item.propertyName ?? item.name).text)
-          : ['*'],
-        node.isTypeOnly ||
-          (bindings !== undefined &&
-            ts.isNamedExports(bindings) &&
-            bindings.elements.every((item) => item.isTypeOnly)),
-        true,
-      );
+      if (node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
+        const exportBindings =
+          bindings && ts.isNamedExports(bindings)
+            ? bindings.elements.map((item) => ({
+                importedName: (item.propertyName ?? item.name).text,
+                exportedName: item.name.text,
+              }))
+            : [{ importedName: '*', exportedName: bindings?.name.text ?? '*' }];
+        add(
+          node.moduleSpecifier.text,
+          exportBindings.map((binding) => binding.importedName),
+          node.isTypeOnly ||
+            (bindings !== undefined &&
+              ts.isNamedExports(bindings) &&
+              bindings.elements.every((item) => item.isTypeOnly)),
+          exportBindings,
+        );
+      } else if (!node.moduleSpecifier && bindings && ts.isNamedExports(bindings)) {
+        for (const item of bindings.elements) {
+          const imported = localImports.get((item.propertyName ?? item.name).text);
+          if (!imported) continue;
+          add(
+            imported.specifier,
+            [imported.importedName],
+            node.isTypeOnly || item.isTypeOnly || imported.typeOnly,
+            [{ importedName: imported.importedName, exportedName: item.name.text }],
+          );
+        }
+      }
     } else if (
       ts.isImportTypeNode(node) &&
       ts.isLiteralTypeNode(node.argument) &&
@@ -382,10 +431,7 @@ function collectImportEdges(module: SourceModule): ImportEdge[] {
   return edges;
 }
 function isTransactionScopedImplementation(importer: string): boolean {
-  return (
-    importer.startsWith('packages/core/transactions/scoped/') ||
-    /^packages\/core\/transactions\/(?:.+\/)?TransactionScoped[^/]*Commands\.ts$/.test(importer)
-  );
+  return importer.startsWith('packages/core/transactions/scoped/');
 }
 
 function isApplicationTransactionImplementation(importer: string): boolean {
@@ -395,7 +441,7 @@ function isApplicationTransactionImplementation(importer: string): boolean {
   )
     return false;
   const filename = path.posix.basename(importer);
-  return !filename.startsWith('Transactional') && filename.endsWith('Transactions.ts');
+  return filename.endsWith('Transactions.ts');
 }
 
 function isOperationService(importer: string): boolean {
@@ -416,7 +462,7 @@ function importsApplicationTransactionGateway(edge: ImportEdge): boolean {
   )
     return true;
   const filename = path.posix.basename(edge.target!);
-  const directGateway = !filename.startsWith('Transactional') && filename.endsWith('Transactions');
+  const directGateway = filename.endsWith('Transactions');
   const gatewayFromBarrel = edge.importedNames.some((name) => name.endsWith('Transactions'));
   return directGateway || gatewayFromBarrel;
 }
@@ -708,16 +754,19 @@ function dependencyViolations(
   const edgeMap = new Map(modules.map((module) => [module.path, collectImportEdges(module)]));
   const result: TransactionArchitectureViolation[] = [];
   for (const root of modules) {
-    const visit = (module: SourceModule, chain: string[], exportsOnly = false): void => {
+    const visit = (module: SourceModule, chain: string[], requestedExports?: string[]): void => {
       // Break cycles per path, not per root: a second path to the same forbidden dependency
       // must not inherit an exception granted to the first path.
       if (chain.slice(0, -1).includes(module.path)) return;
-      if (!exportsOnly)
+      if (!requestedExports)
         result.push(
           ...sourceEffects(module, root.path).map((item) => ({ ...item, dependencyPath: chain })),
         );
-      for (const edge of edgeMap.get(module.path) ?? []) {
-        if (exportsOnly && !edge.reExport) continue;
+      for (const collectedEdge of edgeMap.get(module.path) ?? []) {
+        const edge = requestedExports
+          ? selectTypeReExport(collectedEdge, requestedExports)
+          : collectedEdge;
+        if (!edge) continue;
         const effectiveEdge = { ...edge, importer: root.path };
         const violations = violationsForEdge(effectiveEdge);
         if (
@@ -753,7 +802,8 @@ function dependencyViolations(
         )
           continue;
         const target = moduleMap.get(edge.target) ?? moduleMap.get(`${edge.target}/index`);
-        if (target) visit(target, [...chain, target.path], edge.typeOnly === true);
+        if (target)
+          visit(target, [...chain, target.path], edge.typeOnly ? edge.importedNames : undefined);
       }
     };
     // Legacy application code is checked directly; scoped, gateway, capability, and operation
@@ -769,6 +819,21 @@ function dependencyViolations(
     }
   }
   return [...new Map(result.map((item) => [violationKey(item), item])).values()];
+}
+
+/** A type import grants only its selected exports, never the other exports or runtime effects. */
+function selectTypeReExport(edge: ImportEdge, requestedExports: string[]): ImportEdge | null {
+  if (!edge.reExport) return null;
+  const importedNames = (edge.exportBindings ?? []).flatMap((binding) => {
+    if (requestedExports.includes('*')) return [binding.importedName];
+    if (binding.exportedName === '*') {
+      // `export *` forwards named exports, but not the source's default export.
+      return requestedExports.filter((name) => name !== 'default');
+    }
+    return requestedExports.includes(binding.exportedName) ? [binding.importedName] : [];
+  });
+  if (!importedNames.length) return null;
+  return { ...edge, importedNames: [...new Set(importedNames)].sort(), typeOnly: true };
 }
 
 export function checkTransactionArchitecture(

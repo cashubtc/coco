@@ -9,7 +9,44 @@ import {
 } from '../../../../scripts/check-transaction-architecture.ts';
 
 describe('transaction architecture imports', () => {
-  const scoped = 'packages/core/transactions/scoped/proofs/TransactionScopedProofCommands.ts';
+  const scoped = 'packages/core/transactions/scoped/proofs/ScopedProofCommands.ts';
+
+  it.each(['SendTransactions.ts', 'CoreSendTransactions.ts', 'TransactionalSendTransactions.ts'])(
+    'applies gateway ownership rules to %s without prefix exemptions',
+    (filename) => {
+      const path = `packages/core/transactions/send/${filename}`;
+      expect(
+        checkTransactionArchitecture(
+          [
+            {
+              path,
+              sourceText: "import type { CoreTransactionRunner } from '../CoreTransaction';",
+            },
+          ],
+          [],
+        ).unexpectedViolations,
+      ).toEqual([]);
+      expect(
+        checkTransactionArchitecture(
+          [
+            {
+              path,
+              sourceText: "import type { ProofService } from '../../services/ProofService';",
+            },
+          ],
+          [],
+        ).unexpectedViolations,
+      ).toContainEqual(expect.objectContaining({ rule: 'application-gateway-service' }));
+
+      // Importing a gateway under a neutral binding must still reveal its transaction authority.
+      expect(
+        checkTransactionArchitecture(
+          [{ path: scoped, sourceText: `import { Gateway } from '../../send/${filename}';` }],
+          [],
+        ).unexpectedViolations,
+      ).toContainEqual(expect.objectContaining({ rule: 'transaction-scope-application-gateway' }));
+    },
+  );
 
   it('rejects a nested runner invocation inside a gateway callback', () => {
     const modules = [
@@ -60,7 +97,7 @@ describe('transaction architecture imports', () => {
       {
         path: 'packages/core/operations/send/SendOperationService.ts',
         sourceText:
-          "import type { TransactionScopedProofCommands } from '@core/transactions/scoped/proofs/TransactionScopedProofCommands';",
+          "import type { ScopedProofCommands } from '@core/transactions/scoped/proofs/ScopedProofCommands';",
       },
     ];
     expect(checkTransactionArchitecture(modules, []).unexpectedViolations).toContainEqual(
@@ -118,11 +155,16 @@ describe('transaction architecture imports', () => {
     );
   });
 
-  it('checks every scoped file, regardless of its class or filename', () => {
+  it.each([
+    'ScopedProofCommands.ts',
+    'RepositoryProofCommands.ts',
+    'helper.ts',
+    'ProofTransactions.ts',
+  ])('uses the scoped directory to restrict %s, regardless of its name', (filename) => {
     const result = checkTransactionArchitecture(
       [
         {
-          path: 'packages/core/transactions/scoped/proofs/helper.ts',
+          path: `packages/core/transactions/scoped/proofs/${filename}`,
           sourceText: "import { EventBus } from '@core/events';",
         },
       ],
@@ -130,6 +172,111 @@ describe('transaction architecture imports', () => {
     );
     expect(result.unexpectedViolations).toContainEqual(
       expect.objectContaining({ rule: 'transaction-scope-live-event-bus' }),
+    );
+  });
+
+  it.each([
+    "export type { ProofRepository as HiddenRepository } from '../repositories';",
+    "import type { ProofRepository } from '../repositories'; export type { ProofRepository as HiddenRepository };",
+    "export type { LocalRepository as HiddenRepository }; import { type ProofRepository as LocalRepository } from '../repositories';",
+  ])('rejects mutation authority through the selected re-export: %s', (sourceText) => {
+    const path = 'packages/core/queries/ProofQueries.ts';
+    const result = checkTransactionArchitecture(
+      [
+        {
+          path,
+          sourceText: `import type { HiddenRepository } from '../helpers/types';
+            export async function getProofs(repository: HiddenRepository) {
+              await repository.deleteProofs('mint', ['secret']);
+              return [];
+            }`,
+        },
+        { path: 'packages/core/helpers/types.ts', sourceText },
+      ],
+      [],
+    );
+    expect(result.unexpectedViolations).toContainEqual(
+      expect.objectContaining({
+        importer: path,
+        rule: 'read-capability-effect',
+        importedNames: ['ProofRepository'],
+      }),
+    );
+  });
+
+  it.each([
+    "export type { QueryOptions as Options } from '../models/QueryOptions';",
+    "import type { QueryOptions as LocalOptions } from '../models/QueryOptions'; export type { LocalOptions as Options };",
+    "import type LocalOptions from '../models/QueryOptions'; export type { LocalOptions as Options };",
+  ])('accepts the selected harmless type from a mixed barrel: %s', (sourceText) => {
+    const result = checkTransactionArchitecture(
+      [
+        {
+          path: 'packages/core/queries/ProofQueries.ts',
+          sourceText: "import type { Options } from '../helpers/types';",
+        },
+        {
+          path: 'packages/core/helpers/types.ts',
+          sourceText: `${sourceText}
+            export type { ProofRepository } from '../repositories';`,
+        },
+        {
+          path: 'packages/core/models/QueryOptions.ts',
+          sourceText:
+            'export interface QueryOptions { limit: number; } export type { QueryOptions as default };',
+        },
+      ],
+      [],
+    );
+    expect(result.unexpectedViolations).toEqual([]);
+  });
+
+  it('preserves selected type bindings through star and value re-exports', () => {
+    const path = 'packages/core/queries/ProofQueries.ts';
+    const barrels: SourceModule[] = [
+      { path: 'packages/core/helpers/types.ts', sourceText: "export * from './inner';" },
+      {
+        path: 'packages/core/helpers/inner.ts',
+        sourceText: `export { QueryOptions as Options } from '../models/QueryOptions';
+          export type { ProofRepository } from '../repositories';`,
+      },
+      {
+        path: 'packages/core/models/QueryOptions.ts',
+        sourceText: `export class QueryOptions { limit = 10; }
+          const request = () => fetch('https://mint.invalid');`,
+      },
+    ];
+    const inspect = (importedName: string) =>
+      checkTransactionArchitecture(
+        [
+          { path, sourceText: `import type { ${importedName} } from '../helpers/types';` },
+          ...barrels,
+        ],
+        [],
+      ).unexpectedViolations;
+    expect(inspect('Options')).toEqual([]);
+    expect(inspect('ProofRepository')).toContainEqual(
+      expect.objectContaining({ importer: path, rule: 'read-capability-effect' }),
+    );
+  });
+
+  it.each([
+    "export type * as Repositories from '../repositories';",
+    "import type * as LocalRepositories from '../repositories'; export type { LocalRepositories as Repositories };",
+  ])('retains repository authority through namespace re-exports: %s', (sourceText) => {
+    expect(
+      checkTransactionArchitecture(
+        [
+          {
+            path: scoped,
+            sourceText: "import type { Repositories } from '../../../helpers/types';",
+          },
+          { path: 'packages/core/helpers/types.ts', sourceText },
+        ],
+        [],
+      ).unexpectedViolations,
+    ).toContainEqual(
+      expect.objectContaining({ importer: scoped, rule: 'transaction-scope-root-repositories' }),
     );
   });
 
@@ -159,8 +306,8 @@ describe('transaction architecture imports', () => {
         sourceText: "import type { ProofRepository } from '@core/repositories'; // fetch('url');",
       },
       {
-        path: 'packages/core/transactions/scoped/send/TransactionScopedSendCommands.ts',
-        sourceText: "import { reserve } from '../proofs/TransactionScopedProofCommands';",
+        path: 'packages/core/transactions/scoped/send/ScopedSendCommands.ts',
+        sourceText: "import { reserve } from '../proofs/ScopedProofCommands';",
       },
     ];
     expect(checkTransactionArchitecture(modules, []).unexpectedViolations).toEqual([]);
@@ -168,15 +315,36 @@ describe('transaction architecture imports', () => {
 
   it('permits the own gateway through the root barrel but rejects a foreign gateway', () => {
     const path = 'packages/core/operations/send/SendOperationService.ts';
+    const gateways: SourceModule[] = [
+      {
+        path: 'packages/core/transactions/index.ts',
+        sourceText: `export type { SendTransactions } from './send/SendTransactions';
+          export type { ReceiveTransactions } from './receive/ReceiveTransactions';`,
+      },
+      {
+        path: 'packages/core/transactions/send/SendTransactions.ts',
+        sourceText: "import type { CoreTransactionRunner } from '../CoreTransaction';",
+      },
+      {
+        path: 'packages/core/transactions/receive/ReceiveTransactions.ts',
+        sourceText: "import type { CoreTransactionRunner } from '../CoreTransaction';",
+      },
+    ];
     expect(
       checkTransactionArchitecture(
-        [{ path, sourceText: "import type { SendTransactions } from '@core/transactions';" }],
+        [
+          { path, sourceText: "import type { SendTransactions } from '@core/transactions';" },
+          ...gateways,
+        ],
         [],
       ).unexpectedViolations,
     ).toEqual([]);
     expect(
       checkTransactionArchitecture(
-        [{ path, sourceText: "import type { ReceiveTransactions } from '@core/transactions';" }],
+        [
+          { path, sourceText: "import type { ReceiveTransactions } from '@core/transactions';" },
+          ...gateways,
+        ],
         [],
       ).unexpectedViolations,
     ).toContainEqual(
@@ -191,36 +359,36 @@ describe('transaction architecture imports', () => {
     }> = [
       {
         module: {
-          path: 'packages/core/transactions/proofs/TransactionScopedProofCommands.ts',
+          path: 'packages/core/transactions/scoped/proofs/ScopedProofCommands.ts',
           sourceText: "import type { ProofService } from '@core/services/ProofService.ts';",
         },
         rule: 'transaction-scope-service',
       },
       {
         module: {
-          path: 'packages/core/transactions/proofs/TransactionScopedProofCommands.ts',
+          path: 'packages/core/transactions/scoped/proofs/ScopedProofCommands.ts',
           sourceText: "import type { MintAdapter } from '@core/infra';",
         },
         rule: 'transaction-scope-remote-infrastructure',
       },
       {
         module: {
-          path: 'packages/core/transactions/proofs/TransactionScopedProofCommands.ts',
+          path: 'packages/core/transactions/scoped/proofs/ScopedProofCommands.ts',
           sourceText: "import type { EventBus } from '@core/events';",
         },
         rule: 'transaction-scope-live-event-bus',
       },
       {
         module: {
-          path: 'packages/core/transactions/proofs/TransactionScopedProofCommands.ts',
+          path: 'packages/core/transactions/scoped/proofs/ScopedProofCommands.ts',
           sourceText: "import type { SendTransactions } from '@core/transactions/send/index.ts';",
         },
         rule: 'transaction-scope-application-gateway',
       },
       {
         module: {
-          path: 'packages/core/transactions/proofs/TransactionScopedProofCommands.ts',
-          sourceText: "import type { CoreTransactionRunner } from '../CoreTransaction.ts';",
+          path: 'packages/core/transactions/scoped/proofs/ScopedProofCommands.ts',
+          sourceText: "import type { CoreTransactionRunner } from '../../CoreTransaction.ts';",
         },
         rule: 'transaction-scope-runner',
       },
