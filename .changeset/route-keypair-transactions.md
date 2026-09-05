@@ -12,3 +12,7 @@ transaction architecture as the baseline for later operation refactors.
 Distinguish transaction gateways (`*Transactions`) from in-transaction command interfaces
 (`Scoped*Commands`), and check dependency boundaries through selected type re-exports.
 Use `*Queries` consistently for read-only state interfaces.
+
+Move index selection, exhaustion checks, and synchronous derivation into the shared scoped keypair
+command. Repositories expose allocation-state reads and writes, and concurrent allocations within
+one scope are ordered before committing their keys and high-water marks together.

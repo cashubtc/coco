@@ -269,7 +269,10 @@ The first slice implements this separation without changing the user-facing KeyR
 - `transactions/keypairs/KeyRingTransactions.ts` receives only the runner and forwards prepared
   commands into one transaction.
 - `transactions/scoped/keypairs/ScopedKeypairCommands.ts` receives only a scoped
-  key-ring repository. Standalone and composed key allocations use this same implementation.
+  key-ring repository. It selects the index, checks exhaustion, invokes the synchronous deriver,
+  and saves the key and high-water mark. Standalone and composed allocations use this same
+  implementation; repositories provide persistence primitives without deriving keys or opening
+  allocation transactions.
 
 No keypair dependency exception remains. Other legacy key-management consumers, including mint
 quote handlers, migrate with their owning workflows; a narrow signing interface must never be a
@@ -416,7 +419,8 @@ as a `CoreTransactionRunner`.
 Independent Coco Sessions using the same Wallet storage must not silently lose committed updates.
 An adapter may serialize conflicting work or reject one participant with a typed transaction
 conflict. The runner retries only conflicts the adapter explicitly marks transient, with a small
-bounded policy.
+bounded policy. It yields between attempts, after rollback, so competing writers can finish;
+repositories never sleep or retry individual allocation steps.
 
 Retryable commands must be replay-safe. Stable operation IDs, timestamps, Exact Operation Request
 material, and other retry-sensitive values are fixed before the callback begins. Each attempt
@@ -443,6 +447,24 @@ Seed loading and gives the keyring gateway a synchronous, purpose-bound deriver.
 that deriver into its one transaction. Inside the transaction, the transaction-scoped keypair
 module reads the durable high-water mark, chooses the next index, derives the keypair, and persists
 the keypair and high-water mark atomically.
+
+`ScopedKeypairCommands.allocate()` owns that complete algorithm:
+
+```text
+read getLastAllocatedIndex(purpose) and getHighestStoredDerivationIndex(purpose)
+choose max(lastAllocatedIndex, highestStoredDerivationIndex) + 1
+reject if the non-hardened child-index range is exhausted
+derive(index) synchronously
+write setPersistedKeyPair(keypair)
+write setLastAllocatedIndex(purpose, index)
+```
+
+The highest stored index preserves compatibility with existing or imported indexed keys. Both
+reads and writes use the current repository scope. Repository implementations only read and write
+these values; they never receive a deriver, choose an index, or open an allocation transaction.
+The runner owns retries. The scoped command orders concurrent allocations within its own scope so
+they observe preceding writes; adapter transaction isolation protects allocations across scopes.
+Allocation errors must propagate to the owning transaction so all its writes roll back together.
 
 ## Remote Outcomes and Recovery
 

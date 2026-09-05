@@ -29,6 +29,11 @@ through helpers. Standalone use wraps the same commands in a gateway; composed u
 commands within the owning transaction. Optional transaction parameters with implicit transaction
 creation are forbidden. This preserves reuse without permitting nested transactions.
 
+For Keypair Allocation, the scoped command reads the durable high-water mark and greatest stored
+index, chooses and validates the next index, invokes the synchronous deriver, and persists the key
+and high-water mark. Repositories expose only the underlying reads and writes; derivation and
+allocation retries do not belong in adapters. The runner retries the whole owning transaction.
+
 Queries and preflight capabilities cannot hide Wallet writes. Narrow interfaces may share one
 implementation, and no domain is required to reproduce every architectural layer. Use
 `<Domain>Queries` consistently for read-only state interfaces, without equivalent `*ReadPort`

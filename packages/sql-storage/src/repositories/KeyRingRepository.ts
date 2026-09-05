@@ -1,29 +1,8 @@
-import { DerivationIndexExhaustedError } from '@cashu/coco-core/adapter';
 import type { KeyRingRepository, Keypair, KeypairPurpose } from '@cashu/coco-core/adapter';
 import type { SqlDatabase } from '../index.ts';
 import { hexToBytes, bytesToHex } from '../utils.ts';
 
 const DEFAULT_KEYPAIR_PURPOSE: KeypairPurpose = 'p2pk';
-const MAX_DERIVATION_INDEX = 0x7fffffff;
-const MAX_BUSY_RETRIES = 3;
-
-function isSqliteBusy(error: unknown): boolean {
-  const code =
-    typeof error === 'object' && error !== null && 'code' in error
-      ? String((error as { code?: unknown }).code)
-      : '';
-  const message =
-    error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
-  return code === 'SQLITE_BUSY' || message.includes('database is locked');
-}
-
-function waitForRetry(attempt: number): Promise<void> {
-  const runtime = globalThis as typeof globalThis & {
-    setTimeout(callback: () => void, milliseconds: number): unknown;
-  };
-  return new Promise((resolve) => runtime.setTimeout(resolve, attempt * 5));
-}
-
 type KeypairRow = {
   publicKey: string;
   secretKey: string;
@@ -130,59 +109,28 @@ export class SqliteKeyRingRepository implements KeyRingRepository {
     }
   }
 
-  async deriveAndPersistKeyPair(
-    purpose: KeypairPurpose,
-    derive: (derivationIndex: number) => Pick<Keypair, 'publicKeyHex' | 'secretKey'>,
-  ): Promise<Keypair> {
-    for (let attempt = 1; ; attempt++) {
-      try {
-        return await this.deriveAndPersistKeyPairOnce(purpose, derive);
-      } catch (error) {
-        if (!isSqliteBusy(error) || attempt > MAX_BUSY_RETRIES) throw error;
-        await waitForRetry(attempt);
-      }
-    }
+  async getLastAllocatedIndex(purpose: KeypairPurpose): Promise<number | null> {
+    const row = await this.db.get<{ lastAllocatedIndex: number }>(
+      `SELECT lastAllocatedIndex FROM coco_cashu_keypair_derivation_allocations WHERE purpose = ?`,
+      [purpose],
+    );
+    return row?.lastAllocatedIndex ?? null;
   }
 
-  private async deriveAndPersistKeyPairOnce(
-    purpose: KeypairPurpose,
-    derive: (derivationIndex: number) => Pick<Keypair, 'publicKeyHex' | 'secretKey'>,
-  ): Promise<Keypair> {
-    return this.db.transaction(
-      async (tx) => {
-        const allocation = await tx.get<{ lastAllocatedIndex: number }>(
-          `SELECT lastAllocatedIndex
-         FROM coco_cashu_keypair_derivation_allocations
-         WHERE purpose = ?`,
-          [purpose],
-        );
-        const greatestStored = await tx.get<{ derivationIndex: number | null }>(
-          `SELECT MAX(derivationIndex) AS derivationIndex
-         FROM coco_cashu_keypairs
-         WHERE purpose = ? AND derivationIndex IS NOT NULL`,
-          [purpose],
-        );
-        const baseIndex = Math.max(
-          allocation?.lastAllocatedIndex ?? -1,
-          greatestStored?.derivationIndex ?? -1,
-        );
-        if (baseIndex >= MAX_DERIVATION_INDEX) {
-          throw new DerivationIndexExhaustedError(purpose);
-        }
+  async getHighestStoredDerivationIndex(purpose: KeypairPurpose): Promise<number | null> {
+    const row = await this.db.get<{ derivationIndex: number | null }>(
+      `SELECT MAX(derivationIndex) AS derivationIndex FROM coco_cashu_keypairs WHERE purpose = ?`,
+      [purpose],
+    );
+    return row?.derivationIndex ?? null;
+  }
 
-        const nextIndex = baseIndex + 1;
-        const keyPair = { ...derive(nextIndex), derivationIndex: nextIndex, purpose };
-
-        await new SqliteKeyRingRepository(tx).setPersistedKeyPair(keyPair);
-        await tx.run(
-          `INSERT INTO coco_cashu_keypair_derivation_allocations (purpose, lastAllocatedIndex)
-         VALUES (?, ?)
-         ON CONFLICT(purpose) DO UPDATE SET lastAllocatedIndex=excluded.lastAllocatedIndex`,
-          [purpose, nextIndex],
-        );
-        return keyPair;
-      },
-      { mode: 'immediate' },
+  async setLastAllocatedIndex(purpose: KeypairPurpose, derivationIndex: number): Promise<void> {
+    await this.db.run(
+      `INSERT INTO coco_cashu_keypair_derivation_allocations (purpose, lastAllocatedIndex)
+       VALUES (?, ?)
+       ON CONFLICT(purpose) DO UPDATE SET lastAllocatedIndex=excluded.lastAllocatedIndex`,
+      [purpose, derivationIndex],
     );
   }
 }

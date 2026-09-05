@@ -18,7 +18,7 @@ contract suites into your test runner:
 import { describe, it, expect } from 'bun:test';
 import {
   runRepositoryTransactionContract,
-  runKeyRingDerivationRepositoryContract,
+  runKeypairAllocationContract,
   runAuthSessionRepositoryContract,
 } from '@cashu/coco-adapter-tests';
 import { MyAdapterRepositories } from './src';
@@ -51,7 +51,7 @@ runAuthSessionRepositoryContract(
   { describe, it, expect },
 );
 
-runKeyRingDerivationRepositoryContract(
+runKeypairAllocationContract(
   {
     createRepositories: createFreshRepositories,
     // Returns { first, second, dispose } using one physical store and independent roots.
@@ -77,10 +77,13 @@ Transaction contract options:
   transient conflict before its callback runs. It requires `createSharedRepositories`.
 
 - `runRepositoryTransactionContract()` verifies transactional behavior across the
-  repository set, including scoped keypair allocation.
-- `runKeyRingDerivationRepositoryContract()` verifies purpose isolation, concurrency,
+  repository set, including grouped keypair and high-water-mark writes.
+- `runKeypairAllocationContract()` exercises the real key-management gateway for purpose isolation, concurrency,
   transactional rollback, committed-key deletion behavior, exhaustion, and—when
   `createSharedRepositories` is supplied—coordination between independent roots sharing one
   physical store.
+- `allocateKeypairForTest(repositories, purpose)` generates a deterministic key through key management
+  on an initialized adapter. It creates and disposes its Coco Session without starting background
+  watchers; allocation logic remains in core's scoped command.
 - `runAuthSessionRepositoryContract()` verifies the NUT-21/22 auth session
   persistence contract.

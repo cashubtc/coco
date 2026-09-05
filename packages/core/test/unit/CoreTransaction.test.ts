@@ -113,6 +113,43 @@ describe('RepositoryCoreTransactionRunner', () => {
     ]);
   });
 
+  it('yields between attempts so a competing writer can release its transaction', async () => {
+    const repositories = new MemoryRepositories();
+    let busy = true;
+    let attempts = 0;
+    const runner = new RepositoryCoreTransactionRunner(
+      overrideTransactions(repositories, async (command) => {
+        attempts++;
+        if (busy) {
+          if (attempts === 1)
+            setTimeout(() => {
+              busy = false;
+            }, 0);
+          throw new RepositoryTransactionConflictError();
+        }
+        return repositories.withTransaction(command);
+      }),
+    );
+
+    expect(await runner.run(async () => 'committed')).toBe('committed');
+    expect(attempts).toBe(2);
+  });
+
+  it('surfaces a persistent conflict after the bounded retry budget', async () => {
+    const repositories = new MemoryRepositories();
+    const conflict = new RepositoryTransactionConflictError();
+    let attempts = 0;
+    const runner = new RepositoryCoreTransactionRunner(
+      overrideTransactions(repositories, async () => {
+        attempts++;
+        throw conflict;
+      }),
+    );
+
+    await expect(runner.run(async () => 'unreachable')).rejects.toBe(conflict);
+    expect(attempts).toBe(3);
+  });
+
   it('does not retry domain failures', async () => {
     const repositories = new MemoryRepositories();
     const runner = new RepositoryCoreTransactionRunner(repositories);

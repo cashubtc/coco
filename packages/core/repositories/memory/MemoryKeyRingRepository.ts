@@ -1,10 +1,8 @@
 import type { Keypair, KeypairPurpose } from '../../models/Keypair';
-import { DerivationIndexExhaustedError } from '../../models/Error.ts';
 import type { KeyRingRepository } from '..';
 import { cloneMemoryValue, COPY_MEMORY_REPOSITORY_STATE } from './MemoryRepositoryTransaction.ts';
 
 const DEFAULT_KEYPAIR_PURPOSE: KeypairPurpose = 'p2pk';
-const MAX_DERIVATION_INDEX = 0x7fffffff;
 
 export class MemoryKeyRingRepository implements KeyRingRepository {
   private keyPairs: Map<string, Keypair> = new Map();
@@ -77,29 +75,25 @@ export class MemoryKeyRingRepository implements KeyRingRepository {
     return null;
   }
 
-  async deriveAndPersistKeyPair(
-    purpose: KeypairPurpose,
-    derive: (derivationIndex: number) => Pick<Keypair, 'publicKeyHex' | 'secretKey'>,
-  ): Promise<Keypair> {
-    let greatestStoredIndex = -1;
+  async getLastAllocatedIndex(purpose: KeypairPurpose): Promise<number | null> {
+    return this.highWaterMarks.get(purpose) ?? null;
+  }
+
+  async getHighestStoredDerivationIndex(purpose: KeypairPurpose): Promise<number | null> {
+    let highest: number | null = null;
     for (const keypair of this.keyPairs.values()) {
       if ((keypair.purpose ?? DEFAULT_KEYPAIR_PURPOSE) !== purpose) continue;
-      if (keypair.derivationIndex != null && keypair.derivationIndex > greatestStoredIndex) {
-        greatestStoredIndex = keypair.derivationIndex;
+      if (
+        keypair.derivationIndex != null &&
+        (highest === null || keypair.derivationIndex > highest)
+      ) {
+        highest = keypair.derivationIndex;
       }
     }
+    return highest;
+  }
 
-    const highWaterMark = this.highWaterMarks.get(purpose) ?? -1;
-    const baseIndex = Math.max(highWaterMark, greatestStoredIndex);
-    if (baseIndex >= MAX_DERIVATION_INDEX) {
-      throw new DerivationIndexExhaustedError(purpose);
-    }
-
-    const nextIndex = baseIndex + 1;
-    const keyPair = { ...derive(nextIndex), derivationIndex: nextIndex, purpose };
-
-    this.persistKeyPair(keyPair);
-    this.highWaterMarks.set(purpose, nextIndex);
-    return keyPair;
+  async setLastAllocatedIndex(purpose: KeypairPurpose, derivationIndex: number): Promise<void> {
+    this.highWaterMarks.set(purpose, derivationIndex);
   }
 }

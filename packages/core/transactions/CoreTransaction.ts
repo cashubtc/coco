@@ -52,6 +52,8 @@ export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
         ) {
           throw error;
         }
+        // Yield outside the failed transaction so competing writers can finish before retrying.
+        await new Promise((resolve) => setTimeout(resolve, attempt * 5));
       }
     }
   }

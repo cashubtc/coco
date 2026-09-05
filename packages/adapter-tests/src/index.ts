@@ -1,4 +1,5 @@
 import { Amount } from '@cashu/cashu-ts';
+import { Manager } from '@cashu/coco-core';
 import {
   type Mint,
   type Keyset,
@@ -17,7 +18,7 @@ import {
   type SendOperation,
   type AuthSession,
   type KeypairPurpose,
-  type KeyRingRepository,
+  type Keypair,
   DerivationIndexExhaustedError,
   QuoteIdentityConflictError,
   RepositoryTransactionConflictError,
@@ -53,7 +54,7 @@ export type ContractOptions<TRepositories extends Repositories = Repositories> =
   testWriterOwnershipAtEntry?: boolean;
 };
 
-export type KeyRingDerivationContractOptions<TRepositories extends Repositories = Repositories> = {
+export type KeypairAllocationContractOptions<TRepositories extends Repositories = Repositories> = {
   createRepositories: TransactionFactory<TRepositories>;
   createSharedRepositories?: SharedTransactionFactory<TRepositories>;
 };
@@ -84,29 +85,51 @@ function derivedKeypair(derivationIndex: number, purpose: KeypairPurpose) {
   } as const;
 }
 
-function deriveNext(repository: KeyRingRepository, purpose: KeypairPurpose) {
-  return repository.deriveAndPersistKeyPair(purpose, (index) => derivedKeypair(index, purpose));
+/** Exercise the real key-management gateway on an initialized adapter without starting watchers. */
+export async function allocateKeypairForTest(
+  repositories: Repositories,
+  purpose: KeypairPurpose,
+): Promise<Keypair> {
+  const manager = new Manager(repositories, async () => new Uint8Array(64));
+  let allocate: (() => Promise<Keypair>) | undefined;
+  manager.use({
+    name: 'keypair-allocation-contract',
+    required: ['keyRingService'],
+    onInit: ({ services: { keyRingService } }) => {
+      allocate = () =>
+        purpose === 'p2pk'
+          ? keyRingService.generateNewKeyPair({ dumpSecretKey: true })
+          : keyRingService.generateMintQuoteKeyPair();
+    },
+  });
+  try {
+    await manager.initPlugins();
+    if (!allocate) throw new Error('Keypair allocation contract was not initialized');
+    return await allocate();
+  } finally {
+    await manager.dispose();
+  }
 }
 
-export function runKeyRingDerivationRepositoryContract(
-  options: KeyRingDerivationContractOptions,
+export function runKeypairAllocationContract(
+  options: KeypairAllocationContractOptions,
   runner: ContractRunner,
 ): void {
   const { describe, it, expect } = runner;
 
-  describe('keyring derivation persistence contract', () => {
+  describe('keypair allocation contract', () => {
     it('starts each purpose at zero and advances independently', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {
         const p2pk = await Promise.all([
-          deriveNext(repositories.keyRingRepository, 'p2pk'),
-          deriveNext(repositories.keyRingRepository, 'p2pk'),
-          deriveNext(repositories.keyRingRepository, 'p2pk'),
+          allocateKeypairForTest(repositories, 'p2pk'),
+          allocateKeypairForTest(repositories, 'p2pk'),
+          allocateKeypairForTest(repositories, 'p2pk'),
         ]);
         const quote = await Promise.all([
-          deriveNext(repositories.keyRingRepository, 'nut20_mint_quote'),
-          deriveNext(repositories.keyRingRepository, 'nut20_mint_quote'),
-          deriveNext(repositories.keyRingRepository, 'nut20_mint_quote'),
+          allocateKeypairForTest(repositories, 'nut20_mint_quote'),
+          allocateKeypairForTest(repositories, 'nut20_mint_quote'),
+          allocateKeypairForTest(repositories, 'nut20_mint_quote'),
         ]);
 
         expectExactIndexRange(
@@ -130,7 +153,7 @@ export function runKeyRingDerivationRepositoryContract(
       const { repositories, dispose } = await options.createRepositories();
       try {
         await repositories.keyRingRepository.setPersistedKeyPair(derivedKeypair(7, 'p2pk'));
-        const next = await deriveNext(repositories.keyRingRepository, 'p2pk');
+        const next = await allocateKeypairForTest(repositories, 'p2pk');
         expect(next.derivationIndex).toBe(8);
       } finally {
         await dispose();
@@ -142,7 +165,7 @@ export function runKeyRingDerivationRepositoryContract(
       try {
         const indexes = await Promise.all(
           Array.from({ length: 50 }, () =>
-            deriveNext(repositories.keyRingRepository, 'nut20_mint_quote'),
+            allocateKeypairForTest(repositories, 'nut20_mint_quote'),
           ),
         );
         expectExactIndexRange(
@@ -161,16 +184,18 @@ export function runKeyRingDerivationRepositoryContract(
       try {
         await expectThrowsNamed(
           () =>
-            repositories.keyRingRepository.deriveAndPersistKeyPair('p2pk', () => {
-              throw new Error('derivation failed');
+            repositories.withTransaction(async (scope) => {
+              await scope.keyRingRepository.setPersistedKeyPair(derivedKeypair(0, 'p2pk'));
+              await scope.keyRingRepository.setLastAllocatedIndex('p2pk', 0);
+              throw new Error('allocation aborted');
             }),
           Error.name,
           expect,
         );
-        const keypair = await deriveNext(repositories.keyRingRepository, 'p2pk');
+        const keypair = await allocateKeypairForTest(repositories, 'p2pk');
         expect(keypair.derivationIndex).toBe(0);
         await repositories.keyRingRepository.deletePersistedKeyPair(keypair.publicKeyHex, 'p2pk');
-        expect((await deriveNext(repositories.keyRingRepository, 'p2pk')).derivationIndex).toBe(1);
+        expect((await allocateKeypairForTest(repositories, 'p2pk')).derivationIndex).toBe(1);
       } finally {
         await dispose();
       }
@@ -183,12 +208,12 @@ export function runKeyRingDerivationRepositoryContract(
           derivedKeypair(0x7fffffff, 'nut20_mint_quote'),
         );
         await expectThrowsNamed(
-          () => deriveNext(repositories.keyRingRepository, 'nut20_mint_quote'),
+          () => allocateKeypairForTest(repositories, 'nut20_mint_quote'),
           DerivationIndexExhaustedError.name,
           expect,
         );
         await expectThrowsNamed(
-          () => deriveNext(repositories.keyRingRepository, 'nut20_mint_quote'),
+          () => allocateKeypairForTest(repositories, 'nut20_mint_quote'),
           DerivationIndexExhaustedError.name,
           expect,
         );
@@ -202,12 +227,8 @@ export function runKeyRingDerivationRepositoryContract(
         const { first, second, dispose } = await options.createSharedRepositories!();
         try {
           const indexes = await Promise.all([
-            ...Array.from({ length: 50 }, () =>
-              deriveNext(first.keyRingRepository, 'nut20_mint_quote'),
-            ),
-            ...Array.from({ length: 50 }, () =>
-              deriveNext(second.keyRingRepository, 'nut20_mint_quote'),
-            ),
+            ...Array.from({ length: 50 }, () => allocateKeypairForTest(first, 'nut20_mint_quote')),
+            ...Array.from({ length: 50 }, () => allocateKeypairForTest(second, 'nut20_mint_quote')),
           ]);
           expectExactIndexRange(
             indexes.map((key) => key.derivationIndex!),
@@ -217,8 +238,8 @@ export function runKeyRingDerivationRepositoryContract(
           );
 
           const p2pk = await Promise.all([
-            deriveNext(first.keyRingRepository, 'p2pk'),
-            deriveNext(second.keyRingRepository, 'p2pk'),
+            allocateKeypairForTest(first, 'p2pk'),
+            allocateKeypairForTest(second, 'p2pk'),
           ]);
           expectExactIndexRange(
             p2pk.map((key) => key.derivationIndex!),
@@ -252,11 +273,10 @@ export async function runRepositoryTransactionContract(
           await tx.proofRepository.saveProofs('https://mint.test', [createDummyProof()]);
           await tx.meltOperationRepository.create(createDummyMeltOperation());
           await tx.counterRepository.setCounter('https://mint.test', 'keyset-id', 7);
-          committedPublicKey = (
-            await tx.keyRingRepository.deriveAndPersistKeyPair('p2pk', (index) =>
-              derivedKeypair(index, 'p2pk'),
-            )
-          ).publicKeyHex;
+          const keypair = derivedKeypair(0, 'p2pk');
+          await tx.keyRingRepository.setPersistedKeyPair(keypair);
+          await tx.keyRingRepository.setLastAllocatedIndex('p2pk', 0);
+          committedPublicKey = keypair.publicKeyHex;
           committed = true;
         });
 
@@ -277,7 +297,7 @@ export async function runRepositoryTransactionContract(
         );
         expect(keypair).toBeDefined();
         await repositories.keyRingRepository.deletePersistedKeyPair(committedPublicKey, 'p2pk');
-        const nextKeypair = await deriveNext(repositories.keyRingRepository, 'p2pk');
+        const nextKeypair = await allocateKeypairForTest(repositories, 'p2pk');
         expect(nextKeypair.derivationIndex).toBe(1);
       } finally {
         await dispose();
@@ -294,9 +314,8 @@ export async function runRepositoryTransactionContract(
             await tx.proofRepository.saveProofs('https://mint.test', [createDummyProof()]);
             await tx.meltOperationRepository.create(createDummyMeltOperation());
             await tx.counterRepository.setCounter('https://mint.test', 'keyset-id', 7);
-            await tx.keyRingRepository.deriveAndPersistKeyPair('p2pk', (index) =>
-              derivedKeypair(index, 'p2pk'),
-            );
+            await tx.keyRingRepository.setPersistedKeyPair(derivedKeypair(0, 'p2pk'));
+            await tx.keyRingRepository.setLastAllocatedIndex('p2pk', 0);
             throw new Error('boom');
           });
         }, expect);
@@ -317,7 +336,7 @@ export async function runRepositoryTransactionContract(
         expect(counter).toBe(null);
         const keypairs = await repositories.keyRingRepository.getAllPersistedKeyPairs('p2pk');
         expect(keypairs).toHaveLength(0);
-        const reallocated = await deriveNext(repositories.keyRingRepository, 'p2pk');
+        const reallocated = await allocateKeypairForTest(repositories, 'p2pk');
         expect(reallocated.derivationIndex).toBe(0);
       } finally {
         await dispose();
