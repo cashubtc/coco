@@ -20,7 +20,8 @@ An application-scoped `*Transactions` implementation is a leaf adapter around it
 `CoreTransactionRunner`. Its caller completes preflight and supplies transaction-ready command
 data. The gateway does not depend on regular Services, remote infrastructure, the live `EventBus`,
 root repositories, or another application-scoped transaction gateway. Existing dependencies that
-violate this boundary remain only as exact, shrinking migration exceptions.
+violate this boundary are removed in their owning workflow migrations; new transaction-aware work
+follows the contract immediately.
 
 Shared domain modules own reusable invariants and algorithms; operation-specific modules compose
 them into atomic transitions. Shared implementations receive repositories from the current
@@ -42,7 +43,11 @@ aliases or extra wrapper layers. Reserve
 Reserve `*Transactions` for gateways; keep scoped implementations and helpers under
 `transactions/scoped/**`. The [naming convention](../../../../TRANSACTION_DESIGN.md#naming-convention)
 distinguishes coordinators, gateways, scoped commands, the scope, and the runner without an ambiguous
-`Transactional*` prefix. Dependency checks apply by role and directory, with no prefix exemptions.
-The keypair implementation is the initial baseline; later proof, output, counter, and handler
-migrations reuse these rules. Import/effect guards, scoped types, composition review, and atomicity
-tests jointly enforce the contract; a filename check alone does not establish effect safety.
+`Transactional*` prefix. The keypair implementation is the initial baseline; later proof, output,
+counter, and handler migrations reuse these rules.
+
+The team relies on mandatory agent review of the documented contract, human code review, scoped
+types, and behavior tests. A custom architecture guard is not maintained: its partial static
+analysis adds maintenance cost without establishing effect safety. Agents follow the
+[review steps](../../../../TRANSACTION_DESIGN.md#agent-review), inspect indirect dependencies and
+composition-root wiring, and report the boundaries checked and remaining deviations before handoff.

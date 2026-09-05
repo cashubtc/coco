@@ -33,8 +33,11 @@ relevant glossary and ADR. See `docs/agents/domain.md`.
 Before changing or reviewing Wallet persistence, operation coordination, or storage adapters, read
 [TRANSACTION_DESIGN.md](TRANSACTION_DESIGN.md) and
 [ADR-0011](packages/core/docs/adr/0011-use-domain-transaction-gateways.md).
-Keep the design as the maintained transaction contract. When changing that contract, update the
-design and ADR in the same PR.
+Apply the design's naming, dependency, and transaction ownership rules to every affected module,
+including helpers and composition-root wiring. Before handoff, complete the design's
+[agent review steps](TRANSACTION_DESIGN.md#agent-review) and report the transaction boundaries
+checked, relevant verification, and any remaining deviations. Passing typecheck alone does not
+establish adherence. When changing the contract, update the design and ADR in the same PR.
 
 ## File router
 

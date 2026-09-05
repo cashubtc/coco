@@ -46,10 +46,9 @@ interface is already a read-only dependency boundary; an equivalent `*ReadPort` 
 or layer. A repository can implement the Query interface directly. Name other local capabilities
 for their behavior, such as `P2pkSigner` and `KeypairDerivation`.
 
-Keep scoped implementations and helpers under `transactions/scoped/**`; that directory determines
-their restrictions regardless of filename. Outside that directory, every `*Transactions.ts` file
-under `transactions/` is a gateway, with no prefix exemptions. A misleading name never exempts a
-module from its architectural restrictions.
+Keep scoped implementations and helpers under `transactions/scoped/**` and application-scoped
+`*Transactions` gateways outside that directory under `transactions/`. These locations make each
+module's role recognizable; review its actual dependencies and behavior against that role.
 
 ## Decision Summary
 
@@ -81,8 +80,8 @@ module from its architectural restrictions.
 - An informational read may happen outside a transaction, but any read authorizing a mutation is
   repeated or validated inside the transaction.
 - Live events are published only after commit.
-- Existing dependency violations may be allowlisted temporarily. Every exception is exact and
-  named; the executable architecture check rejects new edges and stale exceptions.
+- Existing workflows migrate incrementally. Identify remaining legacy dependencies in the owning
+  migration and remove them as it proceeds; new transaction-aware work follows this contract.
 
 ## Modules, Interfaces, and Lifetimes
 
@@ -250,8 +249,8 @@ implementation, and a repository adapter may satisfy a read interface directly.
 Reserve `Operation` for durable sagas. Name transaction-scoped interfaces
 `Scoped*Commands`, with implementations such as `RepositoryKeypairCommands`. Callers
 still use small domain methods: `transaction.keypairs.allocate(command)`. Keep all scoped
-implementations and their private scoped helpers under `transactions/scoped/` so the architecture
-guard applies independently of class names. Do not add interfaces or pass-through classes solely
+implementations and their private scoped helpers under `transactions/scoped/` so their lifetime
+and responsibilities are visible during review. Do not add interfaces or pass-through classes solely
 to reproduce the same layers for every domain.
 
 ## Implemented Keypair Baseline
@@ -495,25 +494,16 @@ If a listener fails after commit, orchestration logs the event error without tre
 Wallet mutation as failed. Event failure must not cause a caller to replay a successful remote
 effect.
 
-## Executable Dependency Rules
+## Dependency Rules
 
-[`scripts/check-transaction-architecture.ts`](./scripts/check-transaction-architecture.ts) inspects
-TypeScript syntax and dependencies during `bun run typecheck`. File naming and placement make the architectural
-roles recognizable:
+Agents and human reviewers apply these rules to module dependencies, including authority supplied
+through helpers, callbacks, and composition-root wiring:
 
-- `transactions/scoped/**` contains shared and operation-specific scoped implementations and helpers;
-- `transactions/**/*Transactions.ts` contains application-scoped transaction gateways; and
-- `operations/**/*OperationService.ts` contains durable operation coordinators.
-- `keypairs/**`, `queries/**`, and `capabilities/**` contain non-mutating queries, preflight,
-  and local capabilities. Put future shared read capabilities in one of these checked locations.
-
-The check enforces these edges:
-
-| Importer                                          | Forbidden dependencies                                                                                                                                       |
+| Module                                            | Forbidden dependencies                                                                                                                                       |
 | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Transaction-scoped implementation                 | Services/coordinators, remote infrastructure, live event bus, raw runner, root repository containers, concrete storage adapters, application-scoped gateways |
 | Application-scoped `*Transactions` implementation | regular Services, remote infrastructure, live event bus, repositories, application-scoped gateways                                                           |
-| Operation Service                                 | regular Services, repositories, `CoreTransactionRunner`, another domain's transaction gateway                                                                |
+| Operation Service                                 | regular Services, repositories, `CoreTransactionRunner`, live scoped commands, another domain's transaction gateway                                          |
 | Query or local preflight capability               | Services/coordinators, repository mutation interfaces, transaction modules, remote infrastructure, live event bus                                            |
 
 Scoped implementations import repository contracts with `import type`; runtime repository helpers
@@ -521,32 +511,34 @@ and concrete adapters cannot be used to acquire an opener. Repository adapters a
 wiring retain full persistence contracts. Queries receive narrow read interfaces, which a repository
 adapter can implement directly; query modules do not import broad mutation contracts.
 
-The check uses an exact legacy allowlist including importer, import source, and imported binding
-names and, for indirect dependencies, the exact helper path. This includes current Operation
-Service dependencies on broad Services and the legacy Melt handler dependency bundle. Adding a
-binding or another helper path to an allowlisted dependency is a new
-violation. Removing a legacy edge makes its allowlist entry stale and fails the check until the
-exception is deleted, so the allowlist must shrink with each migration.
+Follow the authority actually acquired through imported bindings and injected implementations.
+An unrelated type export in a barrel does not grant repository authority to a consumer of a pure
+helper. Runtime dependencies and module initialization still need review for effects. A small
+interface alone does not establish purity.
 
-The guard parses imports, re-exports, import types, literal dynamic imports, and require calls with
-TypeScript. It follows runtime helper dependencies and type re-exports. Type-only imports do not
-grant access to the imported module's implementation; they are checked directly and through
-re-export chains, including bindings imported and then exported in separate statements. Follow the
-specific imported bindings, including aliases, rather than unrelated exports from the same barrel.
-Permitted architectural seams such as a coordinator's own gateway are checked
-separately rather than inheriting the consumer's role. Root runner imports and explicit
-`withTransaction` access are limited to gateways and declared transaction infrastructure; gateways
-must use the runner rather than `withTransaction` directly. Coordinators cannot receive live scoped
-commands. The guard rejects syntactically nested runner calls in gateway callbacks. Restricted
-modules also reject direct network primitives and non-literal dependency loading.
+The team maintains this contract through agent instructions, code review, scoped types, and
+behavior tests. There is no custom architecture guard or dependency allowlist. Typecheck verifies
+TypeScript compatibility; it does not verify these architectural rules.
 
-This is a guard against accidental architectural drift, not a proof of arbitrary JavaScript
-effects. Structural type aliases, injected callbacks, casts, computed property names, third-party
-implementations, and composition-root wiring still require review and behavior tests. The
-composition root must supply non-mutating query/preflight implementations and scoped repositories
-without transaction openers. Never infer purity from a small interface alone. Do not implement a
-process-wide "transaction active" flag: independent concurrent transactions are valid, while
-nested transactions within a call chain are forbidden.
+### Agent Review
+
+Before completing a change or review involving Wallet persistence, operation coordination, or
+storage adapters:
+
+1. Identify each affected module's role using the naming convention. Trace its dependencies through
+   helpers and injected implementations, including composition-root wiring, against the table above.
+2. For each changed atomic transition, identify the owning gateway and runner invocation. Verify all
+   participating commands use the same adapter scope, authoritative reads occur inside it, and scoped
+   repositories and commands cannot open another transaction.
+3. Trace effects across that boundary: asynchronous preflight and remote I/O occur outside it,
+   derivation inside it is synchronous, retry-sensitive inputs remain stable, and live events follow
+   commit. Queries and preflight capabilities must remain non-mutating.
+4. Run the relevant behavior tests from the testing contract below. Add or adjust tests when a
+   changed invariant needs coverage. Resolve new design violations before handoff; identify remaining
+   legacy deviations and their owning migration without treating them as permission for new ones.
+5. Report the transaction boundaries inspected, verification performed, and any unresolved deviations
+   in the handoff or PR description. Update this design and ADR-0011 together when the agreed contract
+   changes.
 
 ## Incremental Migration
 
@@ -554,14 +546,14 @@ The architecture is adopted in reviewable vertical slices. New transaction-aware
 contract immediately; existing workflows move behind it without requiring a repository-wide
 rewrite.
 
-1. Establish the runner, transaction-scoped module factory, keypair allocation, architecture
-   contract, and executable dependency guard.
+1. Establish the runner, transaction-scoped module factory, keypair allocation, and documented
+   architecture contract with agent review instructions.
 2. Use the implemented Keypair Queries, derivation, signer, and shared scoped commands as the
    baseline; retain `KeyRingService` as the user-facing management module.
 3. Migrate Send transitions through `SendTransactions`, extracting shared proof and Output
-   Allocation behavior, separating handler effects, and removing its legacy dependency exceptions.
+   Allocation behavior, separating handler effects, and removing its legacy dependencies.
 4. Migrate core Receive transitions through `ReceiveTransactions`, reusing those implementations
-   and removing its legacy dependency exceptions.
+   and removing its legacy dependencies.
 5. Migrate Mint Swap, Mint Operation, Melt Operation, and Payment Request transitions as their
    cross-domain invariants require.
 
@@ -580,9 +572,8 @@ persistent adapters. Required cases include:
 - independent connections serialize or return a typed conflict; and
 - no live event or remote I/O occurs inside a transaction.
 
-Architecture-check tests cover rejected imports, exact legacy exceptions, additions to allowlisted
-imports, and the current source tree. Orchestration tests assert durable results through Queries and
-use in-memory remote adapters rather than mocking individual repositories.
+Orchestration tests assert durable results through Queries and use in-memory remote adapters rather
+than mocking individual repositories.
 
 The keypair baseline also tests shared command reuse through a standalone gateway and a composed
 transition, exactly one adapter transaction per successful invocation, grouped allocation rollback,

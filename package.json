@@ -29,7 +29,7 @@
   "scripts": {
     "build": "bun scripts/build.ts build",
     "build:test:core": "bun run --filter='@cashu/coco-core' build && bun run --filter='@cashu/coco-adapter-tests' build",
-    "typecheck": "bun scripts/check-transaction-architecture.ts && bun scripts/build.ts typecheck",
+    "typecheck": "bun scripts/build.ts typecheck",
     "test:coverage:core": "bun run build:test:core && bun test packages/core/test/unit --coverage --coverage-reporter=lcov --coverage-dir=coverage/core",
     "docs:dev": "vitepress dev packages/docs",
     "docs:build": "vitepress build packages/docs",
