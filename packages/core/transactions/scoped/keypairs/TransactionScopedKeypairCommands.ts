@@ -1,22 +1,14 @@
-import type { Keypair, KeypairPurpose } from '@core/models/Keypair';
+import type { Keypair } from '@core/models/Keypair';
 import type { KeyRingRepository } from '@core/repositories';
+import type { AllocateKeypairCommand } from '../../../keypairs/types.ts';
 
-export type PurposeBoundKeyDeriver = (
-  derivationIndex: number,
-) => Pick<Keypair, 'publicKeyHex' | 'secretKey'>;
-
-export interface AllocateKeypairCommand {
-  purpose: KeypairPurpose;
-  derive: PurposeBoundKeyDeriver;
-}
-
-export interface TransactionalKeypairOperations {
+export interface TransactionScopedKeypairCommands {
   allocate(command: AllocateKeypairCommand): Promise<Keypair>;
   importP2pk(keypair: Keypair): Promise<void>;
   deleteP2pk(publicKey: string): Promise<void>;
 }
 
-export class RepositoryTransactionalKeypairOperations implements TransactionalKeypairOperations {
+export class RepositoryKeypairCommands implements TransactionScopedKeypairCommands {
   constructor(private readonly repository: KeyRingRepository) {}
 
   allocate(command: AllocateKeypairCommand): Promise<Keypair> {

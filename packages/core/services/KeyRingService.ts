@@ -4,18 +4,18 @@ import type { Keypair, KeypairPurpose } from '@core/models/Keypair';
 import type { KeyRingTransactions } from '@core/transactions/keypairs/KeyRingTransactions.ts';
 import { schnorr } from '@noble/curves/secp256k1.js';
 import { bytesToHex } from '@noble/curves/utils.js';
-import { sha256 } from '@noble/hashes/sha2.js';
+import type { KeypairQueries } from '../keypairs/KeypairQueries.ts';
+import type { KeypairDerivation } from '../keypairs/KeypairDerivation.ts';
+import type { P2pkSigner } from '../keypairs/P2pkSigner.ts';
 
-export interface KeyRingReadPort {
-  getPersistedKeyPair(publicKey: string, purpose: KeypairPurpose): Promise<Keypair | null>;
-  getLatestKeyPair(purpose: KeypairPurpose): Promise<Keypair | null>;
-  getAllPersistedKeyPairs(purpose: KeypairPurpose): Promise<Keypair[]>;
-}
+export type KeyRingReadPort = KeypairQueries;
 
 export class KeyRingService {
   constructor(
     private readonly keyRingReads: KeyRingReadPort,
     private readonly transactions: KeyRingTransactions,
+    private readonly derivation: KeypairDerivation,
+    private readonly signer: P2pkSigner,
     private readonly logger?: Logger,
   ) {}
 
@@ -40,10 +40,8 @@ export class KeyRingService {
       dumpSecretKey?: boolean;
     },
   ): Promise<{ publicKeyHex: string } | Keypair> {
-    const keyPair =
-      purpose === 'p2pk'
-        ? await this.transactions.generateP2pkKey()
-        : await this.transactions.generateMintQuoteKey();
+    const command = await this.derivation.prepare(purpose);
+    const keyPair = await this.transactions.allocate(command);
     if (options?.dumpSecretKey) {
       return keyPair;
     }
@@ -94,22 +92,7 @@ export class KeyRingService {
   }
 
   async signProof(proof: Proof, publicKey: string): Promise<Proof> {
-    this.logger?.debug('Signing proof', { proof, publicKey });
-    if (!proof.secret || typeof proof.secret !== 'string') {
-      throw new Error('Proof secret is required and must be a string');
-    }
-    const keyPair = await this.keyRingReads.getPersistedKeyPair(publicKey, 'p2pk');
-    if (!keyPair) {
-      const publicKeyPreview = publicKey.substring(0, 8);
-      this.logger?.error('Key pair not found', { publicKey });
-      throw new Error(`Key pair not found for public key: ${publicKeyPreview}...`);
-    }
-    const message = new TextEncoder().encode(proof.secret);
-    const signature = schnorr.sign(sha256(message), keyPair.secretKey);
-    const signedProof = {
-      ...proof,
-      witness: JSON.stringify({ signatures: [bytesToHex(signature)] }),
-    };
+    const signedProof = await this.signer.signProof(proof, publicKey);
     this.logger?.debug('Proof signed successfully', { publicKey });
     return signedProof;
   }

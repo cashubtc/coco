@@ -1,12 +1,12 @@
 import type { Repositories, RepositoryTransactionScope } from '@core/repositories';
 import { RepositoryTransactionConflictError } from '@core/repositories';
 import {
-  RepositoryTransactionalKeypairOperations,
-  type TransactionalKeypairOperations,
-} from './keypairs/TransactionalKeypairOperations.ts';
+  RepositoryKeypairCommands,
+  type TransactionScopedKeypairCommands,
+} from './scoped/keypairs/TransactionScopedKeypairCommands.ts';
 
 export interface CoreTransaction {
-  readonly keypairs: TransactionalKeypairOperations;
+  readonly keypairs: TransactionScopedKeypairCommands;
 }
 
 export interface CoreTransactionRunner {
@@ -20,7 +20,7 @@ interface TransactionModuleFactory {
 class RepositoryTransactionModuleFactory implements TransactionModuleFactory {
   create(repositories: RepositoryTransactionScope): CoreTransaction {
     return {
-      keypairs: new RepositoryTransactionalKeypairOperations(repositories.keyRingRepository),
+      keypairs: new RepositoryKeypairCommands(repositories.keyRingRepository),
     };
   }
 }
