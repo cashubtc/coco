@@ -92,6 +92,46 @@ describe('RepositoryCoreTransactionRunner', () => {
     expect((await gateway.allocate(quoteKey)).derivationIndex).toBe(0);
   });
 
+  it('binds inherited repository getters to the owning transaction lifetime', async () => {
+    const repositories = new MemoryRepositories();
+    let boundRepositories!: RepositoryTransactionScope;
+    const runner = new RepositoryCoreTransactionRunner(
+      overrideTransactions(repositories, (command) =>
+        repositories.withTransaction((scope) => {
+          const { keyRingRepository, ...otherRepositories } = scope;
+          class GetterScope {
+            #keyRingRepository = keyRingRepository;
+
+            get keyRingRepository() {
+              return this.#keyRingRepository;
+            }
+          }
+          return command(Object.assign(new GetterScope(), otherRepositories));
+        }),
+      ),
+      {
+        create(scope) {
+          boundRepositories = scope;
+          return Object.freeze({
+            keypairs: new RepositoryKeypairCommands(scope.keyRingRepository),
+          });
+        },
+      },
+    );
+    const command = await new KeypairDerivation(async () => new Uint8Array(64)).prepare('p2pk');
+    const allocated = await new CoreKeyRingTransactions(runner).allocate(command);
+
+    expect(allocated.derivationIndex).toBe(0);
+    expect(await repositories.keyRingRepository.getAllPersistedKeyPairs('p2pk')).toEqual([
+      allocated,
+    ]);
+    expect(boundRepositories.keyRingRepository).toBe(boundRepositories.keyRingRepository);
+    await expect(
+      boundRepositories.keyRingRepository.setLastAllocatedIndex('p2pk', 99),
+    ).rejects.toThrow('Wallet transaction scope is closed');
+    expect(await repositories.keyRingRepository.getLastAllocatedIndex('p2pk')).toBe(0);
+  });
+
   it('retries transient repository conflicts and commits only the successful attempt', async () => {
     const repositories = new MemoryRepositories();
     let attempts = 0;

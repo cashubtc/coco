@@ -8,11 +8,18 @@ export class TransactionLifetime {
   private failure: { error: unknown } | undefined;
   private closed = false;
 
-  /** Wrap each module once at construction, including repositories injected into scoped commands. */
+  /** Wrap modules on access, preserving inherited bindings and each getter's original receiver. */
   bind<T extends { [K in keyof T]: object }>(modules: T): T {
-    return Object.fromEntries(
-      Object.entries(modules).map(([name, module]) => [name, this.bindModule(module as object)]),
-    ) as T;
+    const bound = new WeakMap<object, object>();
+    // An inheriting target lets even frozen source properties return their bound wrappers.
+    return new Proxy(Object.create(modules) as T, {
+      get: (_target, property) => {
+        const module: unknown = Reflect.get(modules, property, modules);
+        if (typeof module !== 'object' || module === null) return module;
+        if (!bound.has(module)) bound.set(module, this.bindModule(module));
+        return bound.get(module);
+      },
+    });
   }
 
   async run<T>(command: () => Promise<T>): Promise<T> {
