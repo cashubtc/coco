@@ -1520,6 +1520,10 @@ const MIGRATIONS: readonly Migration[] = [
         ADD COLUMN executionMemo TEXT;
     `,
   },
+  {
+    id: '041_send_reclaim_data',
+    sql: `ALTER TABLE coco_cashu_send_operations ADD COLUMN reclaimDataJson TEXT;`,
+  },
 ];
 
 // Export for testing

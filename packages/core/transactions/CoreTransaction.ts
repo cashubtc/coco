@@ -2,63 +2,95 @@ import { OutputData, type OutputDataCreator } from '@cashu/cashu-ts';
 import type { Repositories, RepositoryTransactionScope } from '@core/repositories';
 import { RepositoryTransactionConflictError } from '@core/repositories';
 import {
-  RepositoryTransactionalKeypairOperations,
-  type TransactionalKeypairOperations,
-} from './keypairs/TransactionalKeypairOperations.ts';
+  RepositoryMintMetadataCommands,
+  type ScopedMintMetadataCommands,
+} from './scoped/mints/ScopedMintMetadataCommands.ts';
 import {
-  RepositoryTransactionalSendOperations,
-  type TransactionalSendOperations,
-} from './send/TransactionalSendOperations.ts';
+  RepositoryProofCommands,
+  type ScopedProofCommands,
+} from './scoped/proofs/ScopedProofCommands.ts';
+import {
+  RepositoryOutputCommands,
+  type ScopedOutputCommands,
+} from './scoped/outputs/ScopedOutputCommands.ts';
+import {
+  RepositorySendCommands,
+  type ScopedSendCommands,
+} from './scoped/send/ScopedSendCommands.ts';
+import {
+  RepositoryKeypairCommands,
+  type ScopedKeypairCommands,
+} from './scoped/keypairs/ScopedKeypairCommands.ts';
+import { TransactionLifetime } from './scoped/TransactionLifetime.ts';
 
+/**
+ * Scoped commands sharing one adapter transaction attempt. Await mutations sequentially unless
+ * their independence is established; lifetime tracking does not serialize conflicting work.
+ */
 export interface CoreTransaction {
-  readonly keypairs: TransactionalKeypairOperations;
-  readonly sends: TransactionalSendOperations;
+  readonly mintMetadata: ScopedMintMetadataCommands;
+  readonly keypairs: ScopedKeypairCommands;
+  readonly proofs: ScopedProofCommands;
+  readonly outputs: ScopedOutputCommands;
+  readonly sends: ScopedSendCommands;
 }
 
 export interface CoreTransactionRunner {
   run<T>(command: (transaction: CoreTransaction) => Promise<T>): Promise<T>;
 }
 
-export interface TransactionModuleFactory {
-  create(repositories: RepositoryTransactionScope): CoreTransaction;
-}
+type TransactionModuleFactory = (repositories: RepositoryTransactionScope) => CoreTransaction;
 
-class RepositoryTransactionModuleFactory implements TransactionModuleFactory {
-  constructor(private readonly outputDataCreator: OutputDataCreator = OutputData) {}
-
-  create(repositories: RepositoryTransactionScope): CoreTransaction {
+export function createCoreTransactionModuleFactory(
+  outputDataCreator: OutputDataCreator = OutputData,
+): TransactionModuleFactory {
+  return (repositories) => {
+    const mintMetadata = new RepositoryMintMetadataCommands(
+      repositories.mintRepository,
+      repositories.keysetRepository,
+    );
+    const proofs = new RepositoryProofCommands(
+      repositories.proofRepository,
+      repositories.keysetRepository,
+    );
+    const outputs = new RepositoryOutputCommands(
+      repositories.counterRepository,
+      repositories.keysetRepository,
+      outputDataCreator,
+    );
     return {
-      keypairs: new RepositoryTransactionalKeypairOperations(repositories.keyRingRepository),
-      sends: new RepositoryTransactionalSendOperations(
-        repositories.proofRepository,
-        repositories.counterRepository,
-        repositories.keysetRepository,
+      mintMetadata,
+      keypairs: new RepositoryKeypairCommands(repositories.keyRingRepository),
+      proofs,
+      outputs,
+      sends: new RepositorySendCommands(
         repositories.sendOperationRepository,
-        this.outputDataCreator,
+        proofs,
+        outputs,
+        mintMetadata,
       ),
     };
-  }
+  };
 }
 
 const MAX_TRANSACTION_ATTEMPTS = 3;
 
 /** Internal adapter-backed transaction runner owned by the composition root. */
 export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
-  private readonly modules: TransactionModuleFactory;
-
   constructor(
     private readonly repositories: Repositories,
-    modules: TransactionModuleFactory = new RepositoryTransactionModuleFactory(),
-  ) {
-    this.modules = modules;
-  }
+    private readonly createModules: TransactionModuleFactory = createCoreTransactionModuleFactory(),
+  ) {}
 
   async run<T>(command: (transaction: CoreTransaction) => Promise<T>): Promise<T> {
     for (let attempt = 1; ; attempt++) {
       try {
-        return await this.repositories.withTransaction((repositories) =>
-          command(this.modules.create(repositories)),
-        );
+        return await this.repositories.withTransaction((repositories) => {
+          const lifetime = new TransactionLifetime();
+          return lifetime.run(() =>
+            command(lifetime.bind(this.createModules(lifetime.bind(repositories)))),
+          );
+        });
       } catch (error) {
         if (
           !(error instanceof RepositoryTransactionConflictError) ||
@@ -66,13 +98,9 @@ export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
         ) {
           throw error;
         }
+        // Yield outside the failed transaction so competing writers can finish before retrying.
+        await new Promise((resolve) => setTimeout(resolve, attempt * 5));
       }
     }
   }
-}
-
-export function createCoreTransactionModuleFactory(
-  outputDataCreator?: OutputDataCreator,
-): TransactionModuleFactory {
-  return new RepositoryTransactionModuleFactory(outputDataCreator);
 }

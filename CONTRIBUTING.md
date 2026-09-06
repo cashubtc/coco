@@ -107,12 +107,6 @@ Please open an issue before spending time on:
 
 This helps us agree on direction before implementation.
 
-### Worktrees and planning
-
-We often use a git worktree per feature. If you are working from a feature
-worktree and there is a `FEATURE_TODO.md` file at the root, keep it updated as you
-work.
-
 ## Pull request expectations
 
 - Explain the problem and why your change is the right fix

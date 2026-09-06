@@ -1,5 +1,6 @@
 import { parentPort, workerData } from 'node:worker_threads';
 import { Database } from 'bun:sqlite';
+import { allocateKeypairForTest } from '@cashu/coco-adapter-tests';
 import { SqliteRepositories } from '../index.ts';
 
 type AllocationWorkerData = {
@@ -15,14 +16,9 @@ try {
   const repositories = new SqliteRepositories({ database });
   const indexes = await Promise.all(
     Array.from({ length: count }, () =>
-      repositories.keyRingRepository
-        .deriveAndPersistKeyPair('nut20_mint_quote', (derivationIndex) => ({
-          publicKeyHex: '03' + derivationIndex.toString(16).padStart(64, '0'),
-          secretKey: new Uint8Array(32).fill((derivationIndex % 254) + 1),
-          derivationIndex,
-          purpose: 'nut20_mint_quote',
-        }))
-        .then((keyPair) => keyPair.derivationIndex),
+      allocateKeypairForTest(repositories, 'nut20_mint_quote').then(
+        (keyPair) => keyPair.derivationIndex,
+      ),
     ),
   );
   parentPort?.postMessage({ indexes });

@@ -1,186 +1,52 @@
-import {
-  Amount,
-  KeyChain,
-  OutputData,
-  selectProofsRGLI,
-  sumProofs,
-  type KeyChainCache,
-  type MintKeys,
-  type OutputDataCreator,
-  type OutputDataLike,
-  type Proof,
-  type SelectProofs,
-  type Token,
-} from '@cashu/cashu-ts';
-import { assertSameUnit, normalizeUnit } from '@core/amounts.ts';
+import { Amount, sumProofs, type Proof, type Token } from '@cashu/cashu-ts';
+import { assertOutputProofs } from '@core/proofs/OutputProofs.ts';
+import { normalizeUnit } from '@core/amounts.ts';
 import { SendOperationConflictError, ProofValidationError } from '@core/models/Error.ts';
 import type {
   ExecutingSendOperation,
   FinalizedSendOperation,
-  InitSendOperation,
   PendingSendOperation,
   PreparedSendOperation,
   RollingBackSendOperation,
   RolledBackSendOperation,
   SendOperation,
 } from '@core/operations/send/SendOperation.ts';
-import { getSendProofSecrets, isTerminalOperation } from '@core/operations/send/SendOperation.ts';
-import type {
-  CounterRepository,
-  KeysetRepository,
-  ProofRepository,
-  SendOperationRepository,
-} from '@core/repositories';
-import type { CoreProof } from '@core/types.ts';
 import {
-  getSecretsFromSerializedOutputData,
-  serializeOutputData,
-  type SerializedOutputData,
-} from '@core/utils.ts';
+  getSendProofSecrets,
+  getKeepProofSecrets,
+  isTerminalOperation,
+} from '@core/operations/send/SendOperation.ts';
+import type { SendOperationRepository } from '@core/repositories';
+import type { CoreProof } from '@core/types.ts';
+import type { ScopedMintMetadataCommands } from '../mints/ScopedMintMetadataCommands.ts';
+import type {
+  PrepareSendCommand,
+  PreparedSendResult,
+  ExecuteExactSendCommand,
+  ExecuteExactSendResult,
+  BeginSwapExecutionCommand,
+  ClaimSendRecoveryCommand,
+  SwapTransportRequest,
+  BegunSwapExecution,
+  ApplySwapResultCommand,
+  AppliedSwapResult,
+  FailSwapExecutionCommand,
+  FailedSwapExecution,
+  CancelPreparedSendCommand,
+  CancelledPreparedSend,
+  CompletePendingSendCommand,
+  CompletedPendingSend,
+  CleanupLegacyInitResult,
+  CleanupOrphanedSendReservationsResult,
+  BeginReclaimCommand,
+  BegunReclaim,
+  CompleteReclaimCommand,
+  CompletedReclaim,
+} from '../../send/types.ts';
+import type { ScopedProofCommands } from '../proofs/ScopedProofCommands.ts';
+import type { ScopedOutputCommands } from '../outputs/ScopedOutputCommands.ts';
 
-export interface PrepareSendCommand {
-  operation: InitSendOperation;
-  /** Active keys and seed loaded before entering the transaction. */
-  activeKeys: MintKeys;
-  seed: Uint8Array;
-  /** Method policy resolved before entering the transaction. */
-  forceSwap: boolean;
-  /** Randomized outputs fixed during preflight and reused across transaction retries. */
-  fixedSendOutputs?: readonly OutputDataLike[];
-}
-
-export interface PreparedSendResult {
-  operation: PreparedSendOperation;
-  reservation: {
-    mintUrl: string;
-    operationId: string;
-    secrets: string[];
-    amount: Amount;
-    unit: string;
-  };
-  counter?: { mintUrl: string; keysetId: string; counter: number };
-}
-
-export interface ExecuteExactSendCommand {
-  operationId: string;
-  updatedAt: number;
-  memo?: string;
-}
-
-export interface ExecuteExactSendResult {
-  operation: PendingSendOperation & { token: Token };
-  token: Token;
-  /** False when an equivalent pending result had already committed. */
-  committed: boolean;
-}
-
-export interface BeginSwapExecutionCommand {
-  operationId: string;
-  updatedAt: number;
-  /** Normalized before entering the retried transaction. */
-  memo?: string;
-}
-
-export interface ClaimSendRecoveryCommand {
-  operationId: string;
-  expectedRevision: number;
-  updatedAt: number;
-}
-
-export interface SwapTransportRequest {
-  mintUrl: string;
-  unit: string;
-  amount: Amount;
-  inputProofs: Proof[];
-  outputData: SerializedOutputData;
-}
-
-export interface BegunSwapExecution {
-  operation: ExecutingSendOperation;
-  request: SwapTransportRequest;
-}
-
-export interface ApplySwapResultCommand {
-  operationId: string;
-  updatedAt: number;
-  keepProofs: CoreProof[];
-  sendProofs: CoreProof[];
-  token: Token;
-}
-
-export interface AppliedSwapResult {
-  operation: PendingSendOperation;
-  savedProofs: CoreProof[];
-  spentInputSecrets: string[];
-  /** False when an equivalent result had already committed. */
-  committed: boolean;
-}
-
-export interface FailSwapExecutionCommand {
-  operationId: string;
-  updatedAt: number;
-  error: string;
-}
-
-export interface FailedSwapExecution {
-  operation: RolledBackSendOperation;
-  releasedInputSecrets: string[];
-  /** False when the same terminal failure had already committed. */
-  committed: boolean;
-}
-
-export interface CancelPreparedSendCommand {
-  operationId: string;
-  updatedAt: number;
-  reason: string;
-}
-
-export interface CancelledPreparedSend {
-  operation: RolledBackSendOperation;
-  releasedInputSecrets: string[];
-  /** False when the same cancellation had already committed. */
-  committed: boolean;
-}
-
-export interface CompletePendingSendCommand {
-  operationId: string;
-  updatedAt: number;
-  /** Proof-state observations made outside the transaction. */
-  spentProofSecrets?: string[];
-}
-
-export interface CompletedPendingSend {
-  operation: PendingSendOperation | FinalizedSendOperation;
-  spentProofSecrets: string[];
-  releasedInputSecrets: string[];
-  /** True only when this call performed a proof or operation state change. */
-  committed: boolean;
-}
-
-export interface CleanupLegacyInitResult {
-  operationId: string;
-  mintUrl: string;
-  releasedProofSecrets: string[];
-}
-
-export interface CleanupOrphanedSendReservationsResult {
-  released: Array<{ mintUrl: string; secrets: string[] }>;
-  count: number;
-}
-
-/** Compatibility-only seam for the existing pending default-token reclaim flow. */
-export interface BeginLegacyPendingRollbackCommand {
-  operationId: string;
-  updatedAt: number;
-}
-
-export interface CompleteLegacyPendingRollbackCommand {
-  operationId: string;
-  updatedAt: number;
-  reason: string;
-}
-
-export interface TransactionalSendOperations {
+export interface ScopedSendCommands {
   prepare(command: PrepareSendCommand): Promise<PreparedSendResult>;
   executeExact(command: ExecuteExactSendCommand): Promise<ExecuteExactSendResult>;
   beginExecution(command: BeginSwapExecutionCommand): Promise<BegunSwapExecution>;
@@ -191,22 +57,16 @@ export interface TransactionalSendOperations {
   completePending(command: CompletePendingSendCommand): Promise<CompletedPendingSend>;
   cleanupOrphanedReservations(): Promise<CleanupOrphanedSendReservationsResult>;
   cleanupLegacyInit(operationId: string): Promise<CleanupLegacyInitResult>;
-  beginLegacyPendingRollback(
-    command: BeginLegacyPendingRollbackCommand,
-  ): Promise<RollingBackSendOperation>;
-  completeLegacyPendingRollback(
-    command: CompleteLegacyPendingRollbackCommand,
-  ): Promise<RolledBackSendOperation>;
+  beginReclaim(command: BeginReclaimCommand): Promise<BegunReclaim>;
+  completeReclaim(command: CompleteReclaimCommand): Promise<CompletedReclaim>;
 }
 
-export class RepositoryTransactionalSendOperations implements TransactionalSendOperations {
+export class RepositorySendCommands implements ScopedSendCommands {
   constructor(
-    private readonly proofs: ProofRepository,
-    private readonly counters: CounterRepository,
-    private readonly keysets: KeysetRepository,
     private readonly sends: SendOperationRepository,
-    private readonly outputDataCreator: OutputDataCreator = OutputData,
-    private readonly selectProofs: SelectProofs = selectProofsRGLI,
+    private readonly proofs: ScopedProofCommands,
+    private readonly outputs: ScopedOutputCommands,
+    private readonly mints: Pick<ScopedMintMetadataCommands, 'assertTrusted'>,
   ) {}
 
   async prepare(command: PrepareSendCommand): Promise<PreparedSendResult> {
@@ -219,66 +79,34 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
       );
     }
 
-    const available = await this.proofs.getAvailableProofs(operation.mintUrl, {
-      unit: operation.unit,
-    });
-    const keysets = await this.keysets.getKeysetsByMintUrl(operation.mintUrl);
-    assertCurrentActiveKeys(operation, command.activeKeys, keysets);
-    const keyChain = KeyChain.fromCache(operation.mintUrl, operation.unit, {
+    await this.mints.assertTrusted(operation.mintUrl);
+    const selected = await this.proofs.selectAndReserve({
       mintUrl: operation.mintUrl,
-      keysets: keysets.map((keyset) => ({
-        id: keyset.id,
-        unit: keyset.unit,
-        active: keyset.active,
-        input_fee_ppk: keyset.feePpk,
-        keys: keyset.keypairs,
-      })),
-    } satisfies KeyChainCache);
-    const selected = selectInputs(
-      operation,
-      available,
-      keyChain,
-      this.selectProofs,
-      command.forceSwap,
-    );
+      unit: operation.unit,
+      operationId: operation.id,
+      amount: operation.amount,
+      forceSwap: command.forceSwap,
+    });
     const inputAmount = sumProofs(selected.proofs);
     const inputProofSecrets = selected.proofs.map((proof) => proof.secret);
 
     let outputData: PreparedSendOperation['outputData'];
     let counterUpdate: PreparedSendResult['counter'];
     if (selected.needsSwap) {
-      const currentCounter =
-        (await this.counters.getCounter(operation.mintUrl, command.activeKeys.id))?.counter ?? 0;
-      const keepAmount = inputAmount.subtract(operation.amount.add(selected.fee));
-      const keep = keepAmount.isZero()
-        ? []
-        : this.outputDataCreator.createDeterministicData(
-            keepAmount,
-            command.seed,
-            currentCounter,
-            command.activeKeys,
-          );
-      const send = command.fixedSendOutputs
-        ? [...command.fixedSendOutputs]
-        : this.outputDataCreator.createDeterministicData(
-            operation.amount,
-            command.seed,
-            currentCounter + keep.length,
-            command.activeKeys,
-          );
-      if (command.fixedSendOutputs && send.length === 0) {
-        throw new ProofValidationError('Send method preflight did not produce output data');
-      }
-      const allocatedPositions = keep.length + (command.fixedSendOutputs ? 0 : send.length);
-      if (allocatedPositions > 0) {
-        const counter = currentCounter + allocatedPositions;
-        await this.counters.setCounter(operation.mintUrl, command.activeKeys.id, counter);
-        counterUpdate = { mintUrl: operation.mintUrl, keysetId: command.activeKeys.id, counter };
-      }
-      outputData = serializeOutputData({ keep, send });
+      const allocation = await this.outputs.allocate({
+        mintUrl: operation.mintUrl,
+        unit: operation.unit,
+        activeKeys: command.activeKeys,
+        seed: command.seed,
+        keepAmount: inputAmount.subtract(operation.amount.add(selected.fee)),
+        sendAmount: operation.amount,
+        fixedSendOutputs: command.fixedSendOutputs,
+      });
+      outputData = allocation.outputData;
+      counterUpdate = allocation.counter;
+    } else {
+      await this.outputs.assertActiveKeys(operation.mintUrl, operation.unit, command.activeKeys);
     }
-
-    await this.proofs.reserveProofs(operation.mintUrl, inputProofSecrets, operation.id);
 
     const prepared: PreparedSendOperation = {
       ...operation,
@@ -321,7 +149,8 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
       throw new ProofValidationError(`Send operation ${command.operationId} requires a mint swap`);
     }
 
-    const proofs = await loadOwnedReadyProofs(this.proofs, current);
+    const proofs = await this.getOwnedReadyInputs(current);
+    assertExactInputs(proofs, current);
     const revision = current.revision ?? 0;
     const normalizedMemo = normalizeMemo(command.memo);
     const token: Token = {
@@ -337,7 +166,12 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
       token,
     };
 
-    await this.proofs.setProofState(current.mintUrl, current.inputProofSecrets, 'inflight');
+    await this.proofs.markInflight({
+      mintUrl: current.mintUrl,
+      unit: current.unit,
+      operationId: current.id,
+      secrets: current.inputProofSecrets,
+    });
     const transitioned = await this.sends.transition({
       operationId: current.id,
       expectedState: 'prepared',
@@ -495,10 +329,14 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
     await this.getOwnedReadyInputs(current);
     assertSwapResult(current, command);
     const savedProofs = [...command.keepProofs, ...command.sendProofs];
-    if (savedProofs.length > 0) {
-      await this.proofs.saveProofs(current.mintUrl, savedProofs);
-    }
-    await this.proofs.setProofState(current.mintUrl, current.inputProofSecrets, 'spent');
+    await this.proofs.settleSpend({
+      mintUrl: current.mintUrl,
+      unit: current.unit,
+      operationId: current.id,
+      secrets: current.inputProofSecrets,
+      state: 'ready',
+      outputs: savedProofs,
+    });
 
     const pending: PendingSendOperation = {
       ...current,
@@ -548,7 +386,7 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
     }
     const revision = current.revision ?? 0;
     await this.getOwnedReadyInputs(current);
-    await this.proofs.releaseProofs(current.mintUrl, current.inputProofSecrets);
+    await this.proofs.releaseOwned(current.mintUrl, current.id, current.inputProofSecrets);
     const failed: RolledBackSendOperation = {
       ...current,
       state: 'rolled_back',
@@ -593,7 +431,7 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
 
     const revision = current.revision ?? 0;
     await this.getOwnedReadyInputs(current);
-    await this.proofs.releaseProofs(current.mintUrl, current.inputProofSecrets);
+    await this.proofs.releaseOwned(current.mintUrl, current.id, current.inputProofSecrets);
     const rolledBack: RolledBackSendOperation = {
       ...current,
       state: 'rolled_back',
@@ -682,7 +520,13 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
       (secret) => sendBySecret.get(secret)?.state !== 'spent',
     );
     if (newlySpent.length > 0) {
-      await this.proofs.setProofState(current.mintUrl, newlySpent, 'spent');
+      await this.proofs.recordSpent({
+        mintUrl: current.mintUrl,
+        unit: current.unit,
+        operationId: current.id,
+        secrets: newlySpent,
+        ownership: current.needsSwap ? 'created' : 'used',
+      });
     }
     const allSpent = expectedSecrets.every(
       (secret) => observedSecrets.includes(secret) || sendBySecret.get(secret)?.state === 'spent',
@@ -715,7 +559,7 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
         throw new ProofValidationError(`Send input ${secret} is not spent and operation-owned`);
       }
     }
-    await this.proofs.releaseProofs(current.mintUrl, current.inputProofSecrets);
+    await this.proofs.releaseOwned(current.mintUrl, current.id, current.inputProofSecrets);
 
     const finalized: FinalizedSendOperation = {
       ...current,
@@ -754,7 +598,7 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
       .filter((proof) => proof.usedByOperationId === current.id)
       .map((proof) => proof.secret);
     if (ownedSecrets.length > 0) {
-      await this.proofs.releaseProofs(current.mintUrl, ownedSecrets);
+      await this.proofs.releaseOwned(current.mintUrl, current.id, ownedSecrets);
     }
     await this.sends.delete(current.id);
     return {
@@ -787,7 +631,23 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
       if (secrets.length > 0) released.push({ mintUrl, secrets });
     }
     for (const group of released) {
-      await this.proofs.releaseProofs(group.mintUrl, group.secrets);
+      const reserved = reservedByMint.get(group.mintUrl)!;
+      const owners = new Set(
+        reserved
+          .filter((proof) => group.secrets.includes(proof.secret))
+          .map((proof) => proof.usedByOperationId!),
+      );
+      for (const owner of owners) {
+        await this.proofs.releaseOwned(
+          group.mintUrl,
+          owner,
+          reserved
+            .filter(
+              (proof) => proof.usedByOperationId === owner && group.secrets.includes(proof.secret),
+            )
+            .map((proof) => proof.secret),
+        );
+      }
     }
     return {
       released,
@@ -795,22 +655,51 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
     };
   }
 
-  async beginLegacyPendingRollback(
-    command: BeginLegacyPendingRollbackCommand,
-  ): Promise<RollingBackSendOperation> {
+  async beginReclaim(command: BeginReclaimCommand): Promise<BegunReclaim> {
     const current = await this.sends.getById(command.operationId);
     if (!current || current.state !== 'pending' || current.method !== 'default') {
       throw new SendOperationConflictError(
         command.operationId,
-        'Legacy pending Send rollback lost a state or revision conflict',
+        'Pending Send reclaim lost a state or revision conflict',
       );
     }
+    const sendSecrets = getSendProofSecrets(current);
+    const associated = await this.proofs.getProofsByOperationId(current.mintUrl, current.id);
+    const secrets = associated
+      .filter((proof) => sendSecrets.includes(proof.secret) && proof.state === 'inflight')
+      .map((proof) => proof.secret);
+    const inputProofs = await this.proofs.getOwned({
+      mintUrl: current.mintUrl,
+      unit: current.unit,
+      operationId: current.id,
+      secrets,
+      state: 'inflight',
+      ownership: current.needsSwap ? 'created' : 'used',
+    });
+    const total = sumProofs(inputProofs);
+    const fee = await this.proofs.getFee(current.mintUrl, current.unit, inputProofs);
+    const skippedForFees = inputProofs.length > 0 && total.lessThanOrEqual(fee);
+    const allocation =
+      inputProofs.length > 0 && !skippedForFees
+        ? await this.outputs.allocate({
+            mintUrl: current.mintUrl,
+            unit: current.unit,
+            activeKeys: command.activeKeys,
+            seed: command.seed,
+            keepAmount: total.subtract(fee),
+            sendAmount: Amount.zero(),
+          })
+        : undefined;
     const revision = current.revision ?? 0;
     const rollingBack: RollingBackSendOperation = {
       ...current,
       state: 'rolling_back',
       revision: revision + 1,
       updatedAt: command.updatedAt,
+      // Keep the original Send request intact. Reclaim has a separate Output Allocation.
+      reclaimData: allocation
+        ? { inputProofSecrets: secrets, outputData: allocation.outputData }
+        : undefined,
     };
     const transitioned = await this.sends.transition({
       operationId: current.id,
@@ -821,22 +710,54 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
     if (!transitioned) {
       throw new SendOperationConflictError(
         current.id,
-        'Legacy pending Send rollback lost a state or revision conflict',
+        'Pending Send reclaim lost a state or revision conflict',
       );
     }
-    return rollingBack;
+    return { operation: rollingBack, inputProofs, counter: allocation?.counter, skippedForFees };
   }
 
-  async completeLegacyPendingRollback(
-    command: CompleteLegacyPendingRollbackCommand,
-  ): Promise<RolledBackSendOperation> {
+  async completeReclaim(command: CompleteReclaimCommand): Promise<CompletedReclaim> {
     const current = await this.sends.getById(command.operationId);
     if (!current || current.state !== 'rolling_back') {
       throw new SendOperationConflictError(
         command.operationId,
-        'Legacy pending Send rollback completion lost a state or revision conflict',
+        'Pending Send reclaim completion lost a state or revision conflict',
       );
     }
+    const allocation = current.reclaimData;
+    const spentProofSecrets = allocation?.inputProofSecrets ?? [];
+    if (allocation) {
+      assertOutputProofs({
+        mintUrl: current.mintUrl,
+        unit: current.unit,
+        outputData: allocation.outputData,
+        kind: 'keep',
+        state: 'ready',
+        proofs: command.proofs,
+      });
+      await this.proofs.settleSpend({
+        mintUrl: current.mintUrl,
+        unit: current.unit,
+        operationId: current.id,
+        secrets: spentProofSecrets,
+        state: ['inflight', 'spent'],
+        ownership: current.needsSwap ? 'created' : 'used',
+        outputs: command.proofs,
+      });
+    } else if (command.proofs.length > 0) {
+      throw new ProofValidationError('Reclaimed proofs have no committed output plan');
+    }
+    const associated = await this.proofs.getProofsByOperationId(current.mintUrl, current.id);
+    const releaseCandidates = new Set([
+      ...current.inputProofSecrets,
+      ...getKeepProofSecrets(current),
+    ]);
+    const releasedProofSecrets = associated
+      .filter(
+        (proof) => proof.usedByOperationId === current.id && releaseCandidates.has(proof.secret),
+      )
+      .map((proof) => proof.secret);
+    await this.proofs.releaseOwned(current.mintUrl, current.id, releasedProofSecrets);
     const revision = current.revision ?? 0;
     const rolledBack: RolledBackSendOperation = {
       ...current,
@@ -854,35 +775,26 @@ export class RepositoryTransactionalSendOperations implements TransactionalSendO
     if (!transitioned) {
       throw new SendOperationConflictError(
         current.id,
-        'Legacy pending Send rollback completion lost a state or revision conflict',
+        'Pending Send reclaim completion lost a state or revision conflict',
       );
     }
-    return rolledBack;
+    return {
+      operation: rolledBack,
+      savedProofs: command.proofs,
+      spentProofSecrets,
+      releasedProofSecrets,
+    };
   }
 
   private async getOwnedReadyInputs(
     operation: PreparedSendOperation | ExecutingSendOperation,
   ): Promise<CoreProof[]> {
-    const proofs = await this.proofs.getProofsBySecrets(
-      operation.mintUrl,
-      operation.inputProofSecrets,
-    );
-    const bySecret = new Map(proofs.map((proof) => [proof.secret, proof]));
-    if (bySecret.size !== operation.inputProofSecrets.length) {
-      throw new ProofValidationError('Could not find all reserved Send proofs');
-    }
-    return operation.inputProofSecrets.map((secret) => {
-      const proof = bySecret.get(secret);
-      if (
-        !proof ||
-        proof.state !== 'ready' ||
-        proof.usedByOperationId !== operation.id ||
-        proof.mintUrl !== operation.mintUrl ||
-        normalizeUnit(proof.unit) !== normalizeUnit(operation.unit)
-      ) {
-        throw new ProofValidationError(`Send proof ${secret} is not ready and owned by operation`);
-      }
-      return proof;
+    return this.proofs.getOwned({
+      mintUrl: operation.mintUrl,
+      unit: operation.unit,
+      operationId: operation.id,
+      secrets: operation.inputProofSecrets,
+      state: 'ready',
     });
   }
 }
@@ -921,31 +833,7 @@ function isEquivalentExactToken(
   );
 }
 
-async function loadOwnedReadyProofs(
-  proofs: ProofRepository,
-  operation: PreparedSendOperation,
-): Promise<Proof[]> {
-  const uniqueSecrets = new Set(operation.inputProofSecrets);
-  if (uniqueSecrets.size !== operation.inputProofSecrets.length) {
-    throw new ProofValidationError(`Send operation ${operation.id} contains duplicate inputs`);
-  }
-  const stored = await proofs.getProofsBySecrets(operation.mintUrl, operation.inputProofSecrets);
-  const bySecret = new Map(stored.map((proof) => [proof.secret, proof]));
-  const ordered = operation.inputProofSecrets.map((secret) => bySecret.get(secret));
-  for (const proof of ordered) {
-    if (
-      !proof ||
-      proof.mintUrl !== operation.mintUrl ||
-      normalizeUnit(proof.unit) !== normalizeUnit(operation.unit) ||
-      proof.state !== 'ready' ||
-      proof.usedByOperationId !== operation.id
-    ) {
-      throw new ProofValidationError(
-        `Send operation ${operation.id} does not own every ready input proof`,
-      );
-    }
-  }
-  const resolved = ordered as Proof[];
+function assertExactInputs(resolved: Proof[], operation: PreparedSendOperation): void {
   if (
     !sumProofs(resolved).equals(operation.amount) ||
     !operation.inputAmount.equals(operation.amount) ||
@@ -953,7 +841,6 @@ async function loadOwnedReadyProofs(
   ) {
     throw new ProofValidationError(`Send operation ${operation.id} is not an exact proof match`);
   }
-  return resolved;
 }
 
 function normalizeMemo(memo: string | undefined): string | undefined {
@@ -965,8 +852,22 @@ function assertSwapResult(
   operation: ExecutingSendOperation | PendingSendOperation,
   command: ApplySwapResultCommand,
 ): void {
-  assertProofSet(operation, command.keepProofs, 'ready', 'keep');
-  assertProofSet(operation, command.sendProofs, 'inflight', 'send');
+  assertOutputProofs({
+    ...operation,
+    outputData: operation.outputData!,
+    createdByOperationId: operation.id,
+    proofs: command.keepProofs,
+    state: 'ready',
+    kind: 'keep',
+  });
+  assertOutputProofs({
+    ...operation,
+    outputData: operation.outputData!,
+    createdByOperationId: operation.id,
+    proofs: command.sendProofs,
+    state: 'inflight',
+    kind: 'send',
+  });
 
   if (
     command.token.mint !== operation.mintUrl ||
@@ -975,47 +876,6 @@ function assertSwapResult(
     !sameProofSet(command.token.proofs, command.sendProofs)
   ) {
     throw new ProofValidationError('Swap token does not match the persisted Send request');
-  }
-}
-
-function assertProofSet(
-  operation: ExecutingSendOperation | PendingSendOperation,
-  proofs: CoreProof[],
-  state: CoreProof['state'],
-  kind: 'keep' | 'send',
-): void {
-  const outputSecrets = getSecretsFromSerializedOutputData(operation.outputData!);
-  const expectedSecrets = kind === 'keep' ? outputSecrets.keepSecrets : outputSecrets.sendSecrets;
-  if (
-    new Set(expectedSecrets).size !== expectedSecrets.length ||
-    new Set(proofs.map((proof) => proof.secret)).size !== proofs.length ||
-    proofs.length !== expectedSecrets.length
-  ) {
-    throw new ProofValidationError(`Swap ${kind} proofs do not match allocated outputs`);
-  }
-  const allocation = operation.outputData![kind];
-  const expected = new Map(
-    allocation.map((output, index) => [
-      expectedSecrets[index]!,
-      {
-        id: output.blindedMessage.id,
-        amount: Amount.from(output.blindedMessage.amount),
-      },
-    ]),
-  );
-  for (const proof of proofs) {
-    const output = expected.get(proof.secret);
-    if (
-      !output ||
-      proof.id !== output.id ||
-      !Amount.from(proof.amount).equals(output.amount) ||
-      proof.mintUrl !== operation.mintUrl ||
-      normalizeUnit(proof.unit) !== normalizeUnit(operation.unit) ||
-      proof.state !== state ||
-      proof.createdByOperationId !== operation.id
-    ) {
-      throw new ProofValidationError(`Swap ${kind} proofs do not match allocated outputs`);
-    }
   }
 }
 
@@ -1066,71 +926,4 @@ function sameProof(left: Proof, right: Proof): boolean {
     left.witness === right.witness &&
     JSON.stringify(left.dleq) === JSON.stringify(right.dleq)
   );
-}
-
-function assertCurrentActiveKeys(
-  operation: InitSendOperation,
-  activeKeys: MintKeys,
-  keysets: Awaited<ReturnType<KeysetRepository['getKeysetsByMintUrl']>>,
-): void {
-  const keyset = keysets.find((candidate) => candidate.id === activeKeys.id);
-  const sameKeys =
-    keyset &&
-    JSON.stringify(Object.entries(keyset.keypairs).sort()) ===
-      JSON.stringify(Object.entries(activeKeys.keys).sort());
-  if (
-    !keyset ||
-    !keyset.active ||
-    normalizeUnit(keyset.unit) !== normalizeUnit(operation.unit) ||
-    normalizeUnit(activeKeys.unit) !== normalizeUnit(operation.unit) ||
-    !sameKeys
-  ) {
-    throw new SendOperationConflictError(
-      operation.id,
-      `Active keyset ${activeKeys.id} changed after Send preflight`,
-    );
-  }
-}
-
-function selectInputs(
-  operation: InitSendOperation,
-  available: Proof[],
-  keyChain: KeyChain,
-  selectProofs: SelectProofs,
-  forceSwap: boolean,
-): { proofs: Proof[]; fee: Amount; needsSwap: boolean } {
-  const unit = normalizeUnit(operation.unit);
-  for (const proof of available) {
-    assertSameUnit(normalizeUnit((proof as { unit?: string }).unit), unit, 'Send proof selection');
-  }
-  if (sumProofs(available).lessThan(operation.amount)) {
-    throw new ProofValidationError('Not enough proofs to send');
-  }
-
-  if (!forceSwap) {
-    const exact = selectProofs(available, operation.amount, keyChain, false).send;
-    if (sumProofs(exact).equals(operation.amount)) {
-      return { proofs: exact, fee: Amount.zero(), needsSwap: false };
-    }
-  }
-
-  const selected = selectProofs(available, operation.amount, keyChain, true).send;
-  const fee = calculateFee(selected, keyChain);
-  if (selected.length > 0 && sumProofs(selected).greaterThanOrEqual(operation.amount.add(fee))) {
-    return { proofs: selected, fee, needsSwap: true };
-  }
-  throw new ProofValidationError('Send amount is not sufficient after fees');
-}
-
-function calculateFee(proofs: readonly Proof[], keyChain: KeyChain): Amount {
-  const ppk = proofs.reduce((sum, proof) => {
-    let fee: number;
-    try {
-      fee = keyChain.getKeyset(proof.id).fee;
-    } catch {
-      throw new ProofValidationError(`Missing fee preflight for keyset ${proof.id}`);
-    }
-    return sum + BigInt(fee);
-  }, 0n);
-  return Amount.from((ppk + 999n) / 1000n);
 }

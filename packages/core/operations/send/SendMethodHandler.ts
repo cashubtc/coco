@@ -5,18 +5,10 @@ import type {
   P2PKOptions,
   P2PKTag,
   SigFlag,
-  Token,
 } from '@cashu/cashu-ts';
 import { ProofValidationError } from '../../models/Error.ts';
-import type { TopLevelNutCapability } from '../../services/MintService.ts';
-import type { PreparedSendResult } from '../../transactions/send/TransactionalSendOperations.ts';
-import type {
-  ExecutingSendOperation,
-  PendingSendOperation,
-  PreparedSendOperation,
-  SendOperation,
-  InitSendOperation,
-} from './SendOperation';
+import type { InitSendOperation } from './SendOperation';
+import type { MintInfo } from '@core/types.ts';
 
 /**
  * Structured P2PK send options accepted by Coco.
@@ -72,7 +64,6 @@ export interface DefaultSendMethodData {
 
 /**
  * Registry of supported send methods and their payload shapes.
- * Extend via declaration merging if you need to add methods externally.
  *
  * Future methods may include:
  * - htlc: { hash: string; timeout: number } - HTLC locked tokens
@@ -132,53 +123,17 @@ export interface SendPreparationPlan {
   fixedSendOutputs?: readonly OutputDataLike[];
 }
 
-/**
- * Safe preparation interface presented to a Send method handler. The handler owns method policy,
- * while `commit` owns every authoritative proof, counter, and operation write.
- */
+/** Local method policy only; the coordinator owns commits and all remote effects. */
 export interface PrepareContext<M extends SendMethod = SendMethod> {
   operation: InitSendOperation & { method: M; methodData: SendMethodData<M> };
   activeKeys: MintKeys;
+  mintInfo: MintInfo;
   outputDataCreator: OutputDataCreator;
-  assertNutSupported(nut: TopLevelNutCapability, operation: string): Promise<void>;
-  commit(plan: SendPreparationPlan): Promise<PreparedSendResult>;
-}
-
-export interface ExecuteContext {
-  operation: PreparedSendOperation | PendingSendOperation;
-  executeExact(): Promise<{ operation: PendingSendOperation; token: Token }>;
-  executeSwap(): Promise<{ operation: PendingSendOperation; token: Token }>;
-}
-
-export interface PendingContext {
-  operation: PendingSendOperation;
-  checkPersistedSend(): Promise<void>;
-}
-
-export interface FinalizeContext {
-  operation: SendOperation;
-  completePersistedSend(): Promise<void>;
-}
-
-export interface RollbackContext {
-  operation: SendOperation;
-  reason: string;
-  cancelPrepared(): Promise<void>;
-  reclaimPendingDefault(): Promise<void>;
-}
-
-export interface RecoverExecutingContext {
-  operation: ExecutingSendOperation;
-  recoverPersistedSend(): Promise<void>;
 }
 
 export interface SendMethodHandler<M extends SendMethod = SendMethod> {
-  prepare(ctx: PrepareContext<M>): Promise<PreparedSendResult>;
-  execute(ctx: ExecuteContext): Promise<{ operation: PendingSendOperation; token: Token }>;
-  finalize(ctx: FinalizeContext): Promise<void>;
-  rollback(ctx: RollbackContext): Promise<void>;
-  checkPending(ctx: PendingContext): Promise<void>;
-  recoverExecuting(ctx: RecoverExecutingContext): Promise<void>;
+  readonly canReclaim: boolean;
+  prepare(ctx: PrepareContext<M>): SendPreparationPlan;
 }
 
-export type SendMethodHandlerRegistry = Record<SendMethod, SendMethodHandler<any>>;
+export type SendMethodHandlerRegistry = { [M in SendMethod]: SendMethodHandler<M> };

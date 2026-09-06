@@ -11,7 +11,8 @@ export function cloneMemoryValue<T>(value: T, seen = new Map<object, unknown>())
   if (seen.has(value)) return seen.get(value) as T;
 
   if (value instanceof Date) return new Date(value.getTime()) as T;
-  if (value instanceof Uint8Array) return value.slice() as T;
+  // Buffer overrides slice() to return a view over the same storage; use the intrinsic copy.
+  if (value instanceof Uint8Array) return Uint8Array.prototype.slice.call(value) as T;
 
   if (Array.isArray(value)) {
     const clone: unknown[] = [];

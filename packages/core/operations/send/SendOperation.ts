@@ -79,6 +79,12 @@ interface SendOperationBase<M extends SendMethod = SendMethod> {
    * between the mint response and the local result transaction.
    */
   executionMemo?: string;
+
+  /** Reclaim's separate output plan; never replaces the original Send request. */
+  reclaimData?: {
+    inputProofSecrets: string[];
+    outputData: SerializedOutputData;
+  };
 }
 
 /**
@@ -110,8 +116,8 @@ interface PreparedData {
 
 /**
  * Token data available once a send has been executed.
- * For P2PK sends, this is the canonical persisted token copy because the send
- * proofs are intentionally not stored in the wallet proof repository.
+ * The token is the canonical shareable copy for default and P2PK sends; the transaction also
+ * retains the corresponding inflight proof metadata for completion and Operation Recovery.
  */
 interface SendTokenData {
   token?: Token;

@@ -1,3 +1,7 @@
+import { testMintInfo, testMintKeypairs, testMintKeysetId } from '../fixtures/MintMetadata.ts';
+import { StoredMintQueries } from '../../mints/MintMetadata.ts';
+import { deserializeOutputData } from '../../utils.ts';
+import { createSendRemoteDouble } from '../fixtures/SendRemote.ts';
 import { Amount, type ProofState as CashuProofState } from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it, mock, type Mock } from 'bun:test';
 import { EventBus } from '../../events/EventBus.ts';
@@ -16,17 +20,13 @@ import type {
 } from '../../operations/send/SendOperation.ts';
 import { SendOperationService } from '../../operations/send/SendOperationService.ts';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
-import type { MintService } from '../../services/MintService.ts';
-import type { ProofService } from '../../services/ProofService.ts';
-import type { SeedService } from '../../services/SeedService.ts';
-import type { WalletService } from '../../services/WalletService.ts';
 import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
 import { CoreSendTransactions } from '../../transactions/send/SendTransactions.ts';
 import type { SendTransactions } from '../../transactions/send/SendTransactions.ts';
 import type { CoreProof } from '../../types.ts';
 
 const mintUrl = 'https://mint.test';
-const keysetId = 'keyset-1';
+const keysetId = testMintKeysetId();
 
 function coreProof(secret: string, overrides: Partial<CoreProof> = {}): CoreProof {
   return {
@@ -98,23 +98,22 @@ describe('SendOperationService executing recovery', () => {
     send: Mock<typeof replayResult>;
     checkProofsStates: Mock<(proofs: CoreProof[]) => Promise<CashuProofState[]>>;
   };
-  let proofService: ProofService;
+  let remote: ReturnType<typeof createSendRemoteDouble>;
   let logger: Logger;
   let eventBus: EventBus<CoreEvents>;
   let transactions: SendTransactions;
-  let mintService: MintService;
-  let walletService: WalletService;
-  let seedService: SeedService;
 
   function buildService(serviceEvents = eventBus): SendOperationService {
     return new SendOperationService({
       operationQueries: repositories.sendOperationRepository,
       proofQueries: repositories.proofRepository,
       transactions,
-      proofService,
-      mintService,
-      walletService,
-      seedService,
+      mintQueries: new StoredMintQueries(
+        repositories.mintRepository,
+        repositories.keysetRepository,
+      ),
+      remote,
+      loadSeed: async () => new Uint8Array(32),
       eventBus: serviceEvents,
       handlerProvider: new SendHandlerProvider({
         default: new DefaultSendHandler(),
@@ -124,34 +123,37 @@ describe('SendOperationService executing recovery', () => {
     });
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
     repositories = new MemoryRepositories();
     wallet = {
       send: mock(async () => ({ send: [], keep: [] })),
       checkProofsStates: mock(async () => []),
     };
-    proofService = {
-      releaseProofs: mock((selectedMintUrl: string, secrets: string[]) =>
-        repositories.proofRepository.releaseProofs(selectedMintUrl, secrets),
-      ),
-      recoverProofsFromOutputData: mock(async () => []),
-    } as unknown as ProofService;
-    mintService = {
-      isTrustedMint: mock(async () => true),
-      assertNutSupported: mock(async () => {}),
-    } as unknown as MintService;
-    walletService = {
-      getWalletWithActiveKeysetId: mock(async () => ({
-        wallet,
-        keysetId,
-        keyset: { id: keysetId },
-        keys: { id: keysetId, unit: 'sat', active: true, keys: { 1: 'unused' } },
-      })),
-      getWallet: mock(async () => wallet),
-    } as unknown as WalletService;
-    seedService = {
-      getSeed: mock(async () => new Uint8Array(32)),
-    } as unknown as SeedService;
+    await repositories.mintRepository.addNewMint({
+      mintUrl,
+      name: 'Test',
+      trusted: true,
+      mintInfo: testMintInfo,
+      createdAt: 1,
+      updatedAt: Math.floor(Date.now() / 1000),
+    });
+    await repositories.keysetRepository.addKeyset({
+      mintUrl,
+      id: keysetId,
+      unit: 'sat',
+      active: true,
+      feePpk: 0,
+      keypairs: testMintKeypairs,
+    });
+    remote = createSendRemoteDouble();
+    remote.swap.mockImplementation((request) =>
+      wallet.send(request.amount, request.inputProofs as CoreProof[], undefined, {
+        send: { data: deserializeOutputData(request.outputData).send },
+      }),
+    );
+    remote.checkProofStates.mockImplementation((proofs) =>
+      wallet.checkProofsStates(proofs as CoreProof[]),
+    );
     logger = {
       debug: mock(() => {}),
       info: mock(() => {}),
@@ -304,9 +306,7 @@ describe('SendOperationService executing recovery', () => {
           }) as CashuProofState,
       ),
     );
-    (
-      proofService.recoverProofsFromOutputData as Mock<ProofService['recoverProofsFromOutputData']>
-    ).mockResolvedValue([
+    remote.restoreOutputs.mockResolvedValue([
       {
         id: keysetId,
         secret: `${operation.id}-send`,
@@ -318,11 +318,7 @@ describe('SendOperationService executing recovery', () => {
     await service.recoverPendingOperations();
 
     expect(wallet.send).not.toHaveBeenCalled();
-    expect(proofService.recoverProofsFromOutputData).toHaveBeenCalledWith(
-      mintUrl,
-      operation.outputData,
-      expect.objectContaining({ persistRecoveredProofs: false }),
-    );
+    expect(remote.restoreOutputs).toHaveBeenCalledWith(operation.outputData);
     expect((await repositories.sendOperationRepository.getById(operation.id))?.state).toBe(
       'pending',
     );
@@ -354,7 +350,7 @@ describe('SendOperationService executing recovery', () => {
       operation.outputData,
     );
     expect(wallet.send).not.toHaveBeenCalled();
-    expect(proofService.recoverProofsFromOutputData).not.toHaveBeenCalled();
+    expect(remote.restoreOutputs).not.toHaveBeenCalled();
   });
 
   it('keeps an unreachable recovery attempt executing', async () => {

@@ -14,6 +14,9 @@ import type {
 } from '../../repositories';
 import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
 import { CoreKeyRingTransactions } from '../../transactions/keypairs/KeyRingTransactions.ts';
+import { KeypairDerivation } from '../../keypairs/KeypairDerivation.ts';
+import { KeypairP2pkSigner } from '../../keypairs/P2pkSigner.ts';
+import { overrideTransactions } from '../overrideTransactions.ts';
 
 // Mock seed for deterministic testing
 const MOCK_SEED = new Uint8Array(64);
@@ -30,22 +33,13 @@ describe('KeyRingService', () => {
   function createService(transactionRepositories: Repositories, seed: SeedService): KeyRingService {
     const transactions = new CoreKeyRingTransactions(
       new RepositoryCoreTransactionRunner(transactionRepositories),
-      seed,
     );
-    return new KeyRingService(transactionRepositories.keyRingRepository, transactions);
-  }
-
-  function overrideTransactions(
-    base: Repositories,
-    withTransaction: Repositories['withTransaction'],
-  ): Repositories {
-    return new Proxy(base, {
-      get(target, property, receiver) {
-        if (property === 'withTransaction') return withTransaction;
-        const value = Reflect.get(target, property, receiver) as unknown;
-        return typeof value === 'function' ? value.bind(target) : value;
-      },
-    });
+    return new KeyRingService(
+      transactionRepositories.keyRingRepository,
+      transactions,
+      new KeypairDerivation(() => seed.getSeed()),
+      new KeypairP2pkSigner(transactionRepositories.keyRingRepository),
+    );
   }
 
   beforeEach(() => {

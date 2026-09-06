@@ -2,6 +2,8 @@
 
 import { describe, expect, it } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { Manager } from '@cashu/coco-core';
+import { SqlStorageRepositories } from '../repositories.ts';
 import {
   ensureSchemaUpTo,
   MIGRATIONS,
@@ -53,16 +55,19 @@ const EXPECTED_MIGRATION_IDS = [
   '038_keypair_derivation_allocations',
   '039_send_operation_revision',
   '040_send_execution_memo',
+  '041_send_reclaim_data',
 ] as const;
 
-function deriveKeyPair(derivationIndex: number, purpose: 'p2pk' | 'nut20_mint_quote') {
-  return {
-    publicKeyHex:
-      (purpose === 'p2pk' ? '02' : '03') + derivationIndex.toString(16).padStart(64, '0'),
-    secretKey: new Uint8Array(32).fill((derivationIndex % 254) + 1),
-    derivationIndex,
-    purpose,
-  };
+async function allocateP2pkKey(db: SqlDatabase) {
+  const manager = new Manager(
+    new SqlStorageRepositories({ database: db }),
+    async () => new Uint8Array(64),
+  );
+  try {
+    return await manager.keyring.generateKeyPair(true);
+  } finally {
+    await manager.dispose();
+  }
 }
 
 const RECEIVE_OPERATIONS_SQL = `
@@ -243,6 +248,50 @@ describe('shared SQL schema migrations', () => {
     ).toEqual({ executionMemo: null });
   });
 
+  itWithDatabase(
+    'preserves pre-refactor Send recovery material when adding reclaim data',
+    async (db) => {
+      await ensureSchemaUpTo(db, '041_send_reclaim_data');
+      await db.run(
+        `INSERT INTO coco_cashu_send_operations
+      (id, mintUrl, amount, unit, state, createdAt, updatedAt, method, methodDataJson, needsSwap, fee, inputAmount, inputProofSecretsJson, outputDataJson, executionMemo, revision)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          'legacy-executing',
+          'https://mint.test',
+          '10',
+          'sat',
+          'executing',
+          1,
+          1,
+          'default',
+          '{}',
+          1,
+          '0',
+          '10',
+          '["original-input"]',
+          '{"keep":[],"send":[]}',
+          'saved memo',
+          7,
+        ],
+      );
+      await ensureSchemaUpTo(db);
+      expect(
+        await db.get(
+          'SELECT state, inputProofSecretsJson, outputDataJson, executionMemo, revision, reclaimDataJson FROM coco_cashu_send_operations WHERE id = ?',
+          ['legacy-executing'],
+        ),
+      ).toEqual({
+        state: 'executing',
+        inputProofSecretsJson: '["original-input"]',
+        outputDataJson: '{"keep":[],"send":[]}',
+        executionMemo: 'saved memo',
+        revision: 7,
+        reclaimDataJson: null,
+      });
+    },
+  );
+
   itWithDatabase('backfills per-purpose keypair derivation allocations', async (db) => {
     await ensureSchemaUpTo(db, '038_keypair_derivation_allocations');
 
@@ -275,14 +324,9 @@ describe('shared SQL schema migrations', () => {
     ]);
 
     const repository = new SqliteKeyRingRepository(db);
-    await expect(
-      repository.deriveAndPersistKeyPair('p2pk', (index) => deriveKeyPair(index, 'p2pk')),
-    ).resolves.toMatchObject({ derivationIndex: 7 });
-    await expect(
-      repository.deriveAndPersistKeyPair('nut20_mint_quote', (index) =>
-        deriveKeyPair(index, 'nut20_mint_quote'),
-      ),
-    ).resolves.toMatchObject({ derivationIndex: 4 });
+    await expect(allocateP2pkKey(db)).resolves.toMatchObject({ derivationIndex: 7 });
+    expect(await repository.getLastAllocatedIndex('nut20_mint_quote')).toBe(3);
+    expect(await repository.getHighestStoredDerivationIndex('nut20_mint_quote')).toBe(3);
   });
 
   itWithDatabase('normalizes pre-purpose keypairs before allocation backfill', async (db) => {
@@ -302,11 +346,7 @@ describe('shared SQL schema migrations', () => {
          WHERE purpose = 'p2pk'`,
       ),
     ).toEqual({ purpose: 'p2pk', lastAllocatedIndex: 12 });
-    await expect(
-      new SqliteKeyRingRepository(db).deriveAndPersistKeyPair('p2pk', (index) =>
-        deriveKeyPair(index, 'p2pk'),
-      ),
-    ).resolves.toMatchObject({ derivationIndex: 13 });
+    await expect(allocateP2pkKey(db)).resolves.toMatchObject({ derivationIndex: 13 });
   });
 
   itWithDatabase('rolls back a saved keypair when the high-water write fails', async (db) => {
@@ -320,10 +360,7 @@ describe('shared SQL schema migrations', () => {
       END;
     `);
 
-    const repository = new SqliteKeyRingRepository(db);
-    await expect(
-      repository.deriveAndPersistKeyPair('p2pk', (index) => deriveKeyPair(index, 'p2pk')),
-    ).rejects.toThrow('forced high-water failure');
+    await expect(allocateP2pkKey(db)).rejects.toThrow('forced high-water failure');
     expect(
       await db.get(
         `SELECT purpose FROM coco_cashu_keypair_derivation_allocations WHERE purpose = 'p2pk'`,
@@ -333,9 +370,7 @@ describe('shared SQL schema migrations', () => {
     expect(await db.get(`SELECT publicKey FROM coco_cashu_keypairs LIMIT 1`)).toBeUndefined();
 
     await db.exec('DROP TRIGGER fail_keypair_high_water');
-    await expect(
-      repository.deriveAndPersistKeyPair('p2pk', (index) => deriveKeyPair(index, 'p2pk')),
-    ).resolves.toMatchObject({ derivationIndex: 0 });
+    await expect(allocateP2pkKey(db)).resolves.toMatchObject({ derivationIndex: 0 });
   });
 
   itWithDatabase(
