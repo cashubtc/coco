@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { DerivationIndexExhaustedError } from '../../models/Error.ts';
-import type { KeypairPurpose } from '../../models/Keypair.ts';
+import type { Keypair, KeypairPurpose } from '../../models/Keypair.ts';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 import type { Repositories, RepositoryTransactionScope } from '../../repositories/index.ts';
 import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
@@ -125,6 +125,47 @@ function scopedRepositoryAuthority(scope: RepositoryTransactionScope): void {
 void scopedRepositoryAuthority;
 
 describe('ScopedKeypairCommands transaction scope', () => {
+  it.each([0, 1])('stops queued allocations when allocation %i fails', async (failureIndex) => {
+    const repositories = new MemoryRepositories();
+    const runner = new RepositoryCoreTransactionRunner(repositories);
+    const failure = new Error('derivation failed');
+    const derivedIndexes: number[] = [];
+    let allocations: Promise<Keypair>[] = [];
+
+    await expect(
+      runner.run((scope) => {
+        allocations = Array.from({ length: 3 }, (_, position) =>
+          scope.keypairs.allocate({
+            purpose: 'p2pk',
+            derive(index) {
+              derivedIndexes.push(index);
+              if (position === failureIndex) throw failure;
+              return derivedKeypair(index, 'p2pk');
+            },
+          }),
+        );
+        return Promise.all(allocations);
+      }),
+    ).rejects.toBe(failure);
+
+    // Drain every queued call before inspecting state; Promise.all rejects on the first failure.
+    const outcomes = await Promise.allSettled(allocations);
+    expect(derivedIndexes).toEqual(Array.from({ length: failureIndex + 1 }, (_, index) => index));
+    expect(outcomes.slice(failureIndex)).toEqual(
+      Array.from({ length: 3 - failureIndex }, () => ({ status: 'rejected', reason: failure })),
+    );
+    expect(await repositories.keyRingRepository.getAllPersistedKeyPairs('p2pk')).toEqual([]);
+    expect(await repositories.keyRingRepository.getLastAllocatedIndex('p2pk')).toBeNull();
+
+    // A fresh transaction has its own queue and can reuse indexes that never committed.
+    await expect(
+      new CoreKeyRingTransactions(runner).allocate({
+        purpose: 'p2pk',
+        derive: (index) => derivedKeypair(index, 'p2pk'),
+      }),
+    ).resolves.toMatchObject({ derivationIndex: 0 });
+  });
+
   it('allocates distinct indexes when composed callers share one scope concurrently', async () => {
     const repositories = new MemoryRepositories();
     const keys = await new RepositoryCoreTransactionRunner(repositories).run((scope) =>

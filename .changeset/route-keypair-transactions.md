@@ -16,3 +16,6 @@ Use `*Queries` consistently for read-only state interfaces.
 Move index selection, exhaustion checks, and synchronous derivation into the shared scoped keypair
 command. Repositories expose allocation-state reads and writes, and concurrent allocations within
 one scope are ordered before committing their keys and high-water marks together.
+
+Stop queued allocations after a failure so no later key or high-water write can escape the owning
+transaction's rollback.

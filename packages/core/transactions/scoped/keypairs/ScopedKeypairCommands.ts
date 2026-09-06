@@ -20,10 +20,9 @@ export class RepositoryKeypairCommands implements ScopedKeypairCommands {
   allocate(command: AllocateKeypairCommand): Promise<Keypair> {
     // The adapter isolates transactions; this queue orders allocations within this one scope.
     const allocation = this.allocationQueue.then(() => this.allocateNext(command));
-    this.allocationQueue = allocation.then(
-      () => {},
-      () => {},
-    );
+    this.allocationQueue = allocation.then(() => {});
+    // Observe the rejection without recovering the queue: later allocations must fail too.
+    void this.allocationQueue.catch(() => {});
     return allocation;
   }
 
