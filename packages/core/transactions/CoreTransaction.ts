@@ -6,7 +6,10 @@ import {
 } from './scoped/keypairs/ScopedKeypairCommands.ts';
 import { TransactionLifetime } from './scoped/TransactionLifetime.ts';
 
-/** Scoped commands sharing one adapter transaction attempt. */
+/**
+ * Scoped commands sharing one adapter transaction attempt. Await mutations sequentially unless
+ * their independence is established; lifetime tracking does not serialize conflicting work.
+ */
 export interface CoreTransaction {
   readonly keypairs: ScopedKeypairCommands;
 }

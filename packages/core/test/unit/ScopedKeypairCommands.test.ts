@@ -59,7 +59,7 @@ describe('ScopedKeypairCommands allocation', () => {
       MAX_DERIVATION_INDEX,
     );
   });
-  it('allocates exact concurrent sequences independently for each purpose', async () => {
+  it('allocates exact sequences across concurrent transactions for each purpose', async () => {
     const repositories = new MemoryRepositories();
     const p2pk = await Promise.all(
       Array.from({ length: 50 }, () => allocate(repositories, 'p2pk')),
@@ -125,30 +125,31 @@ function scopedRepositoryAuthority(scope: RepositoryTransactionScope): void {
 void scopedRepositoryAuthority;
 
 describe('ScopedKeypairCommands transaction scope', () => {
-  it.each([0, 1])('stops queued allocations when allocation %i fails', async (failureIndex) => {
+  it.each([0, 1])('rejects later allocations after allocation %i fails', async (failureIndex) => {
     const repositories = new MemoryRepositories();
     const runner = new RepositoryCoreTransactionRunner(repositories);
     const failure = new Error('derivation failed');
     const derivedIndexes: number[] = [];
-    let allocations: Promise<Keypair>[] = [];
+    const allocations: Promise<Keypair>[] = [];
 
     await expect(
-      runner.run((scope) => {
-        allocations = Array.from({ length: 3 }, (_, position) =>
-          scope.keypairs.allocate({
+      runner.run(async (scope) => {
+        for (let position = 0; position < 3; position++) {
+          const allocation = scope.keypairs.allocate({
             purpose: 'p2pk',
             derive(index) {
               derivedIndexes.push(index);
               if (position === failureIndex) throw failure;
               return derivedKeypair(index, 'p2pk');
             },
-          }),
-        );
-        return Promise.all(allocations);
+          });
+          allocations.push(allocation);
+          // A caught failure still revokes the scope before the next sequential call.
+          await allocation.catch(() => {});
+        }
       }),
     ).rejects.toBe(failure);
 
-    // Drain every queued call before inspecting state; Promise.all rejects on the first failure.
     const outcomes = await Promise.allSettled(allocations);
     expect(derivedIndexes).toEqual(Array.from({ length: failureIndex + 1 }, (_, index) => index));
     expect(outcomes.slice(failureIndex)).toEqual(
@@ -157,7 +158,7 @@ describe('ScopedKeypairCommands transaction scope', () => {
     expect(await repositories.keyRingRepository.getAllPersistedKeyPairs('p2pk')).toEqual([]);
     expect(await repositories.keyRingRepository.getLastAllocatedIndex('p2pk')).toBeNull();
 
-    // A fresh transaction has its own queue and can reuse indexes that never committed.
+    // A fresh transaction can reuse indexes that never committed.
     await expect(
       new CoreKeyRingTransactions(runner).allocate({
         purpose: 'p2pk',
@@ -166,20 +167,23 @@ describe('ScopedKeypairCommands transaction scope', () => {
     ).resolves.toMatchObject({ derivationIndex: 0 });
   });
 
-  it('allocates distinct indexes when composed callers share one scope concurrently', async () => {
+  it('allocates distinct indexes when composed callers await allocations sequentially', async () => {
     const repositories = new MemoryRepositories();
-    const keys = await new RepositoryCoreTransactionRunner(repositories).run((scope) =>
-      Promise.all(
-        Array.from({ length: 5 }, () =>
-          scope.keypairs.allocate({
+    const keys = await new RepositoryCoreTransactionRunner(repositories).run(async (scope) => {
+      const allocated: Keypair[] = [];
+      for (let position = 0; position < 5; position++) {
+        allocated.push(
+          await scope.keypairs.allocate({
             purpose: 'p2pk',
             derive: (index) => derivedKeypair(index, 'p2pk'),
           }),
-        ),
-      ),
-    );
+        );
+      }
+      return allocated;
+    });
     expect(keys.map((key) => key.derivationIndex)).toEqual([0, 1, 2, 3, 4]);
     expect(await repositories.keyRingRepository.getAllPersistedKeyPairs('p2pk')).toHaveLength(5);
+    expect(await repositories.keyRingRepository.getLastAllocatedIndex('p2pk')).toBe(4);
   });
   it('rolls back a persisted key if advancing the high-water mark fails', async () => {
     const repositories = new MemoryRepositories();

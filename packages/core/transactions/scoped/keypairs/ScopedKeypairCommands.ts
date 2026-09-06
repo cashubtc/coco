@@ -7,26 +7,16 @@ const MAX_DERIVATION_INDEX = 0x7fffffff;
 
 /** Keypair mutations within the owning transaction; these commands never open a transaction. */
 export interface ScopedKeypairCommands {
+  /** Await each allocation before starting another for the same purpose within this scope. */
   allocate(command: AllocateKeypairCommand): Promise<Keypair>;
   importP2pk(keypair: Keypair): Promise<void>;
   deleteP2pk(publicKey: string): Promise<void>;
 }
 
 export class RepositoryKeypairCommands implements ScopedKeypairCommands {
-  private allocationQueue: Promise<void> = Promise.resolve();
-
   constructor(private readonly repository: KeyRingRepository) {}
 
-  allocate(command: AllocateKeypairCommand): Promise<Keypair> {
-    // The adapter isolates transactions; this queue orders allocations within this one scope.
-    const allocation = this.allocationQueue.then(() => this.allocateNext(command));
-    this.allocationQueue = allocation.then(() => {});
-    // Observe the rejection without recovering the queue: later allocations must fail too.
-    void this.allocationQueue.catch(() => {});
-    return allocation;
-  }
-
-  private async allocateNext(command: AllocateKeypairCommand): Promise<Keypair> {
+  async allocate(command: AllocateKeypairCommand): Promise<Keypair> {
     const lastAllocatedIndex = await this.repository.getLastAllocatedIndex(command.purpose);
     const highestStoredIndex = await this.repository.getHighestStoredDerivationIndex(
       command.purpose,

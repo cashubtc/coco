@@ -266,16 +266,25 @@ describe('RepositoryCoreTransactionRunner', () => {
   it('drains started commands before committing when the callback returns early', async () => {
     const repositories = new MemoryRepositories();
     const runner = new RepositoryCoreTransactionRunner(repositories);
-    const command = await new KeypairDerivation(async () => new Uint8Array(64)).prepare('p2pk');
+    const command = await new KeypairDerivation(async () => new Uint8Array(64)).prepare(
+      'nut20_mint_quote',
+    );
     const pending: Promise<unknown>[] = [];
 
     await runner.run(async (scope) => {
       // The runner owns commands already started, even if the caller omits its aggregate await.
-      pending.push(scope.keypairs.allocate(command), scope.keypairs.allocate(command));
+      pending.push(
+        scope.keypairs.allocate(command),
+        scope.keypairs.importP2pk(importedKey('independent')),
+      );
     });
 
-    expect(await repositories.keyRingRepository.getAllPersistedKeyPairs('p2pk')).toHaveLength(2);
-    expect(await repositories.keyRingRepository.getLastAllocatedIndex('p2pk')).toBe(1);
+    expect(await repositories.keyRingRepository.getAllPersistedKeyPairs('p2pk')).toHaveLength(1);
+    expect(
+      await repositories.keyRingRepository.getAllPersistedKeyPairs('nut20_mint_quote'),
+    ).toHaveLength(1);
+    expect(await repositories.keyRingRepository.getLastAllocatedIndex('nut20_mint_quote')).toBe(0);
+    expect(await repositories.keyRingRepository.getLastAllocatedIndex('p2pk')).toBeNull();
     expect(
       (await Promise.allSettled(pending)).every((result) => result.status === 'fulfilled'),
     ).toBe(true);

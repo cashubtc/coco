@@ -14,8 +14,6 @@ Distinguish transaction gateways (`*Transactions`) from in-transaction command i
 Use `*Queries` consistently for read-only state interfaces.
 
 Move index selection, exhaustion checks, and synchronous derivation into the shared scoped keypair
-command. Repositories expose allocation-state reads and writes, and concurrent allocations within
-one scope are ordered before committing their keys and high-water marks together.
-
-Stop queued allocations after a failure so no later key or high-water write can escape the owning
-transaction's rollback.
+command. Repositories expose allocation-state reads and writes. Callers await dependent mutations,
+including allocations for the same purpose, sequentially within one scope before committing keys
+and high-water marks together. Concurrent standalone allocations use separate transactions.

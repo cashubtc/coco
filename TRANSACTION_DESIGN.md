@@ -421,11 +421,19 @@ module used by it shares the same adapter transaction scope. Nested and distribu
 are unsupported. An adapter combination unable to provide the shared scope must not be constructed
 as a `CoreTransactionRunner`.
 
-Concurrent scoped calls, including `Promise.all()` inside commands, are supported. The runner
-waits for both its callback and every started scoped command/repository call before allowing the
-adapter callback to settle. A rejection records the first failure and immediately rejects further
-scoped calls. Already executing calls settle inside the original adapter transaction before
-rollback; only then may the runner retry with a fresh scope. Catching a scoped failure or using
+Within one scope, callers and scoped implementations await mutations sequentially by default.
+Concurrent work, including `Promise.all()` inside commands, is supported only when the implementer
+establishes that the operations are independent: interleaving their reads and writes cannot change
+the intended result or violate a shared invariant. Dependent read-modify-write operations, such as
+allocations for the same keypair purpose, must be awaited in order. Scoped modules do not provide
+per-method queues or mutexes; adapter isolation protects separate transactions, not interleaved
+algorithms within one scope.
+
+Transaction lifetime guarantees containment, not ordering. The runner waits for both its callback
+and every started scoped command/repository call before allowing the adapter callback to settle.
+A rejection records the first failure and immediately rejects further scoped calls. Already
+executing calls settle inside the original adapter transaction before rollback; only then may the
+runner retry with a fresh scope. Catching a scoped failure or using
 `Promise.allSettled()` cannot turn that failed attempt into a commit. Returning early from the
 callback also cannot commit before its started commands finish.
 
@@ -486,8 +494,11 @@ write setLastAllocatedIndex(purpose, index)
 The highest stored index preserves compatibility with existing or imported indexed keys. Both
 reads and writes use the current repository scope. Repository implementations only read and write
 these values; they never receive a deriver, choose an index, or open an allocation transaction.
-The runner owns retries. The scoped command orders concurrent allocations within its own scope so
-they observe preceding writes; adapter transaction isolation protects allocations across scopes.
+The runner owns retries. Callers await allocations for the same purpose sequentially within one
+scope so each observes preceding writes; the scoped command has no allocation queue. Adapter
+transaction isolation protects concurrent allocations across scopes, including standalone gateway
+calls. Lifetime tracking does not make simultaneous allocations for the same purpose safe within
+one scope.
 Allocation errors must propagate to the owning transaction so all its writes roll back together.
 
 ## Remote Outcomes and Recovery
@@ -554,7 +565,8 @@ storage adapters:
    helpers and injected implementations, including composition-root wiring, against the table above.
 2. For each changed atomic transition, identify the owning gateway and runner invocation. Verify all
    participating commands use the same adapter scope, authoritative reads occur inside it, and scoped
-   repositories and commands cannot open another transaction.
+   repositories and commands cannot open another transaction. Check that dependent operations are
+   awaited sequentially and that each concurrent group preserves its invariants when interleaved.
 3. Trace effects across that boundary: asynchronous preflight and remote I/O occur outside it,
    derivation inside it is synchronous, retry-sensitive inputs remain stable, and live events follow
    commit. Queries and preflight capabilities must remain non-mutating.
@@ -592,8 +604,8 @@ persistent adapters. Required cases include:
 
 - grouped writes commit atomically;
 - representative failures roll back the whole write set;
-- sibling failures inside and across scoped commands drain executing repository calls before
-  rollback or retry, and prevent subsequent queued writes;
+- failures of independent siblings inside and across scoped commands drain executing repository
+  calls before rollback or retry, and reject further scoped calls;
 - caught or unobserved scoped failures cannot commit, early callback completion waits for started
   commands, and completed scopes reject further commands and repository calls;
 - transaction reads do not observe concurrent uncommitted writes;
@@ -605,8 +617,9 @@ Orchestration tests assert durable results through Queries and use in-memory rem
 than mocking individual repositories.
 
 The keypair baseline also tests shared command reuse through a standalone gateway and a composed
-transition, exactly one adapter transaction per successful invocation, grouped allocation rollback,
-high-water-mark rollback, synchronous reusable derivation, and signing through read-only key access.
+transition, exactly one adapter transaction per successful invocation, sequential allocations within
+one scope, concurrent allocations across transactions, grouped allocation rollback, high-water-mark
+rollback, synchronous reusable derivation, and signing through read-only key access.
 Compile-time assertions ensure neither domain scope nor repository scope exposes a transaction
 opener. Later migrations must exercise the same composition guarantees across proofs, allocation,
 and operation persistence, including adapter concurrency and ambiguous remote outcomes.

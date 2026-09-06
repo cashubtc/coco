@@ -32,9 +32,13 @@ creation are forbidden. This preserves reuse without permitting nested transacti
 
 The runner owns one `TransactionLifetime` per attempt and binds all scoped commands and their
 repository dependencies to it. Concurrent promises inside commands remain supported without
-call-site draining. The first scoped failure rejects further calls and forces rollback even if
-the callback catches it. The runner drains already executing calls before the adapter callback
-settles, then revokes the scope; rollback finishes before a fresh retry begins. Calls through
+call-site draining when the implementer establishes that their operations are independent.
+Within one scope, callers and scoped implementations await mutations sequentially by default;
+dependent operations must observe preceding writes. Scoped modules do not provide per-method
+queues or mutexes. Lifetime tracking guarantees containment, not ordering, while adapter isolation
+protects separate transactions. The first scoped failure rejects further calls and forces rollback
+even if the callback catches it. The runner drains already executing calls before the adapter
+callback settles, then revokes the scope; rollback finishes before a fresh retry begins. Calls through
 completed scopes reject rather than writing outside their transaction. Direct legacy repository
 transactions migrate with their owning workflows; arbitrary asynchronous work and remote effects
 remain outside this guarantee.
@@ -43,6 +47,8 @@ For Keypair Allocation, the scoped command reads the durable high-water mark and
 index, chooses and validates the next index, invokes the synchronous deriver, and persists the key
 and high-water mark. Repositories expose only the underlying reads and writes; derivation and
 allocation retries do not belong in adapters. The runner retries the whole owning transaction.
+Callers await allocations for the same purpose sequentially within a scope; concurrent standalone
+gateway calls use separate transactions and remain supported.
 
 Queries and preflight capabilities cannot hide Wallet writes. Narrow interfaces may share one
 implementation, and no domain is required to reproduce every architectural layer. Use
