@@ -1,6 +1,6 @@
 ---
 '@cashu/coco-core': major
-'@cashu/coco-adapter-tests': major
+'@cashu/coco-adapter-tests': minor
 '@cashu/coco-sql-storage': patch
 '@cashu/coco-sqlite': patch
 '@cashu/coco-sqlite-bun': patch
@@ -19,7 +19,5 @@ These persistence primitives replace the legacy derivation methods. Shared scope
 the next index, derive synchronously, and persist the key with its high-water mark inside the
 owning Wallet transaction; adapters must not open another transaction for allocation.
 
-Replace the adapter-test exports `runKeyRingDerivationRepositoryContract` and
-`KeyRingDerivationContractOptions` with `runKeypairAllocationContract` and
-`KeypairAllocationContractOptions`. The allocation contract exercises the real key-management
-gateway.
+Add `runKeypairAllocationContract` and `KeypairAllocationContractOptions` to exercise the real
+key-management gateway in adapter tests.
