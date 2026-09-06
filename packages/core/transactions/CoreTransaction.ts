@@ -4,6 +4,7 @@ import {
   RepositoryKeypairCommands,
   type ScopedKeypairCommands,
 } from './scoped/keypairs/ScopedKeypairCommands.ts';
+import { TransactionLifetime } from './scoped/TransactionLifetime.ts';
 
 /** Scoped commands sharing one adapter transaction attempt. */
 export interface CoreTransaction {
@@ -42,9 +43,12 @@ export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
   async run<T>(command: (transaction: CoreTransaction) => Promise<T>): Promise<T> {
     for (let attempt = 1; ; attempt++) {
       try {
-        return await this.repositories.withTransaction((repositories) =>
-          command(this.modules.create(repositories)),
-        );
+        return await this.repositories.withTransaction((repositories) => {
+          const lifetime = new TransactionLifetime();
+          return lifetime.run(() =>
+            command(lifetime.bind(this.modules.create(lifetime.bind(repositories)))),
+          );
+        });
       } catch (error) {
         if (
           !(error instanceof RepositoryTransactionConflictError) ||

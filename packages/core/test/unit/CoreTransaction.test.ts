@@ -6,6 +6,19 @@ import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransact
 import type { CoreTransaction } from '../../transactions/CoreTransaction.ts';
 import { CoreKeyRingTransactions } from '../../transactions/keypairs/KeyRingTransactions.ts';
 import { KeypairDerivation } from '../../keypairs/KeypairDerivation.ts';
+import { RepositoryKeypairCommands } from '../../transactions/scoped/keypairs/ScopedKeypairCommands.ts';
+
+function gate() {
+  let release!: () => void;
+  const promise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { promise, release };
+}
+
+function importedKey(publicKeyHex: string) {
+  return { publicKeyHex, secretKey: new Uint8Array(32), purpose: 'p2pk' as const };
+}
 
 // Compile-time contract: neither the shared commands nor repository scope grants an opener.
 function scopedAuthority(transaction: CoreTransaction, scope: RepositoryTransactionScope) {
@@ -164,5 +177,190 @@ describe('RepositoryCoreTransactionRunner', () => {
     ).rejects.toBe(invariantError);
 
     expect(attempts).toBe(1);
+  });
+
+  it.each(['rollback', 'retry'] as const)(
+    'drains executing repository calls before %s even when concurrency is inside a command',
+    async (outcome) => {
+      const repositories = new MemoryRepositories();
+      const blocked = gate();
+      const failed = gate();
+      const failure =
+        outcome === 'retry'
+          ? new RepositoryTransactionConflictError('retry after draining')
+          : new Error('sibling failed');
+      let attempts = 0;
+      let ended = 0;
+      let writesFinished = 0;
+      const controlled = overrideTransactions(repositories, async (command) => {
+        attempts++;
+        try {
+          return await repositories.withTransaction((scope) => {
+            if (attempts === 1) {
+              const save = scope.keyRingRepository.setPersistedKeyPair.bind(
+                scope.keyRingRepository,
+              );
+              scope.keyRingRepository.setPersistedKeyPair = async (keypair) => {
+                await blocked.promise;
+                await save(keypair);
+                writesFinished++;
+              };
+              scope.counterRepository.setCounter = async () => {
+                failed.release();
+                throw failure;
+              };
+            }
+            return command(scope);
+          });
+        } finally {
+          ended++;
+        }
+      });
+      const runner = new RepositoryCoreTransactionRunner(controlled, {
+        create(scope) {
+          const keypairs = new RepositoryKeypairCommands(scope.keyRingRepository);
+          // Both calls are made inside a command; tracking its returned promise alone is insufficient.
+          keypairs.importP2pk = async (keypair) => {
+            await Promise.all([
+              scope.keyRingRepository.setPersistedKeyPair(keypair),
+              scope.counterRepository.setCounter('https://mint.test', 'keyset', 7),
+            ]);
+          };
+          return { keypairs };
+        },
+      });
+      const result = runner
+        .run((scope) => scope.keypairs.importP2pk(importedKey('slow')))
+        .then(
+          () => ({ ok: true as const }),
+          (error: unknown) => ({ ok: false as const, error }),
+        );
+
+      try {
+        await failed.promise;
+        // Give an incorrectly early rollback a full turn to settle while the write is still held.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(ended).toBe(0);
+        expect(attempts).toBe(1);
+      } finally {
+        blocked.release();
+      }
+      expect(await result).toEqual(
+        outcome === 'retry' ? { ok: true } : { ok: false, error: failure },
+      );
+      expect(writesFinished).toBe(1);
+      expect(attempts).toBe(outcome === 'retry' ? 2 : 1);
+      expect(await repositories.keyRingRepository.getAllPersistedKeyPairs('p2pk')).toHaveLength(
+        outcome === 'retry' ? 1 : 0,
+      );
+      expect(
+        await repositories.counterRepository.getCounter('https://mint.test', 'keyset'),
+      ).toEqual(
+        outcome === 'retry'
+          ? { mintUrl: 'https://mint.test', keysetId: 'keyset', counter: 7 }
+          : null,
+      );
+    },
+  );
+
+  it('drains started commands before committing when the callback returns early', async () => {
+    const repositories = new MemoryRepositories();
+    const runner = new RepositoryCoreTransactionRunner(repositories);
+    const command = await new KeypairDerivation(async () => new Uint8Array(64)).prepare('p2pk');
+    const pending: Promise<unknown>[] = [];
+
+    await runner.run(async (scope) => {
+      // The runner owns commands already started, even if the caller omits its aggregate await.
+      pending.push(scope.keypairs.allocate(command), scope.keypairs.allocate(command));
+    });
+
+    expect(await repositories.keyRingRepository.getAllPersistedKeyPairs('p2pk')).toHaveLength(2);
+    expect(await repositories.keyRingRepository.getLastAllocatedIndex('p2pk')).toBe(1);
+    expect(
+      (await Promise.allSettled(pending)).every((result) => result.status === 'fulfilled'),
+    ).toBe(true);
+  });
+
+  it.each(['catch', 'allSettled', 'unobserved'] as const)(
+    'rolls back a command failure even when it is handled with %s',
+    async (handling) => {
+      const repositories = new MemoryRepositories();
+      const runner = new RepositoryCoreTransactionRunner(repositories);
+      const failure = new Error('derivation failed');
+
+      await expect(
+        runner.run(async (scope) => {
+          await scope.keypairs.importP2pk(importedKey('first'));
+          const allocation = scope.keypairs.allocate({
+            purpose: 'p2pk',
+            derive() {
+              throw failure;
+            },
+          });
+          if (handling === 'catch') await allocation.catch(() => {});
+          if (handling === 'allSettled') await Promise.allSettled([allocation]);
+          return 'callback succeeded';
+        }),
+      ).rejects.toBe(failure);
+
+      expect(await repositories.keyRingRepository.getAllPersistedKeyPairs('p2pk')).toHaveLength(0);
+      expect(await repositories.keyRingRepository.getLastAllocatedIndex('p2pk')).toBeNull();
+    },
+  );
+
+  it.each(['commit', 'rollback'] as const)(
+    'revokes commands and repositories after %s',
+    async (outcome) => {
+      const repositories = new MemoryRepositories();
+      let capturedTransaction!: CoreTransaction;
+      let capturedRepositories!: RepositoryTransactionScope;
+      let importKey!: CoreTransaction['keypairs']['importP2pk'];
+      let persistKey!: RepositoryTransactionScope['keyRingRepository']['setPersistedKeyPair'];
+      const runner = new RepositoryCoreTransactionRunner(repositories, {
+        create(scope) {
+          capturedRepositories = scope;
+          return { keypairs: new RepositoryKeypairCommands(scope.keyRingRepository) };
+        },
+      });
+      const result = runner.run(async (scope) => {
+        capturedTransaction = scope;
+        importKey = scope.keypairs.importP2pk;
+        persistKey = capturedRepositories.keyRingRepository.setPersistedKeyPair;
+        if (outcome === 'rollback') throw new Error('abort');
+      });
+      if (outcome === 'rollback') await expect(result).rejects.toThrow('abort');
+      else await result;
+
+      await expect(capturedTransaction.keypairs.importP2pk(importedKey('late'))).rejects.toThrow(
+        'Wallet transaction scope is closed',
+      );
+      await expect(
+        capturedRepositories.keyRingRepository.setPersistedKeyPair(importedKey('late')),
+      ).rejects.toThrow('Wallet transaction scope is closed');
+      await expect(importKey(importedKey('late'))).rejects.toThrow(
+        'Wallet transaction scope is closed',
+      );
+      await expect(persistKey(importedKey('late'))).rejects.toThrow(
+        'Wallet transaction scope is closed',
+      );
+      expect(await repositories.keyRingRepository.getAllPersistedKeyPairs('p2pk')).toHaveLength(0);
+    },
+  );
+
+  it('preserves an undefined rejection reason and rolls back earlier writes', async () => {
+    const repositories = new MemoryRepositories();
+    const runner = new RepositoryCoreTransactionRunner(repositories);
+    const result = await runner
+      .run(async (scope) => {
+        await scope.keypairs.importP2pk(importedKey('first'));
+        throw undefined;
+      })
+      .then(
+        () => ({ ok: true }),
+        (error: unknown) => ({ ok: false, error }),
+      );
+
+    expect(result).toEqual({ ok: false, error: undefined });
+    expect(await repositories.keyRingRepository.getAllPersistedKeyPairs('p2pk')).toHaveLength(0);
   });
 });

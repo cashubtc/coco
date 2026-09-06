@@ -120,6 +120,12 @@ The runner creates a `CoreTransaction` and all of its transaction-scoped modules
 same `RepositoryTransactionScope`. Callers must not retain that scope, the `CoreTransaction`, or a
 transaction-scoped module after `run()` completes.
 
+Each attempt has one internal `TransactionLifetime`, owned by the runner. The runner binds every
+repository before injecting it into scoped modules, and binds every module exposed on
+`CoreTransaction`. These wrappers track asynchronous method calls and share one failure state;
+adding a module to the factory does not require its callers to register or drain work manually.
+The lifetime has no transaction opener or commit/rollback authority.
+
 ```ts
 export interface CoreTransaction {
   readonly proofs: ScopedProofCommands;
@@ -415,6 +421,25 @@ module used by it shares the same adapter transaction scope. Nested and distribu
 are unsupported. An adapter combination unable to provide the shared scope must not be constructed
 as a `CoreTransactionRunner`.
 
+Concurrent scoped calls, including `Promise.all()` inside commands, are supported. The runner
+waits for both its callback and every started scoped command/repository call before allowing the
+adapter callback to settle. A rejection records the first failure and immediately rejects further
+scoped calls. Already executing calls settle inside the original adapter transaction before
+rollback; only then may the runner retry with a fresh scope. Catching a scoped failure or using
+`Promise.allSettled()` cannot turn that failed attempt into a commit. Returning early from the
+callback also cannot commit before its started commands finish.
+
+After the attempt finishes, the bound commands and repositories reject further calls, including
+through previously captured method references. This prevents a continuation from using an expired
+SQLite scope as an autocommit connection or falling out of an IndexedDB transaction. This guarantee
+applies to scopes constructed by `CoreTransactionRunner`; direct legacy `withTransaction()` callers
+still follow their adapter contract until their owning workflow migrates.
+
+Callers still await their work and keep remote I/O, timers, and unrelated asynchronous work outside
+transactions. Lifetime tracking covers calls through the bound scoped interfaces; it cannot cancel
+arbitrary JavaScript promises or make external effects transactional. Scoped modules receive only
+the runner-bound repositories and return/await work performed by their internal helpers.
+
 Independent Coco Sessions using the same Wallet storage must not silently lose committed updates.
 An adapter may serialize conflicting work or reject one participant with a typed transaction
 conflict. The runner retries only conflicts the adapter explicitly marks transient, with a small
@@ -567,6 +592,10 @@ persistent adapters. Required cases include:
 
 - grouped writes commit atomically;
 - representative failures roll back the whole write set;
+- sibling failures inside and across scoped commands drain executing repository calls before
+  rollback or retry, and prevent subsequent queued writes;
+- caught or unobserved scoped failures cannot commit, early callback completion waits for started
+  commands, and completed scopes reject further commands and repository calls;
 - transaction reads do not observe concurrent uncommitted writes;
 - root writes cannot be clobbered by transaction commit or rollback;
 - independent connections serialize or return a typed conflict; and

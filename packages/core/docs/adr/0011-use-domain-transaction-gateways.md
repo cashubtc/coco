@@ -30,6 +30,15 @@ through helpers. Standalone use wraps the same commands in a gateway; composed u
 commands within the owning transaction. Optional transaction parameters with implicit transaction
 creation are forbidden. This preserves reuse without permitting nested transactions.
 
+The runner owns one `TransactionLifetime` per attempt and binds all scoped commands and their
+repository dependencies to it. Concurrent promises inside commands remain supported without
+call-site draining. The first scoped failure rejects further calls and forces rollback even if
+the callback catches it. The runner drains already executing calls before the adapter callback
+settles, then revokes the scope; rollback finishes before a fresh retry begins. Calls through
+completed scopes reject rather than writing outside their transaction. Direct legacy repository
+transactions migrate with their owning workflows; arbitrary asynchronous work and remote effects
+remain outside this guarantee.
+
 For Keypair Allocation, the scoped command reads the durable high-water mark and greatest stored
 index, chooses and validates the next index, invokes the synchronous deriver, and persists the key
 and high-water mark. Repositories expose only the underlying reads and writes; derivation and
