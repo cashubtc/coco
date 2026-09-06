@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'bun:test';
 import { RepositoryTransactionConflictError } from '../../repositories/RepositoryTransactionError.ts';
-import type { Repositories, RepositoryTransactionScope } from '../../repositories/index.ts';
+import type { RepositoryTransactionScope } from '../../repositories/index.ts';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
 import type { CoreTransaction } from '../../transactions/CoreTransaction.ts';
 import { CoreKeyRingTransactions } from '../../transactions/keypairs/KeyRingTransactions.ts';
 import { KeypairDerivation } from '../../keypairs/KeypairDerivation.ts';
 import { RepositoryKeypairCommands } from '../../transactions/scoped/keypairs/ScopedKeypairCommands.ts';
+import { overrideTransactions } from '../overrideTransactions.ts';
 
 function gate() {
   let release!: () => void;
@@ -28,19 +29,6 @@ function scopedAuthority(transaction: CoreTransaction, scope: RepositoryTransact
   transaction.keypairs.withTransaction;
   // @ts-expect-error The scoped repository container deliberately omits withTransaction.
   scope.withTransaction;
-}
-
-function overrideTransactions(
-  base: Repositories,
-  withTransaction: Repositories['withTransaction'],
-): Repositories {
-  return new Proxy(base, {
-    get(target, property, receiver) {
-      if (property === 'withTransaction') return withTransaction;
-      const value = Reflect.get(target, property, receiver) as unknown;
-      return typeof value === 'function' ? value.bind(target) : value;
-    },
-  });
 }
 
 describe('RepositoryCoreTransactionRunner', () => {
@@ -116,13 +104,11 @@ describe('RepositoryCoreTransactionRunner', () => {
           return command(Object.assign(new GetterScope(), otherRepositories));
         }),
       ),
-      {
-        create(scope) {
-          boundRepositories = scope;
-          return Object.freeze({
-            keypairs: new RepositoryKeypairCommands(scope.keyRingRepository),
-          });
-        },
+      (scope) => {
+        boundRepositories = scope;
+        return Object.freeze({
+          keypairs: new RepositoryKeypairCommands(scope.keyRingRepository),
+        });
       },
     );
     const command = await new KeypairDerivation(async () => new Uint8Array(64)).prepare('p2pk');
@@ -263,18 +249,16 @@ describe('RepositoryCoreTransactionRunner', () => {
           ended++;
         }
       });
-      const runner = new RepositoryCoreTransactionRunner(controlled, {
-        create(scope) {
-          const keypairs = new RepositoryKeypairCommands(scope.keyRingRepository);
-          // Both calls are made inside a command; tracking its returned promise alone is insufficient.
-          keypairs.importP2pk = async (keypair) => {
-            await Promise.all([
-              scope.keyRingRepository.setPersistedKeyPair(keypair),
-              scope.counterRepository.setCounter('https://mint.test', 'keyset', 7),
-            ]);
-          };
-          return { keypairs };
-        },
+      const runner = new RepositoryCoreTransactionRunner(controlled, (scope) => {
+        const keypairs = new RepositoryKeypairCommands(scope.keyRingRepository);
+        // Both calls are made inside a command; tracking its returned promise alone is insufficient.
+        keypairs.importP2pk = async (keypair) => {
+          await Promise.all([
+            scope.keyRingRepository.setPersistedKeyPair(keypair),
+            scope.counterRepository.setCounter('https://mint.test', 'keyset', 7),
+          ]);
+        };
+        return { keypairs };
       });
       const result = runner
         .run((scope) => scope.keypairs.importP2pk(importedKey('slow')))
@@ -372,11 +356,9 @@ describe('RepositoryCoreTransactionRunner', () => {
       let capturedRepositories!: RepositoryTransactionScope;
       let importKey!: CoreTransaction['keypairs']['importP2pk'];
       let persistKey!: RepositoryTransactionScope['keyRingRepository']['setPersistedKeyPair'];
-      const runner = new RepositoryCoreTransactionRunner(repositories, {
-        create(scope) {
-          capturedRepositories = scope;
-          return { keypairs: new RepositoryKeypairCommands(scope.keyRingRepository) };
-        },
+      const runner = new RepositoryCoreTransactionRunner(repositories, (scope) => {
+        capturedRepositories = scope;
+        return { keypairs: new RepositoryKeypairCommands(scope.keyRingRepository) };
       });
       const result = runner.run(async (scope) => {
         capturedTransaction = scope;

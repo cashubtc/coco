@@ -22,10 +22,6 @@ export class MemoryKeyRingRepository implements KeyRingRepository {
   }
 
   async setPersistedKeyPair(keyPair: Keypair): Promise<void> {
-    this.persistKeyPair(keyPair);
-  }
-
-  private persistKeyPair(keyPair: Keypair): void {
     if (!this.keyPairs.has(keyPair.publicKeyHex)) {
       this.insertionOrder.push(keyPair.publicKeyHex);
     }

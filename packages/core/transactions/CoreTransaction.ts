@@ -18,30 +18,22 @@ export interface CoreTransactionRunner {
   run<T>(command: (transaction: CoreTransaction) => Promise<T>): Promise<T>;
 }
 
-interface TransactionModuleFactory {
-  create(repositories: RepositoryTransactionScope): CoreTransaction;
-}
+type TransactionModuleFactory = (repositories: RepositoryTransactionScope) => CoreTransaction;
 
-class RepositoryTransactionModuleFactory implements TransactionModuleFactory {
-  create(repositories: RepositoryTransactionScope): CoreTransaction {
-    return {
-      keypairs: new RepositoryKeypairCommands(repositories.keyRingRepository),
-    };
-  }
+function createTransactionModules(repositories: RepositoryTransactionScope): CoreTransaction {
+  return {
+    keypairs: new RepositoryKeypairCommands(repositories.keyRingRepository),
+  };
 }
 
 const MAX_TRANSACTION_ATTEMPTS = 3;
 
 /** Internal adapter-backed transaction runner owned by the composition root. */
 export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
-  private readonly modules: TransactionModuleFactory;
-
   constructor(
     private readonly repositories: Repositories,
-    modules: TransactionModuleFactory = new RepositoryTransactionModuleFactory(),
-  ) {
-    this.modules = modules;
-  }
+    private readonly createModules: TransactionModuleFactory = createTransactionModules,
+  ) {}
 
   async run<T>(command: (transaction: CoreTransaction) => Promise<T>): Promise<T> {
     for (let attempt = 1; ; attempt++) {
@@ -49,7 +41,7 @@ export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
         return await this.repositories.withTransaction((repositories) => {
           const lifetime = new TransactionLifetime();
           return lifetime.run(() =>
-            command(lifetime.bind(this.modules.create(lifetime.bind(repositories)))),
+            command(lifetime.bind(this.createModules(lifetime.bind(repositories)))),
           );
         });
       } catch (error) {

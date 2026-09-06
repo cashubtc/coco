@@ -5,6 +5,7 @@ import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories
 import type { Repositories, RepositoryTransactionScope } from '../../repositories/index.ts';
 import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
 import { CoreKeyRingTransactions } from '../../transactions/keypairs/KeyRingTransactions.ts';
+import { overrideTransactions } from '../overrideTransactions.ts';
 
 const MAX_DERIVATION_INDEX = 0x7fffffff;
 
@@ -188,20 +189,14 @@ describe('ScopedKeypairCommands transaction scope', () => {
   it('rolls back a persisted key if advancing the high-water mark fails', async () => {
     const repositories = new MemoryRepositories();
     const first = await allocate(repositories, 'p2pk');
-    const failing = new Proxy(repositories, {
-      get(target, property, receiver) {
-        if (property === 'withTransaction') {
-          return <T>(command: (scope: RepositoryTransactionScope) => Promise<T>) =>
-            repositories.withTransaction((scope) => {
-              scope.keyRingRepository.setLastAllocatedIndex = async () => {
-                throw new Error('high-water write failed');
-              };
-              return command(scope);
-            });
-        }
-        return Reflect.get(target, property, receiver);
-      },
-    });
+    const failing = overrideTransactions(repositories, (command) =>
+      repositories.withTransaction((scope) => {
+        scope.keyRingRepository.setLastAllocatedIndex = async () => {
+          throw new Error('high-water write failed');
+        };
+        return command(scope);
+      }),
+    );
     await expect(allocate(failing, 'p2pk')).rejects.toThrow('high-water write failed');
     expect(await repositories.keyRingRepository.getAllPersistedKeyPairs('p2pk')).toEqual([first]);
     expect(await repositories.keyRingRepository.getLastAllocatedIndex('p2pk')).toBe(0);
