@@ -92,13 +92,20 @@ describe('RepositoryCoreTransactionRunner', () => {
     expect((await gateway.allocate(quoteKey)).derivationIndex).toBe(0);
   });
 
-  it('binds inherited repository getters to the owning transaction lifetime', async () => {
+  it('binds inherited getters and frozen repository methods to the owning lifetime', async () => {
     const repositories = new MemoryRepositories();
     let boundRepositories!: RepositoryTransactionScope;
     const runner = new RepositoryCoreTransactionRunner(
       overrideTransactions(repositories, (command) =>
         repositories.withTransaction((scope) => {
           const { keyRingRepository, ...otherRepositories } = scope;
+          // Own methods on frozen objects require the wrapper to use a separate proxy target.
+          Object.freeze(
+            Object.assign(keyRingRepository, {
+              getLastAllocatedIndex: keyRingRepository.getLastAllocatedIndex,
+              setLastAllocatedIndex: keyRingRepository.setLastAllocatedIndex,
+            }),
+          );
           class GetterScope {
             #keyRingRepository = keyRingRepository;
 

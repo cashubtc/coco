@@ -45,13 +45,13 @@ export class TransactionLifetime {
 
   private bindModule<T extends object>(module: T): T {
     const methods = new Map<PropertyKey, unknown>();
-    return new Proxy(module, {
-      get: (target, property) => {
-        const value: unknown = Reflect.get(target, property, target);
+    return new Proxy(Object.create(module) as T, {
+      get: (_target, property) => {
+        const value: unknown = Reflect.get(module, property, module);
         if (typeof value !== 'function') return value;
         if (!methods.has(property)) {
           methods.set(property, (...args: unknown[]) =>
-            this.invoke(() => Reflect.apply(value, target, args) as Promise<unknown>),
+            this.invoke(() => Reflect.apply(value, module, args) as Promise<unknown>),
           );
         }
         return methods.get(property);
