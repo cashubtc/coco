@@ -99,3 +99,13 @@ export type {
   StoredBlindedMessage,
   StoredBlindedSignature,
 } from './utils.ts';
+export type {
+  MintSwapOperation,
+  MintSwapOperationState,
+} from './operations/mintSwap/MintSwapOperation.ts';
+export type {
+  MintSwapOperationRepository,
+  MintSwapPersistence,
+} from './operations/mintSwap/MintSwapOperationRepository.ts';
+export { parseMintSwapOperation } from './operations/mintSwap/parseMintSwapOperation.ts';
+export { validateMintSwapTransition } from './operations/mintSwap/validateMintSwapTransition.ts';
