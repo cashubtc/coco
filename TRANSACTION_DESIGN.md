@@ -27,14 +27,15 @@ suffix. Established names such as `SendOperationService` and `ReceiveOperationSe
 
 Names distinguish transaction ownership from work performed within an existing transaction:
 
-| Role                          | Name                    | Responsibility                                                    |
-| ----------------------------- | ----------------------- | ----------------------------------------------------------------- |
-| Workflow coordinator          | `SendOperationService`  | Orders preflight, committed transitions, remote calls, and events |
-| Read-only state interface     | `KeypairQueries`        | Reads existing state without creating or changing it              |
-| Transaction gateway           | `SendTransactions`      | Each method opens and commits one transaction through the runner  |
-| Commands within a transaction | `ScopedSendCommands`    | Reads and writes within the supplied transaction scope            |
-| Transaction scope             | `CoreTransaction`       | Provides scoped commands for one transaction attempt              |
-| Transaction runner            | `CoreTransactionRunner` | Creates the scope and manages commit, rollback, and retries       |
+| Role                          | Name                    | Responsibility                                                   |
+| ----------------------------- | ----------------------- | ---------------------------------------------------------------- |
+| Management coordinator        | `KeyRingService`        | Coordinates domain actions without a durable operation lifecycle |
+| Durable workflow coordinator  | `SendOperationService`  | Coordinates a durable saga, its state transitions, and recovery  |
+| Read-only state interface     | `KeypairQueries`        | Reads existing state without creating or changing it             |
+| Transaction gateway           | `SendTransactions`      | Each method opens and commits one transaction through the runner |
+| Commands within a transaction | `ScopedSendCommands`    | Reads and writes within the supplied transaction scope           |
+| Transaction scope             | `CoreTransaction`       | Provides scoped commands for one transaction attempt             |
+| Transaction runner            | `CoreTransactionRunner` | Creates the scope and manages commit, rollback, and retries      |
 
 Reserve `*Transactions` for application-scoped gateways and `Scoped*Commands` for interfaces used
 inside a transaction. Concrete implementations may describe their backing mechanism, such as
@@ -49,6 +50,31 @@ for their behavior, such as `P2pkSigner` and `KeypairDerivation`.
 Keep scoped implementations and helpers under `transactions/scoped/**` and application-scoped
 `*Transactions` gateways outside that directory under `transactions/`. These locations make each
 module's role recognizable; review its actual dependencies and behavior against that role.
+
+### Services and Operation Services
+
+`Service` identifies an application-level orchestration role. A `<Domain>Service`
+coordinates domain management actions without owning a durable operation lifecycle.
+A `<Domain>OperationService` coordinates a durable saga, including its persisted
+state transitions, remote effects, and recovery. Both occupy the same architectural
+layer and may be invoked by public APIs or background processors.
+
+Services depend on narrow Queries, local capabilities, remote interfaces where
+needed, and their own domain's transaction gateway. Wallet mutations go through
+that gateway; Services do not receive the raw runner or live transaction scopes,
+write through repositories, or compose other Services to construct an atomic
+transition. Events describing committed changes are published after commit.
+
+Shared algorithms, read-only access, and transactional invariants belong in
+behavior-specific capabilities, `<Domain>Queries`, and `Scoped*Commands`.
+A module does not acquire the `Service` suffix merely because several callers
+reuse it. `KeyRingService` is a management coordinator; `SendOperationService`
+additionally owns a durable saga lifecycle.
+
+This is the target convention. Existing Service names may temporarily describe
+mixed or different responsibilities. Each owning migration must split or rename
+those modules according to their resulting roles. New modules follow this
+convention immediately.
 
 ## Decision Summary
 
@@ -539,7 +565,7 @@ through helpers, callbacks, and composition-root wiring:
 | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Transaction-scoped implementation                 | Services/coordinators, remote infrastructure, live event bus, raw runner, root repository containers, concrete storage adapters, application-scoped gateways |
 | Application-scoped `*Transactions` implementation | regular Services, remote infrastructure, live event bus, repositories, application-scoped gateways                                                           |
-| Operation Service                                 | regular Services, repositories, `CoreTransactionRunner`, live scoped commands, another domain's transaction gateway                                          |
+| Service / Operation Service                       | other Services/coordinators, repositories, `CoreTransactionRunner`, live scoped commands, another domain's transaction gateway                               |
 | Query or local preflight capability               | Services/coordinators, repository mutation interfaces, transaction modules, remote infrastructure, live event bus                                            |
 
 Scoped implementations import repository contracts with `import type`; runtime repository helpers

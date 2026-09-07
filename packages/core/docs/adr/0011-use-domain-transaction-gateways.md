@@ -5,9 +5,10 @@ status: accepted
 # Use domain transaction gateways for critical Wallet mutations
 
 Coco uses narrow domain transaction gateways backed by one composition-root-owned runner for
-critical Wallet mutations. Operation Services coordinate workflows through these gateways; shared
-scoped commands compose reusable domain invariants within one adapter transaction. Each gateway
-method returns only after commit, with the runner owning rollback and bounded retries.
+critical Wallet mutations. Services coordinate domain management actions; Operation Services
+additionally coordinate durable saga lifecycles. Both use domain gateways, while shared scoped
+commands compose reusable domain invariants within one adapter transaction. Each gateway method
+returns only after commit, with the runner owning rollback and bounded retries.
 
 This gives each atomic transition an explicit owner and prevents reusable helpers from opening
 nested transactions. Coordinators perform asynchronous preflight and remote mint I/O outside the
