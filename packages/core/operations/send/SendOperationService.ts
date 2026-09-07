@@ -5,13 +5,10 @@ import {
   type Token,
   type ProofState as CashuProofState,
 } from '@cashu/cashu-ts';
+import type { MintService } from '@core/services/MintService.ts';
 import type { ProofQueries } from '@core/proofs/ProofQueries.ts';
 import { createKeyChain } from '@core/proofs/KeysetSelection.ts';
-import {
-  MINT_REFRESH_TTL_S,
-  type MintMetadata,
-  type MintQueries,
-} from '@core/mints/MintMetadata.ts';
+import type { MintMetadata, MintQueries } from '@core/mints/MintMetadata.ts';
 import type {
   SendOperation,
   InitSendOperation,
@@ -71,7 +68,8 @@ export interface SendOperationServiceDependencies {
   operationQueries: SendOperationQueries;
   proofQueries: ProofQueries;
   transactions: SendTransactions;
-  mintQueries: MintQueries;
+  mintQueries: Pick<MintQueries, 'isTrustedMint'>;
+  mintMetadataRefresh: Pick<MintService, 'refreshAndCommitIfStale'>;
   remote: SendRemote;
   loadSeed: () => Promise<Uint8Array>;
   eventBus: Pick<EventBus<CoreEvents>, 'emit'>;
@@ -99,7 +97,8 @@ export class SendOperationService {
   private readonly operationQueries: SendOperationQueries;
   private readonly proofQueries: ProofQueries;
   private readonly transactions: SendTransactions;
-  private readonly mintQueries: MintQueries;
+  private readonly mintQueries: Pick<MintQueries, 'isTrustedMint'>;
+  private readonly mintMetadataRefresh: Pick<MintService, 'refreshAndCommitIfStale'>;
   private readonly remote: SendRemote;
   private readonly loadSeed: () => Promise<Uint8Array>;
   private readonly eventBus: Pick<EventBus<CoreEvents>, 'emit'>;
@@ -119,6 +118,7 @@ export class SendOperationService {
     this.proofQueries = dependencies.proofQueries;
     this.transactions = dependencies.transactions;
     this.mintQueries = dependencies.mintQueries;
+    this.mintMetadataRefresh = dependencies.mintMetadataRefresh;
     this.remote = dependencies.remote;
     this.loadSeed = dependencies.loadSeed;
     this.eventBus = dependencies.eventBus;
@@ -203,7 +203,7 @@ export class SendOperationService {
         if (!(await this.mintQueries.isTrustedMint(operation.mintUrl))) {
           throw new UnknownMintError(`Mint ${operation.mintUrl} is not trusted`);
         }
-        const metadata = await this.loadMintMetadata(operation.mintUrl);
+        const metadata = await this.mintMetadataRefresh.refreshAndCommitIfStale(operation.mintUrl);
         const keys = this.activeKeys(metadata, operation.unit);
         const seed = await this.loadSeed();
         const plan = handler.prepare({
@@ -301,7 +301,10 @@ export class SendOperationService {
     if (!operation.outputData) {
       throw new Error('Missing output data for swap operation');
     }
-    const remote = this.remote.open(await this.loadMintMetadata(operation.mintUrl), operation.unit);
+    const remote = this.remote.open(
+      await this.mintMetadataRefresh.refreshAndCommitIfStale(operation.mintUrl),
+      operation.unit,
+    );
     const begun = await this.transactions.beginExecution({
       operationId: operation.id,
       updatedAt: Date.now(),
@@ -533,7 +536,7 @@ export class SendOperationService {
           reason,
         });
       } else if (operation.state === 'pending' && operation.method === 'default') {
-        const metadata = await this.loadMintMetadata(operation.mintUrl);
+        const metadata = await this.mintMetadataRefresh.refreshAndCommitIfStale(operation.mintUrl);
         const remote = this.remote.open(metadata, operation.unit);
         const begun = await this.transactions.beginReclaim({
           operationId,
@@ -729,7 +732,10 @@ export class SendOperationService {
     const inputProofs = latest.inputProofSecrets.map(
       (secret) => inputBySecret.get(secret) as Proof,
     );
-    const remote = this.remote.open(await this.loadMintMetadata(latest.mintUrl), latest.unit);
+    const remote = this.remote.open(
+      await this.mintMetadataRefresh.refreshAndCommitIfStale(latest.mintUrl),
+      latest.unit,
+    );
     const inputStates = await remote.checkProofStates(inputProofs);
     if (inputStates.length !== inputProofs.length) {
       this.logger?.warn(
@@ -886,7 +892,10 @@ export class SendOperationService {
     secrets: string[],
     unit: string,
   ): Promise<CashuProofState[]> {
-    const remote = this.remote.open(await this.loadMintMetadata(mintUrl), unit);
+    const remote = this.remote.open(
+      await this.mintMetadataRefresh.refreshAndCommitIfStale(mintUrl),
+      unit,
+    );
     const proofInputs = await this.proofQueries.getProofsBySecrets(mintUrl, secrets);
     if (proofInputs.length !== secrets.length) {
       throw new ProofValidationError('Cannot check proof states: missing proof metadata');
@@ -1011,17 +1020,6 @@ export class SendOperationService {
       });
       this.logger?.info('Send operation finalized', { operationId: result.operation.id });
     }
-  }
-
-  private async loadMintMetadata(mintUrl: string): Promise<MintMetadata> {
-    const cached = await this.mintQueries.getMetadata(mintUrl);
-    if (cached && cached.mint.updatedAt >= Math.floor(Date.now() / 1000) - MINT_REFRESH_TTL_S)
-      return cached;
-    const observation = await this.remote.fetchMintMetadata(mintUrl, cached?.keysets ?? []);
-    const refreshed = await this.transactions.refreshMintMetadata(observation);
-    await this.publishCommittedEvent('mint:metadata-refreshed', { mintUrl });
-    await this.publishCommittedEvent('mint:updated', refreshed);
-    return refreshed;
   }
 
   private activeKeys(metadata: MintMetadata, unit: string) {

@@ -247,14 +247,4 @@ describe('CashuSendRemote', () => {
       `${mintUrl}/v1/checkstate`,
     ]);
   });
-
-  it('returns refreshed metadata while reusing immutable known keys', async () => {
-    const { remote, mint } = environment();
-    const result = await remote.fetchMintMetadata(mintUrl, metadata.keysets);
-    expect(result.mintInfo).toEqual(testMintInfo);
-    expect(result.keysets[0]!.keypairs).toEqual(keys.keys);
-    expect(mint.fetchKeysForId).not.toHaveBeenCalled();
-    await remote.fetchMintMetadata(mintUrl, []);
-    expect(mint.fetchKeysForId).toHaveBeenCalledWith(mintUrl, keys.id);
-  });
 });

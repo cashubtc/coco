@@ -1,3 +1,7 @@
+import {
+  createMintServiceForMetadata,
+  createMintMetadataRemoteDouble,
+} from '../fixtures/MintMetadataRefresh.ts';
 import { testMintInfo, testMintKeypairs, testMintKeysetId } from '../fixtures/MintMetadata.ts';
 import { StoredMintQueries } from '../../mints/MintMetadata.ts';
 import { deserializeOutputData } from '../../utils.ts';
@@ -59,6 +63,7 @@ describe('SendOperationService', () => {
   let sendOpRepo: MemorySendOperationRepository;
   let proofRepo: MemoryProofRepository;
   let mintQueries: StoredMintQueries;
+  let metadataRemote: ReturnType<typeof createMintMetadataRemoteDouble>;
   let remote: ReturnType<typeof createSendRemoteDouble>;
   let eventBus: EventBus<CoreEvents>;
   let logger: Logger;
@@ -90,6 +95,7 @@ describe('SendOperationService', () => {
       proofQueries: proofRepo,
       transactions: sendTransactions,
       mintQueries,
+      mintMetadataRefresh: createMintServiceForMetadata(repositories, metadataRemote, eventBus),
       remote,
       loadSeed,
       eventBus,
@@ -175,6 +181,7 @@ describe('SendOperationService', () => {
     });
     mintQueries = new StoredMintQueries(repositories.mintRepository, repositories.keysetRepository);
     remote = createSendRemoteDouble();
+    metadataRemote = createMintMetadataRemoteDouble();
     loadSeed = mock(async () => new Uint8Array(32).fill(1));
 
     logger = {
@@ -726,7 +733,7 @@ describe('SendOperationService', () => {
     const mint = await repositories.mintRepository.getMintByUrl(mintUrl);
     await repositories.mintRepository.updateMint({ ...mint, updatedAt: 0 });
     await proofRepo.saveProofs(mintUrl, [makeProof('metadata-input', 10)]);
-    remote.fetchMintMetadata.mockImplementation(async () => {
+    metadataRemote.fetchMintMetadata.mockImplementation(async () => {
       expect(repositories.transactionOpen).toBe(false);
       return {
         mintUrl,
@@ -747,7 +754,33 @@ describe('SendOperationService', () => {
     expect(prepared.state).toBe('prepared');
     expect(observedCommitted).toBe(true);
     expect(repositories.transactionCount).toBe(2);
-    expect(remote.fetchMintMetadata).toHaveBeenCalledTimes(1);
+    expect(metadataRemote.fetchMintMetadata).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains an independently committed metadata refresh when Send preparation fails', async () => {
+    const mint = await repositories.mintRepository.getMintByUrl(mintUrl);
+    await repositories.mintRepository.updateMint({ ...mint, updatedAt: 0 });
+    await proofRepo.saveProofs(mintUrl, [makeProof('refresh-before-failure', 10)]);
+    metadataRemote.fetchMintMetadata.mockImplementation(async () => ({
+      mintUrl,
+      mintInfo: { ...testMintInfo, name: 'Independent refresh' },
+      keysets: await repositories.keysetRepository.getKeysetsByMintUrl(mintUrl),
+      observedAt: Math.floor(Date.now() / 1000),
+    }));
+    loadSeed.mockImplementationOnce(async () => {
+      await repositories.mintRepository.setMintTrusted(mintUrl, false);
+      return new Uint8Array(32).fill(1);
+    });
+    const intent = await service.init(mintUrl, unitAmount(10));
+    await expect(service.prepare(intent)).rejects.toThrow('not trusted');
+    expect((await repositories.mintRepository.getMintByUrl(mintUrl)).mintInfo.name).toBe(
+      'Independent refresh',
+    );
+    expect(await sendOpRepo.getById(intent.id)).toBeNull();
+    expect(
+      (await proofRepo.getProofBySecret(mintUrl, 'refresh-before-failure'))?.usedByOperationId,
+    ).toBeUndefined();
+    expect(repositories.transactionCount).toBe(2);
   });
 
   it('commits the reclaim plan before mint I/O and publishes the complete terminal result', async () => {

@@ -1,4 +1,3 @@
-import type { MintMetadata, MintMetadataObservation } from '@core/mints/MintMetadata.ts';
 import type { CoreTransactionRunner } from '../CoreTransaction.ts';
 import type {
   AppliedSwapResult,
@@ -25,7 +24,6 @@ import type {
 } from './types.ts';
 
 export interface SendTransactions {
-  refreshMintMetadata(observation: MintMetadataObservation): Promise<MintMetadata>;
   prepare(input: PrepareSendInput): Promise<PreparedSendResult>;
   executeExact(input: ExecuteExactSendInput): Promise<ExecuteExactSendResult>;
   beginExecution(input: BeginSwapExecutionInput): Promise<BegunSwapExecution>;
@@ -42,10 +40,6 @@ export interface SendTransactions {
 
 export class CoreSendTransactions implements SendTransactions {
   constructor(private readonly runner: CoreTransactionRunner) {}
-
-  refreshMintMetadata(observation: MintMetadataObservation): Promise<MintMetadata> {
-    return this.runner.run((transaction) => transaction.mintMetadata.applyObservation(observation));
-  }
 
   prepare(input: PrepareSendInput): Promise<PreparedSendResult> {
     return this.runner.run((transaction) => transaction.sends.prepare(input));

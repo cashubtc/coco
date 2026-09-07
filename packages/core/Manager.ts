@@ -1,4 +1,6 @@
 import type { OutputDataCreator } from '@cashu/cashu-ts';
+import { CashuMintMetadataRemote } from './infra/CashuMintMetadataRemote.ts';
+import { CoreMintMetadataTransactions } from './transactions/mints/MintMetadataTransactions.ts';
 import { StoredMintQueries } from './mints/MintMetadata.ts';
 import { CashuSendRemote } from './infra/handlers/send/CashuSendRemote.ts';
 import type {
@@ -917,17 +919,26 @@ export class Manager {
     const keyRingLogger = this.getChildLogger('KeyRingService');
     const historyLogger = this.getChildLogger('HistoryService');
     const tokenLogger = this.getChildLogger('TokenService');
-    const mintService = new MintService(
-      repositories.mintRepository,
-      repositories.keysetRepository,
-      this.mintAdapter,
-      mintLogger,
-      this.eventBus,
-    );
     const seedService = new SeedService(seedGetter);
     const coreTransactionRunner = new RepositoryCoreTransactionRunner(
       repositories,
       createCoreTransactionModuleFactory(this.outputDataCreator),
+    );
+    const mintQueries = new StoredMintQueries(
+      repositories.mintRepository,
+      repositories.keysetRepository,
+    );
+    const mintService = new MintService(
+      repositories.mintRepository,
+      repositories.keysetRepository,
+      this.mintAdapter,
+      {
+        queries: mintQueries,
+        remote: new CashuMintMetadataRemote(this.mintAdapter),
+        transactions: new CoreMintMetadataTransactions(coreTransactionRunner),
+      },
+      mintLogger,
+      this.eventBus,
     );
     const keyRingTransactions = new CoreKeyRingTransactions(coreTransactionRunner);
     const keypairDerivation = new KeypairDerivation(() => seedService.getSeed());
@@ -987,10 +998,8 @@ export class Manager {
       operationQueries: repositories.sendOperationRepository,
       proofQueries: repositories.proofRepository,
       transactions: sendTransactions,
-      mintQueries: new StoredMintQueries(
-        repositories.mintRepository,
-        repositories.keysetRepository,
-      ),
+      mintQueries,
+      mintMetadataRefresh: mintService,
       remote: new CashuSendRemote(
         this.mintAdapter,
         this.mintRequestProvider,

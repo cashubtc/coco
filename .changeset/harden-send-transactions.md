@@ -20,3 +20,8 @@ release another workflow’s inputs.
 Use the shared transaction naming convention consistently: `*Input` argument types, `input`
 parameters, and `work` runner callbacks. Keep `Scoped*Commands` for mutations within an existing
 transaction and `SendOperationService` for the durable saga coordinator.
+
+Share mint metadata refresh through the explicitly committing
+`MintService.refreshAndCommitIfStale` action and a dedicated metadata transaction gateway. Keep
+freshness policy, fetching, and post-commit mint events out of Send; existing metadata refresh
+callers reuse the same action.

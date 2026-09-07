@@ -1,6 +1,5 @@
 import type { Proof, ProofState } from '@cashu/cashu-ts';
-import type { MintMetadata, MintMetadataObservation } from '@core/mints/MintMetadata.ts';
-import type { Keyset } from '@core/models/Keyset.ts';
+import type { MintMetadata } from '@core/mints/MintMetadata.ts';
 import type { SerializedOutputData } from '@core/utils.ts';
 import type { SwapTransportRequest } from '@core/transactions/send/types.ts';
 
@@ -13,9 +12,5 @@ export interface SendRemoteSession {
 }
 
 export interface SendRemote {
-  fetchMintMetadata(
-    mintUrl: string,
-    knownKeysets: readonly Keyset[],
-  ): Promise<MintMetadataObservation>;
   open(metadata: MintMetadata, unit: string): SendRemoteSession;
 }

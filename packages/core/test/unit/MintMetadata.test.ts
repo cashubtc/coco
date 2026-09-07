@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { StoredMintQueries } from '../../mints/MintMetadata.ts';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
-import { CoreSendTransactions } from '../../transactions/send/SendTransactions.ts';
+import { CoreMintMetadataTransactions } from '../../transactions/mints/MintMetadataTransactions.ts';
 import { overrideTransactions } from '../overrideTransactions.ts';
 import { testMintInfo, testMintKeypairs, testMintKeysetId } from '../fixtures/MintMetadata.ts';
 
@@ -30,7 +30,7 @@ const observation = {
   observedAt: 20,
 };
 
-describe('Mint metadata in Send preflight', () => {
+describe('Mint metadata queries and transactions', () => {
   it('returns missing or stale stored metadata without opening a transaction or refreshing it', async () => {
     const repositories = new MemoryRepositories();
     const queries = new StoredMintQueries(
@@ -51,10 +51,10 @@ describe('Mint metadata in Send preflight', () => {
     const repositories = new MemoryRepositories();
     await repositories.mintRepository.addNewMint({ ...original, trusted: false });
     await repositories.keysetRepository.addKeyset(keyset);
-    const transactions = new CoreSendTransactions(
+    const transactions = new CoreMintMetadataTransactions(
       new RepositoryCoreTransactionRunner(repositories),
     );
-    const result = await transactions.refreshMintMetadata(observation);
+    const result = await transactions.applyObservation(observation);
     expect(result.mint.trusted).toBe(false);
     expect(result.mint.mintInfo.name).toBe('Refreshed');
     expect(result.keysets[0]?.active).toBe(false);
@@ -72,8 +72,10 @@ describe('Mint metadata in Send preflight', () => {
         return fn(scope);
       }),
     );
-    const transactions = new CoreSendTransactions(new RepositoryCoreTransactionRunner(controlled));
-    await expect(transactions.refreshMintMetadata(observation)).rejects.toThrow(
+    const transactions = new CoreMintMetadataTransactions(
+      new RepositoryCoreTransactionRunner(controlled),
+    );
+    await expect(transactions.applyObservation(observation)).rejects.toThrow(
       'metadata write failed',
     );
     expect((await repositories.mintRepository.getMintByUrl(mintUrl)).updatedAt).toBe(10);

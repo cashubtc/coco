@@ -23,10 +23,15 @@ cancellation, pending default-token reclaim, and cleanup to the current transact
 - `ScopedSendCommands` composes proof reservation and settlement, Output Allocation, and operation
   persistence inside one adapter scope. Shared proof and output implementations live under
   `transactions/scoped/`; selection, fee calculation, and output validation are reusable pure logic.
-- `MintQueries` and `ProofQueries` read existing storage. Mint metadata refresh is explicit:
-  `SendRemote` returns an observation, Send's gateway commits the cache through shared scoped mint
-  metadata commands, and the coordinator publishes events after commit. Preparation rechecks trust
-  and active keys in the transaction that authorizes the reservation.
+- `MintQueries` and `ProofQueries` read existing storage. Send receives only mint trust queries and
+  `Pick<MintService, 'refreshAndCommitIfStale'>`. The shared action owns freshness policy,
+  `CashuMintMetadataRemote` fetching, `MintMetadataTransactions.applyObservation`, and post-commit
+  mint events. Its independent commit survives a later Send failure. `ensureUpdatedMint` delegates
+  to the same action for legacy callers. Send's gateway and remote interface no longer own metadata
+  refresh. Preparation still rechecks trust and active keys in its reservation transaction.
+- Existing MintService add, forced-update, trust, and delete paths retain their legacy dependencies;
+  their full migration is separate. The new shared action only acquires Queries, remote observation,
+  its own gateway, and event publication through its implementation dependencies.
 - `CashuSendRemote` constructs a Wallet Instance from committed metadata and performs swap,
   proof-state checks, and reclaim without persistence authority. Remote output restoration and
   unblinding are shared with remaining `ProofService` callers; persistence stays with the caller.
@@ -45,7 +50,7 @@ owning transaction.
 Method-specific argument objects use `*Input` types and the parameter name `input`, such as
 `prepare(input: PrepareSendInput)` and `allocate(input: AllocateOutputsInput)`. Transaction runner
 callbacks use `work`. Existing domain values retain their specific names, such as
-`refreshMintMetadata(observation)` and `cleanupLegacyInit(operationId)`.
+`applyObservation(observation)` and `cleanupLegacyInit(operationId)`.
 
 ## Persisted request compatibility
 
@@ -82,3 +87,8 @@ post-commit events, exact replay, ambiguous outcomes, reclaim allocation/result 
 cleanup. Protocol tests exercise the real cashu-ts client with in-memory mint responses for default
 and P2PK swaps, reclaim, and output restoration. Storage contracts cover request immutability,
 conditional revisions, and reclaim-plan round trips; migration tests retain existing recovery data.
+
+Shared metadata action tests cover fresh-cache reuse, normalized URLs, remote I/O outside
+transactions, atomic refresh failure, post-commit events and listener failures, and a refresh
+remaining committed after Send preparation fails. Uniform rejection of nested Wallet transactions
+is follow-up work; the action must never be injected into gateways or scoped commands.

@@ -1,3 +1,4 @@
+import { createMintServiceForMetadata } from '../fixtures/MintMetadataRefresh.ts';
 import { testMintInfo, testMintKeypairs, testMintKeysetId } from '../fixtures/MintMetadata.ts';
 import { StoredMintQueries } from '../../mints/MintMetadata.ts';
 import { deserializeOutputData } from '../../utils.ts';
@@ -112,6 +113,7 @@ describe('SendOperationService executing recovery', () => {
         repositories.mintRepository,
         repositories.keysetRepository,
       ),
+      mintMetadataRefresh: createMintServiceForMetadata(repositories, undefined, serviceEvents),
       remote,
       loadSeed: async () => new Uint8Array(32),
       eventBus: serviceEvents,

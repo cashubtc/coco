@@ -12,8 +12,5 @@ export function createSendRemoteDouble() {
   return {
     ...session,
     open: mock<SendRemote['open']>(() => session),
-    fetchMintMetadata: mock<SendRemote['fetchMintMetadata']>(async () => {
-      throw new Error('Unexpected mint metadata refresh');
-    }),
   };
 }
