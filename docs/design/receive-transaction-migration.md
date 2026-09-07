@@ -62,6 +62,11 @@ Payment Request source metadata is preserved. Atomic parent/attempt/child creati
 to the Payment Request migration, as specified by TRANSACTION_DESIGN and ADR-0011. Other legacy
 workflows still use their existing Services; this change does not alter the architecture contract.
 
+Payment Request claim and pre-child recovery prepare the child before saving its ID on the attempt.
+If that link write fails, the validating attempt remains recoverable through the child's `attemptId`
+source metadata. A crash after linking therefore always leaves a durable child, and a crash before
+linking can reuse the prepared child without redelivery or another output allocation.
+
 ## Verification
 
 Coordinator tests use real memory-backed gateways and configurable remote adapters. Coverage
