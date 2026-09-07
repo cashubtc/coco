@@ -36,9 +36,9 @@ describe('RepositoryCoreTransactionRunner', () => {
     const repositories = new MemoryRepositories();
     let opens = 0;
     const runner = new RepositoryCoreTransactionRunner(
-      overrideTransactions(repositories, (command) => {
+      overrideTransactions(repositories, (work) => {
         opens++;
-        return repositories.withTransaction(command);
+        return repositories.withTransaction(work);
       }),
     );
     const derivation = new KeypairDerivation(async () => new Uint8Array(64));
@@ -84,7 +84,7 @@ describe('RepositoryCoreTransactionRunner', () => {
     const repositories = new MemoryRepositories();
     let boundRepositories!: RepositoryTransactionScope;
     const runner = new RepositoryCoreTransactionRunner(
-      overrideTransactions(repositories, (command) =>
+      overrideTransactions(repositories, (work) =>
         repositories.withTransaction((scope) => {
           const { keyRingRepository, ...otherRepositories } = scope;
           // Own methods on frozen objects require the wrapper to use a separate proxy target.
@@ -101,7 +101,7 @@ describe('RepositoryCoreTransactionRunner', () => {
               return this.#keyRingRepository;
             }
           }
-          return command(Object.assign(new GetterScope(), otherRepositories));
+          return work(Object.assign(new GetterScope(), otherRepositories));
         }),
       ),
       (scope) => {
@@ -111,8 +111,8 @@ describe('RepositoryCoreTransactionRunner', () => {
         });
       },
     );
-    const command = await new KeypairDerivation(async () => new Uint8Array(64)).prepare('p2pk');
-    const allocated = await new CoreKeyRingTransactions(runner).allocate(command);
+    const input = await new KeypairDerivation(async () => new Uint8Array(64)).prepare('p2pk');
+    const allocated = await new CoreKeyRingTransactions(runner).allocate(input);
 
     expect(allocated.derivationIndex).toBe(0);
     expect(await repositories.keyRingRepository.getAllPersistedKeyPairs('p2pk')).toEqual([
@@ -130,10 +130,10 @@ describe('RepositoryCoreTransactionRunner', () => {
     let attempts = 0;
     const conflictingRepositories = overrideTransactions(
       repositories,
-      async <T>(command: (scope: RepositoryTransactionScope) => Promise<T>) =>
+      async <T>(work: (scope: RepositoryTransactionScope) => Promise<T>) =>
         repositories.withTransaction(async (scope) => {
           attempts++;
-          const result = await command(scope);
+          const result = await work(scope);
           if (attempts < 3) {
             throw new RepositoryTransactionConflictError('transient conflict');
           }
@@ -164,7 +164,7 @@ describe('RepositoryCoreTransactionRunner', () => {
     let busy = true;
     let attempts = 0;
     const runner = new RepositoryCoreTransactionRunner(
-      overrideTransactions(repositories, async (command) => {
+      overrideTransactions(repositories, async (work) => {
         attempts++;
         if (busy) {
           if (attempts === 1)
@@ -173,7 +173,7 @@ describe('RepositoryCoreTransactionRunner', () => {
             }, 0);
           throw new RepositoryTransactionConflictError();
         }
-        return repositories.withTransaction(command);
+        return repositories.withTransaction(work);
       }),
     );
 
@@ -225,7 +225,7 @@ describe('RepositoryCoreTransactionRunner', () => {
       let attempts = 0;
       let ended = 0;
       let writesFinished = 0;
-      const controlled = overrideTransactions(repositories, async (command) => {
+      const controlled = overrideTransactions(repositories, async (work) => {
         attempts++;
         try {
           return await repositories.withTransaction((scope) => {
@@ -243,7 +243,7 @@ describe('RepositoryCoreTransactionRunner', () => {
                 throw failure;
               };
             }
-            return command(scope);
+            return work(scope);
           });
         } finally {
           ended++;
@@ -297,7 +297,7 @@ describe('RepositoryCoreTransactionRunner', () => {
   it('drains started commands before committing when the callback returns early', async () => {
     const repositories = new MemoryRepositories();
     const runner = new RepositoryCoreTransactionRunner(repositories);
-    const command = await new KeypairDerivation(async () => new Uint8Array(64)).prepare(
+    const input = await new KeypairDerivation(async () => new Uint8Array(64)).prepare(
       'nut20_mint_quote',
     );
     const pending: Promise<unknown>[] = [];
@@ -305,7 +305,7 @@ describe('RepositoryCoreTransactionRunner', () => {
     await runner.run(async (scope) => {
       // The runner owns commands already started, even if the caller omits its aggregate await.
       pending.push(
-        scope.keypairs.allocate(command),
+        scope.keypairs.allocate(input),
         scope.keypairs.importP2pk(importedKey('independent')),
       );
     });

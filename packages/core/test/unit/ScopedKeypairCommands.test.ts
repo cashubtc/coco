@@ -189,12 +189,12 @@ describe('ScopedKeypairCommands transaction scope', () => {
   it('rolls back a persisted key if advancing the high-water mark fails', async () => {
     const repositories = new MemoryRepositories();
     const first = await allocate(repositories, 'p2pk');
-    const failing = overrideTransactions(repositories, (command) =>
+    const failing = overrideTransactions(repositories, (work) =>
       repositories.withTransaction((scope) => {
         scope.keyRingRepository.setLastAllocatedIndex = async () => {
           throw new Error('high-water write failed');
         };
-        return command(scope);
+        return work(scope);
       }),
     );
     await expect(allocate(failing, 'p2pk')).rejects.toThrow('high-water write failed');

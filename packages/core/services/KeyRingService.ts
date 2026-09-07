@@ -38,8 +38,8 @@ export class KeyRingService {
       dumpSecretKey?: boolean;
     },
   ): Promise<{ publicKeyHex: string } | Keypair> {
-    const command = await this.derivation.prepare(purpose);
-    const keyPair = await this.transactions.allocate(command);
+    const input = await this.derivation.prepare(purpose);
+    const keyPair = await this.transactions.allocate(input);
     if (options?.dumpSecretKey) {
       return keyPair;
     }

@@ -15,6 +15,11 @@ nested transactions. Coordinators perform asynchronous preflight and remote mint
 transaction and publish live events after commit. Authoritative reads and writes share the
 transaction scope, preserving atomicity across supported adapters, including IndexedDB.
 
+`Scoped*Commands` names interfaces for state-changing actions within an existing transaction.
+Method-specific argument objects use `*Input` types and the parameter name `input`; transaction
+runner callbacks are named `work`. These names distinguish actions from their inputs and the work
+that composes them.
+
 ## Considered Options
 
 Broad Service dependencies and transaction-scoped Service clones obscure effects and transaction

@@ -11,7 +11,7 @@ describe('CoreTransaction with SQLite', () => {
     const repositories = new SqlStorageRepositories({ database: new SqliteDb({ database }) });
     await repositories.init();
     const derivation = new KeypairDerivation(async () => new Uint8Array(64));
-    const command = await derivation.prepare('nut20_mint_quote');
+    const input = await derivation.prepare('nut20_mint_quote');
     const importDeriver = await derivation.prepare('p2pk');
     const imported = { ...importDeriver.derive(100), purpose: 'p2pk' as const };
     database.exec(`
@@ -25,7 +25,7 @@ describe('CoreTransaction with SQLite', () => {
     try {
       await expect(
         runner.run((scope) => {
-          pending = [scope.keypairs.allocate(command), scope.keypairs.importP2pk(imported)];
+          pending = [scope.keypairs.allocate(input), scope.keypairs.importP2pk(imported)];
           return Promise.all(pending);
         }),
       ).rejects.toThrow('import failed');
@@ -39,7 +39,7 @@ describe('CoreTransaction with SQLite', () => {
       expect(
         await repositories.keyRingRepository.getLastAllocatedIndex('nut20_mint_quote'),
       ).toBeNull();
-      await expect(runner.run((scope) => scope.keypairs.allocate(command))).resolves.toMatchObject({
+      await expect(runner.run((scope) => scope.keypairs.allocate(input))).resolves.toMatchObject({
         derivationIndex: 0,
       });
     } finally {
