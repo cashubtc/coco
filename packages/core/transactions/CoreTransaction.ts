@@ -1,3 +1,7 @@
+import {
+  RepositoryReceiveCommands,
+  type ScopedReceiveCommands,
+} from './scoped/receive/ScopedReceiveCommands.ts';
 import { OutputData, type OutputDataCreator } from '@cashu/cashu-ts';
 import type { Repositories, RepositoryTransactionScope } from '@core/repositories';
 import { RepositoryTransactionConflictError } from '@core/repositories';
@@ -33,6 +37,7 @@ export interface CoreTransaction {
   readonly proofs: ScopedProofCommands;
   readonly outputs: ScopedOutputCommands;
   readonly sends: ScopedSendCommands;
+  readonly receives: ScopedReceiveCommands;
 }
 
 export interface CoreTransactionRunner {
@@ -63,6 +68,12 @@ export function createCoreTransactionModuleFactory(
       keypairs: new RepositoryKeypairCommands(repositories.keyRingRepository),
       proofs,
       outputs,
+      receives: new RepositoryReceiveCommands(
+        repositories.receiveOperationRepository,
+        proofs,
+        outputs,
+        mintMetadata,
+      ),
       sends: new RepositorySendCommands(
         repositories.sendOperationRepository,
         proofs,

@@ -1,4 +1,4 @@
-import { Amount } from '@cashu/cashu-ts';
+import { Amount, type OutputDataLike } from '@cashu/cashu-ts';
 import { normalizeUnit } from '@core/amounts.ts';
 import { ProofValidationError } from '@core/models/Error.ts';
 import type { CoreProof } from '@core/types.ts';
@@ -9,7 +9,7 @@ export function assertOutputProofs(command: {
   unit: string;
   outputData: SerializedOutputData;
   kind: 'keep' | 'send';
-  state: CoreProof['state'];
+  state: CoreProof['state'] | readonly CoreProof['state'][];
   proofs: CoreProof[];
   createdByOperationId?: string;
 }): void {
@@ -41,10 +41,19 @@ export function assertOutputProofs(command: {
       !Amount.from(proof.amount).equals(output.amount) ||
       proof.mintUrl !== command.mintUrl ||
       normalizeUnit(proof.unit) !== normalizeUnit(command.unit) ||
-      proof.state !== state ||
+      !(typeof state === 'string' ? proof.state === state : state.includes(proof.state)) ||
       proof.createdByOperationId !== command.createdByOperationId
     ) {
       throw new ProofValidationError(`Swap ${kind} proofs do not match allocated outputs`);
     }
   }
+}
+
+/** Pin unblinding to the committed plan even if another keyset is now preferred. */
+export function getOutputKeysetId(outputs: readonly OutputDataLike[]): string {
+  const keysetId = outputs[0]?.blindedMessage.id;
+  if (!keysetId || outputs.some((output) => output.blindedMessage.id !== keysetId)) {
+    throw new ProofValidationError('Outputs must specify a single non-empty keyset id');
+  }
+  return keysetId;
 }

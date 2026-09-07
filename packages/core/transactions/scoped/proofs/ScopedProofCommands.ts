@@ -1,4 +1,5 @@
-import { selectProofsRGLI, type Amount, type SelectProofs } from '@cashu/cashu-ts';
+import { sameCoreProof } from '@core/proofs/ProofIdentity.ts';
+import { selectProofsRGLI, type Amount, type SelectProofs, type Proof } from '@cashu/cashu-ts';
 import { normalizeUnit } from '@core/amounts.ts';
 import { ProofValidationError } from '@core/models/Error.ts';
 import { createKeyChain } from '@core/proofs/KeysetSelection.ts';
@@ -30,7 +31,14 @@ export interface ScopedProofCommands extends ProofQueries {
     fee: Amount;
     needsSwap: boolean;
   }>;
-  getFee(mintUrl: string, unit: string, proofs: readonly CoreProof[]): Promise<Amount>;
+  getFee(mintUrl: string, unit: string, proofs: readonly Proof[]): Promise<Amount>;
+  /** Reconcile issued outputs without claiming or spending incoming token proofs. */
+  reconcileIssued(command: {
+    mintUrl: string;
+    unit: string;
+    operationId: string;
+    proofs: CoreProof[];
+  }): Promise<CoreProof[]>;
   getOwned(command: OwnedProofs): Promise<CoreProof[]>;
   markInflight(command: Omit<OwnedProofs, 'state' | 'ownership'>): Promise<void>;
   settleSpend(command: OwnedProofs & { outputs: CoreProof[] }): Promise<void>;
@@ -64,11 +72,54 @@ export class RepositoryProofCommands implements ScopedProofCommands {
     return { ...selected, proofs: selected.proofs as CoreProof[] };
   }
 
-  async getFee(mintUrl: string, unit: string, proofs: readonly CoreProof[]): Promise<Amount> {
+  async getFee(mintUrl: string, unit: string, proofs: readonly Proof[]): Promise<Amount> {
     return calculateProofFee(
       proofs,
       createKeyChain(mintUrl, unit, await this.keysets.getKeysetsByMintUrl(mintUrl)),
     );
+  }
+
+  async reconcileIssued(command: {
+    mintUrl: string;
+    unit: string;
+    operationId: string;
+    proofs: CoreProof[];
+  }): Promise<CoreProof[]> {
+    if (
+      new Set(command.proofs.map((proof) => proof.secret)).size !== command.proofs.length ||
+      command.proofs.some(
+        (proof) =>
+          proof.mintUrl !== command.mintUrl ||
+          normalizeUnit(proof.unit) !== normalizeUnit(command.unit) ||
+          proof.createdByOperationId !== command.operationId ||
+          (proof.state !== 'ready' && proof.state !== 'spent'),
+      )
+    ) {
+      throw new ProofValidationError('Issued proofs have invalid identity or state');
+    }
+    const existing = await this.proofs.getProofsBySecrets(
+      command.mintUrl,
+      command.proofs.map((proof) => proof.secret),
+    );
+    const bySecret = new Map(command.proofs.map((proof) => [proof.secret, proof]));
+    for (const proof of existing) {
+      const candidate = bySecret.get(proof.secret);
+      if (!candidate || !sameCoreProof(proof, candidate)) {
+        throw new ProofValidationError(
+          `Issued output ${proof.secret} conflicts with an existing proof`,
+        );
+      }
+    }
+    const existingSecrets = new Set(existing.map((proof) => proof.secret));
+    const missing = command.proofs.filter((proof) => !existingSecrets.has(proof.secret));
+    if (missing.length > 0) await this.proofs.saveProofs(command.mintUrl, missing);
+    // A complete Restore may establish that legacy partially saved outputs were spent.
+    // Ready observations must never reset a proof's later local state or reservation.
+    const spent = existing
+      .filter((proof) => bySecret.get(proof.secret)?.state === 'spent')
+      .map((proof) => proof.secret);
+    if (spent.length > 0) await this.proofs.setProofState(command.mintUrl, spent, 'spent');
+    return missing;
   }
 
   async getOwned(command: OwnedProofs): Promise<CoreProof[]> {

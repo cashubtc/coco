@@ -1,3 +1,4 @@
+import { createReceiveEnvironment, receiveKeysetId } from '../fixtures/ReceiveEnvironment.ts';
 import { Amount } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect, mock } from 'bun:test';
 import { WalletApi } from '../../api/WalletApi';
@@ -8,7 +9,7 @@ import { WalletRestoreService } from '../../services/WalletRestoreService';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import { UnknownMintError } from '../../models/Error';
-import { getEncodedToken, OutputData, PaymentRequest } from '@cashu/cashu-ts';
+import { getEncodedToken, PaymentRequest } from '@cashu/cashu-ts';
 import type { Proof } from '@cashu/cashu-ts';
 import { ReceiveOperationService } from '../../operations/receive/ReceiveOperationService';
 import { MemoryProofRepository, MemoryReceiveOperationRepository } from '@core/repositories';
@@ -29,7 +30,7 @@ describe('WalletApi - Trust Enforcement', () => {
   let mintAdapter: MintAdapter;
 
   const testMintUrl = 'https://mint.test';
-  const keysetId = '009a1f293253e41e';
+  const keysetId = receiveKeysetId;
   const testProofs: Proof[] = [
     {
       id: keysetId,
@@ -38,16 +39,6 @@ describe('WalletApi - Trust Enforcement', () => {
       C: '02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9',
     } as Proof,
   ];
-
-  const makeOutputData = (secrets: string[]): OutputData[] =>
-    secrets.map(
-      (secret) =>
-        new OutputData(
-          { amount: Amount.from(10), id: keysetId, B_: `B_${secret}` },
-          BigInt(1),
-          new TextEncoder().encode(secret),
-        ),
-    );
 
   const encodeLegacyTokenWithoutUnit = (token: { mint: string; proofs: Proof[] }): string => {
     const legacyToken = {
@@ -73,7 +64,7 @@ describe('WalletApi - Trust Enforcement', () => {
       checkProofStates: mock(() => Promise.resolve([])),
     }) as unknown as MintAdapter;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     eventBus = new EventBus<CoreEvents>();
 
     mockMintService = {
@@ -108,12 +99,13 @@ describe('WalletApi - Trust Enforcement', () => {
           receive: mock(async () => []),
           getFeesForProofs: mock(() => Amount.zero()),
         },
+        keys: { id: keysetId, unit: 'sat', keys: { 1: 'unused' } },
       })),
     };
 
     mockProofService = {
       createOutputsAndIncrementCounters: mock(async () => ({
-        keep: makeOutputData(['out-1', 'out-2']),
+        keep: [],
         send: [],
       })),
       getBalancesByMint: mock(async () => ({
@@ -162,21 +154,18 @@ describe('WalletApi - Trust Enforcement', () => {
 
     mockWalletRestoreService = {};
 
-    receiveOpRepo = new MemoryReceiveOperationRepository();
-    proofReceiveRepo = new MemoryProofRepository();
     tokenService = new TokenService(mockMintService);
-    mintAdapter = createMockMintAdapter();
-
-    receiveOperationService = new ReceiveOperationService(
-      receiveOpRepo,
-      proofReceiveRepo,
-      mockProofService,
-      mockMintService,
-      mockWalletService,
-      mintAdapter,
-      tokenService,
+    const environment = await createReceiveEnvironment();
+    receiveOpRepo = environment.repositories
+      .receiveOperationRepository as MemoryReceiveOperationRepository;
+    proofReceiveRepo = environment.repositories.proofRepository as MemoryProofRepository;
+    receiveOperationService = environment.buildService({
+      mintQueries: {
+        isTrustedMint: (mintUrl) => mockMintService.isTrustedMint(mintUrl),
+        getMetadata: (mintUrl) => environment.dependencies.mintQueries.getMetadata(mintUrl),
+      },
       eventBus,
-    );
+    });
 
     walletApi = new WalletApi(
       mockMintService,
@@ -229,10 +218,7 @@ describe('WalletApi - Trust Enforcement', () => {
       // Should not throw
       await walletApi.receive(token);
 
-      expect(mockWalletService.getWalletWithActiveKeysetId).toHaveBeenCalledWith(
-        testMintUrl,
-        'sat',
-      );
+      expect(await receiveOpRepo.getByState('finalized')).toHaveLength(1);
     });
 
     it('should check trust status before processing token', async () => {
@@ -274,10 +260,7 @@ describe('WalletApi - Trust Enforcement', () => {
       // Should not throw
       await walletApi.receive(encodedToken);
 
-      expect(mockWalletService.getWalletWithActiveKeysetId).toHaveBeenCalledWith(
-        testMintUrl,
-        'sat',
-      );
+      expect(await receiveOpRepo.getByState('finalized')).toHaveLength(1);
     });
 
     it('should provide clear error message for untrusted mints', async () => {

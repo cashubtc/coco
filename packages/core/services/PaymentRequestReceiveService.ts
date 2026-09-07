@@ -38,8 +38,8 @@ import type {
 import type {
   PaymentRequestReceiveAttemptRepository,
   PaymentRequestReceiveOperationRepository,
-  ReceiveOperationRepository,
 } from '../repositories';
+import type { ReceiveOperationQueries } from '../operations/receive/ReceiveOperationQueries.ts';
 import { computeYHexForSecrets, generateSubId, normalizeMintUrl } from '../utils';
 import { OperationIdLock } from '../operations/OperationIdLock';
 import type {
@@ -91,7 +91,7 @@ export class PaymentRequestReceiveService {
     private readonly operationRepository: PaymentRequestReceiveOperationRepository,
     private readonly attemptRepository: PaymentRequestReceiveAttemptRepository,
     private readonly receiveOperationService: ReceiveOperationService,
-    private readonly receiveOperationRepository: ReceiveOperationRepository,
+    private readonly receiveOperationQueries: ReceiveOperationQueries,
     private readonly mintService: MintService,
     private readonly transportHandlerProvider: PaymentRequestReceiveTransportHandlerProvider,
     private readonly logger?: Logger,
@@ -370,7 +370,7 @@ export class PaymentRequestReceiveService {
 
         const childReceive =
           currentAttempt.state === 'validating'
-            ? await this.receiveOperationRepository.getByPaymentRequestAttemptId(currentAttempt.id)
+            ? await this.receiveOperationQueries.getByPaymentRequestAttemptId(currentAttempt.id)
             : null;
         if (childReceive) {
           const linkedAttempt = await this.updateAttempt({
@@ -599,18 +599,32 @@ export class PaymentRequestReceiveService {
         { mint: payload.mint, unit: payload.unit, proofs: payload.proofs },
         sourceMetadata,
       );
+      const preparedReceive = await this.receiveOperationService.prepare(initReceive);
       currentAttempt = await this.updateAttempt({
         ...currentAttempt,
         state: 'receiving',
-        receiveOperationId: initReceive.id,
+        receiveOperationId: preparedReceive.id,
+        fee: preparedReceive.fee,
+        netAmount: preparedReceive.amount.subtract(preparedReceive.fee),
       });
-      await this.resumeInitChildReceive(currentAttempt, initReceive, {
+      await this.resumePreparedChildReceive(currentAttempt, preparedReceive, {
         ignoreMissingTransportHandler: true,
       });
     } catch (error) {
       const receiveOperation = currentAttempt.receiveOperationId
         ? await this.receiveOperationService.getOperation(currentAttempt.receiveOperationId)
-        : await this.receiveOperationRepository.getByPaymentRequestAttemptId(currentAttempt.id);
+        : await this.receiveOperationQueries.getByPaymentRequestAttemptId(currentAttempt.id);
+
+      if (receiveOperation && !currentAttempt.receiveOperationId) {
+        // Preparation committed but linking failed. Validating-attempt recovery discovers the
+        // durable child by attemptId; leave the attempt intact until that link can be saved.
+        this.logger?.warn('Payment request child left for linkage recovery', {
+          attemptId: currentAttempt.id,
+          receiveOperationId: receiveOperation.id,
+          error,
+        });
+        return;
+      }
 
       if (receiveOperation?.state === 'finalized') {
         await this.finalizeAttemptFromReceive(currentAttempt, receiveOperation, {
@@ -741,18 +755,14 @@ export class PaymentRequestReceiveService {
         { mint: payload.mint, unit: payload.unit, proofs: payload.proofs },
         sourceMetadata,
       );
+      // init is transient. Persist the child first so every published child ID is recoverable.
+      const preparedReceive = await this.receiveOperationService.prepare(initReceive);
       attempt = await this.updateAttempt({
         ...attempt,
         state: 'receiving',
-        receiveOperationId: initReceive.id,
-      });
-
-      const preparedReceive = await this.receiveOperationService.prepare(initReceive);
-      const netAmount = preparedReceive.amount.subtract(preparedReceive.fee);
-      attempt = await this.updateAttempt({
-        ...attempt,
+        receiveOperationId: preparedReceive.id,
         fee: preparedReceive.fee,
-        netAmount,
+        netAmount: preparedReceive.amount.subtract(preparedReceive.fee),
       });
 
       const finalizedReceive = await this.receiveOperationService.execute(preparedReceive);
@@ -768,7 +778,15 @@ export class PaymentRequestReceiveService {
     } catch (error) {
       const receiveOperation = attempt.receiveOperationId
         ? await this.receiveOperationService.getOperation(attempt.receiveOperationId)
-        : undefined;
+        : await this.receiveOperationQueries.getByPaymentRequestAttemptId(attempt.id);
+      if (receiveOperation && !attempt.receiveOperationId) {
+        this.logger?.warn('Payment request child left for linkage recovery', {
+          attemptId: attempt.id,
+          receiveOperationId: receiveOperation.id,
+          error,
+        });
+        throw error;
+      }
       if (receiveOperation?.state === 'finalized') {
         attempt = await this.finalizeAttemptFromReceive(attempt, receiveOperation);
         const updatedOperation = await this.operationRepository.getById(operation.id);

@@ -1,3 +1,5 @@
+import { CashuMintClient } from './infra/CashuMintClient.ts';
+import { CashuReceiveRemote } from './infra/handlers/receive/CashuReceiveRemote.ts';
 import type { OutputDataCreator } from '@cashu/cashu-ts';
 import { StoredMintQueries } from './mints/MintMetadata.ts';
 import { CashuSendRemote } from './infra/handlers/send/CashuSendRemote.ts';
@@ -86,6 +88,7 @@ import {
   createCoreTransactionModuleFactory,
 } from './transactions/CoreTransaction.ts';
 import { CoreSendTransactions } from './transactions/send/SendTransactions.ts';
+import { CoreReceiveTransactions } from './transactions/receive/ReceiveTransactions.ts';
 import { CoreKeyRingTransactions } from './transactions/keypairs/KeyRingTransactions.ts';
 import { KeypairDerivation } from './keypairs/KeypairDerivation.ts';
 import { KeypairP2pkSigner } from './keypairs/P2pkSigner.ts';
@@ -983,19 +986,21 @@ export class Manager {
       p2pk: new P2pkSendHandler(),
     });
     const sendTransactions = new CoreSendTransactions(coreTransactionRunner);
+    const mintQueries = new StoredMintQueries(
+      repositories.mintRepository,
+      repositories.keysetRepository,
+    );
+    const cashuMintClient = new CashuMintClient(
+      this.mintAdapter,
+      this.mintRequestProvider,
+      this.outputDataCreator,
+    );
     const sendOperationService = new SendOperationService({
       operationQueries: repositories.sendOperationRepository,
       proofQueries: repositories.proofRepository,
       transactions: sendTransactions,
-      mintQueries: new StoredMintQueries(
-        repositories.mintRepository,
-        repositories.keysetRepository,
-      ),
-      remote: new CashuSendRemote(
-        this.mintAdapter,
-        this.mintRequestProvider,
-        this.outputDataCreator,
-      ),
+      mintQueries,
+      remote: new CashuSendRemote(cashuMintClient),
       loadSeed: () => seedService.getSeed(),
       eventBus: this.eventBus,
       handlerProvider: sendHandlerProvider,
@@ -1008,18 +1013,19 @@ export class Manager {
     const tokenService = new TokenService(mintService, tokenLogger);
 
     const receiveOperationLogger = this.getChildLogger('ReceiveOperationService');
-    const receiveOperationService = new ReceiveOperationService(
-      repositories.receiveOperationRepository,
-      repositories.proofRepository,
-      proofService,
-      mintService,
-      walletService,
-      this.mintAdapter,
-      tokenService,
-      this.eventBus,
-      receiveOperationLogger,
+    const receiveTransactions = new CoreReceiveTransactions(coreTransactionRunner);
+    const receiveOperationService = new ReceiveOperationService({
+      operationQueries: repositories.receiveOperationRepository,
+      proofQueries: repositories.proofRepository,
+      transactions: receiveTransactions,
+      mintQueries,
+      signer: p2pkSigner,
+      remote: new CashuReceiveRemote(cashuMintClient),
+      loadSeed: () => seedService.getSeed(),
+      eventBus: this.eventBus,
+      logger: receiveOperationLogger,
       mintScopedLock,
-    );
+    });
     const receiveOperationRepository = repositories.receiveOperationRepository;
     const paymentRequestReceiveOperationRepository =
       repositories.paymentRequestReceiveOperationRepository;

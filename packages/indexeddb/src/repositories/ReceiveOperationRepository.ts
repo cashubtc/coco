@@ -33,6 +33,7 @@ function rowToOperation(row: ReceiveOperationRow): ReceiveOperation {
     inputProofs: parseInputProofs(row.inputProofsJson),
     createdAt: row.createdAt * 1000,
     updatedAt: row.updatedAt * 1000,
+    revision: row.revision ?? 0,
     error: row.error ?? undefined,
     source: row.sourceJson ? JSON.parse(row.sourceJson) : undefined,
   };
@@ -73,6 +74,7 @@ function operationToRow(op: ReceiveOperation): ReceiveOperationRow {
       state: op.state,
       createdAt: createdAtSeconds,
       updatedAt: updatedAtSeconds,
+      revision: op.revision ?? 0,
       error: op.error ?? null,
       fee: null,
       inputProofsJson: JSON.stringify(op.inputProofs),
@@ -89,6 +91,7 @@ function operationToRow(op: ReceiveOperation): ReceiveOperationRow {
     state: op.state,
     createdAt: createdAtSeconds,
     updatedAt: updatedAtSeconds,
+    revision: op.revision ?? 0,
     error: op.error ?? null,
     fee: serializeAmount(op.fee),
     inputProofsJson: JSON.stringify(op.inputProofs),
@@ -125,6 +128,30 @@ export class IdbReceiveOperationRepository implements ReceiveOperationRepository
       const row = operationToRow(operation);
       row.updatedAt = getUnixTimeSeconds();
       await table.put(row);
+    });
+  }
+
+  async transition(command: {
+    operationId: string;
+    expectedState: ReceiveOperationState;
+    expectedRevision: number;
+    next: ReceiveOperation;
+  }): Promise<boolean> {
+    return this.db.runTransaction('rw', ['coco_cashu_receive_operations'], async (tx) => {
+      const table = tx.table('coco_cashu_receive_operations');
+      const existing = (await table.get(command.operationId)) as ReceiveOperationRow | undefined;
+      if (
+        !existing ||
+        existing.state !== command.expectedState ||
+        (existing.revision ?? 0) !== command.expectedRevision
+      ) {
+        return false;
+      }
+      if (command.next.id !== command.operationId) {
+        throw new Error('Receive operation transition cannot change the operation id');
+      }
+      await table.put(operationToRow({ ...command.next, revision: command.expectedRevision + 1 }));
+      return true;
     });
   }
 

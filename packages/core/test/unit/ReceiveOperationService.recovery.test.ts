@@ -1,395 +1,240 @@
-import { Amount } from '@cashu/cashu-ts';
-import type {
-  InitReceiveOperation,
-  PreparedReceiveOperation,
-  ExecutingReceiveOperation,
-} from '../../operations/receive/ReceiveOperation';
-import { getOutputProofSecrets } from '../../operations/receive/ReceiveOperation';
-import { EventBus } from '../../events/EventBus';
-import type { CoreEvents } from '../../events/types';
-import type { MintAdapter } from '../../infra/MintAdapter';
-import type { MintService } from '../../services/MintService';
-import { TokenService } from '../../services/TokenService';
-import type { ProofService } from '../../services/ProofService';
-import type { WalletService } from '../../services/WalletService';
-import type { ProofState as CashuProofState, Proof } from '@cashu/cashu-ts';
-import type { CoreProof } from '../../types';
-import { MintOperationError, ProofValidationError } from '../../models/Error';
-import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
+import { type ProofState } from '@cashu/cashu-ts';
+import { beforeEach, describe, expect, it } from 'bun:test';
 import { ReceiveOpsApi } from '../../api/ReceiveOpsApi.ts';
-import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepository';
-import { ReceiveOperationService } from '../../operations/receive/ReceiveOperationService';
-import { MemoryReceiveOperationRepository } from '../../repositories/memory/MemoryReceiveOperationRepository';
+import { MintOperationError, ProofValidationError } from '../../models/Error.ts';
+import type { ExecutingReceiveOperation } from '../../operations/receive/ReceiveOperation.ts';
+import { mapProofToCoreProof } from '../../utils.ts';
+import {
+  createReceiveEnvironment,
+  receiveInput,
+  receiveMintUrl,
+} from '../fixtures/ReceiveEnvironment.ts';
+import { receivedProofs } from '../fixtures/ReceiveRemote.ts';
 
-describe('ReceiveOperationService - recoverPendingOperations', () => {
-  const mintUrl = 'https://mint.test';
-  const keysetId = 'keyset-1';
+const mintUrl = receiveMintUrl;
+const token = () => ({ mint: mintUrl, unit: 'sat', proofs: [receiveInput()] });
+const proofState = (state: 'SPENT' | 'UNSPENT' | 'PENDING'): ProofState => ({
+  Y: 'test',
+  witness: null,
+  state,
+});
 
-  let receiveOpRepo: MemoryReceiveOperationRepository;
-  let proofRepo: MemoryProofRepository;
-  let proofService: ProofService;
-  let mintService: MintService;
-  let walletService: WalletService;
-  let mintAdapter: MintAdapter;
-  let tokenService: TokenService;
-  let eventBus: EventBus<CoreEvents>;
-  let service: ReceiveOperationService;
-  let api: ReceiveOpsApi;
-
-  let mockCheckProofsStates: Mock<(mintUrl: string, ys: string[]) => Promise<CashuProofState[]>>;
-  let mockWalletReceive: Mock<(...args: any[]) => Promise<Proof[]>>;
-  let mockSaveProofs: Mock<(...args: any[]) => Promise<void>>;
-
-  const makeProof = (secret: string): Proof =>
-    ({
-      id: keysetId,
-      amount: Amount.from(10),
-      secret,
-      C: `C_${secret}`,
-    }) as Proof;
-
-  const makeOutputData = (secrets: string[]) => {
-    const mockKeepOutputs = secrets.map((secret) => ({
-      blindedMessage: { amount: 10, id: keysetId, B_: `B_${secret}` },
-      blindingFactor: '1234567890abcdef',
-      secret: Buffer.from(secret).toString('hex'),
-    }));
-
-    return {
-      keep: mockKeepOutputs,
-      send: [],
-    };
+describe('ReceiveOperationService recovery', () => {
+  let env: Awaited<ReturnType<typeof createReceiveEnvironment>>;
+  beforeEach(async () => {
+    env = await createReceiveEnvironment();
+  });
+  const executing = async (): Promise<ExecutingReceiveOperation> => {
+    const prepared = await env.service.prepare(await env.service.init(token()));
+    return (await env.transactions.beginExecution({ operationId: prepared.id, updatedAt: 300 }))
+      .operation;
   };
+  const storedState = async (id: string) =>
+    (await env.repositories.receiveOperationRepository.getById(id))?.state;
 
-  const makeInitOp = (id: string, proofs: Proof[]): InitReceiveOperation => ({
-    id,
-    state: 'init',
-    mintUrl,
-    unit: 'sat',
-    amount: Amount.sum(proofs.map((proof) => proof.amount)),
-    inputProofs: proofs,
-    createdAt: Date.now() - 10000,
-    updatedAt: Date.now() - 10000,
+  it('cleans up legacy init records without mint contact or allocating outputs', async () => {
+    const init = await env.service.init(token());
+    await env.repositories.receiveOperationRepository.create(init);
+    await env.service.recoverPendingOperations();
+    expect(await env.repositories.receiveOperationRepository.getById(init.id)).toBeNull();
+    expect(env.remote.receive).not.toHaveBeenCalled();
+    expect(env.loadSeed).not.toHaveBeenCalled();
   });
 
-  const makePreparedOp = (
-    id: string,
-    proofs: Proof[],
-    outputSecret = 'output-secret',
-  ): PreparedReceiveOperation => ({
-    id,
-    state: 'prepared',
-    mintUrl,
-    unit: 'sat',
-    amount: Amount.sum(proofs.map((proof) => proof.amount)),
-    inputProofs: proofs,
-    createdAt: Date.now() - 10000,
-    updatedAt: Date.now() - 10000,
-    fee: Amount.from(1),
-    outputData: makeOutputData([outputSecret]),
+  it('leaves prepared operations untouched for an explicit execute or cancel', async () => {
+    const prepared = await env.service.prepare(await env.service.init(token()));
+    await env.service.recoverPendingOperations();
+    expect(await storedState(prepared.id)).toBe('prepared');
+    expect(env.remote.receive).not.toHaveBeenCalled();
   });
 
-  const makeExecutingOp = (
-    id: string,
-    proofs: Proof[],
-    outputSecret = 'output-secret',
-  ): ExecutingReceiveOperation => ({
-    ...makePreparedOp(id, proofs, outputSecret),
-    state: 'executing',
-  });
-
-  beforeEach(() => {
-    receiveOpRepo = new MemoryReceiveOperationRepository();
-    proofRepo = new MemoryProofRepository();
-    eventBus = new EventBus<CoreEvents>();
-    mockCheckProofsStates = mock(async (_mintUrl: string, ys: string[]) =>
-      ys.map(() => ({ state: 'UNSPENT' }) as CashuProofState),
-    );
-    mintAdapter = { checkProofStates: mockCheckProofsStates } as unknown as MintAdapter;
-    mockWalletReceive = mock(async () => [makeProof('r1')]);
-    mockSaveProofs = mock(async () => {});
-
-    walletService = {
-      getWalletWithActiveKeysetId: mock(async () => ({
-        wallet: {
-          unit: 'sat',
-          receive: mockWalletReceive,
+  it('restarts with the exact persisted inputs and output allocation', async () => {
+    const operation = await executing();
+    const restarted = env.buildService({
+      loadSeed: async () => {
+        throw new Error('Recovery must not load seed');
+      },
+      signer: {
+        signProof: async () => {
+          throw new Error('Recovery must not sign');
         },
-      })),
-    } as unknown as WalletService;
-
-    proofService = {
-      recoverProofsFromOutputData: mock(async () => []),
-      saveProofs: mockSaveProofs,
-    } as unknown as ProofService;
-
-    mintService = {} as MintService;
-
-    tokenService = new TokenService(mintService);
-
-    service = new ReceiveOperationService(
-      receiveOpRepo,
-      proofRepo,
-      proofService,
-      mintService,
-      walletService,
-      mintAdapter,
-      tokenService,
-      eventBus,
-    );
-    api = new ReceiveOpsApi(service);
-  });
-
-  it('cleans up init operations', async () => {
-    const proofs = [makeProof('p1')];
-    const op = makeInitOp('init-op', proofs);
-    await receiveOpRepo.create(op);
-
-    await service.recoverPendingOperations();
-
-    const stored = await receiveOpRepo.getById(op.id);
-    expect(stored).toBe(null);
-  });
-
-  it('leaves prepared operations unchanged for manual rollback', async () => {
-    const proofs = [makeProof('p1')];
-    const op = makePreparedOp('prepared-op', proofs);
-    await receiveOpRepo.create(op);
-
-    await service.recoverPendingOperations();
-
-    const stored = await receiveOpRepo.getById(op.id);
-    expect(stored?.state).toBe('prepared');
-  });
-
-  it('retries executing operations when all inputs are unspent', async () => {
-    const proofs = [makeProof('p1'), makeProof('p2')];
-    const op = makeExecutingOp('exec-op', proofs);
-    await receiveOpRepo.create(op);
-
-    await service.recoverPendingOperations();
-
-    const stored = await receiveOpRepo.getById(op.id);
-    expect(stored?.state).toBe('finalized');
-    expect(mockWalletReceive.mock.calls.length).toBe(1);
-    expect(mockSaveProofs.mock.calls.length).toBe(1);
-    expect((proofService.recoverProofsFromOutputData as Mock<any>).mock.calls.length).toBe(0);
-  });
-
-  it('finalizes executing operations when all inputs are spent and recovers proofs', async () => {
-    const proofs = [makeProof('p1'), makeProof('p2')];
-    const op = makeExecutingOp('exec-op-spent', proofs);
-    await receiveOpRepo.create(op);
-
-    mockCheckProofsStates.mockImplementation(async (_mintUrl: string, ys: string[]) => {
-      const count = Math.max(1, ys.length);
-      return Array.from({ length: count }, () => ({ state: 'SPENT' }) as CashuProofState);
+      },
     });
-    (proofService.recoverProofsFromOutputData as Mock<any>).mockImplementation(async () => {
-      const outputSecrets = getOutputProofSecrets(op);
-      const recovered: CoreProof[] = outputSecrets.map((secret) => ({
-        id: keysetId,
-        amount: Amount.from(10),
-        secret,
-        C: `C_${secret}`,
-        mintUrl,
-        unit: 'sat',
-        state: 'ready',
-        createdByOperationId: op.id,
-      }));
-      await proofRepo.saveProofs(mintUrl, recovered);
-      return recovered as unknown as Proof[];
+    env.remote.receive.mockImplementationOnce(async (request) => {
+      expect(env.repositories.transactionOpen).toBe(false);
+      expect(request.inputProofs).toEqual(operation.inputProofs);
+      expect(request.outputData).toEqual(operation.outputData);
+      return receivedProofs(request.outputData);
     });
-
-    await service.recoverPendingOperations();
-
-    const stored = await receiveOpRepo.getById(op.id);
-    expect(stored?.state).toBe('finalized');
-    expect((proofService.recoverProofsFromOutputData as Mock<any>).mock.calls.length).toBe(1);
-    expect(mockCheckProofsStates.mock.calls.length).toBeGreaterThan(0);
-    expect(mockWalletReceive.mock.calls.length).toBe(0);
+    await restarted.recoverPendingOperations();
+    expect(await storedState(operation.id)).toBe('finalized');
+    expect(env.remote.receive).toHaveBeenCalledTimes(1);
+    await restarted.recoverPendingOperations();
+    expect(env.remote.receive).toHaveBeenCalledTimes(1);
   });
 
-  it('rolls back an executing receive when spent inputs have no recoverable outputs', async () => {
-    const proofs = [makeProof('p1')];
-    const op = makeExecutingOp('exec-op-spent-unrecoverable', proofs);
-    await receiveOpRepo.create(op);
-
-    mockCheckProofsStates.mockImplementation(async (_mintUrl: string, ys: string[]) =>
-      ys.map(() => ({ state: 'SPENT' }) as CashuProofState),
-    );
-
-    await api.recovery.run();
-
-    const stored = await api.get(op.id);
-    expect(stored?.state).toBe('rolled_back');
-    expect(stored?.error).toBe('Recovered: input proofs spent without recoverable outputs');
-    expect((await api.listInFlight()).map((operation) => operation.id)).not.toContain(op.id);
+  it('converges concurrent recovery from independent coordinators without duplicate output proofs', async () => {
+    const operation = await executing();
+    await Promise.all([
+      env.service.recoverPendingOperations(),
+      env.buildService().recoverPendingOperations(),
+    ]);
+    expect(await storedState(operation.id)).toBe('finalized');
+    expect(
+      await env.repositories.proofRepository.getProofsByOperationId(mintUrl, operation.id),
+    ).toHaveLength(operation.outputData.keep.length);
   });
 
-  it('properly propagates errors from checkProofsStates as executing', async () => {
-    const proofs = [makeProof('p1')];
-    const op = makeExecutingOp('exec-op-error', proofs);
-    await receiveOpRepo.create(op);
-
-    mockCheckProofsStates.mockImplementation(async () => {
-      throw new Error('Network timeout');
-    });
-    await service.recoverPendingOperations();
-
-    const stored = await receiveOpRepo.getById(op.id);
-    expect(stored?.state).toBe('executing');
-  });
-
-  it('keeps executing when inputs are not conclusively spent', async () => {
-    const proofs = [makeProof('p1'), makeProof('p2')];
-    const op = makeExecutingOp('exec-op-mixed', proofs);
-    await receiveOpRepo.create(op);
-
-    mockCheckProofsStates.mockImplementation(async (_mintUrl: string, ys: string[]) => {
-      if (ys.length === 0) return [];
-      if (ys.length === 1) return [{ state: 'SPENT' } as CashuProofState];
-      return [{ state: 'SPENT' } as CashuProofState, { state: 'UNSPENT' } as CashuProofState];
-    });
-
-    await service.recoverPendingOperations();
-
-    const stored = await receiveOpRepo.getById(op.id);
-    expect(stored?.state).toBe('executing');
-  });
-
-  it('keeps executing when recoverProofsFromOutputData fails for spent inputs', async () => {
-    const proofs = [makeProof('p1')];
-    const op = makeExecutingOp('exec-op-error-proof', proofs);
-    await receiveOpRepo.create(op);
-
-    mockCheckProofsStates.mockImplementation(async (_mintUrl: string, ys: string[]) =>
-      ys.map(() => ({ state: 'SPENT' }) as CashuProofState),
-    );
-    (proofService.recoverProofsFromOutputData as Mock<any>).mockImplementation(async () => {
-      throw new Error('Mint restore failed');
-    });
-
-    await service.recoverPendingOperations();
-
-    const stored = await receiveOpRepo.getById(op.id);
-    expect(stored?.state).toBe('executing');
-  });
-
-  it('rolls back when re-execution fails with a terminal NUT-03 mint error', async () => {
-    const proofs = [makeProof('p1')];
-    const op = makeExecutingOp('exec-op-terminal-retry', proofs);
-    await receiveOpRepo.create(op);
-
-    mockCheckProofsStates.mockImplementation(async (_mintUrl: string, ys: string[]) =>
-      ys.map(() => ({ state: 'UNSPENT' }) as CashuProofState),
-    );
-    mockWalletReceive.mockImplementation(async () => {
-      throw new MintOperationError(11001, 'Proofs already spent');
-    });
-
-    await service.recoverPendingOperations();
-
-    const stored = await receiveOpRepo.getById(op.id);
-    expect(stored?.state).toBe('rolled_back');
-    expect(stored?.error).toBe('Proofs already spent');
-  });
-
-  it('rolls back when re-execution fails with a terminal NUT-03 keyset error', async () => {
-    const proofs = [makeProof('p1')];
-    const op = makeExecutingOp('exec-op-terminal-keyset-retry', proofs);
-    await receiveOpRepo.create(op);
-
-    mockCheckProofsStates.mockImplementation(async (_mintUrl: string, ys: string[]) =>
-      ys.map(() => ({ state: 'UNSPENT' }) as CashuProofState),
-    );
-    mockWalletReceive.mockImplementation(async () => {
-      throw new MintOperationError(12002, 'Keyset is inactive');
-    });
-
-    await service.recoverPendingOperations();
-
-    const stored = await receiveOpRepo.getById(op.id);
-    expect(stored?.state).toBe('rolled_back');
-    expect(stored?.error).toBe('Keyset is inactive');
-  });
-
-  it('rolls back when re-execution fails with a generic mint protocol error', async () => {
-    const proofs = [makeProof('p1')];
-    const op = makeExecutingOp('exec-op-generic-mint-error', proofs);
-    await receiveOpRepo.create(op);
-
-    mockCheckProofsStates.mockImplementation(async (_mintUrl: string, ys: string[]) =>
-      ys.map(() => ({ state: 'UNSPENT' }) as CashuProofState),
-    );
-    mockWalletReceive.mockImplementation(async () => {
-      throw new MintOperationError(0, 'Keyset unknown');
-    });
-
-    await service.recoverPendingOperations();
-
-    const stored = await receiveOpRepo.getById(op.id);
-    expect(stored?.state).toBe('rolled_back');
-    expect(stored?.error).toBe('Keyset unknown');
-  });
-
-  it('keeps executing when re-execution hits recovery-sensitive outputs already signed', async () => {
-    const proofs = [makeProof('p1')];
-    const op = makeExecutingOp('exec-op-already-signed', proofs);
-    await receiveOpRepo.create(op);
-
-    mockCheckProofsStates.mockImplementation(async (_mintUrl: string, ys: string[]) =>
-      ys.map(() => ({ state: 'UNSPENT' }) as CashuProofState),
-    );
-    mockWalletReceive.mockImplementation(async () => {
-      throw new MintOperationError(11003, 'Outputs already signed');
-    });
-
-    await service.recoverPendingOperations();
-
-    const stored = await receiveOpRepo.getById(op.id);
-    expect(stored?.state).toBe('executing');
-  });
-
-  for (const { code, message } of [
-    { code: 11002, message: 'Proofs are pending' },
-    { code: 11004, message: 'Outputs are pending' },
-  ]) {
-    it(`rolls back when re-execution hits non-spendable NUT-03 state ${code}`, async () => {
-      const proofs = [makeProof('p1')];
-      const op = makeExecutingOp(`exec-op-pending-${code}`, proofs);
-      await receiveOpRepo.create(op);
-
-      mockCheckProofsStates.mockImplementation(async (_mintUrl: string, ys: string[]) =>
-        ys.map(() => ({ state: 'UNSPENT' }) as CashuProofState),
-      );
-      mockWalletReceive.mockImplementation(async () => {
-        throw new MintOperationError(code, message);
+  it.each(['complete-unspent', 'complete-spent'] as const)(
+    'finalizes exact Restore evidence: %s',
+    async (status) => {
+      const operation = await executing();
+      const proofs = receivedProofs(operation.outputData);
+      env.remote.checkProofStates.mockResolvedValueOnce([proofState('SPENT')]);
+      env.remote.observeRestore.mockImplementationOnce(async (outputs) => {
+        expect(env.repositories.transactionOpen).toBe(false);
+        expect(outputs).toEqual(operation.outputData);
+        return {
+          status,
+          expectedOutputCount: proofs.length,
+          restoredProofs: proofs,
+          unspentProofs: status === 'complete-unspent' ? proofs : [],
+        };
       });
+      await env.service.recoverPendingOperations();
+      expect(await storedState(operation.id)).toBe('finalized');
+      const saved = await env.repositories.proofRepository.getProofsByOperationId(
+        mintUrl,
+        operation.id,
+      );
+      expect(saved.map((proof) => proof.state)).toEqual(
+        proofs.map(() => (status === 'complete-unspent' ? 'ready' : 'spent')),
+      );
+      expect(env.remote.receive).not.toHaveBeenCalled();
+    },
+  );
 
-      await service.recoverPendingOperations();
+  it('fails spent inputs only after a successful Restore finding no exact outputs', async () => {
+    const operation = await executing();
+    env.remote.checkProofStates.mockResolvedValueOnce([proofState('SPENT')]);
+    await env.service.recoverPendingOperations();
+    expect(await storedState(operation.id)).toBe('rolled_back');
+    expect(env.remote.observeRestore).toHaveBeenCalledTimes(1);
+  });
 
-      const stored = await receiveOpRepo.getById(op.id);
-      expect(stored?.state).toBe('rolled_back');
-      expect(stored?.error).toBe(message);
-    });
-  }
+  it('retains executing when the mint cannot provide input-state evidence', async () => {
+    const operation = await executing();
+    env.remote.checkProofStates.mockRejectedValueOnce(new Error('offline'));
+    await env.service.recoverPendingOperations();
+    expect(await storedState(operation.id)).toBe('executing');
+    expect(env.remote.observeRestore).not.toHaveBeenCalled();
+  });
 
-  it('keeps executing when spent-proof recovery fails with a local validation error', async () => {
-    const proofs = [makeProof('p1')];
-    const op = makeExecutingOp('exec-op-terminal-restore', proofs);
-    await receiveOpRepo.create(op);
+  it.each([{ states: [] }, { states: [proofState('PENDING')] }])(
+    'retains executing for incomplete or pending inputs ($states)',
+    async ({ states }) => {
+      const operation = await executing();
+      env.remote.checkProofStates.mockResolvedValueOnce([...states]);
+      await env.service.recoverPendingOperations();
+      expect(await storedState(operation.id)).toBe('executing');
+      expect(env.remote.receive).not.toHaveBeenCalled();
+      expect(env.remote.observeRestore).not.toHaveBeenCalled();
+    },
+  );
 
-    mockCheckProofsStates.mockImplementation(async (_mintUrl: string, ys: string[]) =>
-      ys.map(() => ({ state: 'SPENT' }) as CashuProofState),
+  it('retains executing when inputs have mixed spent states', async () => {
+    const prepared = await env.service.prepare(
+      await env.service.init({ ...token(), proofs: [receiveInput('a'), receiveInput('b')] }),
     );
-    (proofService.recoverProofsFromOutputData as Mock<any>).mockImplementation(async () => {
-      throw new ProofValidationError('Invalid signature in recovered outputs');
+    await env.transactions.beginExecution({ operationId: prepared.id, updatedAt: 300 });
+    env.remote.checkProofStates.mockResolvedValueOnce([proofState('SPENT'), proofState('UNSPENT')]);
+    await env.service.recoverPendingOperations();
+    expect(await storedState(prepared.id)).toBe('executing');
+    expect(env.remote.receive).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    new Error('restore unavailable'),
+    new ProofValidationError('invalid Restore signature'),
+  ])('retains executing on Restore failure: %s', async (error) => {
+    const operation = await executing();
+    env.remote.checkProofStates.mockResolvedValueOnce([proofState('SPENT')]);
+    env.remote.observeRestore.mockRejectedValueOnce(error);
+    await env.service.recoverPendingOperations();
+    expect(await storedState(operation.id)).toBe('executing');
+  });
+
+  it('retains executing for incomplete or mixed Restore evidence', async () => {
+    const operation = await executing();
+    env.remote.checkProofStates.mockResolvedValueOnce([proofState('SPENT')]);
+    env.remote.observeRestore.mockResolvedValueOnce({
+      status: 'inconclusive',
+      expectedOutputCount: 1,
+      restoredProofs: receivedProofs(operation.outputData),
+      unspentProofs: [],
     });
+    await env.service.recoverPendingOperations();
+    expect(await storedState(operation.id)).toBe('executing');
+    expect(
+      await env.repositories.proofRepository.getProofsByOperationId(mintUrl, operation.id),
+    ).toEqual([]);
+  });
 
-    await service.recoverPendingOperations();
+  it.each([11001, 12001, 0])(
+    'records replay rejection %s only after Restore establishes no result',
+    async (code) => {
+      const operation = await executing();
+      env.remote.receive.mockRejectedValueOnce(new MintOperationError(code, 'terminal rejection'));
+      await env.service.recoverPendingOperations();
+      expect(await storedState(operation.id)).toBe('rolled_back');
+      expect(env.remote.observeRestore).toHaveBeenCalledTimes(1);
+    },
+  );
 
-    const stored = await receiveOpRepo.getById(op.id);
-    expect(stored?.state).toBe('executing');
+  it.each([11002, 11003, 11004])(
+    'retains executing after recovery-sensitive replay rejection %s',
+    async (code) => {
+      const operation = await executing();
+      env.remote.receive.mockRejectedValueOnce(new MintOperationError(code, 'ambiguous'));
+      await env.service.recoverPendingOperations();
+      expect(await storedState(operation.id)).toBe('executing');
+    },
+  );
+
+  it('uses Restore to establish success after another submission consumed the inputs during replay', async () => {
+    const operation = await executing();
+    const proofs = receivedProofs(operation.outputData);
+    env.remote.receive.mockRejectedValueOnce(new MintOperationError(11001, 'already spent'));
+    env.remote.observeRestore.mockResolvedValueOnce({
+      status: 'complete-unspent',
+      expectedOutputCount: proofs.length,
+      restoredProofs: proofs,
+      unspentProofs: proofs,
+    });
+    await env.service.recoverPendingOperations();
+    expect(await storedState(operation.id)).toBe('finalized');
+  });
+
+  it('retains executing if Restore is unavailable after a definitive replay rejection', async () => {
+    const operation = await executing();
+    env.remote.receive.mockRejectedValueOnce(new MintOperationError(11001, 'already spent'));
+    env.remote.observeRestore.mockRejectedValueOnce(new Error('offline'));
+    await env.service.recoverPendingOperations();
+    expect(await storedState(operation.id)).toBe('executing');
+  });
+
+  it('uses already saved exact outputs before querying the mint', async () => {
+    const operation = await executing();
+    await env.repositories.proofRepository.saveProofs(
+      mintUrl,
+      mapProofToCoreProof(mintUrl, 'spent', receivedProofs(operation.outputData), {
+        unit: operation.unit,
+        createdByOperationId: operation.id,
+      }),
+    );
+    await new ReceiveOpsApi(env.buildService()).refresh(operation.id);
+    expect(await storedState(operation.id)).toBe('finalized');
+    expect(env.remote.checkProofStates).not.toHaveBeenCalled();
+    expect(env.remote.receive).not.toHaveBeenCalled();
   });
 });

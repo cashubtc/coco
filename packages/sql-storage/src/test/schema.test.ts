@@ -56,6 +56,7 @@ const EXPECTED_MIGRATION_IDS = [
   '039_send_operation_revision',
   '040_send_execution_memo',
   '041_send_reclaim_data',
+  '041_receive_operation_revision',
 ] as const;
 
 async function allocateP2pkKey(db: SqlDatabase) {
@@ -289,6 +290,80 @@ describe('shared SQL schema migrations', () => {
         revision: 7,
         reclaimDataJson: null,
       });
+    },
+  );
+  itWithDatabase('backfills legacy Receive operation revisions to zero', async (db) => {
+    await ensureSchemaUpTo(db, '041_receive_operation_revision');
+    await db.run(
+      `INSERT INTO coco_cashu_receive_operations
+        (id, mintUrl, amount, unit, state, createdAt, updatedAt, inputProofsJson)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ['legacy-receive', 'https://mint.test', '10', 'sat', 'init', 1, 1, '[]'],
+    );
+
+    await ensureSchemaUpTo(db);
+
+    expect(
+      await db.get<{ revision: number }>(
+        'SELECT revision FROM coco_cashu_receive_operations WHERE id = ?',
+        ['legacy-receive'],
+      ),
+    ).toEqual({ revision: 0 });
+  });
+
+  itWithDatabase(
+    'upgrades an existing Receive branch without reapplying its revision migration',
+    async (db) => {
+      await ensureSchemaUpTo(db, '041_send_reclaim_data');
+      const receiveMigration = MIGRATIONS.find(
+        (migration) => migration.id === '041_receive_operation_revision',
+      )!;
+      await db.exec(receiveMigration.sql!);
+      await db.run('INSERT INTO coco_cashu_migrations (id, appliedAt) VALUES (?, ?)', [
+        receiveMigration.id,
+        1,
+      ]);
+      const inputs =
+        '[{"id":"keyset","amount":"10","secret":"signed-input","C":"C","witness":"persisted-witness"}]';
+      const outputs =
+        '{"keep":[{"secret":"abcd","blindingFactor":"01","blindedMessage":{"id":"keyset","amount":"10","B_":"B"}}],"send":[]}';
+      await db.run(
+        `INSERT INTO coco_cashu_receive_operations
+      (id, mintUrl, amount, unit, state, createdAt, updatedAt, fee, inputProofsJson, outputDataJson, revision)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          'existing-receive',
+          'https://mint.test',
+          '10',
+          'sat',
+          'executing',
+          1,
+          1,
+          '0',
+          inputs,
+          outputs,
+          7,
+        ],
+      );
+
+      await ensureSchemaUpTo(db);
+      await ensureSchemaUpTo(db);
+
+      expect(
+        await db.get(
+          'SELECT state, inputProofsJson, outputDataJson, revision FROM coco_cashu_receive_operations WHERE id = ?',
+          ['existing-receive'],
+        ),
+      ).toEqual({
+        state: 'executing',
+        inputProofsJson: inputs,
+        outputDataJson: outputs,
+        revision: 7,
+      });
+      const columns = await db.all<{ name: string }>(
+        'PRAGMA table_info(coco_cashu_send_operations)',
+      );
+      expect(columns.some((column) => column.name === 'reclaimDataJson')).toBe(true);
     },
   );
 

@@ -1787,6 +1787,69 @@ export async function runReceiveOperationRepositoryContract(
   const { describe, it, expect } = runner;
 
   describe('ReceiveOperationRepository contract', () => {
+    it('keeps nested request data isolated from callers across queries and transitions', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = {
+          ...createDummyReceiveOperation(),
+          state: 'prepared' as const,
+          revision: 0,
+          fee: Amount.from(1),
+          source: {
+            type: 'payment-request' as const,
+            requestOperationId: 'request',
+            attemptId: 'attempt',
+            transport: 'inband' as const,
+          },
+          outputData: {
+            keep: [
+              {
+                secret: 'abcd',
+                blindingFactor: '01',
+                blindedMessage: { id: 'keyset-id', amount: '2', B_: 'original-output' },
+              },
+            ],
+            send: [],
+          },
+        };
+        operation.inputProofs[0]!.witness = 'original-witness';
+        await repositories.receiveOperationRepository.create(operation);
+        operation.inputProofs[0]!.witness = 'mutated-input';
+        operation.outputData.keep[0]!.blindedMessage.B_ = 'mutated-output';
+        operation.source.attemptId = 'mutated-source';
+        const byId = await repositories.receiveOperationRepository.getById(operation.id);
+        const byState = (await repositories.receiveOperationRepository.getByState('prepared'))[0]!;
+        const byAttempt =
+          await repositories.receiveOperationRepository.getByPaymentRequestAttemptId('attempt');
+        expect(byAttempt?.id).toBe(operation.id);
+        expect(byId!.inputProofs[0]!.witness).toBe('original-witness');
+        byState.inputProofs[0]!.witness = 'mutated-query';
+        if (byAttempt?.source?.type !== 'payment-request')
+          throw new Error('Expected payment request source');
+        byAttempt.source.attemptId = 'mutated-query';
+        if (byId?.state !== 'prepared') throw new Error('Expected prepared operation');
+        expect(byId.outputData.keep[0]!.blindedMessage.B_).toBe('original-output');
+        const transitioned = await repositories.receiveOperationRepository.transition({
+          operationId: operation.id,
+          expectedState: 'prepared',
+          expectedRevision: 0,
+          next: { ...byId, state: 'executing', revision: 1 },
+        });
+        expect(transitioned).toBe(true);
+        byId.outputData.keep[0]!.blindedMessage.B_ = 'mutated-after-transition';
+        const stored = await repositories.receiveOperationRepository.getById(operation.id);
+        expect(stored!.inputProofs[0]!.witness).toBe('original-witness');
+        if (stored?.source?.type !== 'payment-request')
+          throw new Error('Expected payment request source');
+        expect(stored.source.attemptId).toBe('attempt');
+        expect(stored!.revision).toBe(1);
+        if (stored?.state !== 'executing') throw new Error('Expected executing operation');
+        expect(stored.outputData.keep[0]!.blindedMessage.B_).toBe('original-output');
+      } finally {
+        await dispose();
+      }
+    });
+
     it('rehydrates persisted input proof amounts', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {
@@ -1851,6 +1914,46 @@ export async function runReceiveOperationRepositoryContract(
           expect(stored!.source.requestOperationId).toBe('request-op');
           expect(stored!.source.attemptId).toBe('attempt-id');
         }
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('normalizes legacy revisions and allows one conditional transition winner', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = createDummyReceiveOperation();
+        delete operation.revision;
+        await repositories.receiveOperationRepository.create(operation);
+
+        const stored = await repositories.receiveOperationRepository.getById(operation.id);
+        expect(stored?.revision).toBe(0);
+        const next = {
+          ...operation,
+          state: 'prepared',
+          fee: Amount.zero(),
+          outputData: { keep: [], send: [] },
+        } satisfies ReceiveOperation;
+
+        const results = await Promise.all([
+          repositories.receiveOperationRepository.transition({
+            operationId: operation.id,
+            expectedState: 'init',
+            expectedRevision: 0,
+            next,
+          }),
+          repositories.receiveOperationRepository.transition({
+            operationId: operation.id,
+            expectedState: 'init',
+            expectedRevision: 0,
+            next,
+          }),
+        ]);
+
+        expect(results.filter(Boolean)).toHaveLength(1);
+        const transitioned = await repositories.receiveOperationRepository.getById(operation.id);
+        expect(transitioned?.state).toBe('prepared');
+        expect(transitioned?.revision).toBe(1);
       } finally {
         await dispose();
       }

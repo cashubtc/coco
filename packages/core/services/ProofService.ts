@@ -1,4 +1,6 @@
-import { restoreOutputProofs } from '../infra/ProofRestore.ts';
+import { observeOutputProofs } from '../infra/ProofRestore.ts';
+import type { RestoreProofsObservation } from '../proofs/RestoreProofsObservation.ts';
+import { prepareProofsForReceiving } from '../proofs/ProofPreparation.ts';
 import {
   Amount,
   OutputData,
@@ -39,7 +41,7 @@ import {
   normalizeUnitAmount,
   type UnitAmount,
 } from '../amounts.ts';
-import { deserializeOutputData, mapProofToCoreProof, type SerializedOutputData } from '../utils';
+import { mapProofToCoreProof, type SerializedOutputData } from '../utils';
 import type { Keyset } from '@core/models/Keyset.ts';
 
 function countBlankOutputsForAmount(amount: Amount): number {
@@ -49,6 +51,11 @@ function countBlankOutputsForAmount(amount: Amount): number {
   }
   return Math.max((value - 1n).toString(2).length, 1);
 }
+
+export type {
+  RestoreProofsObservation,
+  RestoreProofsObservationStatus,
+} from '../proofs/RestoreProofsObservation.ts';
 
 export class ProofService {
   private readonly counterService: CounterService;
@@ -835,70 +842,7 @@ export class ProofService {
   }
 
   async prepareProofsForReceiving(proofs: Proof[]): Promise<Proof[]> {
-    this.logger?.debug('Preparing proofs for receiving', { totalProofs: proofs.length });
-
-    const preparedProofs = [...proofs];
-    let regularProofCount = 0;
-    let p2pkProofCount = 0;
-
-    for (let i = 0; i < preparedProofs.length; i++) {
-      const proof = preparedProofs[i];
-      if (!proof) continue;
-
-      // Try to parse as P2PK proof
-      let parsedSecret: [string, { nonce: string; data: string; tags: string[][] }];
-      try {
-        parsedSecret = JSON.parse(proof.secret);
-      } catch (parseError) {
-        // Not a JSON secret (regular proof), skip P2PK processing
-        this.logger?.debug('Regular proof detected, skipping P2PK processing', {
-          proofIndex: i,
-        });
-        regularProofCount++;
-        continue;
-      }
-
-      // Check if it's a P2PK proof
-      if (parsedSecret[0] !== 'P2PK') {
-        this.logger?.error('Unsupported locking script type', {
-          proofIndex: i,
-          scriptType: parsedSecret[0],
-        });
-        throw new ProofValidationError('Only P2PK locking scripts are supported');
-      }
-
-      // Validate multisig is not used
-      const additionalKeysTag = parsedSecret[1].tags?.find((tag) => tag[0] === 'pubkeys');
-      if (additionalKeysTag && additionalKeysTag[1] && additionalKeysTag[1].length > 0) {
-        this.logger?.error('Multisig P2PK proof detected', { proofIndex: i });
-        throw new ProofValidationError('Multisig is not supported');
-      }
-
-      // Sign the proof - if this fails, we abort the entire operation
-      try {
-        preparedProofs[i] = await this.signer.signProof(proof, parsedSecret[1].data);
-        this.logger?.debug('P2PK proof signed successfully', {
-          proofIndex: i,
-          recipient: parsedSecret[1].data,
-        });
-        p2pkProofCount++;
-      } catch (error) {
-        this.logger?.error('Failed to sign P2PK proof for receiving', {
-          proofIndex: i,
-          recipient: parsedSecret[1].data,
-          error,
-        });
-        throw error;
-      }
-    }
-
-    this.logger?.info('Proofs prepared for receiving', {
-      totalProofs: proofs.length,
-      regularProofs: regularProofCount,
-      p2pkProofs: p2pkProofCount,
-    });
-
-    return preparedProofs;
+    return prepareProofsForReceiving(proofs, this.signer, this.logger);
   }
 
   async createBlankOutputs(mintUrl: string, intent: UnitAmount): Promise<OutputDataLike[]> {
@@ -1020,19 +964,17 @@ export class ProofService {
     serializedOutputData: SerializedOutputData,
     options: { unit: string; createdByOperationId?: string; persistRecoveredProofs?: boolean },
   ): Promise<Proof[]> {
-    if (!mintUrl || mintUrl.trim().length === 0) {
-      throw new ProofValidationError('mintUrl is required');
-    }
-    if (!serializedOutputData) {
-      throw new ProofValidationError('serializedOutputData is required');
-    }
-
+    const observation = await this.observeRestoreProofsFromOutputData(
+      mintUrl,
+      serializedOutputData,
+      options.unit,
+    );
     const unit = normalizeUnit(options.unit);
-    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl, unit);
+    const unspentProofs = observation.unspentProofs;
 
-    const { keysets } = await this.mintService.ensureUpdatedMint(mintUrl);
-    const unspentProofs = await restoreOutputProofs(wallet, keysets, unit, serializedOutputData);
-    if (unspentProofs.length === 0) return [];
+    if (unspentProofs.length === 0) {
+      return [];
+    }
 
     if (options?.persistRecoveredProofs !== false) {
       await this.saveProofs(
@@ -1047,10 +989,37 @@ export class ProofService {
     this.logger?.info('Recovered proofs from output data', {
       mintUrl,
       unit,
+      totalRestored: observation.restoredProofs.length,
       unspentCount: unspentProofs.length,
+      spentCount: observation.restoredProofs.length - unspentProofs.length,
       persisted: options?.persistRecoveredProofs !== false,
     });
 
     return unspentProofs;
+  }
+
+  /**
+   * Observe Restore without persisting proofs.
+   *
+   * Unlike recoverProofsFromOutputData(), this preserves the distinction between no signatures,
+   * a complete set of spent signatures, and incomplete or mixed evidence.
+   */
+  async observeRestoreProofsFromOutputData(
+    mintUrl: string,
+    serializedOutputData: SerializedOutputData,
+    requestedUnit: string,
+  ): Promise<RestoreProofsObservation> {
+    if (!mintUrl || mintUrl.trim().length === 0) {
+      throw new ProofValidationError('mintUrl is required');
+    }
+    if (!serializedOutputData) {
+      throw new ProofValidationError('serializedOutputData is required');
+    }
+
+    const unit = normalizeUnit(requestedUnit);
+    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl, unit);
+
+    const { keysets } = await this.mintService.ensureUpdatedMint(mintUrl);
+    return observeOutputProofs(wallet, keysets, unit, serializedOutputData);
   }
 }

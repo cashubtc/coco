@@ -1,91 +1,31 @@
+import { ProofValidationError } from '../../models/Error.ts';
 import {
   Amount,
   OutputData,
-  createBlindSignature,
-  createNewMintKeys,
-  hashToCurve,
-  pointFromHex,
-  serializeMintKeys,
   sumProofs,
+  createNewMintKeys,
+  serializeMintKeys,
+  createBlindSignature,
+  hashToCurve,
   type MintKeys,
-  type Proof,
 } from '@cashu/cashu-ts';
-import { describe, expect, it, mock } from 'bun:test';
+import { describe, expect, it } from 'bun:test';
 import { CashuSendRemote } from '../../infra/handlers/send/CashuSendRemote.ts';
-import type { MintRequestFn } from '../../infra/MintRequestProvider.ts';
-import type { MintMetadata } from '../../mints/MintMetadata.ts';
-import { ProofValidationError } from '../../models/Error.ts';
 import { serializeOutputData } from '../../utils.ts';
 import { testMintInfo } from '../fixtures/MintMetadata.ts';
+import {
+  createProtocolMintEnvironment,
+  inputProof,
+  keys,
+  metadata,
+  mintUrl,
+  seed,
+  unit,
+} from '../fixtures/ProtocolMint.ts';
 
-const mintUrl = 'https://mint.test';
-const unit = 'sat';
-const seed = new Uint8Array(64).fill(1);
-const keyset = createNewMintKeys(8, new Uint8Array(32).fill(2));
-const keys: MintKeys = { id: keyset.keysetId, unit, keys: serializeMintKeys(keyset.pubKeys) };
-const metadata: MintMetadata = {
-  mint: {
-    mintUrl,
-    name: 'Test Mint',
-    trusted: true,
-    mintInfo: testMintInfo,
-    createdAt: 1,
-    updatedAt: 1,
-  },
-  keysets: [
-    { mintUrl, id: keys.id, unit, keypairs: keys.keys, active: true, feePpk: 0, updatedAt: 1 },
-  ],
-};
-
-function inputProof(): Proof {
-  const secret = 'synthetic-input';
-  const signature = createBlindSignature(
-    hashToCurve(new TextEncoder().encode(secret)),
-    keyset.privKeys['16']!,
-    keys.id,
-  );
-  return { id: keys.id, secret, amount: Amount.from(16), C: signature.C_.toHex(true) };
-}
-
-type WireOutput = { id: string; amount: number; B_: string };
-function sign(outputs: WireOutput[], signingKeyset = keyset) {
-  return outputs.map((output) => {
-    const signature = createBlindSignature(
-      pointFromHex(output.B_),
-      signingKeyset.privKeys[String(output.amount)]!,
-      output.id,
-    );
-    return { id: output.id, amount: output.amount, C_: signature.C_.toHex(true) };
-  });
-}
-
-function environment(signingKeyset = keyset) {
-  const calls: Array<{ endpoint: string; body?: Record<string, unknown> }> = [];
-  const request: MintRequestFn = async <T>({
-    endpoint,
-    requestBody,
-  }: Parameters<MintRequestFn>[0]): Promise<T> => {
-    calls.push({ endpoint, body: requestBody });
-    if (endpoint.endsWith('/swap'))
-      return { signatures: sign(requestBody!.outputs as WireOutput[], signingKeyset) } as T;
-    if (endpoint.endsWith('/restore'))
-      return {
-        outputs: requestBody!.outputs,
-        signatures: sign(requestBody!.outputs as WireOutput[], signingKeyset),
-      } as T;
-    if (endpoint.endsWith('/checkstate'))
-      return { states: (requestBody!.Ys as string[]).map((Y) => ({ Y, state: 'UNSPENT' })) } as T;
-    throw new Error(`Unexpected endpoint: ${endpoint}`);
-  };
-  const mint = {
-    getAuthProvider: () => undefined,
-    fetchMintInfo: mock(async () => testMintInfo),
-    fetchKeysets: mock(async () => ({
-      keysets: [{ id: keys.id, unit, active: true, input_fee_ppk: 0 }],
-    })),
-    fetchKeysForId: mock(async () => keys.keys),
-  };
-  return { remote: new CashuSendRemote(mint, { getRequestFn: () => request }), calls, mint };
+function environment(signingKeyset?: ReturnType<typeof createNewMintKeys>) {
+  const environment = createProtocolMintEnvironment({ signingKeyset });
+  return { ...environment, remote: new CashuSendRemote(environment.client) };
 }
 
 describe('CashuSendRemote', () => {
@@ -152,9 +92,9 @@ describe('CashuSendRemote', () => {
         expect(proof.id).toBe(originalKeys.id);
         expect(proof.C).toBe(expected.C_.toHex(true));
       }
-      expect((calls[0]!.body!.outputs as WireOutput[]).map((output) => output.B_).sort()).toEqual(
-        [...keep, ...send].map((output) => output.blindedMessage.B_).sort(),
-      );
+      expect(
+        (calls[0]!.body!.outputs as Array<{ B_: string }>).map((output) => output.B_).sort(),
+      ).toEqual([...keep, ...send].map((output) => output.blindedMessage.B_).sort());
     },
   );
 
@@ -224,9 +164,9 @@ describe('CashuSendRemote', () => {
       expect(result.send[0]!.secret).toBe(new TextDecoder().decode(send[0]!.secret));
       expect(calls).toHaveLength(1);
       expect(calls[0]!.endpoint).toBe(`${mintUrl}/v1/swap`);
-      expect((calls[0]!.body!.outputs as WireOutput[]).map((output) => output.B_).sort()).toEqual(
-        [...keep, ...send].map((output) => output.blindedMessage.B_).sort(),
-      );
+      expect(
+        (calls[0]!.body!.outputs as Array<{ B_: string }>).map((output) => output.B_).sort(),
+      ).toEqual([...keep, ...send].map((output) => output.blindedMessage.B_).sort());
       const states = await session.checkProofStates(result.send);
       expect(states.map((state) => state.state)).toEqual(['UNSPENT']);
     },

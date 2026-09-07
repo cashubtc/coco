@@ -1,3 +1,4 @@
+import { sameCoreProofSet, sameProofSet } from '@core/proofs/ProofIdentity.ts';
 import { Amount, sumProofs, type Proof, type Token } from '@cashu/cashu-ts';
 import { assertOutputProofs } from '@core/proofs/OutputProofs.ts';
 import { normalizeUnit } from '@core/amounts.ts';
@@ -885,45 +886,5 @@ function sameToken(left: Token, right: Token): boolean {
     normalizeUnit(left.unit) === normalizeUnit(right.unit) &&
     left.memo === right.memo &&
     sameProofSet(left.proofs, right.proofs)
-  );
-}
-
-function sameCoreProofSet(left: CoreProof[], right: CoreProof[]): boolean {
-  return (
-    sameProofSet(left, right) &&
-    left.every((proof) => {
-      const candidate = right.find((item) => item.secret === proof.secret);
-      return (
-        candidate?.mintUrl === proof.mintUrl &&
-        normalizeUnit(candidate.unit) === normalizeUnit(proof.unit) &&
-        candidate.createdByOperationId === proof.createdByOperationId
-      );
-    })
-  );
-}
-
-function sameProofSet(left: Proof[], right: Proof[]): boolean {
-  if (
-    left.length !== right.length ||
-    new Set(left.map((proof) => proof.secret)).size !== left.length ||
-    new Set(right.map((proof) => proof.secret)).size !== right.length
-  ) {
-    return false;
-  }
-  const rightBySecret = new Map(right.map((proof) => [proof.secret, proof]));
-  return left.every((proof) => {
-    const candidate = rightBySecret.get(proof.secret);
-    return candidate ? sameProof(proof, candidate) : false;
-  });
-}
-
-function sameProof(left: Proof, right: Proof): boolean {
-  return (
-    left.id === right.id &&
-    left.secret === right.secret &&
-    left.C === right.C &&
-    Amount.from(left.amount).equals(Amount.from(right.amount)) &&
-    left.witness === right.witness &&
-    JSON.stringify(left.dleq) === JSON.stringify(right.dleq)
   );
 }
