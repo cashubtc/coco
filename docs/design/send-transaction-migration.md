@@ -58,6 +58,22 @@ Send retains the original input-secret references, output plan, and execution me
 request fields remain unchanged when proof state or ownership metadata changes. Memory reads and
 writes copy nested values so caller-owned objects cannot mutate that stored request material.
 
+Legacy exact Sends can remain `executing` after a crash, although new exact Sends transition
+directly from `prepared` to `pending`. `recoverLegacyExact` accepts only a revision-zero default
+Send without a swap output plan or token. It validates the exact amount and owned ready/inflight
+inputs, returns them to ready, releases reservations, and records `rolled_back` in one transaction.
+Spent inputs, missing ownership, and changed revisions cannot authorize this release. Events follow
+commit; recovery does not contact the mint for this unsubmitted local send.
+
+Legacy swap handlers could save outputs and spend inputs before persisting `pending`. Recovery
+claims therefore accept operation-owned ready or spent inputs. After observing remote spent inputs,
+recovery combines existing operation-created outputs with any missing restored outputs and uses the
+normal `applyResult` transaction. That transaction validates the immutable output plan, rejects
+conflicting stored proof data or creation ownership, saves only missing outputs, and preserves the
+current state and reservations of existing outputs. In particular, recovered change never becomes
+spendable again if another operation already used it. Failure release still requires ready inputs;
+ambiguous outcomes retain their request and resources.
+
 Reclaim has a separate optional `reclaimData` field containing its input references and output plan.
 The `pending` to `rolling_back` transaction commits this plan with its Output Allocation. The result
 transaction validates returned proofs against the plan, saves them, spends the reclaimed inputs,

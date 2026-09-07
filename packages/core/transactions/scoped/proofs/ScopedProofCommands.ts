@@ -33,6 +33,8 @@ export interface ScopedProofCommands extends ProofQueries {
   getFee(mintUrl: string, unit: string, proofs: readonly CoreProof[]): Promise<Amount>;
   getOwned(input: OwnedProofsInput): Promise<CoreProof[]>;
   markInflight(input: Omit<OwnedProofsInput, 'state' | 'ownership'>): Promise<void>;
+  /** The owning transition must establish that these inputs were never submitted or shared. */
+  releaseUnsubmitted(input: Omit<OwnedProofsInput, 'state' | 'ownership'>): Promise<void>;
   settleSpend(input: OwnedProofsInput & { outputs: CoreProof[] }): Promise<void>;
   recordSpent(input: Omit<OwnedProofsInput, 'state'>): Promise<void>;
   releaseOwned(mintUrl: string, operationId: string, secrets: string[]): Promise<void>;
@@ -99,6 +101,12 @@ export class RepositoryProofCommands implements ScopedProofCommands {
   async markInflight(input: Omit<OwnedProofsInput, 'state' | 'ownership'>): Promise<void> {
     await this.getOwned({ ...input, state: 'ready' });
     await this.proofs.setProofState(input.mintUrl, input.secrets, 'inflight');
+  }
+
+  async releaseUnsubmitted(input: Omit<OwnedProofsInput, 'state' | 'ownership'>): Promise<void> {
+    await this.getOwned({ ...input, state: ['ready', 'inflight'] });
+    await this.proofs.setProofState(input.mintUrl, input.secrets, 'ready');
+    await this.proofs.releaseProofs(input.mintUrl, input.secrets);
   }
 
   async settleSpend(input: OwnedProofsInput & { outputs: CoreProof[] }): Promise<void> {

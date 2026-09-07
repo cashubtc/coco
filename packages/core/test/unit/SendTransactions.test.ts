@@ -403,6 +403,88 @@ describe('SendTransactions exact-match execution', () => {
   });
 });
 
+describe('SendTransactions legacy exact recovery', () => {
+  async function persistLegacy(repositories: MemoryRepositories) {
+    const legacy: ExecutingSendOperation = {
+      ...operation('legacy-exact', false),
+      state: 'executing',
+      revision: undefined,
+      needsSwap: false,
+      fee: Amount.zero(),
+      inputAmount: Amount.from(10),
+      inputProofSecrets: ['legacy-input'],
+    };
+    await repositories.sendOperationRepository.create(legacy);
+    await repositories.proofRepository.saveProofs(mintUrl, [
+      { ...proof('legacy-input'), state: 'inflight', usedByOperationId: legacy.id },
+    ]);
+    return legacy;
+  }
+
+  it('rolls back proof state and reservation changes when the operation transition fails', async () => {
+    const { repositories, transactions } = await setup(new RejectingSendTransitionRepositories());
+    const legacy = await persistLegacy(repositories);
+
+    await expect(
+      transactions.recoverLegacyExact({ operationId: legacy.id, updatedAt: 300 }),
+    ).rejects.toThrow('conflicted');
+
+    expect((await repositories.sendOperationRepository.getById(legacy.id))?.state).toBe(
+      'executing',
+    );
+    const stored = await repositories.proofRepository.getProofBySecret(mintUrl, 'legacy-input');
+    expect(stored?.state).toBe('inflight');
+    expect(stored?.usedByOperationId).toBe(legacy.id);
+  });
+
+  it('allows only one recovery of the legacy executing revision', async () => {
+    const { repositories, transactions } = await setup();
+    const legacy = await persistLegacy(repositories);
+    const recover = () =>
+      transactions.recoverLegacyExact({ operationId: legacy.id, updatedAt: 300 });
+
+    const results = await Promise.allSettled([recover(), recover()]);
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    expect((await repositories.sendOperationRepository.getById(legacy.id))?.revision).toBe(1);
+    expect(await repositories.proofRepository.getAvailableProofs(mintUrl)).toHaveLength(1);
+  });
+
+  it.each(['spent', 'unowned', 'revision', 'swap', 'amount'] as const)(
+    'preserves inputs when legacy exact recovery encounters %s data',
+    async (invalid) => {
+      const { repositories, transactions } = await setup();
+      const legacy = await persistLegacy(repositories);
+      if (invalid === 'spent') {
+        await repositories.proofRepository.setProofState(mintUrl, ['legacy-input'], 'spent');
+      } else if (invalid === 'unowned') {
+        await repositories.proofRepository.releaseProofs(mintUrl, ['legacy-input']);
+      } else {
+        await repositories.sendOperationRepository.update({
+          ...legacy,
+          ...(invalid === 'revision' ? { revision: 1 } : {}),
+          ...(invalid === 'swap' ? { needsSwap: true } : {}),
+          ...(invalid === 'amount' ? { amount: Amount.from(11) } : {}),
+        });
+      }
+      const before = await repositories.proofRepository.getProofBySecret(mintUrl, 'legacy-input');
+      const operationBefore = await repositories.sendOperationRepository.getById(legacy.id);
+
+      await expect(
+        transactions.recoverLegacyExact({ operationId: legacy.id, updatedAt: 300 }),
+      ).rejects.toThrow();
+
+      expect(await repositories.proofRepository.getProofBySecret(mintUrl, 'legacy-input')).toEqual(
+        before,
+      );
+      expect(await repositories.sendOperationRepository.getById(legacy.id)).toEqual(
+        operationBefore,
+      );
+    },
+  );
+});
+
 function swapProof(
   operation: ExecutingSendOperation,
   secret: string,
@@ -421,6 +503,41 @@ function swapProof(
 }
 
 describe('SendTransactions swap execution', () => {
+  it('settles a legacy partial result without resetting existing output state or ownership', async () => {
+    const { repositories, transactions } = await setup();
+    await repositories.proofRepository.saveProofs(mintUrl, [proof('legacy-swap-input', 20)]);
+    const prepared = (await transactions.prepare(prepareInput('legacy-partial-result'))).operation;
+    const executing: ExecutingSendOperation = { ...prepared, state: 'executing', revision: 0 };
+    await repositories.sendOperationRepository.update(executing);
+    const { keepSecrets, sendSecrets } = getSecretsFromSerializedOutputData(executing.outputData!);
+    const keep = swapProof(executing, keepSecrets[0]!, 'ready');
+    const send = swapProof(executing, sendSecrets[0]!, 'inflight');
+    const alreadyUsed = { ...keep, state: 'spent' as const, usedByOperationId: 'later-send' };
+    await repositories.proofRepository.saveProofs(mintUrl, [alreadyUsed]);
+    await repositories.proofRepository.setProofState(mintUrl, executing.inputProofSecrets, 'spent');
+
+    const claimed = await transactions.claimRecovery({
+      operationId: executing.id,
+      expectedRevision: 0,
+      updatedAt: 300,
+    });
+    const result = await transactions.applyResult({
+      operationId: executing.id,
+      updatedAt: 400,
+      keepProofs: [keep],
+      sendProofs: [send],
+      token: { mint: mintUrl, unit: 'sat', proofs: [send] },
+    });
+
+    expect(claimed.request.outputData).toEqual(executing.outputData!);
+    expect(result.operation.state).toBe('pending');
+    expect(result.savedProofs).toEqual([send]);
+    expect(await repositories.proofRepository.getProofBySecret(mintUrl, keep.secret)).toEqual(
+      alreadyUsed,
+    );
+    expect(await repositories.proofRepository.getProofBySecret(mintUrl, send.secret)).toEqual(send);
+  });
+
   it('commits the exact executing request and memo before transport starts', async () => {
     const { repositories, transactions } = await setup();
     await repositories.proofRepository.saveProofs(mintUrl, [proof('proof-1')]);

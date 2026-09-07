@@ -714,7 +714,22 @@ export class SendOperationService {
       });
       return;
     }
-    if (!latest.needsSwap || !latest.outputData) {
+    if (!latest.needsSwap) {
+      const recovered = await this.transactions.recoverLegacyExact({
+        operationId: latest.id,
+        updatedAt: Date.now(),
+      });
+      if (recovered.readyProofSecrets.length > 0) {
+        await this.publishCommittedEvent('proofs:state-changed', {
+          mintUrl: recovered.operation.mintUrl,
+          secrets: recovered.readyProofSecrets,
+          state: 'ready',
+        });
+      }
+      await this.publishCancelledSend(recovered);
+      return;
+    }
+    if (!latest.outputData) {
       this.logger?.warn('Executing Send lacks a persisted swap request; leaving it for recovery', {
         operationId: latest.id,
       });
@@ -785,10 +800,23 @@ export class SendOperationService {
     });
     const recoveryOperation = claimed.operation;
 
-    const recovered = await remote.restoreOutputs(recoveryOperation.outputData!);
     const outputSecrets = getSecretsFromSerializedOutputData(recoveryOperation.outputData!);
     const expectedSecrets = [...outputSecrets.keepSecrets, ...outputSecrets.sendSecrets];
-    const recoveredBySecret = new Map(recovered.map((proof) => [proof.secret, proof]));
+    const storedOutputs = await this.proofQueries.getProofsBySecrets(
+      recoveryOperation.mintUrl,
+      expectedSecrets,
+    );
+    const recoveredBySecret = new Map<string, Proof>(
+      storedOutputs
+        .filter((proof) => proof.createdByOperationId === recoveryOperation.id)
+        .map((proof) => [proof.secret, proof]),
+    );
+    if (!expectedSecrets.every((secret) => recoveredBySecret.has(secret))) {
+      const recovered = await remote.restoreOutputs(recoveryOperation.outputData!);
+      for (const proof of recovered) {
+        if (!recoveredBySecret.has(proof.secret)) recoveredBySecret.set(proof.secret, proof);
+      }
+    }
     if (!expectedSecrets.every((secret) => recoveredBySecret.has(secret))) {
       this.logger?.warn(
         'Executing Send outputs could not be fully reconstructed; preserving recovery material',

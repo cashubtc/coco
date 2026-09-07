@@ -329,6 +329,150 @@ describe('SendOperationService executing recovery', () => {
     ).toBe('inflight');
   });
 
+  it.each(['ready', 'inflight'] as const)(
+    'recovers a legacy exact Send interrupted with %s inputs',
+    async (state) => {
+      const operation: ExecutingSendOperation = {
+        ...executingOperation(`legacy-exact-${state}`),
+        revision: undefined,
+        needsSwap: false,
+        outputData: undefined,
+        methodData: {},
+      };
+      await persistExecuting(operation);
+      await repositories.proofRepository.setProofState(mintUrl, operation.inputProofSecrets, state);
+      let rolledBackEvents = 0;
+      eventBus.on('send:rolled-back', async () => {
+        expect((await repositories.sendOperationRepository.getById(operation.id))?.state).toBe(
+          'rolled_back',
+        );
+        expect(await repositories.proofRepository.getAvailableProofs(mintUrl)).toHaveLength(1);
+        rolledBackEvents++;
+        throw new Error('Legacy recovery listener failed');
+      });
+
+      await service.recoverPendingOperations();
+      await service.recoverPendingOperations();
+
+      const stored = await repositories.sendOperationRepository.getById(operation.id);
+      expect(stored?.state).toBe('rolled_back');
+      expect(stored?.revision).toBe(1);
+      const input = await repositories.proofRepository.getProofBySecret(
+        mintUrl,
+        operation.inputProofSecrets[0]!,
+      );
+      expect(input?.state).toBe('ready');
+      expect(input?.usedByOperationId).toBeUndefined();
+      expect(rolledBackEvents).toBe(1);
+      expect(logger.error).toHaveBeenCalledWith(
+        'Failed to publish committed Send event',
+        expect.objectContaining({ event: 'send:rolled-back' }),
+      );
+      expect(remote.swap).not.toHaveBeenCalled();
+      expect(remote.checkProofStates).not.toHaveBeenCalled();
+    },
+  );
+
+  it('preserves saved change already spent by another operation during legacy swap recovery', async () => {
+    const original = executingOperation('legacy-spent-change');
+    const keepSecret = `${original.id}-keep`;
+    const operation: ExecutingSendOperation = {
+      ...original,
+      revision: undefined,
+      inputAmount: Amount.from(20),
+      outputData: {
+        send: original.outputData!.send,
+        keep: [
+          {
+            ...original.outputData!.send[0]!,
+            secret: Buffer.from(keepSecret).toString('hex'),
+            blindedMessage: { amount: 10, id: keysetId, B_: 'B-keep' },
+          },
+        ],
+      },
+    };
+    await repositories.sendOperationRepository.create(operation);
+    const spentChange = coreProof(keepSecret, {
+      state: 'spent',
+      createdByOperationId: operation.id,
+      usedByOperationId: 'later-operation',
+    });
+    await repositories.proofRepository.saveProofs(mintUrl, [
+      coreProof(operation.inputProofSecrets[0]!, {
+        amount: Amount.from(20),
+        state: 'spent',
+        usedByOperationId: operation.id,
+      }),
+      spentChange,
+    ]);
+    wallet.checkProofsStates.mockImplementation(async (proofs: CoreProof[]) =>
+      proofs.map(
+        (proof) =>
+          ({
+            state: proof.secret.endsWith('-input') ? 'SPENT' : 'UNSPENT',
+            Y: `Y-${proof.secret}`,
+          }) as CashuProofState,
+      ),
+    );
+    // Restore returns only unspent outputs, so the already-spent change must come from storage.
+    remote.restoreOutputs.mockResolvedValue([coreProof(`${operation.id}-send`)]);
+
+    await service.recoverPendingOperations();
+
+    expect((await repositories.sendOperationRepository.getById(operation.id))?.state).toBe(
+      'pending',
+    );
+    expect(await repositories.proofRepository.getProofBySecret(mintUrl, keepSecret)).toEqual(
+      spentChange,
+    );
+    expect(remote.swap).not.toHaveBeenCalled();
+  });
+
+  it.each(['ready', 'spent'] as const)(
+    'recovers a legacy swap after saving outputs with %s inputs',
+    async (state) => {
+      const operation = { ...executingOperation(`legacy-swap-${state}`), revision: undefined };
+      await persistExecuting(operation);
+      const sendProof = coreProof(`${operation.id}-send`, {
+        state: 'inflight',
+        createdByOperationId: operation.id,
+      });
+      await repositories.proofRepository.saveProofs(mintUrl, [sendProof]);
+      await repositories.proofRepository.setProofState(mintUrl, operation.inputProofSecrets, state);
+      wallet.checkProofsStates.mockImplementation(async (proofs: CoreProof[]) =>
+        proofs.map(
+          (proof) =>
+            ({
+              state: proof.secret.endsWith('-input') ? 'SPENT' : 'UNSPENT',
+              Y: `Y-${proof.secret}`,
+            }) as CashuProofState,
+        ),
+      );
+      remote.restoreOutputs.mockResolvedValue([sendProof]);
+
+      await service.recoverPendingOperations();
+      await service.recoverPendingOperations();
+
+      const stored = await repositories.sendOperationRepository.getById(operation.id);
+      expect(stored?.state).toBe('pending');
+      if (stored?.state !== 'pending') throw new Error('Expected pending Send');
+      expect(stored.token?.proofs[0]?.secret).toBe(sendProof.secret);
+      expect(stored.token?.memo).toBe(operation.executionMemo);
+      expect(
+        await repositories.proofRepository.getProofBySecret(mintUrl, sendProof.secret),
+      ).toEqual(sendProof);
+      expect(
+        (
+          await repositories.proofRepository.getProofBySecret(
+            mintUrl,
+            operation.inputProofSecrets[0]!,
+          )
+        )?.state,
+      ).toBe('spent');
+      expect(remote.swap).not.toHaveBeenCalled();
+    },
+  );
+
   it('keeps mixed input outcomes executing with the original request intact', async () => {
     const operation = {
       ...executingOperation('restart-ambiguous'),

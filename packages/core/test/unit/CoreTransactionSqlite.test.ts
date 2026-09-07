@@ -1,11 +1,135 @@
 import { describe, expect, it } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { Amount } from '@cashu/cashu-ts';
 import { KeypairDerivation } from '../../keypairs/KeypairDerivation.ts';
 import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
 import { SqlStorageRepositories } from '../../../sql-storage/src/repositories.ts';
 import { SqliteDb } from '../../../sqlite-bun/src/db.ts';
+import { CoreSendTransactions } from '../../transactions/send/SendTransactions.ts';
+import type { ExecutingSendOperation } from '../../operations/send/SendOperation.ts';
+import type { CoreProof } from '../../types.ts';
 
 describe('CoreTransaction with SQLite', () => {
+  it.each(['exact', 'swap', 'conflict'] as const)(
+    'recovers legacy Send persistence atomically (%s)',
+    async (scenario) => {
+      const database = new Database(':memory:');
+      const repositories = new SqlStorageRepositories({ database: new SqliteDb({ database }) });
+      await repositories.init();
+      const transactions = new CoreSendTransactions(
+        new RepositoryCoreTransactionRunner(repositories),
+      );
+      const mintUrl = 'https://mint.test';
+      const amount = Amount.from(10);
+      const input: CoreProof = {
+        id: 'keyset',
+        secret: 'input',
+        C: 'C-input',
+        amount,
+        mintUrl,
+        unit: 'sat',
+        state: scenario === 'swap' ? 'spent' : 'inflight',
+        usedByOperationId: 'legacy',
+      };
+      const send: CoreProof = {
+        ...input,
+        secret: 'output',
+        C: 'C-output',
+        state: 'inflight',
+        usedByOperationId: undefined,
+        createdByOperationId: 'legacy',
+      };
+      const operation: ExecutingSendOperation = {
+        id: 'legacy',
+        state: 'executing',
+        amount,
+        mintUrl,
+        unit: 'sat',
+        method: 'default',
+        methodData: {},
+        createdAt: 1000,
+        updatedAt: 1000,
+        needsSwap: scenario === 'swap',
+        inputProofSecrets: [input.secret],
+        inputAmount: amount,
+        fee: Amount.zero(),
+        outputData:
+          scenario === 'swap'
+            ? {
+                keep: [],
+                send: [
+                  {
+                    blindedMessage: { id: send.id, amount: 10, B_: 'B-output' },
+                    secret: Buffer.from(send.secret).toString('hex'),
+                    blindingFactor: '01',
+                  },
+                ],
+              }
+            : undefined,
+      };
+      try {
+        await repositories.sendOperationRepository.create(operation);
+        await repositories.proofRepository.saveProofs(
+          mintUrl,
+          scenario === 'swap' ? [input, send] : [input],
+        );
+        if (scenario === 'swap') {
+          const storedSend = await repositories.proofRepository.getProofBySecret(
+            mintUrl,
+            send.secret,
+          );
+          await transactions.claimRecovery({
+            operationId: operation.id,
+            expectedRevision: 0,
+            updatedAt: 2000,
+          });
+          const result = await transactions.applyResult({
+            operationId: operation.id,
+            updatedAt: 3000,
+            keepProofs: [],
+            sendProofs: [send],
+            token: { mint: mintUrl, unit: 'sat', proofs: [send] },
+          });
+          expect(result.operation.state).toBe('pending');
+          expect(result.savedProofs).toEqual([]);
+          expect(await repositories.proofRepository.getProofBySecret(mintUrl, send.secret)).toEqual(
+            storedSend,
+          );
+          expect(
+            (await repositories.proofRepository.getProofBySecret(mintUrl, input.secret))
+              ?.usedByOperationId,
+          ).toBe(operation.id);
+        } else if (scenario === 'conflict') {
+          database.exec(`
+            CREATE TRIGGER reject_recovery BEFORE UPDATE ON coco_cashu_send_operations
+            WHEN NEW.state = 'rolled_back'
+            BEGIN SELECT RAISE(ABORT, 'recovery failed'); END;
+          `);
+          await expect(
+            transactions.recoverLegacyExact({ operationId: operation.id, updatedAt: 2000 }),
+          ).rejects.toThrow('recovery failed');
+          expect((await repositories.sendOperationRepository.getById(operation.id))?.state).toBe(
+            'executing',
+          );
+          expect(
+            await repositories.proofRepository.getProofBySecret(mintUrl, input.secret),
+          ).toMatchObject(input);
+        } else {
+          await transactions.recoverLegacyExact({ operationId: operation.id, updatedAt: 2000 });
+          expect((await repositories.sendOperationRepository.getById(operation.id))?.state).toBe(
+            'rolled_back',
+          );
+          const available = await repositories.proofRepository.getAvailableProofs(mintUrl);
+          expect(available).toHaveLength(1);
+          expect(available[0]?.secret).toBe(input.secret);
+          expect(available[0]?.usedByOperationId).toBeUndefined();
+        }
+      } finally {
+        database.close();
+      }
+    },
+  );
+
   it('rolls back allocation when an independent sibling import fails', async () => {
     const database = new Database(':memory:');
     const repositories = new SqlStorageRepositories({ database: new SqliteDb({ database }) });

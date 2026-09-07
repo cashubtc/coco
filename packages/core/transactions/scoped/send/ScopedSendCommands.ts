@@ -26,6 +26,8 @@ import type {
   ExecuteExactSendResult,
   BeginSwapExecutionInput,
   ClaimSendRecoveryInput,
+  RecoverLegacyExactSendInput,
+  RecoveredLegacyExactSend,
   SwapTransportRequest,
   BegunSwapExecution,
   ApplySwapResultInput,
@@ -51,6 +53,7 @@ export interface ScopedSendCommands {
   executeExact(input: ExecuteExactSendInput): Promise<ExecuteExactSendResult>;
   beginExecution(input: BeginSwapExecutionInput): Promise<BegunSwapExecution>;
   claimRecovery(input: ClaimSendRecoveryInput): Promise<BegunSwapExecution>;
+  recoverLegacyExact(input: RecoverLegacyExactSendInput): Promise<RecoveredLegacyExactSend>;
   applyResult(input: ApplySwapResultInput): Promise<AppliedSwapResult>;
   failExecution(input: FailSwapExecutionInput): Promise<FailedSwapExecution>;
   cancelPrepared(input: CancelPreparedSendInput): Promise<CancelledPreparedSend>;
@@ -255,7 +258,14 @@ export class RepositorySendCommands implements ScopedSendCommands {
         'Send recovery lost an executing-state or revision conflict',
       );
     }
-    const inputProofs = await this.getOwnedReadyInputs(current);
+    // Legacy handlers spent inputs before persisting pending. A recovery claim never releases them.
+    const inputProofs = await this.proofs.getOwned({
+      mintUrl: current.mintUrl,
+      unit: current.unit,
+      operationId: current.id,
+      secrets: current.inputProofSecrets,
+      state: ['ready', 'spent'],
+    });
     const claimed: ExecutingSendOperation = {
       ...current,
       revision: input.expectedRevision + 1,
@@ -282,6 +292,65 @@ export class RepositorySendCommands implements ScopedSendCommands {
         inputProofs,
         outputData: claimed.outputData!,
       },
+    };
+  }
+
+  async recoverLegacyExact(input: RecoverLegacyExactSendInput): Promise<RecoveredLegacyExactSend> {
+    const current = await this.sends.getById(input.operationId);
+    // New exact Sends never enter executing. Legacy rows normalize their absent revision to zero.
+    if (
+      !current ||
+      current.state !== 'executing' ||
+      (current.revision ?? 0) !== 0 ||
+      current.method !== 'default' ||
+      current.needsSwap ||
+      current.outputData ||
+      ('token' in current && current.token)
+    ) {
+      throw new SendOperationConflictError(
+        input.operationId,
+        'Legacy exact Send recovery lost a state or revision conflict',
+      );
+    }
+    const inputs = await this.proofs.getOwned({
+      mintUrl: current.mintUrl,
+      unit: current.unit,
+      operationId: current.id,
+      secrets: current.inputProofSecrets,
+      state: ['ready', 'inflight'],
+    });
+    assertExactInputs(inputs, current);
+    // The old exact path returned a token only after persisting pending and never submitted inputs.
+    await this.proofs.releaseUnsubmitted({
+      mintUrl: current.mintUrl,
+      unit: current.unit,
+      operationId: current.id,
+      secrets: current.inputProofSecrets,
+    });
+    const operation: RolledBackSendOperation = {
+      ...current,
+      state: 'rolled_back',
+      revision: 1,
+      updatedAt: input.updatedAt,
+      error: 'Recovered legacy exact Send interrupted before token delivery',
+    };
+    if (
+      !(await this.sends.transition({
+        operationId: current.id,
+        expectedState: 'executing',
+        expectedRevision: 0,
+        next: operation,
+      }))
+    ) {
+      throw new SendOperationConflictError(current.id, 'Legacy exact Send recovery conflicted');
+    }
+    return {
+      operation,
+      readyProofSecrets: inputs
+        .filter((proof) => proof.state === 'inflight')
+        .map((proof) => proof.secret),
+      releasedInputSecrets: [...current.inputProofSecrets],
+      committed: true,
     };
   }
 
@@ -326,15 +395,32 @@ export class RepositorySendCommands implements ScopedSendCommands {
       );
     }
     const revision = current.revision ?? 0;
-    await this.getOwnedReadyInputs(current);
     assertSwapResult(current, input);
-    const savedProofs = [...input.keepProofs, ...input.sendProofs];
+    const outputs = [...input.keepProofs, ...input.sendProofs];
+    const existing = await this.proofs.getProofsBySecrets(
+      current.mintUrl,
+      outputs.map((proof) => proof.secret),
+    );
+    const existingSecrets = new Set(existing.map((proof) => proof.secret));
+    if (
+      !sameCoreProofSet(
+        existing,
+        outputs.filter((proof) => existingSecrets.has(proof.secret)),
+      )
+    ) {
+      throw new ProofValidationError(
+        'Swap output already exists with conflicting proof data or ownership',
+      );
+    }
+    // A legacy result may already have saved some or all outputs. Keep their current state and
+    // reservations: change can have been spent or reserved by another operation before recovery.
+    const savedProofs = outputs.filter((proof) => !existingSecrets.has(proof.secret));
     await this.proofs.settleSpend({
       mintUrl: current.mintUrl,
       unit: current.unit,
       operationId: current.id,
       secrets: current.inputProofSecrets,
-      state: 'ready',
+      state: ['ready', 'spent'],
       outputs: savedProofs,
     });
 
@@ -841,7 +927,10 @@ function isEquivalentExactToken(
   );
 }
 
-function assertExactInputs(resolved: Proof[], operation: PreparedSendOperation): void {
+function assertExactInputs(
+  resolved: Proof[],
+  operation: PreparedSendOperation | ExecutingSendOperation,
+): void {
   if (
     !sumProofs(resolved).equals(operation.amount) ||
     !operation.inputAmount.equals(operation.amount) ||

@@ -25,3 +25,7 @@ Share mint metadata refresh through the explicitly committing
 `MintService.refreshAndCommitIfStale` action and a dedicated metadata transaction gateway. Keep
 freshness policy, fetching, and post-commit mint events out of Send; existing metadata refresh
 callers reuse the same action.
+
+Recover legacy exact Sends stranded in `executing` by atomically releasing their unsubmitted
+inputs. Resume legacy swaps with locally spent inputs or previously saved outputs without
+duplicating proofs or resetting later output spending and reservations.

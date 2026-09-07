@@ -7,6 +7,8 @@ import type {
   BegunSwapExecution,
   BeginSwapExecutionInput,
   ClaimSendRecoveryInput,
+  RecoverLegacyExactSendInput,
+  RecoveredLegacyExactSend,
   BeginReclaimInput,
   CancelledPreparedSend,
   CancelPreparedSendInput,
@@ -28,6 +30,7 @@ export interface SendTransactions {
   executeExact(input: ExecuteExactSendInput): Promise<ExecuteExactSendResult>;
   beginExecution(input: BeginSwapExecutionInput): Promise<BegunSwapExecution>;
   claimRecovery(input: ClaimSendRecoveryInput): Promise<BegunSwapExecution>;
+  recoverLegacyExact(input: RecoverLegacyExactSendInput): Promise<RecoveredLegacyExactSend>;
   applyResult(input: ApplySwapResultInput): Promise<AppliedSwapResult>;
   failExecution(input: FailSwapExecutionInput): Promise<FailedSwapExecution>;
   cancelPrepared(input: CancelPreparedSendInput): Promise<CancelledPreparedSend>;
@@ -55,6 +58,10 @@ export class CoreSendTransactions implements SendTransactions {
 
   claimRecovery(input: ClaimSendRecoveryInput): Promise<BegunSwapExecution> {
     return this.runner.run((transaction) => transaction.sends.claimRecovery(input));
+  }
+
+  recoverLegacyExact(input: RecoverLegacyExactSendInput): Promise<RecoveredLegacyExactSend> {
+    return this.runner.run((transaction) => transaction.sends.recoverLegacyExact(input));
   }
 
   applyResult(input: ApplySwapResultInput): Promise<AppliedSwapResult> {

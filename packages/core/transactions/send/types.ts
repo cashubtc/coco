@@ -60,6 +60,15 @@ export interface ClaimSendRecoveryInput {
   updatedAt: number;
 }
 
+export interface RecoverLegacyExactSendInput {
+  operationId: string;
+  updatedAt: number;
+}
+
+export interface RecoveredLegacyExactSend extends CancelledPreparedSend {
+  readyProofSecrets: string[];
+}
+
 export interface SwapTransportRequest {
   mintUrl: string;
   unit: string;
