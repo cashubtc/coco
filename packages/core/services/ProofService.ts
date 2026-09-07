@@ -29,7 +29,7 @@ import { WalletService } from './WalletService';
 import type { MintService } from './MintService';
 import type { Logger } from '../logging/Logger.ts';
 import type { SeedService } from './SeedService.ts';
-import type { KeyRingService } from './KeyRingService.ts';
+import type { P2pkSigner } from '../keypairs/P2pkSigner.ts';
 import {
   DEFAULT_UNIT,
   assertSameUnit,
@@ -55,7 +55,7 @@ export class ProofService {
   private readonly eventBus?: EventBus<CoreEvents>;
   private readonly walletService: WalletService;
   private readonly mintService: MintService;
-  private readonly keyRingService: KeyRingService;
+  private readonly signer: P2pkSigner;
   private readonly seedService: SeedService;
   private readonly logger?: Logger;
   private readonly outputDataCreator: OutputDataCreator;
@@ -64,7 +64,7 @@ export class ProofService {
     proofRepository: ProofRepository,
     walletService: WalletService,
     mintService: MintService,
-    keyRingService: KeyRingService,
+    signer: P2pkSigner,
     seedService: SeedService,
     logger?: Logger,
     eventBus?: EventBus<CoreEvents>,
@@ -73,7 +73,7 @@ export class ProofService {
     this.counterService = counterService;
     this.walletService = walletService;
     this.mintService = mintService;
-    this.keyRingService = keyRingService;
+    this.signer = signer;
     this.proofRepository = proofRepository;
     this.seedService = seedService;
     this.logger = logger;
@@ -875,7 +875,7 @@ export class ProofService {
 
       // Sign the proof - if this fails, we abort the entire operation
       try {
-        preparedProofs[i] = await this.keyRingService.signProof(proof, parsedSecret[1].data);
+        preparedProofs[i] = await this.signer.signProof(proof, parsedSecret[1].data);
         this.logger?.debug('P2PK proof signed successfully', {
           proofIndex: i,
           recipient: parsedSecret[1].data,
