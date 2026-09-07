@@ -1,7 +1,13 @@
-import { isBlsKeyset, Mint, Wallet, type OutputDataCreator } from '@cashu/cashu-ts';
+import {
+  isBlsKeyset,
+  Mint,
+  Wallet,
+  type OutputDataCreator,
+  type OutputDataLike,
+} from '@cashu/cashu-ts';
 import type { MintMetadata, MintMetadataObservation } from '@core/mints/MintMetadata.ts';
 import type { Keyset } from '@core/models/Keyset.ts';
-import { KeysetSyncError, MintFetchError } from '@core/models/Error.ts';
+import { KeysetSyncError, MintFetchError, ProofValidationError } from '@core/models/Error.ts';
 import type { SendRemote, SendRemoteSession } from '@core/operations/send/SendRemote.ts';
 import { createKeyChain } from '@core/proofs/KeysetSelection.ts';
 import { deserializeOutputData } from '@core/utils.ts';
@@ -70,18 +76,40 @@ export class CashuSendRemote implements SendRemote {
     return {
       swap: (request) => {
         const data = deserializeOutputData(request.outputData);
-        return wallet.send(request.amount, request.inputProofs, undefined, {
-          send: { type: 'custom', data: data.send },
-          keep: { type: 'custom', data: data.keep },
-        });
+        const keysetId = getOutputKeysetId([...data.keep, ...data.send]);
+        return wallet.send(
+          request.amount,
+          request.inputProofs,
+          { keysetId },
+          {
+            send: { type: 'custom', data: data.send },
+            keep: { type: 'custom', data: data.keep },
+          },
+        );
       },
       checkProofStates: (proofs) => wallet.checkProofsStates(proofs),
       restoreOutputs: (outputs) => restoreOutputProofs(wallet, metadata.keysets, unit, outputs),
-      reclaim: (proofs, outputs) =>
-        wallet.receive({ mint: mintUrl, proofs, unit }, undefined, {
-          type: 'custom',
-          data: deserializeOutputData(outputs).keep,
-        }),
+      reclaim: (proofs, outputs) => {
+        const data = deserializeOutputData(outputs).keep;
+        const keysetId = getOutputKeysetId(data);
+        return wallet.receive(
+          { mint: mintUrl, proofs, unit },
+          { keysetId },
+          {
+            type: 'custom',
+            data,
+          },
+        );
+      },
     };
   }
+}
+
+/** Pin unblinding to the committed output plan, even if the wallet now prefers another keyset. */
+function getOutputKeysetId(outputs: readonly OutputDataLike[]): string {
+  const keysetId = outputs[0]?.blindedMessage.id;
+  if (!keysetId || outputs.some((output) => output.blindedMessage.id !== keysetId)) {
+    throw new ProofValidationError('Send outputs must specify a single non-empty keyset id');
+  }
+  return keysetId;
 }

@@ -31,6 +31,8 @@ cancellation, pending default-token reclaim, and cleanup to the current transact
 - `CashuSendRemote` constructs a Wallet Instance from committed metadata and performs swap,
   proof-state checks, and reclaim without persistence authority. Remote output restoration and
   unblinding are shared with remaining `ProofService` callers; persistence stays with the caller.
+  Swap and reclaim explicitly select their persisted output keyset for unblinding and reject empty
+  or mixed-keyset output plans before mint I/O.
 - The current `TransactionLifetime` binds repositories and exposed commands, drains started work,
   rejects failed or expired scopes, and keeps retries outside rolled-back transactions.
 
