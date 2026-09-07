@@ -1,15 +1,14 @@
 # Send transaction migration
 
-PR #463 adapts Send to the transaction architecture in PR #461. The baseline is #461 at
-`19f6ecb5fe856b70ba27442900c48ba053f672b0`; the original Send slice is #463 at
-`b4ff6278ee285ed384fc85c736dc3af87d406f11`.
+PR #463 adapts Send to the transaction architecture merged in PR #461. The baseline is master at
+`a8952b3491c7e5eee67f5e186f6ade3db52727c0`, including the final input naming and coverage conventions.
 [Transaction Design](../../TRANSACTION_DESIGN.md) and
 [ADR-0011](../../packages/core/docs/adr/0011-use-domain-transaction-gateways.md) govern the migration.
 
 ## Scope
 
 Preserve the existing public Send APIs, plugin operation methods, supported methods, token behavior,
-and Operation Recovery decisions. Migrate preparation, exact execution, swap execution, completion,
+and persisted request compatibility. Migrate preparation, exact execution, swap execution, completion,
 cancellation, pending default-token reclaim, and cleanup to the current transaction boundaries.
 
 `init` is a transient intent, not work to resume. Startup releases any reservations owned by legacy
@@ -36,6 +35,18 @@ cancellation, pending default-token reclaim, and cleanup to the current transact
 - The current `TransactionLifetime` binds repositories and exposed commands, drains started work,
   rejects failed or expired scopes, and keeps retries outside rolled-back transactions.
 
+## Naming
+
+`SendOperationService` retains its name because it coordinates a durable saga. Shared behavior uses
+Queries, local capabilities, and `Scoped*Commands`; shared reuse alone does not make a module a
+Service. `SendTransactions` owns committed transitions, while scoped command methods run inside the
+owning transaction.
+
+Method-specific argument objects use `*Input` types and the parameter name `input`, such as
+`prepare(input: PrepareSendInput)` and `allocate(input: AllocateOutputsInput)`. Transaction runner
+callbacks use `work`. Existing domain values retain their specific names, such as
+`refreshMintMetadata(observation)` and `cleanupLegacyInit(operationId)`.
+
 ## Persisted request compatibility
 
 Send retains the original input-secret references, output plan, and execution memo. Referenced proof
@@ -52,7 +63,17 @@ material. IndexedDB tolerates records without the field. The original Send reque
 
 Automatic recovery of interrupted reclaim remains outside this refactor. Both old and new
 `rolling_back` records retain the existing startup warning and manual seed Restore path. The
-existing Send mint-error classification policy is preserved.
+Send mint-error classification now recognizes an explicit set of request-validation rejections from
+[NUT error codes](https://github.com/cashubtc/nuts/blob/main/error_codes.md). Unknown codes retain the
+executing request and its reservations, just like known ambiguous outcomes. Replay errors always
+retain the request because an earlier submission may still complete. An initial validation rejection
+can release resources only while its authorizing revision is still current; a recovery claim fences
+that failure. A successful response can still settle the immutable request after a recovery claim.
+
+Reservation cleanup releases only proofs owned by known terminal Sends. A missing Send record does
+not establish orphanhood: the reservation may belong to Melt or another workflow. Unidentified
+owners remain reserved until their owning workflow or a future ownership-aware repair can establish
+safe release.
 
 ## Verification coverage
 

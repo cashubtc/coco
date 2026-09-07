@@ -57,7 +57,11 @@ import type {
 import type { SendOperationQueries } from './SendOperationQueries.ts';
 import type { SendRemote, SendRemoteSession } from './SendRemote.ts';
 
-const AMBIGUOUS_SWAP_MINT_ERROR_CODES = new Set([11001, 11002, 11003, 11004]);
+// Explicit request-validation rejections from NUT error_codes.md. Unknown errors
+// do not establish non-effect and must retain the request for recovery.
+const DEFINITIVE_SWAP_MINT_ERROR_CODES = new Set([
+  10001, 11005, 11007, 11008, 11009, 11010, 11014, 11015, 12001, 12002, 12003,
+]);
 
 type SwapExecutionOutcome =
   | { status: 'PENDING'; result: AppliedSwapResult }
@@ -303,23 +307,26 @@ export class SendOperationService {
       updatedAt: Date.now(),
       memo: options?.memo ? this.normalizeMemo(options.memo) : undefined,
     });
-    return this.submitPersistedSwap(begun.operation, begun.request, remote);
+    return this.submitPersistedSwap(begun.operation, begun.request, remote, 'initial');
   }
 
   private async submitPersistedSwap(
     operation: ExecutingSendOperation,
     request: SwapTransportRequest,
     remote: SendRemoteSession,
+    submission: 'initial' | 'replay',
   ): Promise<SwapExecutionOutcome> {
     let result: Awaited<ReturnType<SendRemoteSession['swap']>>;
     try {
       result = await remote.swap(request);
     } catch (error) {
-      if (!this.isDefinitiveSwapFailure(error)) {
+      // A rejected replay cannot rule out an earlier submission still completing.
+      if (submission === 'replay' || !this.isDefinitiveSwapFailure(error)) {
         throw error;
       }
       const failed = await this.transactions.failExecution({
         operationId: operation.id,
+        expectedRevision: operation.revision ?? 0,
         updatedAt: Date.now(),
         error: error.message,
       });
@@ -740,7 +747,12 @@ export class SendOperationService {
         expectedRevision: latest.revision ?? 0,
         updatedAt: Date.now(),
       });
-      const outcome = await this.submitPersistedSwap(claimed.operation, claimed.request, remote);
+      const outcome = await this.submitPersistedSwap(
+        claimed.operation,
+        claimed.request,
+        remote,
+        'replay',
+      );
       if (outcome.status === 'FAILED') {
         await this.publishFailedSwap(outcome.result);
       } else {
@@ -888,7 +900,7 @@ export class SendOperationService {
 
   /**
    * Clean up orphaned proof reservations.
-   * Finds proofs that are reserved but point to non-existent or terminal operations.
+   * Releases proofs reserved by known terminal Sends; unidentified owners remain reserved.
    */
   private async cleanupOrphanedReservations(): Promise<number> {
     const result = await this.transactions.cleanupOrphanedReservations();
@@ -1021,7 +1033,7 @@ export class SendOperationService {
   }
 
   private isDefinitiveSwapFailure(error: unknown): error is MintOperationError {
-    return error instanceof MintOperationError && !AMBIGUOUS_SWAP_MINT_ERROR_CODES.has(error.code);
+    return error instanceof MintOperationError && DEFINITIVE_SWAP_MINT_ERROR_CODES.has(error.code);
   }
 
   private async publishCommittedEvent<E extends keyof CoreEvents>(

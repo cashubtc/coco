@@ -33,28 +33,28 @@ export class MemorySendOperationRepository implements SendOperationRepository {
     );
   }
 
-  async transition(command: {
+  async transition(input: {
     operationId: string;
     expectedState: SendOperationState;
     expectedRevision: number;
     next: SendOperation;
   }): Promise<boolean> {
-    const current = this.operations.get(command.operationId);
+    const current = this.operations.get(input.operationId);
     if (
       !current ||
-      current.state !== command.expectedState ||
-      (current.revision ?? 0) !== command.expectedRevision
+      current.state !== input.expectedState ||
+      (current.revision ?? 0) !== input.expectedRevision
     ) {
       return false;
     }
-    if (command.next.id !== command.operationId) {
+    if (input.next.id !== input.operationId) {
       throw new Error('Send operation transition cannot change the operation id');
     }
     this.operations.set(
-      command.operationId,
+      input.operationId,
       cloneMemoryValue({
-        ...command.next,
-        revision: command.expectedRevision + 1,
+        ...input.next,
+        revision: input.expectedRevision + 1,
       }),
     );
     return true;

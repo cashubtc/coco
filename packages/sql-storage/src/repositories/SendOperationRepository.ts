@@ -241,16 +241,16 @@ export class SqliteSendOperationRepository implements SendOperationRepository {
     }
   }
 
-  async transition(command: {
+  async transition(input: {
     operationId: string;
     expectedState: SendOperationState;
     expectedRevision: number;
     next: SendOperation;
   }): Promise<boolean> {
-    if (command.next.id !== command.operationId) {
+    if (input.next.id !== input.operationId) {
       throw new Error('Send operation transition cannot change the operation id');
     }
-    const next = command.next;
+    const next = input.next;
     const prepared: SqlValue[] =
       next.state === 'init'
         ? [null, null, null, null, null, null]
@@ -274,11 +274,11 @@ export class SqliteSendOperationRepository implements SendOperationRepository {
         next.executionMemo ?? null,
         next.unit,
         ...prepared,
-        command.expectedRevision + 1,
+        input.expectedRevision + 1,
         next.reclaimData ? stringifyJson(next.reclaimData) : null,
-        command.operationId,
-        command.expectedState,
-        command.expectedRevision,
+        input.operationId,
+        input.expectedState,
+        input.expectedRevision,
       ],
     );
     return result.changes === 1;

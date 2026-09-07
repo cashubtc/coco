@@ -4,7 +4,7 @@ import { ProofValidationError } from '@core/models/Error.ts';
 import type { CoreProof } from '@core/types.ts';
 import { getSecretsFromSerializedOutputData, type SerializedOutputData } from '@core/utils.ts';
 
-export function assertOutputProofs(command: {
+export function assertOutputProofs(input: {
   mintUrl: string;
   unit: string;
   outputData: SerializedOutputData;
@@ -13,8 +13,8 @@ export function assertOutputProofs(command: {
   proofs: CoreProof[];
   createdByOperationId?: string;
 }): void {
-  const { proofs, state, kind } = command;
-  const outputSecrets = getSecretsFromSerializedOutputData(command.outputData);
+  const { proofs, state, kind } = input;
+  const outputSecrets = getSecretsFromSerializedOutputData(input.outputData);
   const expectedSecrets = kind === 'keep' ? outputSecrets.keepSecrets : outputSecrets.sendSecrets;
   if (
     new Set(expectedSecrets).size !== expectedSecrets.length ||
@@ -23,7 +23,7 @@ export function assertOutputProofs(command: {
   ) {
     throw new ProofValidationError(`Swap ${kind} proofs do not match allocated outputs`);
   }
-  const allocation = command.outputData[kind];
+  const allocation = input.outputData[kind];
   const expected = new Map(
     allocation.map((output, index) => [
       expectedSecrets[index]!,
@@ -39,10 +39,10 @@ export function assertOutputProofs(command: {
       !output ||
       proof.id !== output.id ||
       !Amount.from(proof.amount).equals(output.amount) ||
-      proof.mintUrl !== command.mintUrl ||
-      normalizeUnit(proof.unit) !== normalizeUnit(command.unit) ||
+      proof.mintUrl !== input.mintUrl ||
+      normalizeUnit(proof.unit) !== normalizeUnit(input.unit) ||
       proof.state !== state ||
-      proof.createdByOperationId !== command.createdByOperationId
+      proof.createdByOperationId !== input.createdByOperationId
     ) {
       throw new ProofValidationError(`Swap ${kind} proofs do not match allocated outputs`);
     }

@@ -190,7 +190,7 @@ export class IdbSendOperationRepository implements SendOperationRepository {
     });
   }
 
-  async transition(command: {
+  async transition(input: {
     operationId: string;
     expectedState: SendOperationState;
     expectedRevision: number;
@@ -198,18 +198,18 @@ export class IdbSendOperationRepository implements SendOperationRepository {
   }): Promise<boolean> {
     return this.db.runTransaction('rw', [this.storeName], async (tx) => {
       const table = tx.table(this.storeName);
-      const existing = (await table.get(command.operationId)) as SendOperationRow | undefined;
+      const existing = (await table.get(input.operationId)) as SendOperationRow | undefined;
       if (
         !existing ||
-        existing.state !== command.expectedState ||
-        (existing.revision ?? 0) !== command.expectedRevision
+        existing.state !== input.expectedState ||
+        (existing.revision ?? 0) !== input.expectedRevision
       ) {
         return false;
       }
-      if (command.next.id !== command.operationId) {
+      if (input.next.id !== input.operationId) {
         throw new Error('Send operation transition cannot change the operation id');
       }
-      await table.put(operationToRow({ ...command.next, revision: command.expectedRevision + 1 }));
+      await table.put(operationToRow({ ...input.next, revision: input.expectedRevision + 1 }));
       return true;
     });
   }

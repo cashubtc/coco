@@ -4,40 +4,40 @@ import type {
   AppliedSwapResult,
   BegunReclaim,
   CompletedReclaim,
-  ApplySwapResultCommand,
+  ApplySwapResultInput,
   BegunSwapExecution,
-  BeginSwapExecutionCommand,
-  ClaimSendRecoveryCommand,
-  BeginReclaimCommand,
+  BeginSwapExecutionInput,
+  ClaimSendRecoveryInput,
+  BeginReclaimInput,
   CancelledPreparedSend,
-  CancelPreparedSendCommand,
+  CancelPreparedSendInput,
   CleanupLegacyInitResult,
   CleanupOrphanedSendReservationsResult,
   CompletedPendingSend,
-  CompletePendingSendCommand,
-  CompleteReclaimCommand,
-  ExecuteExactSendCommand,
+  CompletePendingSendInput,
+  CompleteReclaimInput,
+  ExecuteExactSendInput,
   ExecuteExactSendResult,
   FailedSwapExecution,
-  FailSwapExecutionCommand,
-  PrepareSendCommand,
+  FailSwapExecutionInput,
+  PrepareSendInput,
   PreparedSendResult,
 } from './types.ts';
 
 export interface SendTransactions {
   refreshMintMetadata(observation: MintMetadataObservation): Promise<MintMetadata>;
-  prepare(command: PrepareSendCommand): Promise<PreparedSendResult>;
-  executeExact(command: ExecuteExactSendCommand): Promise<ExecuteExactSendResult>;
-  beginExecution(command: BeginSwapExecutionCommand): Promise<BegunSwapExecution>;
-  claimRecovery(command: ClaimSendRecoveryCommand): Promise<BegunSwapExecution>;
-  applyResult(command: ApplySwapResultCommand): Promise<AppliedSwapResult>;
-  failExecution(command: FailSwapExecutionCommand): Promise<FailedSwapExecution>;
-  cancelPrepared(command: CancelPreparedSendCommand): Promise<CancelledPreparedSend>;
-  completePending(command: CompletePendingSendCommand): Promise<CompletedPendingSend>;
+  prepare(input: PrepareSendInput): Promise<PreparedSendResult>;
+  executeExact(input: ExecuteExactSendInput): Promise<ExecuteExactSendResult>;
+  beginExecution(input: BeginSwapExecutionInput): Promise<BegunSwapExecution>;
+  claimRecovery(input: ClaimSendRecoveryInput): Promise<BegunSwapExecution>;
+  applyResult(input: ApplySwapResultInput): Promise<AppliedSwapResult>;
+  failExecution(input: FailSwapExecutionInput): Promise<FailedSwapExecution>;
+  cancelPrepared(input: CancelPreparedSendInput): Promise<CancelledPreparedSend>;
+  completePending(input: CompletePendingSendInput): Promise<CompletedPendingSend>;
   cleanupOrphanedReservations(): Promise<CleanupOrphanedSendReservationsResult>;
   cleanupLegacyInit(operationId: string): Promise<CleanupLegacyInitResult>;
-  beginReclaim(command: BeginReclaimCommand): Promise<BegunReclaim>;
-  completeReclaim(command: CompleteReclaimCommand): Promise<CompletedReclaim>;
+  beginReclaim(input: BeginReclaimInput): Promise<BegunReclaim>;
+  completeReclaim(input: CompleteReclaimInput): Promise<CompletedReclaim>;
 }
 
 export class CoreSendTransactions implements SendTransactions {
@@ -47,36 +47,36 @@ export class CoreSendTransactions implements SendTransactions {
     return this.runner.run((transaction) => transaction.mintMetadata.applyObservation(observation));
   }
 
-  prepare(command: PrepareSendCommand): Promise<PreparedSendResult> {
-    return this.runner.run((transaction) => transaction.sends.prepare(command));
+  prepare(input: PrepareSendInput): Promise<PreparedSendResult> {
+    return this.runner.run((transaction) => transaction.sends.prepare(input));
   }
 
-  executeExact(command: ExecuteExactSendCommand): Promise<ExecuteExactSendResult> {
-    return this.runner.run((transaction) => transaction.sends.executeExact(command));
+  executeExact(input: ExecuteExactSendInput): Promise<ExecuteExactSendResult> {
+    return this.runner.run((transaction) => transaction.sends.executeExact(input));
   }
 
-  beginExecution(command: BeginSwapExecutionCommand): Promise<BegunSwapExecution> {
-    return this.runner.run((transaction) => transaction.sends.beginExecution(command));
+  beginExecution(input: BeginSwapExecutionInput): Promise<BegunSwapExecution> {
+    return this.runner.run((transaction) => transaction.sends.beginExecution(input));
   }
 
-  claimRecovery(command: ClaimSendRecoveryCommand): Promise<BegunSwapExecution> {
-    return this.runner.run((transaction) => transaction.sends.claimRecovery(command));
+  claimRecovery(input: ClaimSendRecoveryInput): Promise<BegunSwapExecution> {
+    return this.runner.run((transaction) => transaction.sends.claimRecovery(input));
   }
 
-  applyResult(command: ApplySwapResultCommand): Promise<AppliedSwapResult> {
-    return this.runner.run((transaction) => transaction.sends.applyResult(command));
+  applyResult(input: ApplySwapResultInput): Promise<AppliedSwapResult> {
+    return this.runner.run((transaction) => transaction.sends.applyResult(input));
   }
 
-  failExecution(command: FailSwapExecutionCommand): Promise<FailedSwapExecution> {
-    return this.runner.run((transaction) => transaction.sends.failExecution(command));
+  failExecution(input: FailSwapExecutionInput): Promise<FailedSwapExecution> {
+    return this.runner.run((transaction) => transaction.sends.failExecution(input));
   }
 
-  cancelPrepared(command: CancelPreparedSendCommand): Promise<CancelledPreparedSend> {
-    return this.runner.run((transaction) => transaction.sends.cancelPrepared(command));
+  cancelPrepared(input: CancelPreparedSendInput): Promise<CancelledPreparedSend> {
+    return this.runner.run((transaction) => transaction.sends.cancelPrepared(input));
   }
 
-  completePending(command: CompletePendingSendCommand): Promise<CompletedPendingSend> {
-    return this.runner.run((transaction) => transaction.sends.completePending(command));
+  completePending(input: CompletePendingSendInput): Promise<CompletedPendingSend> {
+    return this.runner.run((transaction) => transaction.sends.completePending(input));
   }
 
   cleanupOrphanedReservations(): Promise<CleanupOrphanedSendReservationsResult> {
@@ -87,11 +87,11 @@ export class CoreSendTransactions implements SendTransactions {
     return this.runner.run((transaction) => transaction.sends.cleanupLegacyInit(operationId));
   }
 
-  beginReclaim(command: BeginReclaimCommand): Promise<BegunReclaim> {
-    return this.runner.run((transaction) => transaction.sends.beginReclaim(command));
+  beginReclaim(input: BeginReclaimInput): Promise<BegunReclaim> {
+    return this.runner.run((transaction) => transaction.sends.beginReclaim(input));
   }
 
-  completeReclaim(command: CompleteReclaimCommand): Promise<CompletedReclaim> {
-    return this.runner.run((transaction) => transaction.sends.completeReclaim(command));
+  completeReclaim(input: CompleteReclaimInput): Promise<CompletedReclaim> {
+    return this.runner.run((transaction) => transaction.sends.completeReclaim(input));
   }
 }

@@ -473,7 +473,7 @@ describe('SendOperationService executing recovery', () => {
     );
   });
 
-  it('releases reservations owned by missing and terminal operations', async () => {
+  it('releases terminal Send reservations and preserves unidentified owners', async () => {
     const rolledBack: RolledBackSendOperation = {
       ...executingOperation('terminal-operation'),
       state: 'rolled_back',
@@ -497,14 +497,12 @@ describe('SendOperationService executing recovery', () => {
     expect(
       (await repositories.proofRepository.getProofBySecret(mintUrl, 'missing-owner-proof'))
         ?.usedByOperationId,
-    ).toBeUndefined();
+    ).toBe('missing-operation');
     expect(
       (await repositories.proofRepository.getProofBySecret(mintUrl, 'terminal-owner-proof'))
         ?.usedByOperationId,
     ).toBeUndefined();
-    expect(new Set(releasedSecrets)).toEqual(
-      new Set(['missing-owner-proof', 'terminal-owner-proof']),
-    );
+    expect(new Set(releasedSecrets)).toEqual(new Set(['terminal-owner-proof']));
     expect(logger.error).toHaveBeenCalledWith(
       'Failed to publish committed Send event',
       expect.objectContaining({ event: 'proofs:released', error: expect.any(Error) }),
@@ -568,28 +566,74 @@ describe('SendOperationService executing recovery', () => {
     expect(checkedSecrets.some((secret) => secret.startsWith('ordered-pending'))).toBe(true);
   });
 
-  it('commits a definitive replay failure before publishing rollback and logs listener errors', async () => {
-    const operation = executingOperation('definitive-failure');
+  it('retains an executing request after an unknown mint error during recovery', async () => {
+    const operation = executingOperation('unknown-replay-error');
     await persistExecuting(operation);
     wallet.checkProofsStates.mockResolvedValue([
       { state: 'UNSPENT', Y: 'Y-input' },
     ] as CashuProofState[]);
-    wallet.send.mockRejectedValue(new MintOperationError(12001, 'keyset rejected'));
-    eventBus.on('send:rolled-back', async ({ operationId }) => {
-      expect((await repositories.sendOperationRepository.getById(operationId))?.state).toBe(
-        'rolled_back',
-      );
-      throw new Error('listener failed');
-    });
+    wallet.send.mockRejectedValue(new MintOperationError(99999, 'unknown mint failure'));
 
     await service.recoverPendingOperations();
 
-    expect((await repositories.sendOperationRepository.getById(operation.id))?.state).toBe(
-      'rolled_back',
-    );
-    expect(logger.error).toHaveBeenCalledWith(
-      'Failed to publish committed Send event',
-      expect.objectContaining({ event: 'send:rolled-back' }),
-    );
+    const stored = await repositories.sendOperationRepository.getById(operation.id);
+    expect(stored?.state).toBe('executing');
+    if (stored?.state !== 'executing') throw new Error('Expected executing Send');
+    expect(stored.inputProofSecrets).toEqual(operation.inputProofSecrets);
+    expect(stored.outputData).toEqual(operation.outputData);
+    expect(
+      (
+        await repositories.proofRepository.getProofBySecret(
+          mintUrl,
+          operation.inputProofSecrets[0]!,
+        )
+      )?.usedByOperationId,
+    ).toBe(operation.id);
+  });
+
+  it('keeps a replay validation rejection recoverable while the original request succeeds', async () => {
+    const operation = executingOperation('overlapping-submissions');
+    await persistExecuting(operation);
+    const prepared: PreparedSendOperation = { ...operation, state: 'prepared', revision: 0 };
+    await repositories.sendOperationRepository.update(prepared);
+    let originalStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      originalStarted = resolve;
+    });
+    let releaseOriginal!: () => void;
+    const originalResponse = new Promise<void>((resolve) => {
+      releaseOriginal = resolve;
+    });
+    let submissions = 0;
+    wallet.send.mockImplementation(async (...args) => {
+      if (++submissions === 1) {
+        originalStarted();
+        await originalResponse;
+        return replayResult(...args);
+      }
+      throw new MintOperationError(12002, 'keyset rotated after original submission');
+    });
+    wallet.checkProofsStates.mockResolvedValue([
+      { state: 'UNSPENT', Y: 'Y-input' },
+    ] as CashuProofState[]);
+    const original = service.execute(prepared);
+    await started;
+    try {
+      await buildService().recoverPendingOperations();
+      const stored = await repositories.sendOperationRepository.getById(operation.id);
+      expect(stored?.state).toBe('executing');
+      expect(
+        (
+          await repositories.proofRepository.getProofBySecret(
+            mintUrl,
+            operation.inputProofSecrets[0]!,
+          )
+        )?.usedByOperationId,
+      ).toBe(operation.id);
+    } finally {
+      releaseOriginal();
+    }
+    expect((await original).operation.state).toBe('pending');
+    expect(submissions).toBe(2);
   });
 });

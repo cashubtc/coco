@@ -11,7 +11,7 @@ import type {
 import type { CoreProof } from '@core/types.ts';
 import type { SerializedOutputData } from '@core/utils.ts';
 
-export interface PrepareSendCommand {
+export interface PrepareSendInput {
   operation: InitSendOperation;
   /** Active keys and seed loaded before entering the transaction. */
   activeKeys: MintKeys;
@@ -34,7 +34,7 @@ export interface PreparedSendResult {
   counter?: { mintUrl: string; keysetId: string; counter: number };
 }
 
-export interface ExecuteExactSendCommand {
+export interface ExecuteExactSendInput {
   operationId: string;
   updatedAt: number;
   memo?: string;
@@ -47,14 +47,14 @@ export interface ExecuteExactSendResult {
   committed: boolean;
 }
 
-export interface BeginSwapExecutionCommand {
+export interface BeginSwapExecutionInput {
   operationId: string;
   updatedAt: number;
   /** Normalized before entering the retried transaction. */
   memo?: string;
 }
 
-export interface ClaimSendRecoveryCommand {
+export interface ClaimSendRecoveryInput {
   operationId: string;
   expectedRevision: number;
   updatedAt: number;
@@ -73,7 +73,7 @@ export interface BegunSwapExecution {
   request: SwapTransportRequest;
 }
 
-export interface ApplySwapResultCommand {
+export interface ApplySwapResultInput {
   operationId: string;
   updatedAt: number;
   keepProofs: CoreProof[];
@@ -89,8 +89,9 @@ export interface AppliedSwapResult {
   committed: boolean;
 }
 
-export interface FailSwapExecutionCommand {
+export interface FailSwapExecutionInput {
   operationId: string;
+  expectedRevision: number;
   updatedAt: number;
   error: string;
 }
@@ -102,7 +103,7 @@ export interface FailedSwapExecution {
   committed: boolean;
 }
 
-export interface CancelPreparedSendCommand {
+export interface CancelPreparedSendInput {
   operationId: string;
   updatedAt: number;
   reason: string;
@@ -115,7 +116,7 @@ export interface CancelledPreparedSend {
   committed: boolean;
 }
 
-export interface CompletePendingSendCommand {
+export interface CompletePendingSendInput {
   operationId: string;
   updatedAt: number;
   /** Proof-state observations made outside the transaction. */
@@ -141,7 +142,7 @@ export interface CleanupOrphanedSendReservationsResult {
   count: number;
 }
 
-export interface BeginReclaimCommand {
+export interface BeginReclaimInput {
   operationId: string;
   updatedAt: number;
   activeKeys: MintKeys;
@@ -155,7 +156,7 @@ export interface BegunReclaim {
   skippedForFees: boolean;
 }
 
-export interface CompleteReclaimCommand {
+export interface CompleteReclaimInput {
   operationId: string;
   updatedAt: number;
   reason: string;

@@ -20,45 +20,45 @@ import type { SendOperationRepository } from '@core/repositories';
 import type { CoreProof } from '@core/types.ts';
 import type { ScopedMintMetadataCommands } from '../mints/ScopedMintMetadataCommands.ts';
 import type {
-  PrepareSendCommand,
+  PrepareSendInput,
   PreparedSendResult,
-  ExecuteExactSendCommand,
+  ExecuteExactSendInput,
   ExecuteExactSendResult,
-  BeginSwapExecutionCommand,
-  ClaimSendRecoveryCommand,
+  BeginSwapExecutionInput,
+  ClaimSendRecoveryInput,
   SwapTransportRequest,
   BegunSwapExecution,
-  ApplySwapResultCommand,
+  ApplySwapResultInput,
   AppliedSwapResult,
-  FailSwapExecutionCommand,
+  FailSwapExecutionInput,
   FailedSwapExecution,
-  CancelPreparedSendCommand,
+  CancelPreparedSendInput,
   CancelledPreparedSend,
-  CompletePendingSendCommand,
+  CompletePendingSendInput,
   CompletedPendingSend,
   CleanupLegacyInitResult,
   CleanupOrphanedSendReservationsResult,
-  BeginReclaimCommand,
+  BeginReclaimInput,
   BegunReclaim,
-  CompleteReclaimCommand,
+  CompleteReclaimInput,
   CompletedReclaim,
 } from '../../send/types.ts';
 import type { ScopedProofCommands } from '../proofs/ScopedProofCommands.ts';
 import type { ScopedOutputCommands } from '../outputs/ScopedOutputCommands.ts';
 
 export interface ScopedSendCommands {
-  prepare(command: PrepareSendCommand): Promise<PreparedSendResult>;
-  executeExact(command: ExecuteExactSendCommand): Promise<ExecuteExactSendResult>;
-  beginExecution(command: BeginSwapExecutionCommand): Promise<BegunSwapExecution>;
-  claimRecovery(command: ClaimSendRecoveryCommand): Promise<BegunSwapExecution>;
-  applyResult(command: ApplySwapResultCommand): Promise<AppliedSwapResult>;
-  failExecution(command: FailSwapExecutionCommand): Promise<FailedSwapExecution>;
-  cancelPrepared(command: CancelPreparedSendCommand): Promise<CancelledPreparedSend>;
-  completePending(command: CompletePendingSendCommand): Promise<CompletedPendingSend>;
+  prepare(input: PrepareSendInput): Promise<PreparedSendResult>;
+  executeExact(input: ExecuteExactSendInput): Promise<ExecuteExactSendResult>;
+  beginExecution(input: BeginSwapExecutionInput): Promise<BegunSwapExecution>;
+  claimRecovery(input: ClaimSendRecoveryInput): Promise<BegunSwapExecution>;
+  applyResult(input: ApplySwapResultInput): Promise<AppliedSwapResult>;
+  failExecution(input: FailSwapExecutionInput): Promise<FailedSwapExecution>;
+  cancelPrepared(input: CancelPreparedSendInput): Promise<CancelledPreparedSend>;
+  completePending(input: CompletePendingSendInput): Promise<CompletedPendingSend>;
   cleanupOrphanedReservations(): Promise<CleanupOrphanedSendReservationsResult>;
   cleanupLegacyInit(operationId: string): Promise<CleanupLegacyInitResult>;
-  beginReclaim(command: BeginReclaimCommand): Promise<BegunReclaim>;
-  completeReclaim(command: CompleteReclaimCommand): Promise<CompletedReclaim>;
+  beginReclaim(input: BeginReclaimInput): Promise<BegunReclaim>;
+  completeReclaim(input: CompleteReclaimInput): Promise<CompletedReclaim>;
 }
 
 export class RepositorySendCommands implements ScopedSendCommands {
@@ -69,8 +69,8 @@ export class RepositorySendCommands implements ScopedSendCommands {
     private readonly mints: Pick<ScopedMintMetadataCommands, 'assertTrusted'>,
   ) {}
 
-  async prepare(command: PrepareSendCommand): Promise<PreparedSendResult> {
-    const operation = command.operation;
+  async prepare(input: PrepareSendInput): Promise<PreparedSendResult> {
+    const operation = input.operation;
     const existing = await this.sends.getById(operation.id);
     if (existing) {
       throw new SendOperationConflictError(
@@ -85,7 +85,7 @@ export class RepositorySendCommands implements ScopedSendCommands {
       unit: operation.unit,
       operationId: operation.id,
       amount: operation.amount,
-      forceSwap: command.forceSwap,
+      forceSwap: input.forceSwap,
     });
     const inputAmount = sumProofs(selected.proofs);
     const inputProofSecrets = selected.proofs.map((proof) => proof.secret);
@@ -96,16 +96,16 @@ export class RepositorySendCommands implements ScopedSendCommands {
       const allocation = await this.outputs.allocate({
         mintUrl: operation.mintUrl,
         unit: operation.unit,
-        activeKeys: command.activeKeys,
-        seed: command.seed,
+        activeKeys: input.activeKeys,
+        seed: input.seed,
         keepAmount: inputAmount.subtract(operation.amount.add(selected.fee)),
         sendAmount: operation.amount,
-        fixedSendOutputs: command.fixedSendOutputs,
+        fixedSendOutputs: input.fixedSendOutputs,
       });
       outputData = allocation.outputData;
       counterUpdate = allocation.counter;
     } else {
-      await this.outputs.assertActiveKeys(operation.mintUrl, operation.unit, command.activeKeys);
+      await this.outputs.assertActiveKeys(operation.mintUrl, operation.unit, input.activeKeys);
     }
 
     const prepared: PreparedSendOperation = {
@@ -134,25 +134,25 @@ export class RepositorySendCommands implements ScopedSendCommands {
     };
   }
 
-  async executeExact(command: ExecuteExactSendCommand): Promise<ExecuteExactSendResult> {
-    const current = await this.sends.getById(command.operationId);
-    const idempotent = getIdempotentExactResult(current, command);
+  async executeExact(input: ExecuteExactSendInput): Promise<ExecuteExactSendResult> {
+    const current = await this.sends.getById(input.operationId);
+    const idempotent = getIdempotentExactResult(current, input);
     if (idempotent) return idempotent;
 
     if (!current || current.state !== 'prepared') {
       throw new SendOperationConflictError(
-        command.operationId,
+        input.operationId,
         'Exact Send execution lost a state or revision conflict',
       );
     }
     if (current.needsSwap || current.method !== 'default') {
-      throw new ProofValidationError(`Send operation ${command.operationId} requires a mint swap`);
+      throw new ProofValidationError(`Send operation ${input.operationId} requires a mint swap`);
     }
 
     const proofs = await this.getOwnedReadyInputs(current);
     assertExactInputs(proofs, current);
     const revision = current.revision ?? 0;
-    const normalizedMemo = normalizeMemo(command.memo);
+    const normalizedMemo = normalizeMemo(input.memo);
     const token: Token = {
       mint: current.mintUrl,
       proofs,
@@ -162,7 +162,7 @@ export class RepositorySendCommands implements ScopedSendCommands {
     const pending: ExecuteExactSendResult['operation'] = {
       ...current,
       state: 'pending',
-      updatedAt: command.updatedAt,
+      updatedAt: input.updatedAt,
       token,
     };
 
@@ -189,20 +189,20 @@ export class RepositorySendCommands implements ScopedSendCommands {
     return { operation: pending, token, committed: true };
   }
 
-  async beginExecution(command: BeginSwapExecutionCommand): Promise<BegunSwapExecution> {
-    const current = await this.sends.getById(command.operationId);
+  async beginExecution(input: BeginSwapExecutionInput): Promise<BegunSwapExecution> {
+    const current = await this.sends.getById(input.operationId);
     if (!current) {
-      throw new SendOperationConflictError(command.operationId, 'Send operation not found');
+      throw new SendOperationConflictError(input.operationId, 'Send operation not found');
     }
     if (current.state !== 'prepared') {
       throw new SendOperationConflictError(
-        command.operationId,
+        input.operationId,
         `Cannot begin Send execution in state ${current.state}`,
       );
     }
     if (!current.needsSwap || !current.outputData) {
       throw new SendOperationConflictError(
-        command.operationId,
+        input.operationId,
         'Swap execution requires a prepared swap request',
       );
     }
@@ -213,8 +213,8 @@ export class RepositorySendCommands implements ScopedSendCommands {
       ...current,
       state: 'executing',
       revision: revision + 1,
-      updatedAt: command.updatedAt,
-      executionMemo: command.memo,
+      updatedAt: input.updatedAt,
+      executionMemo: input.memo,
     };
     const transitioned = await this.sends.transition({
       operationId: current.id,
@@ -241,30 +241,30 @@ export class RepositorySendCommands implements ScopedSendCommands {
     };
   }
 
-  async claimRecovery(command: ClaimSendRecoveryCommand): Promise<BegunSwapExecution> {
-    const current = await this.sends.getById(command.operationId);
+  async claimRecovery(input: ClaimSendRecoveryInput): Promise<BegunSwapExecution> {
+    const current = await this.sends.getById(input.operationId);
     if (
       !current ||
       current.state !== 'executing' ||
       !current.needsSwap ||
       !current.outputData ||
-      (current.revision ?? 0) !== command.expectedRevision
+      (current.revision ?? 0) !== input.expectedRevision
     ) {
       throw new SendOperationConflictError(
-        command.operationId,
+        input.operationId,
         'Send recovery lost an executing-state or revision conflict',
       );
     }
     const inputProofs = await this.getOwnedReadyInputs(current);
     const claimed: ExecutingSendOperation = {
       ...current,
-      revision: command.expectedRevision + 1,
-      updatedAt: command.updatedAt,
+      revision: input.expectedRevision + 1,
+      updatedAt: input.updatedAt,
     };
     const transitioned = await this.sends.transition({
       operationId: current.id,
       expectedState: 'executing',
-      expectedRevision: command.expectedRevision,
+      expectedRevision: input.expectedRevision,
       next: claimed,
     });
     if (!transitioned) {
@@ -285,30 +285,30 @@ export class RepositorySendCommands implements ScopedSendCommands {
     };
   }
 
-  async applyResult(command: ApplySwapResultCommand): Promise<AppliedSwapResult> {
-    const current = await this.sends.getById(command.operationId);
+  async applyResult(input: ApplySwapResultInput): Promise<AppliedSwapResult> {
+    const current = await this.sends.getById(input.operationId);
     if (!current) {
-      throw new SendOperationConflictError(command.operationId, 'Send operation not found');
+      throw new SendOperationConflictError(input.operationId, 'Send operation not found');
     }
     if (current.state === 'pending') {
       if (
         !current.needsSwap ||
         !current.outputData ||
         !current.token ||
-        !sameToken(current.token, command.token)
+        !sameToken(current.token, input.token)
       ) {
         throw new SendOperationConflictError(
-          command.operationId,
+          input.operationId,
           'Send result conflicts with the persisted pending token',
         );
       }
-      assertSwapResult(current, command);
+      assertSwapResult(current, input);
       const persistedProofs = (
         await this.proofs.getProofsByOperationId(current.mintUrl, current.id)
       ).filter((proof) => proof.createdByOperationId === current.id);
-      if (!sameCoreProofSet(persistedProofs, [...command.keepProofs, ...command.sendProofs])) {
+      if (!sameCoreProofSet(persistedProofs, [...input.keepProofs, ...input.sendProofs])) {
         throw new SendOperationConflictError(
-          command.operationId,
+          input.operationId,
           'Send result conflicts with the persisted pending proofs',
         );
       }
@@ -321,14 +321,14 @@ export class RepositorySendCommands implements ScopedSendCommands {
     }
     if (current.state !== 'executing' || !current.needsSwap || !current.outputData) {
       throw new SendOperationConflictError(
-        command.operationId,
+        input.operationId,
         `Cannot apply Send result in state ${current.state}`,
       );
     }
     const revision = current.revision ?? 0;
     await this.getOwnedReadyInputs(current);
-    assertSwapResult(current, command);
-    const savedProofs = [...command.keepProofs, ...command.sendProofs];
+    assertSwapResult(current, input);
+    const savedProofs = [...input.keepProofs, ...input.sendProofs];
     await this.proofs.settleSpend({
       mintUrl: current.mintUrl,
       unit: current.unit,
@@ -342,8 +342,8 @@ export class RepositorySendCommands implements ScopedSendCommands {
       ...current,
       state: 'pending',
       revision: (current.revision ?? 0) + 1,
-      updatedAt: command.updatedAt,
-      token: command.token,
+      updatedAt: input.updatedAt,
+      token: input.token,
     };
     const transitioned = await this.sends.transition({
       operationId: current.id,
@@ -366,12 +366,12 @@ export class RepositorySendCommands implements ScopedSendCommands {
     };
   }
 
-  async failExecution(command: FailSwapExecutionCommand): Promise<FailedSwapExecution> {
-    const current = await this.sends.getById(command.operationId);
+  async failExecution(input: FailSwapExecutionInput): Promise<FailedSwapExecution> {
+    const current = await this.sends.getById(input.operationId);
     if (!current) {
-      throw new SendOperationConflictError(command.operationId, 'Send operation not found');
+      throw new SendOperationConflictError(input.operationId, 'Send operation not found');
     }
-    if (current.state === 'rolled_back' && current.error === command.error) {
+    if (current.state === 'rolled_back' && current.error === input.error) {
       return {
         operation: current,
         releasedInputSecrets: [],
@@ -380,19 +380,25 @@ export class RepositorySendCommands implements ScopedSendCommands {
     }
     if (current.state !== 'executing' || !current.needsSwap) {
       throw new SendOperationConflictError(
-        command.operationId,
+        input.operationId,
         `Cannot fail Send execution in state ${current.state}`,
       );
     }
     const revision = current.revision ?? 0;
+    if (revision !== input.expectedRevision) {
+      throw new SendOperationConflictError(
+        input.operationId,
+        'Send failure lost an executing revision conflict',
+      );
+    }
     await this.getOwnedReadyInputs(current);
     await this.proofs.releaseOwned(current.mintUrl, current.id, current.inputProofSecrets);
     const failed: RolledBackSendOperation = {
       ...current,
       state: 'rolled_back',
       revision: (current.revision ?? 0) + 1,
-      updatedAt: command.updatedAt,
-      error: command.error,
+      updatedAt: input.updatedAt,
+      error: input.error,
     };
     const transitioned = await this.sends.transition({
       operationId: current.id,
@@ -414,17 +420,17 @@ export class RepositorySendCommands implements ScopedSendCommands {
     };
   }
 
-  async cancelPrepared(command: CancelPreparedSendCommand): Promise<CancelledPreparedSend> {
-    const current = await this.sends.getById(command.operationId);
+  async cancelPrepared(input: CancelPreparedSendInput): Promise<CancelledPreparedSend> {
+    const current = await this.sends.getById(input.operationId);
     if (!current) {
-      throw new SendOperationConflictError(command.operationId, 'Send operation not found');
+      throw new SendOperationConflictError(input.operationId, 'Send operation not found');
     }
-    if (current.state === 'rolled_back' && current.error === command.reason) {
+    if (current.state === 'rolled_back' && current.error === input.reason) {
       return { operation: current, releasedInputSecrets: [], committed: false };
     }
     if (current.state !== 'prepared') {
       throw new SendOperationConflictError(
-        command.operationId,
+        input.operationId,
         'Send cancellation lost a prepared-state or revision conflict',
       );
     }
@@ -436,8 +442,8 @@ export class RepositorySendCommands implements ScopedSendCommands {
       ...current,
       state: 'rolled_back',
       revision: revision + 1,
-      updatedAt: command.updatedAt,
-      error: command.reason,
+      updatedAt: input.updatedAt,
+      error: input.reason,
     };
     const transitioned = await this.sends.transition({
       operationId: current.id,
@@ -459,10 +465,10 @@ export class RepositorySendCommands implements ScopedSendCommands {
     };
   }
 
-  async completePending(command: CompletePendingSendCommand): Promise<CompletedPendingSend> {
-    const current = await this.sends.getById(command.operationId);
+  async completePending(input: CompletePendingSendInput): Promise<CompletedPendingSend> {
+    const current = await this.sends.getById(input.operationId);
     if (!current) {
-      throw new SendOperationConflictError(command.operationId, 'Send operation not found');
+      throw new SendOperationConflictError(input.operationId, 'Send operation not found');
     }
     if (current.state === 'finalized') {
       return {
@@ -474,7 +480,7 @@ export class RepositorySendCommands implements ScopedSendCommands {
     }
     if (current.state !== 'pending') {
       throw new SendOperationConflictError(
-        command.operationId,
+        input.operationId,
         'Send completion lost a pending-state or revision conflict',
       );
     }
@@ -484,7 +490,7 @@ export class RepositorySendCommands implements ScopedSendCommands {
     if (expectedSecrets.length === 0 || new Set(expectedSecrets).size !== expectedSecrets.length) {
       throw new ProofValidationError(`Send operation ${current.id} has invalid send proof data`);
     }
-    const observedSecrets = command.spentProofSecrets ?? [];
+    const observedSecrets = input.spentProofSecrets ?? [];
     if (new Set(observedSecrets).size !== observedSecrets.length) {
       throw new ProofValidationError('Send completion contains duplicate proof observations');
     }
@@ -565,7 +571,7 @@ export class RepositorySendCommands implements ScopedSendCommands {
       ...current,
       state: 'finalized',
       revision: revision + 1,
-      updatedAt: command.updatedAt,
+      updatedAt: input.updatedAt,
     };
     const transitioned = await this.sends.transition({
       operationId: current.id,
@@ -625,7 +631,9 @@ export class RepositorySendCommands implements ScopedSendCommands {
       const secrets = reserved
         .filter((proof) => {
           const operation = operationById.get(proof.usedByOperationId!);
-          return !operation || isTerminalOperation(operation);
+          // A missing Send record does not establish ownership: Melt and future
+          // workflows also reserve proofs. Only clean up known terminal Sends.
+          return operation !== undefined && isTerminalOperation(operation);
         })
         .map((proof) => proof.secret);
       if (secrets.length > 0) released.push({ mintUrl, secrets });
@@ -655,11 +663,11 @@ export class RepositorySendCommands implements ScopedSendCommands {
     };
   }
 
-  async beginReclaim(command: BeginReclaimCommand): Promise<BegunReclaim> {
-    const current = await this.sends.getById(command.operationId);
+  async beginReclaim(input: BeginReclaimInput): Promise<BegunReclaim> {
+    const current = await this.sends.getById(input.operationId);
     if (!current || current.state !== 'pending' || current.method !== 'default') {
       throw new SendOperationConflictError(
-        command.operationId,
+        input.operationId,
         'Pending Send reclaim lost a state or revision conflict',
       );
     }
@@ -684,8 +692,8 @@ export class RepositorySendCommands implements ScopedSendCommands {
         ? await this.outputs.allocate({
             mintUrl: current.mintUrl,
             unit: current.unit,
-            activeKeys: command.activeKeys,
-            seed: command.seed,
+            activeKeys: input.activeKeys,
+            seed: input.seed,
             keepAmount: total.subtract(fee),
             sendAmount: Amount.zero(),
           })
@@ -695,7 +703,7 @@ export class RepositorySendCommands implements ScopedSendCommands {
       ...current,
       state: 'rolling_back',
       revision: revision + 1,
-      updatedAt: command.updatedAt,
+      updatedAt: input.updatedAt,
       // Keep the original Send request intact. Reclaim has a separate Output Allocation.
       reclaimData: allocation
         ? { inputProofSecrets: secrets, outputData: allocation.outputData }
@@ -716,11 +724,11 @@ export class RepositorySendCommands implements ScopedSendCommands {
     return { operation: rollingBack, inputProofs, counter: allocation?.counter, skippedForFees };
   }
 
-  async completeReclaim(command: CompleteReclaimCommand): Promise<CompletedReclaim> {
-    const current = await this.sends.getById(command.operationId);
+  async completeReclaim(input: CompleteReclaimInput): Promise<CompletedReclaim> {
+    const current = await this.sends.getById(input.operationId);
     if (!current || current.state !== 'rolling_back') {
       throw new SendOperationConflictError(
-        command.operationId,
+        input.operationId,
         'Pending Send reclaim completion lost a state or revision conflict',
       );
     }
@@ -733,7 +741,7 @@ export class RepositorySendCommands implements ScopedSendCommands {
         outputData: allocation.outputData,
         kind: 'keep',
         state: 'ready',
-        proofs: command.proofs,
+        proofs: input.proofs,
       });
       await this.proofs.settleSpend({
         mintUrl: current.mintUrl,
@@ -742,9 +750,9 @@ export class RepositorySendCommands implements ScopedSendCommands {
         secrets: spentProofSecrets,
         state: ['inflight', 'spent'],
         ownership: current.needsSwap ? 'created' : 'used',
-        outputs: command.proofs,
+        outputs: input.proofs,
       });
-    } else if (command.proofs.length > 0) {
+    } else if (input.proofs.length > 0) {
       throw new ProofValidationError('Reclaimed proofs have no committed output plan');
     }
     const associated = await this.proofs.getProofsByOperationId(current.mintUrl, current.id);
@@ -763,8 +771,8 @@ export class RepositorySendCommands implements ScopedSendCommands {
       ...current,
       state: 'rolled_back',
       revision: revision + 1,
-      updatedAt: command.updatedAt,
-      error: command.reason,
+      updatedAt: input.updatedAt,
+      error: input.reason,
     };
     const transitioned = await this.sends.transition({
       operationId: current.id,
@@ -780,7 +788,7 @@ export class RepositorySendCommands implements ScopedSendCommands {
     }
     return {
       operation: rolledBack,
-      savedProofs: command.proofs,
+      savedProofs: input.proofs,
       spentProofSecrets,
       releasedProofSecrets,
     };
@@ -801,14 +809,14 @@ export class RepositorySendCommands implements ScopedSendCommands {
 
 function getIdempotentExactResult(
   current: SendOperation | null,
-  command: ExecuteExactSendCommand,
+  input: ExecuteExactSendInput,
 ): ExecuteExactSendResult | undefined {
   if (!current || current.state !== 'pending' || current.needsSwap || !current.token) {
     return undefined;
   }
-  if (!isEquivalentExactToken(current, current.token, command)) {
+  if (!isEquivalentExactToken(current, current.token, input)) {
     throw new SendOperationConflictError(
-      command.operationId,
+      input.operationId,
       'Exact Send result differs from the already committed operation',
     );
   }
@@ -822,12 +830,12 @@ function getIdempotentExactResult(
 function isEquivalentExactToken(
   operation: PendingSendOperation,
   token: Token,
-  command: ExecuteExactSendCommand,
+  input: ExecuteExactSendInput,
 ): boolean {
   return (
     token.mint === operation.mintUrl &&
     normalizeUnit(token.unit) === normalizeUnit(operation.unit) &&
-    normalizeMemo(token.memo) === normalizeMemo(command.memo) &&
+    normalizeMemo(token.memo) === normalizeMemo(input.memo) &&
     token.proofs.length === operation.inputProofSecrets.length &&
     token.proofs.every((proof, index) => proof.secret === operation.inputProofSecrets[index])
   );
@@ -850,13 +858,13 @@ function normalizeMemo(memo: string | undefined): string | undefined {
 
 function assertSwapResult(
   operation: ExecutingSendOperation | PendingSendOperation,
-  command: ApplySwapResultCommand,
+  input: ApplySwapResultInput,
 ): void {
   assertOutputProofs({
     ...operation,
     outputData: operation.outputData!,
     createdByOperationId: operation.id,
-    proofs: command.keepProofs,
+    proofs: input.keepProofs,
     state: 'ready',
     kind: 'keep',
   });
@@ -864,16 +872,16 @@ function assertSwapResult(
     ...operation,
     outputData: operation.outputData!,
     createdByOperationId: operation.id,
-    proofs: command.sendProofs,
+    proofs: input.sendProofs,
     state: 'inflight',
     kind: 'send',
   });
 
   if (
-    command.token.mint !== operation.mintUrl ||
-    normalizeUnit(command.token.unit) !== normalizeUnit(operation.unit) ||
-    command.token.memo !== operation.executionMemo ||
-    !sameProofSet(command.token.proofs, command.sendProofs)
+    input.token.mint !== operation.mintUrl ||
+    normalizeUnit(input.token.unit) !== normalizeUnit(operation.unit) ||
+    input.token.memo !== operation.executionMemo ||
+    !sameProofSet(input.token.proofs, input.sendProofs)
   ) {
     throw new ProofValidationError('Swap token does not match the persisted Send request');
   }

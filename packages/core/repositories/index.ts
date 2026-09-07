@@ -235,7 +235,7 @@ export interface SendOperationRepository {
    * Conditionally replace an operation when its state and revision still match.
    * Implementations persist `next` with `expectedRevision + 1` and return false on contention.
    */
-  transition(command: {
+  transition(input: {
     operationId: string;
     expectedState: SendOperationState;
     expectedRevision: number;

@@ -11,7 +11,7 @@ import { ProofValidationError } from '@core/models/Error.ts';
 import type { CounterRepository, KeysetRepository } from '@core/repositories';
 import { serializeOutputData, type SerializedOutputData } from '@core/utils.ts';
 
-export interface AllocateOutputs {
+export interface AllocateOutputsInput {
   mintUrl: string;
   unit: string;
   activeKeys: MintKeys;
@@ -29,7 +29,7 @@ export interface AllocatedOutputs {
 export interface ScopedOutputCommands {
   assertActiveKeys(mintUrl: string, unit: string, activeKeys: MintKeys): Promise<void>;
   /** The caller must persist the returned output plan in this same transaction. */
-  allocate(command: AllocateOutputs): Promise<AllocatedOutputs>;
+  allocate(input: AllocateOutputsInput): Promise<AllocatedOutputs>;
 }
 
 /** Shared deterministic Output Allocation. Only the owning transition may commit its plan. */
@@ -54,37 +54,37 @@ export class RepositoryOutputCommands implements ScopedOutputCommands {
     }
   }
 
-  async allocate(command: AllocateOutputs): Promise<AllocatedOutputs> {
-    await this.assertActiveKeys(command.mintUrl, command.unit, command.activeKeys);
+  async allocate(input: AllocateOutputsInput): Promise<AllocatedOutputs> {
+    await this.assertActiveKeys(input.mintUrl, input.unit, input.activeKeys);
     const current =
-      (await this.counters.getCounter(command.mintUrl, command.activeKeys.id))?.counter ?? 0;
-    const keep = command.keepAmount.isZero()
+      (await this.counters.getCounter(input.mintUrl, input.activeKeys.id))?.counter ?? 0;
+    const keep = input.keepAmount.isZero()
       ? []
       : this.creator.createDeterministicData(
-          command.keepAmount,
-          command.seed,
+          input.keepAmount,
+          input.seed,
           current,
-          command.activeKeys,
+          input.activeKeys,
         );
-    const send = command.fixedSendOutputs
-      ? [...command.fixedSendOutputs]
-      : command.sendAmount.isZero()
+    const send = input.fixedSendOutputs
+      ? [...input.fixedSendOutputs]
+      : input.sendAmount.isZero()
         ? []
         : this.creator.createDeterministicData(
-            command.sendAmount,
-            command.seed,
+            input.sendAmount,
+            input.seed,
             current + keep.length,
-            command.activeKeys,
+            input.activeKeys,
           );
-    if (command.fixedSendOutputs && send.length === 0) {
+    if (input.fixedSendOutputs && send.length === 0) {
       throw new ProofValidationError('Method preflight did not produce output data');
     }
-    const positions = keep.length + (command.fixedSendOutputs ? 0 : send.length);
+    const positions = keep.length + (input.fixedSendOutputs ? 0 : send.length);
     const next = current + positions;
     if (!Number.isSafeInteger(next)) throw new ProofValidationError('Output counter exhausted');
     const counter =
       positions > 0
-        ? { mintUrl: command.mintUrl, keysetId: command.activeKeys.id, counter: next }
+        ? { mintUrl: input.mintUrl, keysetId: input.activeKeys.id, counter: next }
         : undefined;
     if (counter) await this.counters.setCounter(counter.mintUrl, counter.keysetId, counter.counter);
     return { outputData: serializeOutputData({ keep, send }), counter };

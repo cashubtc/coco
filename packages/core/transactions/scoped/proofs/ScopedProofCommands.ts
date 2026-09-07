@@ -7,7 +7,7 @@ import { selectProofInputs, calculateProofFee } from '@core/proofs/ProofSelectio
 import type { KeysetRepository, ProofRepository } from '@core/repositories';
 import type { CoreProof } from '@core/types.ts';
 
-export interface OwnedProofs {
+export interface OwnedProofsInput {
   mintUrl: string;
   unit: string;
   operationId: string;
@@ -16,7 +16,7 @@ export interface OwnedProofs {
   ownership?: 'used' | 'created';
 }
 
-export interface SelectAndReserveProofs {
+export interface SelectAndReserveProofsInput {
   mintUrl: string;
   unit: string;
   operationId: string;
@@ -25,16 +25,16 @@ export interface SelectAndReserveProofs {
 }
 
 export interface ScopedProofCommands extends ProofQueries {
-  selectAndReserve(command: SelectAndReserveProofs): Promise<{
+  selectAndReserve(input: SelectAndReserveProofsInput): Promise<{
     proofs: CoreProof[];
     fee: Amount;
     needsSwap: boolean;
   }>;
   getFee(mintUrl: string, unit: string, proofs: readonly CoreProof[]): Promise<Amount>;
-  getOwned(command: OwnedProofs): Promise<CoreProof[]>;
-  markInflight(command: Omit<OwnedProofs, 'state' | 'ownership'>): Promise<void>;
-  settleSpend(command: OwnedProofs & { outputs: CoreProof[] }): Promise<void>;
-  recordSpent(command: Omit<OwnedProofs, 'state'>): Promise<void>;
+  getOwned(input: OwnedProofsInput): Promise<CoreProof[]>;
+  markInflight(input: Omit<OwnedProofsInput, 'state' | 'ownership'>): Promise<void>;
+  settleSpend(input: OwnedProofsInput & { outputs: CoreProof[] }): Promise<void>;
+  recordSpent(input: Omit<OwnedProofsInput, 'state'>): Promise<void>;
   releaseOwned(mintUrl: string, operationId: string, secrets: string[]): Promise<void>;
 }
 
@@ -46,21 +46,21 @@ export class RepositoryProofCommands implements ScopedProofCommands {
     private readonly selectProofs: SelectProofs = selectProofsRGLI,
   ) {}
 
-  async selectAndReserve(command: SelectAndReserveProofs) {
-    const available = await this.proofs.getAvailableProofs(command.mintUrl, { unit: command.unit });
-    const keysets = await this.keysets.getKeysetsByMintUrl(command.mintUrl);
+  async selectAndReserve(input: SelectAndReserveProofsInput) {
+    const available = await this.proofs.getAvailableProofs(input.mintUrl, { unit: input.unit });
+    const keysets = await this.keysets.getKeysetsByMintUrl(input.mintUrl);
     const selected = selectProofInputs(
-      command,
+      input,
       available,
-      createKeyChain(command.mintUrl, command.unit, keysets),
+      createKeyChain(input.mintUrl, input.unit, keysets),
       this.selectProofs,
-      command.forceSwap,
+      input.forceSwap,
     );
     const secrets = selected.proofs.map((proof) => proof.secret);
     if (new Set(secrets).size !== secrets.length) {
       throw new ProofValidationError('Proof selection contains duplicate inputs');
     }
-    await this.proofs.reserveProofs(command.mintUrl, secrets, command.operationId);
+    await this.proofs.reserveProofs(input.mintUrl, secrets, input.operationId);
     return { ...selected, proofs: selected.proofs as CoreProof[] };
   }
 
@@ -71,55 +71,53 @@ export class RepositoryProofCommands implements ScopedProofCommands {
     );
   }
 
-  async getOwned(command: OwnedProofs): Promise<CoreProof[]> {
-    if (new Set(command.secrets).size !== command.secrets.length) {
+  async getOwned(input: OwnedProofsInput): Promise<CoreProof[]> {
+    if (new Set(input.secrets).size !== input.secrets.length) {
       throw new ProofValidationError('Operation contains duplicate input proofs');
     }
-    const stored = await this.proofs.getProofsBySecrets(command.mintUrl, command.secrets);
+    const stored = await this.proofs.getProofsBySecrets(input.mintUrl, input.secrets);
     const bySecret = new Map(stored.map((proof) => [proof.secret, proof]));
-    return command.secrets.map((secret) => {
+    return input.secrets.map((secret) => {
       const proof = bySecret.get(secret);
       const owner =
-        command.ownership === 'created' ? proof?.createdByOperationId : proof?.usedByOperationId;
+        input.ownership === 'created' ? proof?.createdByOperationId : proof?.usedByOperationId;
       if (
         !proof ||
-        owner !== command.operationId ||
-        !(Array.isArray(command.state)
-          ? command.state.includes(proof.state)
-          : proof.state === command.state) ||
-        proof.mintUrl !== command.mintUrl ||
-        normalizeUnit(proof.unit) !== normalizeUnit(command.unit)
+        owner !== input.operationId ||
+        !(Array.isArray(input.state)
+          ? input.state.includes(proof.state)
+          : proof.state === input.state) ||
+        proof.mintUrl !== input.mintUrl ||
+        normalizeUnit(proof.unit) !== normalizeUnit(input.unit)
       ) {
-        throw new ProofValidationError(
-          `Proof ${secret} is not ${command.state} and operation-owned`,
-        );
+        throw new ProofValidationError(`Proof ${secret} is not ${input.state} and operation-owned`);
       }
       return proof;
     });
   }
 
-  async markInflight(command: Omit<OwnedProofs, 'state' | 'ownership'>): Promise<void> {
-    await this.getOwned({ ...command, state: 'ready' });
-    await this.proofs.setProofState(command.mintUrl, command.secrets, 'inflight');
+  async markInflight(input: Omit<OwnedProofsInput, 'state' | 'ownership'>): Promise<void> {
+    await this.getOwned({ ...input, state: 'ready' });
+    await this.proofs.setProofState(input.mintUrl, input.secrets, 'inflight');
   }
 
-  async settleSpend(command: OwnedProofs & { outputs: CoreProof[] }): Promise<void> {
-    await this.getOwned(command);
-    for (const proof of command.outputs) {
+  async settleSpend(input: OwnedProofsInput & { outputs: CoreProof[] }): Promise<void> {
+    await this.getOwned(input);
+    for (const proof of input.outputs) {
       if (
-        proof.mintUrl !== command.mintUrl ||
-        normalizeUnit(proof.unit) !== normalizeUnit(command.unit)
+        proof.mintUrl !== input.mintUrl ||
+        normalizeUnit(proof.unit) !== normalizeUnit(input.unit)
       ) {
         throw new ProofValidationError('Settlement outputs have a different mint or unit');
       }
     }
-    await this.proofs.saveProofs(command.mintUrl, command.outputs);
-    await this.proofs.setProofState(command.mintUrl, command.secrets, 'spent');
+    await this.proofs.saveProofs(input.mintUrl, input.outputs);
+    await this.proofs.setProofState(input.mintUrl, input.secrets, 'spent');
   }
 
-  async recordSpent(command: Omit<OwnedProofs, 'state'>): Promise<void> {
-    await this.getOwned({ ...command, state: 'inflight' });
-    await this.proofs.setProofState(command.mintUrl, command.secrets, 'spent');
+  async recordSpent(input: Omit<OwnedProofsInput, 'state'>): Promise<void> {
+    await this.getOwned({ ...input, state: 'inflight' });
+    await this.proofs.setProofState(input.mintUrl, input.secrets, 'spent');
   }
 
   async releaseOwned(mintUrl: string, operationId: string, secrets: string[]): Promise<void> {

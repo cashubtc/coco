@@ -285,8 +285,8 @@ describe('SendOperationService', () => {
     const committed = new Promise<void>((resolve) => {
       markCommitted = resolve;
     });
-    sendTransactions.prepare = async (command) => {
-      const result = await realPrepare(command);
+    sendTransactions.prepare = async (input) => {
+      const result = await realPrepare(input);
       markCommitted();
       await holdGateway;
       return result;
@@ -462,6 +462,33 @@ describe('SendOperationService', () => {
         ?.usedByOperationId,
     ).toBe(prepared.id);
   });
+
+  it.each([11001, 11002, 11003, 11004, 99999])(
+    'retains the exact request and reservation after ambiguous mint error %i',
+    async (code) => {
+      const prepared = await makeSwapPrepared(`swap-error-${code}`);
+      const rolledBack = mock(() => {});
+      eventBus.on('send:rolled-back', rolledBack);
+      useSwapWallet(
+        mock(async () => {
+          throw new MintOperationError(code, 'uncertain swap outcome');
+        }),
+      );
+
+      await expect(service.execute(prepared)).rejects.toThrow('uncertain swap outcome');
+
+      const stored = await sendOpRepo.getById(prepared.id);
+      expect(stored?.state).toBe('executing');
+      if (stored?.state !== 'executing') throw new Error('Expected executing Send');
+      expect(stored.inputProofSecrets).toEqual(prepared.inputProofSecrets);
+      expect(stored.outputData).toEqual(prepared.outputData);
+      expect(
+        (await proofRepo.getProofBySecret(mintUrl, prepared.inputProofSecrets[0]!))
+          ?.usedByOperationId,
+      ).toBe(prepared.id);
+      expect(rolledBack).not.toHaveBeenCalled();
+    },
+  );
 
   it('does not begin or mask a definitive-looking wallet preflight failure', async () => {
     const prepared = await makeSwapPrepared('swap-preflight-failure');
