@@ -206,17 +206,15 @@ export interface KeyRingRepository {
   deletePersistedKeyPair(publicKey: string, purpose?: KeypairPurpose): Promise<void>;
   getAllPersistedKeyPairs(purpose?: KeypairPurpose): Promise<Keypair[]>;
   getLatestKeyPair(purpose?: KeypairPurpose): Promise<Keypair | null>;
+  /** Read the durable allocation high-water mark, or null when none has been recorded. */
+  getLastAllocatedIndex(purpose: KeypairPurpose): Promise<number | null>;
+  /** Read the greatest derivation index on stored keys for this purpose, or null when absent. */
+  getHighestStoredDerivationIndex(purpose: KeypairPurpose): Promise<number | null>;
   /**
-   * Derive and persist the next keypair for `purpose` atomically with its durable high-water mark.
-   *
-   * Implementations invoke `derive` synchronously inside a writer transaction and resolve only
-   * after both the returned keypair and the high-water mark have committed. If derivation,
-   * persistence, or commit fails, neither value may remain persisted.
+   * Persist the allocation high-water mark. The owning scoped command must choose the index and
+   * save its keypair in the same repository transaction. This method never opens a transaction.
    */
-  deriveAndPersistKeyPair(
-    purpose: KeypairPurpose,
-    derive: (derivationIndex: number) => Pick<Keypair, 'publicKeyHex' | 'secretKey'>,
-  ): Promise<Keypair>;
+  setLastAllocatedIndex(purpose: KeypairPurpose, derivationIndex: number): Promise<void>;
 }
 
 export interface HistoryProjectionRepository {

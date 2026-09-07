@@ -1,5 +1,8 @@
+import { CashuMintClient } from './infra/CashuMintClient.ts';
+import { CashuReceiveRemote } from './infra/handlers/receive/CashuReceiveRemote.ts';
 import type { OutputDataCreator } from '@cashu/cashu-ts';
-
+import { StoredMintQueries } from './mints/MintMetadata.ts';
+import { CashuSendRemote } from './infra/handlers/send/CashuSendRemote.ts';
 import type {
   Repositories,
   LegacyMintQuoteRepository,
@@ -84,9 +87,11 @@ import {
   RepositoryCoreTransactionRunner,
   createCoreTransactionModuleFactory,
 } from './transactions/CoreTransaction.ts';
-import { CoreKeyRingTransactions } from './transactions/keypairs/KeyRingTransactions.ts';
 import { CoreSendTransactions } from './transactions/send/SendTransactions.ts';
 import { CoreReceiveTransactions } from './transactions/receive/ReceiveTransactions.ts';
+import { CoreKeyRingTransactions } from './transactions/keypairs/KeyRingTransactions.ts';
+import { KeypairDerivation } from './keypairs/KeypairDerivation.ts';
+import { KeypairP2pkSigner } from './keypairs/P2pkSigner.ts';
 
 /**
  * Configuration options for initializing the Coco Cashu manager
@@ -927,14 +932,14 @@ export class Manager {
       repositories,
       createCoreTransactionModuleFactory(this.outputDataCreator),
     );
-    const keyRingTransactions = new CoreKeyRingTransactions(
-      coreTransactionRunner,
-      seedService,
-      keyRingLogger,
-    );
+    const keyRingTransactions = new CoreKeyRingTransactions(coreTransactionRunner);
+    const keypairDerivation = new KeypairDerivation(() => seedService.getSeed());
+    const p2pkSigner = new KeypairP2pkSigner(repositories.keyRingRepository);
     const keyRingService = new KeyRingService(
       repositories.keyRingRepository,
       keyRingTransactions,
+      keypairDerivation,
+      p2pkSigner,
       keyRingLogger,
     );
     const walletService = new WalletService(
@@ -955,7 +960,7 @@ export class Manager {
       repositories.proofRepository,
       walletService,
       mintService,
-      keyRingService,
+      p2pkSigner,
       seedService,
       proofLogger,
       this.eventBus,
@@ -981,14 +986,22 @@ export class Manager {
       p2pk: new P2pkSendHandler(),
     });
     const sendTransactions = new CoreSendTransactions(coreTransactionRunner);
+    const mintQueries = new StoredMintQueries(
+      repositories.mintRepository,
+      repositories.keysetRepository,
+    );
+    const cashuMintClient = new CashuMintClient(
+      this.mintAdapter,
+      this.mintRequestProvider,
+      this.outputDataCreator,
+    );
     const sendOperationService = new SendOperationService({
       operationQueries: repositories.sendOperationRepository,
       proofQueries: repositories.proofRepository,
       transactions: sendTransactions,
-      proofService,
-      mintService,
-      walletService,
-      seedService,
+      mintQueries,
+      remote: new CashuSendRemote(cashuMintClient),
+      loadSeed: () => seedService.getSeed(),
       eventBus: this.eventBus,
       handlerProvider: sendHandlerProvider,
       outputDataCreator: this.outputDataCreator,
@@ -1005,12 +1018,10 @@ export class Manager {
       operationQueries: repositories.receiveOperationRepository,
       proofQueries: repositories.proofRepository,
       transactions: receiveTransactions,
-      proofService,
-      mintService,
-      walletService,
-      mintAdapter: this.mintAdapter,
-      tokenService,
-      seedService,
+      mintQueries,
+      signer: p2pkSigner,
+      remote: new CashuReceiveRemote(cashuMintClient),
+      loadSeed: () => seedService.getSeed(),
       eventBus: this.eventBus,
       logger: receiveOperationLogger,
       mintScopedLock,

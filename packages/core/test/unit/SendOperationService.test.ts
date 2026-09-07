@@ -1,3 +1,7 @@
+import { testMintInfo, testMintKeypairs, testMintKeysetId } from '../fixtures/MintMetadata.ts';
+import { StoredMintQueries } from '../../mints/MintMetadata.ts';
+import { deserializeOutputData } from '../../utils.ts';
+import { createSendRemoteDouble } from '../fixtures/SendRemote.ts';
 import {
   Amount,
   type OutputDataCreator,
@@ -15,10 +19,6 @@ import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepo
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
-import type { ProofService } from '../../services/ProofService';
-import type { MintService } from '../../services/MintService';
-import type { WalletService } from '../../services/WalletService';
-import type { SeedService } from '../../services/SeedService.ts';
 import type { Logger } from '../../logging/Logger';
 import type { CoreProof } from '../../types';
 import type {
@@ -34,30 +34,37 @@ import { makeOutputDataCreator } from '../fixtures/OutputDataCreator.ts';
 
 class CountingMemoryRepositories extends MemoryRepositories {
   transactionCount = 0;
+  transactionOpen = false;
 
   override withTransaction<T>(
     fn: (repositories: RepositoryTransactionScope) => Promise<T>,
   ): Promise<T> {
     this.transactionCount++;
-    return super.withTransaction(fn);
+    return super.withTransaction(async (scope) => {
+      this.transactionOpen = true;
+      try {
+        return await fn(scope);
+      } finally {
+        this.transactionOpen = false;
+      }
+    });
   }
 }
 
 describe('SendOperationService', () => {
   const mintUrl = 'https://mint.test';
-  const keysetId = 'keyset-1';
-  const usdKeysetId = 'keyset-usd';
+  const keysetId = testMintKeysetId();
+  const usdKeysetId = testMintKeysetId('usd');
 
   let sendOpRepo: MemorySendOperationRepository;
   let proofRepo: MemoryProofRepository;
-  let proofService: ProofService;
-  let mintService: MintService;
-  let walletService: WalletService;
+  let mintQueries: StoredMintQueries;
+  let remote: ReturnType<typeof createSendRemoteDouble>;
   let eventBus: EventBus<CoreEvents>;
   let logger: Logger;
   let handlerProvider: SendHandlerProvider;
   let service: SendOperationService;
-  let seedService: SeedService;
+  let loadSeed: Mock<() => Promise<Uint8Array>>;
   let sendTransactions: SendTransactions;
   let repositories: CountingMemoryRepositories;
 
@@ -82,10 +89,9 @@ describe('SendOperationService', () => {
       operationQueries: sendOpRepo,
       proofQueries: proofRepo,
       transactions: sendTransactions,
-      proofService,
-      mintService,
-      walletService,
-      seedService,
+      mintQueries,
+      remote,
+      loadSeed,
       eventBus,
       handlerProvider,
       outputDataCreator,
@@ -127,16 +133,12 @@ describe('SendOperationService', () => {
   };
 
   const useSwapWallet = (send: Wallet['send']): void => {
-    (
-      walletService.getWalletWithActiveKeysetId as Mock<
-        WalletService['getWalletWithActiveKeysetId']
-      >
-    ).mockResolvedValue({
-      wallet: { send } as Wallet,
-      keysetId,
-      keyset: { id: keysetId, unit: 'sat', active: true },
-      keys: { keys: { 1: 'unused' }, id: keysetId, unit: 'sat', active: true },
-      unit: 'sat',
+    remote.swap.mockImplementation((request) => {
+      const data = deserializeOutputData(request.outputData);
+      return send(request.amount, request.inputProofs, undefined, {
+        send: { type: 'custom', data: data.send },
+        keep: { type: 'custom', data: data.keep },
+      });
     });
   };
 
@@ -149,7 +151,7 @@ describe('SendOperationService', () => {
       mintUrl,
       id: keysetId,
       unit: 'sat',
-      keypairs: { 1: 'unused' },
+      keypairs: testMintKeypairs,
       active: true,
       feePpk: 0,
     });
@@ -157,101 +159,23 @@ describe('SendOperationService', () => {
       mintUrl,
       id: usdKeysetId,
       unit: 'usd',
-      keypairs: { 1: 'unused' },
+      keypairs: testMintKeypairs,
       active: true,
       feePpk: 0,
     });
     eventBus = new EventBus<CoreEvents>();
 
-    mintService = {
-      isTrustedMint: mock(async () => true),
-      assertNutSupported: mock(async () => {}),
-      ensureUpdatedMint: mock(async () => ({
-        mint: { mintUrl },
-        keysets: [
-          { id: keysetId, unit: 'sat', feePpk: 0 },
-          { id: usdKeysetId, unit: 'usd', feePpk: 0 },
-        ],
-      })),
-    } as unknown as MintService;
-
-    const wallet = {
-      unit: 'sat',
-      selectProofsToSend(proofs: CoreProof[], amount: Amount, includeFees: boolean) {
-        if (!includeFees) {
-          const exact = proofs.find((p) => p.amount.equals(amount));
-          if (exact) {
-            return { send: [exact], keep: proofs.filter((p) => p.secret !== exact.secret) };
-          }
-        }
-
-        const send: CoreProof[] = [];
-        let total = Amount.zero();
-        for (const proof of proofs) {
-          if (total.greaterThanOrEqual(amount)) break;
-          send.push(proof);
-          total = total.add(proof.amount);
-        }
-
-        return {
-          send,
-          keep: proofs.filter((p) => !send.some((selected) => selected.secret === p.secret)),
-        };
-      },
-      getFeesForProofs() {
-        return Amount.zero();
-      },
-    };
-
-    walletService = {
-      getWalletWithActiveKeysetId: mock(async (_mintUrl: string, unit: string) => {
-        const selectedKeysetId = unit.toLowerCase() === 'sat' ? keysetId : usdKeysetId;
-        return {
-          wallet,
-          keysetId: selectedKeysetId,
-          keyset: { id: selectedKeysetId },
-          keys: {
-            keys: { 1: 'unused' },
-            id: selectedKeysetId,
-            unit: unit.toLowerCase(),
-            active: true,
-          },
-        };
-      }),
-      getWallet: mock(async () => wallet),
-    } as unknown as WalletService;
-    seedService = {
-      getSeed: mock(async () => new Uint8Array(32).fill(1)),
-    } as unknown as SeedService;
-
-    proofService = {
-      selectProofsToSend: mock(
-        async (
-          selectedMintUrl: string,
-          intent: { amount: Amount; unit: string },
-          includeFees: boolean = true,
-        ) => {
-          const proofs = await proofRepo.getAvailableProofs(selectedMintUrl, { unit: intent.unit });
-          return wallet.selectProofsToSend(proofs, intent.amount, includeFees).send;
-        },
-      ),
-      reserveProofs: mock((selectedMintUrl: string, secrets: string[], operationId: string) =>
-        proofRepo
-          .reserveProofs(selectedMintUrl, secrets, operationId)
-          .then(() => ({ amount: Amount.from(0) })),
-      ),
-      releaseProofs: mock((selectedMintUrl: string, secrets: string[]) =>
-        proofRepo.releaseProofs(selectedMintUrl, secrets),
-      ),
-      createOutputsAndIncrementCounters: mock(async () => ({
-        keep: [],
-        send: [],
-        sendAmount: Amount.zero(),
-        keepAmount: Amount.zero(),
-      })),
-      setProofState: mock(async () => {}),
-      saveProofs: mock(async () => {}),
-    } as unknown as ProofService;
+    await repositories.mintRepository.addNewMint({
+      mintUrl,
+      name: 'Test',
+      trusted: true,
+      mintInfo: testMintInfo,
+      createdAt: 1,
+      updatedAt: Math.floor(Date.now() / 1000),
+    });
+    mintQueries = new StoredMintQueries(repositories.mintRepository, repositories.keysetRepository);
+    remote = createSendRemoteDouble();
+    loadSeed = mock(async () => new Uint8Array(32).fill(1));
 
     logger = {
       debug: mock(() => {}),
@@ -286,7 +210,7 @@ describe('SendOperationService', () => {
   it('completes asynchronous preflight before opening a repository transaction', async () => {
     await proofRepo.saveProofs(mintUrl, [makeProof('proof-1', 10)]);
     const init = await service.init(mintUrl, unitAmount(10));
-    (seedService.getSeed as Mock<SeedService['getSeed']>).mockImplementationOnce(async () => {
+    loadSeed.mockImplementationOnce(async () => {
       throw new Error('seed unavailable');
     });
 
@@ -321,7 +245,6 @@ describe('SendOperationService', () => {
 
     const prepared = await service.prepare(operation);
 
-    expect(mintService.assertNutSupported).toHaveBeenCalledWith(mintUrl, 11, 'P2PK send');
     expect(createP2PKData).toHaveBeenCalledTimes(1);
     expect(prepared.needsSwap).toBe(true);
     expect(prepared.outputData?.send[0]?.blindedMessage.B_).toBe('p2pk-B');
@@ -425,21 +348,18 @@ describe('SendOperationService', () => {
     expect(lockedDuringEvent).toBe(false);
   });
 
-  it('dispatches an exact match through its handler without making a wallet request', async () => {
+  it('executes an exact match without opening a remote session', async () => {
     await proofRepo.saveProofs(mintUrl, [makeProof('proof-1', 100)]);
     const initOp = await service.init(mintUrl, unitAmount(100));
     const preparedOp = await service.prepare(initOp);
-    const getWalletWithActiveKeysetId = walletService.getWalletWithActiveKeysetId as Mock<
-      WalletService['getWalletWithActiveKeysetId']
-    >;
-    const walletCallsAfterPreparation = getWalletWithActiveKeysetId.mock.calls.length;
 
     const result = await service.execute(preparedOp);
 
     expect(result.operation.state).toBe('pending');
     expect(result.operation.revision).toBe(1);
     expect(result.token.proofs.map((proof) => proof.secret)).toEqual(['proof-1']);
-    expect(getWalletWithActiveKeysetId.mock.calls).toHaveLength(walletCallsAfterPreparation);
+    expect(remote.open).not.toHaveBeenCalled();
+    expect(remote.swap).not.toHaveBeenCalled();
   });
 
   it('uses only the caller operation id and reloads authoritative exact-send data', async () => {
@@ -522,8 +442,6 @@ describe('SendOperationService', () => {
     expect((await proofRepo.getProofBySecret(mintUrl, `${prepared.id}-send`))?.state).toBe(
       'inflight',
     );
-    expect(proofService.saveProofs).not.toHaveBeenCalled();
-    expect(proofService.setProofState).not.toHaveBeenCalled();
   });
 
   it('leaves an ambiguous swap failure executing for recovery', async () => {
@@ -547,11 +465,9 @@ describe('SendOperationService', () => {
 
   it('does not begin or mask a definitive-looking wallet preflight failure', async () => {
     const prepared = await makeSwapPrepared('swap-preflight-failure');
-    (
-      walletService.getWalletWithActiveKeysetId as Mock<
-        WalletService['getWalletWithActiveKeysetId']
-      >
-    ).mockRejectedValueOnce(new MintOperationError(12001, 'Could not load active keyset'));
+    remote.open.mockImplementationOnce(() => {
+      throw new MintOperationError(12001, 'Could not load active keyset');
+    });
 
     await expect(service.execute(prepared)).rejects.toThrow('Could not load active keyset');
 
@@ -630,7 +546,6 @@ describe('SendOperationService', () => {
 
     expect(preparedOp.unit).toBe('usd');
     expect(preparedOp.inputProofSecrets).toEqual(['usd-proof']);
-    expect(walletService.getWalletWithActiveKeysetId).toHaveBeenCalledWith(mintUrl, 'usd');
     expect(result.token.unit).toBe('usd');
     expect(result.operation.unit).toBe('usd');
     expect(result.token.proofs.map((proof) => proof.secret)).toEqual(['usd-proof']);
@@ -692,25 +607,13 @@ describe('SendOperationService', () => {
       { ...makeProof('proof-1', 100), state: 'spent', usedByOperationId: pendingOp.id },
     ]);
 
-    const customHandler = new DefaultSendHandler();
-    const finalize = mock((ctx: Parameters<DefaultSendHandler['finalize']>[0]) =>
-      ctx.completePersistedSend(),
-    );
-    customHandler.finalize = finalize;
-
-    handlerProvider = new SendHandlerProvider({
-      default: customHandler,
-      p2pk: new P2pkSendHandler(),
-    });
-    service = buildService();
-
     await service.finalize(pendingOp.id);
 
-    expect(finalize).toHaveBeenCalledTimes(1);
+    expect(repositories.transactionCount).toBe(1);
     expect((await sendOpRepo.getById(pendingOp.id))?.state).toBe('finalized');
   });
 
-  it('preserves pending default-token reclaim through its narrow legacy gateway', async () => {
+  it('preserves empty pending default-token reclaim through its transaction gateway', async () => {
     const pendingOp: PendingSendOperation = {
       id: 'send-op-legacy-reclaim',
       state: 'pending',
@@ -729,20 +632,10 @@ describe('SendOperationService', () => {
       methodData: {},
     };
     await sendOpRepo.create(pendingOp);
-    const customHandler = new DefaultSendHandler();
-    const rollback = mock((ctx: Parameters<DefaultSendHandler['rollback']>[0]) =>
-      ctx.reclaimPendingDefault(),
-    );
-    customHandler.rollback = rollback;
-    handlerProvider = new SendHandlerProvider({
-      default: customHandler,
-      p2pk: new P2pkSendHandler(),
-    });
-    service = buildService();
 
     await service.rollback(pendingOp.id, 'Reclaimed by user');
 
-    expect(rollback).toHaveBeenCalledTimes(1);
+    expect(repositories.transactionCount).toBe(2);
     const stored = await sendOpRepo.getById(pendingOp.id);
     expect(stored?.state).toBe('rolled_back');
     expect(stored?.revision).toBe(3);
@@ -787,5 +680,97 @@ describe('SendOperationService', () => {
     await service.execute(preparedOp, { memo: 'event-memo' });
 
     expect(eventToken?.memo).toBe('event-memo');
+  });
+  it('rechecks mint trust inside preparation after asynchronous preflight', async () => {
+    await proofRepo.saveProofs(mintUrl, [makeProof('trust-input', 10)]);
+    const intent = await service.init(mintUrl, unitAmount(10));
+    loadSeed.mockImplementationOnce(async () => {
+      await repositories.mintRepository.setMintTrusted(mintUrl, false);
+      return new Uint8Array(32).fill(1);
+    });
+    await expect(service.prepare(intent)).rejects.toThrow('not trusted');
+    expect(await sendOpRepo.getById(intent.id)).toBeNull();
+    expect(
+      (await proofRepo.getProofBySecret(mintUrl, 'trust-input'))?.usedByOperationId,
+    ).toBeUndefined();
+  });
+
+  it('fetches stale metadata outside transactions and publishes only the committed snapshot', async () => {
+    const mint = await repositories.mintRepository.getMintByUrl(mintUrl);
+    await repositories.mintRepository.updateMint({ ...mint, updatedAt: 0 });
+    await proofRepo.saveProofs(mintUrl, [makeProof('metadata-input', 10)]);
+    remote.fetchMintMetadata.mockImplementation(async () => {
+      expect(repositories.transactionOpen).toBe(false);
+      return {
+        mintUrl,
+        mintInfo: testMintInfo,
+        keysets: await repositories.keysetRepository.getKeysetsByMintUrl(mintUrl),
+        observedAt: Math.floor(Date.now() / 1000),
+      };
+    });
+    let observedCommitted = false;
+    eventBus.on('mint:metadata-refreshed', async () => {
+      expect(repositories.transactionOpen).toBe(false);
+      expect((await repositories.mintRepository.getMintByUrl(mintUrl)).updatedAt).toBeGreaterThan(
+        0,
+      );
+      observedCommitted = true;
+    });
+    const prepared = await service.prepare(await service.init(mintUrl, unitAmount(10)));
+    expect(prepared.state).toBe('prepared');
+    expect(observedCommitted).toBe(true);
+    expect(repositories.transactionCount).toBe(2);
+    expect(remote.fetchMintMetadata).toHaveBeenCalledTimes(1);
+  });
+
+  it('commits the reclaim plan before mint I/O and publishes the complete terminal result', async () => {
+    await proofRepo.saveProofs(mintUrl, [makeProof('reclaim-input', 10)]);
+    const prepared = await service.prepare(await service.init(mintUrl, unitAmount(10)));
+    const pending = await service.execute(prepared);
+    remote.reclaim.mockImplementation(async (inputs, outputData) => {
+      expect(repositories.transactionOpen).toBe(false);
+      const stored = await sendOpRepo.getById(prepared.id);
+      expect(stored?.state).toBe('rolling_back');
+      expect(stored?.reclaimData?.outputData).toEqual(outputData);
+      expect(inputs.map((proof) => proof.secret)).toEqual(['reclaim-input']);
+      return deserializeOutputData(outputData).keep.map((output) => ({
+        id: output.blindedMessage.id,
+        amount: output.blindedMessage.amount,
+        secret: new TextDecoder().decode(output.secret),
+        C: 'reclaimed-signature',
+      }));
+    });
+    let observed = false;
+    eventBus.on('send:rolled-back', async ({ operationId }) => {
+      expect(repositories.transactionOpen).toBe(false);
+      expect((await sendOpRepo.getById(operationId))?.state).toBe('rolled_back');
+      expect(
+        (await proofRepo.getProofBySecret(mintUrl, 'reclaim-input'))?.usedByOperationId,
+      ).toBeUndefined();
+      expect((await proofRepo.getAvailableProofs(mintUrl)).length).toBeGreaterThan(0);
+      observed = true;
+    });
+    await service.rollback(pending.operation.id);
+    expect(observed).toBe(true);
+    expect(remote.reclaim).toHaveBeenCalledTimes(1);
+    expect(repositories.transactionCount).toBe(4);
+  });
+
+  it('preserves the existing startup warning after an interrupted reclaim without resubmitting it', async () => {
+    await proofRepo.saveProofs(mintUrl, [makeProof('reclaim-interrupted-input', 10)]);
+    const prepared = await service.prepare(await service.init(mintUrl, unitAmount(10)));
+    await service.execute(prepared);
+    remote.reclaim.mockRejectedValue(new Error('connection lost'));
+    await expect(service.rollback(prepared.id)).rejects.toThrow('connection lost');
+    const stored = await sendOpRepo.getById(prepared.id);
+    expect(stored?.state).toBe('rolling_back');
+    expect(stored?.reclaimData?.outputData.keep.length).toBeGreaterThan(0);
+    await buildService().recoverPendingOperations();
+    expect((await sendOpRepo.getById(prepared.id))?.state).toBe('rolling_back');
+    expect(remote.reclaim).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('Manual recovery via seed restore may be needed'),
+      expect.objectContaining({ operationId: prepared.id }),
+    );
   });
 });

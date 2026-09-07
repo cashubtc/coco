@@ -1,4 +1,15 @@
 import {
+  MINT_REFRESH_TTL_S,
+  type MintMetadata,
+  type MintQueries,
+} from '@core/mints/MintMetadata.ts';
+import type { P2pkSigner } from '@core/keypairs/P2pkSigner.ts';
+import type { ProofQueries } from '@core/proofs/ProofQueries.ts';
+import { createKeyChain } from '@core/proofs/KeysetSelection.ts';
+import { prepareProofsForReceiving } from '@core/proofs/ProofPreparation.ts';
+import { decodeTokenWithKeysets } from '@core/tokens/TokenDecoding.ts';
+import type { ReceiveRemote } from './ReceiveRemote.ts';
+import {
   getTokenMetadata,
   sumProofs,
   type Proof,
@@ -6,15 +17,10 @@ import {
   type Token,
 } from '@cashu/cashu-ts';
 
-import {
-  generateSubId,
-  normalizeMintUrl,
-  mapProofToCoreProof,
-  deserializeOutputData,
-  computeYHexForSecrets,
-} from '../../utils';
+import { generateSubId, normalizeMintUrl, mapProofToCoreProof } from '../../utils';
 import {
   UnknownMintError,
+  TokenValidationError,
   MintOperationError,
   ProofValidationError,
   OperationInProgressError,
@@ -31,27 +37,18 @@ import type {
 import type { Logger } from '../../logging/Logger';
 import type { CoreEvents } from '../../events/types';
 import type { EventBus } from '../../events/EventBus';
-import type { MintAdapter } from '../../infra/MintAdapter';
-import type { MintService } from '../../services/MintService';
-import type { ProofService } from '../../services/ProofService';
-import type { TokenService } from '../../services/TokenService';
-import type { WalletService } from '../../services/WalletService';
-import type { SeedService } from '../../services/SeedService.ts';
 import { createReceiveOperation, getOutputProofSecrets } from './ReceiveOperation';
 import { OperationIdLock } from '../OperationIdLock';
 import { MintScopedLock } from '../MintScopedLock';
 import { DEFAULT_UNIT, normalizeUnit } from '../../amounts.ts';
 import type { ReceiveTransactions } from '../../transactions/receive/ReceiveTransactions.ts';
-import type {
-  ReceiveOperationQueries,
-  ReceiveProofQueries,
-} from '../../transactions/receive/ReceiveOperationQueries.ts';
+import type { ReceiveOperationQueries } from './ReceiveOperationQueries.ts';
 import type {
   AppliedReceiveResult,
   FailedReceiveExecution,
   PreparedReceiveResult,
   ReceiveTransportRequest,
-} from '../../transactions/receive/TransactionalReceiveOperations.ts';
+} from '../../transactions/receive/types.ts';
 
 const NON_TERMINAL_RECEIVE_MINT_ERROR_CODES = new Set([
   // Pending inputs or outputs and already-signed outputs do not prove the exact persisted
@@ -65,15 +62,13 @@ type ReceiveExecutionOutcome =
 
 export interface ReceiveOperationServiceDependencies {
   operationQueries: ReceiveOperationQueries;
-  proofQueries: ReceiveProofQueries;
+  proofQueries: Pick<ProofQueries, 'getProofsBySecrets'>;
   transactions: ReceiveTransactions;
-  proofService: ProofService;
-  mintService: MintService;
-  walletService: WalletService;
-  mintAdapter: MintAdapter;
-  tokenService: TokenService;
-  seedService: SeedService;
-  eventBus: EventBus<CoreEvents>;
+  mintQueries: MintQueries;
+  signer: P2pkSigner;
+  loadSeed: () => Promise<Uint8Array>;
+  remote: ReceiveRemote;
+  eventBus: Pick<EventBus<CoreEvents>, 'emit'>;
   logger?: Logger;
   mintScopedLock?: MintScopedLock;
 }
@@ -87,34 +82,30 @@ export interface ReceiveOperationServiceDependencies {
  */
 export class ReceiveOperationService {
   private readonly operationQueries: ReceiveOperationQueries;
-  private readonly proofQueries: ReceiveProofQueries;
+  private readonly proofQueries: Pick<ProofQueries, 'getProofsBySecrets'>;
   private readonly transactions: ReceiveTransactions;
-  private readonly proofService: ProofService;
-  private readonly mintService: MintService;
-  private readonly walletService: WalletService;
-  private readonly mintAdapter: MintAdapter;
-  private readonly tokenService: TokenService;
-  private readonly seedService: SeedService;
-  private readonly eventBus: EventBus<CoreEvents>;
+  private readonly mintQueries: MintQueries;
+  private readonly signer: P2pkSigner;
+  private readonly loadSeed: () => Promise<Uint8Array>;
+  private readonly remote: ReceiveRemote;
+  private readonly eventBus: Pick<EventBus<CoreEvents>, 'emit'>;
   private readonly logger?: Logger;
 
   /** In-memory lock to prevent concurrent operations on the same operation ID */
   private readonly operationIdLock = new OperationIdLock();
   /** Lock for the global recovery process */
   private recoveryLock: Promise<void> | null = null;
-  /** In-memory lock to serialize deterministic-output derivation (counter) per mint */
+  /** In-session coordination with legacy workflows; the transaction owns counter safety. */
   private readonly mintScopedLock: MintScopedLock;
 
   constructor(dependencies: ReceiveOperationServiceDependencies) {
     this.operationQueries = dependencies.operationQueries;
     this.proofQueries = dependencies.proofQueries;
     this.transactions = dependencies.transactions;
-    this.proofService = dependencies.proofService;
-    this.mintService = dependencies.mintService;
-    this.walletService = dependencies.walletService;
-    this.mintAdapter = dependencies.mintAdapter;
-    this.tokenService = dependencies.tokenService;
-    this.seedService = dependencies.seedService;
+    this.mintQueries = dependencies.mintQueries;
+    this.signer = dependencies.signer;
+    this.loadSeed = dependencies.loadSeed;
+    this.remote = dependencies.remote;
     this.eventBus = dependencies.eventBus;
     this.logger = dependencies.logger;
     this.mintScopedLock = dependencies.mintScopedLock ?? new MintScopedLock();
@@ -148,16 +139,21 @@ export class ReceiveOperationService {
     source?: ReceiveOperationSource,
   ): Promise<InitReceiveOperation> {
     const mintUrl = this.extractMintUrl(token);
-    const trusted = await this.mintService.isTrustedMint(mintUrl);
+    const trusted = await this.mintQueries.isTrustedMint(mintUrl);
     if (!trusted) {
       throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
     }
 
-    const decodedToken = await this.tokenService.decodeToken(token, mintUrl);
+    const metadata = await this.loadMintMetadata(mintUrl).catch((error: unknown) => {
+      throw new TokenValidationError(
+        error instanceof Error ? error.message : 'Unable to retrieve mint keysets',
+      );
+    });
+    const decodedToken = decodeTokenWithKeysets(token, metadata.keysets);
     const unit = normalizeUnit(decodedToken.unit, { defaultUnit: DEFAULT_UNIT });
     const proofs = decodedToken.proofs;
 
-    const preparedProofs = await this.proofService.prepareProofsForReceiving(proofs);
+    const preparedProofs = await prepareProofsForReceiving(proofs, this.signer, this.logger);
     if (!Array.isArray(preparedProofs) || preparedProofs.length === 0) {
       this.logger?.warn('Token contains no proofs', { mintUrl });
       throw new ProofValidationError('Token contains no proofs');
@@ -190,9 +186,8 @@ export class ReceiveOperationService {
     const releaseLock = await this.acquireOperationLock(operation.id);
     let result: PreparedReceiveResult;
     try {
-      // Serialize per-mint so concurrent receives on the same keyset cannot read the
-      // same NUT-13 counter and derive colliding deterministic outputs. Mirrors the
-      // send/melt/mint services, which already hold this lock across counter usage.
+      // Coordinate with legacy mint/melt workflows in this session. Shared scoped allocation
+      // and adapter transactions protect Send/Receive counters across sessions.
       const releaseMintLock = await this.mintScopedLock.acquire(operation.mintUrl);
       try {
         const current = await this.operationQueries.getById(operation.id);
@@ -218,28 +213,22 @@ export class ReceiveOperationService {
     }
 
     const { mintUrl } = operation;
-    const { wallet, keys } = await this.walletService.getWalletWithActiveKeysetId(
-      mintUrl,
-      operation.unit,
-    );
-    const fee = wallet.getFeesForProofs(operation.inputProofs);
-
-    if (operation.amount.lessThanOrEqual(fee)) {
-      throw new ProofValidationError('Receive amount is not sufficient after fees');
-    }
-
-    const seed = await this.seedService.getSeed();
+    const metadata = await this.loadMintMetadata(mintUrl);
+    const keys = createKeyChain(mintUrl, operation.unit, metadata.keysets)
+      .getCheapestKeyset()
+      .toMintKeys();
+    if (!keys) throw new ProofValidationError('Active keyset is missing mint keys');
+    const seed = await this.loadSeed();
     const result = await this.transactions.prepare({
       operation: { ...operation, updatedAt: Date.now() },
       activeKeys: keys,
       seed,
-      fee,
     });
 
     this.logger?.info('Receive operation prepared', {
       operationId: operation.id,
       mintUrl,
-      fee,
+      fee: result.operation.fee,
       proofCount: operation.inputProofs.length,
     });
 
@@ -318,11 +307,8 @@ export class ReceiveOperationService {
     request: ReceiveTransportRequest,
     options: { failDefinitiveRejection?: boolean } = {},
   ): Promise<ReceiveExecutionOutcome> {
-    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
-      request.mintUrl,
-      request.unit,
-    );
-    const outputData = deserializeOutputData(request.outputData);
+    const metadata = await this.loadMintMetadata(request.mintUrl);
+    const remote = this.remote.open(metadata, request.unit);
 
     this.logger?.info('Receiving token', {
       operationId: operation.id,
@@ -333,11 +319,7 @@ export class ReceiveOperationService {
 
     let received: Proof[];
     try {
-      received = await wallet.receive(
-        { mint: request.mintUrl, proofs: request.inputProofs, unit: request.unit },
-        undefined,
-        { type: 'custom', data: outputData.keep },
-      );
+      received = await remote.receive(request);
     } catch (error) {
       const rollbackReason = this.getRollbackReasonForReceiveFailure(error);
       if (
@@ -613,7 +595,11 @@ export class ReceiveOperationService {
   ): Promise<ReceiveExecutionOutcome | undefined> {
     let inputStates: CashuProofState[];
     try {
-      inputStates = await this.checkProofStatesWithMint(executing.mintUrl, executing.inputProofs);
+      inputStates = await this.checkProofStatesWithMint(
+        executing.mintUrl,
+        executing.unit,
+        executing.inputProofs,
+      );
     } catch {
       this.logger?.warn('Could not reach mint for receive recovery, will retry later', {
         operationId: executing.id,
@@ -688,11 +674,10 @@ export class ReceiveOperationService {
     executing: ExecutingReceiveOperation,
     definitiveFailure: string | null,
   ): Promise<ReceiveExecutionOutcome | undefined> {
-    const observation = await this.proofService.observeRestoreProofsFromOutputData(
-      executing.mintUrl,
-      executing.outputData,
-      executing.unit,
-    );
+    const metadata = await this.loadMintMetadata(executing.mintUrl);
+    const observation = await this.remote
+      .open(metadata, executing.unit)
+      .observeRestore(executing.outputData);
     if (observation.status === 'complete-unspent' || observation.status === 'complete-spent') {
       const state = observation.status === 'complete-unspent' ? 'ready' : 'spent';
       const restored =
@@ -750,24 +735,22 @@ export class ReceiveOperationService {
 
   private async checkProofStatesWithMint(
     mintUrl: string,
+    unit: string,
     proofs: Proof[],
   ): Promise<CashuProofState[]> {
-    const batches: string[][] = [];
-    let batchResults: CashuProofState[][] = [];
+    const metadata = await this.loadMintMetadata(mintUrl);
+    return this.remote.open(metadata, unit).checkProofStates(proofs);
+  }
 
-    const proofSecrets = proofs.map((p) => p.secret);
-    const yHexes = computeYHexForSecrets(proofSecrets);
-
-    // Using a batch of 100 Y values as checkProofStates only accepts 100 per request
-    for (let i = 0; i < yHexes.length; i += 100) {
-      batches.push(yHexes.slice(i, i + 100));
-    }
-
-    batchResults = await Promise.all(
-      batches.map((batch) => this.mintAdapter.checkProofStates(mintUrl, batch)),
-    );
-
-    return batchResults.flat();
+  private async loadMintMetadata(mintUrl: string): Promise<MintMetadata> {
+    const cached = await this.mintQueries.getMetadata(mintUrl);
+    if (cached && cached.mint.updatedAt >= Math.floor(Date.now() / 1000) - MINT_REFRESH_TTL_S)
+      return cached;
+    const observation = await this.remote.fetchMintMetadata(mintUrl, cached?.keysets ?? []);
+    const refreshed = await this.transactions.refreshMintMetadata(observation);
+    await this.publishCommittedEvent('mint:metadata-refreshed', { mintUrl });
+    await this.publishCommittedEvent('mint:updated', refreshed);
+    return refreshed;
   }
 
   /**

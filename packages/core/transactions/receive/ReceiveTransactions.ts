@@ -1,3 +1,4 @@
+import type { MintMetadata, MintMetadataObservation } from '@core/mints/MintMetadata.ts';
 import type { CoreTransactionRunner } from '../CoreTransaction.ts';
 import type {
   AppliedReceiveResult,
@@ -9,9 +10,10 @@ import type {
   FailReceiveExecutionCommand,
   PrepareReceiveCommand,
   PreparedReceiveResult,
-} from './TransactionalReceiveOperations.ts';
+} from './types.ts';
 
 export interface ReceiveTransactions {
+  refreshMintMetadata(observation: MintMetadataObservation): Promise<MintMetadata>;
   prepare(command: PrepareReceiveCommand): Promise<PreparedReceiveResult>;
   beginExecution(command: BeginReceiveExecutionCommand): Promise<BegunReceiveExecution>;
   applyResult(command: ApplyReceiveResultCommand): Promise<AppliedReceiveResult>;
@@ -22,6 +24,10 @@ export interface ReceiveTransactions {
 
 export class CoreReceiveTransactions implements ReceiveTransactions {
   constructor(private readonly runner: CoreTransactionRunner) {}
+
+  refreshMintMetadata(observation: MintMetadataObservation): Promise<MintMetadata> {
+    return this.runner.run((transaction) => transaction.mintMetadata.applyObservation(observation));
+  }
 
   prepare(command: PrepareReceiveCommand): Promise<PreparedReceiveResult> {
     return this.runner.run((transaction) => transaction.receives.prepare(command));

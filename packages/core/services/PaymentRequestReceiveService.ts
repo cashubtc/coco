@@ -39,7 +39,7 @@ import type {
   PaymentRequestReceiveAttemptRepository,
   PaymentRequestReceiveOperationRepository,
 } from '../repositories';
-import type { ReceiveOperationQueries } from '../transactions/receive/ReceiveOperationQueries.ts';
+import type { ReceiveOperationQueries } from '../operations/receive/ReceiveOperationQueries.ts';
 import { computeYHexForSecrets, generateSubId, normalizeMintUrl } from '../utils';
 import { OperationIdLock } from '../operations/OperationIdLock';
 import type {

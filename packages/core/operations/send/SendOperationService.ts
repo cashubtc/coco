@@ -1,40 +1,35 @@
 import {
-  Amount,
   OutputData,
-  sumProofs,
-  type OutputConfig,
   type OutputDataCreator,
   type Proof,
   type Token,
-  type Wallet,
   type ProofState as CashuProofState,
 } from '@cashu/cashu-ts';
+import type { ProofQueries } from '@core/proofs/ProofQueries.ts';
+import { createKeyChain } from '@core/proofs/KeysetSelection.ts';
+import {
+  MINT_REFRESH_TTL_S,
+  type MintMetadata,
+  type MintQueries,
+} from '@core/mints/MintMetadata.ts';
 import type {
   SendOperation,
   InitSendOperation,
   PreparedSendOperation,
   ExecutingSendOperation,
   PendingSendOperation,
-  RollingBackSendOperation,
-  RolledBackSendOperation,
 } from './SendOperation';
 import {
   createSendOperation,
-  getKeepProofSecrets,
   getSendProofSecrets,
   type CreateSendOperationOptions,
 } from './SendOperation';
 import type { SendMethod, SendMethodData } from './SendMethodHandler';
 import { SendHandlerProvider } from '../../infra/handlers/send/SendHandlerProvider';
-import type { MintService } from '../../services/MintService';
-import type { WalletService } from '../../services/WalletService';
-import type { ProofService } from '../../services/ProofService';
-import type { SeedService } from '../../services/SeedService.ts';
 import type { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
 import {
-  deserializeOutputData,
   generateSubId,
   getSecretsFromSerializedOutputData,
   mapProofToCoreProof,
@@ -50,18 +45,17 @@ import { MintScopedLock } from '../MintScopedLock';
 import { OperationIdLock } from '../OperationIdLock';
 import { normalizeUnitAmount, type UnitAmount } from '../../amounts.ts';
 import type { SendTransactions } from '../../transactions/send/SendTransactions.ts';
-import type { PreparedSendResult } from '../../transactions/send/TransactionalSendOperations.ts';
+import type { PreparedSendResult } from '../../transactions/send/types.ts';
 import type {
   AppliedSwapResult,
+  CompletedReclaim,
   CancelledPreparedSend,
   CompletedPendingSend,
   FailedSwapExecution,
   SwapTransportRequest,
-} from '../../transactions/send/TransactionalSendOperations.ts';
-import type {
-  SendOperationQueries,
-  SendProofQueries,
-} from '../../transactions/send/SendOperationQueries.ts';
+} from '../../transactions/send/types.ts';
+import type { SendOperationQueries } from './SendOperationQueries.ts';
+import type { SendRemote, SendRemoteSession } from './SendRemote.ts';
 
 const AMBIGUOUS_SWAP_MINT_ERROR_CODES = new Set([11001, 11002, 11003, 11004]);
 
@@ -71,13 +65,12 @@ type SwapExecutionOutcome =
 
 export interface SendOperationServiceDependencies {
   operationQueries: SendOperationQueries;
-  proofQueries: SendProofQueries;
+  proofQueries: ProofQueries;
   transactions: SendTransactions;
-  proofService: ProofService;
-  mintService: MintService;
-  walletService: WalletService;
-  seedService: SeedService;
-  eventBus: EventBus<CoreEvents>;
+  mintQueries: MintQueries;
+  remote: SendRemote;
+  loadSeed: () => Promise<Uint8Array>;
+  eventBus: Pick<EventBus<CoreEvents>, 'emit'>;
   handlerProvider: SendHandlerProvider;
   outputDataCreator?: OutputDataCreator;
   logger?: Logger;
@@ -100,13 +93,12 @@ export interface ExecuteSendOptions {
  */
 export class SendOperationService {
   private readonly operationQueries: SendOperationQueries;
-  private readonly proofQueries: SendProofQueries;
+  private readonly proofQueries: ProofQueries;
   private readonly transactions: SendTransactions;
-  private readonly proofService: ProofService;
-  private readonly mintService: MintService;
-  private readonly walletService: WalletService;
-  private readonly seedService: SeedService;
-  private readonly eventBus: EventBus<CoreEvents>;
+  private readonly mintQueries: MintQueries;
+  private readonly remote: SendRemote;
+  private readonly loadSeed: () => Promise<Uint8Array>;
+  private readonly eventBus: Pick<EventBus<CoreEvents>, 'emit'>;
   private readonly handlerProvider: SendHandlerProvider;
   private readonly logger?: Logger;
   private readonly outputDataCreator: OutputDataCreator;
@@ -122,10 +114,9 @@ export class SendOperationService {
     this.operationQueries = dependencies.operationQueries;
     this.proofQueries = dependencies.proofQueries;
     this.transactions = dependencies.transactions;
-    this.proofService = dependencies.proofService;
-    this.mintService = dependencies.mintService;
-    this.walletService = dependencies.walletService;
-    this.seedService = dependencies.seedService;
+    this.mintQueries = dependencies.mintQueries;
+    this.remote = dependencies.remote;
+    this.loadSeed = dependencies.loadSeed;
     this.eventBus = dependencies.eventBus;
     this.handlerProvider = dependencies.handlerProvider;
     this.logger = dependencies.logger;
@@ -169,7 +160,7 @@ export class SendOperationService {
     },
   ): Promise<InitSendOperation> {
     const parsed = normalizeUnitAmount(amount);
-    const trusted = await this.mintService.isTrustedMint(mintUrl);
+    const trusted = await this.mintQueries.isTrustedMint(mintUrl);
     if (!trusted) {
       throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
     }
@@ -205,28 +196,23 @@ export class SendOperationService {
       const releaseMintLock = await this.mintScopedLock.acquire(operation.mintUrl);
       try {
         const handler = this.handlerProvider.get(operation.method);
-        if (!(await this.mintService.isTrustedMint(operation.mintUrl))) {
+        if (!(await this.mintQueries.isTrustedMint(operation.mintUrl))) {
           throw new UnknownMintError(`Mint ${operation.mintUrl} is not trusted`);
         }
-        const { keys } = await this.walletService.getWalletWithActiveKeysetId(
-          operation.mintUrl,
-          operation.unit,
-        );
-        const seed = await this.seedService.getSeed();
-        result = await handler.prepare({
+        const metadata = await this.loadMintMetadata(operation.mintUrl);
+        const keys = this.activeKeys(metadata, operation.unit);
+        const seed = await this.loadSeed();
+        const plan = handler.prepare({
           operation,
           activeKeys: keys,
+          mintInfo: metadata.mint.mintInfo,
           outputDataCreator: this.outputDataCreator,
-          assertNutSupported: (nut, name) =>
-            this.mintService.assertNutSupported(operation.mintUrl, nut, name),
-          commit: (plan) =>
-            this.transactions.prepare({
-              operation: { ...operation, updatedAt: Date.now() },
-              activeKeys: keys,
-              seed,
-              forceSwap: plan.forceSwap,
-              fixedSendOutputs: plan.fixedSendOutputs,
-            }),
+        });
+        result = await this.transactions.prepare({
+          operation: { ...operation, updatedAt: Date.now() },
+          activeKeys: keys,
+          seed,
+          ...plan,
         });
       } finally {
         releaseMintLock();
@@ -265,12 +251,9 @@ export class SendOperationService {
         `Cannot execute Send operation in state ${current.state}`,
       );
     }
-    const handler = this.handlerProvider.get(current.method);
-    return handler.execute({
-      operation: current,
-      executeExact: () => this.executeExactMatch(current.id, options?.memo),
-      executeSwap: () => this.executePreparedSwap(current.id, options),
-    });
+    return current.needsSwap
+      ? this.executePreparedSwap(current.id, options)
+      : this.executeExactMatch(current.id, options?.memo);
   }
 
   private async executePreparedSwap(
@@ -314,32 +297,23 @@ export class SendOperationService {
     if (!operation.outputData) {
       throw new Error('Missing output data for swap operation');
     }
-    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
-      operation.mintUrl,
-      operation.unit,
-    );
+    const remote = this.remote.open(await this.loadMintMetadata(operation.mintUrl), operation.unit);
     const begun = await this.transactions.beginExecution({
       operationId: operation.id,
       updatedAt: Date.now(),
       memo: options?.memo ? this.normalizeMemo(options.memo) : undefined,
     });
-    return this.submitPersistedSwap(begun.operation, begun.request, wallet);
+    return this.submitPersistedSwap(begun.operation, begun.request, remote);
   }
 
   private async submitPersistedSwap(
     operation: ExecutingSendOperation,
     request: SwapTransportRequest,
-    wallet: Wallet,
+    remote: SendRemoteSession,
   ): Promise<SwapExecutionOutcome> {
-    const outputData = deserializeOutputData(request.outputData);
-    const outputConfig: OutputConfig = {
-      send: { type: 'custom', data: outputData.send },
-      keep: { type: 'custom', data: outputData.keep },
-    };
-
-    let result: Awaited<ReturnType<typeof wallet.send>>;
+    let result: Awaited<ReturnType<SendRemoteSession['swap']>>;
     try {
-      result = await wallet.send(request.amount, request.inputProofs, undefined, outputConfig);
+      result = await remote.swap(request);
     } catch (error) {
       if (!this.isDefinitiveSwapFailure(error)) {
         throw error;
@@ -434,11 +408,7 @@ export class SendOperationService {
   async finalize(operationId: string): Promise<void> {
     const operation = await this.operationQueries.getById(operationId);
     if (!operation) throw new Error(`Operation ${operationId} not found`);
-    const handler = this.handlerProvider.get(operation.method);
-    return handler.finalize({
-      operation,
-      completePersistedSend: () => this.completePersistedSend(operationId),
-    });
+    return this.completePersistedSend(operationId);
   }
 
   private async completePersistedSend(operationId: string): Promise<void> {
@@ -527,25 +497,23 @@ export class SendOperationService {
 
   /**
    * Cancel a prepared operation and release its reservations.
-   * Pending-token reclaim is intentionally outside the migrated transaction flow.
+   * Reclaim commits its Output Allocation before mint I/O and applies the result atomically.
    * Throws if the operation is already in progress.
    */
   async rollback(operationId: string, reason = 'Rolled back by user action'): Promise<void> {
     const operation = await this.operationQueries.getById(operationId);
     if (!operation) throw new Error(`Operation ${operationId} not found`);
     const handler = this.handlerProvider.get(operation.method);
-    return handler.rollback({
-      operation,
-      reason,
-      cancelPrepared: () => this.rollbackPersistedSend(operationId, reason),
-      reclaimPendingDefault: () => this.rollbackPersistedSend(operationId, reason),
-    });
+    if (operation.state !== 'prepared' && !handler.canReclaim) {
+      throw new Error(`P2PK Send Operation in ${operation.state} state can not be rolled back.`);
+    }
+    return this.rollbackPersistedSend(operationId, reason);
   }
 
   private async rollbackPersistedSend(operationId: string, reason: string): Promise<void> {
     const releaseLock = await this.acquireOperationLock(operationId);
     let cancelled: CancelledPreparedSend | undefined;
-    let legacyRolledBack: RolledBackSendOperation | undefined;
+    let reclaimed: CompletedReclaim | undefined;
     try {
       const operation = await this.operationQueries.getById(operationId);
       if (!operation) {
@@ -558,19 +526,28 @@ export class SendOperationService {
           reason,
         });
       } else if (operation.state === 'pending' && operation.method === 'default') {
-        const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
-          operation.mintUrl,
-          operation.unit,
-        );
-        const rollingBack = await this.transactions.beginLegacyPendingRollback({
+        const metadata = await this.loadMintMetadata(operation.mintUrl);
+        const remote = this.remote.open(metadata, operation.unit);
+        const begun = await this.transactions.beginReclaim({
           operationId,
           updatedAt: Date.now(),
+          activeKeys: this.activeKeys(metadata, operation.unit),
+          seed: await this.loadSeed(),
         });
-        await this.reclaimPendingDefault(rollingBack, wallet);
-        legacyRolledBack = await this.transactions.completeLegacyPendingRollback({
+        if (begun.counter) await this.publishCommittedEvent('counter:updated', begun.counter);
+        if (begun.skippedForFees) {
+          this.logger?.warn('Cannot reclaim send proofs because fees consume the amount', {
+            operationId,
+          });
+        }
+        const proofs = begun.operation.reclaimData
+          ? await remote.reclaim(begun.inputProofs, begun.operation.reclaimData.outputData)
+          : [];
+        reclaimed = await this.transactions.completeReclaim({
           operationId,
           updatedAt: Date.now(),
           reason,
+          proofs: mapProofToCoreProof(operation.mintUrl, 'ready', proofs, { unit: operation.unit }),
         });
       } else {
         throw new Error(`Cannot rollback operation in state ${operation.state}`);
@@ -579,75 +556,24 @@ export class SendOperationService {
       releaseLock();
     }
     if (cancelled) await this.publishCancelledSend(cancelled);
-    if (legacyRolledBack) {
-      await this.publishCommittedEvent('send:rolled-back', {
-        mintUrl: legacyRolledBack.mintUrl,
-        operationId: legacyRolledBack.id,
-        operation: legacyRolledBack,
-      });
-    }
-  }
-
-  private async reclaimPendingDefault(
-    operation: RollingBackSendOperation,
-    wallet: Wallet,
-  ): Promise<void> {
-    const sendSecrets = getSendProofSecrets(operation);
-    const operationProofs = await this.proofQueries.getProofsByOperationId(
-      operation.mintUrl,
-      operation.id,
-    );
-    const sendProofs = operationProofs.filter(
-      (proof) => sendSecrets.includes(proof.secret) && proof.state === 'inflight',
-    );
-
-    if (sendProofs.length > 0) {
-      const totalAmount = sumProofs(sendProofs);
-      const fee = wallet.getFeesForProofs(sendProofs);
-      if (totalAmount.lessThanOrEqual(fee)) {
-        this.logger?.warn('Cannot reclaim send proofs because fees consume the amount', {
-          operationId: operation.id,
-          amount: totalAmount,
-          fee,
+    if (reclaimed) {
+      await this.publishSavedProofs(reclaimed.operation.mintUrl, reclaimed.savedProofs);
+      if (reclaimed.spentProofSecrets.length > 0)
+        await this.publishCommittedEvent('proofs:state-changed', {
+          mintUrl: reclaimed.operation.mintUrl,
+          secrets: reclaimed.spentProofSecrets,
+          state: 'spent',
         });
-      } else {
-        const reclaimAmount = totalAmount.subtract(fee);
-        if (!reclaimAmount.isZero()) {
-          const outputResult = await this.proofService.createOutputsAndIncrementCounters(
-            operation.mintUrl,
-            {
-              keep: { amount: reclaimAmount, unit: operation.unit },
-              send: { amount: Amount.zero(), unit: operation.unit },
-            },
-            {},
-          );
-          const keep = await wallet.receive(
-            { mint: operation.mintUrl, proofs: sendProofs, unit: operation.unit },
-            undefined,
-            { type: 'custom', data: outputResult.keep },
-          );
-          await this.proofService.saveProofs(
-            operation.mintUrl,
-            mapProofToCoreProof(operation.mintUrl, 'ready', keep, { unit: operation.unit }),
-          );
-          await this.proofService.setProofState(
-            operation.mintUrl,
-            sendProofs.map((proof) => proof.secret),
-            'spent',
-          );
-          this.logger?.info('Reclaimed proofs from pending operation', {
-            operationId: operation.id,
-            reclaimedAmount: reclaimAmount,
-            proofCount: keep.length,
-          });
-        }
-      }
-    }
-
-    await this.proofService.releaseProofs(operation.mintUrl, operation.inputProofSecrets);
-    const keepSecrets = getKeepProofSecrets(operation);
-    if (keepSecrets.length > 0) {
-      await this.proofService.releaseProofs(operation.mintUrl, keepSecrets);
+      if (reclaimed.releasedProofSecrets.length > 0)
+        await this.publishCommittedEvent('proofs:released', {
+          mintUrl: reclaimed.operation.mintUrl,
+          secrets: reclaimed.releasedProofSecrets,
+        });
+      await this.publishCommittedEvent('send:rolled-back', {
+        mintUrl: reclaimed.operation.mintUrl,
+        operationId: reclaimed.operation.id,
+        operation: reclaimed.operation,
+      });
     }
   }
 
@@ -692,12 +618,7 @@ export class SendOperationService {
       const executingOps = await this.operationQueries.getByState('executing');
       for (const op of executingOps) {
         try {
-          const executing = op as ExecutingSendOperation;
-          const handler = this.handlerProvider.get(executing.method);
-          await handler.recoverExecuting({
-            operation: executing,
-            recoverPersistedSend: () => this.recoverExecutingOperation(executing),
-          });
+          await this.recoverExecutingOperation(op as ExecutingSendOperation);
           executingCount++;
         } catch (e) {
           this.logger?.error('Error recovering executing operation', {
@@ -723,10 +644,9 @@ export class SendOperationService {
 
       // 5. Warn about rolling_back operations (need manual intervention)
       // TODO: Implement automatic recovery for rolling_back operations.
-      // This requires storing the reclaim OutputData before the swap so we can
-      // recover proofs via the mint's restore endpoint if the swap succeeded
-      // but we crashed before saving the reclaimed proofs.
-      // For now, users need to manually recover via seed restore if this happens.
+      // New reclaims retain their output plan atomically, but automatic reclaim recovery remains
+      // a separate behavior change. Older records may lack that plan. Preserve the existing
+      // warning and manual seed Restore path for both.
       const rollingBackOps = await this.operationQueries.getByState('rolling_back');
       for (const op of rollingBackOps) {
         this.logger?.warn(
@@ -802,11 +722,8 @@ export class SendOperationService {
     const inputProofs = latest.inputProofSecrets.map(
       (secret) => inputBySecret.get(secret) as Proof,
     );
-    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
-      latest.mintUrl,
-      latest.unit,
-    );
-    const inputStates = await wallet.checkProofsStates(inputProofs);
+    const remote = this.remote.open(await this.loadMintMetadata(latest.mintUrl), latest.unit);
+    const inputStates = await remote.checkProofStates(inputProofs);
     if (inputStates.length !== inputProofs.length) {
       this.logger?.warn(
         'Executing Send proof-state response was incomplete; preserving recovery material',
@@ -823,7 +740,7 @@ export class SendOperationService {
         expectedRevision: latest.revision ?? 0,
         updatedAt: Date.now(),
       });
-      const outcome = await this.submitPersistedSwap(claimed.operation, claimed.request, wallet);
+      const outcome = await this.submitPersistedSwap(claimed.operation, claimed.request, remote);
       if (outcome.status === 'FAILED') {
         await this.publishFailedSwap(outcome.result);
       } else {
@@ -850,15 +767,7 @@ export class SendOperationService {
     });
     const recoveryOperation = claimed.operation;
 
-    const recovered = await this.proofService.recoverProofsFromOutputData(
-      recoveryOperation.mintUrl,
-      recoveryOperation.outputData!,
-      {
-        unit: recoveryOperation.unit,
-        createdByOperationId: recoveryOperation.id,
-        persistRecoveredProofs: false,
-      },
-    );
+    const recovered = await remote.restoreOutputs(recoveryOperation.outputData!);
     const outputSecrets = getSecretsFromSerializedOutputData(recoveryOperation.outputData!);
     const expectedSecrets = [...outputSecrets.keepSecrets, ...outputSecrets.sendSecrets];
     const recoveredBySecret = new Map(recovered.map((proof) => [proof.secret, proof]));
@@ -907,11 +816,7 @@ export class SendOperationService {
   async checkPendingOperation(op: PendingSendOperation): Promise<void> {
     const latest = await this.operationQueries.getById(op.id);
     if (!latest || latest.state !== 'pending') return;
-    const handler = this.handlerProvider.get(latest.method);
-    return handler.checkPending({
-      operation: latest,
-      checkPersistedSend: () => this.checkPersistedSend(latest),
-    });
+    return this.checkPersistedSend(latest);
   }
 
   private async checkPersistedSend(op: PendingSendOperation): Promise<void> {
@@ -969,12 +874,12 @@ export class SendOperationService {
     secrets: string[],
     unit: string,
   ): Promise<CashuProofState[]> {
-    const wallet = await this.walletService.getWallet(mintUrl, unit);
+    const remote = this.remote.open(await this.loadMintMetadata(mintUrl), unit);
     const proofInputs = await this.proofQueries.getProofsBySecrets(mintUrl, secrets);
     if (proofInputs.length !== secrets.length) {
       throw new ProofValidationError('Cannot check proof states: missing proof metadata');
     }
-    const states = await wallet.checkProofsStates(proofInputs);
+    const states = await remote.checkProofStates(proofInputs);
     if (states.length !== proofInputs.length) {
       throw new ProofValidationError('Cannot check proof states: incomplete mint response');
     }
@@ -1016,22 +921,20 @@ export class SendOperationService {
     });
   }
 
+  private async publishSavedProofs(
+    mintUrl: string,
+    savedProofs: import('@core/types.ts').CoreProof[],
+  ): Promise<void> {
+    const groups = new Map<string, typeof savedProofs>();
+    for (const proof of savedProofs) groups.set(proof.id, [...(groups.get(proof.id) ?? []), proof]);
+    for (const [keysetId, proofs] of groups)
+      await this.publishCommittedEvent('proofs:saved', { mintUrl, keysetId, proofs });
+  }
+
   private async publishAppliedSwap(result: AppliedSwapResult): Promise<void> {
     if (!result.committed) return;
 
-    const proofsByKeyset = new Map<string, typeof result.savedProofs>();
-    for (const proof of result.savedProofs) {
-      const keysetProofs = proofsByKeyset.get(proof.id) ?? [];
-      keysetProofs.push(proof);
-      proofsByKeyset.set(proof.id, keysetProofs);
-    }
-    for (const [keysetId, proofs] of proofsByKeyset) {
-      await this.publishCommittedEvent('proofs:saved', {
-        mintUrl: result.operation.mintUrl,
-        keysetId,
-        proofs,
-      });
-    }
+    await this.publishSavedProofs(result.operation.mintUrl, result.savedProofs);
     await this.publishCommittedEvent('proofs:state-changed', {
       mintUrl: result.operation.mintUrl,
       secrets: result.spentInputSecrets,
@@ -1096,6 +999,25 @@ export class SendOperationService {
       });
       this.logger?.info('Send operation finalized', { operationId: result.operation.id });
     }
+  }
+
+  private async loadMintMetadata(mintUrl: string): Promise<MintMetadata> {
+    const cached = await this.mintQueries.getMetadata(mintUrl);
+    if (cached && cached.mint.updatedAt >= Math.floor(Date.now() / 1000) - MINT_REFRESH_TTL_S)
+      return cached;
+    const observation = await this.remote.fetchMintMetadata(mintUrl, cached?.keysets ?? []);
+    const refreshed = await this.transactions.refreshMintMetadata(observation);
+    await this.publishCommittedEvent('mint:metadata-refreshed', { mintUrl });
+    await this.publishCommittedEvent('mint:updated', refreshed);
+    return refreshed;
+  }
+
+  private activeKeys(metadata: MintMetadata, unit: string) {
+    const keys = createKeyChain(metadata.mint.mintUrl, unit, metadata.keysets)
+      .getCheapestKeyset()
+      .toMintKeys();
+    if (!keys) throw new ProofValidationError('Active keyset is missing mint keys');
+    return keys;
   }
 
   private isDefinitiveSwapFailure(error: unknown): error is MintOperationError {

@@ -1,3 +1,4 @@
+import { testMintInfo } from '../fixtures/MintMetadata.ts';
 import { Amount, type MintKeys, type OutputDataLike, type Proof } from '@cashu/cashu-ts';
 import { describe, expect, it } from 'bun:test';
 import { createReceiveOperation } from '../../operations/receive/ReceiveOperation.ts';
@@ -9,6 +10,8 @@ import {
   createCoreTransactionModuleFactory,
 } from '../../transactions/CoreTransaction.ts';
 import { CoreReceiveTransactions } from '../../transactions/receive/ReceiveTransactions.ts';
+import { CoreSendTransactions } from '../../transactions/send/SendTransactions.ts';
+import { createSendOperation } from '../../operations/send/SendOperation.ts';
 import { getSecretsFromSerializedOutputData } from '../../utils.ts';
 import { makeOutputDataCreator } from '../fixtures/OutputDataCreator.ts';
 
@@ -50,6 +53,14 @@ async function setup(
     createDeterministicData: (amount, _seed, counter) => [output(Amount.from(amount), counter)],
   }),
 ) {
+  await repositories.mintRepository.addOrUpdateMint({
+    mintUrl,
+    name: 'Test',
+    trusted: true,
+    createdAt: 1,
+    updatedAt: 1,
+    mintInfo: testMintInfo,
+  });
   await repositories.keysetRepository.addKeyset({
     mintUrl,
     id: keysetId,
@@ -62,7 +73,7 @@ async function setup(
     repositories,
     createCoreTransactionModuleFactory(outputDataCreator),
   );
-  return { repositories, transactions: new CoreReceiveTransactions(runner) };
+  return { repositories, runner, transactions: new CoreReceiveTransactions(runner) };
 }
 
 function command(id: string, proof?: Proof) {
@@ -70,7 +81,6 @@ function command(id: string, proof?: Proof) {
     operation: operation(id, proof),
     activeKeys: keys,
     seed: new Uint8Array(64).fill(1),
-    fee: Amount.zero(),
   };
 }
 
@@ -151,6 +161,61 @@ async function prepareAndBegin(
 }
 
 describe('ReceiveTransactions preparation', () => {
+  it('allocates Send and Receive outputs from the same counter authority', async () => {
+    const { repositories, runner, transactions } = await setup();
+    await repositories.proofRepository.saveProofs(mintUrl, [
+      {
+        ...receivedProof('send-input', 'original-receive'),
+        amount: Amount.from(16),
+      },
+    ]);
+    const [receive, send] = await Promise.all([
+      transactions.prepare(command('shared-receive')),
+      new CoreSendTransactions(runner).prepare({
+        operation: createSendOperation(
+          'shared-send',
+          mintUrl,
+          { amount: Amount.from(8), unit: 'sat' },
+          { method: 'default', methodData: {} },
+        ),
+        activeKeys: keys,
+        seed: new Uint8Array(64).fill(1),
+        forceSwap: true,
+      }),
+    ]);
+    const outputs = [receive.operation.outputData, send.operation.outputData!].flatMap((data) => [
+      ...data.keep,
+      ...data.send,
+    ]);
+    expect(new Set(outputs.map((output) => output.secret)).size).toBe(outputs.length);
+    expect((await repositories.counterRepository.getCounter(mintUrl, keysetId))?.counter).toBe(
+      outputs.length,
+    );
+  });
+
+  it('isolates saved requests from input, result, and query object mutations', async () => {
+    const { repositories, transactions } = await setup();
+    const input = command('immutable-request', inputProof('signed', 'original-witness'));
+    const result = await transactions.prepare(input);
+    const expected = await repositories.receiveOperationRepository.getById(input.operation.id);
+    input.operation.inputProofs[0]!.witness = 'changed-input';
+    result.operation.outputData.keep[0]!.secret = 'changed-result';
+    const begun = await transactions.beginExecution({
+      operationId: input.operation.id,
+      updatedAt: 300,
+    });
+    begun.request.inputProofs[0]!.witness = 'changed-transport';
+    begun.request.outputData.keep[0]!.blindedMessage.B_ = 'changed-transport';
+    const queried = (await repositories.receiveOperationRepository.getByState('executing'))[0]!;
+    queried.inputProofs[0]!.witness = 'changed-query';
+    const stored = await repositories.receiveOperationRepository.getById(input.operation.id);
+    expect(stored?.inputProofs).toEqual(expected?.inputProofs);
+    if (stored?.state !== 'executing' || expected?.state !== 'prepared')
+      throw new Error('Unexpected operation state');
+    expect(stored.outputData).toEqual(expected.outputData);
+    expect(stored.revision).toBe(1);
+  });
+
   it('persists the exact signed inputs with allocation and counter in one prepared row', async () => {
     const { repositories, transactions } = await setup();
     const signed = inputProof('p2pk-input', '{"signatures":["signed-once"]}');
@@ -376,7 +441,7 @@ describe('ReceiveTransactions execution', () => {
         updatedAt: 400,
         proofs: [proof],
       }),
-    ).rejects.toThrow('Receive proofs do not match the allocated outputs');
+    ).rejects.toThrow('Swap keep proofs do not match allocated outputs');
 
     expect(
       (await environment.repositories.receiveOperationRepository.getById(begun.operation.id))
@@ -407,7 +472,7 @@ describe('ReceiveTransactions execution', () => {
           { ...receivedProof(secrets[1]!, begun.operation.id), amount: Amount.from(2) },
         ],
       }),
-    ).rejects.toThrow('Receive proofs do not match the allocated outputs');
+    ).rejects.toThrow('Swap keep proofs do not match allocated outputs');
 
     expect(
       (await environment.repositories.receiveOperationRepository.getById(begun.operation.id))

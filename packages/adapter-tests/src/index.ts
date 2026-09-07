@@ -1,4 +1,5 @@
 import { Amount } from '@cashu/cashu-ts';
+import { Manager } from '@cashu/coco-core';
 import {
   type Mint,
   type Keyset,
@@ -17,7 +18,7 @@ import {
   type SendOperation,
   type AuthSession,
   type KeypairPurpose,
-  type KeyRingRepository,
+  type Keypair,
   DerivationIndexExhaustedError,
   QuoteIdentityConflictError,
   RepositoryTransactionConflictError,
@@ -53,7 +54,7 @@ export type ContractOptions<TRepositories extends Repositories = Repositories> =
   testWriterOwnershipAtEntry?: boolean;
 };
 
-export type KeyRingDerivationContractOptions<TRepositories extends Repositories = Repositories> = {
+export type KeypairAllocationContractOptions<TRepositories extends Repositories = Repositories> = {
   createRepositories: TransactionFactory<TRepositories>;
   createSharedRepositories?: SharedTransactionFactory<TRepositories>;
 };
@@ -84,29 +85,51 @@ function derivedKeypair(derivationIndex: number, purpose: KeypairPurpose) {
   } as const;
 }
 
-function deriveNext(repository: KeyRingRepository, purpose: KeypairPurpose) {
-  return repository.deriveAndPersistKeyPair(purpose, (index) => derivedKeypair(index, purpose));
+/** Exercise the real key-management gateway on an initialized adapter without starting watchers. */
+export async function allocateKeypairForTest(
+  repositories: Repositories,
+  purpose: KeypairPurpose,
+): Promise<Keypair> {
+  const manager = new Manager(repositories, async () => new Uint8Array(64));
+  let allocate: (() => Promise<Keypair>) | undefined;
+  manager.use({
+    name: 'keypair-allocation-contract',
+    required: ['keyRingService'],
+    onInit: ({ services: { keyRingService } }) => {
+      allocate = () =>
+        purpose === 'p2pk'
+          ? keyRingService.generateNewKeyPair({ dumpSecretKey: true })
+          : keyRingService.generateMintQuoteKeyPair();
+    },
+  });
+  try {
+    await manager.initPlugins();
+    if (!allocate) throw new Error('Keypair allocation contract was not initialized');
+    return await allocate();
+  } finally {
+    await manager.dispose();
+  }
 }
 
-export function runKeyRingDerivationRepositoryContract(
-  options: KeyRingDerivationContractOptions,
+export function runKeypairAllocationContract(
+  options: KeypairAllocationContractOptions,
   runner: ContractRunner,
 ): void {
   const { describe, it, expect } = runner;
 
-  describe('keyring derivation persistence contract', () => {
+  describe('keypair allocation contract', () => {
     it('starts each purpose at zero and advances independently', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {
         const p2pk = await Promise.all([
-          deriveNext(repositories.keyRingRepository, 'p2pk'),
-          deriveNext(repositories.keyRingRepository, 'p2pk'),
-          deriveNext(repositories.keyRingRepository, 'p2pk'),
+          allocateKeypairForTest(repositories, 'p2pk'),
+          allocateKeypairForTest(repositories, 'p2pk'),
+          allocateKeypairForTest(repositories, 'p2pk'),
         ]);
         const quote = await Promise.all([
-          deriveNext(repositories.keyRingRepository, 'nut20_mint_quote'),
-          deriveNext(repositories.keyRingRepository, 'nut20_mint_quote'),
-          deriveNext(repositories.keyRingRepository, 'nut20_mint_quote'),
+          allocateKeypairForTest(repositories, 'nut20_mint_quote'),
+          allocateKeypairForTest(repositories, 'nut20_mint_quote'),
+          allocateKeypairForTest(repositories, 'nut20_mint_quote'),
         ]);
 
         expectExactIndexRange(
@@ -130,7 +153,7 @@ export function runKeyRingDerivationRepositoryContract(
       const { repositories, dispose } = await options.createRepositories();
       try {
         await repositories.keyRingRepository.setPersistedKeyPair(derivedKeypair(7, 'p2pk'));
-        const next = await deriveNext(repositories.keyRingRepository, 'p2pk');
+        const next = await allocateKeypairForTest(repositories, 'p2pk');
         expect(next.derivationIndex).toBe(8);
       } finally {
         await dispose();
@@ -142,7 +165,7 @@ export function runKeyRingDerivationRepositoryContract(
       try {
         const indexes = await Promise.all(
           Array.from({ length: 50 }, () =>
-            deriveNext(repositories.keyRingRepository, 'nut20_mint_quote'),
+            allocateKeypairForTest(repositories, 'nut20_mint_quote'),
           ),
         );
         expectExactIndexRange(
@@ -161,16 +184,18 @@ export function runKeyRingDerivationRepositoryContract(
       try {
         await expectThrowsNamed(
           () =>
-            repositories.keyRingRepository.deriveAndPersistKeyPair('p2pk', () => {
-              throw new Error('derivation failed');
+            repositories.withTransaction(async (scope) => {
+              await scope.keyRingRepository.setPersistedKeyPair(derivedKeypair(0, 'p2pk'));
+              await scope.keyRingRepository.setLastAllocatedIndex('p2pk', 0);
+              throw new Error('allocation aborted');
             }),
           Error.name,
           expect,
         );
-        const keypair = await deriveNext(repositories.keyRingRepository, 'p2pk');
+        const keypair = await allocateKeypairForTest(repositories, 'p2pk');
         expect(keypair.derivationIndex).toBe(0);
         await repositories.keyRingRepository.deletePersistedKeyPair(keypair.publicKeyHex, 'p2pk');
-        expect((await deriveNext(repositories.keyRingRepository, 'p2pk')).derivationIndex).toBe(1);
+        expect((await allocateKeypairForTest(repositories, 'p2pk')).derivationIndex).toBe(1);
       } finally {
         await dispose();
       }
@@ -183,12 +208,12 @@ export function runKeyRingDerivationRepositoryContract(
           derivedKeypair(0x7fffffff, 'nut20_mint_quote'),
         );
         await expectThrowsNamed(
-          () => deriveNext(repositories.keyRingRepository, 'nut20_mint_quote'),
+          () => allocateKeypairForTest(repositories, 'nut20_mint_quote'),
           DerivationIndexExhaustedError.name,
           expect,
         );
         await expectThrowsNamed(
-          () => deriveNext(repositories.keyRingRepository, 'nut20_mint_quote'),
+          () => allocateKeypairForTest(repositories, 'nut20_mint_quote'),
           DerivationIndexExhaustedError.name,
           expect,
         );
@@ -202,12 +227,8 @@ export function runKeyRingDerivationRepositoryContract(
         const { first, second, dispose } = await options.createSharedRepositories!();
         try {
           const indexes = await Promise.all([
-            ...Array.from({ length: 50 }, () =>
-              deriveNext(first.keyRingRepository, 'nut20_mint_quote'),
-            ),
-            ...Array.from({ length: 50 }, () =>
-              deriveNext(second.keyRingRepository, 'nut20_mint_quote'),
-            ),
+            ...Array.from({ length: 50 }, () => allocateKeypairForTest(first, 'nut20_mint_quote')),
+            ...Array.from({ length: 50 }, () => allocateKeypairForTest(second, 'nut20_mint_quote')),
           ]);
           expectExactIndexRange(
             indexes.map((key) => key.derivationIndex!),
@@ -217,8 +238,8 @@ export function runKeyRingDerivationRepositoryContract(
           );
 
           const p2pk = await Promise.all([
-            deriveNext(first.keyRingRepository, 'p2pk'),
-            deriveNext(second.keyRingRepository, 'p2pk'),
+            allocateKeypairForTest(first, 'p2pk'),
+            allocateKeypairForTest(second, 'p2pk'),
           ]);
           expectExactIndexRange(
             p2pk.map((key) => key.derivationIndex!),
@@ -252,11 +273,10 @@ export async function runRepositoryTransactionContract(
           await tx.proofRepository.saveProofs('https://mint.test', [createDummyProof()]);
           await tx.meltOperationRepository.create(createDummyMeltOperation());
           await tx.counterRepository.setCounter('https://mint.test', 'keyset-id', 7);
-          committedPublicKey = (
-            await tx.keyRingRepository.deriveAndPersistKeyPair('p2pk', (index) =>
-              derivedKeypair(index, 'p2pk'),
-            )
-          ).publicKeyHex;
+          const keypair = derivedKeypair(0, 'p2pk');
+          await tx.keyRingRepository.setPersistedKeyPair(keypair);
+          await tx.keyRingRepository.setLastAllocatedIndex('p2pk', 0);
+          committedPublicKey = keypair.publicKeyHex;
           committed = true;
         });
 
@@ -277,7 +297,7 @@ export async function runRepositoryTransactionContract(
         );
         expect(keypair).toBeDefined();
         await repositories.keyRingRepository.deletePersistedKeyPair(committedPublicKey, 'p2pk');
-        const nextKeypair = await deriveNext(repositories.keyRingRepository, 'p2pk');
+        const nextKeypair = await allocateKeypairForTest(repositories, 'p2pk');
         expect(nextKeypair.derivationIndex).toBe(1);
       } finally {
         await dispose();
@@ -294,9 +314,8 @@ export async function runRepositoryTransactionContract(
             await tx.proofRepository.saveProofs('https://mint.test', [createDummyProof()]);
             await tx.meltOperationRepository.create(createDummyMeltOperation());
             await tx.counterRepository.setCounter('https://mint.test', 'keyset-id', 7);
-            await tx.keyRingRepository.deriveAndPersistKeyPair('p2pk', (index) =>
-              derivedKeypair(index, 'p2pk'),
-            );
+            await tx.keyRingRepository.setPersistedKeyPair(derivedKeypair(0, 'p2pk'));
+            await tx.keyRingRepository.setLastAllocatedIndex('p2pk', 0);
             throw new Error('boom');
           });
         }, expect);
@@ -317,7 +336,7 @@ export async function runRepositoryTransactionContract(
         expect(counter).toBe(null);
         const keypairs = await repositories.keyRingRepository.getAllPersistedKeyPairs('p2pk');
         expect(keypairs).toHaveLength(0);
-        const reallocated = await deriveNext(repositories.keyRingRepository, 'p2pk');
+        const reallocated = await allocateKeypairForTest(repositories, 'p2pk');
         expect(reallocated.derivationIndex).toBe(0);
       } finally {
         await dispose();
@@ -1591,6 +1610,36 @@ export async function runMeltQuoteRepositoryContract(
       }
     });
 
+    it('rehydrates cached melt change signature amounts', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const quote = createDummyMeltQuote({
+          quoteId: 'paid-melt-with-change',
+          quote: 'paid-melt-with-change',
+          state: 'PAID',
+          change: [
+            {
+              id: 'keyset-1',
+              amount: Amount.from(2),
+              C_: '02'.padEnd(66, '1'),
+            },
+          ],
+        });
+
+        await repositories.meltQuoteRepository.upsertMeltQuote(quote);
+        const stored = await repositories.meltQuoteRepository.getMeltQuote(
+          quote.mintUrl,
+          quote.method,
+          quote.quoteId,
+        );
+
+        expect(stored?.change).toHaveLength(1);
+        expect(stored?.change?.[0]?.amount.equals(Amount.from(2))).toBe(true);
+      } finally {
+        await dispose();
+      }
+    });
+
     it('looks up canonical melt quotes by identity without method', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {
@@ -1738,6 +1787,69 @@ export async function runReceiveOperationRepositoryContract(
   const { describe, it, expect } = runner;
 
   describe('ReceiveOperationRepository contract', () => {
+    it('keeps nested request data isolated from callers across queries and transitions', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = {
+          ...createDummyReceiveOperation(),
+          state: 'prepared' as const,
+          revision: 0,
+          fee: Amount.from(1),
+          source: {
+            type: 'payment-request' as const,
+            requestOperationId: 'request',
+            attemptId: 'attempt',
+            transport: 'inband' as const,
+          },
+          outputData: {
+            keep: [
+              {
+                secret: 'abcd',
+                blindingFactor: '01',
+                blindedMessage: { id: 'keyset-id', amount: '2', B_: 'original-output' },
+              },
+            ],
+            send: [],
+          },
+        };
+        operation.inputProofs[0]!.witness = 'original-witness';
+        await repositories.receiveOperationRepository.create(operation);
+        operation.inputProofs[0]!.witness = 'mutated-input';
+        operation.outputData.keep[0]!.blindedMessage.B_ = 'mutated-output';
+        operation.source.attemptId = 'mutated-source';
+        const byId = await repositories.receiveOperationRepository.getById(operation.id);
+        const byState = (await repositories.receiveOperationRepository.getByState('prepared'))[0]!;
+        const byAttempt =
+          await repositories.receiveOperationRepository.getByPaymentRequestAttemptId('attempt');
+        expect(byAttempt?.id).toBe(operation.id);
+        expect(byId!.inputProofs[0]!.witness).toBe('original-witness');
+        byState.inputProofs[0]!.witness = 'mutated-query';
+        if (byAttempt?.source?.type !== 'payment-request')
+          throw new Error('Expected payment request source');
+        byAttempt.source.attemptId = 'mutated-query';
+        if (byId?.state !== 'prepared') throw new Error('Expected prepared operation');
+        expect(byId.outputData.keep[0]!.blindedMessage.B_).toBe('original-output');
+        const transitioned = await repositories.receiveOperationRepository.transition({
+          operationId: operation.id,
+          expectedState: 'prepared',
+          expectedRevision: 0,
+          next: { ...byId, state: 'executing', revision: 1 },
+        });
+        expect(transitioned).toBe(true);
+        byId.outputData.keep[0]!.blindedMessage.B_ = 'mutated-after-transition';
+        const stored = await repositories.receiveOperationRepository.getById(operation.id);
+        expect(stored!.inputProofs[0]!.witness).toBe('original-witness');
+        if (stored?.source?.type !== 'payment-request')
+          throw new Error('Expected payment request source');
+        expect(stored.source.attemptId).toBe('attempt');
+        expect(stored!.revision).toBe(1);
+        if (stored?.state !== 'executing') throw new Error('Expected executing operation');
+        expect(stored.outputData.keep[0]!.blindedMessage.B_).toBe('original-output');
+      } finally {
+        await dispose();
+      }
+    });
+
     it('rehydrates persisted input proof amounts', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {
@@ -2087,6 +2199,59 @@ export async function runSendOperationRepositoryContract(
       }
     });
 
+    it('keeps nested Send request data independent of caller-owned objects', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = createDummyPreparedSendOperation({ id: 'immutable-send-request' });
+        const original = JSON.stringify(operation);
+        await repositories.sendOperationRepository.create(operation);
+        operation.inputProofSecrets.push('caller-mutation');
+        const read = await repositories.sendOperationRepository.getById(operation.id);
+        if (!read || read.state !== 'prepared') throw new Error('Missing prepared Send');
+        expect(read.inputProofSecrets.includes('caller-mutation')).toBe(false);
+        read.inputProofSecrets.push('query-mutation');
+        const stored = await repositories.sendOperationRepository.getById(operation.id);
+        expect(
+          JSON.stringify(stored && 'inputProofSecrets' in stored ? stored.inputProofSecrets : []),
+        ).toBe(JSON.stringify(JSON.parse(original).inputProofSecrets));
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('preserves the separate reclaim output plan through create, update, and transition', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const original = createDummyPreparedSendOperation({ id: 'send-reclaim-plan' });
+        const reclaimData = {
+          inputProofSecrets: ['reclaim-input'],
+          outputData: { keep: [], send: [] },
+        };
+        const operation: SendOperation = { ...original, state: 'rolling_back', reclaimData };
+        await repositories.sendOperationRepository.create(operation);
+        let stored = await repositories.sendOperationRepository.getById(operation.id);
+        expect(JSON.stringify(stored!.reclaimData)).toBe(JSON.stringify(reclaimData));
+        expect(
+          JSON.stringify(stored && 'outputData' in stored ? stored.outputData : undefined),
+        ).toBe(JSON.stringify(original.outputData));
+        await repositories.sendOperationRepository.update({ ...operation, error: 'interrupted' });
+        stored = await repositories.sendOperationRepository.getById(operation.id);
+        expect(JSON.stringify(stored!.reclaimData)).toBe(JSON.stringify(reclaimData));
+        expect(
+          await repositories.sendOperationRepository.transition({
+            operationId: operation.id,
+            expectedState: 'rolling_back',
+            expectedRevision: stored!.revision ?? 0,
+            next: { ...operation, state: 'rolled_back' },
+          }),
+        ).toBe(true);
+        stored = await repositories.sendOperationRepository.getById(operation.id);
+        expect(JSON.stringify(stored!.reclaimData)).toBe(JSON.stringify(reclaimData));
+      } finally {
+        await dispose();
+      }
+    });
+
     it('normalizes legacy revisions and allows only one conditional transition winner', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {
@@ -2322,6 +2487,55 @@ export async function runProofRepositoryContract(
   const { describe, it, expect } = runner;
 
   describe('ProofRepository contract', () => {
+    it('preserves request material across metadata mutations and caller-owned snapshots', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const proof = {
+          ...createDummyProof(),
+          dleq: { e: 'e', s: 's', r: 'r' },
+          witness: '{"signatures":["signature"]}',
+        };
+        const material = (value: CoreProof) =>
+          JSON.stringify({
+            id: value.id,
+            amount: value.amount,
+            secret: value.secret,
+            C: value.C,
+            dleq: value.dleq,
+            witness: value.witness,
+          });
+        const expected = material(proof);
+        await repositories.proofRepository.saveProofs(proof.mintUrl, [proof]);
+        proof.dleq.e = 'caller-mutation';
+        const queried = await repositories.proofRepository.getProofBySecret(
+          proof.mintUrl,
+          proof.secret,
+        );
+        expect(material(queried!)).toBe(expected);
+        queried!.dleq!.s = 'query-mutation';
+        await repositories.proofRepository.reserveProofs(
+          proof.mintUrl,
+          [proof.secret],
+          'request-owner',
+        );
+        await repositories.proofRepository.setProofState(proof.mintUrl, [proof.secret], 'inflight');
+        await repositories.proofRepository.setCreatedByOperation(
+          proof.mintUrl,
+          [proof.secret],
+          'creator',
+        );
+        await repositories.proofRepository.setProofState(proof.mintUrl, [proof.secret], 'spent');
+        await repositories.proofRepository.releaseProofs(proof.mintUrl, [proof.secret]);
+        const stored = await repositories.proofRepository.getProofBySecret(
+          proof.mintUrl,
+          proof.secret,
+        );
+        expect(material(stored!)).toBe(expected);
+      } finally {
+        await dispose();
+      }
+    });
+
     it('returns matches for a mint', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {

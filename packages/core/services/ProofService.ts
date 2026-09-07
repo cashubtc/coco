@@ -1,3 +1,6 @@
+import { observeOutputProofs } from '../infra/ProofRestore.ts';
+import type { RestoreProofsObservation } from '../proofs/RestoreProofsObservation.ts';
+import { prepareProofsForReceiving } from '../proofs/ProofPreparation.ts';
 import {
   Amount,
   OutputData,
@@ -29,7 +32,7 @@ import { WalletService } from './WalletService';
 import type { MintService } from './MintService';
 import type { Logger } from '../logging/Logger.ts';
 import type { SeedService } from './SeedService.ts';
-import type { KeyRingService } from './KeyRingService.ts';
+import type { P2pkSigner } from '../keypairs/P2pkSigner.ts';
 import {
   DEFAULT_UNIT,
   assertSameUnit,
@@ -38,7 +41,7 @@ import {
   normalizeUnitAmount,
   type UnitAmount,
 } from '../amounts.ts';
-import { deserializeOutputData, mapProofToCoreProof, type SerializedOutputData } from '../utils';
+import { mapProofToCoreProof, type SerializedOutputData } from '../utils';
 import type { Keyset } from '@core/models/Keyset.ts';
 
 function countBlankOutputsForAmount(amount: Amount): number {
@@ -49,19 +52,10 @@ function countBlankOutputsForAmount(amount: Amount): number {
   return Math.max((value - 1n).toString(2).length, 1);
 }
 
-export type RestoreProofsObservationStatus =
-  | 'none'
-  | 'complete-unspent'
-  | 'complete-spent'
-  | 'inconclusive';
-
-/** Read-only evidence returned by the mint Restore endpoint for one exact output allocation. */
-export interface RestoreProofsObservation {
-  status: RestoreProofsObservationStatus;
-  expectedOutputCount: number;
-  restoredProofs: Proof[];
-  unspentProofs: Proof[];
-}
+export type {
+  RestoreProofsObservation,
+  RestoreProofsObservationStatus,
+} from '../proofs/RestoreProofsObservation.ts';
 
 export class ProofService {
   private readonly counterService: CounterService;
@@ -69,7 +63,7 @@ export class ProofService {
   private readonly eventBus?: EventBus<CoreEvents>;
   private readonly walletService: WalletService;
   private readonly mintService: MintService;
-  private readonly keyRingService: KeyRingService;
+  private readonly signer: P2pkSigner;
   private readonly seedService: SeedService;
   private readonly logger?: Logger;
   private readonly outputDataCreator: OutputDataCreator;
@@ -78,7 +72,7 @@ export class ProofService {
     proofRepository: ProofRepository,
     walletService: WalletService,
     mintService: MintService,
-    keyRingService: KeyRingService,
+    signer: P2pkSigner,
     seedService: SeedService,
     logger?: Logger,
     eventBus?: EventBus<CoreEvents>,
@@ -87,7 +81,7 @@ export class ProofService {
     this.counterService = counterService;
     this.walletService = walletService;
     this.mintService = mintService;
-    this.keyRingService = keyRingService;
+    this.signer = signer;
     this.proofRepository = proofRepository;
     this.seedService = seedService;
     this.logger = logger;
@@ -848,70 +842,7 @@ export class ProofService {
   }
 
   async prepareProofsForReceiving(proofs: Proof[]): Promise<Proof[]> {
-    this.logger?.debug('Preparing proofs for receiving', { totalProofs: proofs.length });
-
-    const preparedProofs = [...proofs];
-    let regularProofCount = 0;
-    let p2pkProofCount = 0;
-
-    for (let i = 0; i < preparedProofs.length; i++) {
-      const proof = preparedProofs[i];
-      if (!proof) continue;
-
-      // Try to parse as P2PK proof
-      let parsedSecret: [string, { nonce: string; data: string; tags: string[][] }];
-      try {
-        parsedSecret = JSON.parse(proof.secret);
-      } catch (parseError) {
-        // Not a JSON secret (regular proof), skip P2PK processing
-        this.logger?.debug('Regular proof detected, skipping P2PK processing', {
-          proofIndex: i,
-        });
-        regularProofCount++;
-        continue;
-      }
-
-      // Check if it's a P2PK proof
-      if (parsedSecret[0] !== 'P2PK') {
-        this.logger?.error('Unsupported locking script type', {
-          proofIndex: i,
-          scriptType: parsedSecret[0],
-        });
-        throw new ProofValidationError('Only P2PK locking scripts are supported');
-      }
-
-      // Validate multisig is not used
-      const additionalKeysTag = parsedSecret[1].tags?.find((tag) => tag[0] === 'pubkeys');
-      if (additionalKeysTag && additionalKeysTag[1] && additionalKeysTag[1].length > 0) {
-        this.logger?.error('Multisig P2PK proof detected', { proofIndex: i });
-        throw new ProofValidationError('Multisig is not supported');
-      }
-
-      // Sign the proof - if this fails, we abort the entire operation
-      try {
-        preparedProofs[i] = await this.keyRingService.signProof(proof, parsedSecret[1].data);
-        this.logger?.debug('P2PK proof signed successfully', {
-          proofIndex: i,
-          recipient: parsedSecret[1].data,
-        });
-        p2pkProofCount++;
-      } catch (error) {
-        this.logger?.error('Failed to sign P2PK proof for receiving', {
-          proofIndex: i,
-          recipient: parsedSecret[1].data,
-          error,
-        });
-        throw error;
-      }
-    }
-
-    this.logger?.info('Proofs prepared for receiving', {
-      totalProofs: proofs.length,
-      regularProofs: regularProofCount,
-      p2pkProofs: p2pkProofCount,
-    });
-
-    return preparedProofs;
+    return prepareProofsForReceiving(proofs, this.signer, this.logger);
   }
 
   async createBlankOutputs(mintUrl: string, intent: UnitAmount): Promise<OutputDataLike[]> {
@@ -1088,92 +1019,7 @@ export class ProofService {
     const unit = normalizeUnit(requestedUnit);
     const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl, unit);
 
-    // Deserialize OutputData
-    const outputData = deserializeOutputData(serializedOutputData);
-    const allOutputs = [...outputData.keep, ...outputData.send];
-
-    if (allOutputs.length === 0) {
-      return {
-        status: 'none',
-        expectedOutputCount: 0,
-        restoredProofs: [],
-        unspentProofs: [],
-      };
-    }
-
-    // Build blinded messages for restore request
-    const blindedMessages = allOutputs.map((o) => o.blindedMessage);
-
-    // Fetch keysets needed to unblind restored signatures
     const { keysets } = await this.mintService.ensureUpdatedMint(mintUrl);
-    const keysetMap: { [id: string]: Keyset } = {};
-    keysets.forEach((ks) => {
-      keysetMap[ks.id] = ks;
-    });
-
-    // Call mint restore endpoint
-    const restoreResult = await wallet.mint.restore({ outputs: blindedMessages });
-
-    // Match signatures back to outputs and unblind to construct proofs
-    const restoredProofs: Proof[] = [];
-    const matchedOutputBlinds = new Set<string>();
-    for (let i = 0; i < restoreResult.outputs.length; i++) {
-      const output = allOutputs.find((o) => o.blindedMessage.B_ === restoreResult.outputs[i]?.B_);
-      const signature = restoreResult.signatures[i];
-      if (output && signature && !matchedOutputBlinds.has(output.blindedMessage.B_)) {
-        const keyset = keysetMap[signature.id];
-        if (!keyset) {
-          this.logger?.warn('Missing keyset for restored signature', { id: signature.id });
-          continue;
-        }
-        assertSameUnit(
-          normalizeUnit(keyset.unit, { defaultUnit: DEFAULT_UNIT }),
-          unit,
-          'Restored proof keyset',
-        );
-        restoredProofs.push(
-          output.toProof(signature, { id: keyset.id, keys: keyset.keypairs as Keys }),
-        );
-        matchedOutputBlinds.add(output.blindedMessage.B_);
-      }
-    }
-
-    if (restoredProofs.length === 0) {
-      this.logger?.debug('No proofs found to restore', { mintUrl });
-      return {
-        status:
-          restoreResult.outputs.length === 0 && restoreResult.signatures.length === 0
-            ? 'none'
-            : 'inconclusive',
-        expectedOutputCount: allOutputs.length,
-        restoredProofs: [],
-        unspentProofs: [],
-      };
-    }
-
-    // Check which proofs are still unspent
-    const proofStates = await wallet.checkProofsStates(restoredProofs);
-    const unspentProofs = restoredProofs.filter((_, index) => {
-      const state = proofStates[index];
-      return state && state.state === 'UNSPENT';
-    });
-
-    if (unspentProofs.length === 0) {
-      this.logger?.debug('All restored proofs are already spent', {
-        mintUrl,
-        totalRestored: restoredProofs.length,
-      });
-    }
-
-    const complete =
-      restoredProofs.length === allOutputs.length && proofStates.length === restoredProofs.length;
-    const allUnspent = complete && proofStates.every((state) => state?.state === 'UNSPENT');
-    const allSpent = complete && proofStates.every((state) => state?.state === 'SPENT');
-    return {
-      status: allUnspent ? 'complete-unspent' : allSpent ? 'complete-spent' : 'inconclusive',
-      expectedOutputCount: allOutputs.length,
-      restoredProofs,
-      unspentProofs,
-    };
+    return observeOutputProofs(wallet, keysets, unit, serializedOutputData);
   }
 }

@@ -25,6 +25,7 @@ interface SendOperationRow {
   revision?: number | null;
   error: string | null;
   executionMemo?: string | null;
+  reclaimDataJson?: string | null;
   method: string;
   methodDataJson: string;
   needsSwap: number | null;
@@ -55,6 +56,7 @@ function rowToOperation(row: SendOperationRow): SendOperation {
     revision: row.revision ?? 0,
     error: row.error ?? undefined,
     executionMemo: row.executionMemo ?? undefined,
+    reclaimData: row.reclaimDataJson ? JSON.parse(row.reclaimDataJson) : undefined,
     method: row.method as SendMethod,
     methodData: JSON.parse(row.methodDataJson),
   };
@@ -134,6 +136,7 @@ function operationToParams(op: SendOperation): SqlValue[] {
       null, // outputDataJson
       null, // tokenJson
       op.revision ?? 0,
+      op.reclaimData ? stringifyJson(op.reclaimData) : null,
     ];
   }
 
@@ -157,6 +160,7 @@ function operationToParams(op: SendOperation): SqlValue[] {
     op.outputData ? JSON.stringify(op.outputData) : null,
     serializeToken(op),
     op.revision ?? 0,
+    op.reclaimData ? stringifyJson(op.reclaimData) : null,
   ];
 }
 
@@ -179,8 +183,8 @@ export class SqliteSendOperationRepository implements SendOperationRepository {
     const params = operationToParams(operation);
     await this.db.run(
       `INSERT INTO coco_cashu_send_operations 
-        (id, mintUrl, amount, unit, state, createdAt, updatedAt, error, executionMemo, method, methodDataJson, needsSwap, fee, inputAmount, inputProofSecretsJson, outputDataJson, tokenJson, revision)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (id, mintUrl, amount, unit, state, createdAt, updatedAt, error, executionMemo, method, methodDataJson, needsSwap, fee, inputAmount, inputProofSecretsJson, outputDataJson, tokenJson, revision, reclaimDataJson)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       params,
     );
   }
@@ -199,7 +203,7 @@ export class SqliteSendOperationRepository implements SendOperationRepository {
     if (operation.state === 'init') {
       await this.db.run(
         `UPDATE coco_cashu_send_operations 
-         SET state = ?, updatedAt = ?, error = ?, executionMemo = ?, unit = ?, revision = ?
+         SET state = ?, updatedAt = ?, error = ?, executionMemo = ?, unit = ?, revision = ?, reclaimDataJson = ?
          WHERE id = ?`,
         [
           operation.state,
@@ -208,13 +212,14 @@ export class SqliteSendOperationRepository implements SendOperationRepository {
           operation.executionMemo ?? null,
           operation.unit,
           operation.revision ?? 0,
+          operation.reclaimData ? stringifyJson(operation.reclaimData) : null,
           operation.id,
         ],
       );
     } else {
       await this.db.run(
         `UPDATE coco_cashu_send_operations 
-         SET state = ?, updatedAt = ?, error = ?, executionMemo = ?, unit = ?, needsSwap = ?, fee = ?, inputAmount = ?, inputProofSecretsJson = ?, outputDataJson = ?, tokenJson = ?, revision = ?
+         SET state = ?, updatedAt = ?, error = ?, executionMemo = ?, unit = ?, needsSwap = ?, fee = ?, inputAmount = ?, inputProofSecretsJson = ?, outputDataJson = ?, tokenJson = ?, revision = ?, reclaimDataJson = ?
          WHERE id = ?`,
         [
           operation.state,
@@ -229,6 +234,7 @@ export class SqliteSendOperationRepository implements SendOperationRepository {
           operation.outputData ? JSON.stringify(operation.outputData) : null,
           serializeToken(operation),
           operation.revision ?? 0,
+          operation.reclaimData ? stringifyJson(operation.reclaimData) : null,
           operation.id,
         ],
       );
@@ -259,7 +265,7 @@ export class SqliteSendOperationRepository implements SendOperationRepository {
     const result = await this.db.run(
       `UPDATE coco_cashu_send_operations
        SET state = ?, updatedAt = ?, error = ?, executionMemo = ?, unit = ?, needsSwap = ?, fee = ?, inputAmount = ?,
-           inputProofSecretsJson = ?, outputDataJson = ?, tokenJson = ?, revision = ?
+           inputProofSecretsJson = ?, outputDataJson = ?, tokenJson = ?, revision = ?, reclaimDataJson = ?
        WHERE id = ? AND state = ? AND revision = ?`,
       [
         next.state,
@@ -269,6 +275,7 @@ export class SqliteSendOperationRepository implements SendOperationRepository {
         next.unit,
         ...prepared,
         command.expectedRevision + 1,
+        next.reclaimData ? stringifyJson(next.reclaimData) : null,
         command.operationId,
         command.expectedState,
         command.expectedRevision,

@@ -1,31 +1,31 @@
-import type {
-  RollingBackSendOperation,
-  RolledBackSendOperation,
-} from '@core/operations/send/SendOperation.ts';
+import type { MintMetadata, MintMetadataObservation } from '@core/mints/MintMetadata.ts';
 import type { CoreTransactionRunner } from '../CoreTransaction.ts';
 import type {
   AppliedSwapResult,
+  BegunReclaim,
+  CompletedReclaim,
   ApplySwapResultCommand,
   BegunSwapExecution,
   BeginSwapExecutionCommand,
   ClaimSendRecoveryCommand,
-  BeginLegacyPendingRollbackCommand,
+  BeginReclaimCommand,
   CancelledPreparedSend,
   CancelPreparedSendCommand,
   CleanupLegacyInitResult,
   CleanupOrphanedSendReservationsResult,
   CompletedPendingSend,
   CompletePendingSendCommand,
-  CompleteLegacyPendingRollbackCommand,
+  CompleteReclaimCommand,
   ExecuteExactSendCommand,
   ExecuteExactSendResult,
   FailedSwapExecution,
   FailSwapExecutionCommand,
   PrepareSendCommand,
   PreparedSendResult,
-} from './TransactionalSendOperations.ts';
+} from './types.ts';
 
 export interface SendTransactions {
+  refreshMintMetadata(observation: MintMetadataObservation): Promise<MintMetadata>;
   prepare(command: PrepareSendCommand): Promise<PreparedSendResult>;
   executeExact(command: ExecuteExactSendCommand): Promise<ExecuteExactSendResult>;
   beginExecution(command: BeginSwapExecutionCommand): Promise<BegunSwapExecution>;
@@ -36,16 +36,16 @@ export interface SendTransactions {
   completePending(command: CompletePendingSendCommand): Promise<CompletedPendingSend>;
   cleanupOrphanedReservations(): Promise<CleanupOrphanedSendReservationsResult>;
   cleanupLegacyInit(operationId: string): Promise<CleanupLegacyInitResult>;
-  beginLegacyPendingRollback(
-    command: BeginLegacyPendingRollbackCommand,
-  ): Promise<RollingBackSendOperation>;
-  completeLegacyPendingRollback(
-    command: CompleteLegacyPendingRollbackCommand,
-  ): Promise<RolledBackSendOperation>;
+  beginReclaim(command: BeginReclaimCommand): Promise<BegunReclaim>;
+  completeReclaim(command: CompleteReclaimCommand): Promise<CompletedReclaim>;
 }
 
 export class CoreSendTransactions implements SendTransactions {
   constructor(private readonly runner: CoreTransactionRunner) {}
+
+  refreshMintMetadata(observation: MintMetadataObservation): Promise<MintMetadata> {
+    return this.runner.run((transaction) => transaction.mintMetadata.applyObservation(observation));
+  }
 
   prepare(command: PrepareSendCommand): Promise<PreparedSendResult> {
     return this.runner.run((transaction) => transaction.sends.prepare(command));
@@ -87,17 +87,11 @@ export class CoreSendTransactions implements SendTransactions {
     return this.runner.run((transaction) => transaction.sends.cleanupLegacyInit(operationId));
   }
 
-  beginLegacyPendingRollback(
-    command: BeginLegacyPendingRollbackCommand,
-  ): Promise<RollingBackSendOperation> {
-    return this.runner.run((transaction) => transaction.sends.beginLegacyPendingRollback(command));
+  beginReclaim(command: BeginReclaimCommand): Promise<BegunReclaim> {
+    return this.runner.run((transaction) => transaction.sends.beginReclaim(command));
   }
 
-  completeLegacyPendingRollback(
-    command: CompleteLegacyPendingRollbackCommand,
-  ): Promise<RolledBackSendOperation> {
-    return this.runner.run((transaction) =>
-      transaction.sends.completeLegacyPendingRollback(command),
-    );
+  completeReclaim(command: CompleteReclaimCommand): Promise<CompletedReclaim> {
+    return this.runner.run((transaction) => transaction.sends.completeReclaim(command));
   }
 }

@@ -1,3 +1,4 @@
+import { createReceiveEnvironment, receiveKeysetId } from '../fixtures/ReceiveEnvironment.ts';
 import { Amount } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect, mock } from 'bun:test';
 import { WalletApi } from '../../api/WalletApi';
@@ -8,16 +9,12 @@ import { WalletRestoreService } from '../../services/WalletRestoreService';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import { UnknownMintError } from '../../models/Error';
-import { getEncodedToken, OutputData, PaymentRequest } from '@cashu/cashu-ts';
+import { getEncodedToken, PaymentRequest } from '@cashu/cashu-ts';
 import type { Proof } from '@cashu/cashu-ts';
 import { ReceiveOperationService } from '../../operations/receive/ReceiveOperationService';
 import { MemoryProofRepository, MemoryReceiveOperationRepository } from '@core/repositories';
 import { TokenService } from '../../services/TokenService';
 import type { MintAdapter } from '../../infra/MintAdapter';
-import type { ReceiveTransactions } from '../../transactions/receive/ReceiveTransactions.ts';
-import type { PreparedReceiveOperation } from '../../operations/receive/ReceiveOperation.ts';
-import { serializeOutputData } from '../../utils.ts';
-import type { SeedService } from '../../services/SeedService.ts';
 
 describe('WalletApi - Trust Enforcement', () => {
   let walletApi: WalletApi;
@@ -33,7 +30,7 @@ describe('WalletApi - Trust Enforcement', () => {
   let mintAdapter: MintAdapter;
 
   const testMintUrl = 'https://mint.test';
-  const keysetId = '009a1f293253e41e';
+  const keysetId = receiveKeysetId;
   const testProofs: Proof[] = [
     {
       id: keysetId,
@@ -42,16 +39,6 @@ describe('WalletApi - Trust Enforcement', () => {
       C: '02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9',
     } as Proof,
   ];
-
-  const makeOutputData = (secrets: string[]): OutputData[] =>
-    secrets.map(
-      (secret) =>
-        new OutputData(
-          { amount: Amount.from(10), id: keysetId, B_: `B_${secret}` },
-          BigInt(1),
-          new TextEncoder().encode(secret),
-        ),
-    );
 
   const encodeLegacyTokenWithoutUnit = (token: { mint: string; proofs: Proof[] }): string => {
     const legacyToken = {
@@ -77,7 +64,7 @@ describe('WalletApi - Trust Enforcement', () => {
       checkProofStates: mock(() => Promise.resolve([])),
     }) as unknown as MintAdapter;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     eventBus = new EventBus<CoreEvents>();
 
     mockMintService = {
@@ -118,7 +105,7 @@ describe('WalletApi - Trust Enforcement', () => {
 
     mockProofService = {
       createOutputsAndIncrementCounters: mock(async () => ({
-        keep: makeOutputData(['out-1', 'out-2']),
+        keep: [],
         send: [],
       })),
       getBalancesByMint: mock(async () => ({
@@ -167,138 +154,16 @@ describe('WalletApi - Trust Enforcement', () => {
 
     mockWalletRestoreService = {};
 
-    receiveOpRepo = new MemoryReceiveOperationRepository();
-    proofReceiveRepo = new MemoryProofRepository();
     tokenService = new TokenService(mockMintService);
-    mintAdapter = createMockMintAdapter();
-
-    const transactions: ReceiveTransactions = {
-      prepare: async ({ operation, fee }) => {
-        const outputs = await mockProofService.createOutputsAndIncrementCounters();
-        const prepared: PreparedReceiveOperation = {
-          ...operation,
-          state: 'prepared',
-          revision: 0,
-          fee,
-          outputData: serializeOutputData({ keep: outputs.keep, send: [] }),
-        };
-        await receiveOpRepo.create(prepared);
-        return {
-          operation: prepared,
-          counter: { mintUrl: operation.mintUrl, keysetId, counter: outputs.keep.length },
-        };
+    const environment = await createReceiveEnvironment();
+    receiveOpRepo = environment.repositories
+      .receiveOperationRepository as MemoryReceiveOperationRepository;
+    proofReceiveRepo = environment.repositories.proofRepository as MemoryProofRepository;
+    receiveOperationService = environment.buildService({
+      mintQueries: {
+        isTrustedMint: (mintUrl) => mockMintService.isTrustedMint(mintUrl),
+        getMetadata: (mintUrl) => environment.dependencies.mintQueries.getMetadata(mintUrl),
       },
-      beginExecution: async ({ operationId, updatedAt }) => {
-        const current = await receiveOpRepo.getById(operationId);
-        if (!current || current.state !== 'prepared') throw new Error('Receive not prepared');
-        const revision = current.revision ?? 0;
-        const executing = {
-          ...current,
-          state: 'executing' as const,
-          revision: revision + 1,
-          updatedAt,
-        };
-        if (
-          !(await receiveOpRepo.transition({
-            operationId,
-            expectedState: 'prepared',
-            expectedRevision: revision,
-            next: executing,
-          }))
-        ) {
-          throw new Error('Receive execution conflict');
-        }
-        return {
-          operation: executing,
-          request: {
-            mintUrl: executing.mintUrl,
-            unit: executing.unit,
-            inputProofs: executing.inputProofs,
-            outputData: executing.outputData,
-          },
-        };
-      },
-      applyResult: async ({ operationId, updatedAt, proofs }) => {
-        const current = await receiveOpRepo.getById(operationId);
-        if (!current || current.state !== 'executing') throw new Error('Receive not executing');
-        const revision = current.revision ?? 0;
-        await proofReceiveRepo.saveProofs(current.mintUrl, proofs);
-        const finalized = {
-          ...current,
-          state: 'finalized' as const,
-          revision: revision + 1,
-          updatedAt,
-        };
-        if (
-          !(await receiveOpRepo.transition({
-            operationId,
-            expectedState: 'executing',
-            expectedRevision: revision,
-            next: finalized,
-          }))
-        ) {
-          throw new Error('Receive result conflict');
-        }
-        return { operation: finalized, savedProofs: proofs, committed: true };
-      },
-      failExecution: async ({ operationId, updatedAt, error }) => {
-        const current = await receiveOpRepo.getById(operationId);
-        if (!current || current.state !== 'executing') throw new Error('Receive not executing');
-        const revision = current.revision ?? 0;
-        const rolledBack = {
-          ...current,
-          state: 'rolled_back' as const,
-          revision: revision + 1,
-          updatedAt,
-          error,
-        };
-        if (
-          !(await receiveOpRepo.transition({
-            operationId,
-            expectedState: 'executing',
-            expectedRevision: revision,
-            next: rolledBack,
-          }))
-        ) {
-          throw new Error('Receive failure conflict');
-        }
-        return { operation: rolledBack, committed: true };
-      },
-      cancelPrepared: async ({ operationId, updatedAt, error }) => {
-        const current = await receiveOpRepo.getById(operationId);
-        if (!current || current.state !== 'prepared') throw new Error('Receive not prepared');
-        const revision = current.revision ?? 0;
-        const rolledBack = {
-          ...current,
-          state: 'rolled_back' as const,
-          revision: revision + 1,
-          updatedAt,
-          error,
-        };
-        if (
-          !(await receiveOpRepo.transition({
-            operationId,
-            expectedState: 'prepared',
-            expectedRevision: revision,
-            next: rolledBack,
-          }))
-        ) {
-          throw new Error('Receive cancellation conflict');
-        }
-        return { operation: rolledBack, committed: true };
-      },
-      deleteLegacyInit: (operationId) => receiveOpRepo.delete(operationId),
-    };
-    receiveOperationService = new ReceiveOperationService({
-      operationQueries: receiveOpRepo,
-      proofQueries: proofReceiveRepo,
-      transactions,
-      proofService: mockProofService,
-      mintService: mockMintService,
-      walletService: mockWalletService,
-      mintAdapter,
-      tokenService,
-      seedService: { getSeed: async () => new Uint8Array(64) } as SeedService,
       eventBus,
     });
 
@@ -353,10 +218,7 @@ describe('WalletApi - Trust Enforcement', () => {
       // Should not throw
       await walletApi.receive(token);
 
-      expect(mockWalletService.getWalletWithActiveKeysetId).toHaveBeenCalledWith(
-        testMintUrl,
-        'sat',
-      );
+      expect(await receiveOpRepo.getByState('finalized')).toHaveLength(1);
     });
 
     it('should check trust status before processing token', async () => {
@@ -398,10 +260,7 @@ describe('WalletApi - Trust Enforcement', () => {
       // Should not throw
       await walletApi.receive(encodedToken);
 
-      expect(mockWalletService.getWalletWithActiveKeysetId).toHaveBeenCalledWith(
-        testMintUrl,
-        'sat',
-      );
+      expect(await receiveOpRepo.getByState('finalized')).toHaveLength(1);
     });
 
     it('should provide clear error message for untrusted mints', async () => {

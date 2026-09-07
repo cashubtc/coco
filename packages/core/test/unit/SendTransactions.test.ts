@@ -1,3 +1,5 @@
+import { testMintInfo } from '../fixtures/MintMetadata.ts';
+import { overrideTransactions } from '../overrideTransactions.ts';
 import { Amount, type MintKeys, type OutputDataLike } from '@cashu/cashu-ts';
 import { describe, expect, it } from 'bun:test';
 import {
@@ -13,10 +15,7 @@ import {
   createCoreTransactionModuleFactory,
 } from '../../transactions/CoreTransaction.ts';
 import { CoreSendTransactions } from '../../transactions/send/SendTransactions.ts';
-import type {
-  ExecuteExactSendCommand,
-  PrepareSendCommand,
-} from '../../transactions/send/TransactionalSendOperations.ts';
+import type { ExecuteExactSendCommand, PrepareSendCommand } from '../../transactions/send/types.ts';
 import type { CoreProof } from '../../types.ts';
 import { getSecretsFromSerializedOutputData } from '../../utils.ts';
 import { makeOutputDataCreator } from '../fixtures/OutputDataCreator.ts';
@@ -65,6 +64,14 @@ function output(amount: Amount, counter: number): OutputDataLike {
 }
 
 async function setup(repositories = new MemoryRepositories()) {
+  await repositories.mintRepository.addNewMint({
+    mintUrl,
+    name: 'Test',
+    trusted: true,
+    mintInfo: testMintInfo,
+    createdAt: 1,
+    updatedAt: 1,
+  });
   await repositories.keysetRepository.addKeyset({
     mintUrl,
     id: keysetId,
@@ -278,7 +285,7 @@ describe('SendTransactions preparation', () => {
         ...command('stale-keyset-send'),
         activeKeys: { ...keys, keys: { 1: 'stale-key' } },
       }),
-    ).rejects.toThrow('changed after Send preflight');
+    ).rejects.toThrow('changed after preflight');
 
     expect(
       (await repositories.proofRepository.getProofBySecret(mintUrl, 'proof-1'))?.usedByOperationId,
@@ -384,7 +391,7 @@ describe('SendTransactions exact-match execution', () => {
     await repositories.proofRepository.releaseProofs(mintUrl, ['exact-proof']);
 
     await expect(transactions.executeExact(executeCommand('unowned-exact-send'))).rejects.toThrow(
-      'does not own every ready input proof',
+      'not ready and operation-owned',
     );
 
     expect((await repositories.sendOperationRepository.getById('unowned-exact-send'))?.state).toBe(
@@ -434,6 +441,30 @@ describe('SendTransactions swap execution', () => {
     expect(
       (await repositories.proofRepository.getProofBySecret(mintUrl, 'proof-1'))?.usedByOperationId,
     ).toBe(prepared.id);
+  });
+
+  it('keeps persisted inputs and outputs independent of returned and queried request objects', async () => {
+    const { repositories, transactions } = await setup();
+    await repositories.proofRepository.saveProofs(mintUrl, [proof('request-input')]);
+    const prepared = await transactions.prepare(command('request-immutability'));
+    const begun = await transactions.beginExecution({
+      operationId: prepared.operation.id,
+      updatedAt: 300,
+    });
+    const expected = JSON.stringify(begun.request.outputData);
+    begun.request.outputData.send[0]!.secret = 'changed';
+    const queried = await repositories.sendOperationRepository.getById(prepared.operation.id);
+    if (!queried || queried.state !== 'executing') throw new Error('Missing executing operation');
+    expect(JSON.stringify(queried.outputData)).toBe(expected);
+    queried.inputProofSecrets.push('changed');
+    queried.outputData!.send[0]!.secret = 'changed';
+    const replay = await transactions.claimRecovery({
+      operationId: prepared.operation.id,
+      expectedRevision: queried.revision!,
+      updatedAt: 400,
+    });
+    expect(JSON.stringify(replay.request.outputData)).toBe(expected);
+    expect(replay.request.inputProofs.map((proof) => proof.secret)).toEqual(['request-input']);
   });
 
   it('leaves the complete request executing when a response is not applied', async () => {
@@ -828,5 +859,148 @@ describe('SendTransactions cancellation and completion', () => {
     const storedInput = await repositories.proofRepository.getProofBySecret(mintUrl, input.secret);
     expect(storedInput?.state).toBe('inflight');
     expect(storedInput?.usedByOperationId).toBe(pending.id);
+  });
+});
+
+describe('SendTransactions reclaim', () => {
+  async function pending(repositories = new MemoryRepositories()) {
+    const environment = await setup(repositories);
+    await repositories.proofRepository.saveProofs(mintUrl, [proof('reclaim-input')]);
+    const prepared = await environment.transactions.prepare(command('reclaim-send', false));
+    const result = await environment.transactions.executeExact({
+      operationId: prepared.operation.id,
+      updatedAt: 300,
+    });
+    return { ...environment, operation: result.operation };
+  }
+
+  function reclaimProofs(
+    outputData: NonNullable<PendingSendOperation['reclaimData']>['outputData'],
+  ): CoreProof[] {
+    const secrets = getSecretsFromSerializedOutputData(outputData).keepSecrets;
+    return outputData.keep.map((output, index) => ({
+      ...proof(secrets[index]!),
+      amount: Amount.from(output.blindedMessage.amount),
+      id: output.blindedMessage.id,
+    }));
+  }
+
+  it('commits reclaim allocation with rolling_back and atomically applies its proofs and releases inputs', async () => {
+    const { repositories, transactions, operation } = await pending();
+    const begun = await transactions.beginReclaim({
+      operationId: operation.id,
+      updatedAt: 400,
+      activeKeys: keys,
+      seed: new Uint8Array(32),
+    });
+    const stored = await repositories.sendOperationRepository.getById(operation.id);
+    expect(stored?.state).toBe('rolling_back');
+    expect(stored?.reclaimData).toEqual(begun.operation.reclaimData);
+    expect(begun.counter?.counter).toBe(1);
+    expect(
+      (await repositories.proofRepository.getProofBySecret(mintUrl, 'reclaim-input'))?.state,
+    ).toBe('inflight');
+
+    const proofs = reclaimProofs(begun.operation.reclaimData!.outputData);
+    const completed = await transactions.completeReclaim({
+      operationId: operation.id,
+      updatedAt: 500,
+      reason: 'reclaimed',
+      proofs,
+    });
+    expect(completed.operation.state).toBe('rolled_back');
+    expect(completed.operation.token).toEqual(operation.token);
+    expect(await repositories.proofRepository.getAvailableProofs(mintUrl)).toEqual(proofs);
+    const input = await repositories.proofRepository.getProofBySecret(mintUrl, 'reclaim-input');
+    expect(input?.state).toBe('spent');
+    expect(input?.usedByOperationId).toBeUndefined();
+  });
+
+  it('rolls back reclaim allocation when the pending-state transition conflicts', async () => {
+    const { repositories, operation } = await pending();
+    const rejecting = new CoreSendTransactions(
+      new RepositoryCoreTransactionRunner(
+        overrideTransactions(repositories, (fn) =>
+          repositories.withTransaction((scope) =>
+            fn({
+              ...scope,
+              sendOperationRepository: rejectTransitions(scope.sendOperationRepository),
+            }),
+          ),
+        ),
+      ),
+    );
+    await expect(
+      rejecting.beginReclaim({
+        operationId: operation.id,
+        updatedAt: 400,
+        activeKeys: keys,
+        seed: new Uint8Array(32),
+      }),
+    ).rejects.toThrow('conflict');
+    expect((await repositories.sendOperationRepository.getById(operation.id))?.state).toBe(
+      'pending',
+    );
+    expect(await repositories.counterRepository.getCounter(mintUrl, keysetId)).toBeNull();
+  });
+
+  it('preserves allocation and every input when applying a reclaim result loses its transition', async () => {
+    const { repositories, transactions, operation } = await pending();
+    const begun = await transactions.beginReclaim({
+      operationId: operation.id,
+      updatedAt: 400,
+      activeKeys: keys,
+      seed: new Uint8Array(32),
+    });
+    const rejecting = new CoreSendTransactions(
+      new RepositoryCoreTransactionRunner(
+        overrideTransactions(repositories, (fn) =>
+          repositories.withTransaction((scope) =>
+            fn({
+              ...scope,
+              sendOperationRepository: rejectTransitions(scope.sendOperationRepository),
+            }),
+          ),
+        ),
+      ),
+    );
+    await expect(
+      rejecting.completeReclaim({
+        operationId: operation.id,
+        updatedAt: 500,
+        reason: 'reclaimed',
+        proofs: reclaimProofs(begun.operation.reclaimData!.outputData),
+      }),
+    ).rejects.toThrow('conflict');
+    const stored = await repositories.sendOperationRepository.getById(operation.id);
+    expect(stored?.state).toBe('rolling_back');
+    expect(stored?.reclaimData).toEqual(begun.operation.reclaimData);
+    expect(await repositories.proofRepository.getAvailableProofs(mintUrl)).toEqual([]);
+    const input = await repositories.proofRepository.getProofBySecret(mintUrl, 'reclaim-input');
+    expect(input?.state).toBe('inflight');
+    expect(input?.usedByOperationId).toBe(operation.id);
+    expect((await repositories.counterRepository.getCounter(mintUrl, keysetId))?.counter).toBe(1);
+  });
+
+  it('rejects returned proofs that differ from the committed reclaim plan', async () => {
+    const { repositories, transactions, operation } = await pending();
+    await transactions.beginReclaim({
+      operationId: operation.id,
+      updatedAt: 400,
+      activeKeys: keys,
+      seed: new Uint8Array(32),
+    });
+    await expect(
+      transactions.completeReclaim({
+        operationId: operation.id,
+        updatedAt: 500,
+        reason: 'reclaimed',
+        proofs: [proof('unexpected')],
+      }),
+    ).rejects.toThrow('allocated outputs');
+    expect((await repositories.sendOperationRepository.getById(operation.id))?.state).toBe(
+      'rolling_back',
+    );
+    expect(await repositories.proofRepository.getAvailableProofs(mintUrl)).toEqual([]);
   });
 });

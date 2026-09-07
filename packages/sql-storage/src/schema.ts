@@ -1521,6 +1521,10 @@ const MIGRATIONS: readonly Migration[] = [
     `,
   },
   {
+    id: '041_send_reclaim_data',
+    sql: `ALTER TABLE coco_cashu_send_operations ADD COLUMN reclaimDataJson TEXT;`,
+  },
+  {
     id: '041_receive_operation_revision',
     sql: `
       ALTER TABLE coco_cashu_receive_operations
