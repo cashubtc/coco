@@ -4,65 +4,36 @@ status: accepted
 
 # Use domain transaction gateways for critical Wallet mutations
 
-Coco uses Operation Services as the coordinators for durable operations. A migrated Operation
-Service depends on narrow Queries, local capabilities, remote interfaces, and its own
-application-scoped `*Transactions` interface; it does not receive repositories, the raw
-`CoreTransactionRunner`, or another domain's transaction gateway.
+Coco uses narrow domain transaction gateways backed by one composition-root-owned runner for
+critical Wallet mutations. Services coordinate domain management actions; Operation Services
+additionally coordinate durable saga lifecycles. Both use domain gateways, while shared scoped
+commands compose reusable domain invariants within one adapter transaction. Each gateway method
+returns only after commit, with the runner owning rollback and bounded retries.
 
-Each `*Transactions` method owns exactly one adapter transaction and returns only after commit.
-Cross-domain writes compose through transaction-scoped modules created from the same short-lived
-`CoreTransaction`; those modules never open transactions or perform remote I/O. Preflight and
-remote mint I/O remain outside transactions, authoritative reads are repeated inside them, and live
-events are published only after commit. [Transaction Design](../../../../TRANSACTION_DESIGN.md)
-defines the detailed dependency, lifetime, retry, and incremental-migration contract.
+This gives each atomic transition an explicit owner and prevents reusable helpers from opening
+nested transactions. Coordinators perform asynchronous preflight and remote mint I/O outside the
+transaction and publish live events after commit. Authoritative reads and writes share the
+transaction scope, preserving atomicity across supported adapters, including IndexedDB.
 
-An application-scoped `*Transactions` implementation is a leaf adapter around its
-`CoreTransactionRunner`. Its caller completes preflight and supplies transaction-ready command
-data. The gateway does not depend on regular Services, remote infrastructure, the live `EventBus`,
-root repositories, or another application-scoped transaction gateway. Existing dependencies that
-violate this boundary are removed in their owning workflow migrations; new transaction-aware work
-follows the contract immediately.
+`Scoped*Commands` names interfaces for state-changing actions within an existing transaction.
+Method-specific argument objects use `*Input` types and the parameter name `input`; transaction
+runner callbacks are named `work`. These names distinguish actions from their inputs and the work
+that composes them.
 
-Shared domain modules own reusable invariants and algorithms; operation-specific modules compose
-them into atomic transitions. Shared implementations receive repositories from the current
-transaction scope and never receive a runner, root repository container, or gateway, including
-through helpers. Standalone use wraps the same commands in a gateway; composed use invokes those
-commands within the owning transaction. Optional transaction parameters with implicit transaction
-creation are forbidden. This preserves reuse without permitting nested transactions.
+## Considered Options
 
-The runner owns one `TransactionLifetime` per attempt and binds all scoped commands and their
-repository dependencies to it. Concurrent promises inside commands remain supported without
-call-site draining when the implementer establishes that their operations are independent.
-Within one scope, callers and scoped implementations await mutations sequentially by default;
-dependent operations must observe preceding writes. Scoped modules do not provide per-method
-queues or mutexes. Lifetime tracking guarantees containment, not ordering, while adapter isolation
-protects separate transactions. The first scoped failure rejects further calls and forces rollback
-even if the callback catches it. The runner drains already executing calls before the adapter
-callback settles, then revokes the scope; rollback finishes before a fresh retry begins. Calls through
-completed scopes reject rather than writing outside their transaction. Direct legacy repository
-transactions migrate with their owning workflows; arbitrary asynchronous work and remote effects
-remain outside this guarantee.
+Broad Service dependencies and transaction-scoped Service clones obscure effects and transaction
+ownership. Composing separate gateway calls cannot provide one atomic transition. Shared scoped
+commands preserve algorithm reuse while keeping transaction creation at the owning gateway.
 
-For Keypair Allocation, the scoped command reads the durable high-water mark and greatest stored
-index, chooses and validates the next index, invokes the synchronous deriver, and persists the key
-and high-water mark. Repositories expose only the underlying reads and writes; derivation and
-allocation retries do not belong in adapters. The runner retries the whole owning transaction.
-Callers await allocations for the same purpose sequentially within a scope; concurrent standalone
-gateway calls use separate transactions and remain supported.
+We use agent and human review, scoped types, and behavior tests instead of a custom architecture
+checker because partial static analysis adds maintenance cost without establishing effect safety.
 
-Queries and preflight capabilities cannot hide Wallet writes. Narrow interfaces may share one
-implementation, and no domain is required to reproduce every architectural layer. Use
-`<Domain>Queries` consistently for read-only state interfaces, without equivalent `*ReadPort`
-aliases or extra wrapper layers. Reserve
-`Operation` for durable sagas and use `Scoped*Commands` for in-transaction behavior.
-Reserve `*Transactions` for gateways; keep scoped implementations and helpers under
-`transactions/scoped/**`. The [naming convention](../../../../TRANSACTION_DESIGN.md#naming-convention)
-distinguishes coordinators, gateways, scoped commands, the scope, and the runner without an ambiguous
-`Transactional*` prefix. The keypair implementation is the initial baseline; later proof, output,
-counter, and handler migrations reuse these rules.
+## Consequences
 
-The team relies on mandatory agent review of the documented contract, human code review, scoped
-types, and behavior tests. A custom architecture guard is not maintained: its partial static
-analysis adds maintenance cost without establishing effect safety. Agents follow the
-[review steps](../../../../TRANSACTION_DESIGN.md#agent-review), inspect indirect dependencies and
-composition-root wiring, and report the boundaries checked and remaining deviations before handoff.
+The design adds interfaces and stricter dependency boundaries. Adoption is incremental: Keypair
+Allocation establishes the baseline, and other workflows migrate through their own gateways while
+reusing shared scoped commands.
+
+[Transaction Design](../../../../TRANSACTION_DESIGN.md) is the authoritative implementation
+contract for naming, dependencies, scope lifetime, concurrency, retries, and review requirements.

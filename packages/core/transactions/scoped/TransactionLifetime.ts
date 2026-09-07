@@ -22,11 +22,11 @@ export class TransactionLifetime {
     });
   }
 
-  async run<T>(command: () => Promise<T>): Promise<T> {
+  async run<T>(work: () => Promise<T>): Promise<T> {
     let result!: T;
     try {
       try {
-        result = await command();
+        result = await work();
       } catch (error) {
         this.fail(error);
       }

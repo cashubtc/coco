@@ -10,7 +10,8 @@ transactions. Reuse scoped keypair commands within an owning transaction, and es
 transaction architecture as the baseline for later operation refactors.
 
 Distinguish transaction gateways (`*Transactions`) from in-transaction command interfaces
-(`Scoped*Commands`).
+(`Scoped*Commands`). Name argument objects `*Input`, their parameters `input`, and transaction
+runner callbacks `work`.
 Use `*Queries` consistently for read-only state interfaces.
 
 Move index selection, exhaustion checks, and synchronous derivation into the shared scoped keypair

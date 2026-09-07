@@ -36,7 +36,7 @@ export interface CoreTransaction {
 }
 
 export interface CoreTransactionRunner {
-  run<T>(command: (transaction: CoreTransaction) => Promise<T>): Promise<T>;
+  run<T>(work: (transaction: CoreTransaction) => Promise<T>): Promise<T>;
 }
 
 type TransactionModuleFactory = (repositories: RepositoryTransactionScope) => CoreTransaction;
@@ -82,13 +82,13 @@ export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
     private readonly createModules: TransactionModuleFactory = createCoreTransactionModuleFactory(),
   ) {}
 
-  async run<T>(command: (transaction: CoreTransaction) => Promise<T>): Promise<T> {
+  async run<T>(work: (transaction: CoreTransaction) => Promise<T>): Promise<T> {
     for (let attempt = 1; ; attempt++) {
       try {
         return await this.repositories.withTransaction((repositories) => {
           const lifetime = new TransactionLifetime();
           return lifetime.run(() =>
-            command(lifetime.bind(this.createModules(lifetime.bind(repositories)))),
+            work(lifetime.bind(this.createModules(lifetime.bind(repositories)))),
           );
         });
       } catch (error) {

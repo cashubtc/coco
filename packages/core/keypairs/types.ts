@@ -5,7 +5,7 @@ export type PurposeBoundKeyDeriver = (
   derivationIndex: number,
 ) => Pick<Keypair, 'publicKeyHex' | 'secretKey'>;
 
-export interface AllocateKeypairCommand {
+export interface AllocateKeypairInput {
   purpose: KeypairPurpose;
   derive: PurposeBoundKeyDeriver;
 }

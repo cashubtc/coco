@@ -27,19 +27,30 @@ suffix. Established names such as `SendOperationService` and `ReceiveOperationSe
 
 Names distinguish transaction ownership from work performed within an existing transaction:
 
-| Role                          | Name                    | Responsibility                                                    |
-| ----------------------------- | ----------------------- | ----------------------------------------------------------------- |
-| Workflow coordinator          | `SendOperationService`  | Orders preflight, committed transitions, remote calls, and events |
-| Read-only state interface     | `KeypairQueries`        | Reads existing state without creating or changing it              |
-| Transaction gateway           | `SendTransactions`      | Each method opens and commits one transaction through the runner  |
-| Commands within a transaction | `ScopedSendCommands`    | Reads and writes within the supplied transaction scope            |
-| Transaction scope             | `CoreTransaction`       | Provides scoped commands for one transaction attempt              |
-| Transaction runner            | `CoreTransactionRunner` | Creates the scope and manages commit, rollback, and retries       |
+| Role                          | Name                    | Responsibility                                                   |
+| ----------------------------- | ----------------------- | ---------------------------------------------------------------- |
+| Management coordinator        | `KeyRingService`        | Coordinates domain actions without a durable operation lifecycle |
+| Durable workflow coordinator  | `SendOperationService`  | Coordinates a durable saga, its state transitions, and recovery  |
+| Read-only state interface     | `KeypairQueries`        | Reads existing state without creating or changing it             |
+| Transaction gateway           | `SendTransactions`      | Each method opens and commits one transaction through the runner |
+| Commands within a transaction | `ScopedSendCommands`    | Reads and writes within the supplied transaction scope           |
+| Transaction scope             | `CoreTransaction`       | Provides scoped commands for one transaction attempt             |
+| Transaction runner            | `CoreTransactionRunner` | Creates the scope and manages commit, rollback, and retries      |
 
 Reserve `*Transactions` for application-scoped gateways and `Scoped*Commands` for interfaces used
 inside a transaction. Concrete implementations may describe their backing mechanism, such as
 `CoreKeyRingTransactions` and `RepositoryKeypairCommands`. Use these role-specific names instead of
 the ambiguous `Transactional*` prefix.
+
+Command methods express state-changing actions. Method-specific argument objects use `*Input` types
+and the parameter name `input`, such as `allocate(input: AllocateKeypairInput)`. Inputs may include prepared
+synchronous capabilities, such as a purpose-bound deriver; they do not represent another command
+being dispatched. Existing domain values and identifiers retain their specific names, such as
+`importP2pk(keypair)` and `deleteP2pk(publicKey)`; they do not need input wrappers.
+
+Transaction runner callbacks are named `work`. Keep `Scoped*Commands` for mutation interfaces and
+small domain verbs such as `allocate` for their methods. This distinguishes the action, its inputs,
+and the callback that composes actions within one transaction.
 
 Use `<Domain>Queries` for read-only state interfaces and the same name at each consumer. A Query
 interface is already a read-only dependency boundary; an equivalent `*ReadPort` alias adds no role
@@ -49,6 +60,31 @@ for their behavior, such as `P2pkSigner` and `KeypairDerivation`.
 Keep scoped implementations and helpers under `transactions/scoped/**` and application-scoped
 `*Transactions` gateways outside that directory under `transactions/`. These locations make each
 module's role recognizable; review its actual dependencies and behavior against that role.
+
+### Services and Operation Services
+
+`Service` identifies an application-level orchestration role. A `<Domain>Service`
+coordinates domain management actions without owning a durable operation lifecycle.
+A `<Domain>OperationService` coordinates a durable saga, including its persisted
+state transitions, remote effects, and recovery. Both occupy the same architectural
+layer and may be invoked by public APIs or background processors.
+
+Services depend on narrow Queries, local capabilities, remote interfaces where
+needed, and their own domain's transaction gateway. Wallet mutations go through
+that gateway; Services do not receive the raw runner or live transaction scopes,
+write through repositories, or compose other Services to construct an atomic
+transition. Events describing committed changes are published after commit.
+
+Shared algorithms, read-only access, and transactional invariants belong in
+behavior-specific capabilities, `<Domain>Queries`, and `Scoped*Commands`.
+A module does not acquire the `Service` suffix merely because several callers
+reuse it. `KeyRingService` is a management coordinator; `SendOperationService`
+additionally owns a durable saga lifecycle.
+
+This is the target convention. Existing Service names may temporarily describe
+mixed or different responsibilities. Each owning migration must split or rename
+those modules according to their resulting roles. New modules follow this
+convention immediately.
 
 ## Decision Summary
 
@@ -135,7 +171,7 @@ export interface CoreTransaction {
 }
 
 export interface CoreTransactionRunner {
-  run<T>(command: (transaction: CoreTransaction) => Promise<T>): Promise<T>;
+  run<T>(work: (transaction: CoreTransaction) => Promise<T>): Promise<T>;
 }
 ```
 
@@ -188,9 +224,9 @@ sequentially, never nest. A thin gateway earns its place by guaranteeing an atom
 
 ```ts
 export interface SendTransactions {
-  prepare(command: PrepareSendCommand): Promise<PreparedSend>;
-  beginExecution(command: BeginSendCommand): Promise<AuthorizedSend>;
-  applyResult(command: ApplySendResultCommand): Promise<SendResult>;
+  prepare(input: PrepareSendInput): Promise<PreparedSend>;
+  beginExecution(input: BeginSendInput): Promise<AuthorizedSend>;
+  applyResult(input: ApplySendResultInput): Promise<SendResult>;
 }
 ```
 
@@ -199,7 +235,7 @@ not commit. Callers can therefore publish a corresponding live event after a suc
 without exposing uncommitted state.
 
 The implementation is a leaf adapter around its runner. Callers complete preflight before invoking
-it and pass stable, transaction-ready command data. For example, the Keyring management
+it and pass stable, transaction-ready inputs. For example, the Keyring management
 coordinator or a narrow keypair capability loads the Wallet Seed and creates a synchronous,
 purpose-bound deriver before asking the keyring gateway to allocate a keypair. A transaction
 gateway must not depend on regular Services, perform remote mint I/O, publish live events, access
@@ -213,8 +249,8 @@ Cross-domain writes use modules from one `CoreTransaction`:
 class CoreSendTransactions implements SendTransactions {
   constructor(private readonly runner: CoreTransactionRunner) {}
 
-  prepare(command: PrepareSendCommand): Promise<PreparedSend> {
-    return this.runner.run((transaction) => transaction.sends.prepare(command));
+  prepare(input: PrepareSendInput): Promise<PreparedSend> {
+    return this.runner.run((transaction) => transaction.sends.prepare(input));
   }
 }
 ```
@@ -254,7 +290,7 @@ implementation, and a repository adapter may satisfy a read interface directly.
 
 Reserve `Operation` for durable sagas. Name transaction-scoped interfaces
 `Scoped*Commands`, with implementations such as `RepositoryKeypairCommands`. Callers
-still use small domain methods: `transaction.keypairs.allocate(command)`. Keep all scoped
+still use small domain methods: `transaction.keypairs.allocate(input)`. Keep all scoped
 implementations and their private scoped helpers under `transactions/scoped/` so their lifetime
 and responsibilities are visible during review. Do not add interfaces or pass-through classes solely
 to reproduce the same layers for every domain.
@@ -272,7 +308,7 @@ The first slice implements this separation without changing the user-facing KeyR
 - `services/KeyRingService.ts` coordinates user-facing key management and invokes preflight before
   calling its own gateway. Existing management and signing methods remain available for callers.
 - `transactions/keypairs/KeyRingTransactions.ts` receives only the runner and forwards prepared
-  commands into one transaction.
+  inputs into one transaction.
 - `transactions/scoped/keypairs/ScopedKeypairCommands.ts` receives only a scoped
   key-ring repository. It selects the index, checks exhaustion, invokes the synchronous deriver,
   and saves the key and high-water mark. Standalone and composed allocations use this same
@@ -321,9 +357,9 @@ invariant local to the domain concept that owns it.
 
 ```ts
 interface ScopedProofCommands {
-  selectAndReserve(command: SelectAndReserveProofs): Promise<ProofReservation>;
-  settleSpend(command: SettleProofSpend): Promise<void>;
-  releaseAfterNonEffect(command: ReleaseProofReservation): Promise<void>;
+  selectAndReserve(input: SelectAndReserveProofsInput): Promise<ProofReservation>;
+  settleSpend(input: SettleProofSpendInput): Promise<void>;
+  releaseAfterNonEffect(input: ReleaseProofReservationInput): Promise<void>;
 }
 ```
 
@@ -353,7 +389,7 @@ Transaction-scoped modules never call `CoreTransactionRunner.run()` or repositor
 - remote infrastructure or network-capable adapters; or
 - the live `EventBus`.
 
-Command/result types, pure domain logic, logging types, scoped repositories, and peer
+Input/result types, pure domain logic, logging types, scoped repositories, and peer
 transaction-scoped modules are valid dependencies when the owning invariant requires them.
 
 ## Transaction Flow
@@ -376,7 +412,7 @@ transaction open. The result transaction reloads the durable operation by identi
 that the observation belongs to its persisted request before applying it.
 
 ```ts
-const authorization = await transactions.beginExecution(command);
+const authorization = await transactions.beginExecution(input);
 const remoteResult = await remote.execute(authorization.request);
 const result = await transactions.applyResult({
   operationId: authorization.operationId,
@@ -406,7 +442,7 @@ state. The transaction-scoped operation reads or validates the current proof sta
 writing:
 
 ```ts
-await sendTransactions.prepare(command);
+await sendTransactions.prepare(input);
 ```
 
 The rule is:
@@ -539,7 +575,7 @@ through helpers, callbacks, and composition-root wiring:
 | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Transaction-scoped implementation                 | Services/coordinators, remote infrastructure, live event bus, raw runner, root repository containers, concrete storage adapters, application-scoped gateways |
 | Application-scoped `*Transactions` implementation | regular Services, remote infrastructure, live event bus, repositories, application-scoped gateways                                                           |
-| Operation Service                                 | regular Services, repositories, `CoreTransactionRunner`, live scoped commands, another domain's transaction gateway                                          |
+| Service / Operation Service                       | other Services/coordinators, repositories, `CoreTransactionRunner`, live scoped commands, another domain's transaction gateway                               |
 | Query or local preflight capability               | Services/coordinators, repository mutation interfaces, transaction modules, remote infrastructure, live event bus                                            |
 
 Scoped implementations import repository contracts with `import type`; runtime repository helpers

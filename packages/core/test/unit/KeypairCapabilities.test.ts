@@ -13,10 +13,10 @@ describe('shared keypair capabilities', () => {
       reads++;
       return new Uint8Array(64);
     });
-    const command = await derivation.prepare('p2pk');
-    const first = command.derive(0);
-    expect(command.derive(0)).toEqual(first);
-    expect(command.derive(1).publicKeyHex).not.toBe(first.publicKeyHex);
+    const input = await derivation.prepare('p2pk');
+    const first = input.derive(0);
+    expect(input.derive(0)).toEqual(first);
+    expect(input.derive(1).publicKeyHex).not.toBe(first.publicKeyHex);
     expect(reads).toBe(1);
   });
 

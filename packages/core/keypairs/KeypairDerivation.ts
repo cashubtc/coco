@@ -2,7 +2,7 @@ import { schnorr, secp256k1 } from '@noble/curves/secp256k1.js';
 import { bytesToHex } from '@noble/curves/utils.js';
 import { HDKey } from '@scure/bip32';
 import type { KeypairPurpose } from '../models/Keypair.ts';
-import type { AllocateKeypairCommand } from './types.ts';
+import type { AllocateKeypairInput } from './types.ts';
 
 const DERIVATION_PURPOSES: Record<KeypairPurpose, number> = {
   p2pk: 10,
@@ -13,7 +13,7 @@ const DERIVATION_PURPOSES: Record<KeypairPurpose, number> = {
 export class KeypairDerivation {
   constructor(private readonly loadSeed: () => Promise<Uint8Array>) {}
 
-  async prepare(purpose: KeypairPurpose): Promise<AllocateKeypairCommand> {
+  async prepare(purpose: KeypairPurpose): Promise<AllocateKeypairInput> {
     const hdKey = HDKey.fromMasterSeed(await this.loadSeed());
     const derivationPurpose = DERIVATION_PURPOSES[purpose];
     return {
