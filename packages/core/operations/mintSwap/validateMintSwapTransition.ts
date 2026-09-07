@@ -1,6 +1,7 @@
 import type { MintSwapOperation, MintSwapOperationState } from './MintSwapOperation.ts';
 import { parseMintSwapOperation } from './parseMintSwapOperation.ts';
 
+/** Legal state changes; same-state metadata writes are validated separately. */
 const TRANSITIONS: Record<MintSwapOperationState, readonly MintSwapOperationState[]> = {
   preparing: ['prepared', 'cancelled', 'failed', 'needs_attention'],
   prepared: ['source_pending', 'cancelled', 'failed', 'needs_attention'],
@@ -13,6 +14,7 @@ const TRANSITIONS: Record<MintSwapOperationState, readonly MintSwapOperationStat
   needs_attention: [],
 };
 
+/** Parent identity and caller intent that no transition may replace or remove. */
 const IMMUTABLE_FIELDS = [
   'schemaVersion',
   'id',
@@ -29,6 +31,7 @@ const IMMUTABLE_FIELDS = [
   'createdAt',
 ] as const;
 
+/** Economic progress facts that remain fixed after their first persisted state. */
 const PROGRESS_FIELDS = [
   'sourceDebitBounds',
   'sourceStartedAt',
@@ -36,23 +39,34 @@ const PROGRESS_FIELDS = [
   'destinationStartedAt',
 ] as const;
 
+/** Reject a transition invariant without including persisted values in the diagnostic. */
 function check(condition: boolean, field: string): asserts condition {
   if (!condition) throw new TypeError(`Invalid Mint Swap transition: ${field}`);
 }
 
+/** Compare canonical parser output, including nested Amount values and quote references. */
 function same(a: unknown, b: unknown): boolean {
   // Both values have been reconstructed by the parser in canonical property order.
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
+/** Return whether caller cancellation intent may still be recorded in this state. */
 function canRequestCancellation(state: MintSwapOperationState): boolean {
   return state === 'preparing' || state === 'prepared' || state === 'source_pending';
 }
 
 /**
- * Validate a persistence-stamped transition, including same-state metadata writes.
+ * Validate one persistence-stamped Mint Swap state change or same-state metadata write.
+ *
+ * Both records first cross the parser boundary. The transition then preserves immutable intent and
+ * established economic facts, enforces legal state movement, monotonic timestamps and evidence,
+ * write-once cancellation intent, and retry reset or progression rules. Terminal and attention
+ * states are quiescent and cannot be updated.
+ *
  * The repository must first match the current state/revision and assign current revision + 1.
  * Local timestamps must be clamped by the writer against the previous persisted update time.
+ *
+ * @throws {TypeError} When either record is invalid or the transition violates a parent invariant.
  */
 export function validateMintSwapTransition(
   previous: MintSwapOperation,

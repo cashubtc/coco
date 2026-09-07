@@ -41,11 +41,13 @@ const STATE_FIELDS: Record<MintSwapOperationState, readonly string[]> = {
   needs_attention: ['lastSafe', 'attention', 'attentionAt'],
 };
 
+/** Reject an invalid persisted fact without copying its potentially sensitive value into the error. */
 function check(condition: boolean, field: string): asserts condition {
   // Never interpolate rejected values or unknown property names into diagnostics.
   if (!condition) throw new TypeError(`Invalid Mint Swap ${field}`);
 }
 
+/** Narrow persisted input to a plain record before reading any domain fields from it. */
 function object(value: unknown): Record<string, unknown> {
   check(typeof value === 'object' && value !== null && !Array.isArray(value), 'record');
   check(
@@ -55,6 +57,7 @@ function object(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+/** Require the exact persisted keys for a state so stale or foreign data cannot be ignored. */
 function fields(
   value: Record<string, unknown>,
   required: readonly string[],
@@ -70,54 +73,52 @@ function fields(
   );
 }
 
+/** Narrow a persisted string to one member of a closed domain vocabulary. */
 function choice<T extends string>(value: unknown, choices: readonly T[], field: string): T {
   const result = choices.find((item) => item === value);
   check(result !== undefined, field);
   return result;
 }
 
+/** Parse persistence metadata that must be a nonnegative safe integer. */
 function integer(value: unknown, field: string): number {
   check(typeof value === 'number' && Number.isSafeInteger(value) && value >= 0, field);
   return value;
 }
 
+/** Parse a local Unix-millisecond timestamp within its established lifecycle bounds. */
 function time(value: unknown, minimum: number, maximum: number, field: string): number {
   const result = integer(value, field);
   check(minimum <= result && result <= maximum, field);
   return result;
 }
 
+/** Parse an opaque, nonempty identity without silently trimming it. */
 function id(value: unknown): string {
   check(typeof value === 'string' && value.length > 0 && value.trim() === value, 'identity');
   return value;
 }
 
-function canonicalMintUrl(value: unknown): string {
-  const result = id(value);
-  let normalized: string;
+/** Normalize an unknown mint URL through Coco's shared URL identity boundary. */
+function mintUrl(value: unknown): string {
   try {
-    // URL parsing and normalization belong to the shared Coco utility. Persisted parents must
-    // already contain its canonical output so aliases cannot acquire separate identities.
-    normalized = normalizeMintUrl(result);
+    return normalizeMintUrl(id(value));
   } catch {
     throw new TypeError('Invalid Mint Swap mint URL');
   }
-  check(normalized === result, 'canonical mint URL');
-  return normalized;
 }
 
+/** Reconstruct a defensive Amount and optionally require a value greater than zero. */
 function amount(value: unknown, positive = false): Amount {
-  check(
-    value instanceof Amount ||
-      typeof value === 'string' ||
-      typeof value === 'number' ||
-      typeof value === 'bigint',
-    'amount',
-  );
   let result: Amount;
   try {
-    // Reconstruct even immutable Amount instances, keeping all returned objects independent.
-    result = deserializeAmount(value instanceof Amount ? value.toBigInt() : value);
+    // Amount.from(), through deserializeAmount(), owns representation, sign, integer, and safe-number
+    // validation. Existing Amount instances are converted first so reads return independent values.
+    result = deserializeAmount(
+      value instanceof Amount
+        ? value.toBigInt()
+        : (value as Parameters<typeof deserializeAmount>[0]),
+    );
   } catch {
     throw new TypeError('Invalid Mint Swap amount');
   }
@@ -125,6 +126,11 @@ function amount(value: unknown, positive = false): Amount {
   return result;
 }
 
+/**
+ * Parse a SHA-256 payment-request digest into its canonical lowercase hex representation.
+ * A string must contain exactly 64 lowercase hexadecimal characters (32 bytes); adapters may also
+ * hydrate the same digest as a 32-byte Uint8Array or integer array.
+ */
 function paymentRequestHash(value: unknown): string {
   if (typeof value === 'string') {
     check(/^[0-9a-f]{64}$/.test(value), 'payment request hash');
@@ -141,10 +147,11 @@ function paymentRequestHash(value: unknown): string {
   return bytesToHex(Uint8Array.from(bytes));
 }
 
+/** Parse a BOLT11 quote reference and bind its normalized mint URL to the expected leg. */
 function quote(value: unknown, expectedMintUrl: string) {
   const record = object(value);
   fields(record, ['mintUrl', 'method', 'quoteId']);
-  const url = canonicalMintUrl(record.mintUrl);
+  const url = mintUrl(record.mintUrl);
   check(url === expectedMintUrl, 'quote role');
   return {
     mintUrl: url,
@@ -153,6 +160,7 @@ function quote(value: unknown, expectedMintUrl: string) {
   };
 }
 
+/** Parse bounded retry diagnostics without retaining raw remote errors or protocol data. */
 function retryError(value: unknown, lastAttemptAt: number, updatedAt: number): MintSwapRetryError {
   const record = object(value);
   fields(record, ['category', 'code', 'at']);
@@ -196,6 +204,7 @@ function retryError(value: unknown, lastAttemptAt: number, updatedAt: number): M
   }
 }
 
+/** Parse retry scheduling and enforce automatic versus quiescent state semantics. */
 function retry(
   value: unknown,
   state: MintSwapOperationState,
@@ -230,6 +239,7 @@ interface ProgressContext {
   sourceDebitCap?: Amount;
 }
 
+/** Parse and validate the source debit bounds established by successful preparation. */
 function prepared(record: Record<string, unknown>, context: ProgressContext) {
   const bounds = object(record.sourceDebitBounds);
   fields(bounds, ['minimum', 'maximum', 'reserved']);
@@ -249,6 +259,7 @@ function prepared(record: Record<string, unknown>, context: ProgressContext) {
   return { sourceDebitBounds };
 }
 
+/** Parse prepared facts plus the timestamp committed before source execution. */
 function sourcePending(record: Record<string, unknown>, context: ProgressContext) {
   return {
     ...prepared(record, context),
@@ -261,6 +272,7 @@ function sourcePending(record: Record<string, unknown>, context: ProgressContext
   };
 }
 
+/** Parse paid-source evidence and verify the exact debit and fee equations. */
 function funded(record: Record<string, unknown>, context: ProgressContext) {
   const source = sourcePending(record, context);
   const settlement = object(record.sourceSettlement);
@@ -289,6 +301,7 @@ function funded(record: Record<string, unknown>, context: ProgressContext) {
   return { ...source, sourceSettlement };
 }
 
+/** Parse funded facts plus the timestamp committed before destination issuance. */
 function destinationPending(record: Record<string, unknown>, context: ProgressContext) {
   const source = funded(record, context);
   return {
@@ -302,6 +315,7 @@ function destinationPending(record: Record<string, unknown>, context: ProgressCo
   };
 }
 
+/** Reconstruct a non-recursive snapshot of the last automatic state and its established facts. */
 function checkpoint(value: unknown, context: ProgressContext): LastSafeCheckpoint {
   const record = object(value);
   const state = choice(
@@ -344,6 +358,7 @@ function checkpoint(value: unknown, context: ProgressContext): LastSafeCheckpoin
   }
 }
 
+/** Parse evidence proving that cancellation or failure did not transfer source value. */
 function valueNeutral(
   value: unknown,
   lastSafe: LastSafeCheckpoint,
@@ -374,6 +389,7 @@ function valueNeutral(
   };
 }
 
+/** Parse a deterministic failure from the bounded V1 failure vocabulary. */
 function failure(value: unknown): MintSwapFailure {
   const record = object(value);
   fields(record, ['code']);
@@ -386,6 +402,7 @@ function failure(value: unknown): MintSwapFailure {
   };
 }
 
+/** Parse bounded evidence explaining why automatic economic recovery must stop. */
 function attention(
   value: unknown,
   lastSafe: LastSafeCheckpoint,
@@ -476,8 +493,8 @@ export function parseMintSwapOperation(value: unknown): MintSwapOperation {
     ['sourceDebitCap', 'cancellationRequestedAt'],
   );
   check(record.schemaVersion === 1, 'schema version');
-  const sourceMintUrl = canonicalMintUrl(record.sourceMintUrl);
-  const destinationMintUrl = canonicalMintUrl(record.destinationMintUrl);
+  const sourceMintUrl = mintUrl(record.sourceMintUrl);
+  const destinationMintUrl = mintUrl(record.destinationMintUrl);
   check(sourceMintUrl !== destinationMintUrl, 'distinct mints');
   const createdAt = integer(record.createdAt, 'creation time');
   const updatedAt = integer(record.updatedAt, 'update time');
@@ -490,6 +507,7 @@ export function parseMintSwapOperation(value: unknown): MintSwapOperation {
     record.cancellationRequestedAt === undefined
       ? undefined
       : time(record.cancellationRequestedAt, createdAt, updatedAt, 'cancellation request time');
+
   const base = {
     schemaVersion: 1 as const,
     id: id(record.id),
@@ -510,30 +528,55 @@ export function parseMintSwapOperation(value: unknown): MintSwapOperation {
     retry: retry(record.retry, state, stateEnteredAt, updatedAt),
     ...(cancellationRequestedAt === undefined ? {} : { cancellationRequestedAt }),
   };
+
   let result: MintSwapOperation;
   switch (state) {
+    /**
+     * The durable parent exists before either child is prepared, allowing recovery to resume the
+     * exact preassigned child identities after an interruption.
+     */
     case 'preparing':
       check(stateEnteredAt === createdAt, 'preparing entry time');
       result = { ...base, state };
       break;
+    /**
+     * Both child preparations have established the source debit bounds. This state remains
+     * quiescent until the caller explicitly authorizes source execution.
+     */
     case 'prepared':
       result = { ...base, state, ...prepared(record, base) };
       break;
+    /**
+     * Source execution has been authorized and durably timestamped. Recovery must reconcile the
+     * exact Melt child before it retries or decides whether a value-neutral exit is possible.
+     */
     case 'source_pending': {
       const facts = sourcePending(record, base);
       check(facts.sourceStartedAt === stateEnteredAt, 'source authorization time');
       result = { ...base, state, ...facts };
       break;
     }
+    /**
+     * The source payment is proven paid and its exact settlement is recorded. Recovery is now
+     * forward-only and must continue toward destination issuance.
+     */
     case 'destination_funded':
       result = { ...base, state, ...funded(record, base) };
       break;
+    /**
+     * Destination issuance has been authorized and durably timestamped. Recovery reconciles the
+     * exact Mint child and its persisted outputs or proofs.
+     */
     case 'destination_pending': {
       const facts = destinationPending(record, base);
       check(facts.destinationStartedAt === stateEnteredAt, 'destination authorization time');
       result = { ...base, state, ...facts };
       break;
     }
+    /**
+     * Destination quote accounting and locally stored, verified proofs both equal the requested
+     * amount, completing the parent without copying child proof material into it.
+     */
     case 'completed': {
       const facts = destinationPending(record, base);
       const completion = object(record.destinationCompletion);
@@ -565,7 +608,15 @@ export function parseMintSwapOperation(value: unknown): MintSwapOperation {
       };
       break;
     }
+    /**
+     * A recorded caller request ended the operation before source value moved. Cancellation shares
+     * the value-neutral checkpoint parser below with deterministic failure.
+     */
     case 'cancelled':
+    /**
+     * A deterministic rejection ended the operation before source value moved. Both terminal paths
+     * require an exact pre-payment checkpoint and evidence that payment and proofs are neutral.
+     */
     case 'failed': {
       const lastSafe = checkpoint(record.lastSafe, base);
       check(
@@ -605,6 +656,10 @@ export function parseMintSwapOperation(value: unknown): MintSwapOperation {
       }
       break;
     }
+    /**
+     * Contradictory evidence or missing recovery material makes another automatic economic action
+     * unsafe, so the parent retains its last safe checkpoint for explicit repair.
+     */
     case 'needs_attention': {
       const lastSafe = checkpoint(record.lastSafe, base);
       result = {

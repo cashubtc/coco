@@ -120,12 +120,6 @@ describe('Mint Swap identity and serialization boundaries', () => {
     ['revision', 0.5],
     ['revision', Number.MAX_SAFE_INTEGER + 1],
     ['revision', '0'],
-    ['sourceMintUrl', 'https://SOURCE.example'],
-    ['sourceMintUrl', 'https://source.example/'],
-    ['sourceMintUrl', 'https://source.example:443'],
-    ['sourceMintUrl', 'https://source.example/?secret=1'],
-    ['sourceMintUrl', 'https://source.example#fragment'],
-    ['sourceMintUrl', 'https://user:pass@source.example'],
     ['sourceMintUrl', 'not a URL'],
     ['destinationMintUrl', 'https://source.example'],
     ['paymentRequestHash', ''],
@@ -155,9 +149,23 @@ describe('Mint Swap identity and serialization boundaries', () => {
     }
   }
 
-  it('accepts canonical HTTP and path-based mint URLs', () => {
+  it('normalizes mint and quote URL aliases through the shared Coco utility', () => {
     const value = raw();
-    value.sourceMintUrl = 'http://localhost:3338/mint';
+    value.sourceMintUrl = 'https://SOURCE.example:443/';
+    nested(value, 'sourceQuote').mintUrl = 'https://user:pass@source.example/?secret=discarded';
+    value.destinationMintUrl = 'https://DESTINATION.example#fragment';
+    nested(value, 'destinationQuote').mintUrl = 'https://destination.example/';
+
+    const parsed = parseMintSwapOperation(value);
+    expect(parsed.sourceMintUrl).toBe('https://source.example');
+    expect(parsed.sourceQuote.mintUrl).toBe('https://source.example');
+    expect(parsed.destinationMintUrl).toBe('https://destination.example');
+    expect(parsed.destinationQuote.mintUrl).toBe('https://destination.example');
+  });
+
+  it('accepts normalized HTTP and path-based mint URLs', () => {
+    const value = raw();
+    value.sourceMintUrl = 'http://LOCALHOST:3338/mint/';
     nested(value, 'sourceQuote').mintUrl = value.sourceMintUrl;
     expect(parseMintSwapOperation(value).sourceMintUrl).toBe('http://localhost:3338/mint');
   });

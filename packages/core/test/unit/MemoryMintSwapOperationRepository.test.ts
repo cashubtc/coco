@@ -92,14 +92,14 @@ describe('Memory Mint Swap atomic create and all-time identity constraints', () 
     expect(await repository.listActive()).toEqual([first, second]);
   });
 
-  it('rejects noncanonical quote aliases before indexes or storage can change', async () => {
+  it('normalizes quote aliases before enforcing uniqueness', async () => {
     const repository = new MemoryMintSwapOperationRepository();
     const first = mintSwapFixtures('first').preparing;
     await repository.create(first);
     const alias = mintSwapFixtures('second').preparing;
     alias.sourceMintUrl = 'https://SOURCE.example/';
     alias.sourceQuote = { ...first.sourceQuote, mintUrl: alias.sourceMintUrl };
-    await expect(repository.create(alias)).rejects.toThrow(TypeError);
+    await expect(repository.create(alias)).rejects.toThrow('Mint Swap source quote already exists');
     expect(await repository.listActive()).toEqual([first]);
     await repository.create(mintSwapFixtures('second').preparing);
   });
