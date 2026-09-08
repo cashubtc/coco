@@ -32,6 +32,7 @@ for (const method of ['bolt11', 'bolt12', 'onchain'] as const)
       f.control.issue = 'timeout';
       const operation = await f.service.prepare(await f.quote(), Amount.from(100));
       await expect(f.service.execute(operation.id)).rejects.toThrow('Network timeout');
+      expect(f.service.isOperationLocked(operation.id)).toBe(false);
       const request = (await f.repositories.mintRecoveryRepository.get(operation.id))!.request;
       await f.accounting(100, 40);
       const restart = f.restart();
@@ -132,6 +133,56 @@ for (const method of ['bolt11', 'bolt12', 'onchain'] as const)
       expect((await executing).state).toBe('finalized');
       expect(f.calls.filter((c) => c.path === `/v1/mint/${method}`)).toHaveLength(1);
     });
+    it.each(['issuance', 'recovery'] as const)(
+      'keeps concurrent local callers locked until delayed %s commits proofs',
+      async (phase) => {
+        const f = await mintFixture(method);
+        const operation = await f.service.prepare(await f.quote(), Amount.from(100));
+        if (phase === 'recovery') {
+          const authorized = await f.transactions.authorize({
+            operationId: operation.id,
+            ...(await f.remote.prepareRequest(operation)),
+          });
+          // Simulate issuance whose response was lost before local settlement.
+          await f.remote.issue(operation, authorized.recovery!);
+        }
+
+        let start!: () => void, finish!: () => void;
+        const started = new Promise<void>((resolve) => (start = resolve));
+        const waiting = new Promise<void>((resolve) => (finish = resolve));
+        const delayResponse = async () => {
+          start();
+          await waiting;
+        };
+        if (phase === 'issuance') f.control.beforeIssue = delayResponse;
+        else f.control.beforeRestore = delayResponse;
+
+        const first = f.service.execute(operation.id);
+        await started;
+        const lockedDuringResponse = f.service.isOperationLocked(operation.id);
+        const second = f.service.execute(operation.id);
+        try {
+          expect(lockedDuringResponse).toBe(true);
+          expect(await f.repositories.proofRepository.getReadyProofs(f.mintUrl)).toEqual([]);
+        } finally {
+          finish();
+          await Promise.allSettled([first, second]);
+        }
+
+        const results = await Promise.all([first, second]);
+        expect(results.map((result) => result.state)).toEqual(['finalized', 'finalized']);
+        expect(
+          Amount.sum(
+            (await f.repositories.proofRepository.getReadyProofs(f.mintUrl)).map((p) => p.amount),
+          ).toString(),
+        ).toBe('100');
+        expect(f.service.isOperationLocked(operation.id)).toBe(false);
+        expect(f.calls.filter((c) => c.path === `/v1/mint/${method}`)).toHaveLength(1);
+        expect(f.calls.filter((c) => c.path === '/v1/restore')).toHaveLength(
+          phase === 'recovery' ? 1 : 0,
+        );
+      },
+    );
     it('does not repeat remote effects when an event listener fails after commit', async () => {
       const f = await mintFixture(method);
       f.events.on('mint-op:executing', () => {

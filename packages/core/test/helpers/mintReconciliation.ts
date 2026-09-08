@@ -79,6 +79,7 @@ export async function mintFixture(
     restore: 'success' as 'success' | 'empty' | 'fail' | 'duplicate' | 'wrong-amount',
     proofState: 'UNSPENT' as 'UNSPENT' | 'SPENT' | 'PENDING' | 'fail',
     beforeIssue: undefined as (() => Promise<void>) | undefined,
+    beforeRestore: undefined as (() => Promise<void>) | undefined,
     fullOnly: false,
     proofStates: undefined as undefined | Array<'UNSPENT' | 'SPENT' | 'PENDING'>,
     legacyQuoteState: undefined as undefined | 'UNPAID' | 'PAID' | 'ISSUED',
@@ -134,6 +135,7 @@ export async function mintFixture(
           control.issue === 'malformed' ? signatures.map((s) => ({ ...s, amount: 3 })) : signatures,
       };
     } else if (path === '/v1/restore') {
+      await control.beforeRestore?.();
       if (control.restore === 'fail') throw new Error('Restore unavailable');
       const found =
         control.restore === 'empty'

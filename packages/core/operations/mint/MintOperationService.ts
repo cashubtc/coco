@@ -121,7 +121,7 @@ export class MintOperationService {
       const migrated = await this.deps.transactions.migrate(id);
       await this.publish(migrated);
       const operation = migrated.operation;
-      if (operation.state === 'executing') return this.reconcile(operation);
+      if (operation.state === 'executing') return await this.reconcile(operation);
       if (operation.state === 'finalized' || operation.state === 'failed') return operation;
       if (operation.state !== 'pending')
         throw new Error(`Cannot execute operation ${id} in state ${operation.state}`);
@@ -131,8 +131,9 @@ export class MintOperationService {
       // Only the caller that committed authorization may transmit. Other coordinators restore.
       if (!authorized.changed || !authorized.recovery || authorized.operation.state !== 'executing')
         return authorized.operation;
-      return this.transmit(authorized.operation, authorized.recovery);
+      return await this.transmit(authorized.operation, authorized.recovery);
     } finally {
+      // Await remote work and local settlement before allowing another local caller to proceed.
       release();
     }
   }
