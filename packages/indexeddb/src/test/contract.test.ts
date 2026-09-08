@@ -15,6 +15,7 @@ import {
   runSendOperationRepositoryContract,
   runMeltOperationRepositoryContract,
   runMeltQuoteRepositoryContract,
+  runMintSwapPersistenceContract,
 } from '@cashu/coco-adapter-tests';
 import { IndexedDbRepositories } from '../index.ts';
 
@@ -29,6 +30,16 @@ async function createRepositories() {
     dispose: async () => {
       repositories.db.close();
     },
+  };
+}
+
+async function createMintSwapRepositories() {
+  const dbName = `coco_cashu_mint_swap_contract_${Date.now()}_${dbCounter++}`;
+  const repositories = new IndexedDbRepositories({ name: dbName, mintSwap: true });
+  await repositories.init();
+  return {
+    repositories,
+    dispose: async () => repositories.db.close(),
   };
 }
 
@@ -72,6 +83,14 @@ runRepositoryTransactionContract(
 
 runKeypairAllocationContract(
   { createRepositories, createSharedRepositories },
+  { describe, it, expect },
+);
+
+runMintSwapPersistenceContract(
+  {
+    createRepositories: createMintSwapRepositories,
+    createDisabledRepositories: createRepositories,
+  },
   { describe, it, expect },
 );
 
@@ -251,6 +270,16 @@ describe('indexeddb quote storage constraints', () => {
           .table('coco_cashu_keypairs')
           .schema.indexes.some((index) => index.name === '[purpose+derivationIndex]'),
       ).toBe(true);
+      expect(
+        repositories.db.tables.some((table) => table.name === 'coco_cashu_mint_swap_operations'),
+      ).toBe(true);
+      const mintSwapIndexes = repositories.db.table('coco_cashu_mint_swap_operations').schema
+        .indexes;
+      expect(mintSwapIndexes.some((index) => index.name === 'sourceOperationId')).toBe(true);
+      expect(mintSwapIndexes.some((index) => index.name === 'destinationOperationId')).toBe(true);
+      expect(
+        repositories.db.tables.some((table) => table.name.includes('operation_event_outbox')),
+      ).toBe(false);
       await expect(allocateKeypairForTest(repositories, 'p2pk')).resolves.toMatchObject({
         derivationIndex: 7,
       });
