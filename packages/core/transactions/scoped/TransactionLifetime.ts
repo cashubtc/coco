@@ -8,18 +8,35 @@ export class TransactionLifetime {
   private failure: { error: unknown } | undefined;
   private closed = false;
 
-  /** Wrap modules on access, preserving inherited bindings and each getter's original receiver. */
-  bind<T extends { [K in keyof T]: object }>(modules: T): T {
+  /** Recursively wrap capabilities, preserving inherited bindings and getter receivers. */
+  bind<T extends object>(modules: T): T {
     const bound = new WeakMap<object, object>();
-    // An inheriting target lets even frozen source properties return their bound wrappers.
-    return new Proxy(Object.create(modules) as T, {
-      get: (_target, property) => {
-        const module: unknown = Reflect.get(modules, property, modules);
-        if (typeof module !== 'object' || module === null) return module;
-        if (!bound.has(module)) bound.set(module, this.bindModule(module));
-        return bound.get(module);
-      },
-    });
+    const bindObject = <TObject extends object>(source: TObject): TObject => {
+      const existing = bound.get(source);
+      if (existing) return existing as TObject;
+
+      const methods = new Map<PropertyKey, unknown>();
+      // An inheriting target lets even frozen source properties return their bound wrappers.
+      const proxy = new Proxy(Object.create(source) as TObject, {
+        get: (_target, property) => {
+          const value: unknown = Reflect.get(source, property, source);
+          if (typeof value === 'function') {
+            if (!methods.has(property)) {
+              methods.set(property, (...args: unknown[]) =>
+                this.invoke(() => Reflect.apply(value, source, args) as Promise<unknown>),
+              );
+            }
+            return methods.get(property);
+          }
+          if (typeof value === 'object' && value !== null) return bindObject(value);
+          return value;
+        },
+      });
+      bound.set(source, proxy);
+      return proxy;
+    };
+
+    return bindObject(modules);
   }
 
   async run<T>(work: () => Promise<T>): Promise<T> {
@@ -41,22 +58,6 @@ export class TransactionLifetime {
     } finally {
       this.closed = true;
     }
-  }
-
-  private bindModule<T extends object>(module: T): T {
-    const methods = new Map<PropertyKey, unknown>();
-    return new Proxy(Object.create(module) as T, {
-      get: (_target, property) => {
-        const value: unknown = Reflect.get(module, property, module);
-        if (typeof value !== 'function') return value;
-        if (!methods.has(property)) {
-          methods.set(property, (...args: unknown[]) =>
-            this.invoke(() => Reflect.apply(value, module, args) as Promise<unknown>),
-          );
-        }
-        return methods.get(property);
-      },
-    });
   }
 
   private invoke<T>(call: () => Promise<T>): Promise<T> {

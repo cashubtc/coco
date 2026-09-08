@@ -103,9 +103,23 @@ export type {
   MintSwapOperation,
   MintSwapOperationState,
 } from './operations/mintSwap/MintSwapOperation.ts';
+export {
+  isMintSwapAutomaticState,
+  isMintSwapTerminalState,
+} from './operations/mintSwap/MintSwapOperation.ts';
 export type {
   MintSwapOperationRepository,
   MintSwapPersistence,
 } from './operations/mintSwap/MintSwapOperationRepository.ts';
 export { parseMintSwapOperation } from './operations/mintSwap/parseMintSwapOperation.ts';
 export { validateMintSwapTransition } from './operations/mintSwap/validateMintSwapTransition.ts';
+export {
+  compareMintSwapCreated,
+  compareMintSwapDue,
+  deserializeMintSwapOperation,
+  serializeMintSwapOperation,
+} from './operations/mintSwap/MintSwapSerialization.ts';
+export {
+  MintSwapIdentityConflictError,
+  type MintSwapIdentityKind,
+} from './operations/mintSwap/MintSwapIdentityConflictError.ts';
