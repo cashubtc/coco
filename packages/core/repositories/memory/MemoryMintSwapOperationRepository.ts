@@ -6,6 +6,7 @@ import {
 import type { MintSwapOperationRepository } from '../../operations/mintSwap/MintSwapOperationRepository.ts';
 import { parseMintSwapOperation } from '../../operations/mintSwap/parseMintSwapOperation.ts';
 import { validateMintSwapTransition } from '../../operations/mintSwap/validateMintSwapTransition.ts';
+import { MintSwapIdentityConflictError } from '../../operations/mintSwap/MintSwapIdentityConflictError.ts';
 
 function quoteKey(quote: MintSwapOperation['sourceQuote']): string {
   return JSON.stringify([quote.mintUrl, quote.method, quote.quoteId]);
@@ -32,15 +33,14 @@ export class MemoryMintSwapOperationRepository implements MintSwapOperationRepos
     if (parsed.revision !== 0) throw new TypeError('Mint Swap creation requires revision zero');
     const sourceQuote = quoteKey(parsed.sourceQuote);
     const destinationQuote = quoteKey(parsed.destinationQuote);
-    if (this.operations.has(parsed.id)) throw new Error('Mint Swap parent identity already exists');
-    if (this.sourceQuotes.has(sourceQuote))
-      throw new Error('Mint Swap source quote already exists');
+    if (this.operations.has(parsed.id)) throw new MintSwapIdentityConflictError('parent');
+    if (this.sourceQuotes.has(sourceQuote)) throw new MintSwapIdentityConflictError('source_quote');
     if (this.destinationQuotes.has(destinationQuote))
-      throw new Error('Mint Swap destination quote already exists');
+      throw new MintSwapIdentityConflictError('destination_quote');
     if (this.sourceChildren.has(parsed.sourceOperationId))
-      throw new Error('Mint Swap source child already exists');
+      throw new MintSwapIdentityConflictError('source_child');
     if (this.destinationChildren.has(parsed.destinationOperationId))
-      throw new Error('Mint Swap destination child already exists');
+      throw new MintSwapIdentityConflictError('destination_child');
 
     this.operations.set(parsed.id, parsed);
     this.sourceQuotes.add(sourceQuote);
