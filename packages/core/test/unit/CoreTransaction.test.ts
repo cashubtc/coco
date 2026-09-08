@@ -257,6 +257,7 @@ describe('RepositoryCoreTransactionRunner', () => {
             scope.keyRingRepository.setPersistedKeyPair(keypair),
             scope.counterRepository.setCounter('https://mint.test', 'keyset', 7),
           ]);
+          return keypair;
         };
         return { keypairs };
       });
