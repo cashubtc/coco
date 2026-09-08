@@ -147,6 +147,10 @@ for (const method of ['bolt11', 'bolt12', 'onchain'] as const)
           await f.remote.issue(operation, authorized.recovery!);
         }
 
+        let executionAnnounced = false;
+        f.events.once('mint-op:executing', () => {
+          executionAnnounced = true;
+        });
         let start!: () => void, finish!: () => void;
         const started = new Promise<void>((resolve) => (start = resolve));
         const waiting = new Promise<void>((resolve) => (finish = resolve));
@@ -163,6 +167,7 @@ for (const method of ['bolt11', 'bolt12', 'onchain'] as const)
         const second = f.service.execute(operation.id);
         try {
           expect(lockedDuringResponse).toBe(true);
+          if (phase === 'issuance') expect(executionAnnounced).toBe(true);
           expect(await f.repositories.proofRepository.getReadyProofs(f.mintUrl)).toEqual([]);
         } finally {
           finish();
@@ -183,12 +188,62 @@ for (const method of ['bolt11', 'bolt12', 'onchain'] as const)
         );
       },
     );
+    it.each(['issuance', 'recovery'] as const)(
+      'allows settlement listeners to await the same operation after %s',
+      async (phase) => {
+        const f = await mintFixture(method);
+        const operation = await f.service.prepare(await f.quote(), Amount.from(100));
+        if (phase === 'recovery') {
+          const authorized = await f.transactions.authorize({
+            operationId: operation.id,
+            ...(await f.remote.prepareRequest(operation)),
+          });
+          await f.remote.issue(operation, authorized.recovery!);
+        }
+
+        const observed: string[] = [];
+        f.events.once('proofs:saved', async () => {
+          const result = await f.service.execute(operation.id);
+          observed.push(`proofs:${result.state}`);
+        });
+        f.events.once('mint-op:finalized', async ({ operationId }) => {
+          const result = await f.service.finalize(operationId);
+          observed.push(`operation:${result.state}`);
+        });
+
+        expect((await f.service.execute(operation.id)).state).toBe('finalized');
+        expect(observed).toEqual(['proofs:finalized', 'operation:finalized']);
+        expect(f.service.isOperationLocked(operation.id)).toBe(false);
+        expect(f.calls.filter((c) => c.path === `/v1/mint/${method}`)).toHaveLength(1);
+        expect(f.calls.filter((c) => c.path === '/v1/restore')).toHaveLength(
+          phase === 'recovery' ? 1 : 0,
+        );
+      },
+      1000,
+    );
+    it('allows a rejection listener to await the same failed operation', async () => {
+      const f = await mintFixture(method);
+      f.control.issue = 'expired';
+      const operation = await f.service.prepare(await f.quote(), Amount.from(100));
+      let observed: string | undefined;
+      f.events.once('mint-op:failed', async ({ operationId }) => {
+        observed = (await f.service.finalize(operationId)).state;
+      });
+
+      expect((await f.service.execute(operation.id)).state).toBe('failed');
+      expect(observed).toBe('failed');
+      expect(f.service.isOperationLocked(operation.id)).toBe(false);
+      expect(f.calls.filter((c) => c.path === `/v1/mint/${method}`)).toHaveLength(1);
+    });
     it('does not repeat remote effects when an event listener fails after commit', async () => {
       const f = await mintFixture(method);
       f.events.on('mint-op:executing', () => {
         throw new Error('listener failed');
       });
       f.events.on('proofs:saved', () => {
+        throw new Error('listener failed');
+      });
+      f.events.on('mint-op:finalized', () => {
         throw new Error('listener failed');
       });
       const operation = await f.service.prepare(await f.quote(), Amount.from(100));
@@ -211,6 +266,26 @@ for (const method of ['bolt11', 'bolt12', 'onchain'] as const)
       );
       expect(f.calls.filter((c) => c.path === `/v1/mint/${method}`)).toHaveLength(0);
     });
+    if (method !== 'bolt11')
+      it('publishes committed signature fallback even when the next issuance throws', async () => {
+        const f = await mintFixture(method);
+        f.control.issue = 'legacy';
+        const operation = await f.service.prepare(await f.quote(), Amount.from(100));
+        const lockedAtEvent: boolean[] = [];
+        f.events.on('mint-op:executing', () => {
+          lockedAtEvent.push(f.service.isOperationLocked(operation.id));
+        });
+        f.control.beforeIssue = async () => {
+          if (f.calls.filter((c) => c.path === `/v1/mint/${method}`).length === 2)
+            f.control.issue = 'timeout';
+        };
+
+        await expect(f.service.execute(operation.id)).rejects.toThrow('Network timeout');
+        expect(lockedAtEvent).toEqual([true, false]);
+        expect(f.service.isOperationLocked(operation.id)).toBe(false);
+        expect((await f.service.getOperation(operation.id))!.state).toBe('executing');
+        expect(f.calls.filter((c) => c.path === `/v1/mint/${method}`)).toHaveLength(2);
+      });
     if (method !== 'bolt11')
       it('persists a rejected current signature before submitting the legacy variant', async () => {
         const f = await mintFixture(method);

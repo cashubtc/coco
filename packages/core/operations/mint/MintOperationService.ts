@@ -117,11 +117,12 @@ export class MintOperationService {
 
   async execute(id: string): Promise<MintOperation> {
     const release = await this.acquire(id);
+    const commits: MintCommit[] = [];
     try {
       const migrated = await this.deps.transactions.migrate(id);
       await this.publish(migrated);
       const operation = migrated.operation;
-      if (operation.state === 'executing') return await this.reconcile(operation);
+      if (operation.state === 'executing') return await this.reconcile(operation, commits);
       if (operation.state === 'finalized' || operation.state === 'failed') return operation;
       if (operation.state !== 'pending')
         throw new Error(`Cannot execute operation ${id} in state ${operation.state}`);
@@ -131,21 +132,23 @@ export class MintOperationService {
       // Only the caller that committed authorization may transmit. Other coordinators restore.
       if (!authorized.changed || !authorized.recovery || authorized.operation.state !== 'executing')
         return authorized.operation;
-      return await this.transmit(authorized.operation, authorized.recovery);
+      return await this.transmit(authorized.operation, authorized.recovery, commits);
     } finally {
-      // Await remote work and local settlement before allowing another local caller to proceed.
+      // Settlement stays locked; its listeners may re-enter the operation after release.
       release();
+      for (const commit of commits) await this.publish(commit);
     }
   }
 
   private async transmit(
     operation: ExecutingMintOperation,
     recovery: MintRecoveryRecord,
+    commits: MintCommit[],
   ): Promise<MintOperation> {
     try {
       const receipts = await this.deps.remote.issue(operation, recovery);
       const result = await this.deps.transactions.applyEvidence(operation.id, receipts);
-      await this.publish(result);
+      commits.push(result);
       return result.operation;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -157,20 +160,23 @@ export class MintOperationService {
           message,
           useLegacy,
         );
-        await this.publish(rejected);
+        commits.push(rejected);
         if (rejected.changed && rejected.operation.state === 'executing' && rejected.recovery)
-          return this.transmit(rejected.operation, rejected.recovery);
+          return this.transmit(rejected.operation, rejected.recovery, commits);
         if (rejected.operation.state === 'failed') return rejected.operation;
       }
       await this.deps.transactions.noteAmbiguity(operation.id, recovery.revision, message);
-      const reconciled = await this.reconcile(operation);
+      const reconciled = await this.reconcile(operation, commits);
       if (reconciled.state === 'finalized') return reconciled;
       throw error;
     }
   }
 
   /** Bounded recovery: exact evidence first. Quote totals and empty Restore never cancel a request. */
-  private async reconcile(operation: PendingOrLaterOperation): Promise<MintOperation> {
+  private async reconcile(
+    operation: PendingOrLaterOperation,
+    commits: MintCommit[],
+  ): Promise<MintOperation> {
     let recovery = await this.deps.recovery.get(operation.id);
     if (!recovery) throw new Error('Mint recovery provenance is missing');
     const cached = await this.deps.proofs.getProofsByOperationId(operation.mintUrl, operation.id);
@@ -195,7 +201,7 @@ export class MintOperationService {
     });
     if (localReceipts.length) {
       const saved = await this.deps.transactions.applyEvidence(operation.id, localReceipts);
-      await this.publish(saved);
+      commits.push(saved);
       recovery = saved.recovery ?? recovery;
       if (
         saved.operation.state === 'finalized' &&
@@ -208,14 +214,14 @@ export class MintOperationService {
         .checkReceipts(operation, recovery.receipts)
         .catch(() => recovery!.receipts);
       const local = await this.deps.transactions.applyEvidence(operation.id, checked);
-      await this.publish(local);
+      commits.push(local);
       if (local.operation.state === 'finalized') return local.operation;
       recovery = local.recovery ?? recovery;
     }
     try {
       const receipts = await this.deps.remote.restore(operation);
       const result = await this.deps.transactions.applyEvidence(operation.id, receipts);
-      await this.publish(result);
+      commits.push(result);
       if (result.operation.state === 'finalized') return result.operation;
       recovery = result.recovery ?? recovery;
     } catch (error) {
@@ -282,10 +288,13 @@ export class MintOperationService {
           operation?.state === 'finalized' &&
           (await this.deps.remote.isTrusted(operation.mintUrl))
         ) {
+          const commits: MintCommit[] = [];
           try {
-            await this.reconcile(operation);
+            await this.reconcile(operation, commits);
           } catch {
             /* retain durable holding area */
+          } finally {
+            for (const commit of commits) await this.publish(commit);
           }
         }
       }
