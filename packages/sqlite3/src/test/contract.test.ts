@@ -16,8 +16,13 @@ import {
   runSendOperationRepositoryContract,
   runMeltOperationRepositoryContract,
   runMeltQuoteRepositoryContract,
+  createMintSwapFixtures,
+  runMintSwapPersistenceContract,
 } from '@cashu/coco-adapter-tests';
-import { RepositoryTransactionConflictError } from '@cashu/coco-core/adapter';
+import {
+  MintSwapIdentityConflictError,
+  RepositoryTransactionConflictError,
+} from '@cashu/coco-core/adapter';
 import { runSqlDatabaseContract } from '@cashu/coco-sql-storage/test';
 import { SqliteRepositories as Repositories } from '../index.ts';
 import { SqliteDb } from '../db.ts';
@@ -28,6 +33,19 @@ async function createRepositories() {
   await repositories.init();
   return {
     repositories,
+    dispose: async () => {
+      rawDatabase.close();
+    },
+  };
+}
+
+async function createMintSwapRepositories() {
+  const rawDatabase = new Database(':memory:');
+  const repositories = new Repositories({ database: rawDatabase, mintSwap: true });
+  await repositories.init();
+  return {
+    repositories,
+    rawDatabase,
     dispose: async () => {
       rawDatabase.close();
     },
@@ -207,6 +225,44 @@ describe('synchronous SQLite contention', () => {
       }
     });
   }
+});
+
+runMintSwapPersistenceContract(
+  {
+    createRepositories: createMintSwapRepositories,
+    createDisabledRepositories: createRepositories,
+  },
+  { describe, it, expect },
+);
+
+describe('Mint Swap create error classification', () => {
+  it('does not relabel an unrelated SQL failure when an identity already exists', async () => {
+    const { repositories, rawDatabase, dispose } = await createMintSwapRepositories();
+    const repository = repositories.mintSwap!.operationRepository;
+    const operation = createMintSwapFixtures('sql-create-failure').preparing;
+    try {
+      await repository.create(operation);
+      rawDatabase.exec(`
+        CREATE TRIGGER force_mint_swap_create_failure
+        BEFORE INSERT ON coco_cashu_mint_swap_operations
+        BEGIN
+          SELECT RAISE(ABORT, 'forced mint swap create failure');
+        END
+      `);
+
+      let thrown: unknown;
+      try {
+        await repository.create(operation);
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).not.toBeInstanceOf(MintSwapIdentityConflictError);
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message).toContain('forced mint swap create failure');
+    } finally {
+      await dispose();
+    }
+  });
 });
 
 runAuthSessionRepositoryContract({ createRepositories }, { describe, it, expect });

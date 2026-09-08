@@ -15,6 +15,7 @@ import {
   runSendOperationRepositoryContract,
   runMeltOperationRepositoryContract,
   runMeltQuoteRepositoryContract,
+  runMintSwapPersistenceContract,
 } from '@cashu/coco-adapter-tests';
 import { runSqlDatabaseContract } from '@cashu/coco-sql-storage/test';
 import { SqliteRepositories as Repositories } from '../index.ts';
@@ -141,6 +142,19 @@ async function createRepositories() {
   } as const;
 }
 
+async function createMintSwapRepositories() {
+  const rawDatabase = new BunExpoSqliteDatabaseShim();
+  const repositories = new Repositories({
+    database: rawDatabase as unknown as SqliteRepositoriesOptions['database'],
+    mintSwap: true,
+  });
+  await repositories.init();
+  return {
+    repositories,
+    dispose: async () => rawDatabase.closeAsync(),
+  };
+}
+
 async function createSharedRepositories() {
   const directory = await mkdtemp(join(tmpdir(), 'coco-expo-sqlite-keyring-'));
   const filename = join(directory, 'wallet.sqlite');
@@ -199,6 +213,14 @@ runRepositoryTransactionContract(
 
 runKeypairAllocationContract(
   { createRepositories, createSharedRepositories },
+  { describe, it, expect },
+);
+
+runMintSwapPersistenceContract(
+  {
+    createRepositories: createMintSwapRepositories,
+    createDisabledRepositories: createRepositories,
+  },
   { describe, it, expect },
 );
 
