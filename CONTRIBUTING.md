@@ -173,6 +173,11 @@ Please follow the project guidance in `AGENTS.md`. The short version:
 
 We use `bun:test` across most packages, plus Vitest for some adapter coverage.
 
+Run `bun run test:coverage:core` for core unit coverage. Core unit and integration coverage use
+`scripts/scope-core-coverage.ts` to report only core source, excluding generated `dist/` output and
+other workspace packages imported by the tests. Adapter behavior can still be exercised by core
+tests; adapter coverage belongs in separate adapter reports.
+
 - Put tests under `test/unit` or `test/integration`
 - Name test files `*.test.ts`
 - Prefer Bun `mock()` for spies and doubles

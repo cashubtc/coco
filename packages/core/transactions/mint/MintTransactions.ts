@@ -1,21 +1,21 @@
 import type {
   MintCommands,
-  PrepareMintCommand,
-  AuthorizeMintCommand,
+  PrepareMintInput,
+  AuthorizeMintInput,
 } from '../../operations/mint/MintCommands.ts';
 import type { MintIssuanceReceipt } from '../../operations/mint/MintRecovery.ts';
 import type { CoreTransactionRunner } from '../CoreTransaction.ts';
 
 export interface MintTransactions extends MintCommands {}
 
-/** Every method opens exactly one transaction; all effects are owned by its scoped command. */
+/** Every method opens exactly one transaction; all effects are owned by its scoped input. */
 export class CoreMintTransactions implements MintTransactions {
   constructor(private readonly runner: CoreTransactionRunner) {}
-  prepare(command: PrepareMintCommand) {
-    return this.runner.run((tx) => tx.mints.prepare(command));
+  prepare(input: PrepareMintInput) {
+    return this.runner.run((tx) => tx.mints.prepare(input));
   }
-  authorize(command: AuthorizeMintCommand) {
-    return this.runner.run((tx) => tx.mints.authorize(command));
+  authorize(input: AuthorizeMintInput) {
+    return this.runner.run((tx) => tx.mints.authorize(input));
   }
   migrate(operationId: string) {
     return this.runner.run((tx) => tx.mints.migrate(operationId));

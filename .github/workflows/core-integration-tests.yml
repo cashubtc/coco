@@ -8,6 +8,7 @@ on:
       - 'packages/core/**'
       - 'packages/adapter-tests/**'
       - 'scripts/test-integration.sh'
+      - 'scripts/scope-core-coverage*'
       - 'package.json'
       - 'bun.lock'
       - '.github/workflows/core-integration-tests.yml'
@@ -16,6 +17,7 @@ on:
       - 'packages/core/**'
       - 'packages/adapter-tests/**'
       - 'scripts/test-integration.sh'
+      - 'scripts/scope-core-coverage*'
       - 'package.json'
       - 'bun.lock'
       - '.github/workflows/core-integration-tests.yml'
@@ -41,8 +43,8 @@ jobs:
       - name: Run core custom-unit integration tests
         run: ./scripts/test-integration.sh core --custom-unit usd
 
-      - name: Normalize core integration coverage paths
-        run: sed -i 's|^SF:|SF:packages/core/|' packages/core/coverage/integration/lcov.info
+      - name: Scope and normalize core integration coverage
+        run: bun scripts/scope-core-coverage.ts packages/core/coverage/integration/lcov.info packages/core
 
       - name: Upload core integration coverage to Codecov
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false

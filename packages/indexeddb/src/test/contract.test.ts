@@ -1,8 +1,9 @@
 import { Amount } from '@cashu/cashu-ts';
 import {
   createDummyMint,
+  runKeypairAllocationContract,
+  allocateKeypairForTest,
   runAuthSessionRepositoryContract,
-  runKeyRingDerivationRepositoryContract,
   runMeltOperationRepositoryContract,
   runMeltQuoteRepositoryContract,
   runMintOperationRepositoryContract,
@@ -19,16 +20,6 @@ import { describe, expect, it } from 'vitest';
 import { IndexedDbRepositories } from '../index.ts';
 
 let dbCounter = 0;
-
-function deriveKeyPair(derivationIndex: number, purpose: 'p2pk' | 'nut20_mint_quote') {
-  return {
-    publicKeyHex:
-      (purpose === 'p2pk' ? '02' : '03') + derivationIndex.toString(16).padStart(64, '0'),
-    secretKey: new Uint8Array(32).fill((derivationIndex % 254) + 1),
-    derivationIndex,
-    purpose,
-  };
-}
 
 async function createRepositories() {
   const dbName = `coco_cashu_contract_${Date.now()}_${dbCounter++}`;
@@ -80,7 +71,7 @@ runRepositoryTransactionContract(
   { describe, it, expect },
 );
 
-runKeyRingDerivationRepositoryContract(
+runKeypairAllocationContract(
   { createRepositories, createSharedRepositories },
   { describe, it, expect },
 );
@@ -191,19 +182,15 @@ describe('indexeddb quote storage constraints', () => {
     allocationTable.hook('creating').subscribe(failAllocationWrite);
     try {
       await expectRejects(async () => {
-        await repositories.keyRingRepository.deriveAndPersistKeyPair('p2pk', (index) =>
-          deriveKeyPair(index, 'p2pk'),
-        );
+        await allocateKeypairForTest(repositories, 'p2pk');
       });
 
       expect(await repositories.keyRingRepository.getAllPersistedKeyPairs('p2pk')).toEqual([]);
       expect(await allocationTable.get('p2pk')).toBeUndefined();
       allocationTable.hook('creating').unsubscribe(failAllocationWrite);
-      await expect(
-        repositories.keyRingRepository.deriveAndPersistKeyPair('p2pk', (index) =>
-          deriveKeyPair(index, 'p2pk'),
-        ),
-      ).resolves.toMatchObject({ derivationIndex: 0 });
+      await expect(allocateKeypairForTest(repositories, 'p2pk')).resolves.toMatchObject({
+        derivationIndex: 0,
+      });
     } finally {
       allocationTable.hook('creating').unsubscribe(failAllocationWrite);
       await dispose();
@@ -265,16 +252,12 @@ describe('indexeddb quote storage constraints', () => {
           .table('coco_cashu_keypairs')
           .schema.indexes.some((index) => index.name === '[purpose+derivationIndex]'),
       ).toBe(true);
-      await expect(
-        repositories.keyRingRepository.deriveAndPersistKeyPair('p2pk', (index) =>
-          deriveKeyPair(index, 'p2pk'),
-        ),
-      ).resolves.toMatchObject({ derivationIndex: 7 });
-      await expect(
-        repositories.keyRingRepository.deriveAndPersistKeyPair('nut20_mint_quote', (index) =>
-          deriveKeyPair(index, 'nut20_mint_quote'),
-        ),
-      ).resolves.toMatchObject({ derivationIndex: 4 });
+      await expect(allocateKeypairForTest(repositories, 'p2pk')).resolves.toMatchObject({
+        derivationIndex: 7,
+      });
+      await expect(allocateKeypairForTest(repositories, 'nut20_mint_quote')).resolves.toMatchObject(
+        { derivationIndex: 4 },
+      );
     } finally {
       repositories.db.close();
     }
@@ -282,11 +265,9 @@ describe('indexeddb quote storage constraints', () => {
     const reopened = new IndexedDbRepositories({ name: dbName });
     await reopened.init();
     try {
-      await expect(
-        reopened.keyRingRepository.deriveAndPersistKeyPair('p2pk', (index) =>
-          deriveKeyPair(index, 'p2pk'),
-        ),
-      ).resolves.toMatchObject({ derivationIndex: 8 });
+      await expect(allocateKeypairForTest(reopened, 'p2pk')).resolves.toMatchObject({
+        derivationIndex: 8,
+      });
     } finally {
       reopened.db.close();
       await Dexie.delete(dbName);

@@ -679,12 +679,10 @@ Clearly report unavailable runtime/browser environments instead of substituting 
    release notes, and the supported storage writer version. Monitor shortfalls and unresolved legacy
    operations without logging recovery material.
 
-Prefer small reviewable PRs against `master` once their actual prerequisites are merged. Do not
-inherit unrelated commits just because #480's worktree was based on #461. PR #481 builds its Mint-specific
-transactions on the repository foundation merged in #460. It also introduces a composition-root
-runner at the same path as #461, which owns the shared transaction baseline and keypair migration.
-The runners and composition-root wiring must be combined when these branches meet; independent
-compilation does not remove that integration requirement. Send/Receive migrations remain separate.
+PR #481 includes the repository foundation merged in #460 and the shared transaction baseline
+merged in #461. One composition-root-owned runner constructs both Keypair and Mint commands from
+the same bound repository scope. Both domains use its lifetime tracking, rollback, and bounded
+conflict retries. Send/Receive migrations remain separate.
 
 This temporary review document has no runtime effect and needs no published-package changeset.
 The implementation does: storage and semantic changes require a fresh per-package assessment.
@@ -733,10 +731,9 @@ conservative and the limitation is reported; it is not replaced by method-specif
 
 ## 18. Implementation choices
 
-The implementation is based directly on `master` and the strong repository transactions merged in
-PR #460. It introduces the Mint-owned runner/gateway/scoped commands without importing the separate
-keyring migration from PR #461. Both PRs introduce `CoreTransaction.ts`; their domain commands
-and composition-root wiring need integration when the branches meet. Permanent decisions live in
+The implementation includes the current `master` transaction baseline from PRs #460 and #461.
+The Mint gateway uses the same `CoreTransactionRunner` as the Keyring gateway, and `ScopedMintCommands`
+receives repositories bound to the current transaction lifetime. Permanent decisions live in
 [ADR-0011][adr11] and [ADR-0012][adr12], with domain terms in the Coco Cashu glossary.
 
 - The installed cashu-ts 5.0.0-rc.4 public `prepareMint` quote-reference input accepts real quote

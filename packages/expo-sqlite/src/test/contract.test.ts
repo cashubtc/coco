@@ -1,6 +1,6 @@
 import {
+  runKeypairAllocationContract,
   runAuthSessionRepositoryContract,
-  runKeyRingDerivationRepositoryContract,
   runMeltOperationRepositoryContract,
   runMeltQuoteRepositoryContract,
   runMintOperationRepositoryContract,
@@ -198,7 +198,7 @@ runRepositoryTransactionContract(
   { describe, it, expect },
 );
 
-runKeyRingDerivationRepositoryContract(
+runKeypairAllocationContract(
   { createRepositories, createSharedRepositories },
   { describe, it, expect },
 );

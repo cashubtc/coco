@@ -1,7 +1,6 @@
 import type { OutputDataCreator } from '@cashu/cashu-ts';
 import { SdkMintRemote } from './infra/mint/SdkMintRemote.ts';
 import { isMintQuotePending } from './models/MintQuote.ts';
-import { RepositoryCoreTransactionRunner } from './transactions/CoreTransaction.ts';
 import { CoreMintTransactions } from './transactions/mint/MintTransactions.ts';
 
 import {
@@ -83,6 +82,10 @@ import {
   WalletRestoreService,
   WalletService,
 } from './services';
+import { RepositoryCoreTransactionRunner } from './transactions/CoreTransaction.ts';
+import { CoreKeyRingTransactions } from './transactions/keypairs/KeyRingTransactions.ts';
+import { KeypairDerivation } from './keypairs/KeypairDerivation.ts';
+import { KeypairP2pkSigner } from './keypairs/P2pkSigner.ts';
 
 /**
  * Configuration options for initializing the Coco Cashu manager
@@ -919,9 +922,15 @@ export class Manager {
       this.eventBus,
     );
     const seedService = new SeedService(seedGetter);
+    const coreTransactionRunner = new RepositoryCoreTransactionRunner(repositories);
+    const keyRingTransactions = new CoreKeyRingTransactions(coreTransactionRunner);
+    const keypairDerivation = new KeypairDerivation(() => seedService.getSeed());
+    const p2pkSigner = new KeypairP2pkSigner(repositories.keyRingRepository);
     const keyRingService = new KeyRingService(
       repositories.keyRingRepository,
-      seedService,
+      keyRingTransactions,
+      keypairDerivation,
+      p2pkSigner,
       keyRingLogger,
     );
     const walletService = new WalletService(
@@ -942,7 +951,7 @@ export class Manager {
       repositories.proofRepository,
       walletService,
       mintService,
-      keyRingService,
+      p2pkSigner,
       seedService,
       proofLogger,
       this.eventBus,
@@ -1056,7 +1065,7 @@ export class Manager {
         keyRingService,
         this.outputDataCreator,
       ),
-      transactions: new CoreMintTransactions(new RepositoryCoreTransactionRunner(repositories)),
+      transactions: new CoreMintTransactions(coreTransactionRunner),
       events: this.eventBus,
       logger: mintOperationLogger,
     });

@@ -1,6 +1,6 @@
 import type { Amount } from '@cashu/cashu-ts';
 import type { MintQuote } from '../../models/MintQuote.ts';
-import type { PrepareMintCommand } from './MintCommands.ts';
+import type { PrepareMintInput } from './MintCommands.ts';
 import type { PendingMintOperation, PendingOrLaterOperation } from './MintOperation.ts';
 import type { MintIssuanceReceipt, MintRecoveryRecord, MintRequestRecord } from './MintRecovery.ts';
 
@@ -9,7 +9,7 @@ export interface MintRemote {
   preflight(
     quote: MintQuote,
     amount: Amount,
-  ): Promise<Pick<PrepareMintCommand, 'keysetId' | 'derive'>>;
+  ): Promise<Pick<PrepareMintInput, 'keysetId' | 'derive'>>;
   prepareRequest(
     operation: PendingMintOperation,
   ): Promise<{ request: MintRequestRecord; legacySignature?: string }>;

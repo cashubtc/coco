@@ -5,7 +5,7 @@ import type { MintIssuanceReceipt, MintRecoveryRecord, MintRequestRecord } from 
 import type { CoreProof } from '../../types.ts';
 import type { SerializedOutputData } from '../../utils.ts';
 
-export interface PrepareMintCommand {
+export interface PrepareMintInput {
   id: string;
   quote: MintQuote;
   amount: Amount;
@@ -17,7 +17,7 @@ export interface PreparedMintCommit {
   operation: PendingMintOperation;
   counter: { mintUrl: string; keysetId: string; counter: number };
 }
-export interface AuthorizeMintCommand {
+export interface AuthorizeMintInput {
   operationId: string;
   request: MintRequestRecord;
   legacySignature?: string;
@@ -29,8 +29,8 @@ export interface MintCommit {
   changed: boolean;
 }
 export interface MintCommands {
-  prepare(command: PrepareMintCommand): Promise<PreparedMintCommit>;
-  authorize(command: AuthorizeMintCommand): Promise<MintCommit>;
+  prepare(input: PrepareMintInput): Promise<PreparedMintCommit>;
+  authorize(input: AuthorizeMintInput): Promise<MintCommit>;
   migrate(operationId: string): Promise<MintCommit>;
   applyEvidence(operationId: string, receipts: MintIssuanceReceipt[]): Promise<MintCommit>;
   reject(
