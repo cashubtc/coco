@@ -2589,3 +2589,4 @@ export type { IntegrationTestRunner, IntegrationTestOptions } from './integratio
 // export type { MigrationTestRunner, MigrationTestOptions } from './migrations.ts';
 export { createFakeInvoice } from 'fake-bolt11';
 export type { FakeInvoiceOptions } from 'fake-bolt11';
+export { runMintSwapPersistenceContract, type MintSwapContractOptions } from './mintSwap.ts';
