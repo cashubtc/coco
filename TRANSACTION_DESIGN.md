@@ -315,6 +315,13 @@ The first slice implements this separation without changing the user-facing KeyR
   implementation; repositories provide persistence primitives without deriving keys or opening
   allocation transactions.
 
+P2PK imports and deletions resolve canonical SEC1 and legacy always-`02` identities through
+the scoped repository before mutating it. Import returns the persisted `Keypair`, including an
+existing row's identity and derivation metadata; `KeyRingTransactions.importP2pkKey` exposes that
+result only after commit. These commands do not alter allocation high-water marks. Read-only
+keyring lookup and signing reuse the same bounded alias lookup with narrow `KeypairQueries`
+access. The helper owns no transaction and never enumerates the keyring or rewrites rows.
+
 No keypair dependency exception remains. Other legacy key-management consumers, including mint
 quote handlers, migrate with their owning workflows; a narrow signing interface must never be a
 disguise for `getOrCreateKey()` or other hidden persistence.

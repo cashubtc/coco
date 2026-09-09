@@ -5,7 +5,8 @@ import type { CoreTransactionRunner } from '../CoreTransaction.ts';
 /** Each key-management command owns one transaction and resolves after commit. */
 export interface KeyRingTransactions {
   allocate(input: AllocateKeypairInput): Promise<Keypair>;
-  importP2pkKey(keypair: Keypair): Promise<void>;
+  /** Returns the persisted keypair, retaining an existing canonical or legacy identity. */
+  importP2pkKey(keypair: Keypair): Promise<Keypair>;
   deleteP2pkKey(publicKey: string): Promise<void>;
 }
 
@@ -16,7 +17,7 @@ export class CoreKeyRingTransactions implements KeyRingTransactions {
     return this.runner.run((transaction) => transaction.keypairs.allocate(input));
   }
 
-  importP2pkKey(keypair: Keypair): Promise<void> {
+  importP2pkKey(keypair: Keypair): Promise<Keypair> {
     return this.runner.run((transaction) => transaction.keypairs.importP2pk(keypair));
   }
 
