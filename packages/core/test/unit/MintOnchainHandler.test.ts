@@ -71,11 +71,7 @@ describe('MintOnchainHandler', () => {
     createQuoteData: { unit: 'sat' },
     wallet,
     mintAdapter,
-    proofService,
-    proofRepository,
-    walletService,
     mintService,
-    eventBus,
     logger,
   });
 
@@ -100,11 +96,6 @@ describe('MintOnchainHandler', () => {
       updatedAt: Date.now(),
     },
     mintAdapter,
-    proofService,
-    proofRepository,
-    walletService,
-    mintService,
-    eventBus,
     logger,
   });
 
@@ -121,14 +112,6 @@ describe('MintOnchainHandler', () => {
       createdAt: Date.now(),
       updatedAt: Date.now(),
     } satisfies InitMintOperation<'onchain'>,
-    wallet,
-    mintAdapter,
-    proofService,
-    proofRepository,
-    walletService,
-    mintService,
-    eventBus,
-    logger,
   });
 
   const buildExecutingOperation = (): ExecutingMintOperation<'onchain'> => ({
@@ -148,7 +131,15 @@ describe('MintOnchainHandler', () => {
     },
   ): RecoverExecutingContext<'onchain'> => ({
     ...buildPrepareContext(),
+    wallet,
+    mintAdapter,
+    logger,
     operation: buildExecutingOperation(),
+    restoreOutputs: () =>
+      proofService.recoverProofsFromOutputData(mintUrl, buildExecutingOperation().outputData, {
+        unit: 'sat',
+        persistRecoveredProofs: false,
+      }),
     localClaimabilityFacts,
   });
 
@@ -271,25 +262,18 @@ describe('MintOnchainHandler', () => {
     expect(result.amountIssued.equals(Amount.from(8))).toBe(true);
   });
 
-  it('prepares deterministic outputs without requiring available quote balance', async () => {
+  it('prepares quote metadata without requiring available quote balance', async () => {
     const result = await handler.prepare({
       ...buildPrepareContext(),
       importedQuote: { ...remoteQuote, amount_paid: Amount.zero(), amount_issued: Amount.zero() },
     });
 
     expect(keyRingService.getMintQuoteKeyPair).toHaveBeenCalledWith(pubkey);
-    expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalledWith(
-      mintUrl,
-      {
-        keep: { amount: Amount.from(10), unit: 'sat' },
-        send: { amount: Amount.zero(), unit: 'sat' },
-      },
-      {},
-    );
+    expect(proofService.createOutputsAndIncrementCounters).not.toHaveBeenCalled();
     expect(result.state).toBe('pending');
     expect(result.quoteId).toBe(quoteId);
     expect(result.pubkey).toBe(pubkey);
-    expect(deserializeOutputData(result.outputData).keep).toHaveLength(1);
+    expect(result).not.toHaveProperty('outputData');
   });
 
   it('fails onchain preparation when the quote key is missing', async () => {
@@ -310,8 +294,12 @@ describe('MintOnchainHandler', () => {
     });
     const context: ExecuteContext<'onchain'> = {
       ...buildPrepareContext(),
+      wallet,
+      mintAdapter,
+      logger,
       operation: {
         ...pending,
+        outputData: buildExecutingOperation().outputData,
         state: 'executing',
       },
     };
@@ -325,7 +313,7 @@ describe('MintOnchainHandler', () => {
       remoteQuote,
       ''.padEnd(64, '0'),
       undefined,
-      { type: 'custom', data: deserializeOutputData(pending.outputData).keep },
+      { type: 'custom', data: deserializeOutputData(buildExecutingOperation().outputData).keep },
     );
   });
 
@@ -343,7 +331,14 @@ describe('MintOnchainHandler', () => {
     await expect(
       handler.execute({
         ...buildPrepareContext(),
-        operation: { ...pending, state: 'executing' },
+        wallet,
+        mintAdapter,
+        logger,
+        operation: {
+          ...pending,
+          outputData: buildExecutingOperation().outputData,
+          state: 'executing',
+        },
       }),
     ).rejects.toThrow(`Onchain mint quote ${quoteId} is not claimable: invalid`);
 
@@ -363,7 +358,14 @@ describe('MintOnchainHandler', () => {
 
     const result = await handler.execute({
       ...buildPrepareContext(),
-      operation: { ...pending, state: 'executing' },
+      wallet,
+      mintAdapter,
+      logger,
+      operation: {
+        ...pending,
+        outputData: buildExecutingOperation().outputData,
+        state: 'executing',
+      },
     });
 
     expect(result.status).toBe('ISSUED');
@@ -382,7 +384,7 @@ describe('MintOnchainHandler', () => {
 
     const result = await handler.recoverExecuting(buildRecoverContext());
 
-    expect(result).toEqual({ status: 'FINALIZED' });
+    expect(result).toMatchObject({ status: 'FINALIZED', proofs: expect.any(Array) });
     expect(proofService.recoverProofsFromOutputData).toHaveBeenCalled();
     expect(wallet.mintProofsOnchain).not.toHaveBeenCalled();
   });
@@ -390,7 +392,7 @@ describe('MintOnchainHandler', () => {
   it('retries onchain minting from persisted output data when the quote is still available', async () => {
     const result = await handler.recoverExecuting(buildRecoverContext());
 
-    expect(result).toEqual({ status: 'FINALIZED' });
+    expect(result).toMatchObject({ status: 'FINALIZED', proofs: expect.any(Array) });
     expect(proofService.recoverProofsFromOutputData).toHaveBeenCalled();
     expect(wallet.mintProofsOnchain).toHaveBeenCalledWith(
       Amount.from(10),
@@ -399,7 +401,7 @@ describe('MintOnchainHandler', () => {
       undefined,
       { type: 'custom', data: [output] },
     );
-    expect(proofService.saveProofs).toHaveBeenCalled();
+    expect(proofService.saveProofs).not.toHaveBeenCalled();
   });
 
   it('returns pending during recovery when output restore is empty and balance is unavailable', async () => {
@@ -444,7 +446,7 @@ describe('MintOnchainHandler', () => {
 
     const result = await handler.recoverExecuting(buildRecoverContext());
 
-    expect(result).toEqual({ status: 'FINALIZED' });
+    expect(result).toMatchObject({ status: 'FINALIZED', proofs: expect.any(Array) });
     expect(proofService.recoverProofsFromOutputData).toHaveBeenCalledTimes(2);
   });
 
@@ -456,9 +458,9 @@ describe('MintOnchainHandler', () => {
 
     const result = await handler.recoverExecuting(buildRecoverContext());
 
-    expect(result).toEqual({ status: 'FINALIZED' });
+    expect(result).toMatchObject({ status: 'FINALIZED', proofs: expect.any(Array) });
     expect(wallet.mintProofsOnchain).toHaveBeenCalled();
-    expect(proofService.saveProofs).toHaveBeenCalled();
+    expect(proofService.saveProofs).not.toHaveBeenCalled();
   });
 
   it('fails recovery when the mint rejects onchain issuance with quote expired', async () => {

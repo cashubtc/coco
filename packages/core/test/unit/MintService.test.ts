@@ -1,9 +1,12 @@
 import { Amount } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect, mock } from 'bun:test';
+import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
+import { CashuMintMetadataRemote } from '../../infra/CashuMintMetadataRemote.ts';
+import { createMintMetadataRefreshDependencies } from '../fixtures/MintMetadataRefresh.ts';
 import { MintService } from '../../services/MintService';
 import { ProofValidationError } from '../../models/Error';
-import { MemoryMintRepository } from '../../repositories/memory/MemoryMintRepository';
-import { MemoryKeysetRepository } from '../../repositories/memory/MemoryKeysetRepository';
+import type { MemoryMintRepository } from '../../repositories/memory/MemoryMintRepository';
+import type { MemoryKeysetRepository } from '../../repositories/memory/MemoryKeysetRepository';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { Mint } from '../../models/Mint';
@@ -51,8 +54,9 @@ describe('MintService', () => {
   };
 
   beforeEach(() => {
-    mintRepo = new MemoryMintRepository();
-    keysetRepo = new MemoryKeysetRepository();
+    const repositories = new MemoryRepositories();
+    mintRepo = repositories.mintRepository as MemoryMintRepository;
+    keysetRepo = repositories.keysetRepository as MemoryKeysetRepository;
     eventBus = new EventBus<CoreEvents>();
 
     // Create mock MintAdapter
@@ -65,7 +69,14 @@ describe('MintService', () => {
       checkProofStates: mock(() => Promise.resolve([])),
     } as unknown as MintAdapter;
 
-    service = new MintService(mintRepo, keysetRepo, mockAdapter, undefined, eventBus);
+    service = new MintService(
+      mintRepo,
+      keysetRepo,
+      mockAdapter,
+      createMintMetadataRefreshDependencies(repositories, new CashuMintMetadataRemote(mockAdapter)),
+      undefined,
+      eventBus,
+    );
   });
 
   describe('trust management', () => {

@@ -7,6 +7,7 @@ import type { CoreTransaction } from '../../transactions/CoreTransaction.ts';
 import { CoreKeyRingTransactions } from '../../transactions/keypairs/KeyRingTransactions.ts';
 import { KeypairDerivation } from '../../keypairs/KeypairDerivation.ts';
 import { RepositoryKeypairCommands } from '../../transactions/scoped/keypairs/ScopedKeypairCommands.ts';
+import { createCoreTransactionModuleFactory } from '../../transactions/CoreTransaction.ts';
 import { overrideTransactions } from '../overrideTransactions.ts';
 
 function gate() {
@@ -107,7 +108,7 @@ describe('RepositoryCoreTransactionRunner', () => {
       (scope) => {
         boundRepositories = scope;
         return Object.freeze({
-          keypairs: new RepositoryKeypairCommands(scope.keyRingRepository),
+          ...createCoreTransactionModuleFactory()(scope),
         });
       },
     );
@@ -258,7 +259,7 @@ describe('RepositoryCoreTransactionRunner', () => {
             scope.counterRepository.setCounter('https://mint.test', 'keyset', 7),
           ]);
         };
-        return { keypairs };
+        return { ...createCoreTransactionModuleFactory()(scope), keypairs };
       });
       const result = runner
         .run((scope) => scope.keypairs.importP2pk(importedKey('slow')))
@@ -358,7 +359,9 @@ describe('RepositoryCoreTransactionRunner', () => {
       let persistKey!: RepositoryTransactionScope['keyRingRepository']['setPersistedKeyPair'];
       const runner = new RepositoryCoreTransactionRunner(repositories, (scope) => {
         capturedRepositories = scope;
-        return { keypairs: new RepositoryKeypairCommands(scope.keyRingRepository) };
+        return {
+          ...createCoreTransactionModuleFactory()(scope),
+        };
       });
       const result = runner.run(async (scope) => {
         capturedTransaction = scope;

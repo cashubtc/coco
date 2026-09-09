@@ -1,7 +1,6 @@
 import type { MintOperationRepository } from '@cashu/coco-core/adapter';
 import { deserializeAmount, serializeAmount, stringifyJson } from '@cashu/coco-core/adapter';
 import type { SqlDatabase, SqlValue } from '../index.ts';
-import { getUnixTimeSeconds } from '../utils.ts';
 
 type MintOperation = NonNullable<Awaited<ReturnType<MintOperationRepository['getById']>>>;
 type MintOperationState = Parameters<MintOperationRepository['getByState']>[0];
@@ -57,8 +56,8 @@ const rowToOperation = (row: MintOperationRow): MintOperation => {
     mintUrl: row.mintUrl,
     method: row.method,
     methodData: JSON.parse(row.methodDataJson) as MintMethodData,
-    createdAt: row.createdAt * 1000,
-    updatedAt: row.updatedAt * 1000,
+    createdAt: Math.round(row.createdAt * 1000),
+    updatedAt: Math.round(row.updatedAt * 1000),
     error: row.error ?? undefined,
     ...(row.terminalFailureJson
       ? { terminalFailure: JSON.parse(row.terminalFailureJson) as MintOperationFailure }
@@ -92,8 +91,8 @@ const rowToOperation = (row: MintOperationRow): MintOperation => {
 };
 
 const operationToParams = (operation: MintOperation): SqlValue[] => {
-  const createdAtSeconds = Math.floor(operation.createdAt / 1000);
-  const updatedAtSeconds = Math.floor(operation.updatedAt / 1000);
+  const createdAtSeconds = operation.createdAt / 1000;
+  const updatedAtSeconds = operation.updatedAt / 1000;
   const methodDataJson = stringifyJson(operation.methodData);
 
   if (operation.state === 'init') {
@@ -175,7 +174,7 @@ export class SqliteMintOperationRepository implements MintOperationRepository {
       throw new Error(`MintOperation with id ${operation.id} not found`);
     }
 
-    const updatedAtSeconds = getUnixTimeSeconds();
+    const updatedAtSeconds = operation.updatedAt / 1000;
 
     if (operation.state === 'init') {
       await this.db.run(

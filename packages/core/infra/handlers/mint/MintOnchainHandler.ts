@@ -5,7 +5,7 @@ import {
 } from '@cashu/cashu-ts';
 import { assertSameUnit } from '@core/amounts';
 import type { KeyRingService } from '@core/services';
-import { deserializeOutputData, mapProofToCoreProof, serializeOutputData } from '@core/utils';
+import { deserializeOutputData } from '@core/utils';
 import { bytesToHex } from '@noble/curves/utils.js';
 import {
   MintOperationError,
@@ -34,8 +34,15 @@ import type {
   RecoverExecutingResult,
 } from '../../../operations/mint';
 
+import type { PreparedMintOperation } from '../../../operations/mint/MintCommands.ts';
+
 export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
-  constructor(private readonly keyRingService: KeyRingService) {}
+  constructor(
+    private readonly keyRingService: Pick<
+      KeyRingService,
+      'generateMintQuoteKeyPair' | 'getMintQuoteKeyPair'
+    >,
+  ) {}
 
   async createQuote(ctx: CreateMintQuoteContext<'onchain'>): Promise<MintQuote<'onchain'>> {
     const quoteKey = await this.keyRingService.generateMintQuoteKeyPair();
@@ -67,7 +74,7 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
     await this.requireQuoteKey(quote.quoteData.pubkey);
   }
 
-  async prepare(ctx: PrepareContext<'onchain'>): Promise<PendingMintOperation<'onchain'>> {
+  async prepare(ctx: PrepareContext<'onchain'>): Promise<PreparedMintOperation<'onchain'>> {
     const quote = ctx.importedQuote;
     if (!quote) {
       throw new Error(`Mint quote ${ctx.operation.quoteId ?? '(missing)'} was not provided`);
@@ -82,26 +89,12 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
     assertSameUnit(quote.unit, ctx.operation.unit, `Onchain mint quote ${quote.quote}`);
     await this.requireQuoteKey(quote.pubkey);
 
-    const outputData = await ctx.proofService.createOutputsAndIncrementCounters(
-      ctx.operation.mintUrl,
-      {
-        keep: { amount: ctx.operation.amount, unit: ctx.operation.unit },
-        send: { amount: Amount.zero(), unit: ctx.operation.unit },
-      },
-      {},
-    );
-
-    if (outputData.keep.length === 0) {
-      throw new Error('Failed to create deterministic outputs for onchain mint operation');
-    }
-
     return {
       ...ctx.operation,
       quoteId: quote.quote,
       request: quote.request,
       expiry: quote.expiry,
       pubkey: quote.pubkey,
-      outputData: serializeOutputData({ keep: outputData.keep, send: [] }),
       state: 'pending',
     };
   }
@@ -224,15 +217,7 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
         { type: 'custom', data: outputData.keep },
       );
 
-      await ctx.proofService.saveProofs(
-        operation.mintUrl,
-        mapProofToCoreProof(operation.mintUrl, 'ready', proofs, {
-          unit: operation.unit,
-          createdByOperationId: operation.id,
-        }),
-      );
-
-      return { status: 'FINALIZED' };
+      return { status: 'FINALIZED', proofs };
     } catch (error) {
       if (this.isAlreadyIssuedError(error)) {
         return (
@@ -335,16 +320,9 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
     ctx: RecoverExecutingContext<'onchain'>,
   ): Promise<RecoverExecutingResult | null> {
     try {
-      const recovered = await ctx.proofService.recoverProofsFromOutputData(
-        ctx.operation.mintUrl,
-        ctx.operation.outputData,
-        {
-          unit: ctx.operation.unit,
-          createdByOperationId: ctx.operation.id,
-        },
-      );
+      const recovered = await ctx.restoreOutputs();
 
-      return recovered.length > 0 ? { status: 'FINALIZED' } : null;
+      return recovered.length > 0 ? { status: 'FINALIZED', proofs: recovered } : null;
     } catch (error) {
       ctx.logger?.warn('Failed to recover onchain mint outputs from output data', {
         mintUrl: ctx.operation.mintUrl,

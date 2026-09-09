@@ -4,7 +4,6 @@ import { assertSameUnit } from '@core/amounts';
 import type {
   CreateMintQuoteContext,
   ExecuteContext,
-  MintMethodMeta,
   PrepareContext,
   MintMethodHandler,
   MintExecutionResult,
@@ -15,7 +14,7 @@ import type {
   PendingMintObservationResult,
   FetchRemoteMintQuoteContext,
 } from '@core/operations/mint';
-import { deserializeOutputData, mapProofToCoreProof, serializeOutputData } from '@core/utils';
+import { deserializeOutputData } from '@core/utils';
 import {
   MintOperationError,
   MintQuoteKeyError,
@@ -26,8 +25,15 @@ import { mintQuoteFromBolt11Response, type MintQuote } from '../../../models/Min
 import { mintQuoteObservationFromBolt11Response } from '../../../models/MintQuoteObservationFactory';
 import { assessMintQuoteClaimability } from '../../../models/MintQuoteClaimability.ts';
 
+import type { PreparedMintOperation } from '../../../operations/mint/MintCommands.ts';
+
 export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
-  constructor(private readonly keyRingService: KeyRingService) {}
+  constructor(
+    private readonly keyRingService: Pick<
+      KeyRingService,
+      'generateMintQuoteKeyPair' | 'getMintQuoteKeyPair'
+    >,
+  ) {}
 
   async createQuote(ctx: CreateMintQuoteContext<'bolt11'>): Promise<MintQuote<'bolt11'>> {
     const { amount, locked, ownedPubkey } = ctx.createQuoteData;
@@ -64,9 +70,7 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
     return mintQuoteObservationFromBolt11Response(ctx.quote.mintUrl, remoteQuote);
   }
 
-  async prepare(
-    ctx: PrepareContext<'bolt11'>,
-  ): Promise<PendingMintOperation<'bolt11'> & MintMethodMeta<'bolt11'>> {
+  async prepare(ctx: PrepareContext<'bolt11'>): Promise<PreparedMintOperation<'bolt11'>> {
     const quote = ctx.importedQuote;
     if (!quote) {
       throw new Error(`Mint quote ${ctx.operation.quoteId ?? '(missing)'} was not provided`);
@@ -91,19 +95,6 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
     assertSameUnit(quote.unit, ctx.operation.unit, `Mint quote ${quote.quote}`);
     await this.requireQuoteKey(quote.pubkey);
 
-    const outputData = await ctx.proofService.createOutputsAndIncrementCounters(
-      ctx.operation.mintUrl,
-      {
-        keep: { amount: quote.amount, unit: ctx.operation.unit },
-        send: { amount: Amount.zero(), unit: ctx.operation.unit },
-      },
-      {},
-    );
-
-    if (outputData.keep.length === 0) {
-      throw new Error('Failed to create deterministic outputs for mint operation');
-    }
-
     return {
       ...ctx.operation,
       quoteId: quote.quote,
@@ -112,7 +103,6 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
       request: quote.request,
       expiry: quote.expiry,
       pubkey: quote.pubkey,
-      outputData: serializeOutputData({ keep: outputData.keep, send: [] }),
       state: 'pending',
     };
   }
@@ -210,15 +200,7 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
           },
         );
 
-        await ctx.proofService.saveProofs(
-          ctx.operation.mintUrl,
-          mapProofToCoreProof(ctx.operation.mintUrl, 'ready', proofs, {
-            unit: ctx.operation.unit,
-            createdByOperationId: ctx.operation.id,
-          }),
-        );
-
-        return { status: 'FINALIZED' };
+        return { status: 'FINALIZED', proofs };
       } catch (err) {
         if (err instanceof MintOperationError) {
           if (err.code === 20002) {
@@ -244,21 +226,14 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
     }
 
     try {
-      const recovered = await ctx.proofService.recoverProofsFromOutputData(
-        ctx.operation.mintUrl,
-        ctx.operation.outputData,
-        {
-          unit: ctx.operation.unit,
-          createdByOperationId: ctx.operation.id,
-        },
-      );
+      const recovered = await ctx.restoreOutputs();
       if (recovered.length === 0) {
         return {
           status: 'PENDING',
           error: `Recovered: quote ${quoteId} issued remotely but proofs were not recoverable`,
         };
       }
-      return { status: 'FINALIZED' };
+      return { status: 'FINALIZED', proofs: recovered };
     } catch (error) {
       return {
         status: 'PENDING',
