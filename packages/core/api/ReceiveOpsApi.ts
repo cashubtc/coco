@@ -5,6 +5,7 @@ import type {
   ReceiveOperation,
 } from '../operations/receive/ReceiveOperation';
 import type { ReceiveOperationService } from '../operations/receive/ReceiveOperationService';
+import { ReceiveOperationNotFoundError, ReceiveOperationStateError } from '../models/Error.ts';
 
 export interface PrepareReceiveInput {
   /** Token to receive, either encoded or already decoded. */
@@ -62,9 +63,7 @@ export class ReceiveOpsApi {
   async execute(operationOrId: ReceiveOperation | string): Promise<FinalizedReceiveOperation> {
     const operation = await this.resolveOperation(operationOrId);
     if (operation.state !== 'prepared') {
-      throw new Error(
-        `Cannot execute operation in state '${operation.state}'. Expected 'prepared'.`,
-      );
+      throw new ReceiveOperationStateError(operation.id, operation.state, ['prepared']);
     }
 
     return this.receiveOperationService.execute(operation);
@@ -109,9 +108,7 @@ export class ReceiveOpsApi {
   async cancel(operationId: string, reason?: string): Promise<void> {
     const operation = await this.requireOperation(operationId);
     if (operation.state !== 'init' && operation.state !== 'prepared') {
-      throw new Error(
-        `Cannot cancel operation in state '${operation.state}'. Expected 'init' or 'prepared'.`,
-      );
+      throw new ReceiveOperationStateError(operation.id, operation.state, ['init', 'prepared']);
     }
 
     await this.receiveOperationService.rollback(operation.id, reason);
@@ -130,7 +127,7 @@ export class ReceiveOpsApi {
   private async requireOperation(operationId: string): Promise<ReceiveOperation> {
     const operation = await this.receiveOperationService.getOperation(operationId);
     if (!operation) {
-      throw new Error(`Operation ${operationId} not found`);
+      throw new ReceiveOperationNotFoundError(operationId);
     }
 
     return operation;

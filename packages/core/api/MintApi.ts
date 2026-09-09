@@ -1,23 +1,18 @@
 import type {
+  AddMintResult,
   CheckPaymentMethodCapabilityInput,
   ListPaymentMethodCapabilitiesInput,
   MintService,
   PaymentMethodCapability,
   PaymentMethodCapabilityCheck,
 } from '@core/services';
-import type { Mint, Keyset } from '@core/models';
+import type { Mint } from '@core/models';
 import type { MintInfo } from '@core/types';
 
 export class MintApi {
   constructor(private readonly mintService: MintService) {}
 
-  async addMint(
-    mintUrl: string,
-    options?: { trusted?: boolean },
-  ): Promise<{
-    mint: Mint;
-    keysets: Keyset[];
-  }> {
+  async addMint(mintUrl: string, options?: { trusted?: boolean }): Promise<AddMintResult> {
     return this.mintService.addMintByUrl(mintUrl, options);
   }
 

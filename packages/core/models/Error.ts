@@ -1,3 +1,7 @@
+import type { MeltOperationState } from '../operations/melt/MeltOperation.ts';
+import type { MintOperationState } from '../operations/mint/MintOperation.ts';
+import type { SendOperationState } from '../operations/send/SendOperation.ts';
+import type { ReceiveOperationState } from '../operations/receive/ReceiveOperation.ts';
 import type { KeypairPurpose } from './Keypair.ts';
 
 export { HttpResponseError, MintOperationError, NetworkError } from '@cashu/cashu-ts';
@@ -122,6 +126,102 @@ export class OperationInProgressError extends Error {
     super(`Operation ${operationId} is already in progress`);
     this.name = 'OperationInProgressError';
     this.operationId = operationId;
+  }
+}
+
+/** Raised when a requested Mint Operation does not exist. */
+export class MintOperationNotFoundError extends Error {
+  constructor(readonly operationId: string) {
+    super(`Operation ${operationId} not found`);
+    this.name = 'MintOperationNotFoundError';
+  }
+}
+
+/** Raised when a Mint lifecycle command is unavailable in the current state. */
+export class MintOperationStateError extends Error {
+  readonly expectedStates: readonly MintOperationState[];
+
+  constructor(
+    readonly operationId: string,
+    readonly state: MintOperationState,
+    expectedStates: readonly MintOperationState[],
+  ) {
+    const expected = expectedStates.map((expectedState) => `'${expectedState}'`).join(' or ');
+    super(`Cannot modify operation in state '${state}'. Expected ${expected}.`);
+    this.name = 'MintOperationStateError';
+    this.expectedStates = [...expectedStates];
+  }
+}
+
+/** Raised when a requested Melt Operation does not exist. */
+export class MeltOperationNotFoundError extends Error {
+  constructor(readonly operationId: string) {
+    super(`Operation ${operationId} not found`);
+    this.name = 'MeltOperationNotFoundError';
+  }
+}
+
+/** Raised when a Melt lifecycle command is unavailable in the current state. */
+export class MeltOperationStateError extends Error {
+  readonly expectedStates: readonly MeltOperationState[];
+
+  constructor(
+    readonly operationId: string,
+    readonly state: MeltOperationState,
+    expectedStates: readonly MeltOperationState[],
+  ) {
+    const expected = expectedStates.map((expectedState) => `'${expectedState}'`).join(' or ');
+    super(`Cannot modify operation in state '${state}'. Expected ${expected}.`);
+    this.name = 'MeltOperationStateError';
+    this.expectedStates = [...expectedStates];
+  }
+}
+
+/** Raised when a requested Send Operation does not exist. */
+export class SendOperationNotFoundError extends Error {
+  constructor(readonly operationId: string) {
+    super(`Operation ${operationId} not found`);
+    this.name = 'SendOperationNotFoundError';
+  }
+}
+
+/** Raised when a Send lifecycle command is unavailable in the current state. */
+export class SendOperationStateError extends Error {
+  readonly expectedStates: readonly SendOperationState[];
+
+  constructor(
+    readonly operationId: string,
+    readonly state: SendOperationState,
+    expectedStates: readonly SendOperationState[],
+  ) {
+    const expected = expectedStates.map((expectedState) => `'${expectedState}'`).join(' or ');
+    super(`Cannot modify operation in state '${state}'. Expected ${expected}.`);
+    this.name = 'SendOperationStateError';
+    this.expectedStates = [...expectedStates];
+  }
+}
+
+/** Raised when a requested Receive Operation does not exist. */
+export class ReceiveOperationNotFoundError extends Error {
+  constructor(readonly operationId: string) {
+    super(`Operation ${operationId} not found`);
+    this.name = 'ReceiveOperationNotFoundError';
+  }
+}
+
+/** Raised when a Receive lifecycle command is unavailable in the current state. */
+export class ReceiveOperationStateError extends Error {
+  readonly expectedStates: readonly ReceiveOperationState[];
+
+  constructor(
+    readonly operationId: string,
+    readonly state: ReceiveOperationState,
+    expectedStates: readonly ReceiveOperationState[],
+  ) {
+    const expected = expectedStates.map((expectedState) => `'${expectedState}'`).join(' or ');
+    super(`Cannot modify operation in state '${state}'. Expected ${expected}.`);
+    this.name = 'ReceiveOperationStateError';
+    this.expectedStates = [...expectedStates];
   }
 }
 

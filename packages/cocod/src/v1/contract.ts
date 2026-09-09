@@ -3,6 +3,7 @@ import type {
   CocodStatus,
   InitializeWalletInput,
   InitializeWalletResult,
+  RunningCocoSession,
   SessionStartTransition,
   WalletRecoveryMaterialInput,
 } from '../runtime.js';
@@ -11,10 +12,31 @@ import type { RuntimeSchema, StartSessionRequest, V1ErrorCode } from './schema.j
 /** Headers supplied by a route-specific v1 response. */
 export type ResponseHeaders = Headers | Record<string, string> | string[][];
 
-type V1RouteHandler<TRequest, TResponse> = (
+/** Declarative HTTP parameter shared by runtime parsing and OpenAPI generation. */
+export interface V1RouteParameter {
+  readonly name: string;
+  readonly in: 'path' | 'query' | 'header';
+  readonly required: boolean;
+  readonly schema: Readonly<Record<string, unknown>>;
+  readonly style?: 'form';
+  readonly explode?: boolean;
+}
+
+type V1RouteHandler<TRequest, TResponse, TContext> = (
   input: TRequest,
   request: Request,
-) => Promise<TResponse | V1HttpResponse<TResponse>> | TResponse | V1HttpResponse<TResponse>;
+  context: TContext,
+) =>
+  | Promise<TResponse | V1HttpResponse<TResponse> | V1HttpStreamResponse>
+  | TResponse
+  | V1HttpResponse<TResponse>
+  | V1HttpStreamResponse;
+
+/** Per-request capabilities available to executable v1 route handlers. */
+export interface V1RouteHandlerContext {
+  /** Rechecks the request's original Client Credential against the active verifier. */
+  reauthorize(): Promise<boolean>;
+}
 
 /** Declarative method, path, authorization, schema, and success contract for one v1 route. */
 export interface V1RouteMetadata<TRequest = unknown, TResponse = unknown> {
@@ -26,14 +48,17 @@ export interface V1RouteMetadata<TRequest = unknown, TResponse = unknown> {
   readonly successStatuses?: readonly number[];
   readonly idempotencyKey?: 'optional' | null;
   readonly responseCacheControl?: 'no-store' | null;
+  readonly responseMediaType?: 'text/event-stream';
+  readonly parameters?: readonly V1RouteParameter[];
 }
 
 /** Executable v1 route definition formed by binding a handler to route metadata. */
-export interface V1RouteDefinition<TRequest = unknown, TResponse = unknown> extends V1RouteMetadata<
-  TRequest,
-  TResponse
-> {
-  readonly handler: V1RouteHandler<TRequest, TResponse>;
+export interface V1RouteDefinition<
+  TRequest = unknown,
+  TResponse = unknown,
+  TContext = V1RouteHandlerContext,
+> extends V1RouteMetadata<TRequest, TResponse> {
+  readonly handler: V1RouteHandler<TRequest, TResponse, TContext>;
 }
 
 /** Transport metadata for a stable v1 HTTP failure. */
@@ -64,9 +89,19 @@ export class V1HttpResponse<T> {
   ) {}
 }
 
-/** Minimal transport-independent lifecycle interface consumed by the v1 route handlers. */
-export interface V1LifecycleRuntime {
+/** Carries a schema-validated stream through the common v1 authorization and error boundary. */
+export class V1HttpStreamResponse {
+  constructor(
+    readonly body: ReadableStream<Uint8Array>,
+    readonly status = 200,
+    readonly headers?: ResponseHeaders,
+  ) {}
+}
+
+/** Transport-independent host interface consumed by the implemented v1 route handlers. */
+export interface V1Runtime {
   getStatus(): CocodStatus;
+  getRunningSession(): RunningCocoSession | null;
   initializeWallet(input: InitializeWalletInput): Promise<InitializeWalletResult>;
   getWalletRecoveryMaterial(input?: WalletRecoveryMaterialInput): Promise<string>;
   startSession(input?: StartSessionRequest): SessionStartTransition;
@@ -74,14 +109,15 @@ export interface V1LifecycleRuntime {
 }
 
 /** Preserves handler input/output types while erasing them for the common route runner. */
-export function defineV1Route<TRequest, TResponse>(
-  definition: V1RouteDefinition<TRequest, TResponse>,
-): V1RouteDefinition {
+export function defineV1Route<TRequest, TResponse, TContext = V1RouteHandlerContext>(
+  definition: V1RouteDefinition<TRequest, TResponse, TContext>,
+): V1RouteDefinition<unknown, unknown, TContext> {
   return {
     ...definition,
     successStatuses: definition.successStatuses ?? [200],
     idempotencyKey: definition.idempotencyKey ?? null,
     responseCacheControl: definition.responseCacheControl ?? null,
-    handler: (input, request) => definition.handler(input as TRequest, request),
+    parameters: definition.parameters ?? [],
+    handler: (input, request, context) => definition.handler(input as TRequest, request, context),
   };
 }

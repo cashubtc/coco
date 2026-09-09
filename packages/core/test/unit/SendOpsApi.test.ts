@@ -9,6 +9,7 @@ import type {
 } from '../../operations/send/SendOperation.ts';
 import type { DefaultSendMethodData, P2pkSendOptions } from '../../index.ts';
 import { SendOpsApi } from '../../api/SendOpsApi.ts';
+import { SendOperationNotFoundError, SendOperationStateError } from '../../models/Error.ts';
 
 const mintUrl = 'https://mint.test';
 const forcedSwapMethodData = { forceSwap: true } satisfies DefaultSendMethodData;
@@ -245,5 +246,23 @@ describe('SendOpsApi', () => {
     await api.execute(preparedOperation.id, { memo: 'hello' });
 
     expect(sendOperationService.execute).toHaveBeenCalledWith(preparedOperation, { memo: 'hello' });
+  });
+
+  it('exposes typed missing-operation and invalid-state failures', async () => {
+    (sendOperationService.getOperation as unknown as ReturnType<typeof mock>)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(pendingOperation as SendOperation);
+
+    const missing = await api.execute('missing').catch((error: unknown) => error);
+    const invalid = await api.cancel(pendingOperation.id).catch((error: unknown) => error);
+
+    expect(missing).toBeInstanceOf(SendOperationNotFoundError);
+    expect(missing).toMatchObject({ operationId: 'missing' });
+    expect(invalid).toBeInstanceOf(SendOperationStateError);
+    expect(invalid).toMatchObject({
+      operationId: pendingOperation.id,
+      state: 'pending',
+      expectedStates: ['prepared'],
+    });
   });
 });

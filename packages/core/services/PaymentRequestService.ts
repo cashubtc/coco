@@ -172,6 +172,13 @@ export class PaymentRequestService {
       spendingCondition,
     );
     const allowedMints = decodedPaymentRequest.mints ?? [];
+    this.logger?.info('Payment request decoded', {
+      transport: transport.type,
+      unit,
+      hasAmount: decodedPaymentRequest.amount !== undefined,
+      allowedMintCount: allowedMints.length,
+      ...(spendingCondition ? { spendingConditionKind: spendingCondition.kind } : {}),
+    });
     return {
       paymentRequest: decodedPaymentRequest,
       payableMints,
@@ -274,12 +281,12 @@ export class PaymentRequestService {
   }
 
   private async readPaymentRequest(paymentRequest: string): Promise<PaymentRequest> {
-    this.logger?.debug('Reading payment request', { paymentRequest });
-    const decodedPaymentRequest = PaymentRequest.fromEncodedRequest(paymentRequest);
-    this.logger?.info('Payment request decoded', {
-      decodedPaymentRequest,
-    });
-    return decodedPaymentRequest;
+    this.logger?.debug('Reading payment request');
+    try {
+      return PaymentRequest.fromEncodedRequest(paymentRequest);
+    } catch (cause) {
+      throw new PaymentRequestError('Malformed encoded Payment Request', cause);
+    }
   }
 
   private validateMint(mintUrl: string, mints?: string[]): void {

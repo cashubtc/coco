@@ -11,7 +11,7 @@
     "start": "bun src/index.ts",
     "daemon": "bun src/index.ts daemon",
     "generate:interface": "bun scripts/generate-v1-interface.ts",
-    "check:interface": "bun scripts/generate-v1-interface.ts --check",
+    "check:interface": "bun test test/unit/v1-openapi.test.ts test/unit/v1-schema.test.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test"
   },
@@ -24,6 +24,7 @@
     "@scure/bip39": "^2.0.1",
     "coco-cashu-plugin-npc": "3.0.0-rc.20260707.3.1.sha.debd5dd",
     "commander": "^14.0.2",
-    "nostr-tools": "^2.22.1"
+    "nostr-tools": "^2.22.1",
+    "zod": "^4.3.5"
   }
 }

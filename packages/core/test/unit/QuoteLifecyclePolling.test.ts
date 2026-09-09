@@ -1,5 +1,8 @@
 import { Amount } from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it, mock } from 'bun:test';
+import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
+import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
+import { CoreMintTransactions } from '../../transactions/mints/MintTransactions.ts';
 import { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
 import type { MintAdapter } from '../../infra/MintAdapter.ts';
@@ -22,9 +25,7 @@ import {
 } from '../normalizedMintQuoteFixtures.ts';
 import type { CompatibleMintQuoteBolt11Response } from '../../operations/mint/MintMethodHandler.ts';
 import type { ProofRepository } from '../../repositories/index.ts';
-import { MemoryKeysetRepository } from '../../repositories/memory/MemoryKeysetRepository.ts';
 import { MemoryMintQuoteRepository } from '../../repositories/memory/MemoryMintQuoteRepository.ts';
-import { MemoryMintRepository } from '../../repositories/memory/MemoryMintRepository.ts';
 import { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
 import { MintService } from '../../services/MintService.ts';
 import type { ProofService } from '../../services/ProofService.ts';
@@ -53,7 +54,7 @@ describe('QuoteLifecycle mint quote polling', () => {
   let eventBus: EventBus<CoreEvents>;
   let mintAdapter: MintAdapter;
   let mintQuoteRepository: MemoryMintQuoteRepository;
-  let mintRepository: MemoryMintRepository;
+  let mintRepository: MemoryRepositories['mintRepository'];
   let mintService: MintService;
   let quoteLifecycle: QuoteLifecycle;
   let fetchRemoteMintQuote: ReturnType<typeof mock>;
@@ -68,7 +69,8 @@ describe('QuoteLifecycle mint quote polling', () => {
       ),
     } as unknown as MintAdapter;
 
-    mintRepository = new MemoryMintRepository();
+    const repositories = new MemoryRepositories();
+    mintRepository = repositories.mintRepository;
     await mintRepository.addOrUpdateMint({
       mintUrl,
       name: 'test mint',
@@ -91,8 +93,9 @@ describe('QuoteLifecycle mint quote polling', () => {
     });
     mintService = new MintService(
       mintRepository,
-      new MemoryKeysetRepository(),
+      repositories.keysetRepository,
       mintAdapter,
+      new CoreMintTransactions(new RepositoryCoreTransactionRunner(repositories)),
       undefined,
       eventBus,
     );

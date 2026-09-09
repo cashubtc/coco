@@ -2,6 +2,22 @@ import { afterEach, describe, expect, mock, test } from 'bun:test';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import {
+  UnknownMintError,
+  ProofValidationError,
+  MintOperationNotFoundError,
+  MintOperationStateError,
+  MeltOperationNotFoundError,
+  MeltOperationStateError,
+  OperationInProgressError,
+  PaymentRequestError,
+  ReceiveOperationNotFoundError,
+  ReceiveOperationStateError,
+  SendOperationStateError,
+  SendOperationNotFoundError,
+  UnitMismatchError,
+  toAmount,
+} from '@cashu/coco-core';
 
 import {
   AdministrativeCredential,
@@ -17,7 +33,7 @@ import {
   defineV1Route,
   type LifecycleStatusDocument,
   type RuntimeSchema,
-  type V1LifecycleRuntime,
+  type V1Runtime,
 } from '../../src/v1/http.js';
 import { deferred } from '../helpers/deferred.js';
 import { createTestLogger } from '../helpers/logger.js';
@@ -32,106 +48,2848 @@ afterEach(async () => {
 });
 
 describe('v1 HTTP route interface', () => {
-  test('declares lifecycle routes with their runtime schemas and capabilities', () => {
-    const routes = createLifecycleTestRouteDefinitions(
-      statusRuntime(unconfiguredStatus()),
-      '0.0.17',
+  for (const [type, stateError, missingError] of [
+    [
+      'mint',
+      new MintOperationStateError('operation-1', 'init', ['pending']),
+      new MintOperationNotFoundError('operation-1'),
+    ],
+    [
+      'melt',
+      new MeltOperationStateError('operation-1', 'pending', ['prepared']),
+      new MeltOperationNotFoundError('operation-1'),
+    ],
+    [
+      'send',
+      new SendOperationStateError('operation-1', 'pending', ['prepared']),
+      new SendOperationNotFoundError('operation-1'),
+    ],
+    [
+      'receive',
+      new ReceiveOperationStateError('operation-1', 'executing', ['prepared']),
+      new ReceiveOperationNotFoundError('operation-1'),
+    ],
+  ] as const) {
+    test(`${type} commands map state, lock, missing, and untyped failures safely`, async () => {
+      const credential = await createCredential();
+      const label = type[0]!.toUpperCase() + type.slice(1);
+      const cases = [
+        [
+          stateError,
+          409,
+          {
+            code: 'invalid_operation_state',
+            message: `The ${label} Operation command is unavailable in its current state`,
+            retryable: false,
+            details: {
+              type,
+              operationId: 'operation-1',
+              state: stateError.state,
+              expectedStates: stateError.expectedStates,
+            },
+          },
+        ],
+        [
+          new OperationInProgressError('operation-1'),
+          409,
+          {
+            code: 'operation_in_progress',
+            message: `The ${label} Operation is already in progress`,
+            retryable: true,
+            details: { type, operationId: 'operation-1' },
+          },
+        ],
+        [
+          missingError,
+          404,
+          {
+            code: 'not_found',
+            message: `The ${label} Operation does not exist`,
+            retryable: false,
+          },
+        ],
+        [
+          new Error('proof secret must-not-leak'),
+          500,
+          {
+            code: 'coco_error',
+            message: `Coco could not execute the ${label} Operation`,
+            retryable: false,
+          },
+        ],
+      ] as const;
+      for (const [error, status, expected] of cases) {
+        const execute = mock(async () => {
+          throw error;
+        });
+        const get = mock(async () => {
+          throw missingError;
+        });
+        const routes = createWalletTestRoutes(
+          { ops: { [type]: { execute, get } } },
+          credential.credentials,
+        );
+        const response = await routes[`/v1/operations/${type}/:operationId/execute`]!.POST!(
+          authorizedPostRequest(`/v1/operations/${type}/operation-1/execute`, credential.plaintext),
+        );
+        expect(response.status).toBe(status);
+        expect(await response.json()).toEqual({ error: expected });
+        expect(execute).toHaveBeenCalledWith('operation-1');
+        if (type === 'send' || type === 'melt') {
+          expect(response.headers.get('cache-control')).toBe('no-store');
+        }
+        if (error === missingError) {
+          const missing = await routes[`/v1/operations/${type}/:operationId`]!.GET!(
+            authorizedRequest(`/v1/operations/${type}/operation-1`, credential.plaintext),
+          );
+          expect(missing.status).toBe(404);
+          expect(await missing.json()).toEqual({ error: expected });
+        }
+      }
+    });
+  }
+
+  for (const [type, fixture] of [
+    ['melt', meltOperationFixture],
+    ['send', sendOperationFixture],
+    ['receive', receiveOperationFixture],
+  ] as const) {
+    test(`${type} cancel, refresh, and reclaim return canonical Coco state`, async () => {
+      const credential = await createCredential();
+      const commands =
+        type === 'receive' ? ['cancel', 'refresh'] : ['cancel', 'refresh', 'reclaim'];
+      for (const name of commands) {
+        const state = name === 'refresh' ? 'finalized' : 'rolled_back';
+        const operation = fixture({ state });
+        const command = mock(async () => (name === 'refresh' ? operation : undefined));
+        const get = mock(async () => operation);
+        const routes = createWalletTestRoutes(
+          { ops: { [type]: { [name]: command, get } } },
+          credential.credentials,
+        );
+        const response = await routes[`/v1/operations/${type}/:operationId/${name}`]!.POST!(
+          authorizedPostRequest(
+            `/v1/operations/${type}/${type}-operation-1/${name}`,
+            credential.plaintext,
+          ),
+        );
+        expect(response.status).toBe(200);
+        expect(await response.json()).toMatchObject({ state });
+        expect(command).toHaveBeenCalledWith(`${type}-operation-1`);
+        expect(get).toHaveBeenCalledTimes(1);
+      }
+    });
+  }
+
+  for (const type of ['mint', 'receive'] as const) {
+    test(`${type} operations expose no distinct result resource`, async () => {
+      const credential = await createCredential();
+      const get = mock();
+      const routes = createWalletTestRoutes({ ops: { [type]: { get } } }, credential.credentials);
+      const response = await routes[`/v1/operations/${type}/:operationId/result`]!.GET!(
+        authorizedRequest(`/v1/operations/${type}/operation-1/result`, credential.plaintext),
+      );
+      const label = type === 'mint' ? 'Mint' : 'Receive';
+      expect(response.status).toBe(404);
+      expect(response.headers.get('cache-control')).toBe('no-store');
+      expect(await response.json()).toEqual({
+        error: {
+          code: 'not_found',
+          message: `${label} Operations do not expose a distinct result`,
+          retryable: false,
+        },
+      });
+      expect(get).not.toHaveBeenCalled();
+    });
+  }
+
+  test('protects every resource before invoking Coco and prevents sensitive responses from being cached', async () => {
+    const credential = await createCredential();
+    const called = mock(() => {
+      throw new Error('Unauthorized work reached the runtime');
+    });
+    const runtime: V1Runtime = {
+      getStatus: called,
+      getRunningSession: called,
+      initializeWallet: called,
+      getWalletRecoveryMaterial: called,
+      startSession: called,
+      stopSession: called,
+    };
+    const definitions = createV1RouteDefinitions(runtime, '0.0.17', { request: called });
+    const routes = buildV1Routes(definitions, credential.credentials);
+    await setCapabilities(credential.verifierFile, ['wallet:read']);
+    for (const definition of definitions) {
+      const { method, path } = definition;
+      if (path === '/health') continue;
+      const readOnly = method === 'GET' || path === '/v1/payment-requests/evaluate';
+      expect(definition.capability).toBe(readOnly ? 'wallet:read' : 'wallet:admin');
+      const key = path.replace(/\{([^}]+)\}/g, ':$1');
+      const handler = routes[key]![method]!;
+      const response = await handler(new Request(`http://localhost${path}`, { method }));
+      expect(response.status).toBe(401);
+      expect(await response.json()).toMatchObject({ error: { code: 'unauthenticated' } });
+      const sensitive =
+        path.endsWith('/result') ||
+        path === '/v1/events' ||
+        path.startsWith('/v1/admin/wallet/') ||
+        /^\/v1\/operations\/(send|melt)\/.*\/execute$/.test(path);
+      if (sensitive) expect(response.headers.get('cache-control')).toBe('no-store');
+      if (!readOnly) {
+        const forbidden = await handler(
+          new Request(`http://localhost${path}`, {
+            method,
+            headers: { Authorization: `Bearer ${credential.plaintext}` },
+          }),
+        );
+        expect(forbidden.status).toBe(403);
+        if (sensitive) expect(forbidden.headers.get('cache-control')).toBe('no-store');
+      }
+    }
+    expect(called).not.toHaveBeenCalled();
+  });
+
+  for (const [type, fixture, overrides, expected, inFlightStates] of [
+    [
+      'mint',
+      mintOperationFixture,
+      {
+        state: 'failed',
+        terminalFailure: {
+          reason: 'Missing NUT-20 mint quote key must-not-leak',
+          code: 'missing_quote_pubkey',
+          retryable: false,
+          observedAt: 1_786_838_520_000,
+        },
+      },
+      {
+        state: 'failed',
+        failure: {
+          reason: 'The Mint Operation failed',
+          code: 'missing_quote_pubkey',
+          retryable: false,
+          observedAt: '2026-08-16T00:02:00.000Z',
+        },
+      },
+      ['executing'],
+    ],
+    [
+      'melt',
+      meltOperationFixture,
+      {
+        state: 'finalized',
+        changeAmount: toAmount(1),
+        effectiveFee: toAmount(2),
+        finalizedData: { preimage: 'must-not-leak' },
+      },
+      { state: 'finalized', changeAmount: '1', effectiveFee: '2' },
+      ['executing', 'pending', 'rolling_back'],
+    ],
+    [
+      'send',
+      sendOperationFixture,
+      {
+        state: 'pending',
+        token: { mint: 'https://mint.example.com', proofs: [{ secret: 'must-not-leak' }] },
+      },
+      {
+        state: 'pending',
+        method: 'default',
+        requestedAmount: '25',
+        inputAmount: '27',
+        fee: '2',
+        needsSwap: true,
+      },
+      ['pending'],
+    ],
+    [
+      'receive',
+      receiveOperationFixture,
+      { state: 'finalized' },
+      { state: 'finalized', amount: '25', fee: '2' },
+      ['executing'],
+    ],
+  ] as const) {
+    test(`${type} reads project safe state and paginate canonical collections deterministically`, async () => {
+      const credential = await createCredential();
+      const readyState = type === 'mint' ? 'pending' : 'prepared';
+      const get = mock(async () => fixture(overrides));
+      const listReady = mock(async () => [
+        fixture({ id: 'old', createdAt: 1_786_838_400_000, state: readyState }),
+        fixture({ id: 'new-b', createdAt: 1_786_838_600_000, state: readyState }),
+        fixture({ id: 'new-a', createdAt: 1_786_838_600_000, state: readyState }),
+      ]);
+      const listInFlight = mock(async () =>
+        inFlightStates.map((state, index) =>
+          fixture({
+            id: state,
+            state,
+            createdAt: 1_786_838_500_000 - index * 20_000,
+          }),
+        ),
+      );
+      const routes = createWalletTestRoutes(
+        {
+          ops: {
+            [type]: {
+              get,
+              [type === 'mint' ? 'listPending' : 'listPrepared']: listReady,
+              listInFlight,
+            },
+          },
+        },
+        credential.credentials,
+      );
+      const path = `/v1/operations/${type}`;
+      const fetched = await routes[`${path}/:operationId`]!.GET!(
+        authorizedRequest(`${path}/${type}-operation-1`, credential.plaintext),
+      );
+      const body = await fetched.json();
+      expect(fetched.status).toBe(200);
+      expect(body).toMatchObject({
+        id: `${type}-operation-1`,
+        type,
+        mintUrl: 'https://mint.example.com',
+        unit: 'sat',
+        createdAt: '2026-08-16T00:00:00.000Z',
+        updatedAt: '2026-08-16T00:01:00.000Z',
+        ...expected,
+      });
+      expect(JSON.stringify(body)).not.toContain('must-not-leak');
+      expect(get).toHaveBeenCalledWith(`${type}-operation-1`);
+      for (const [collection, query, items, offset, limit] of [
+        [readyState, '?offset=1&limit=1', [{ id: 'new-b', state: readyState }], 1, 1],
+        ['in-flight', '', inFlightStates.map((state) => ({ id: state, state })), 0, 20],
+      ] as const) {
+        const response = await routes[`${path}/${collection}`]!.GET!(
+          authorizedRequest(`${path}/${collection}${query}`, credential.plaintext),
+        );
+        expect(response.status).toBe(200);
+        expect(await response.json()).toMatchObject({ items, offset, limit });
+      }
+      expect(listReady).toHaveBeenCalledWith();
+      expect(listInFlight).toHaveBeenCalledWith();
+    });
+  }
+
+  test('lists and inspects safe history documents through Coco ordering and identities', async () => {
+    const credential = await createCredential();
+    const entries = [
+      {
+        id: 'mint:mint-operation-1',
+        source: 'operation' as const,
+        type: 'mint' as const,
+        operationId: 'mint-operation-1',
+        quoteId: 'mint-quote-1',
+        paymentRequest: 'lnbc250n1must-not-leak',
+        state: 'finalized' as const,
+        mintUrl: 'https://mint.example.com/',
+        unit: 'sat',
+        amount: toAmount('9007199254740993'),
+        createdAt: 1_786_838_600_000,
+        updatedAt: 1_786_838_660_000,
+        metadata: { private: 'must-not-leak' },
+        error: 'raw failure must-not-leak',
+      },
+      {
+        id: 'legacy:42',
+        source: 'legacy' as const,
+        legacyHistoryId: '42',
+        type: 'send' as const,
+        operationId: ' legacy-operation-1 ',
+        state: 'pending',
+        mintUrl: 'https://mint.example.com/',
+        unit: 'sat',
+        amount: toAmount(21),
+        createdAt: 1_786_838_500_000,
+        updatedAt: 1_786_838_500_000,
+        token: {
+          mint: 'https://mint.example.com',
+          proofs: [{ secret: 'must-not-leak', C: 'must-not-leak', amount: 21, id: 'keyset' }],
+        },
+      },
+      {
+        id: 'melt:melt-operation-1',
+        source: 'operation' as const,
+        type: 'melt' as const,
+        operationId: 'melt-operation-1',
+        quoteId: 'melt-quote-1',
+        state: 'pending' as const,
+        mintUrl: 'https://mint.example.com/',
+        unit: 'sat',
+        amount: toAmount(13),
+        createdAt: 1_786_838_400_000,
+        updatedAt: 1_786_838_460_000,
+        error: 'raw melt failure must-not-leak',
+      },
+      {
+        id: 'receive:receive-operation-1',
+        source: 'operation' as const,
+        type: 'receive' as const,
+        operationId: 'receive-operation-1',
+        state: 'finalized' as const,
+        mintUrl: 'https://mint.example.com/',
+        unit: 'sat',
+        amount: toAmount(8),
+        createdAt: 1_786_838_300_000,
+        updatedAt: 1_786_838_360_000,
+        metadata: { memo: 'private receive source must-not-leak' },
+        token: {
+          mint: 'https://mint.example.com',
+          proofs: [{ secret: 'must-not-leak', C: 'must-not-leak', amount: 8, id: 'keyset' }],
+        },
+      },
+      {
+        id: 'legacy:7',
+        source: 'legacy' as const,
+        legacyHistoryId: '7',
+        type: 'mint' as const,
+        paymentRequest: 'lnbc1must-not-leak',
+        quoteId: '',
+        state: 'UNPAID',
+        mintUrl: 'https://mint.example.com/',
+        unit: 'sat',
+        amount: toAmount(5),
+        createdAt: 1_786_838_200_000,
+        updatedAt: 1_786_838_200_000,
+      },
+    ];
+    const getPaginatedHistory = mock(async () => entries);
+    const getHistoryEntryById = mock(async () => entries[0]);
+    const routes = createWalletTestRoutes(
+      { history: { getPaginatedHistory, getHistoryEntryById } },
+      credential.credentials,
     );
 
-    expect(
-      routes.map(
-        ({
-          method,
-          path,
-          capability,
-          requestSchema,
-          responseSchema,
-          successStatuses,
-          idempotencyKey,
-          responseCacheControl,
-        }) => ({
-          method,
-          path,
-          capability,
-          requestSchema: requestSchema.name,
-          responseSchema: responseSchema.name,
-          successStatuses,
-          idempotencyKey,
-          responseCacheControl,
-        }),
-      ),
-    ).toEqual([
+    const listed = await routes['/v1/history']!.GET!(
+      authorizedRequest('/v1/history?offset=2&limit=5', credential.plaintext),
+    );
+    const inspected = await routes['/v1/history/:historyEntryId']!.GET!(
+      authorizedRequest('/v1/history/mint%3Amint-operation-1', credential.plaintext),
+    );
+    const listBody = (await listed.json()) as { items: unknown[]; offset: number; limit: number };
+    const detailBody = await inspected.json();
+
+    expect(listed.status).toBe(200);
+    expect(listBody).toEqual({
+      items: [
+        {
+          id: 'mint:mint-operation-1',
+          source: 'operation',
+          type: 'mint',
+          operationId: 'mint-operation-1',
+          quoteId: 'mint-quote-1',
+          state: 'finalized',
+          mintUrl: 'https://mint.example.com',
+          unit: 'sat',
+          amount: '9007199254740993',
+          createdAt: '2026-08-16T00:03:20.000Z',
+          updatedAt: '2026-08-16T00:04:20.000Z',
+        },
+        {
+          id: 'legacy:42',
+          source: 'legacy',
+          type: 'send',
+          operationId: 'legacy-operation-1',
+          state: 'pending',
+          mintUrl: 'https://mint.example.com',
+          unit: 'sat',
+          amount: '21',
+          createdAt: '2026-08-16T00:01:40.000Z',
+          updatedAt: '2026-08-16T00:01:40.000Z',
+        },
+        {
+          id: 'melt:melt-operation-1',
+          source: 'operation',
+          type: 'melt',
+          operationId: 'melt-operation-1',
+          quoteId: 'melt-quote-1',
+          state: 'pending',
+          mintUrl: 'https://mint.example.com',
+          unit: 'sat',
+          amount: '13',
+          createdAt: '2026-08-16T00:00:00.000Z',
+          updatedAt: '2026-08-16T00:01:00.000Z',
+        },
+        {
+          id: 'receive:receive-operation-1',
+          source: 'operation',
+          type: 'receive',
+          operationId: 'receive-operation-1',
+          state: 'finalized',
+          mintUrl: 'https://mint.example.com',
+          unit: 'sat',
+          amount: '8',
+          createdAt: '2026-08-15T23:58:20.000Z',
+          updatedAt: '2026-08-15T23:59:20.000Z',
+        },
+        {
+          id: 'legacy:7',
+          source: 'legacy',
+          type: 'mint',
+          state: 'UNPAID',
+          mintUrl: 'https://mint.example.com',
+          unit: 'sat',
+          amount: '5',
+          createdAt: '2026-08-15T23:56:40.000Z',
+          updatedAt: '2026-08-15T23:56:40.000Z',
+        },
+      ],
+      offset: 2,
+      limit: 5,
+    });
+    expect(detailBody).toEqual(listBody.items[0]);
+    expect(JSON.stringify([listBody, detailBody])).not.toContain('must-not-leak');
+    expect(getPaginatedHistory).toHaveBeenCalledWith(2, 5);
+    expect(getHistoryEntryById).toHaveBeenCalledWith('mint:mint-operation-1');
+  });
+
+  test('omits blank legacy operation identities from safe history documents', async () => {
+    const credential = await createCredential();
+    const entry = {
+      id: 'legacy:42',
+      source: 'legacy' as const,
+      legacyHistoryId: '42',
+      type: 'send' as const,
+      operationId: '   ',
+      state: 'pending',
+      mintUrl: 'https://mint.example.com/',
+      unit: 'sat',
+      amount: toAmount(21),
+      createdAt: 1_786_838_500_000,
+      updatedAt: 1_786_838_500_000,
+    };
+    const routes = createWalletTestRoutes(
       {
-        method: 'GET',
-        path: '/health',
-        capability: null,
-        requestSchema: 'NoBody',
-        responseSchema: 'Health',
-        successStatuses: [200],
-        idempotencyKey: null,
-        responseCacheControl: null,
+        history: {
+          getPaginatedHistory: mock(async () => [entry]),
+          getHistoryEntryById: mock(async () => entry),
+        },
+      },
+      credential.credentials,
+    );
+
+    const listed = await routes['/v1/history']!.GET!(
+      authorizedRequest('/v1/history', credential.plaintext),
+    );
+    const inspected = await routes['/v1/history/:historyEntryId']!.GET!(
+      authorizedRequest('/v1/history/legacy%3A42', credential.plaintext),
+    );
+    const listBody = (await listed.json()) as { items: Record<string, unknown>[] };
+    const detailBody = (await inspected.json()) as Record<string, unknown>;
+
+    expect(listed.status).toBe(200);
+    expect(inspected.status).toBe(200);
+    expect(listBody.items[0]).not.toHaveProperty('operationId');
+    expect(detailBody).not.toHaveProperty('operationId');
+  });
+
+  test('validates history requests before Coco and safely maps lookup failures', async () => {
+    const credential = await createCredential();
+    const getPaginatedHistory = mock(async () => {
+      throw new Error('repository diagnostic must-not-leak');
+    });
+    const getHistoryEntryById = mock(async (id: string) => {
+      if (id === 'send:missing') return null;
+      throw new Error('repository diagnostic must-not-leak');
+    });
+    const routes = createWalletTestRoutes(
+      { history: { getPaginatedHistory, getHistoryEntryById } },
+      credential.credentials,
+    );
+
+    const unauthenticated = await routes['/v1/history']!.GET!(
+      new Request('http://localhost/v1/history'),
+    );
+    const malformedPage = await routes['/v1/history']!.GET!(
+      authorizedRequest('/v1/history?offset=0&limit=101', credential.plaintext),
+    );
+    const unknownFilter = await routes['/v1/history']!.GET!(
+      authorizedRequest('/v1/history?type=mint', credential.plaintext),
+    );
+    const malformedId = await routes['/v1/history/:historyEntryId']!.GET!(
+      authorizedRequest('/v1/history/not-an-id', credential.plaintext),
+    );
+    const missing = await routes['/v1/history/:historyEntryId']!.GET!(
+      authorizedRequest('/v1/history/send%3Amissing', credential.plaintext),
+    );
+    const listFailure = await routes['/v1/history']!.GET!(
+      authorizedRequest('/v1/history', credential.plaintext),
+    );
+    const detailFailure = await routes['/v1/history/:historyEntryId']!.GET!(
+      authorizedRequest('/v1/history/send%3Afailure', credential.plaintext),
+    );
+
+    expect(unauthenticated.status).toBe(401);
+    expect(await unauthenticated.json()).toMatchObject({ error: { code: 'unauthenticated' } });
+    for (const response of [malformedPage, unknownFilter, malformedId]) {
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error: { code: 'invalid_request' } });
+    }
+    expect(missing.status).toBe(404);
+    expect(await missing.json()).toMatchObject({ error: { code: 'not_found' } });
+    expect(listFailure.status).toBe(500);
+    expect(detailFailure.status).toBe(500);
+    const failureBodies = [await listFailure.json(), await detailFailure.json()];
+    expect(failureBodies).toEqual([
+      {
+        error: {
+          code: 'coco_error',
+          message: 'Coco could not list Wallet history',
+          retryable: false,
+        },
       },
       {
-        method: 'GET',
-        path: '/v1/status',
-        capability: 'wallet:read',
-        requestSchema: 'NoBody',
-        responseSchema: 'LifecycleStatus',
-        successStatuses: [200],
-        idempotencyKey: null,
-        responseCacheControl: null,
-      },
-      {
-        method: 'POST',
-        path: '/v1/admin/wallet/initialize',
-        capability: 'wallet:admin',
-        requestSchema: 'InitializeWalletRequest',
-        responseSchema: 'InitializeWalletResponse',
-        successStatuses: [201, 202],
-        idempotencyKey: 'optional',
-        responseCacheControl: 'no-store',
-      },
-      {
-        method: 'POST',
-        path: '/v1/admin/wallet/recovery-material',
-        capability: 'wallet:admin',
-        requestSchema: 'WalletRecoveryMaterialRequest',
-        responseSchema: 'WalletRecoveryMaterialResponse',
-        successStatuses: [200],
-        idempotencyKey: null,
-        responseCacheControl: 'no-store',
-      },
-      {
-        method: 'POST',
-        path: '/v1/admin/session/start',
-        capability: 'wallet:admin',
-        requestSchema: 'StartSessionRequest',
-        responseSchema: 'LifecycleStatus',
-        successStatuses: [200, 202],
-        idempotencyKey: 'optional',
-        responseCacheControl: null,
-      },
-      {
-        method: 'POST',
-        path: '/v1/admin/session/stop',
-        capability: 'wallet:admin',
-        requestSchema: 'StopSessionRequest',
-        responseSchema: 'LifecycleStatus',
-        successStatuses: [200, 202],
-        idempotencyKey: 'optional',
-        responseCacheControl: null,
-      },
-      {
-        method: 'POST',
-        path: '/v1/admin/process/stop',
-        capability: 'wallet:admin',
-        requestSchema: 'ProcessShutdownRequest',
-        responseSchema: 'ProcessShutdownResponse',
-        successStatuses: [202],
-        idempotencyKey: 'optional',
-        responseCacheControl: null,
+        error: {
+          code: 'coco_error',
+          message: 'Coco could not return the Wallet history entry',
+          retryable: false,
+        },
       },
     ]);
+    expect(JSON.stringify(failureBodies)).not.toContain('must-not-leak');
+    expect(getPaginatedHistory).toHaveBeenCalledTimes(1);
+    expect(getPaginatedHistory).toHaveBeenCalledWith(0, 20);
+    expect(getHistoryEntryById).toHaveBeenCalledTimes(2);
+  });
+
+  test('evaluates an outgoing Payment Request as a safe non-durable document', async () => {
+    const credential = await createCredential();
+    const parse = mock(async () => ({
+      paymentRequest: { encoded: 'creqBmust-not-leak' },
+      amount: toAmount('9007199254740993'),
+      unit: 'sat',
+      transport: { type: 'http' as const, url: 'https://receiver.test/private' },
+      allowedMints: ['https://mint.example.com'],
+      payableMints: ['https://mint.example.com'],
+      spendingCondition: {
+        kind: 'P2PK' as const,
+        p2pk: {
+          kind: 'P2PK' as const,
+          options: { pubkey: '02must-not-leak' },
+          rawNut10: { kind: 'P2PK', data: ['02must-not-leak'] },
+        },
+      },
+    }));
+    const routes = createWalletTestRoutes({ paymentRequests: { parse } }, credential.credentials);
+
+    const response = await routes['/v1/payment-requests/evaluate']!.POST!(
+      authorizedJsonRequest('/v1/payment-requests/evaluate', credential.plaintext, {
+        request: 'creqBmust-not-leak',
+      }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toEqual({
+      amount: '9007199254740993',
+      unit: 'sat',
+      transport: { type: 'http' },
+      allowedMints: ['https://mint.example.com'],
+      payableMints: ['https://mint.example.com'],
+      spendingCondition: { kind: 'P2PK' },
+    });
+    expect(JSON.stringify(body)).not.toContain('must-not-leak');
+    expect(body).not.toHaveProperty('id');
+    expect(parse).toHaveBeenCalledWith('creqBmust-not-leak');
+  });
+
+  test('maps invalid and untyped Payment Request evaluation failures safely', async () => {
+    const credential = await createCredential();
+    const parse = mock()
+      .mockRejectedValueOnce(new PaymentRequestError('encoded request secret must-not-leak'))
+      .mockRejectedValueOnce(new Error('wallet diagnostic must-not-leak'));
+    const routes = createWalletTestRoutes({ paymentRequests: { parse } }, credential.credentials);
+    const request = () =>
+      authorizedJsonRequest('/v1/payment-requests/evaluate', credential.plaintext, {
+        request: 'creqBmust-not-leak',
+      });
+
+    const invalid = await routes['/v1/payment-requests/evaluate']!.POST!(request());
+    const failed = await routes['/v1/payment-requests/evaluate']!.POST!(request());
+    const invalidBody = await invalid.json();
+    const failedBody = await failed.json();
+
+    expect(invalid.status).toBe(400);
+    expect(invalidBody).toMatchObject({ error: { code: 'invalid_request', retryable: false } });
+    expect(failed.status).toBe(500);
+    expect(failedBody).toEqual({
+      error: {
+        code: 'coco_error',
+        message: 'Coco could not evaluate the Payment Request',
+        retryable: false,
+      },
+    });
+    expect(JSON.stringify([invalidBody, failedBody])).not.toContain('must-not-leak');
+  });
+
+  test('rejects zero mutation amounts before calling Coco', async () => {
+    const credential = await createCredential();
+    const createMintQuote = mock(async () => mintQuoteFixture());
+    const createMeltQuote = mock(async () => meltQuoteFixture());
+    const prepareMint = mock(async () => mintOperationFixture());
+    const prepareSend = mock(async () => sendOperationFixture());
+    const parsePaymentRequest = mock(async () => ({
+      unit: 'sat',
+      transport: { type: 'inband' as const },
+      allowedMints: [],
+      payableMints: ['https://mint.example.com'],
+    }));
+    const routes = createWalletTestRoutes(
+      {
+        quotes: {
+          mint: { create: createMintQuote },
+          melt: { create: createMeltQuote },
+        },
+        ops: {
+          mint: { prepare: prepareMint },
+          send: { prepare: prepareSend },
+        },
+        paymentRequests: {
+          parse: parsePaymentRequest,
+          prepare: mock(async () => ({ sendOperation: sendOperationFixture() })),
+        },
+      },
+      credential.credentials,
+    );
+    const cases = [
+      ['/v1/quotes/mint', { method: 'bolt11', amount: '0', unit: 'sat' }],
+      [
+        '/v1/quotes/mint',
+        { mintUrl: 'https://mint.example.com', method: 'bolt12', amount: '0', unit: 'sat' },
+      ],
+      ['/v1/quotes/melt', { method: 'bolt11', invoice: 'lnbc1test', amount: '0' }],
+      [
+        '/v1/quotes/melt',
+        { mintUrl: 'https://mint.example.com', method: 'bolt12', offer: 'lno1test', amount: '0' },
+      ],
+      [
+        '/v1/quotes/melt',
+        { mintUrl: 'https://mint.example.com', method: 'onchain', address: 'bc1test', amount: '0' },
+      ],
+      [
+        '/v1/operations/mint',
+        { mintUrl: 'https://mint.example.com', quoteId: 'mint-quote-1', amount: '0' },
+      ],
+      ['/v1/operations/send', { amount: '0', unit: 'sat' }],
+      [
+        '/v1/operations/send',
+        {
+          source: { type: 'payment-request', request: 'creqBtest' },
+          amount: '0',
+          unit: 'sat',
+        },
+      ],
+    ] as const;
+
+    for (const [path, body] of cases) {
+      const response = await routes[path]!.POST!(
+        authorizedJsonRequest(path, credential.plaintext, body),
+      );
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error: { code: 'invalid_request' } });
+    }
+    expect(createMintQuote).not.toHaveBeenCalled();
+    expect(createMeltQuote).not.toHaveBeenCalled();
+    expect(prepareMint).not.toHaveBeenCalled();
+    expect(prepareSend).not.toHaveBeenCalled();
+    expect(parsePaymentRequest).not.toHaveBeenCalled();
+  });
+
+  test('authenticates evaluation and redacts the encoded Payment Request from logs', async () => {
+    const credential = await createCredential();
+    const debug = mock(() => {});
+    const logger = createTestLogger({ debug });
+    const parse = mock(async () => ({
+      unit: 'sat',
+      transport: { type: 'inband' as const },
+      allowedMints: [],
+      payableMints: [],
+    }));
+    const definitions = createLifecycleTestRouteDefinitions(
+      {
+        ...lifecycleRuntime(() => configuredStatus('running')),
+        getRunningSession: () => ({ manager: { paymentRequests: { parse } } }) as never,
+      },
+      '0.0.17',
+      logger,
+    );
+    const routes = buildV1Routes(definitions, credential.credentials, logger);
+    const encoded = 'creqBmust-not-leak';
+
+    const unauthenticated = await routes['/v1/payment-requests/evaluate']!.POST!(
+      new Request('http://localhost/v1/payment-requests/evaluate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ request: encoded }),
+      }),
+    );
+    const evaluated = await routes['/v1/payment-requests/evaluate']!.POST!(
+      authorizedJsonRequest('/v1/payment-requests/evaluate', credential.plaintext, {
+        request: encoded,
+      }),
+    );
+
+    expect(unauthenticated.status).toBe(401);
+    expect(evaluated.status).toBe(200);
+    expect(parse).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(debug.mock.calls)).not.toContain(encoded);
+    expect(debug).toHaveBeenCalledWith('request.received', {
+      input: { request: '[REDACTED]' },
+    });
+  });
+
+  test('prepares a safe Mint Operation from the canonical methodless Quote identity', async () => {
+    const credential = await createCredential();
+    const quote = mintQuoteFixture({ mintUrl: 'https://mint.example.com' });
+    const operation = mintOperationFixture();
+    const getQuote = mock(async () => quote);
+    const prepare = mock(async () => operation);
+    const execute = mock(async () => {
+      throw new Error('execute was not expected');
+    });
+    const routes = createWalletTestRoutes(
+      { quotes: { mint: { get: getQuote } }, ops: { mint: { prepare, execute } } },
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/operations/mint']!.POST!(
+      authorizedJsonRequest('/v1/operations/mint', credential.plaintext, {
+        mintUrl: 'https://mint.example.com/',
+        quoteId: 'mint-quote-1',
+        amount: '25',
+      }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(201);
+    expect(response.headers.get('location')).toBeNull();
+    expect(body).toEqual({
+      id: 'mint-operation-1',
+      type: 'mint',
+      state: 'pending',
+      mintUrl: 'https://mint.example.com',
+      unit: 'sat',
+      method: 'bolt11',
+      amount: '25',
+      quote: { mintUrl: 'https://mint.example.com', quoteId: 'mint-quote-1' },
+      expiry: '2026-08-16T00:05:00.000Z',
+      createdAt: '2026-08-16T00:00:00.000Z',
+      updatedAt: '2026-08-16T00:01:00.000Z',
+    });
+    expect(JSON.stringify(body)).not.toContain('must-not-leak');
+    expect(getQuote).toHaveBeenCalledWith({
+      mintUrl: 'https://mint.example.com',
+      quoteId: 'mint-quote-1',
+    });
+    expect(prepare).toHaveBeenCalledWith({ quote, amount: '25' });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  test('returns not found when Mint Operation preparation cannot resolve the canonical Quote', async () => {
+    const credential = await createCredential();
+    const getQuote = mock(async () => null);
+    const prepare = mock(async () => mintOperationFixture());
+    const routes = createWalletTestRoutes(
+      { quotes: { mint: { get: getQuote } }, ops: { mint: { prepare } } },
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/operations/mint']!.POST!(
+      authorizedJsonRequest('/v1/operations/mint', credential.plaintext, {
+        mintUrl: 'https://mint.example.com',
+        quoteId: 'missing',
+        amount: '25',
+      }),
+    );
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toMatchObject({ error: { code: 'not_found' } });
+    expect(prepare).not.toHaveBeenCalled();
+  });
+
+  test('executes and refreshes Mint Operations while keeping pending payment pending', async () => {
+    const credential = await createCredential();
+    const pending = mintOperationFixture();
+    const finalized = mintOperationFixture({ state: 'finalized' });
+    const execute = mock(async () => pending);
+    const refresh = mock(async () => finalized);
+    const routes = createWalletTestRoutes(
+      { ops: { mint: { execute, refresh } } },
+      credential.credentials,
+    );
+
+    const executed = await routes['/v1/operations/mint/:operationId/execute']!.POST!(
+      authorizedPostRequest('/v1/operations/mint/mint-operation-1/execute', credential.plaintext),
+    );
+    const refreshed = await routes['/v1/operations/mint/:operationId/refresh']!.POST!(
+      authorizedPostRequest('/v1/operations/mint/mint-operation-1/refresh', credential.plaintext),
+    );
+
+    expect(await executed.json()).toMatchObject({ state: 'pending' });
+    expect(await refreshed.json()).toMatchObject({ state: 'finalized' });
+    expect(execute).toHaveBeenCalledWith('mint-operation-1');
+    expect(refresh).toHaveBeenCalledWith('mint-operation-1');
+  });
+
+  test('maps typed missing Mint Operations and protects authenticated idempotent preparation', async () => {
+    const credential = await createCredential();
+    const get = mock(async () => {
+      throw new MintOperationNotFoundError('missing');
+    });
+    const quote = mintQuoteFixture();
+    const getQuote = mock(async () => quote);
+    const prepare = mock(async () => mintOperationFixture());
+    const routes = createWalletTestRoutes(
+      { quotes: { mint: { get: getQuote } }, ops: { mint: { get, prepare } } },
+      credential.credentials,
+    );
+
+    const missing = await routes['/v1/operations/mint/:operationId']!.GET!(
+      authorizedRequest('/v1/operations/mint/missing', credential.plaintext),
+    );
+    const unauthenticated = await routes['/v1/operations/mint']!.POST!(
+      new Request('http://localhost/v1/operations/mint', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mintUrl: 'https://mint.example.com',
+          quoteId: 'mint-quote-1',
+          amount: '25',
+        }),
+      }),
+    );
+    const request = () =>
+      authorizedJsonRequest(
+        '/v1/operations/mint',
+        credential.plaintext,
+        { mintUrl: 'https://mint.example.com', quoteId: 'mint-quote-1', amount: '25' },
+        undefined,
+        { 'Idempotency-Key': 'prepare-mint-1' },
+      );
+    const first = await routes['/v1/operations/mint']!.POST!(request());
+    const replay = await routes['/v1/operations/mint']!.POST!(request());
+
+    expect(missing.status).toBe(404);
+    expect(unauthenticated.status).toBe(401);
+    expect(first.status).toBe(201);
+    expect(replay.status).toBe(201);
+    expect(getQuote).toHaveBeenCalledTimes(1);
+    expect(prepare).toHaveBeenCalledTimes(1);
+  });
+
+  test('prepares a safe Melt Operation from the canonical methodless Quote identity', async () => {
+    const credential = await createCredential();
+    const quote = meltQuoteFixture({ mintUrl: 'https://mint.example.com' });
+    const operation = meltOperationFixture();
+    const getQuote = mock(async () => quote);
+    const prepare = mock(async () => operation);
+    const execute = mock(async () => {
+      throw new Error('execute was not expected');
+    });
+    const routes = createWalletTestRoutes(
+      { quotes: { melt: { get: getQuote } }, ops: { melt: { prepare, execute } } },
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/operations/melt']!.POST!(
+      authorizedJsonRequest('/v1/operations/melt', credential.plaintext, {
+        mintUrl: 'https://mint.example.com/',
+        quoteId: 'melt-quote-1',
+      }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(201);
+    expect(response.headers.get('location')).toBeNull();
+    expect(body).toEqual({
+      id: 'melt-operation-1',
+      type: 'melt',
+      state: 'prepared',
+      mintUrl: 'https://mint.example.com',
+      unit: 'sat',
+      method: 'bolt11',
+      amount: '25',
+      quote: { mintUrl: 'https://mint.example.com', quoteId: 'melt-quote-1' },
+      feeReserve: '2',
+      swapFee: '1',
+      inputAmount: '28',
+      needsSwap: true,
+      createdAt: '2026-08-16T00:00:00.000Z',
+      updatedAt: '2026-08-16T00:01:00.000Z',
+    });
+    expect(JSON.stringify(body)).not.toContain('must-not-leak');
+    expect(getQuote).toHaveBeenCalledWith({
+      mintUrl: 'https://mint.example.com',
+      quoteId: 'melt-quote-1',
+    });
+    expect(prepare).toHaveBeenCalledWith({ quote });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  test('executes a Melt Operation and recovers its payment result from Coco', async () => {
+    const credential = await createCredential();
+    const finalized = meltOperationFixture({
+      state: 'finalized',
+      finalizedData: { preimage: 'payment-preimage' },
+    });
+    const execute = mock(async () => finalized);
+    const get = mock(async () => finalized);
+    const routes = createWalletTestRoutes(
+      { ops: { melt: { execute, get } } },
+      credential.credentials,
+    );
+
+    const executed = await routes['/v1/operations/melt/:operationId/execute']!.POST!(
+      authorizedPostRequest('/v1/operations/melt/melt-operation-1/execute', credential.plaintext),
+    );
+    const recovered = await routes['/v1/operations/melt/:operationId/result']!.GET!(
+      authorizedRequest('/v1/operations/melt/melt-operation-1/result', credential.plaintext),
+    );
+
+    expect(executed.status).toBe(200);
+    expect(executed.headers.get('cache-control')).toBe('no-store');
+    expect(await executed.json()).toMatchObject({
+      operation: { id: 'melt-operation-1', state: 'finalized' },
+      result: { preimage: 'payment-preimage' },
+    });
+    expect(recovered.status).toBe(200);
+    expect(recovered.headers.get('cache-control')).toBe('no-store');
+    expect(await recovered.json()).toEqual({ preimage: 'payment-preimage' });
+    expect(execute).toHaveBeenCalledWith('melt-operation-1');
+    expect(get).toHaveBeenCalledWith('melt-operation-1');
+  });
+
+  test('keeps a pending Melt Operation recoverable when its result is not yet available', async () => {
+    const credential = await createCredential();
+    const pending = meltOperationFixture({ state: 'pending' });
+    const execute = mock(async () => pending);
+    const get = mock(async () => pending);
+    const routes = createWalletTestRoutes(
+      { ops: { melt: { execute, get } } },
+      credential.credentials,
+    );
+
+    const executed = await routes['/v1/operations/melt/:operationId/execute']!.POST!(
+      authorizedPostRequest('/v1/operations/melt/melt-operation-1/execute', credential.plaintext),
+    );
+    const recovered = await routes['/v1/operations/melt/:operationId/result']!.GET!(
+      authorizedRequest('/v1/operations/melt/melt-operation-1/result', credential.plaintext),
+    );
+
+    expect(await executed.json()).toEqual({
+      operation: expect.objectContaining({ id: 'melt-operation-1', state: 'pending' }),
+    });
+    expect(recovered.status).toBe(409);
+    expect(recovered.headers.get('cache-control')).toBe('no-store');
+    expect(await recovered.json()).toEqual({
+      error: {
+        code: 'operation_result_not_available',
+        message: 'The Melt Operation result is not available',
+        retryable: true,
+        details: { state: 'pending' },
+      },
+    });
+  });
+
+  test('authenticates and deduplicates idempotent Melt Operation preparation', async () => {
+    const credential = await createCredential();
+    const quote = meltQuoteFixture();
+    const getQuote = mock(async () => quote);
+    const prepare = mock(async () => meltOperationFixture());
+    const routes = createWalletTestRoutes(
+      { quotes: { melt: { get: getQuote } }, ops: { melt: { prepare } } },
+      credential.credentials,
+    );
+    const unauthenticated = await routes['/v1/operations/melt']!.POST!(
+      new Request('http://localhost/v1/operations/melt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mintUrl: 'https://mint.example.com',
+          quoteId: 'melt-quote-1',
+        }),
+      }),
+    );
+    const request = () =>
+      authorizedJsonRequest(
+        '/v1/operations/melt',
+        credential.plaintext,
+        { mintUrl: 'https://mint.example.com', quoteId: 'melt-quote-1' },
+        undefined,
+        { 'Idempotency-Key': 'prepare-melt-1' },
+      );
+
+    const first = await routes['/v1/operations/melt']!.POST!(request());
+    const replay = await routes['/v1/operations/melt']!.POST!(request());
+
+    expect(unauthenticated.status).toBe(401);
+    expect(first.status).toBe(201);
+    expect(replay.status).toBe(201);
+    expect(getQuote).toHaveBeenCalledTimes(1);
+    expect(prepare).toHaveBeenCalledTimes(1);
+  });
+
+  test('requires and exposes the selected on-chain Melt fee option before execution', async () => {
+    const credential = await createCredential();
+    const quote = meltQuoteFixture({
+      method: 'onchain',
+      fee_options: [{ fee_index: 3, fee_reserve: toAmount(4), estimated_blocks: 6 }],
+    });
+    const prepare = mock(async () =>
+      meltOperationFixture({ method: 'onchain', methodData: { feeIndex: 3 } }),
+    );
+    const routes = createWalletTestRoutes(
+      { quotes: { melt: { get: async () => quote } }, ops: { melt: { prepare } } },
+      credential.credentials,
+    );
+
+    const missingFee = await routes['/v1/operations/melt']!.POST!(
+      authorizedJsonRequest('/v1/operations/melt', credential.plaintext, {
+        mintUrl: 'https://mint.example.com',
+        quoteId: 'melt-quote-1',
+      }),
+    );
+    const prepared = await routes['/v1/operations/melt']!.POST!(
+      authorizedJsonRequest('/v1/operations/melt', credential.plaintext, {
+        mintUrl: 'https://mint.example.com',
+        quoteId: 'melt-quote-1',
+        feeIndex: 3,
+      }),
+    );
+
+    expect(missingFee.status).toBe(400);
+    expect(await missingFee.json()).toMatchObject({ error: { code: 'invalid_request' } });
+    expect(await prepared.json()).toMatchObject({ method: 'onchain', feeIndex: 3 });
+    expect(prepare).toHaveBeenCalledWith({ quote, feeIndex: 3 });
+  });
+
+  test('prepares a safe Send Operation without executing it', async () => {
+    const credential = await createCredential();
+    const operation = sendOperationFixture();
+    const prepare = mock(async () => operation);
+    const execute = mock(async () => {
+      throw new Error('execute was not expected');
+    });
+    const routes = createWalletTestRoutes(
+      { ops: { send: { prepare, execute } } },
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/operations/send']!.POST!(
+      authorizedJsonRequest('/v1/operations/send', credential.plaintext, {
+        mintUrl: 'https://mint.example.com/',
+        amount: '25',
+        unit: 'sat',
+        forceSwap: true,
+      }),
+    );
+
+    expect(response.status).toBe(201);
+    expect(response.headers.get('location')).toBeNull();
+    expect(await response.json()).toEqual({
+      id: 'send-operation-1',
+      type: 'send',
+      state: 'prepared',
+      mintUrl: 'https://mint.example.com',
+      unit: 'sat',
+      method: 'default',
+      requestedAmount: '25',
+      inputAmount: '27',
+      fee: '2',
+      needsSwap: true,
+      createdAt: '2026-08-16T00:00:00.000Z',
+      updatedAt: '2026-08-16T00:01:00.000Z',
+    });
+    expect(prepare).toHaveBeenCalledWith({
+      mintUrl: 'https://mint.example.com',
+      amount: '25',
+      unit: 'sat',
+      forceSwap: true,
+    });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  test('prepares an in-band Payment Request as the underlying Send Operation', async () => {
+    const credential = await createCredential();
+    const resolved = {
+      paymentRequest: { encoded: 'creqBinband' },
+      amount: toAmount(25),
+      unit: 'sat',
+      transport: { type: 'inband' as const },
+      allowedMints: ['https://mint.example.com'],
+      payableMints: ['https://mint.example.com'],
+    };
+    const parse = mock(async () => resolved);
+    const preparePaymentRequest = mock(async () => ({
+      request: resolved,
+      sendOperation: sendOperationFixture({ method: 'p2pk' as const }),
+    }));
+    const prepareSend = mock(async () => {
+      throw new Error('ordinary Send preparation was not expected');
+    });
+    const execute = mock(async () => {
+      throw new Error('execution was not expected');
+    });
+    const routes = createWalletTestRoutes(
+      {
+        paymentRequests: { parse, prepare: preparePaymentRequest },
+        ops: { send: { prepare: prepareSend, execute } },
+      },
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/operations/send']!.POST!(
+      authorizedJsonRequest('/v1/operations/send', credential.plaintext, {
+        mintUrl: 'https://mint.example.com/',
+        source: { type: 'payment-request', request: 'creqBinband' },
+      }),
+    );
+
+    expect(response.status).toBe(201);
+    expect(await response.json()).toMatchObject({
+      id: 'send-operation-1',
+      type: 'send',
+      state: 'prepared',
+      method: 'p2pk',
+      requestedAmount: '25',
+    });
+    expect(parse).toHaveBeenCalledWith('creqBinband');
+    expect(preparePaymentRequest).toHaveBeenCalledWith(resolved, {
+      mintUrl: 'https://mint.example.com',
+    });
+    expect(prepareSend).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  test('rejects HTTP and Nostr Payment Request delivery before preparing a Send Operation', async () => {
+    const credential = await createCredential();
+    const parse = mock()
+      .mockResolvedValueOnce({
+        unit: 'sat',
+        transport: { type: 'http', url: 'https://receiver.test/private' },
+        allowedMints: [],
+        payableMints: ['https://mint.example.com'],
+      })
+      .mockResolvedValueOnce({
+        unit: 'sat',
+        transport: { type: 'nostr', target: 'npub1must-not-leak' },
+        allowedMints: [],
+        payableMints: ['https://mint.example.com'],
+      });
+    const prepare = mock(async () => {
+      throw new Error('preparation was not expected');
+    });
+    const routes = createWalletTestRoutes(
+      { paymentRequests: { parse, prepare } },
+      credential.credentials,
+    );
+    const request = () =>
+      authorizedJsonRequest('/v1/operations/send', credential.plaintext, {
+        source: { type: 'payment-request', request: 'creqBtransport' },
+      });
+
+    const http = await routes['/v1/operations/send']!.POST!(request());
+    const nostr = await routes['/v1/operations/send']!.POST!(request());
+
+    for (const [response, transport] of [
+      [http, 'http'],
+      [nostr, 'nostr'],
+    ] as const) {
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        error: {
+          code: 'unsupported_behavior',
+          message: 'Payment Request delivery is unsupported for this transport',
+          retryable: false,
+          details: { transport },
+        },
+      });
+    }
+    expect(prepare).not.toHaveBeenCalled();
+  });
+
+  test('maps Payment Request amount and unit validation to invalid request', async () => {
+    const credential = await createCredential();
+    const resolved = {
+      unit: 'sat',
+      transport: { type: 'inband' as const },
+      allowedMints: [],
+      payableMints: ['https://mint.example.com'],
+    };
+    const parse = mock(async () => resolved);
+    const prepare = mock(async () => {
+      throw new UnitMismatchError('private unit diagnostic');
+    });
+    const routes = createWalletTestRoutes(
+      { paymentRequests: { parse, prepare } },
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/operations/send']!.POST!(
+      authorizedJsonRequest('/v1/operations/send', credential.plaintext, {
+        mintUrl: 'https://mint.example.com',
+        amount: '25',
+        unit: 'usd',
+        source: { type: 'payment-request', request: 'creqBunit-mismatch' },
+      }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body).toMatchObject({ error: { code: 'invalid_request', retryable: false } });
+    expect(JSON.stringify(body)).not.toContain('private unit diagnostic');
+    expect(prepare).toHaveBeenCalledWith(resolved, {
+      mintUrl: 'https://mint.example.com',
+      amount: { amount: '25', unit: 'usd' },
+    });
+  });
+
+  test('rejects a Payment Request unit override without an amount', async () => {
+    const credential = await createCredential();
+    const parse = mock(async () => {
+      throw new Error('parse was not expected');
+    });
+    const routes = createWalletTestRoutes({ paymentRequests: { parse } }, credential.credentials);
+
+    const response = await routes['/v1/operations/send']!.POST!(
+      authorizedJsonRequest('/v1/operations/send', credential.plaintext, {
+        source: { type: 'payment-request', request: 'creqBunit-only' },
+        unit: 'usd',
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: {
+        code: 'invalid_request',
+        message: 'The request does not match the expected schema',
+        retryable: false,
+      },
+    });
+    expect(parse).not.toHaveBeenCalled();
+  });
+
+  test('rejects a blank Send Operation unit as invalid request input', async () => {
+    const credential = await createCredential();
+    const prepare = mock(async () => sendOperationFixture());
+    const routes = createWalletTestRoutes({ ops: { send: { prepare } } }, credential.credentials);
+
+    const response = await routes['/v1/operations/send']!.POST!(
+      authorizedJsonRequest('/v1/operations/send', credential.plaintext, {
+        amount: '25',
+        unit: '   ',
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: {
+        code: 'invalid_request',
+        message: 'The request does not match the expected schema',
+        retryable: false,
+      },
+    });
+    expect(prepare).not.toHaveBeenCalled();
+  });
+
+  test('executes a Send Operation and returns its sensitive encoded result', async () => {
+    const credential = await createCredential();
+    const token = { mint: 'https://mint.example.com', proofs: [] };
+    const operation = sendOperationFixture({ state: 'pending' as const, token });
+    const execute = mock(async () => ({ operation, token }));
+    const encodeToken = mock(() => 'cashuBpGF0gaJhaUgA');
+    const routes = createWalletTestRoutes(
+      { ops: { send: { execute } }, wallet: { encodeToken } },
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/operations/send/:operationId/execute']!.POST!(
+      authorizedPostRequest('/v1/operations/send/send-operation-1/execute', credential.plaintext),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(await response.json()).toEqual({
+      operation: {
+        id: 'send-operation-1',
+        type: 'send',
+        state: 'pending',
+        mintUrl: 'https://mint.example.com',
+        unit: 'sat',
+        method: 'default',
+        requestedAmount: '25',
+        inputAmount: '27',
+        fee: '2',
+        needsSwap: true,
+        createdAt: '2026-08-16T00:00:00.000Z',
+        updatedAt: '2026-08-16T00:01:00.000Z',
+      },
+      result: { token: 'cashuBpGF0gaJhaUgA' },
+    });
+    expect(execute).toHaveBeenCalledWith('send-operation-1');
+    expect(encodeToken).toHaveBeenCalledWith(token);
+  });
+
+  test('recovers an encoded Send result from Coco-owned Operation state', async () => {
+    const credential = await createCredential();
+    const token = { mint: 'https://mint.example.com', proofs: [] };
+    const operation = sendOperationFixture({ state: 'finalized' as const, token });
+    const get = mock(async () => operation);
+    const execute = mock(async () => {
+      throw new Error('execute was not expected');
+    });
+    const encodeToken = mock(() => 'cashuBrecovered');
+    const routes = createWalletTestRoutes(
+      { ops: { send: { get, execute } }, wallet: { encodeToken } },
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/operations/send/:operationId/result']!.GET!(
+      authorizedRequest('/v1/operations/send/send-operation-1/result', credential.plaintext),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(await response.json()).toEqual({ token: 'cashuBrecovered' });
+    expect(get).toHaveBeenCalledWith('send-operation-1');
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  test('returns a conflict while a Send result is not yet available', async () => {
+    const credential = await createCredential();
+    const get = mock(async () => sendOperationFixture({ state: 'executing' as const }));
+    const routes = createWalletTestRoutes({ ops: { send: { get } } }, credential.credentials);
+
+    const response = await routes['/v1/operations/send/:operationId/result']!.GET!(
+      authorizedRequest('/v1/operations/send/send-operation-1/result', credential.plaintext),
+    );
+
+    expect(response.status).toBe(409);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(await response.json()).toEqual({
+      error: {
+        code: 'operation_result_not_available',
+        message: 'The Send Operation result is not available',
+        retryable: true,
+        details: { state: 'executing' },
+      },
+    });
+  });
+
+  test('replays idempotent Send preparation without creating another Operation', async () => {
+    const credential = await createCredential();
+    const prepare = mock(async () => sendOperationFixture());
+    const routes = createWalletTestRoutes({ ops: { send: { prepare } } }, credential.credentials);
+    const request = () =>
+      authorizedJsonRequest(
+        '/v1/operations/send',
+        credential.plaintext,
+        { mintUrl: 'https://mint.example.com', amount: '25', unit: 'sat' },
+        undefined,
+        { 'Idempotency-Key': 'prepare-send-1' },
+      );
+
+    const first = await routes['/v1/operations/send']!.POST!(request());
+    const replay = await routes['/v1/operations/send']!.POST!(request());
+
+    expect(first.status).toBe(201);
+    expect(replay.status).toBe(201);
+    expect(await replay.json()).toMatchObject({ id: 'send-operation-1' });
+    expect(prepare).toHaveBeenCalledTimes(1);
+  });
+
+  test('maps untyped Coco Send failures without exposing their message', async () => {
+    const credential = await createCredential();
+    const prepare = mock(async () => {
+      throw new Error('proof secret must-not-leak');
+    });
+    const routes = createWalletTestRoutes({ ops: { send: { prepare } } }, credential.credentials);
+
+    const response = await routes['/v1/operations/send']!.POST!(
+      authorizedJsonRequest('/v1/operations/send', credential.plaintext, {
+        mintUrl: 'https://mint.example.com',
+        amount: '25',
+        unit: 'sat',
+      }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(body).toEqual({
+      error: {
+        code: 'coco_error',
+        message: 'Coco could not prepare the Send Operation',
+        retryable: false,
+      },
+    });
+    expect(JSON.stringify(body)).not.toContain('must-not-leak');
+  });
+
+  test('prepares a safe Receive Operation without executing or exposing the token', async () => {
+    const credential = await createCredential();
+    const prepare = mock(async () => receiveOperationFixture());
+    const execute = mock(async () => {
+      throw new Error('execute was not expected');
+    });
+    const routes = createWalletTestRoutes(
+      { ops: { receive: { prepare, execute } } },
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/operations/receive']!.POST!(
+      authorizedJsonRequest('/v1/operations/receive', credential.plaintext, {
+        token: 'cashuBmust-not-leak',
+      }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(201);
+    expect(response.headers.get('location')).toBeNull();
+    expect(body).toEqual({
+      id: 'receive-operation-1',
+      type: 'receive',
+      state: 'prepared',
+      mintUrl: 'https://mint.example.com',
+      unit: 'sat',
+      amount: '25',
+      fee: '2',
+      createdAt: '2026-08-16T00:00:00.000Z',
+      updatedAt: '2026-08-16T00:01:00.000Z',
+    });
+    expect(JSON.stringify(body)).not.toContain('must-not-leak');
+    expect(prepare).toHaveBeenCalledWith({ token: 'cashuBmust-not-leak' });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  test('executes a Receive Operation and returns the finalized safe Operation directly', async () => {
+    const credential = await createCredential();
+    const execute = mock(async () => receiveOperationFixture({ state: 'finalized' as const }));
+    const routes = createWalletTestRoutes(
+      { ops: { receive: { execute } } },
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/operations/receive/:operationId/execute']!.POST!(
+      authorizedPostRequest(
+        '/v1/operations/receive/receive-operation-1/execute',
+        credential.plaintext,
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBeNull();
+    expect(await response.json()).toMatchObject({
+      id: 'receive-operation-1',
+      type: 'receive',
+      state: 'finalized',
+      amount: '25',
+      fee: '2',
+    });
+    expect(execute).toHaveBeenCalledWith('receive-operation-1');
+  });
+
+  test('replays idempotent Receive preparation and authenticates before calling Coco', async () => {
+    const credential = await createCredential();
+    const prepare = mock(async () => receiveOperationFixture());
+    const routes = createWalletTestRoutes(
+      { ops: { receive: { prepare } } },
+      credential.credentials,
+    );
+    const request = () =>
+      authorizedJsonRequest(
+        '/v1/operations/receive',
+        credential.plaintext,
+        { token: 'cashuBidempotent' },
+        undefined,
+        { 'Idempotency-Key': 'prepare-receive-1' },
+      );
+
+    const first = await routes['/v1/operations/receive']!.POST!(request());
+    const replay = await routes['/v1/operations/receive']!.POST!(request());
+    const unauthenticated = await routes['/v1/operations/receive']!.POST!(
+      new Request('http://localhost/v1/operations/receive', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: 'cashuBunauthenticated' }),
+      }),
+    );
+
+    expect(first.status).toBe(201);
+    expect(replay.status).toBe(201);
+    expect(prepare).toHaveBeenCalledTimes(1);
+    expect(unauthenticated.status).toBe(401);
+  });
+
+  test('redacts Receive tokens from request logs and untyped Coco failures', async () => {
+    const credential = await createCredential();
+    const debug = mock(() => {});
+    const logger = createTestLogger({ debug });
+    const prepare = mock(async () => {
+      throw new Error('proof secret must-not-leak');
+    });
+    const definitions = createLifecycleTestRouteDefinitions(
+      {
+        ...lifecycleRuntime(() => configuredStatus('running')),
+        getRunningSession: () => ({ manager: { ops: { receive: { prepare } } } }) as never,
+      },
+      '0.0.17',
+      logger,
+    );
+    const routes = buildV1Routes(definitions, credential.credentials, logger);
+
+    const response = await routes['/v1/operations/receive']!.POST!(
+      authorizedJsonRequest('/v1/operations/receive', credential.plaintext, {
+        token: 'cashuBmust-not-leak',
+      }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(body).toEqual({
+      error: {
+        code: 'coco_error',
+        message: 'Coco could not prepare the Receive Operation',
+        retryable: false,
+      },
+    });
+    expect(JSON.stringify(body)).not.toContain('must-not-leak');
+    expect(JSON.stringify(debug.mock.calls)).not.toContain('cashuBmust-not-leak');
+    expect(debug).toHaveBeenCalledWith('request.received', { input: { token: '[REDACTED]' } });
+  });
+
+  test('creates a BOLT11 Mint Quote with the configured default Mint', async () => {
+    const credential = await createCredential();
+    const quote = mintQuoteFixture({
+      blindedSignatures: [{ C_: 'must-not-leak' }],
+    });
+    const create = mock(async () => quote);
+    const routes = createWalletTestRoutes({ quotes: { mint: { create } } }, credential.credentials);
+
+    const response = await routes['/v1/quotes/mint']!.POST!(
+      authorizedJsonRequest('/v1/quotes/mint', credential.plaintext, {
+        method: 'bolt11',
+        amount: '25',
+        unit: 'sat',
+        locked: true,
+      }),
+    );
+
+    expect(response.status).toBe(201);
+    expect(response.headers.get('location')).toBeNull();
+    expect(await response.json()).toEqual({
+      type: 'mint',
+      method: 'bolt11',
+      mintUrl: 'https://mint.example.com',
+      quoteId: 'mint-quote-1',
+      request: 'lnbc250n1quote',
+      unit: 'sat',
+      amount: '25',
+      amountPaid: '0',
+      amountIssued: '0',
+      reusable: false,
+      state: 'UNPAID',
+      expiry: '2026-08-16T00:05:00.000Z',
+      createdAt: '2026-08-16T00:00:00.000Z',
+      updatedAt: '2026-08-16T00:01:00.000Z',
+    });
+    expect(create).toHaveBeenCalledWith({
+      mintUrl: 'https://mint.example.com',
+      method: 'bolt11',
+      amount: '25',
+      unit: 'sat',
+      locked: true,
+    });
+  });
+
+  test('looks up an evolving Mint Quote by its normalized Coco identity', async () => {
+    const credential = await createCredential();
+    const quote = mintQuoteFixture({
+      quoteId: 'mint-quote-lookup',
+      quote: 'mint-quote-lookup',
+      request: 'lnbc250n1lookup',
+      expiry: null,
+      state: 'PAID' as const,
+      amountPaid: toAmount(25),
+    });
+    const get = mock(async () => quote);
+    const routes = createWalletTestRoutes({ quotes: { mint: { get } } }, credential.credentials);
+
+    const response = await routes['/v1/quotes/mint/:quoteId']!.GET!(
+      authorizedRequest(
+        '/v1/quotes/mint/mint-quote-lookup?mintUrl=https%3A%2F%2Fmint.example.com%2F',
+        credential.plaintext,
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      type: 'mint',
+      quoteId: 'mint-quote-lookup',
+      state: 'PAID',
+      amountPaid: '25',
+    });
+    expect(get).toHaveBeenCalledWith({
+      mintUrl: 'https://mint.example.com',
+      quoteId: 'mint-quote-lookup',
+    });
+  });
+
+  test('paginates pending Mint Quotes deterministically after reading them from Coco', async () => {
+    const credential = await createCredential();
+    const quote = (quoteId: string, mintUrl: string, createdAt: number) =>
+      mintQuoteFixture({
+        mintUrl,
+        quoteId,
+        quote: quoteId,
+        request: `lnbc1${quoteId}`,
+        expiry: null,
+        createdAt,
+        updatedAt: createdAt,
+      });
+    const listPending = mock(async () => [
+      quote('old', 'https://mint.example.com', 1_786_838_400_000),
+      quote('new-b', 'https://mint-b.example.com', 1_786_838_600_000),
+      quote('middle', 'https://mint.example.com', 1_786_838_500_000),
+      quote('new-a', 'https://mint-a.example.com', 1_786_838_600_000),
+    ]);
+    const routes = createWalletTestRoutes(
+      { quotes: { mint: { listPending } } },
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/quotes/mint/pending']!.GET!(
+      authorizedRequest(
+        '/v1/quotes/mint/pending?method=bolt11&offset=1&limit=2',
+        credential.plaintext,
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      items: [{ quoteId: 'new-b' }, { quoteId: 'middle' }],
+      offset: 1,
+      limit: 2,
+    });
+    expect(listPending).toHaveBeenCalledWith({ method: 'bolt11' });
+  });
+
+  test('refreshes a Mint Quote without creating or executing an Operation', async () => {
+    const credential = await createCredential();
+    const quote = mintQuoteFixture({
+      quoteId: 'mint-quote-refresh',
+      quote: 'mint-quote-refresh',
+      request: 'lnbc250n1refresh',
+      expiry: null,
+      state: 'PAID' as const,
+      amountPaid: toAmount(25),
+      remoteUpdatedAt: 1_786_838_460,
+    });
+    const refresh = mock(async () => quote);
+    const routes = createWalletTestRoutes(
+      { quotes: { mint: { get: async () => quote, refresh } } },
+      credential.credentials,
+    );
+    const request = (quoteId = 'mint-quote-refresh') =>
+      authorizedPostRequest(
+        `/v1/quotes/mint/${quoteId}/refresh?mintUrl=https%3A%2F%2Fmint.example.com%2F`,
+        credential.plaintext,
+        { 'Idempotency-Key': 'refresh-mint-quote' },
+      );
+
+    const first = await routes['/v1/quotes/mint/:quoteId/refresh']!.POST!(request());
+    const replay = await routes['/v1/quotes/mint/:quoteId/refresh']!.POST!(request());
+    const conflict = await routes['/v1/quotes/mint/:quoteId/refresh']!.POST!(
+      request('different-quote'),
+    );
+
+    expect(first.status).toBe(200);
+    expect(await first.json()).toMatchObject({
+      quoteId: 'mint-quote-refresh',
+      state: 'PAID',
+      amountPaid: '25',
+    });
+    expect(await replay.json()).toMatchObject({ quoteId: 'mint-quote-refresh' });
+    expect(conflict.status).toBe(409);
+    expect(await conflict.json()).toMatchObject({
+      error: { code: 'idempotency_key_conflict' },
+    });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(refresh).toHaveBeenCalledWith({
+      mintUrl: 'https://mint.example.com',
+      quoteId: 'mint-quote-refresh',
+    });
+  });
+
+  test('creates a BOLT11 Melt Quote with the configured default Mint', async () => {
+    const credential = await createCredential();
+    const quote = meltQuoteFixture({
+      payment_preimage: 'must-not-leak',
+      change: [{ C_: 'must-not-leak' }],
+      lastObservedRemoteState: 'UNPAID' as const,
+      lastObservedRemoteStateAt: 1_786_838_460_000,
+    });
+    const create = mock(async () => quote);
+    const routes = createWalletTestRoutes({ quotes: { melt: { create } } }, credential.credentials);
+
+    const response = await routes['/v1/quotes/melt']!.POST!(
+      authorizedJsonRequest('/v1/quotes/melt', credential.plaintext, {
+        method: 'bolt11',
+        invoice: 'lnbc250n1pay',
+        amount: '25',
+        unit: 'sat',
+      }),
+    );
+
+    expect(response.status).toBe(201);
+    expect(response.headers.get('location')).toBeNull();
+    expect(await response.json()).toEqual({
+      type: 'melt',
+      method: 'bolt11',
+      mintUrl: 'https://mint.example.com',
+      quoteId: 'melt-quote-1',
+      request: 'lnbc250n1pay',
+      unit: 'sat',
+      amount: '25',
+      feeReserve: '2',
+      state: 'UNPAID',
+      expiry: '2026-08-16T00:05:00.000Z',
+      createdAt: '2026-08-16T00:00:00.000Z',
+      updatedAt: '2026-08-16T00:01:00.000Z',
+    });
+    expect(create).toHaveBeenCalledWith({
+      mintUrl: 'https://mint.example.com',
+      method: 'bolt11',
+      methodData: { invoice: 'lnbc250n1pay', amountSats: '25' },
+      unit: 'sat',
+    });
+  });
+
+  test('looks up a Melt Quote by its normalized Coco identity', async () => {
+    const credential = await createCredential();
+    const quote = meltQuoteFixture({
+      quoteId: 'melt-quote-lookup',
+      quote: 'melt-quote-lookup',
+      request: 'lnbc250n1lookup',
+      state: 'PENDING' as const,
+    });
+    const get = mock(async () => quote);
+    const routes = createWalletTestRoutes({ quotes: { melt: { get } } }, credential.credentials);
+
+    const response = await routes['/v1/quotes/melt/:quoteId']!.GET!(
+      authorizedRequest(
+        '/v1/quotes/melt/melt-quote-lookup?mintUrl=https%3A%2F%2Fmint.example.com%2F',
+        credential.plaintext,
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      type: 'melt',
+      quoteId: 'melt-quote-lookup',
+      state: 'PENDING',
+    });
+    expect(get).toHaveBeenCalledWith({
+      mintUrl: 'https://mint.example.com',
+      quoteId: 'melt-quote-lookup',
+    });
+  });
+
+  test('paginates pending Melt Quotes after reading them from Coco', async () => {
+    const credential = await createCredential();
+    const quote = (quoteId: string, createdAt: number) =>
+      meltQuoteFixture({
+        quoteId,
+        quote: quoteId,
+        request: `lnbc1${quoteId}`,
+        createdAt,
+        updatedAt: createdAt,
+      });
+    const listPending = mock(async () => [
+      quote('old', 1_786_838_400_000),
+      quote('new', 1_786_838_600_000),
+      quote('middle', 1_786_838_500_000),
+    ]);
+    const routes = createWalletTestRoutes(
+      { quotes: { melt: { listPending } } },
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/quotes/melt/pending']!.GET!(
+      authorizedRequest('/v1/quotes/melt/pending?offset=1&limit=1', credential.plaintext),
+    );
+
+    expect(await response.json()).toMatchObject({
+      items: [{ quoteId: 'middle' }],
+      offset: 1,
+      limit: 1,
+    });
+    expect(listPending).toHaveBeenCalledWith();
+  });
+
+  test('refreshes a Melt Quote through Coco', async () => {
+    const credential = await createCredential();
+    const quote = meltQuoteFixture({
+      quoteId: 'melt-quote-refresh',
+      quote: 'melt-quote-refresh',
+      request: 'lnbc250n1refresh',
+      state: 'PAID' as const,
+      payment_preimage: 'must-not-leak',
+    });
+    const refresh = mock(async () => quote);
+    const routes = createWalletTestRoutes(
+      { quotes: { melt: { get: async () => quote, refresh } } },
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/quotes/melt/:quoteId/refresh']!.POST!(
+      authorizedPostRequest(
+        '/v1/quotes/melt/melt-quote-refresh/refresh?mintUrl=https%3A%2F%2Fmint.example.com',
+        credential.plaintext,
+      ),
+    );
+
+    expect(await response.json()).toMatchObject({
+      quoteId: 'melt-quote-refresh',
+      state: 'PAID',
+    });
+    expect(refresh).toHaveBeenCalledWith({
+      mintUrl: 'https://mint.example.com',
+      quoteId: 'melt-quote-refresh',
+    });
+  });
+
+  test('creates reusable onchain and BOLT12 Mint Quote documents', async () => {
+    const credential = await createCredential();
+    const base = {
+      mintUrl: 'https://mint.example.com',
+      request: 'payment-request',
+      unit: 'sat',
+      expiry: null,
+      reusable: true as const,
+      amountPaid: toAmount(100),
+      amountIssued: toAmount(25),
+      remoteUpdatedAt: 1_786_838_460,
+      createdAt: 1_786_838_400_000,
+      updatedAt: 1_786_838_460_000,
+    };
+    const onchain = {
+      ...base,
+      method: 'onchain' as const,
+      quoteId: 'mint-onchain',
+      quote: 'mint-onchain',
+      quoteData: { pubkey: 'must-not-leak' },
+      pubkey: 'must-not-leak',
+    };
+    const bolt12 = {
+      ...base,
+      method: 'bolt12' as const,
+      quoteId: 'mint-bolt12',
+      quote: 'mint-bolt12',
+      amount: toAmount(50),
+      quoteData: { pubkey: 'must-not-leak', amount: toAmount(50) },
+    };
+    const create = mock(async (input: Record<string, unknown> & { method: string }) =>
+      input.method === 'onchain' ? onchain : bolt12,
+    );
+    const routes = createWalletTestRoutes({ quotes: { mint: { create } } }, credential.credentials);
+
+    const onchainResponse = await routes['/v1/quotes/mint']!.POST!(
+      authorizedJsonRequest('/v1/quotes/mint', credential.plaintext, {
+        mintUrl: 'https://mint.example.com',
+        method: 'onchain',
+        unit: 'sat',
+      }),
+    );
+    const bolt12Response = await routes['/v1/quotes/mint']!.POST!(
+      authorizedJsonRequest('/v1/quotes/mint', credential.plaintext, {
+        mintUrl: 'https://mint.example.com',
+        method: 'bolt12',
+        unit: 'sat',
+        amount: '50',
+        description: 'coffee',
+      }),
+    );
+
+    expect(await onchainResponse.json()).toEqual({
+      type: 'mint',
+      method: 'onchain',
+      mintUrl: 'https://mint.example.com',
+      quoteId: 'mint-onchain',
+      request: 'payment-request',
+      unit: 'sat',
+      amountPaid: '100',
+      amountIssued: '25',
+      reusable: true,
+      expiry: null,
+      createdAt: '2026-08-16T00:00:00.000Z',
+      updatedAt: '2026-08-16T00:01:00.000Z',
+    });
+    expect(await bolt12Response.json()).toMatchObject({
+      method: 'bolt12',
+      amount: '50',
+      reusable: true,
+    });
+    expect(create.mock.calls.map(([input]) => input)).toEqual([
+      { mintUrl: 'https://mint.example.com', method: 'onchain', unit: 'sat' },
+      {
+        mintUrl: 'https://mint.example.com',
+        method: 'bolt12',
+        unit: 'sat',
+        amount: '50',
+        description: 'coffee',
+      },
+    ]);
+  });
+
+  test('creates BOLT12 and onchain Melt Quote documents with safe fee terms', async () => {
+    const credential = await createCredential();
+    const base = {
+      mintUrl: 'https://mint.example.com',
+      request: 'payment-target',
+      amount: toAmount(75),
+      unit: 'sat',
+      expiry: 1_786_838_700,
+      state: 'UNPAID' as const,
+      createdAt: 1_786_838_400_000,
+      updatedAt: 1_786_838_460_000,
+    };
+    const bolt12 = {
+      ...base,
+      method: 'bolt12' as const,
+      quoteId: 'melt-bolt12',
+      quote: 'melt-bolt12',
+      fee_reserve: toAmount(3),
+      payment_preimage: 'must-not-leak',
+    };
+    const onchain = {
+      ...base,
+      method: 'onchain' as const,
+      quoteId: 'melt-onchain',
+      quote: 'melt-onchain',
+      fee_options: [{ fee_index: 4, fee_reserve: toAmount(8), estimated_blocks: 2 }],
+      outpoint: 'must-not-leak',
+      change: [{ C_: 'must-not-leak' }],
+    };
+    const create = mock(async (input: Record<string, unknown> & { method: string }) =>
+      input.method === 'bolt12' ? bolt12 : onchain,
+    );
+    const routes = createWalletTestRoutes({ quotes: { melt: { create } } }, credential.credentials);
+
+    const bolt12Response = await routes['/v1/quotes/melt']!.POST!(
+      authorizedJsonRequest('/v1/quotes/melt', credential.plaintext, {
+        mintUrl: 'https://mint.example.com',
+        method: 'bolt12',
+        offer: 'lno1offer',
+        amount: '75',
+        unit: 'sat',
+      }),
+    );
+    const onchainResponse = await routes['/v1/quotes/melt']!.POST!(
+      authorizedJsonRequest('/v1/quotes/melt', credential.plaintext, {
+        mintUrl: 'https://mint.example.com',
+        method: 'onchain',
+        address: 'bc1qaddress',
+        amount: '75',
+        unit: 'sat',
+      }),
+    );
+
+    expect(await bolt12Response.json()).toMatchObject({
+      method: 'bolt12',
+      feeReserve: '3',
+    });
+    expect(await onchainResponse.json()).toEqual({
+      type: 'melt',
+      method: 'onchain',
+      mintUrl: 'https://mint.example.com',
+      quoteId: 'melt-onchain',
+      request: 'payment-target',
+      unit: 'sat',
+      amount: '75',
+      feeOptions: [{ feeIndex: 4, feeReserve: '8', estimatedBlocks: 2 }],
+      state: 'UNPAID',
+      expiry: '2026-08-16T00:05:00.000Z',
+      createdAt: '2026-08-16T00:00:00.000Z',
+      updatedAt: '2026-08-16T00:01:00.000Z',
+    });
+    expect(create.mock.calls.map(([input]) => input)).toEqual([
+      {
+        mintUrl: 'https://mint.example.com',
+        method: 'bolt12',
+        methodData: { offer: 'lno1offer', amountSats: '75' },
+        unit: 'sat',
+      },
+      {
+        mintUrl: 'https://mint.example.com',
+        method: 'onchain',
+        methodData: { address: 'bc1qaddress', amountSats: '75' },
+        unit: 'sat',
+      },
+    ]);
+  });
+
+  test('returns a typed unsupported error for unavailable Quote methods', async () => {
+    const credential = await createCredential();
+    const create = mock(async () => {
+      throw new Error('Coco should not be called');
+    });
+    const routes = createWalletTestRoutes(
+      { quotes: { mint: { create }, melt: { create } } },
+      credential.credentials,
+    );
+
+    const mintResponse = await routes['/v1/quotes/mint']!.POST!(
+      authorizedJsonRequest('/v1/quotes/mint', credential.plaintext, {
+        mintUrl: 'https://mint.example.com',
+        method: 'custom',
+        amount: '25',
+        unit: 'sat',
+      }),
+    );
+    const meltResponse = await routes['/v1/quotes/melt']!.POST!(
+      authorizedJsonRequest('/v1/quotes/melt', credential.plaintext, {
+        mintUrl: 'https://mint.example.com',
+        method: 'custom',
+        invoice: 'lnbc250n1pay',
+        amount: '25',
+        unit: 'sat',
+      }),
+    );
+
+    expect(mintResponse.status).toBe(409);
+    expect(await mintResponse.json()).toMatchObject({
+      error: {
+        code: 'unsupported_behavior',
+        retryable: false,
+        details: { type: 'mint', method: 'custom' },
+      },
+    });
+    expect(meltResponse.status).toBe(409);
+    expect(await meltResponse.json()).toMatchObject({
+      error: {
+        code: 'unsupported_behavior',
+        retryable: false,
+        details: { type: 'melt', method: 'custom' },
+      },
+    });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  test('returns not found before refreshing an absent Quote', async () => {
+    const credential = await createCredential();
+    const get = mock(async () => null);
+    const refresh = mock(async () => {
+      throw new Error('refresh should not run');
+    });
+    const routes = createWalletTestRoutes(
+      { quotes: { mint: { get, refresh } } },
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/quotes/mint/:quoteId/refresh']!.POST!(
+      authorizedPostRequest(
+        '/v1/quotes/mint/missing/refresh?mintUrl=https%3A%2F%2Fmint.example.com',
+        credential.plaintext,
+      ),
+    );
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toMatchObject({ error: { code: 'not_found' } });
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  test('rejects malformed Quote identities and pagination before calling Coco', async () => {
+    const credential = await createCredential();
+    const get = mock(async () => null);
+    const listPending = mock(async () => []);
+    const routes = createWalletTestRoutes(
+      { quotes: { mint: { get, listPending } } },
+      credential.credentials,
+    );
+
+    const missingMintUrl = await routes['/v1/quotes/mint/:quoteId']!.GET!(
+      authorizedRequest('/v1/quotes/mint/quote-1', credential.plaintext),
+    );
+    const invalidQuoteId = await routes['/v1/quotes/mint/:quoteId']!.GET!(
+      authorizedRequest(
+        '/v1/quotes/mint/quote%2F1?mintUrl=https%3A%2F%2Fmint.example.com',
+        credential.plaintext,
+      ),
+    );
+    const invalidPage = await routes['/v1/quotes/mint/pending']!.GET!(
+      authorizedRequest('/v1/quotes/mint/pending?offset=-1&limit=101', credential.plaintext),
+    );
+
+    expect([missingMintUrl.status, invalidQuoteId.status, invalidPage.status]).toEqual([
+      400, 400, 400,
+    ]);
+    expect(get).not.toHaveBeenCalled();
+    expect(listPending).not.toHaveBeenCalled();
+  });
+
+  test('returns not found for an absent singular Quote', async () => {
+    const credential = await createCredential();
+    const get = mock(async () => null);
+    const routes = createWalletTestRoutes({ quotes: { melt: { get } } }, credential.credentials);
+
+    const response = await routes['/v1/quotes/melt/:quoteId']!.GET!(
+      authorizedRequest(
+        '/v1/quotes/melt/missing?mintUrl=https%3A%2F%2Fmint.example.com',
+        credential.plaintext,
+      ),
+    );
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toMatchObject({ error: { code: 'not_found' } });
+  });
+
+  test('maps Coco Quote failures without exposing their diagnostic text', async () => {
+    const credential = await createCredential();
+    const listPending = mock(async () => {
+      throw new Error('private mint diagnostic');
+    });
+    const routes = createWalletTestRoutes(
+      { quotes: { melt: { listPending } } },
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/quotes/melt/pending']!.GET!(
+      authorizedRequest('/v1/quotes/melt/pending', credential.plaintext),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(body).toMatchObject({ error: { code: 'coco_error', retryable: false } });
+    expect(JSON.stringify(body)).not.toContain('private mint diagnostic');
+  });
+
+  test('registers a normalized Known Mint without granting trust', async () => {
+    const credential = await createCredential();
+    const mint = {
+      mintUrl: 'https://mint.example.com',
+      name: 'Example Mint',
+      mintInfo: { name: 'Example Mint' },
+      trusted: false,
+      createdAt: 1_786_838_400,
+      updatedAt: 1_786_838_460,
+    };
+    const addMint = mock(async (mintUrl: string, options?: { trusted?: boolean }) => ({
+      mint,
+      keysets: [],
+      created: true,
+    }));
+    const runtime = {
+      ...lifecycleRuntime(() => configuredStatus('running')),
+      getRunningSession: () => ({
+        manager: { mint: { addMint, getAllMints: async () => [mint] } },
+      }),
+    } as unknown as V1Runtime;
+    const routes = buildV1Routes(
+      createLifecycleTestRouteDefinitions(runtime, '0.0.17'),
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/mints']!.POST!(
+      authorizedJsonRequest('/v1/mints', credential.plaintext, {
+        mintUrl: 'https://mint.example.com/',
+      }),
+    );
+
+    expect(response.status).toBe(201);
+    expect(response.headers.get('location')).toBeNull();
+    expect(await response.json()).toEqual({
+      mintUrl: 'https://mint.example.com',
+      name: 'Example Mint',
+      trusted: false,
+      createdAt: '2026-08-16T00:00:00.000Z',
+      updatedAt: '2026-08-16T00:01:00.000Z',
+    });
+    expect(addMint).toHaveBeenCalledWith('https://mint.example.com');
+  });
+
+  test('lists Known Mints and preserves trust on duplicate registration', async () => {
+    const credential = await createCredential();
+    const knownMint = {
+      mintUrl: 'https://mint.example.com/',
+      name: 'Example Mint',
+      mintInfo: { name: 'Example Mint' },
+      trusted: true,
+      createdAt: 1_786_838_400,
+      updatedAt: 1_786_838_460,
+    };
+    const getAllMints = mock(async () => [knownMint]);
+    const getAllTrustedMints = mock(async () => [knownMint]);
+    const addMint = mock(async () => ({ mint: knownMint, keysets: [], created: false }));
+    const runtime = {
+      ...lifecycleRuntime(() => configuredStatus('running')),
+      getRunningSession: () => ({
+        manager: { mint: { addMint, getAllMints, getAllTrustedMints } },
+      }),
+    } as unknown as V1Runtime;
+    const routes = buildV1Routes(
+      createLifecycleTestRouteDefinitions(runtime, '0.0.17'),
+      credential.credentials,
+    );
+
+    const listed = await routes['/v1/mints']!.GET!(
+      authorizedRequest('/v1/mints?trustedOnly=true', credential.plaintext),
+    );
+    const duplicate = await routes['/v1/mints']!.POST!(
+      authorizedJsonRequest('/v1/mints', credential.plaintext, {
+        mintUrl: 'https://mint.example.com/',
+      }),
+    );
+
+    expect(await listed.json()).toEqual({
+      items: [
+        {
+          mintUrl: 'https://mint.example.com',
+          name: 'Example Mint',
+          trusted: true,
+          createdAt: '2026-08-16T00:00:00.000Z',
+          updatedAt: '2026-08-16T00:01:00.000Z',
+        },
+      ],
+    });
+    expect(getAllTrustedMints).toHaveBeenCalledTimes(1);
+    expect(duplicate.status).toBe(200);
+    expect(await duplicate.json()).toMatchObject({
+      mintUrl: 'https://mint.example.com',
+      trusted: true,
+    });
+    expect(addMint).toHaveBeenCalledWith('https://mint.example.com');
+  });
+
+  test('uses Coco registration results for concurrent creation status', async () => {
+    const credential = await createCredential();
+    const mint = {
+      mintUrl: 'https://mint.example.com',
+      name: 'Example Mint',
+      mintInfo: { name: 'Example Mint' },
+      trusted: false,
+      createdAt: 1_786_838_400,
+      updatedAt: 1_786_838_460,
+    };
+    let registrations = 0;
+    const addMint = mock(async () => ({
+      mint,
+      keysets: [],
+      created: registrations++ === 0,
+    }));
+    const runtime = {
+      ...lifecycleRuntime(() => configuredStatus('running')),
+      getRunningSession: () => ({ manager: { mint: { addMint } } }),
+    } as unknown as V1Runtime;
+    const routes = buildV1Routes(
+      createLifecycleTestRouteDefinitions(runtime, '0.0.17'),
+      credential.credentials,
+    );
+    const register = () =>
+      routes['/v1/mints']!.POST!(
+        authorizedJsonRequest('/v1/mints', credential.plaintext, {
+          mintUrl: mint.mintUrl,
+        }),
+      );
+
+    const responses = await Promise.all([register(), register()]);
+
+    expect(responses.map((response) => response.status).sort()).toEqual([200, 201]);
+    expect(addMint).toHaveBeenCalledTimes(2);
+  });
+
+  test('changes trust only through explicit authenticated commands', async () => {
+    const credential = await createCredential();
+    const mint = {
+      mintUrl: 'https://mint.example.com',
+      name: 'Example Mint',
+      mintInfo: { name: 'Example Mint' },
+      trusted: false,
+      createdAt: 1_786_838_400,
+      updatedAt: 1_786_838_460,
+    };
+    const getAllMints = mock(async () => [mint]);
+    const trustMint = mock(async () => {
+      mint.trusted = true;
+    });
+    const untrustMint = mock(async () => {
+      mint.trusted = false;
+    });
+    const runtime = {
+      ...lifecycleRuntime(() => configuredStatus('running')),
+      getRunningSession: () => ({
+        manager: { mint: { getAllMints, trustMint, untrustMint } },
+      }),
+    } as unknown as V1Runtime;
+    const routes = buildV1Routes(
+      createLifecycleTestRouteDefinitions(runtime, '0.0.17'),
+      credential.credentials,
+    );
+
+    const unauthenticated = await routes['/v1/mints/trust']!.POST!(
+      new Request('http://localhost/v1/mints/trust', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mintUrl: mint.mintUrl }),
+      }),
+    );
+    const trusted = await routes['/v1/mints/trust']!.POST!(
+      authorizedJsonRequest('/v1/mints/trust', credential.plaintext, {
+        mintUrl: 'https://mint.example.com/',
+      }),
+    );
+    const untrusted = await routes['/v1/mints/untrust']!.POST!(
+      authorizedJsonRequest('/v1/mints/untrust', credential.plaintext, {
+        mintUrl: mint.mintUrl,
+      }),
+    );
+
+    expect(unauthenticated.status).toBe(401);
+    expect(trustMint).toHaveBeenCalledWith('https://mint.example.com');
+    expect(await trusted.json()).toMatchObject({ trusted: true });
+    expect(untrustMint).toHaveBeenCalledWith('https://mint.example.com');
+    expect(await untrusted.json()).toMatchObject({ trusted: false });
+  });
+
+  test('does not synthesize Known Mint state when the post-trust Coco read is missing', async () => {
+    const credential = await createCredential();
+    const mint = {
+      mintUrl: 'https://mint.example.com',
+      name: 'Example Mint',
+      mintInfo: {},
+      trusted: false,
+      createdAt: 1_786_838_400,
+      updatedAt: 1_786_838_460,
+    };
+    let reads = 0;
+    const getAllMints = mock(async () => (reads++ === 0 ? [mint] : []));
+    const trustMint = mock(async () => undefined);
+    const runtime = {
+      ...lifecycleRuntime(() => configuredStatus('running')),
+      getRunningSession: () => ({ manager: { mint: { getAllMints, trustMint } } }),
+    } as unknown as V1Runtime;
+    const routes = buildV1Routes(
+      createLifecycleTestRouteDefinitions(runtime, '0.0.17'),
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/mints/trust']!.POST!(
+      authorizedJsonRequest('/v1/mints/trust', credential.plaintext, {
+        mintUrl: mint.mintUrl,
+      }),
+    );
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toMatchObject({ error: { code: 'coco_error' } });
+  });
+
+  test('returns refreshed Mint information and safely maps refresh failures', async () => {
+    const credential = await createCredential();
+    const getMintInfo = mock(async () => ({
+      name: 'Example Mint',
+      description: 'Fresh metadata',
+      nuts: { '4': { disabled: false, methods: [] } },
+    }));
+    const runtime = {
+      ...lifecycleRuntime(() => configuredStatus('running')),
+      getRunningSession: () => ({
+        manager: {
+          mint: {
+            getAllMints: async () => [
+              {
+                mintUrl: 'https://mint.example.com',
+                name: 'Example Mint',
+                trusted: false,
+                createdAt: 1_786_838_400,
+                updatedAt: 1_786_838_460,
+              },
+            ],
+            getMintInfo,
+          },
+        },
+      }),
+    } as unknown as V1Runtime;
+    const routes = buildV1Routes(
+      createLifecycleTestRouteDefinitions(runtime, '0.0.17'),
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/mints/info']!.GET!(
+      authorizedRequest(
+        '/v1/mints/info?mintUrl=https%3A%2F%2Fmint.example.com%2F',
+        credential.plaintext,
+      ),
+    );
+
+    expect(await response.json()).toEqual({
+      mintUrl: 'https://mint.example.com',
+      info: {
+        name: 'Example Mint',
+        description: 'Fresh metadata',
+        nuts: { '4': { disabled: false, methods: [] } },
+      },
+    });
+    expect(getMintInfo).toHaveBeenCalledWith('https://mint.example.com');
+
+    getMintInfo.mockImplementation(async () => {
+      throw new Error('https://mint.example.com/private?token=secret');
+    });
+    const failed = await routes['/v1/mints/info']!.GET!(
+      authorizedRequest(
+        '/v1/mints/info?mintUrl=https%3A%2F%2Fmint.example.com',
+        credential.plaintext,
+      ),
+    );
+    const failureDocument = await failed.json();
+    expect(failed.status).toBe(500);
+    expect(failureDocument).toMatchObject({
+      error: { code: 'coco_error', retryable: false },
+    });
+    expect(JSON.stringify(failureDocument)).not.toContain('token=secret');
+  });
+
+  test('lists lossless payment-method capabilities for a Known Mint', async () => {
+    const credential = await createCredential();
+    const listPaymentMethodCapabilities = mock(async () => [
+      {
+        operation: 'mint' as const,
+        nut: 4 as const,
+        method: 'bolt11',
+        unit: 'sat',
+        minAmount: toAmount(9_007_199_254_740_993n),
+        maxAmount: null,
+        options: { reusable: true },
+      },
+    ]);
+    const runtime = {
+      ...lifecycleRuntime(() => configuredStatus('running')),
+      getRunningSession: () => ({
+        manager: {
+          mint: {
+            getAllMints: async () => [
+              {
+                mintUrl: 'https://mint.example.com',
+                name: 'Example Mint',
+                trusted: false,
+                createdAt: 1_786_838_400,
+                updatedAt: 1_786_838_460,
+              },
+            ],
+            listPaymentMethodCapabilities,
+          },
+        },
+      }),
+    } as unknown as V1Runtime;
+    const routes = buildV1Routes(
+      createLifecycleTestRouteDefinitions(runtime, '0.0.17'),
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/mints/payment-method-capabilities']!.GET!(
+      authorizedRequest(
+        '/v1/mints/payment-method-capabilities?mintUrl=https%3A%2F%2Fmint.example.com%2F',
+        credential.plaintext,
+      ),
+    );
+
+    expect(await response.json()).toEqual({
+      items: [
+        {
+          operation: 'mint',
+          nut: 4,
+          method: 'bolt11',
+          unit: 'sat',
+          minAmount: '9007199254740993',
+          maxAmount: null,
+          options: { reusable: true },
+        },
+      ],
+    });
+    expect(listPaymentMethodCapabilities).toHaveBeenCalledWith({
+      mintUrl: 'https://mint.example.com',
+    });
+  });
+
+  test('rejects invalid Mint requests and unknown trust targets before mutation', async () => {
+    const credential = await createCredential();
+    const addMint = mock(async () => {
+      throw new Error('must not register invalid input');
+    });
+    const trustMint = mock(async () => {
+      throw new Error('must not trust unknown input');
+    });
+    const runtime = {
+      ...lifecycleRuntime(() => configuredStatus('running')),
+      getRunningSession: () => ({
+        manager: {
+          mint: {
+            addMint,
+            getAllMints: async () => [],
+            getAllTrustedMints: async () => [],
+            getMintInfo: async () => ({}),
+            listPaymentMethodCapabilities: async () => [],
+            trustMint,
+          },
+        },
+      }),
+    } as unknown as V1Runtime;
+    const routes = buildV1Routes(
+      createLifecycleTestRouteDefinitions(runtime, '0.0.17'),
+      credential.credentials,
+    );
+
+    const invalidRequests = [
+      routes['/v1/mints']!.POST!(
+        authorizedJsonRequest('/v1/mints', credential.plaintext, { mintUrl: 'ftp://mint.test' }),
+      ),
+      routes['/v1/mints']!.GET!(
+        authorizedRequest('/v1/mints?trustedOnly=yes', credential.plaintext),
+      ),
+      routes['/v1/mints/info']!.GET!(
+        authorizedRequest(
+          '/v1/mints/info?mintUrl=https%3A%2F%2Fmint.test&extra=1',
+          credential.plaintext,
+        ),
+      ),
+      routes['/v1/mints/payment-method-capabilities']!.GET!(
+        authorizedRequest(
+          '/v1/mints/payment-method-capabilities?mintUrl=https%3A%2F%2Fmint.test&operation=mint',
+          credential.plaintext,
+        ),
+      ),
+    ];
+
+    for (const pending of invalidRequests) {
+      const response = await pending;
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({
+        error: { code: 'invalid_request', retryable: false },
+      });
+    }
+
+    const unknown = await routes['/v1/mints/trust']!.POST!(
+      authorizedJsonRequest('/v1/mints/trust', credential.plaintext, {
+        mintUrl: 'https://unknown.example.com',
+      }),
+    );
+    expect(unknown.status).toBe(404);
+    expect(await unknown.json()).toMatchObject({ error: { code: 'not_found' } });
+    expect(addMint).not.toHaveBeenCalled();
+    expect(trustMint).not.toHaveBeenCalled();
+  });
+
+  test('returns filtered balances as lossless flat v1 resources', async () => {
+    const credential = await createCredential();
+    const byMintAndUnit = mock(async () => ({
+      'https://mint.example.com': {
+        sat: {
+          spendable: toAmount(9_007_199_254_740_993n),
+          reserved: toAmount(7),
+          total: toAmount(9_007_199_254_741_000n),
+          unit: 'sat',
+        },
+        usd: {
+          spendable: toAmount(2),
+          reserved: toAmount(1),
+          total: toAmount(3),
+          unit: 'usd',
+        },
+      },
+    }));
+    const runtime = {
+      ...lifecycleRuntime(() => configuredStatus('running')),
+      getRunningSession: () => ({
+        manager: { wallet: { balances: { byMintAndUnit } } },
+      }),
+    } as unknown as V1Runtime;
+    const routes = buildV1Routes(
+      createLifecycleTestRouteDefinitions(runtime, '0.0.17'),
+      credential.credentials,
+    );
+
+    const unauthenticated = await routes['/v1/balances']!.GET!(
+      new Request('http://localhost/v1/balances'),
+    );
+    expect(unauthenticated.status).toBe(401);
+    expect(await unauthenticated.json()).toMatchObject({
+      error: { code: 'unauthenticated', retryable: false },
+    });
+    expect(byMintAndUnit).not.toHaveBeenCalled();
+
+    const response = await routes['/v1/balances']!.GET!(
+      authorizedRequest(
+        '/v1/balances?mintUrl=https%3A%2F%2Fmint.example.com&mintUrl=https%3A%2F%2Fmint.other&unit=sat&unit=usd&trustedOnly=true',
+        credential.plaintext,
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      items: [
+        {
+          mintUrl: 'https://mint.example.com',
+          unit: 'sat',
+          spendable: '9007199254740993',
+          reserved: '7',
+          total: '9007199254741000',
+        },
+        {
+          mintUrl: 'https://mint.example.com',
+          unit: 'usd',
+          spendable: '2',
+          reserved: '1',
+          total: '3',
+        },
+      ],
+    });
+    expect(byMintAndUnit).toHaveBeenCalledWith({
+      mintUrls: ['https://mint.example.com', 'https://mint.other'],
+      units: ['sat', 'usd'],
+      trustedOnly: true,
+    });
+  });
+
+  test('returns a safe v1 error when Coco cannot read balances', async () => {
+    const credential = await createCredential();
+    const unsafeDiagnostic = 'postgres://owner:secret@wallet-db';
+    const runtime = {
+      ...lifecycleRuntime(() => configuredStatus('running')),
+      getRunningSession: () => ({
+        manager: {
+          wallet: {
+            balances: {
+              byMintAndUnit: async () => {
+                throw new Error(unsafeDiagnostic);
+              },
+            },
+          },
+        },
+      }),
+    } as unknown as V1Runtime;
+    const routes = buildV1Routes(
+      createLifecycleTestRouteDefinitions(runtime, '0.0.17'),
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/balances']!.GET!(
+      authorizedRequest('/v1/balances', credential.plaintext),
+    );
+    const document = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(document).toEqual({
+      error: {
+        code: 'coco_error',
+        message: 'Coco could not return Wallet balances',
+        retryable: false,
+      },
+    });
+    expect(JSON.stringify(document)).not.toContain(unsafeDiagnostic);
+  });
+
+  test('rejects invalid balance filters before calling Coco', async () => {
+    const credential = await createCredential();
+    const byMintAndUnit = mock(async () => ({}));
+    const runtime = {
+      ...lifecycleRuntime(() => configuredStatus('running')),
+      getRunningSession: () => ({
+        manager: { wallet: { balances: { byMintAndUnit } } },
+      }),
+    } as unknown as V1Runtime;
+    const routes = buildV1Routes(
+      createLifecycleTestRouteDefinitions(runtime, '0.0.17'),
+      credential.credentials,
+    );
+
+    for (const query of [
+      'trustedOnly=yes',
+      'trustedOnly=true&trustedOnly=false',
+      'mintUrl=not-a-url',
+      'mintUrl=ftp%3A%2F%2Fmint.example.com',
+      'unit=',
+      'unexpected=sat',
+    ]) {
+      const response = await routes['/v1/balances']!.GET!(
+        authorizedRequest(`/v1/balances?${query}`, credential.plaintext),
+      );
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({
+        error: { code: 'invalid_request', retryable: false },
+      });
+    }
+    expect(byMintAndUnit).not.toHaveBeenCalled();
+  });
+
+  test('maps every inactive Coco Session state to its shared v1 error', async () => {
+    const credential = await createCredential();
+    const cases: Array<{
+      status: CocodStatus;
+      httpStatus: number;
+      code: string;
+      retryable: boolean;
+      retryAfter?: string;
+    }> = [
+      {
+        status: unconfiguredStatus(),
+        httpStatus: 409,
+        code: 'wallet_not_configured',
+        retryable: false,
+      },
+      {
+        status: configuredStatus('starting'),
+        httpStatus: 503,
+        code: 'session_transition_in_progress',
+        retryable: true,
+        retryAfter: '1',
+      },
+      {
+        status: configuredStatus('stopping'),
+        httpStatus: 503,
+        code: 'session_transition_in_progress',
+        retryable: true,
+        retryAfter: '1',
+      },
+      {
+        status: configuredStatus('failed'),
+        httpStatus: 503,
+        code: 'session_restart_required',
+        retryable: false,
+      },
+      {
+        status: {
+          ...configuredStatus('stopped'),
+          seedAccess: { state: 'locked', requiresPassphrase: true },
+        },
+        httpStatus: 423,
+        code: 'wallet_locked',
+        retryable: false,
+      },
+      {
+        status: configuredStatus('stopped'),
+        httpStatus: 503,
+        code: 'session_stopped',
+        retryable: true,
+      },
+    ];
+
+    for (const testCase of cases) {
+      const runtime = lifecycleRuntime(() => testCase.status);
+      const routes = buildV1Routes(
+        createLifecycleTestRouteDefinitions(runtime, '0.0.17'),
+        credential.credentials,
+      );
+
+      const response = await routes['/v1/balances']!.GET!(
+        authorizedRequest('/v1/balances', credential.plaintext),
+      );
+
+      expect(response.status).toBe(testCase.httpStatus);
+      expect(response.headers.get('retry-after')).toBe(testCase.retryAfter ?? null);
+      expect(await response.json()).toMatchObject({
+        error: { code: testCase.code, retryable: testCase.retryable },
+      });
+    }
   });
 
   test('authenticates and accepts Cocod Process shutdown', async () => {
@@ -1018,16 +3776,147 @@ describe('v1 HTTP route interface', () => {
   });
 });
 
-function statusRuntime(status: CocodStatus): V1LifecycleRuntime {
+function statusRuntime(status: CocodStatus): V1Runtime {
   return lifecycleRuntime(() => status);
+}
+
+function mintQuoteFixture(overrides: Record<string, unknown> = {}) {
+  return {
+    mintUrl: 'https://mint.example.com',
+    method: 'bolt11' as const,
+    quoteId: 'mint-quote-1',
+    quote: 'mint-quote-1',
+    request: 'lnbc250n1quote',
+    amount: toAmount(25),
+    unit: 'sat',
+    expiry: 1_786_838_700,
+    reusable: false as const,
+    state: 'UNPAID' as const,
+    amountPaid: toAmount(0),
+    amountIssued: toAmount(0),
+    remoteUpdatedAt: null,
+    quoteData: { amount: toAmount(25) },
+    createdAt: 1_786_838_400_000,
+    updatedAt: 1_786_838_460_000,
+    ...overrides,
+  };
+}
+
+function meltQuoteFixture(overrides: Record<string, unknown> = {}) {
+  return {
+    mintUrl: 'https://mint.example.com',
+    method: 'bolt11' as const,
+    quoteId: 'melt-quote-1',
+    quote: 'melt-quote-1',
+    request: 'lnbc250n1pay',
+    amount: toAmount(25),
+    unit: 'sat',
+    fee_reserve: toAmount(2),
+    expiry: 1_786_838_700,
+    state: 'UNPAID' as const,
+    createdAt: 1_786_838_400_000,
+    updatedAt: 1_786_838_460_000,
+    ...overrides,
+  };
+}
+
+function mintOperationFixture(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'mint-operation-1',
+    state: 'pending' as const,
+    mintUrl: 'https://mint.example.com',
+    amount: toAmount(25),
+    unit: 'sat',
+    method: 'bolt11' as const,
+    methodData: { ownedPublicKey: 'must-not-leak' },
+    quoteId: 'mint-quote-1',
+    request: 'lnbc250n1must-not-leak',
+    expiry: 1_786_838_700,
+    createdAt: 1_786_838_400_000,
+    updatedAt: 1_786_838_460_000,
+    outputData: { keep: [{ secret: 'must-not-leak' }], send: [] },
+    error: 'must-not-leak',
+    ...overrides,
+  };
+}
+
+function meltOperationFixture(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'melt-operation-1',
+    state: 'prepared' as const,
+    mintUrl: 'https://mint.example.com',
+    amount: toAmount(25),
+    unit: 'sat',
+    method: 'bolt11' as const,
+    methodData: { invoice: 'lnbc250n1must-not-leak' },
+    quoteId: 'melt-quote-1',
+    createdAt: 1_786_838_400_000,
+    updatedAt: 1_786_838_460_000,
+    needsSwap: true,
+    fee_reserve: toAmount(2),
+    swap_fee: toAmount(1),
+    inputAmount: toAmount(28),
+    inputProofSecrets: ['must-not-leak'],
+    changeOutputData: { keep: [{ secret: 'must-not-leak' }], send: [] },
+    swapOutputData: { keep: [{ secret: 'must-not-leak' }], send: [] },
+    error: 'must-not-leak',
+    ...overrides,
+  };
+}
+
+function sendOperationFixture(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'send-operation-1',
+    state: 'prepared' as const,
+    mintUrl: 'https://mint.example.com',
+    amount: toAmount(25),
+    unit: 'sat',
+    method: 'default' as const,
+    methodData: { mustNotLeak: 'method-data' },
+    createdAt: 1_786_838_400_000,
+    updatedAt: 1_786_838_460_000,
+    needsSwap: true,
+    fee: toAmount(2),
+    inputAmount: toAmount(27),
+    inputProofSecrets: ['must-not-leak'],
+    outputData: { mustNotLeak: 'output-data' },
+    ...overrides,
+  };
+}
+
+function receiveOperationFixture(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'receive-operation-1',
+    state: 'prepared' as const,
+    mintUrl: 'https://mint.example.com',
+    amount: toAmount(25),
+    unit: 'sat',
+    inputProofs: [{ amount: 25, id: 'keyset', secret: 'must-not-leak', C: 'point' }],
+    createdAt: 1_786_838_400_000,
+    updatedAt: 1_786_838_460_000,
+    fee: toAmount(2),
+    outputData: { mustNotLeak: 'output-data' },
+    source: { type: 'payment-request', memo: 'private-source-metadata' },
+    error: 'private-error',
+    ...overrides,
+  };
+}
+
+function createWalletTestRoutes(manager: unknown, credential: AdministrativeCredential) {
+  const runtime = {
+    ...lifecycleRuntime(() => configuredStatus('running')),
+    getRunningSession: () => ({ manager, mintUrl: 'https://mint.example.com' }),
+  } as unknown as V1Runtime;
+  return buildV1Routes(createLifecycleTestRouteDefinitions(runtime, '0.0.17'), credential);
 }
 
 function lifecycleRuntime(
   getStatus: () => CocodStatus,
-  overrides: Partial<V1LifecycleRuntime> = {},
-): V1LifecycleRuntime {
+  overrides: Partial<V1Runtime> = {},
+): V1Runtime {
   return {
     getStatus,
+    getRunningSession: () => null,
     initializeWallet: async () => {
       throw new Error('initializeWallet was not expected');
     },
@@ -1103,6 +3992,17 @@ function authorizedRequest(path: string, credential: string): Request {
   });
 }
 
+function authorizedPostRequest(
+  path: string,
+  credential: string,
+  headers?: Record<string, string>,
+): Request {
+  return new Request(`http://localhost${path}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${credential}`, ...headers },
+  });
+}
+
 function authorizedJsonRequest(
   path: string,
   credential: string,
@@ -1125,3 +4025,87 @@ function authorizedJsonRequest(
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
+
+for (const type of ['mint', 'melt'] as const) {
+  test(`${type} Quote creation returns a stable client error for an unavailable Mint`, async () => {
+    const credential = await createCredential();
+    const create = mock(async () => {
+      throw new UnknownMintError('https://mint.example.com');
+    });
+    const routes = createWalletTestRoutes(
+      { quotes: { [type]: { create } } },
+      credential.credentials,
+    );
+    const response = await routes[`/v1/quotes/${type}`]!.POST!(
+      new Request(`http://localhost/v1/quotes/${type}`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${credential.plaintext}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(
+          type === 'mint'
+            ? { method: 'bolt11', amount: '21', unit: 'sat' }
+            : { method: 'bolt11', invoice: 'lnbc21' },
+        ),
+      }),
+    );
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      error: { code: 'mint_unavailable', retryable: false },
+    });
+  });
+  for (const unit of ['', '   ']) {
+    test(`${type} Quote creation rejects blank unit ${JSON.stringify(unit)} before calling Coco`, async () => {
+      const credential = await createCredential();
+      const create = mock(() => {
+        throw new Error('must not reach Coco');
+      });
+      const routes = createWalletTestRoutes(
+        { quotes: { [type]: { create } } },
+        credential.credentials,
+      );
+      const response = await routes[`/v1/quotes/${type}`]!.POST!(
+        new Request(`http://localhost/v1/quotes/${type}`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${credential.plaintext}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(
+            type === 'mint'
+              ? { method: 'bolt11', amount: '21', unit }
+              : { method: 'bolt11', invoice: 'lnbc21', unit },
+          ),
+        }),
+      );
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error: { code: 'invalid_request' } });
+      expect(create).not.toHaveBeenCalled();
+    });
+  }
+}
+
+test('Send preparation maps typed domain validation to a safe client error', async () => {
+  const credential = await createCredential();
+  const prepare = mock(async () => {
+    throw new ProofValidationError('sensitive mint diagnostic');
+  });
+  const routes = createWalletTestRoutes({ ops: { send: { prepare } } }, credential.credentials);
+  const response = await routes['/v1/operations/send']!.POST!(
+    new Request('http://localhost/v1/operations/send', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${credential.plaintext}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ amount: '21', unit: 'sat' }),
+    }),
+  );
+  expect(prepare).toHaveBeenCalledTimes(1);
+  expect(response.status).toBe(400);
+  const body = await response.text();
+  expect(JSON.parse(body)).toMatchObject({ error: { code: 'invalid_request' } });
+  expect(body).not.toContain('sensitive mint diagnostic');
+});

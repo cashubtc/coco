@@ -273,7 +273,11 @@ those details are derived from canonical quote storage.
 
 ### MintApi
 
-- `addMint(mintUrl: string, options?: { trusted?: boolean }): Promise<{ mint: Mint; keysets: Keyset[] }>`
+`addMint()` returns `{ mint, keysets, created }`. Metadata and keysets commit together;
+`created` is true only for the caller that creates the Known Mint. Omitting `trusted` preserves
+an existing trust decision, including one changed while remote metadata was being fetched.
+
+- `addMint(mintUrl: string, options?: { trusted?: boolean }): Promise<AddMintResult>`
 - `getMintInfo(mintUrl: string): Promise<MintInfo>`
 - `isTrustedMint(mintUrl: string): Promise<boolean>`
 - `getAllMints(): Promise<Mint[]>`

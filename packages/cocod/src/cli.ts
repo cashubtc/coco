@@ -2,11 +2,22 @@ import { startDaemon } from './daemon';
 import { AdministrativeCredential } from './credentials.js';
 import {
   assertHostLocalOperation,
+  createV1Client,
   program,
   handleDaemonCommand,
-  callDaemonStream,
+  formatBalances,
+  formatHistory,
+  evaluatePaymentRequestForDisplay,
   handleV1Command,
+  handleWalletV1Command,
+  prepareAndExecuteCashuReceive,
+  prepareAndExecuteBolt11Send,
+  prepareAndExecuteCashuSend,
+  prepareAndExecutePaymentRequest,
+  prepareBolt11Receive,
+  registerAndTrustMint,
   waitForSessionTransition,
+  watchHistoryUpdates,
 } from './cli-shared';
 import type { LifecycleStatusDocument } from './v1/http.js';
 import {
@@ -92,12 +103,12 @@ sessionCmd
     printLifecycleStatus(status);
   });
 
-// Balance - simple GET command
 program
   .command('balance')
   .description('Get wallet balance')
   .action(async () => {
-    await handleDaemonCommand('/balance');
+    const balances = await handleWalletV1Command((client) => client.balances());
+    console.log(formatBalances(balances));
   });
 
 // Receive - nested subcommands
@@ -107,21 +118,21 @@ receiveCmd
   .command('cashu <token>')
   .description('Receive Cashu token')
   .action(async (token: string) => {
-    await handleDaemonCommand('/receive/cashu', {
-      method: 'POST',
-      body: { token },
-    });
+    const output = await handleWalletV1Command((client) =>
+      prepareAndExecuteCashuReceive(client, token),
+    );
+    console.log(output);
   });
 
 receiveCmd
   .command('bolt11 <amount>')
   .description('Create Lightning invoice to receive tokens')
-  .option('--mint-url <url>', 'Mint URL to use (defaults to the mint URL configured during init)')
+  .option('--mint-url <url>', 'Mint URL to use (defaults to the configured Mint)')
   .action(async (amount: string, options: { mintUrl?: string }) => {
-    await handleDaemonCommand('/receive/bolt11', {
-      method: 'POST',
-      body: { amount: parseInt(amount), mintUrl: options.mintUrl },
-    });
+    const invoice = await handleWalletV1Command((client) =>
+      prepareBolt11Receive(client, { amount, mintUrl: options.mintUrl }),
+    );
+    console.log(invoice);
   });
 
 // Send - nested subcommands
@@ -132,21 +143,21 @@ sendCmd
   .description('Create Cashu token to send')
   .option('--mint-url <url>', 'Mint URL to use (defaults to the mint URL configured during init)')
   .action(async (amount: string, options: { mintUrl?: string }) => {
-    await handleDaemonCommand('/send/cashu', {
-      method: 'POST',
-      body: { amount: parseInt(amount), mintUrl: options.mintUrl },
-    });
+    const token = await handleWalletV1Command((client) =>
+      prepareAndExecuteCashuSend(client, { amount, mintUrl: options.mintUrl }),
+    );
+    console.log(token);
   });
 
 sendCmd
   .command('bolt11 <invoice>')
   .description('Pay Lightning invoice')
-  .option('--mint-url <url>', 'Mint URL to use (defaults to the mint URL configured during init)')
+  .option('--mint-url <url>', 'Mint URL to use (defaults to the configured Mint)')
   .action(async (invoice: string, options: { mintUrl?: string }) => {
-    await handleDaemonCommand('/send/bolt11', {
-      method: 'POST',
-      body: { invoice, mintUrl: options.mintUrl },
-    });
+    const output = await handleWalletV1Command((client) =>
+      prepareAndExecuteBolt11Send(client, { invoice, mintUrl: options.mintUrl }),
+    );
+    console.log(output);
   });
 
 program
@@ -230,29 +241,26 @@ const mintsCmd = program.command('mints').description('Mints operations');
 
 mintsCmd
   .command('add <url>')
-  .description('Add a mint URL')
+  .description('Register and trust a Known Mint')
   .action(async (url: string) => {
-    await handleDaemonCommand('/mints/add', {
-      method: 'POST',
-      body: { url },
-    });
+    const mint = await handleWalletV1Command((client) => registerAndTrustMint(client, url));
+    console.log(`Known Mint registered and trusted: ${mint.mintUrl}`);
   });
 
 mintsCmd
   .command('list')
-  .description('List configured mints')
+  .description('List trusted Known Mints')
   .action(async () => {
-    await handleDaemonCommand('/mints/list');
+    const mints = await handleWalletV1Command((client) => client.listMints({ trustedOnly: true }));
+    console.log(mints.items.map((mint) => mint.mintUrl).join('\n'));
   });
 
 mintsCmd
   .command('info <url>')
   .description('Get mint info')
   .action(async (url: string) => {
-    await handleDaemonCommand('/mints/info', {
-      method: 'POST',
-      body: { url },
-    });
+    const mint = await handleWalletV1Command((client) => client.getMintInfo(url));
+    console.log(JSON.stringify(mint.info, null, 2));
   });
 
 // NPC - nested subcommands
@@ -286,20 +294,20 @@ xCashuCmd
   .command('parse <request>')
   .description('Parse x-cashu request')
   .action(async (request: string) => {
-    await handleDaemonCommand('/x-cashu/parse', {
-      method: 'POST',
-      body: { request },
-    });
+    const output = await handleWalletV1Command((client) =>
+      evaluatePaymentRequestForDisplay(client, request),
+    );
+    console.log(output);
   });
 
 xCashuCmd
   .command('handle <request>')
   .description('Handle x-cashu request. Returns a X-Cashu header')
   .action(async (request: string) => {
-    await handleDaemonCommand('/x-cashu/handle', {
-      method: 'POST',
-      body: { request },
-    });
+    const output = await handleWalletV1Command((client) =>
+      prepareAndExecutePaymentRequest(client, request),
+    );
+    console.log(output);
   });
 
 // History - with pagination and watch options
@@ -333,19 +341,15 @@ program
       process.exit(1);
     }
 
-    // Fetch paginated history first (pass params as query string, not body)
-    const queryParams = new URLSearchParams();
-    queryParams.set('offset', offset.toString());
-    queryParams.set('limit', limit.toString());
-    const path = `/history?${queryParams.toString()}`;
-
-    await handleDaemonCommand(path);
+    const history = await handleWalletV1Command((client) => client.listHistory({ offset, limit }));
+    console.log(formatHistory(history));
 
     // If watch is enabled, continue streaming after initial fetch
     if (options.watch) {
       try {
-        await callDaemonStream('/events', (data) => {
-          console.log(JSON.stringify(data));
+        const client = createV1Client();
+        await watchHistoryUpdates(client, { limit }, (updated) => {
+          console.log(formatHistory(updated));
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

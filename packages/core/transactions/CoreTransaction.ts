@@ -1,3 +1,7 @@
+import {
+  RepositoryMintCommands,
+  type ScopedMintCommands,
+} from './scoped/mints/ScopedMintCommands.ts';
 import type { Repositories, RepositoryTransactionScope } from '@core/repositories';
 import { RepositoryTransactionConflictError } from '@core/repositories';
 import {
@@ -12,6 +16,7 @@ import { TransactionLifetime } from './scoped/TransactionLifetime.ts';
  */
 export interface CoreTransaction {
   readonly keypairs: ScopedKeypairCommands;
+  readonly mints: ScopedMintCommands;
 }
 
 export interface CoreTransactionRunner {
@@ -23,6 +28,7 @@ type TransactionModuleFactory = (repositories: RepositoryTransactionScope) => Co
 function createTransactionModules(repositories: RepositoryTransactionScope): CoreTransaction {
   return {
     keypairs: new RepositoryKeypairCommands(repositories.keyRingRepository),
+    mints: new RepositoryMintCommands(repositories.mintRepository, repositories.keysetRepository),
   };
 }
 
