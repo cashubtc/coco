@@ -1,4 +1,3 @@
-import { RepositoryMintCommands } from '../../transactions/scoped/mint/ScopedMintCommands.ts';
 import { describe, expect, it } from 'bun:test';
 import { RepositoryTransactionConflictError } from '../../repositories/RepositoryTransactionError.ts';
 import type { RepositoryTransactionScope } from '../../repositories/index.ts';
@@ -8,6 +7,7 @@ import type { CoreTransaction } from '../../transactions/CoreTransaction.ts';
 import { CoreKeyRingTransactions } from '../../transactions/keypairs/KeyRingTransactions.ts';
 import { KeypairDerivation } from '../../keypairs/KeypairDerivation.ts';
 import { RepositoryKeypairCommands } from '../../transactions/scoped/keypairs/ScopedKeypairCommands.ts';
+import { RepositoryMintCommands } from '../../transactions/scoped/mint/ScopedMintCommands.ts';
 import { overrideTransactions } from '../overrideTransactions.ts';
 
 function gate() {

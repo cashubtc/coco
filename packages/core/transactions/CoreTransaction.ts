@@ -4,11 +4,11 @@ import {
   RepositoryKeypairCommands,
   type ScopedKeypairCommands,
 } from './scoped/keypairs/ScopedKeypairCommands.ts';
-import { TransactionLifetime } from './scoped/TransactionLifetime.ts';
 import {
   RepositoryMintCommands,
   type ScopedMintCommands,
 } from './scoped/mint/ScopedMintCommands.ts';
+import { TransactionLifetime } from './scoped/TransactionLifetime.ts';
 
 /**
  * Scoped commands sharing one adapter transaction attempt. Await mutations sequentially unless
