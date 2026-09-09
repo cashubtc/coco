@@ -1,3 +1,9 @@
+import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
+import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
+import { CoreMintTransactions } from '../../transactions/mint/MintTransactions.ts';
+import { overrideTransactions } from '../overrideTransactions.ts';
+import { mintQuoteToMethodSnapshot } from '../../models/MintQuote.ts';
+import type { MintRemote } from '../../operations/mint/MintRemote.ts';
 import { Amount } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
 import {
@@ -44,7 +50,7 @@ import type { WalletService } from '../../services/WalletService';
 import type { ProofService } from '../../services/ProofService';
 import type { MintAdapter } from '../../infra/MintAdapter';
 import type { Logger } from '../../logging/Logger';
-import { serializeOutputData } from '../../utils';
+import { serializeOutputData, deserializeOutputData } from '../../utils';
 import type { CoreProof } from '../../types';
 import { MintQuoteValidationError, QuoteIdentityConflictError } from '../../models/Error';
 
@@ -53,6 +59,9 @@ describe('MintOperationService', () => {
   const quoteId = 'quote-1';
   const keysetId = 'keyset-1';
 
+  let repositories: MemoryRepositories;
+  let remote: MintRemote;
+  let rejectPreparation: boolean;
   let operationRepo: MemoryMintOperationRepository;
   let quoteRepo: MemoryMintQuoteRepository;
   let proofRepo: MemoryProofRepository;
@@ -99,6 +108,17 @@ describe('MintOperationService', () => {
         ),
       ],
       send: [],
+    });
+
+  const proofsForOperation = (operation: PendingMintOperation | ExecutingMintOperation): Proof[] =>
+    deserializeOutputData(operation.outputData).keep.map((output) => {
+      const secret = new TextDecoder().decode(output.secret);
+      return {
+        id: output.blindedMessage.id,
+        amount: output.blindedMessage.amount,
+        secret,
+        C: `C_${secret}`,
+      };
     });
 
   const toCoreProof = (secret: string, operationId: string): CoreProof => ({
@@ -205,7 +225,7 @@ describe('MintOperationService', () => {
       execute: mock(async ({ operation }: any): Promise<MintExecutionResult> => {
         lastExecutedAmount = operation.amount;
         executedAmounts.push(operation.amount.toString());
-        return { status: 'ISSUED', proofs: [makeProof(operation.id)] };
+        return { status: 'ISSUED', proofs: proofsForOperation(operation) };
       }),
       fetchRemoteQuote: mock(async ({ quote }) => {
         issued = issued.add(lastExecutedAmount);
@@ -261,9 +281,26 @@ describe('MintOperationService', () => {
   });
 
   beforeEach(async () => {
-    operationRepo = new MemoryMintOperationRepository();
-    quoteRepo = new MemoryMintQuoteRepository();
-    proofRepo = new MemoryProofRepository();
+    repositories = new MemoryRepositories();
+    await repositories.init();
+    rejectPreparation = false;
+    operationRepo = repositories.mintOperationRepository as MemoryMintOperationRepository;
+    quoteRepo = repositories.mintQuoteRepository as MemoryMintQuoteRepository;
+    proofRepo = repositories.proofRepository as MemoryProofRepository;
+    await repositories.mintRepository.addOrUpdateMint({
+      mintUrl,
+      name: 'Test mint',
+      mintInfo: {
+        name: 'Fixture',
+        pubkey: '',
+        version: 'test/1',
+        contact: [],
+        nuts: { '4': { methods: [], disabled: false }, '5': { methods: [], disabled: false } },
+      },
+      trusted: true,
+      createdAt: 1,
+      updatedAt: 1,
+    });
     eventBus = new EventBus<CoreEvents>();
     logger = {
       error: mock(() => {}),
@@ -272,9 +309,22 @@ describe('MintOperationService', () => {
       debug: mock(() => {}),
     };
 
-    const mockPrepare = mock(async ({ operation }: { operation: InitMintOperation<'bolt11'> }) => {
-      return makePendingOp(operation.id) as PendingMintOperation<'bolt11'>;
-    });
+    const mockPrepare = mock(
+      async ({
+        operation,
+        importedQuote,
+      }: {
+        operation: InitMintOperation<'bolt11'>;
+        importedQuote?: MintMethodQuoteSnapshot<'bolt11'>;
+      }) => {
+        return {
+          ...makePendingOp(operation.id),
+          ...operation,
+          state: 'pending',
+          request: importedQuote!.request,
+        } as PendingMintOperation<'bolt11'>;
+      },
+    );
 
     const mockExecute = mock(async (): Promise<MintExecutionResult> => {
       return { status: 'ISSUED', proofs: [makeProof('out-1')] };
@@ -340,7 +390,6 @@ describe('MintOperationService', () => {
         if (!options?.createdByOperationId) {
           return [];
         }
-        await proofRepo.saveProofs(mintUrl, [toCoreProof('out-1', options.createdByOperationId)]);
         return [makeProof('out-1')];
       }),
     } as unknown as ProofService;
@@ -390,17 +439,86 @@ describe('MintOperationService', () => {
       logger,
     });
 
-    service = new MintOperationService(
-      handlerProvider,
-      operationRepo,
-      quoteLifecycle,
-      proofRepo,
-      proofService,
-      mintService,
-      walletService,
-      mintAdapter,
-      eventBus,
+    remote = {
+      isTrusted: (url) => mintService.isTrustedMint(url),
+      prepare: async (operation, quote) => {
+        const selectedHandler = handlerProvider.get(operation.method);
+        await selectedHandler.validateQuoteForPrepare?.(quote);
+        await mintService.assertMethodUnitSupported(
+          operation.mintUrl,
+          4,
+          operation.method,
+          operation.method === 'onchain'
+            ? operation.unit
+            : { amount: operation.amount, unit: operation.unit },
+        );
+        await walletService.getWalletWithActiveKeysetId(operation.mintUrl, operation.unit);
+        const prepared = await selectedHandler.prepare({
+          operation,
+          importedQuote: mintQuoteToMethodSnapshot(quote),
+        });
+        // The old method fixtures provide a deterministic plan. Allocation is now owned by the gateway.
+        const plan = (prepared as PendingMintOperation).outputData;
+        return { operation: prepared, keysetId, derive: () => plan };
+      },
+      execute: async (operation) => {
+        const { wallet } = await walletService.getWalletWithActiveKeysetId(
+          operation.mintUrl,
+          operation.unit,
+        );
+        return handlerProvider
+          .get(operation.method)
+          .execute({ operation, wallet, mintAdapter, logger });
+      },
+      recoverExecuting: async (operation, localClaimabilityFacts) => {
+        const { wallet } = await walletService.getWalletWithActiveKeysetId(
+          operation.mintUrl,
+          operation.unit,
+        );
+        return handlerProvider.get(operation.method).recoverExecuting({
+          operation,
+          wallet,
+          mintAdapter,
+          logger,
+          localClaimabilityFacts,
+          restoreOutputs: () => remote.restoreOutputs(operation),
+        });
+      },
+      observePending: (operation) =>
+        handlerProvider.get(operation.method).checkPending({ operation, mintAdapter, logger }),
+      restoreOutputs: (operation) =>
+        proofService.recoverProofsFromOutputData(operation.mintUrl, operation.outputData, {
+          unit: operation.unit,
+          createdByOperationId: operation.id,
+          persistRecoveredProofs: false,
+        }),
+    };
+    const runner = new RepositoryCoreTransactionRunner(
+      overrideTransactions(repositories, (work) =>
+        repositories.withTransaction((scope) =>
+          work({
+            ...scope,
+            mintOperationRepository: rejectPreparation
+              ? {
+                  ...scope.mintOperationRepository,
+                  create: async () => {
+                    throw new Error('pending persistence failed');
+                  },
+                }
+              : scope.mintOperationRepository,
+          }),
+        ),
+      ),
     );
+    service = new MintOperationService({
+      operations: operationRepo,
+      proofs: proofRepo,
+      quotes: quoteLifecycle,
+      remote,
+      transactions: new CoreMintTransactions(runner),
+      events: eventBus,
+      logger,
+    });
   });
 
   it('prepare persists a pending operation and emits mint-op:pending', async () => {
@@ -561,7 +679,7 @@ describe('MintOperationService', () => {
         request: importedQuote.request,
         expiry: importedQuote.expiry,
         pubkey: importedQuote.pubkey,
-        outputData: makeSerializedOutputData(operation.id),
+        outputData: makeSerializedOutputData(operation.id, operation.amount),
       })),
     } as unknown as MintMethodHandler<'onchain'>;
     (handlerProvider.get as Mock<any>).mockImplementation(() => onchainHandler);
@@ -576,7 +694,7 @@ describe('MintOperationService', () => {
     expect(new Set(operations.map((operation) => operation.id)).size).toBe(2);
   });
 
-  it('prepare cleans init operations but keeps consumed counters when onchain persistence fails', async () => {
+  it('prepare rolls back operation and counter allocation when onchain persistence fails', async () => {
     const onchainQuoteId = 'onchain-quote-1';
     const consumedCounters: string[] = [];
     await persistOnchainQuote(onchainQuoteId);
@@ -592,14 +710,12 @@ describe('MintOperationService', () => {
           request: importedQuote.request,
           expiry: importedQuote.expiry,
           pubkey: importedQuote.pubkey,
-          outputData: makeSerializedOutputData(operation.id),
+          outputData: makeSerializedOutputData(operation.id, operation.amount),
         };
       }),
     } as unknown as MintMethodHandler<'onchain'>;
     (handlerProvider.get as Mock<any>).mockImplementation(() => onchainHandler);
-    operationRepo.update = mock(async () => {
-      throw new Error('pending persistence failed');
-    }) as typeof operationRepo.update;
+    rejectPreparation = true;
 
     await expect(
       service.prepare({ mintUrl, method: 'onchain', quoteId: onchainQuoteId }, Amount.from(10)),
@@ -607,6 +723,7 @@ describe('MintOperationService', () => {
 
     expect(consumedCounters).toHaveLength(1);
     expect(await operationRepo.getAll()).toHaveLength(0);
+    expect(await repositories.counterRepository.getCounter(mintUrl, keysetId)).toBeNull();
   });
 
   it('createQuote persists a canonical quote without creating operation output data', async () => {
@@ -1519,6 +1636,7 @@ describe('MintOperationService', () => {
           ...makePendingOp(operation.id),
           quoteId: importedQuote.quote,
           amount: importedQuote.amount,
+          outputData: makeSerializedOutputData('out-1', importedQuote.amount),
           request: importedQuote.request,
           expiry: importedQuote.expiry,
         };
@@ -1711,6 +1829,7 @@ describe('MintOperationService', () => {
         ...makePendingOp(operation.id),
         quoteId: importedQuote.quote,
         amount: importedQuote.amount,
+        outputData: makeSerializedOutputData('out-1', importedQuote.amount),
         request: importedQuote.request,
         expiry: importedQuote.expiry,
       }),
@@ -1936,7 +2055,10 @@ describe('MintOperationService', () => {
     await persistQuote();
     const executing = makeExecutingOp('orphaned-executing');
     await operationRepo.create(executing);
-    (handler.recoverExecuting as Mock<any>).mockResolvedValueOnce({ status: 'FINALIZED' });
+    (handler.recoverExecuting as Mock<any>).mockResolvedValueOnce({
+      status: 'FINALIZED',
+      proofs: [],
+    });
 
     const result = await service.execute(executing.id);
 
@@ -1987,10 +2109,11 @@ describe('MintOperationService', () => {
     const onchainQuoteId = 'onchain-quote-underfunded';
     await persistOnchainQuote(onchainQuoteId, { paid: Amount.from(4), issued: Amount.zero() });
     const pendingOp: PendingMintOperation<'onchain'> = {
-      ...makePendingOp('onchain-underfunded'),
+      ...makePendingOp('onchain-underfunded', 'onchain-underfunded'),
       method: 'onchain',
       quoteId: onchainQuoteId,
       amount: Amount.from(10),
+      outputData: makeSerializedOutputData('onchain-underfunded', Amount.from(10)),
     };
     await operationRepo.create(pendingOp);
 
@@ -2006,11 +2129,12 @@ describe('MintOperationService', () => {
     const onchainQuoteId = 'onchain-quote-funded';
     await persistOnchainQuote(onchainQuoteId, { paid: Amount.from(10), issued: Amount.zero() });
     const pendingOp: PendingMintOperation<'onchain'> = {
-      ...makePendingOp('onchain-funded'),
+      ...makePendingOp('onchain-funded', 'onchain-funded'),
       method: 'onchain',
       quoteId: onchainQuoteId,
       amount: Amount.from(5),
       pubkey: '02'.padEnd(66, '1'),
+      outputData: makeSerializedOutputData('onchain-funded', Amount.from(5)),
     };
     await operationRepo.create(pendingOp);
 
@@ -2019,7 +2143,7 @@ describe('MintOperationService', () => {
       execute: mock(
         async (): Promise<MintExecutionResult> => ({
           status: 'ISSUED',
-          proofs: [makeProof('out-1')],
+          proofs: proofsForOperation(pendingOp),
         }),
       ),
       fetchRemoteQuote: mock(async ({ quote }) =>
@@ -2060,11 +2184,12 @@ describe('MintOperationService', () => {
       pubkey: '02'.padEnd(66, '1'),
     });
     const pendingOp: PendingMintOperation<'onchain'> = {
-      ...makePendingOp('onchain-reserved-pending'),
+      ...makePendingOp('onchain-reserved-pending', 'onchain-reserved-pending'),
       method: 'onchain',
       quoteId: onchainQuoteId,
       amount: Amount.from(5),
       pubkey: '02'.padEnd(66, '1'),
+      outputData: makeSerializedOutputData('onchain-reserved-pending', Amount.from(5)),
     };
     await operationRepo.create(pendingOp);
 
@@ -2089,11 +2214,12 @@ describe('MintOperationService', () => {
     };
     await operationRepo.create(finalized);
     const pendingOp: PendingMintOperation<'onchain'> = {
-      ...makePendingOp('onchain-local-issued-pending'),
+      ...makePendingOp('onchain-local-issued-pending', 'onchain-local-issued-pending'),
       method: 'onchain',
       quoteId: onchainQuoteId,
       amount: Amount.from(5),
       pubkey: '02'.padEnd(66, '1'),
+      outputData: makeSerializedOutputData('onchain-local-issued-pending', Amount.from(5)),
     };
     await operationRepo.create(pendingOp);
 
@@ -2102,7 +2228,7 @@ describe('MintOperationService', () => {
       execute: mock(
         async (): Promise<MintExecutionResult> => ({
           status: 'ISSUED',
-          proofs: [makeProof('out-1')],
+          proofs: proofsForOperation(pendingOp),
         }),
       ),
     } as unknown as MintMethodHandler<'onchain'>;
@@ -2122,20 +2248,22 @@ describe('MintOperationService', () => {
     const onchainQuoteId = 'onchain-quote-prefix';
     await persistOnchainQuote(onchainQuoteId, { paid: Amount.from(10), issued: Amount.zero() });
     const first: PendingMintOperation<'onchain'> = {
-      ...makePendingOp('onchain-prefix-a'),
+      ...makePendingOp('onchain-prefix-a', 'onchain-prefix-a'),
       method: 'onchain',
       quoteId: onchainQuoteId,
       amount: Amount.from(7),
       pubkey: '02'.padEnd(66, '1'),
       createdAt: 1,
+      outputData: makeSerializedOutputData('onchain-prefix-a', Amount.from(7)),
     };
     const second: PendingMintOperation<'onchain'> = {
-      ...makePendingOp('onchain-prefix-b'),
+      ...makePendingOp('onchain-prefix-b', 'onchain-prefix-b'),
       method: 'onchain',
       quoteId: onchainQuoteId,
       amount: Amount.from(5),
       pubkey: '02'.padEnd(66, '1'),
       createdAt: 2,
+      outputData: makeSerializedOutputData('onchain-prefix-b', Amount.from(5)),
     };
     await operationRepo.create(first);
     await operationRepo.create(second);
@@ -2145,7 +2273,7 @@ describe('MintOperationService', () => {
       execute: mock(
         async ({ operation }: any): Promise<MintExecutionResult> => ({
           status: 'ISSUED',
-          proofs: [makeProof(operation.id)],
+          proofs: proofsForOperation(operation),
         }),
       ),
       fetchRemoteQuote: mock(async ({ quote }) =>
@@ -2177,20 +2305,22 @@ describe('MintOperationService', () => {
     const onchainQuoteId = 'onchain-quote-duplicate';
     await persistOnchainQuote(onchainQuoteId, { paid: Amount.from(10), issued: Amount.zero() });
     const first: PendingMintOperation<'onchain'> = {
-      ...makePendingOp('onchain-duplicate-a'),
+      ...makePendingOp('onchain-duplicate-a', 'onchain-duplicate-a'),
       method: 'onchain',
       quoteId: onchainQuoteId,
       amount: Amount.from(7),
       pubkey: '02'.padEnd(66, '1'),
       createdAt: 1,
+      outputData: makeSerializedOutputData('onchain-duplicate-a', Amount.from(7)),
     };
     const second: PendingMintOperation<'onchain'> = {
-      ...makePendingOp('onchain-duplicate-b'),
+      ...makePendingOp('onchain-duplicate-b', 'onchain-duplicate-b'),
       method: 'onchain',
       quoteId: onchainQuoteId,
       amount: Amount.from(5),
       pubkey: '02'.padEnd(66, '1'),
       createdAt: 2,
+      outputData: makeSerializedOutputData('onchain-duplicate-b', Amount.from(5)),
     };
     await operationRepo.create(first);
     await operationRepo.create(second);
@@ -2200,7 +2330,7 @@ describe('MintOperationService', () => {
       execute: mock(
         async ({ operation }: any): Promise<MintExecutionResult> => ({
           status: 'ISSUED',
-          proofs: [makeProof(operation.id)],
+          proofs: proofsForOperation(operation),
         }),
       ),
       fetchRemoteQuote: mock(async ({ quote }) =>
@@ -2235,20 +2365,22 @@ describe('MintOperationService', () => {
     const onchainQuoteId = 'onchain-quote-partials';
     await persistOnchainQuote(onchainQuoteId, { paid: Amount.from(10), issued: Amount.zero() });
     const first: PendingMintOperation<'onchain'> = {
-      ...makePendingOp('onchain-partial-a'),
+      ...makePendingOp('onchain-partial-a', 'onchain-partial-a'),
       method: 'onchain',
       quoteId: onchainQuoteId,
       amount: Amount.from(7),
       pubkey: '02'.padEnd(66, '1'),
       createdAt: 1,
+      outputData: makeSerializedOutputData('onchain-partial-a', Amount.from(7)),
     };
     const second: PendingMintOperation<'onchain'> = {
-      ...makePendingOp('onchain-partial-b'),
+      ...makePendingOp('onchain-partial-b', 'onchain-partial-b'),
       method: 'onchain',
       quoteId: onchainQuoteId,
       amount: Amount.from(5),
       pubkey: '02'.padEnd(66, '1'),
       createdAt: 2,
+      outputData: makeSerializedOutputData('onchain-partial-b', Amount.from(5)),
     };
     await operationRepo.create(first);
     await operationRepo.create(second);
@@ -2260,7 +2392,7 @@ describe('MintOperationService', () => {
       execute: mock(
         async ({ operation }: any): Promise<MintExecutionResult> => ({
           status: 'ISSUED',
-          proofs: [makeProof(operation.id)],
+          proofs: proofsForOperation(operation),
         }),
       ),
       fetchRemoteQuote: mock(async ({ quote }) => {
@@ -2380,27 +2512,30 @@ describe('MintOperationService', () => {
       expiry: Math.floor(Date.now() / 1000) - 1,
     });
     const finalized: FinalizedMintOperation<'onchain'> = {
-      ...makePendingOp('onchain-expired-finalized'),
+      ...makePendingOp('onchain-expired-finalized', 'onchain-expired-finalized'),
       method: 'onchain',
       quoteId: onchainQuoteId,
       amount: Amount.from(7),
       pubkey: '02'.padEnd(66, '1'),
       state: 'finalized',
+      outputData: makeSerializedOutputData('onchain-expired-finalized', Amount.from(7)),
     };
     const reserved: ExecutingMintOperation<'onchain'> = {
-      ...makePendingOp('onchain-expired-reserved'),
+      ...makePendingOp('onchain-expired-reserved', 'onchain-expired-reserved'),
       method: 'onchain',
       quoteId: onchainQuoteId,
       amount: Amount.from(5),
       pubkey: '02'.padEnd(66, '1'),
       state: 'executing',
+      outputData: makeSerializedOutputData('onchain-expired-reserved', Amount.from(5)),
     };
     const pending: PendingMintOperation<'onchain'> = {
-      ...makePendingOp('onchain-expired-pending'),
+      ...makePendingOp('onchain-expired-pending', 'onchain-expired-pending'),
       method: 'onchain',
       quoteId: onchainQuoteId,
       amount: Amount.from(8),
       pubkey: '02'.padEnd(66, '1'),
+      outputData: makeSerializedOutputData('onchain-expired-pending', Amount.from(8)),
     };
     await operationRepo.create(finalized);
     await operationRepo.create(reserved);
@@ -2456,7 +2591,7 @@ describe('MintOperationService', () => {
       pubkey: '02'.padEnd(66, '1'),
     };
     const pending: PendingMintOperation<'onchain'> = {
-      ...makePendingOp('onchain-recover-pending'),
+      ...makePendingOp('onchain-recover-pending', 'onchain-recover-pending'),
       method: 'onchain',
       quoteId: onchainQuoteId,
       pubkey: '02'.padEnd(66, '1'),
@@ -2467,7 +2602,7 @@ describe('MintOperationService', () => {
     const onchainHandler = {
       ...handler,
       recoverExecuting: mock(
-        async (): Promise<RecoverExecutingResult> => ({ status: 'FINALIZED' }),
+        async (): Promise<RecoverExecutingResult> => ({ status: 'FINALIZED', proofs: [] }),
       ),
       fetchRemoteQuote: mock(async ({ quote }) =>
         mintQuoteFromOnchainResponse(quote.mintUrl, {
@@ -2503,7 +2638,7 @@ describe('MintOperationService', () => {
     const onchainHandler = {
       ...handler,
       recoverExecuting: mock(
-        async (): Promise<RecoverExecutingResult> => ({ status: 'FINALIZED' }),
+        async (): Promise<RecoverExecutingResult> => ({ status: 'FINALIZED', proofs: [] }),
       ),
       fetchRemoteQuote: mock(async () => {
         throw new Error('mint offline');
@@ -2521,7 +2656,10 @@ describe('MintOperationService', () => {
     const op = makeExecutingOp('exec-1');
     await operationRepo.create(op);
 
-    (handler.recoverExecuting as Mock<any>).mockResolvedValueOnce({ status: 'FINALIZED' });
+    (handler.recoverExecuting as Mock<any>).mockResolvedValueOnce({
+      status: 'FINALIZED',
+      proofs: [],
+    });
 
     await service.recoverExecutingOperation(op);
 
@@ -2549,7 +2687,10 @@ describe('MintOperationService', () => {
     const op = makeExecutingOp('exec-3');
     await operationRepo.create(op);
 
-    (handler.recoverExecuting as Mock<any>).mockResolvedValueOnce({ status: 'FINALIZED' });
+    (handler.recoverExecuting as Mock<any>).mockResolvedValueOnce({
+      status: 'FINALIZED',
+      proofs: [],
+    });
     (proofService.recoverProofsFromOutputData as Mock<any>).mockResolvedValueOnce([]);
 
     await service.recoverExecutingOperation(op);
@@ -2862,10 +3003,11 @@ describe('MintOperationService', () => {
     const onchainQuoteId = 'onchain-quote-pending-check';
     await persistOnchainQuote(onchainQuoteId, { paid: Amount.zero(), issued: Amount.zero() });
     const pendingOp: PendingMintOperation<'onchain'> = {
-      ...makePendingOp('onchain-pending-check'),
+      ...makePendingOp('onchain-pending-check', 'onchain-pending-check'),
       method: 'onchain',
       quoteId: onchainQuoteId,
       pubkey: '02'.padEnd(66, '1'),
+      outputData: makeSerializedOutputData('onchain-recover-pending', Amount.from(10)),
     };
     await operationRepo.create(pendingOp);
 
@@ -2897,7 +3039,7 @@ describe('MintOperationService', () => {
     const onchainQuoteId = 'onchain-quote-stale-check';
     await persistOnchainQuote(onchainQuoteId, { paid: Amount.from(10), issued: Amount.from(8) });
     const pendingOp: PendingMintOperation<'onchain'> = {
-      ...makePendingOp('onchain-stale-check'),
+      ...makePendingOp('onchain-stale-check', 'onchain-stale-check'),
       method: 'onchain',
       quoteId: onchainQuoteId,
       pubkey: '02'.padEnd(66, '1'),
@@ -2936,7 +3078,7 @@ describe('MintOperationService', () => {
       remoteUpdatedAt: 20,
     });
     const pendingOp: PendingMintOperation<'onchain'> = {
-      ...makePendingOp('onchain-conflicting-check'),
+      ...makePendingOp('onchain-conflicting-check', 'onchain-conflicting-check'),
       method: 'onchain',
       quoteId: onchainQuoteId,
       request: 'bc1qtest',
@@ -3077,7 +3219,7 @@ describe('MintOperationService', () => {
     const onchainQuoteId = 'onchain-legacy-state';
     await persistOnchainQuote(onchainQuoteId);
     const pendingOp: PendingMintOperation<'onchain'> = {
-      ...makePendingOp('pending-onchain-legacy-state'),
+      ...makePendingOp('pending-onchain-legacy-state', 'pending-onchain-legacy-state'),
       method: 'onchain',
       quoteId: onchainQuoteId,
       request: 'bc1qtest',
@@ -3110,6 +3252,7 @@ describe('MintOperationService', () => {
       ...makePendingOp('pending-concurrent-compatibility-observation'),
       request: 'lnbc1old',
       expiry: initialExpiry,
+      outputData: makeSerializedOutputData('onchain-stale-check', Amount.from(10)),
     };
     const newerAtPersist = createDeferred();
     const releaseNewerPersist = createDeferred();

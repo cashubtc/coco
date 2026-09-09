@@ -5,6 +5,10 @@ import {
   type ScopedKeypairCommands,
 } from './scoped/keypairs/ScopedKeypairCommands.ts';
 import { TransactionLifetime } from './scoped/TransactionLifetime.ts';
+import {
+  RepositoryMintCommands,
+  type ScopedMintCommands,
+} from './scoped/mint/ScopedMintCommands.ts';
 
 /**
  * Scoped commands sharing one adapter transaction attempt. Await mutations sequentially unless
@@ -12,6 +16,7 @@ import { TransactionLifetime } from './scoped/TransactionLifetime.ts';
  */
 export interface CoreTransaction {
   readonly keypairs: ScopedKeypairCommands;
+  readonly mints: ScopedMintCommands;
 }
 
 export interface CoreTransactionRunner {
@@ -23,6 +28,7 @@ type TransactionModuleFactory = (repositories: RepositoryTransactionScope) => Co
 function createTransactionModules(repositories: RepositoryTransactionScope): CoreTransaction {
   return {
     keypairs: new RepositoryKeypairCommands(repositories.keyRingRepository),
+    mints: new RepositoryMintCommands(repositories),
   };
 }
 

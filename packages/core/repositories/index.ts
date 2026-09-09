@@ -283,10 +283,10 @@ export interface AuthSessionRepository {
 }
 
 export interface MintOperationRepository {
-  /** Create a new mint operation */
+  /** Create a mint operation, preserving caller-owned timestamps at millisecond precision. */
   create(operation: MintOperation): Promise<void>;
 
-  /** Update an existing mint operation */
+  /** Persist the supplied state and timestamps; do not replace updatedAt with adapter-local time. */
   update(operation: MintOperation): Promise<void>;
 
   /** Get a mint operation by ID */

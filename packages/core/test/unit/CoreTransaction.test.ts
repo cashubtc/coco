@@ -1,3 +1,4 @@
+import { RepositoryMintCommands } from '../../transactions/scoped/mint/ScopedMintCommands.ts';
 import { describe, expect, it } from 'bun:test';
 import { RepositoryTransactionConflictError } from '../../repositories/RepositoryTransactionError.ts';
 import type { RepositoryTransactionScope } from '../../repositories/index.ts';
@@ -108,6 +109,7 @@ describe('RepositoryCoreTransactionRunner', () => {
         boundRepositories = scope;
         return Object.freeze({
           keypairs: new RepositoryKeypairCommands(scope.keyRingRepository),
+          mints: new RepositoryMintCommands(scope),
         });
       },
     );
@@ -258,7 +260,7 @@ describe('RepositoryCoreTransactionRunner', () => {
             scope.counterRepository.setCounter('https://mint.test', 'keyset', 7),
           ]);
         };
-        return { keypairs };
+        return { keypairs, mints: new RepositoryMintCommands(scope) };
       });
       const result = runner
         .run((scope) => scope.keypairs.importP2pk(importedKey('slow')))
@@ -358,7 +360,10 @@ describe('RepositoryCoreTransactionRunner', () => {
       let persistKey!: RepositoryTransactionScope['keyRingRepository']['setPersistedKeyPair'];
       const runner = new RepositoryCoreTransactionRunner(repositories, (scope) => {
         capturedRepositories = scope;
-        return { keypairs: new RepositoryKeypairCommands(scope.keyRingRepository) };
+        return {
+          keypairs: new RepositoryKeypairCommands(scope.keyRingRepository),
+          mints: new RepositoryMintCommands(scope),
+        };
       });
       const result = runner.run(async (scope) => {
         capturedTransaction = scope;

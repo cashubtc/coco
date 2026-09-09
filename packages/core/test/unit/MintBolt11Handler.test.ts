@@ -106,14 +106,6 @@ describe('MintBolt11Handler', () => {
 
   const buildPrepareContext = (): PrepareContext<'bolt11'> => ({
     operation,
-    wallet,
-    mintAdapter,
-    proofService,
-    proofRepository,
-    walletService,
-    mintService,
-    eventBus,
-    logger,
   });
 
   const buildCreateQuoteContext = (): CreateMintQuoteContext<'bolt11'> => ({
@@ -121,11 +113,7 @@ describe('MintBolt11Handler', () => {
     createQuoteData: { amount: { amount: Amount.from(10), unit: 'sat' } },
     wallet,
     mintAdapter,
-    proofService,
-    proofRepository,
-    walletService,
     mintService,
-    eventBus,
     logger,
   });
 
@@ -151,27 +139,22 @@ describe('MintBolt11Handler', () => {
       updatedAt: Date.now(),
     },
     mintAdapter,
-    proofService,
-    proofRepository,
-    walletService,
-    mintService,
-    eventBus,
     logger,
   });
 
   const buildRecoverContext = (): RecoverExecutingContext<'bolt11'> => ({
     operation: executingOperation,
     wallet,
+    restoreOutputs: () =>
+      proofService.recoverProofsFromOutputData(mintUrl, outputData, {
+        unit: 'sat',
+        persistRecoveredProofs: false,
+      }),
     localClaimabilityFacts: {
       finalizedAmount: Amount.zero(),
       reservedAmount: Amount.zero(),
     },
     mintAdapter,
-    proofService,
-    proofRepository,
-    walletService,
-    mintService,
-    eventBus,
     logger,
   });
 
@@ -181,11 +164,6 @@ describe('MintBolt11Handler', () => {
     operation: operationOverride,
     wallet,
     mintAdapter,
-    proofService,
-    proofRepository,
-    walletService,
-    mintService,
-    eventBus,
     logger,
   });
 
@@ -430,7 +408,7 @@ describe('MintBolt11Handler', () => {
         operation: { ...executingOperation, pubkey: quotePubkey },
       });
 
-      expect(result).toEqual({ status: 'FINALIZED' });
+      expect(result).toMatchObject({ status: 'FINALIZED', proofs: expect.any(Array) });
       const call = (wallet.mintProofsBolt11 as Mock<any>).mock.calls[0];
       expect(call?.[2]).toEqual({ privkey: bytesToHex(quoteSecretKey) });
       const customOutputs = call?.[3] as
@@ -440,7 +418,7 @@ describe('MintBolt11Handler', () => {
         'B_out_1',
         'B_out_2',
       ]);
-      expect(proofService.saveProofs).toHaveBeenCalledTimes(1);
+      expect(proofService.saveProofs).not.toHaveBeenCalled();
     });
 
     it('keeps NUT-20 ownership contradictions pending for ambiguity-preserving recovery', async () => {

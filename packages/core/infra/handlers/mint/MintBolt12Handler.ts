@@ -1,7 +1,7 @@
 import { Amount, type MintQuoteBolt12Response, type Wallet } from '@cashu/cashu-ts';
 import { assertSameUnit, normalizeUnitAmount } from '@core/amounts';
 import type { KeyRingService } from '@core/services';
-import { deserializeOutputData, mapProofToCoreProof, serializeOutputData } from '@core/utils';
+import { deserializeOutputData } from '@core/utils';
 import { bytesToHex } from '@noble/curves/utils.js';
 import {
   MintOperationError,
@@ -26,8 +26,15 @@ import type {
   RecoverExecutingResult,
 } from '../../../operations/mint';
 
+import type { PreparedMintOperation } from '../../../operations/mint/MintCommands.ts';
+
 export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
-  constructor(private readonly keyRingService: KeyRingService) {}
+  constructor(
+    private readonly keyRingService: Pick<
+      KeyRingService,
+      'generateMintQuoteKeyPair' | 'getMintQuoteKeyPair'
+    >,
+  ) {}
 
   async createQuote(ctx: CreateMintQuoteContext<'bolt12'>): Promise<MintQuote<'bolt12'>> {
     const quoteKey = await this.keyRingService.generateMintQuoteKeyPair();
@@ -72,7 +79,7 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
     await this.requireQuoteKey(quote.quoteData.pubkey);
   }
 
-  async prepare(ctx: PrepareContext<'bolt12'>): Promise<PendingMintOperation<'bolt12'>> {
+  async prepare(ctx: PrepareContext<'bolt12'>): Promise<PreparedMintOperation<'bolt12'>> {
     const quote = ctx.importedQuote;
     if (!quote) {
       throw new Error(`Mint quote ${ctx.operation.quoteId ?? '(missing)'} was not provided`);
@@ -87,26 +94,12 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
     assertSameUnit(quote.unit, ctx.operation.unit, `BOLT12 mint quote ${quote.quote}`);
     await this.requireQuoteKey(quote.pubkey);
 
-    const outputData = await ctx.proofService.createOutputsAndIncrementCounters(
-      ctx.operation.mintUrl,
-      {
-        keep: { amount: ctx.operation.amount, unit: ctx.operation.unit },
-        send: { amount: Amount.zero(), unit: ctx.operation.unit },
-      },
-      {},
-    );
-
-    if (outputData.keep.length === 0) {
-      throw new Error('Failed to create deterministic outputs for BOLT12 mint operation');
-    }
-
     return {
       ...ctx.operation,
       quoteId: quote.quote,
       request: quote.request,
       expiry: quote.expiry,
       pubkey: quote.pubkey,
-      outputData: serializeOutputData({ keep: outputData.keep, send: [] }),
       state: 'pending',
     };
   }
@@ -236,15 +229,7 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
         { type: 'custom', data: outputData.keep },
       );
 
-      await ctx.proofService.saveProofs(
-        operation.mintUrl,
-        mapProofToCoreProof(operation.mintUrl, 'ready', proofs, {
-          unit: operation.unit,
-          createdByOperationId: operation.id,
-        }),
-      );
-
-      return { status: 'FINALIZED' };
+      return { status: 'FINALIZED', proofs };
     } catch (error) {
       if (this.isAlreadyIssuedError(error)) {
         return (
@@ -371,16 +356,9 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
     ctx: RecoverExecutingContext<'bolt12'>,
   ): Promise<RecoverExecutingResult | null> {
     try {
-      const recovered = await ctx.proofService.recoverProofsFromOutputData(
-        ctx.operation.mintUrl,
-        ctx.operation.outputData,
-        {
-          unit: ctx.operation.unit,
-          createdByOperationId: ctx.operation.id,
-        },
-      );
+      const recovered = await ctx.restoreOutputs();
 
-      return recovered.length > 0 ? { status: 'FINALIZED' } : null;
+      return recovered.length > 0 ? { status: 'FINALIZED', proofs: recovered } : null;
     } catch (error) {
       ctx.logger?.warn('Failed to recover BOLT12 mint outputs from output data', {
         mintUrl: ctx.operation.mintUrl,

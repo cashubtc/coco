@@ -7,12 +7,7 @@ import type {
   Proof,
   Wallet,
 } from '@cashu/cashu-ts';
-import type { ProofRepository } from '../../repositories';
-import type { ProofService } from '../../services/ProofService';
-import type { WalletService } from '../../services/WalletService';
 import type { MintService } from '../../services/MintService';
-import type { EventBus } from '../../events/EventBus';
-import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
 import type {
   ExecutingMintOperation,
@@ -23,6 +18,7 @@ import type {
 import type { MintAdapter } from '../../infra/MintAdapter';
 import type { UnitAmount } from '../../amounts.ts';
 import type { MintQuote } from '../../models/MintQuote';
+import type { PreparedMintOperation } from './MintCommands.ts';
 
 type OptionalImportQuoteMetadata<T extends MintQuoteBaseResponse> = Omit<
   T,
@@ -125,12 +121,7 @@ export interface MintMethodMeta<M extends MintMethod = MintMethod> {
 }
 
 export interface BaseHandlerDeps {
-  proofRepository: ProofRepository;
-  proofService: ProofService;
-  walletService: WalletService;
-  mintService: MintService;
   mintAdapter: MintAdapter;
-  eventBus: EventBus<CoreEvents>;
   logger?: Logger;
 }
 
@@ -138,6 +129,7 @@ export interface CreateMintQuoteContext<M extends MintMethod = MintMethod> exten
   mintUrl: string;
   createQuoteData: MintMethodCreateQuoteData<M>;
   wallet: Wallet;
+  mintService: Pick<MintService, 'assertNutSupported'>;
 }
 
 export interface FetchRemoteMintQuoteContext<
@@ -146,9 +138,8 @@ export interface FetchRemoteMintQuoteContext<
   quote: MintQuote<M>;
 }
 
-export interface PrepareContext<M extends MintMethod = MintMethod> extends BaseHandlerDeps {
+export interface PrepareContext<M extends MintMethod = MintMethod> {
   operation: InitMintOperation<M>;
-  wallet: Wallet;
   importedQuote?: MintMethodQuoteSnapshot<M>;
 }
 
@@ -166,6 +157,8 @@ export interface RecoverExecutingContext<
     finalizedAmount: Amount;
     reservedAmount: Amount;
   };
+  /** Restore returns candidates only; the operation's settlement transaction persists them. */
+  restoreOutputs(): Promise<Proof[]>;
 }
 
 export interface PendingContext<M extends MintMethod = MintMethod> {
@@ -188,7 +181,7 @@ export type MintExecutionResult =
     };
 
 export type RecoverExecutingResult =
-  | { status: 'FINALIZED' }
+  | { status: 'FINALIZED'; proofs: Proof[] }
   | { status: 'TERMINAL'; error: string }
   | { status: 'PENDING'; error?: string };
 
@@ -225,7 +218,7 @@ export interface MintMethodHandler<M extends MintMethod = MintMethod> {
   createQuote(ctx: CreateMintQuoteContext<M>): Promise<MintQuote<M>>;
   fetchRemoteQuote(ctx: FetchRemoteMintQuoteContext<M>): Promise<MintQuote<M>>;
   validateQuoteForPrepare?(quote: MintQuote<M>): Promise<void> | void;
-  prepare(ctx: PrepareContext<M>): Promise<PendingMintOperation<M>>;
+  prepare(ctx: PrepareContext<M>): Promise<PreparedMintOperation<M>>;
   execute(ctx: ExecuteContext<M>): Promise<MintExecutionResult>;
   recoverExecuting(ctx: RecoverExecutingContext<M>): Promise<RecoverExecutingResult>;
   checkPending(ctx: PendingContext<M>): Promise<PendingMintObservationResult<M>>;

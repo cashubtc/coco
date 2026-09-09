@@ -1149,6 +1149,28 @@ export async function runMintOperationRepositoryContract(
   const { describe, it, expect } = runner;
 
   describe('MintOperationRepository contract', () => {
+    it('preserves caller-owned millisecond timestamps across Mint transitions', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = createDummyMintOperation({
+          createdAt: 1_700_000_000_123,
+          updatedAt: 1_700_000_000_123,
+        });
+        await repositories.mintOperationRepository.create(operation);
+        const executing = {
+          ...operation,
+          state: 'executing' as const,
+          updatedAt: operation.updatedAt + 1,
+        };
+        await repositories.mintOperationRepository.update(executing);
+        const stored = await repositories.mintOperationRepository.getById(operation.id);
+        expect(stored!.createdAt).toBe(operation.createdAt);
+        expect(stored!.updatedAt).toBe(executing.updatedAt);
+      } finally {
+        await dispose();
+      }
+    });
+
     it('round-trips init mint operation quote ids', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {

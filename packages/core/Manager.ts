@@ -1,4 +1,6 @@
 import type { OutputDataCreator } from '@cashu/cashu-ts';
+import { HandlerMintRemote } from './infra/mint/HandlerMintRemote.ts';
+import { CoreMintTransactions } from './transactions/mint/MintTransactions.ts';
 
 import type {
   Repositories,
@@ -1051,19 +1053,29 @@ export class Manager {
     const meltOperationRepository = repositories.meltOperationRepository;
 
     const mintOperationLogger = this.getChildLogger('MintOperationService');
-    const mintOperationService = new MintOperationService(
-      mintHandlerProvider,
-      repositories.mintOperationRepository,
-      quoteLifecycle,
-      repositories.proofRepository,
-      proofService,
-      mintService,
-      walletService,
-      this.mintAdapter,
-      this.eventBus,
-      mintOperationLogger,
+    const mintOperationService = new MintOperationService({
+      operations: repositories.mintOperationRepository,
+      proofs: repositories.proofRepository,
+      quotes: quoteLifecycle,
+      transactions: new CoreMintTransactions(coreTransactionRunner),
+      remote: new HandlerMintRemote(
+        mintHandlerProvider,
+        walletService,
+        mintService,
+        this.mintAdapter,
+        () => seedService.getSeed(),
+        (operation) =>
+          proofService.recoverProofsFromOutputData(operation.mintUrl, operation.outputData, {
+            unit: operation.unit,
+            persistRecoveredProofs: false,
+          }),
+        this.outputDataCreator,
+        mintOperationLogger,
+      ),
+      events: this.eventBus,
+      logger: mintOperationLogger,
       mintScopedLock,
-    );
+    });
     const mintOperationRepository = repositories.mintOperationRepository;
 
     const historyService = new HistoryService(
