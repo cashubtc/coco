@@ -44,7 +44,6 @@ const CREATE_RECEIVE_OPERATION_ROUTE = {
   responseSchema: receiveOperationSchema,
   successStatuses: [201],
   idempotencyKey: 'optional',
-  responseCacheControl: null,
 } as const satisfies V1RouteMetadata<CreateReceiveOperationRequest, ReceiveOperationDocument>;
 
 const GET_RECEIVE_OPERATION_ROUTE = {
@@ -53,9 +52,6 @@ const GET_RECEIVE_OPERATION_ROUTE = {
   capability: 'wallet:read',
   requestSchema: noBodySchema,
   responseSchema: receiveOperationSchema,
-  successStatuses: [200],
-  idempotencyKey: null,
-  responseCacheControl: null,
   parameters: [pathParameter('operationId')],
 } as const satisfies V1RouteMetadata<null, ReceiveOperationDocument>;
 
@@ -65,9 +61,6 @@ const LIST_PREPARED_RECEIVE_OPERATIONS_ROUTE = {
   capability: 'wallet:read',
   requestSchema: noBodySchema,
   responseSchema: receiveOperationsSchema,
-  successStatuses: [200],
-  idempotencyKey: null,
-  responseCacheControl: null,
   parameters: PAGE_PARAMETERS,
 } as const satisfies V1RouteMetadata<null, ReceiveOperationsDocument>;
 
@@ -82,9 +75,7 @@ const EXECUTE_RECEIVE_OPERATION_ROUTE = {
   capability: 'wallet:admin',
   requestSchema: noBodySchema,
   responseSchema: receiveOperationSchema,
-  successStatuses: [200],
   idempotencyKey: 'optional',
-  responseCacheControl: null,
   parameters: [pathParameter('operationId')],
 } as const satisfies V1RouteMetadata<null, ReceiveOperationDocument>;
 
@@ -95,7 +86,6 @@ const GET_RECEIVE_OPERATION_RESULT_ROUTE = {
   requestSchema: noBodySchema,
   responseSchema: noSuccessResponseSchema,
   successStatuses: [],
-  idempotencyKey: null,
   responseCacheControl: 'no-store',
   parameters: [pathParameter('operationId')],
 } as const satisfies V1RouteMetadata<null, never>;
@@ -106,9 +96,7 @@ const CANCEL_RECEIVE_OPERATION_ROUTE = {
   capability: 'wallet:admin',
   requestSchema: noBodySchema,
   responseSchema: receiveOperationSchema,
-  successStatuses: [200],
   idempotencyKey: 'optional',
-  responseCacheControl: null,
   parameters: [pathParameter('operationId')],
 } as const satisfies V1RouteMetadata<null, ReceiveOperationDocument>;
 

@@ -48,7 +48,6 @@ const CREATE_MELT_OPERATION_ROUTE = {
   responseSchema: meltOperationSchema,
   successStatuses: [201],
   idempotencyKey: 'optional',
-  responseCacheControl: null,
 } as const satisfies V1RouteMetadata<CreateMeltOperationRequest, MeltOperationDocument>;
 
 const GET_MELT_OPERATION_ROUTE = {
@@ -57,9 +56,6 @@ const GET_MELT_OPERATION_ROUTE = {
   capability: 'wallet:read',
   requestSchema: noBodySchema,
   responseSchema: meltOperationSchema,
-  successStatuses: [200],
-  idempotencyKey: null,
-  responseCacheControl: null,
   parameters: [pathParameter('operationId')],
 } as const satisfies V1RouteMetadata<null, MeltOperationDocument>;
 
@@ -69,9 +65,6 @@ const LIST_PREPARED_MELT_OPERATIONS_ROUTE = {
   capability: 'wallet:read',
   requestSchema: noBodySchema,
   responseSchema: meltOperationsSchema,
-  successStatuses: [200],
-  idempotencyKey: null,
-  responseCacheControl: null,
   parameters: PAGE_PARAMETERS,
 } as const satisfies V1RouteMetadata<null, MeltOperationsDocument>;
 
@@ -86,7 +79,6 @@ const EXECUTE_MELT_OPERATION_ROUTE = {
   capability: 'wallet:admin',
   requestSchema: noBodySchema,
   responseSchema: executeMeltOperationResponseSchema,
-  successStatuses: [200],
   idempotencyKey: 'optional',
   responseCacheControl: 'no-store',
   parameters: [pathParameter('operationId')],
@@ -98,8 +90,6 @@ const GET_MELT_OPERATION_RESULT_ROUTE = {
   capability: 'wallet:read',
   requestSchema: noBodySchema,
   responseSchema: meltResultSchema,
-  successStatuses: [200],
-  idempotencyKey: null,
   responseCacheControl: 'no-store',
   parameters: [pathParameter('operationId')],
 } as const satisfies V1RouteMetadata<null, MeltResultDocument>;
@@ -110,9 +100,7 @@ const CANCEL_MELT_OPERATION_ROUTE = {
   capability: 'wallet:admin',
   requestSchema: noBodySchema,
   responseSchema: meltOperationSchema,
-  successStatuses: [200],
   idempotencyKey: 'optional',
-  responseCacheControl: null,
   parameters: [pathParameter('operationId')],
 } as const satisfies V1RouteMetadata<null, MeltOperationDocument>;
 

@@ -730,8 +730,8 @@ This resource is implemented and requires `wallet:read`.
 
 The document is generated from the same route metadata and runtime request and response schemas
 enforced by the server. Unsupported resources MUST NOT appear as callable operations in the
-generated document. The checked-in [OpenAPI artifact](openapi-v1.json) is generated from the same
-source and checked for drift.
+generated document. The contract can also be exported with `generate:interface`. Compatibility tests verify the
+route surface, schemas, authorization, and HTTP representation without committing a generated copy.
 
 Within v1, new routes, optional response fields, and optional capabilities are additive changes.
 Removing or renaming a route or field, adding a required field, changing established semantics,

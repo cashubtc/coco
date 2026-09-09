@@ -190,7 +190,8 @@ bun test
 ## Docs
 
 - [API and command reference](docs/API.md)
-- [OpenAPI v1 contract](docs/openapi-v1.json)
+- OpenAPI v1: authenticated `GET /v1/openapi.json`; export with
+  `bun scripts/generate-v1-interface.ts > openapi.json` from `packages/cocod`
 - [Unversioned NPC extension contract](docs/daemon-api.json)
 - [Accepted network interface v1](docs/network-interface-v1.md)
 

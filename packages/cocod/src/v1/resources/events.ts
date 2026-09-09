@@ -25,8 +25,6 @@ const EVENTS_ROUTE = {
   capability: 'wallet:read',
   requestSchema: noBodySchema,
   responseSchema: resourceInvalidationEventSchema,
-  successStatuses: [200],
-  idempotencyKey: null,
   responseCacheControl: 'no-store',
   responseMediaType: 'text/event-stream',
 } as const satisfies V1RouteMetadata<null, ResourceInvalidationEventDocument>;

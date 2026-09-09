@@ -45,7 +45,6 @@ const CREATE_MINT_OPERATION_ROUTE = {
   responseSchema: mintOperationSchema,
   successStatuses: [201],
   idempotencyKey: 'optional',
-  responseCacheControl: null,
 } as const satisfies V1RouteMetadata<CreateMintOperationRequest, MintOperationDocument>;
 
 const GET_MINT_OPERATION_ROUTE = {
@@ -54,9 +53,6 @@ const GET_MINT_OPERATION_ROUTE = {
   capability: 'wallet:read',
   requestSchema: noBodySchema,
   responseSchema: mintOperationSchema,
-  successStatuses: [200],
-  idempotencyKey: null,
-  responseCacheControl: null,
   parameters: [pathParameter('operationId')],
 } as const satisfies V1RouteMetadata<null, MintOperationDocument>;
 
@@ -66,9 +62,6 @@ const LIST_PENDING_MINT_OPERATIONS_ROUTE = {
   capability: 'wallet:read',
   requestSchema: noBodySchema,
   responseSchema: mintOperationsSchema,
-  successStatuses: [200],
-  idempotencyKey: null,
-  responseCacheControl: null,
   parameters: PAGE_PARAMETERS,
 } as const satisfies V1RouteMetadata<null, MintOperationsDocument>;
 
@@ -83,9 +76,7 @@ const EXECUTE_MINT_OPERATION_ROUTE = {
   capability: 'wallet:admin',
   requestSchema: noBodySchema,
   responseSchema: mintOperationSchema,
-  successStatuses: [200],
   idempotencyKey: 'optional',
-  responseCacheControl: null,
   parameters: [pathParameter('operationId')],
 } as const satisfies V1RouteMetadata<null, MintOperationDocument>;
 
@@ -101,7 +92,6 @@ const GET_MINT_OPERATION_RESULT_ROUTE = {
   requestSchema: noBodySchema,
   responseSchema: noSuccessResponseSchema,
   successStatuses: [],
-  idempotencyKey: null,
   responseCacheControl: 'no-store',
   parameters: [pathParameter('operationId')],
 } as const satisfies V1RouteMetadata<null, never>;

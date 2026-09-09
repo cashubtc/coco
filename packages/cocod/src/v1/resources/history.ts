@@ -33,9 +33,6 @@ const LIST_HISTORY_ROUTE = {
   capability: 'wallet:read',
   requestSchema: noBodySchema,
   responseSchema: historyPageSchema,
-  successStatuses: [200],
-  idempotencyKey: null,
-  responseCacheControl: null,
   parameters: PAGE_PARAMETERS,
 } as const satisfies V1RouteMetadata<null, HistoryPageDocument>;
 
@@ -45,9 +42,6 @@ const GET_HISTORY_ROUTE = {
   capability: 'wallet:read',
   requestSchema: noBodySchema,
   responseSchema: historySchema,
-  successStatuses: [200],
-  idempotencyKey: null,
-  responseCacheControl: null,
   parameters: [pathParameter('historyEntryId')],
 } as const satisfies V1RouteMetadata<null, HistoryDocument>;
 

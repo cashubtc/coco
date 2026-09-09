@@ -19,9 +19,6 @@ const EVALUATE_PAYMENT_REQUEST_ROUTE = {
   capability: 'wallet:read',
   requestSchema: evaluatePaymentRequestRequestSchema,
   responseSchema: paymentRequestEvaluationSchema,
-  successStatuses: [200],
-  idempotencyKey: null,
-  responseCacheControl: null,
 } as const satisfies V1RouteMetadata<
   EvaluatePaymentRequestRequest,
   PaymentRequestEvaluationDocument

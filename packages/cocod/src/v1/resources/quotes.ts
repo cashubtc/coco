@@ -56,7 +56,6 @@ const CREATE_MINT_QUOTE_ROUTE = {
   responseSchema: mintQuoteSchema,
   successStatuses: [201],
   idempotencyKey: 'optional',
-  responseCacheControl: null,
 } as const satisfies V1RouteMetadata<CreateMintQuoteRequest, MintQuoteDocument>;
 
 const GET_MINT_QUOTE_ROUTE = {
@@ -65,9 +64,6 @@ const GET_MINT_QUOTE_ROUTE = {
   capability: 'wallet:read',
   requestSchema: noBodySchema,
   responseSchema: mintQuoteSchema,
-  successStatuses: [200],
-  idempotencyKey: null,
-  responseCacheControl: null,
   parameters: [pathParameter('quoteId'), MINT_URL_QUERY_PARAMETER],
 } as const satisfies V1RouteMetadata<null, MintQuoteDocument>;
 
@@ -77,9 +73,6 @@ const LIST_PENDING_MINT_QUOTES_ROUTE = {
   capability: 'wallet:read',
   requestSchema: noBodySchema,
   responseSchema: pendingMintQuotesSchema,
-  successStatuses: [200],
-  idempotencyKey: null,
-  responseCacheControl: null,
   parameters: [QUOTE_METHOD_QUERY_PARAMETER, ...PAGE_PARAMETERS],
 } as const satisfies V1RouteMetadata<null, PendingMintQuotesDocument>;
 
@@ -89,9 +82,7 @@ const REFRESH_MINT_QUOTE_ROUTE = {
   capability: 'wallet:admin',
   requestSchema: noBodySchema,
   responseSchema: mintQuoteSchema,
-  successStatuses: [200],
   idempotencyKey: 'optional',
-  responseCacheControl: null,
   parameters: [pathParameter('quoteId'), MINT_URL_QUERY_PARAMETER],
 } as const satisfies V1RouteMetadata<null, MintQuoteDocument>;
 
@@ -103,7 +94,6 @@ const CREATE_MELT_QUOTE_ROUTE = {
   responseSchema: meltQuoteSchema,
   successStatuses: [201],
   idempotencyKey: 'optional',
-  responseCacheControl: null,
 } as const satisfies V1RouteMetadata<CreateMeltQuoteRequest, MeltQuoteDocument>;
 
 const GET_MELT_QUOTE_ROUTE = {
@@ -112,9 +102,6 @@ const GET_MELT_QUOTE_ROUTE = {
   capability: 'wallet:read',
   requestSchema: noBodySchema,
   responseSchema: meltQuoteSchema,
-  successStatuses: [200],
-  idempotencyKey: null,
-  responseCacheControl: null,
   parameters: [pathParameter('quoteId'), MINT_URL_QUERY_PARAMETER],
 } as const satisfies V1RouteMetadata<null, MeltQuoteDocument>;
 
@@ -124,9 +111,6 @@ const LIST_PENDING_MELT_QUOTES_ROUTE = {
   capability: 'wallet:read',
   requestSchema: noBodySchema,
   responseSchema: pendingMeltQuotesSchema,
-  successStatuses: [200],
-  idempotencyKey: null,
-  responseCacheControl: null,
   parameters: [QUOTE_METHOD_QUERY_PARAMETER, ...PAGE_PARAMETERS],
 } as const satisfies V1RouteMetadata<null, PendingMeltQuotesDocument>;
 
@@ -136,9 +120,7 @@ const REFRESH_MELT_QUOTE_ROUTE = {
   capability: 'wallet:admin',
   requestSchema: noBodySchema,
   responseSchema: meltQuoteSchema,
-  successStatuses: [200],
   idempotencyKey: 'optional',
-  responseCacheControl: null,
   parameters: [pathParameter('quoteId'), MINT_URL_QUERY_PARAMETER],
 } as const satisfies V1RouteMetadata<null, MeltQuoteDocument>;
 

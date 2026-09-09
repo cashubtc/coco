@@ -77,7 +77,7 @@ cocod balance
 ## Commands
 
 For direct API calls, read [the API reference](docs/API.md) and use the authenticated
-[OpenAPI contract](docs/openapi-v1.json). Retain the returned Quote and Operation identities
+OpenAPI contract at `GET /v1/openapi.json`. Retain the returned Quote and Operation identities
 for inspection and result recovery after a lost response. Preparation can reserve funds;
 execution is a separate command.
 

@@ -163,11 +163,15 @@ test('does not advertise unsupported, legacy, or Location-based interface concep
   expect(serialized).not.toContain('Last-Event-ID');
 });
 
-test('keeps the checked-in OpenAPI artifact equal to runtime generation', async () => {
-  const checkedIn = JSON.parse(
-    await Bun.file(new URL('../../docs/openapi-v1.json', import.meta.url)).text(),
-  ) as unknown;
-  expect(checkedIn).toEqual(generateV1OpenApiDocument(createV1RouteMetadata(), '0.0.17'));
+test('exports the served OpenAPI contract on demand', async () => {
+  const process = Bun.spawn(['bun', 'scripts/generate-v1-interface.ts'], {
+    cwd: new URL('../..', import.meta.url).pathname,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  const output = await new Response(process.stdout).json();
+  expect(await process.exited).toBe(0);
+  expect(output).toEqual(generateV1OpenApiDocument(createV1RouteMetadata(), '0.0.17'));
 });
 
 test('serves the generated document only to authenticated readers', async () => {

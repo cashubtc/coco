@@ -36,9 +36,6 @@ const OPENAPI_ROUTE = {
   capability: 'wallet:read',
   requestSchema: noBodySchema,
   responseSchema: openApiDocumentSchema,
-  successStatuses: [200],
-  idempotencyKey: null,
-  responseCacheControl: null,
 } as const satisfies V1RouteMetadata<null, unknown>;
 
 const httpMetadata = [OPENAPI_ROUTE];

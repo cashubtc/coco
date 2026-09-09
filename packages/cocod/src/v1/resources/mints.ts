@@ -39,7 +39,6 @@ const CREATE_MINT_ROUTE = {
   responseSchema: knownMintSchema,
   successStatuses: [200, 201],
   idempotencyKey: 'optional',
-  responseCacheControl: null,
 } as const satisfies V1RouteMetadata<MintUrlRequest, KnownMintDocument>;
 
 const LIST_MINTS_ROUTE = {
@@ -48,9 +47,6 @@ const LIST_MINTS_ROUTE = {
   capability: 'wallet:read',
   requestSchema: noBodySchema,
   responseSchema: knownMintsSchema,
-  successStatuses: [200],
-  idempotencyKey: null,
-  responseCacheControl: null,
   parameters: [TRUSTED_ONLY_QUERY_PARAMETER],
 } as const satisfies V1RouteMetadata<null, KnownMintsDocument>;
 
@@ -60,9 +56,7 @@ const TRUST_MINT_ROUTE = {
   capability: 'wallet:admin',
   requestSchema: mintUrlRequestSchema,
   responseSchema: knownMintSchema,
-  successStatuses: [200],
   idempotencyKey: 'optional',
-  responseCacheControl: null,
 } as const satisfies V1RouteMetadata<MintUrlRequest, KnownMintDocument>;
 
 const UNTRUST_MINT_ROUTE = {
@@ -76,9 +70,6 @@ const MINT_INFO_ROUTE = {
   capability: 'wallet:read',
   requestSchema: noBodySchema,
   responseSchema: mintInformationSchema,
-  successStatuses: [200],
-  idempotencyKey: null,
-  responseCacheControl: null,
   parameters: [MINT_URL_QUERY_PARAMETER],
 } as const satisfies V1RouteMetadata<null, MintInformationDocument>;
 
@@ -88,9 +79,6 @@ const PAYMENT_METHOD_CAPABILITIES_ROUTE = {
   capability: 'wallet:read',
   requestSchema: noBodySchema,
   responseSchema: paymentMethodCapabilitiesSchema,
-  successStatuses: [200],
-  idempotencyKey: null,
-  responseCacheControl: null,
   parameters: [MINT_URL_QUERY_PARAMETER],
 } as const satisfies V1RouteMetadata<null, PaymentMethodCapabilitiesDocument>;
 

@@ -39,9 +39,6 @@ const HEALTH_ROUTE = {
   capability: null,
   requestSchema: noBodySchema,
   responseSchema: healthSchema,
-  successStatuses: [200],
-  idempotencyKey: null,
-  responseCacheControl: null,
 } as const satisfies V1RouteMetadata<null, HealthDocument>;
 
 const STATUS_ROUTE = {
@@ -50,9 +47,6 @@ const STATUS_ROUTE = {
   capability: 'wallet:read',
   requestSchema: noBodySchema,
   responseSchema: lifecycleStatusSchema,
-  successStatuses: [200],
-  idempotencyKey: null,
-  responseCacheControl: null,
 } as const satisfies V1RouteMetadata<null, LifecycleStatusDocument>;
 
 const INITIALIZE_WALLET_ROUTE = {
@@ -72,8 +66,6 @@ const WALLET_RECOVERY_MATERIAL_ROUTE = {
   capability: 'wallet:admin',
   requestSchema: walletRecoveryMaterialRequestSchema,
   responseSchema: walletRecoveryMaterialResponseSchema,
-  successStatuses: [200],
-  idempotencyKey: null,
   responseCacheControl: 'no-store',
 } as const satisfies V1RouteMetadata<
   WalletRecoveryMaterialRequest,
@@ -88,7 +80,6 @@ const START_SESSION_ROUTE = {
   responseSchema: lifecycleStatusSchema,
   successStatuses: [200, 202],
   idempotencyKey: 'optional',
-  responseCacheControl: null,
 } as const satisfies V1RouteMetadata<StartSessionRequest, LifecycleStatusDocument>;
 
 const STOP_SESSION_ROUTE = {
@@ -99,7 +90,6 @@ const STOP_SESSION_ROUTE = {
   responseSchema: lifecycleStatusSchema,
   successStatuses: [200, 202],
   idempotencyKey: 'optional',
-  responseCacheControl: null,
 } as const satisfies V1RouteMetadata<StopSessionRequest, LifecycleStatusDocument>;
 
 const STOP_PROCESS_ROUTE = {
@@ -110,7 +100,6 @@ const STOP_PROCESS_ROUTE = {
   responseSchema: processShutdownResponseSchema,
   successStatuses: [202],
   idempotencyKey: 'optional',
-  responseCacheControl: null,
 } as const satisfies V1RouteMetadata<ProcessShutdownRequest, ProcessShutdownResponseDocument>;
 
 function observeDetachedTransition(

@@ -13,7 +13,7 @@
     "scheme": "bearer",
     "publicPaths": ["/health"],
     "protectedPaths": "all legacy routes and every /v1 route",
-    "openApiDescription": "openapi-v1.json"
+    "openApiDescription": "/v1/openapi.json"
   },
   "responseContract": {
     "scope": "unversioned NPC extension routes",

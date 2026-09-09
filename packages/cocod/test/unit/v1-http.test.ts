@@ -14,6 +14,7 @@ import {
   ReceiveOperationNotFoundError,
   ReceiveOperationStateError,
   SendOperationStateError,
+  SendOperationNotFoundError,
   UnitMismatchError,
   toAmount,
 } from '@cashu/coco-core';
@@ -47,6 +48,161 @@ afterEach(async () => {
 });
 
 describe('v1 HTTP route interface', () => {
+  for (const [type, stateError, missingError] of [
+    [
+      'mint',
+      new MintOperationStateError('operation-1', 'init', ['pending']),
+      new MintOperationNotFoundError('operation-1'),
+    ],
+    [
+      'melt',
+      new MeltOperationStateError('operation-1', 'pending', ['prepared']),
+      new MeltOperationNotFoundError('operation-1'),
+    ],
+    [
+      'send',
+      new SendOperationStateError('operation-1', 'pending', ['prepared']),
+      new SendOperationNotFoundError('operation-1'),
+    ],
+    [
+      'receive',
+      new ReceiveOperationStateError('operation-1', 'executing', ['prepared']),
+      new ReceiveOperationNotFoundError('operation-1'),
+    ],
+  ] as const) {
+    test(`${type} commands map state, lock, missing, and untyped failures safely`, async () => {
+      const credential = await createCredential();
+      const label = type[0]!.toUpperCase() + type.slice(1);
+      const cases = [
+        [
+          stateError,
+          409,
+          {
+            code: 'invalid_operation_state',
+            message: `The ${label} Operation command is unavailable in its current state`,
+            retryable: false,
+            details: {
+              type,
+              operationId: 'operation-1',
+              state: stateError.state,
+              expectedStates: stateError.expectedStates,
+            },
+          },
+        ],
+        [
+          new OperationInProgressError('operation-1'),
+          409,
+          {
+            code: 'operation_in_progress',
+            message: `The ${label} Operation is already in progress`,
+            retryable: true,
+            details: { type, operationId: 'operation-1' },
+          },
+        ],
+        [
+          missingError,
+          404,
+          {
+            code: 'not_found',
+            message: `The ${label} Operation does not exist`,
+            retryable: false,
+          },
+        ],
+        [
+          new Error('proof secret must-not-leak'),
+          500,
+          {
+            code: 'coco_error',
+            message: `Coco could not execute the ${label} Operation`,
+            retryable: false,
+          },
+        ],
+      ] as const;
+      for (const [error, status, expected] of cases) {
+        const execute = mock(async () => {
+          throw error;
+        });
+        const get = mock(async () => {
+          throw missingError;
+        });
+        const routes = createWalletTestRoutes(
+          { ops: { [type]: { execute, get } } },
+          credential.credentials,
+        );
+        const response = await routes[`/v1/operations/${type}/:operationId/execute`]!.POST!(
+          authorizedPostRequest(`/v1/operations/${type}/operation-1/execute`, credential.plaintext),
+        );
+        expect(response.status).toBe(status);
+        expect(await response.json()).toEqual({ error: expected });
+        expect(execute).toHaveBeenCalledWith('operation-1');
+        if (type === 'send' || type === 'melt') {
+          expect(response.headers.get('cache-control')).toBe('no-store');
+        }
+        if (error === missingError) {
+          const missing = await routes[`/v1/operations/${type}/:operationId`]!.GET!(
+            authorizedRequest(`/v1/operations/${type}/operation-1`, credential.plaintext),
+          );
+          expect(missing.status).toBe(404);
+          expect(await missing.json()).toEqual({ error: expected });
+        }
+      }
+    });
+  }
+
+  for (const [type, fixture] of [
+    ['melt', meltOperationFixture],
+    ['send', sendOperationFixture],
+    ['receive', receiveOperationFixture],
+  ] as const) {
+    test(`${type} cancel, refresh, and reclaim return canonical Coco state`, async () => {
+      const credential = await createCredential();
+      const commands =
+        type === 'receive' ? ['cancel', 'refresh'] : ['cancel', 'refresh', 'reclaim'];
+      for (const name of commands) {
+        const state = name === 'refresh' ? 'finalized' : 'rolled_back';
+        const operation = fixture({ state });
+        const command = mock(async () => (name === 'refresh' ? operation : undefined));
+        const get = mock(async () => operation);
+        const routes = createWalletTestRoutes(
+          { ops: { [type]: { [name]: command, get } } },
+          credential.credentials,
+        );
+        const response = await routes[`/v1/operations/${type}/:operationId/${name}`]!.POST!(
+          authorizedPostRequest(
+            `/v1/operations/${type}/${type}-operation-1/${name}`,
+            credential.plaintext,
+          ),
+        );
+        expect(response.status).toBe(200);
+        expect(await response.json()).toMatchObject({ state });
+        expect(command).toHaveBeenCalledWith(`${type}-operation-1`);
+        expect(get).toHaveBeenCalledTimes(1);
+      }
+    });
+  }
+
+  for (const type of ['mint', 'receive'] as const) {
+    test(`${type} operations expose no distinct result resource`, async () => {
+      const credential = await createCredential();
+      const get = mock();
+      const routes = createWalletTestRoutes({ ops: { [type]: { get } } }, credential.credentials);
+      const response = await routes[`/v1/operations/${type}/:operationId/result`]!.GET!(
+        authorizedRequest(`/v1/operations/${type}/operation-1/result`, credential.plaintext),
+      );
+      const label = type === 'mint' ? 'Mint' : 'Receive';
+      expect(response.status).toBe(404);
+      expect(response.headers.get('cache-control')).toBe('no-store');
+      expect(await response.json()).toEqual({
+        error: {
+          code: 'not_found',
+          message: `${label} Operations do not expose a distinct result`,
+          retryable: false,
+        },
+      });
+      expect(get).not.toHaveBeenCalled();
+    });
+  }
+
   test('lists and inspects safe history documents through Coco ordering and identities', async () => {
     const credential = await createCredential();
     const entries = [
@@ -668,77 +824,6 @@ describe('v1 HTTP route interface', () => {
     expect(refresh).toHaveBeenCalledWith('mint-operation-1');
   });
 
-  test('Mint Operations expose no distinct result resource', async () => {
-    const credential = await createCredential();
-    const get = mock(async () => mintOperationFixture({ state: 'finalized' }));
-    const routes = createWalletTestRoutes({ ops: { mint: { get } } }, credential.credentials);
-
-    const response = await routes['/v1/operations/mint/:operationId/result']!.GET!(
-      authorizedRequest('/v1/operations/mint/mint-operation-1/result', credential.plaintext),
-    );
-
-    expect(response.status).toBe(404);
-    expect(response.headers.get('cache-control')).toBe('no-store');
-    expect(await response.json()).toEqual({
-      error: {
-        code: 'not_found',
-        message: 'Mint Operations do not expose a distinct result',
-        retryable: false,
-      },
-    });
-    expect(get).not.toHaveBeenCalled();
-  });
-
-  test('maps typed Mint lifecycle failures and preserves operation-in-progress retry semantics', async () => {
-    const credential = await createCredential();
-    const execute = mock()
-      .mockRejectedValueOnce(new MintOperationStateError('mint-operation-1', 'init', ['pending']))
-      .mockRejectedValueOnce(new OperationInProgressError('mint-operation-1'));
-    const routes = createWalletTestRoutes({ ops: { mint: { execute } } }, credential.credentials);
-    const request = () =>
-      routes['/v1/operations/mint/:operationId/execute']!.POST!(
-        authorizedPostRequest('/v1/operations/mint/mint-operation-1/execute', credential.plaintext),
-      );
-
-    const invalid = await request();
-    const inProgress = await request();
-
-    expect(invalid.status).toBe(409);
-    expect(await invalid.json()).toMatchObject({
-      error: {
-        code: 'invalid_operation_state',
-        details: { type: 'mint', state: 'init', expectedStates: ['pending'] },
-      },
-    });
-    expect(inProgress.status).toBe(409);
-    expect(await inProgress.json()).toMatchObject({
-      error: { code: 'operation_in_progress', retryable: true },
-    });
-  });
-
-  test('maps untyped Coco Mint failures without exposing recovery diagnostics', async () => {
-    const credential = await createCredential();
-    const execute = mock(async () => {
-      throw new Error('proof secret must-not-leak');
-    });
-    const routes = createWalletTestRoutes({ ops: { mint: { execute } } }, credential.credentials);
-
-    const response = await routes['/v1/operations/mint/:operationId/execute']!.POST!(
-      authorizedPostRequest('/v1/operations/mint/mint-operation-1/execute', credential.plaintext),
-    );
-    const body = await response.json();
-
-    expect(response.status).toBe(500);
-    expect(body).toEqual({
-      error: {
-        code: 'coco_error',
-        message: 'Coco could not execute the Mint Operation',
-        retryable: false,
-      },
-    });
-    expect(JSON.stringify(body)).not.toContain('must-not-leak');
-  });
-
   test('maps typed missing Mint Operations and protects authenticated idempotent preparation', async () => {
     const credential = await createCredential();
     const get = mock(async () => {
@@ -961,101 +1046,6 @@ describe('v1 HTTP route interface', () => {
         details: { state: 'pending' },
       },
     });
-  });
-
-  test('cancels, refreshes, and reclaims Melt Operations through explicit commands', async () => {
-    const credential = await createCredential();
-    const rolledBack = meltOperationFixture({ state: 'rolled_back' });
-    const finalized = meltOperationFixture({ state: 'finalized' });
-    const cancel = mock(async () => {});
-    const refresh = mock(async () => finalized);
-    const reclaim = mock(async () => {});
-    const get = mock()
-      .mockResolvedValueOnce(rolledBack)
-      .mockResolvedValueOnce(finalized)
-      .mockResolvedValueOnce(rolledBack);
-    const routes = createWalletTestRoutes(
-      { ops: { melt: { cancel, refresh, reclaim, get } } },
-      credential.credentials,
-    );
-    const command = (name: 'cancel' | 'refresh' | 'reclaim') =>
-      routes[`/v1/operations/melt/:operationId/${name}`]!.POST!(
-        authorizedPostRequest(`/v1/operations/melt/melt-operation-1/${name}`, credential.plaintext),
-      );
-
-    const cancelled = await command('cancel');
-    const refreshed = await command('refresh');
-    const reclaimed = await command('reclaim');
-
-    expect(await cancelled.json()).toMatchObject({ state: 'rolled_back' });
-    expect(await refreshed.json()).toMatchObject({ state: 'finalized' });
-    expect(await reclaimed.json()).toMatchObject({ state: 'rolled_back' });
-    expect(cancel).toHaveBeenCalledWith('melt-operation-1');
-    expect(refresh).toHaveBeenCalledWith('melt-operation-1');
-    expect(reclaim).toHaveBeenCalledWith('melt-operation-1');
-  });
-
-  test('maps typed Melt lifecycle failures and preserves operation-in-progress retries', async () => {
-    const credential = await createCredential();
-    const execute = mock()
-      .mockRejectedValueOnce(
-        new MeltOperationStateError('melt-operation-1', 'pending', ['prepared']),
-      )
-      .mockRejectedValueOnce(new OperationInProgressError('melt-operation-1'));
-    const get = mock(async () => {
-      throw new MeltOperationNotFoundError('missing');
-    });
-    const routes = createWalletTestRoutes(
-      { ops: { melt: { execute, get } } },
-      credential.credentials,
-    );
-    const executeRequest = () =>
-      routes['/v1/operations/melt/:operationId/execute']!.POST!(
-        authorizedPostRequest('/v1/operations/melt/melt-operation-1/execute', credential.plaintext),
-      );
-
-    const invalid = await executeRequest();
-    const inProgress = await executeRequest();
-    const missing = await routes['/v1/operations/melt/:operationId']!.GET!(
-      authorizedRequest('/v1/operations/melt/missing', credential.plaintext),
-    );
-
-    expect(invalid.status).toBe(409);
-    expect(await invalid.json()).toMatchObject({
-      error: {
-        code: 'invalid_operation_state',
-        details: { type: 'melt', state: 'pending', expectedStates: ['prepared'] },
-      },
-    });
-    expect(inProgress.status).toBe(409);
-    expect(await inProgress.json()).toMatchObject({
-      error: { code: 'operation_in_progress', retryable: true },
-    });
-    expect(missing.status).toBe(404);
-    expect(await missing.json()).toMatchObject({ error: { code: 'not_found' } });
-  });
-
-  test('maps untyped Coco Melt failures without exposing recovery diagnostics', async () => {
-    const credential = await createCredential();
-    const execute = mock(async () => {
-      throw new Error('proof secret must-not-leak');
-    });
-    const routes = createWalletTestRoutes({ ops: { melt: { execute } } }, credential.credentials);
-
-    const response = await routes['/v1/operations/melt/:operationId/execute']!.POST!(
-      authorizedPostRequest('/v1/operations/melt/melt-operation-1/execute', credential.plaintext),
-    );
-    const body = await response.json();
-
-    expect(response.status).toBe(500);
-    expect(body).toEqual({
-      error: {
-        code: 'coco_error',
-        message: 'Coco could not execute the Melt Operation',
-        retryable: false,
-      },
-    });
-    expect(JSON.stringify(body)).not.toContain('must-not-leak');
   });
 
   test('authenticates and deduplicates idempotent Melt Operation preparation', async () => {
@@ -1489,88 +1479,6 @@ describe('v1 HTTP route interface', () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
-  test('returns canonical Coco state after Send cancel, refresh, and reclaim commands', async () => {
-    const credential = await createCredential();
-    const cancel = mock(async () => {});
-    const refresh = mock(async () => sendOperationFixture({ state: 'finalized' as const }));
-    const reclaim = mock(async () => {});
-    const get = mock()
-      .mockResolvedValueOnce(sendOperationFixture({ state: 'rolled_back' as const }))
-      .mockResolvedValueOnce(sendOperationFixture({ state: 'finalized' as const }))
-      .mockResolvedValueOnce(sendOperationFixture({ state: 'rolled_back' as const }));
-    const routes = createWalletTestRoutes(
-      { ops: { send: { cancel, refresh, reclaim, get } } },
-      credential.credentials,
-    );
-
-    const command = async (name: 'cancel' | 'refresh' | 'reclaim') =>
-      routes[`/v1/operations/send/:operationId/${name}`]!.POST!(
-        authorizedPostRequest(`/v1/operations/send/send-operation-1/${name}`, credential.plaintext),
-      );
-    const cancelled = await command('cancel');
-    const refreshed = await command('refresh');
-    const reclaimed = await command('reclaim');
-
-    expect(await cancelled.json()).toMatchObject({ state: 'rolled_back' });
-    expect(await refreshed.json()).toMatchObject({ state: 'finalized' });
-    expect(await reclaimed.json()).toMatchObject({ state: 'rolled_back' });
-    expect(cancel).toHaveBeenCalledWith('send-operation-1');
-    expect(refresh).toHaveBeenCalledWith('send-operation-1');
-    expect(reclaim).toHaveBeenCalledWith('send-operation-1');
-    expect(get).toHaveBeenCalledTimes(3);
-  });
-
-  test('maps Coco typed Send lifecycle failures to an invalid-state conflict', async () => {
-    const credential = await createCredential();
-    const execute = mock(async () => {
-      throw new SendOperationStateError('send-operation-1', 'pending', ['prepared']);
-    });
-    const routes = createWalletTestRoutes({ ops: { send: { execute } } }, credential.credentials);
-
-    const response = await routes['/v1/operations/send/:operationId/execute']!.POST!(
-      authorizedPostRequest('/v1/operations/send/send-operation-1/execute', credential.plaintext),
-    );
-
-    expect(response.status).toBe(409);
-    expect(response.headers.get('cache-control')).toBe('no-store');
-    expect(await response.json()).toEqual({
-      error: {
-        code: 'invalid_operation_state',
-        message: 'The Send Operation command is unavailable in its current state',
-        retryable: false,
-        details: {
-          type: 'send',
-          operationId: 'send-operation-1',
-          state: 'pending',
-          expectedStates: ['prepared'],
-        },
-      },
-    });
-  });
-
-  test('preserves retry semantics when a Send Operation command is already in progress', async () => {
-    const credential = await createCredential();
-    const execute = mock(async () => {
-      throw new OperationInProgressError('send-operation-1');
-    });
-    const routes = createWalletTestRoutes({ ops: { send: { execute } } }, credential.credentials);
-
-    const response = await routes['/v1/operations/send/:operationId/execute']!.POST!(
-      authorizedPostRequest('/v1/operations/send/send-operation-1/execute', credential.plaintext),
-    );
-
-    expect(response.status).toBe(409);
-    expect(response.headers.get('cache-control')).toBe('no-store');
-    expect(await response.json()).toEqual({
-      error: {
-        code: 'operation_in_progress',
-        message: 'The Send Operation is already in progress',
-        retryable: true,
-        details: { type: 'send', operationId: 'send-operation-1' },
-      },
-    });
-  });
-
   test('returns a conflict while a Send result is not yet available', async () => {
     const credential = await createCredential();
     const get = mock(async () => sendOperationFixture({ state: 'executing' as const }));
@@ -1810,115 +1718,6 @@ describe('v1 HTTP route interface', () => {
       fee: '2',
     });
     expect(execute).toHaveBeenCalledWith('receive-operation-1');
-  });
-
-  test('returns canonical Coco state after Receive cancel and refresh commands', async () => {
-    const credential = await createCredential();
-    const cancel = mock(async () => {});
-    const refresh = mock(async () => receiveOperationFixture({ state: 'finalized' as const }));
-    const get = mock()
-      .mockResolvedValueOnce(receiveOperationFixture({ state: 'rolled_back' as const }))
-      .mockResolvedValueOnce(receiveOperationFixture({ state: 'finalized' as const }));
-    const routes = createWalletTestRoutes(
-      { ops: { receive: { cancel, refresh, get } } },
-      credential.credentials,
-    );
-
-    const cancelled = await routes['/v1/operations/receive/:operationId/cancel']!.POST!(
-      authorizedPostRequest(
-        '/v1/operations/receive/receive-operation-1/cancel',
-        credential.plaintext,
-      ),
-    );
-    const refreshed = await routes['/v1/operations/receive/:operationId/refresh']!.POST!(
-      authorizedPostRequest(
-        '/v1/operations/receive/receive-operation-1/refresh',
-        credential.plaintext,
-      ),
-    );
-
-    expect(await cancelled.json()).toMatchObject({ state: 'rolled_back' });
-    expect(await refreshed.json()).toMatchObject({ state: 'finalized' });
-    expect(cancel).toHaveBeenCalledWith('receive-operation-1');
-    expect(refresh).toHaveBeenCalledWith('receive-operation-1');
-    expect(get).toHaveBeenCalledTimes(2);
-  });
-
-  test('reports that Receive Operations have no distinct result resource', async () => {
-    const credential = await createCredential();
-    const get = mock(async () => receiveOperationFixture({ state: 'finalized' as const }));
-    const routes = createWalletTestRoutes({ ops: { receive: { get } } }, credential.credentials);
-
-    const response = await routes['/v1/operations/receive/:operationId/result']!.GET!(
-      authorizedRequest('/v1/operations/receive/receive-operation-1/result', credential.plaintext),
-    );
-
-    expect(response.status).toBe(404);
-    expect(response.headers.get('cache-control')).toBe('no-store');
-    expect(await response.json()).toEqual({
-      error: {
-        code: 'not_found',
-        message: 'Receive Operations do not expose a distinct result',
-        retryable: false,
-      },
-    });
-    expect(get).not.toHaveBeenCalled();
-  });
-
-  test('maps typed Receive lifecycle failures and retryable operation locks', async () => {
-    const credential = await createCredential();
-    const execute = mock()
-      .mockRejectedValueOnce(
-        new ReceiveOperationStateError('receive-operation-1', 'executing', ['prepared']),
-      )
-      .mockRejectedValueOnce(new OperationInProgressError('receive-operation-1'))
-      .mockRejectedValueOnce(new ReceiveOperationNotFoundError('receive-operation-1'));
-    const routes = createWalletTestRoutes(
-      { ops: { receive: { execute } } },
-      credential.credentials,
-    );
-    const request = () =>
-      authorizedPostRequest(
-        '/v1/operations/receive/receive-operation-1/execute',
-        credential.plaintext,
-      );
-
-    const invalidState =
-      await routes['/v1/operations/receive/:operationId/execute']!.POST!(request());
-    const inProgress =
-      await routes['/v1/operations/receive/:operationId/execute']!.POST!(request());
-    const missing = await routes['/v1/operations/receive/:operationId/execute']!.POST!(request());
-
-    expect(invalidState.status).toBe(409);
-    expect(await invalidState.json()).toEqual({
-      error: {
-        code: 'invalid_operation_state',
-        message: 'The Receive Operation command is unavailable in its current state',
-        retryable: false,
-        details: {
-          type: 'receive',
-          operationId: 'receive-operation-1',
-          state: 'executing',
-          expectedStates: ['prepared'],
-        },
-      },
-    });
-    expect(inProgress.status).toBe(409);
-    expect(await inProgress.json()).toMatchObject({
-      error: {
-        code: 'operation_in_progress',
-        retryable: true,
-        details: { type: 'receive', operationId: 'receive-operation-1' },
-      },
-    });
-    expect(missing.status).toBe(404);
-    expect(await missing.json()).toEqual({
-      error: {
-        code: 'not_found',
-        message: 'The Receive Operation does not exist',
-        retryable: false,
-      },
-    });
   });
 
   test('replays idempotent Receive preparation and authenticates before calling Coco', async () => {
@@ -3249,644 +3048,175 @@ describe('v1 HTTP route interface', () => {
     }
   });
 
-  test('declares implemented v1 routes with their runtime schemas and capabilities', () => {
-    const routes = createLifecycleTestRouteDefinitions(
+  test('declares the supported route contracts', () => {
+    type Contract = {
+      method: 'GET' | 'POST';
+      path: string;
+      capability: ClientCapability | null;
+      requestSchema: string;
+      responseSchema: string;
+      successStatuses: readonly number[];
+      idempotencyKey: 'optional' | null;
+      responseCacheControl: 'no-store' | null;
+    };
+    const read = (
+      path: string,
+      responseSchema: string,
+      options: Partial<Contract> = {},
+    ): Contract => ({
+      method: 'GET',
+      path,
+      capability: 'wallet:read',
+      requestSchema: 'NoBody',
+      responseSchema,
+      successStatuses: [200],
+      idempotencyKey: null,
+      responseCacheControl: null,
+      ...options,
+    });
+    const write = (
+      path: string,
+      requestSchema: string,
+      responseSchema: string,
+      options: Partial<Contract> = {},
+    ): Contract => ({
+      ...read(path, responseSchema),
+      method: 'POST',
+      capability: 'wallet:admin',
+      requestSchema,
+      idempotencyKey: 'optional',
+      ...options,
+    });
+    const expected = [
+      read('/health', 'Health', { capability: null }),
+      read('/v1/openapi.json', 'OpenApiDocument'),
+      read('/v1/status', 'LifecycleStatus'),
+      write(
+        '/v1/payment-requests/evaluate',
+        'EvaluatePaymentRequestRequest',
+        'PaymentRequestEvaluation',
+        { capability: 'wallet:read', idempotencyKey: null },
+      ),
+      read('/v1/balances', 'Balances'),
+      read('/v1/history', 'HistoryPage'),
+      read('/v1/history/{historyEntryId}', 'History'),
+      read('/v1/events', 'ResourceInvalidationEvent', { responseCacheControl: 'no-store' }),
+      read('/v1/mints', 'KnownMints'),
+      write('/v1/mints', 'MintUrlRequest', 'KnownMint', { successStatuses: [200, 201] }),
+      write('/v1/mints/trust', 'MintUrlRequest', 'KnownMint'),
+      write('/v1/mints/untrust', 'MintUrlRequest', 'KnownMint'),
+      read('/v1/mints/info', 'MintInformation'),
+      read('/v1/mints/payment-method-capabilities', 'PaymentMethodCapabilities'),
+      write('/v1/quotes/mint', 'CreateMintQuoteRequest', 'MintQuote', { successStatuses: [201] }),
+      read('/v1/quotes/mint/pending', 'PendingMintQuotes'),
+      read('/v1/quotes/mint/{quoteId}', 'MintQuote'),
+      write('/v1/quotes/mint/{quoteId}/refresh', 'NoBody', 'MintQuote'),
+      write('/v1/quotes/melt', 'CreateMeltQuoteRequest', 'MeltQuote', { successStatuses: [201] }),
+      read('/v1/quotes/melt/pending', 'PendingMeltQuotes'),
+      read('/v1/quotes/melt/{quoteId}', 'MeltQuote'),
+      write('/v1/quotes/melt/{quoteId}/refresh', 'NoBody', 'MeltQuote'),
+      write('/v1/operations/mint', 'CreateMintOperationRequest', 'MintOperation', {
+        successStatuses: [201],
+      }),
+      read('/v1/operations/mint/pending', 'MintOperations'),
+      read('/v1/operations/mint/in-flight', 'MintOperations'),
+      read('/v1/operations/mint/{operationId}', 'MintOperation'),
+      write('/v1/operations/mint/{operationId}/execute', 'NoBody', 'MintOperation'),
+      read('/v1/operations/mint/{operationId}/result', 'Never', {
+        successStatuses: [],
+        responseCacheControl: 'no-store',
+      }),
+      write('/v1/operations/mint/{operationId}/refresh', 'NoBody', 'MintOperation'),
+      write('/v1/operations/melt', 'CreateMeltOperationRequest', 'MeltOperation', {
+        successStatuses: [201],
+      }),
+      read('/v1/operations/melt/prepared', 'MeltOperations'),
+      read('/v1/operations/melt/in-flight', 'MeltOperations'),
+      read('/v1/operations/melt/{operationId}', 'MeltOperation'),
+      write('/v1/operations/melt/{operationId}/execute', 'NoBody', 'ExecuteMeltOperationResponse', {
+        responseCacheControl: 'no-store',
+      }),
+      read('/v1/operations/melt/{operationId}/result', 'MeltResult', {
+        responseCacheControl: 'no-store',
+      }),
+      write('/v1/operations/melt/{operationId}/cancel', 'NoBody', 'MeltOperation'),
+      write('/v1/operations/melt/{operationId}/refresh', 'NoBody', 'MeltOperation'),
+      write('/v1/operations/melt/{operationId}/reclaim', 'NoBody', 'MeltOperation'),
+      write('/v1/operations/send', 'CreateSendOperationRequest', 'SendOperation', {
+        successStatuses: [201],
+      }),
+      read('/v1/operations/send/prepared', 'SendOperations'),
+      read('/v1/operations/send/in-flight', 'SendOperations'),
+      read('/v1/operations/send/{operationId}', 'SendOperation'),
+      write('/v1/operations/send/{operationId}/execute', 'NoBody', 'ExecuteSendOperationResponse', {
+        responseCacheControl: 'no-store',
+      }),
+      read('/v1/operations/send/{operationId}/result', 'SendResult', {
+        responseCacheControl: 'no-store',
+      }),
+      write('/v1/operations/send/{operationId}/cancel', 'NoBody', 'SendOperation'),
+      write('/v1/operations/send/{operationId}/refresh', 'NoBody', 'SendOperation'),
+      write('/v1/operations/send/{operationId}/reclaim', 'NoBody', 'SendOperation'),
+      write('/v1/operations/receive', 'CreateReceiveOperationRequest', 'ReceiveOperation', {
+        successStatuses: [201],
+      }),
+      read('/v1/operations/receive/prepared', 'ReceiveOperations'),
+      read('/v1/operations/receive/in-flight', 'ReceiveOperations'),
+      read('/v1/operations/receive/{operationId}', 'ReceiveOperation'),
+      write('/v1/operations/receive/{operationId}/execute', 'NoBody', 'ReceiveOperation'),
+      read('/v1/operations/receive/{operationId}/result', 'Never', {
+        successStatuses: [],
+        responseCacheControl: 'no-store',
+      }),
+      write('/v1/operations/receive/{operationId}/cancel', 'NoBody', 'ReceiveOperation'),
+      write('/v1/operations/receive/{operationId}/refresh', 'NoBody', 'ReceiveOperation'),
+      write('/v1/admin/wallet/initialize', 'InitializeWalletRequest', 'InitializeWalletResponse', {
+        successStatuses: [201, 202],
+        responseCacheControl: 'no-store',
+      }),
+      write(
+        '/v1/admin/wallet/recovery-material',
+        'WalletRecoveryMaterialRequest',
+        'WalletRecoveryMaterialResponse',
+        { idempotencyKey: null, responseCacheControl: 'no-store' },
+      ),
+      write('/v1/admin/session/start', 'StartSessionRequest', 'LifecycleStatus', {
+        successStatuses: [200, 202],
+      }),
+      write('/v1/admin/session/stop', 'StopSessionRequest', 'LifecycleStatus', {
+        successStatuses: [200, 202],
+      }),
+      write('/v1/admin/process/stop', 'ProcessShutdownRequest', 'ProcessShutdownResponse', {
+        successStatuses: [202],
+      }),
+    ];
+    const actual = createLifecycleTestRouteDefinitions(
       statusRuntime(unconfiguredStatus()),
       '0.0.17',
+    ).map(
+      ({
+        method,
+        path,
+        capability,
+        requestSchema,
+        responseSchema,
+        successStatuses,
+        idempotencyKey,
+        responseCacheControl,
+      }) => ({
+        method,
+        path,
+        capability,
+        requestSchema: requestSchema.name,
+        responseSchema: responseSchema.name,
+        successStatuses,
+        idempotencyKey,
+        responseCacheControl,
+      }),
     );
-
     const byRoute = (a: { method: string; path: string }, b: { method: string; path: string }) =>
       `${a.method} ${a.path}`.localeCompare(`${b.method} ${b.path}`);
-    expect(
-      routes
-        .map(
-          ({
-            method,
-            path,
-            capability,
-            requestSchema,
-            responseSchema,
-            successStatuses,
-            idempotencyKey,
-            responseCacheControl,
-          }) => ({
-            method,
-            path,
-            capability,
-            requestSchema: requestSchema.name,
-            responseSchema: responseSchema.name,
-            successStatuses,
-            idempotencyKey,
-            responseCacheControl,
-          }),
-        )
-        .toSorted(byRoute),
-    ).toEqual(
-      (
-        [
-          {
-            method: 'GET',
-            path: '/health',
-            capability: null,
-            requestSchema: 'NoBody',
-            responseSchema: 'Health',
-            successStatuses: [200],
-            idempotencyKey: null,
-            responseCacheControl: null,
-          },
-          {
-            method: 'GET',
-            path: '/v1/openapi.json',
-            capability: 'wallet:read',
-            requestSchema: 'NoBody',
-            responseSchema: 'OpenApiDocument',
-            successStatuses: [200],
-            idempotencyKey: null,
-            responseCacheControl: null,
-          },
-          {
-            method: 'GET',
-            path: '/v1/status',
-            capability: 'wallet:read',
-            requestSchema: 'NoBody',
-            responseSchema: 'LifecycleStatus',
-            successStatuses: [200],
-            idempotencyKey: null,
-            responseCacheControl: null,
-          },
-          {
-            method: 'POST',
-            path: '/v1/payment-requests/evaluate',
-            capability: 'wallet:read',
-            requestSchema: 'EvaluatePaymentRequestRequest',
-            responseSchema: 'PaymentRequestEvaluation',
-            successStatuses: [200],
-            idempotencyKey: null,
-            responseCacheControl: null,
-          },
-          {
-            method: 'GET',
-            path: '/v1/balances',
-            capability: 'wallet:read',
-            requestSchema: 'NoBody',
-            responseSchema: 'Balances',
-            successStatuses: [200],
-            idempotencyKey: null,
-            responseCacheControl: null,
-          },
-          {
-            method: 'GET',
-            path: '/v1/history',
-            capability: 'wallet:read',
-            requestSchema: 'NoBody',
-            responseSchema: 'HistoryPage',
-            successStatuses: [200],
-            idempotencyKey: null,
-            responseCacheControl: null,
-          },
-          {
-            method: 'GET',
-            path: '/v1/history/{historyEntryId}',
-            capability: 'wallet:read',
-            requestSchema: 'NoBody',
-            responseSchema: 'History',
-            successStatuses: [200],
-            idempotencyKey: null,
-            responseCacheControl: null,
-          },
-          {
-            method: 'GET',
-            path: '/v1/events',
-            capability: 'wallet:read',
-            requestSchema: 'NoBody',
-            responseSchema: 'ResourceInvalidationEvent',
-            successStatuses: [200],
-            idempotencyKey: null,
-            responseCacheControl: 'no-store',
-          },
-          {
-            method: 'GET',
-            path: '/v1/mints',
-            capability: 'wallet:read',
-            requestSchema: 'NoBody',
-            responseSchema: 'KnownMints',
-            successStatuses: [200],
-            idempotencyKey: null,
-            responseCacheControl: null,
-          },
-          {
-            method: 'POST',
-            path: '/v1/mints',
-            capability: 'wallet:admin',
-            requestSchema: 'MintUrlRequest',
-            responseSchema: 'KnownMint',
-            successStatuses: [200, 201],
-            idempotencyKey: 'optional',
-            responseCacheControl: null,
-          },
-          {
-            method: 'POST',
-            path: '/v1/mints/trust',
-            capability: 'wallet:admin',
-            requestSchema: 'MintUrlRequest',
-            responseSchema: 'KnownMint',
-            successStatuses: [200],
-            idempotencyKey: 'optional',
-            responseCacheControl: null,
-          },
-          {
-            method: 'POST',
-            path: '/v1/mints/untrust',
-            capability: 'wallet:admin',
-            requestSchema: 'MintUrlRequest',
-            responseSchema: 'KnownMint',
-            successStatuses: [200],
-            idempotencyKey: 'optional',
-            responseCacheControl: null,
-          },
-          {
-            method: 'GET',
-            path: '/v1/mints/info',
-            capability: 'wallet:read',
-            requestSchema: 'NoBody',
-            responseSchema: 'MintInformation',
-            successStatuses: [200],
-            idempotencyKey: null,
-            responseCacheControl: null,
-          },
-          {
-            method: 'GET',
-            path: '/v1/mints/payment-method-capabilities',
-            capability: 'wallet:read',
-            requestSchema: 'NoBody',
-            responseSchema: 'PaymentMethodCapabilities',
-            successStatuses: [200],
-            idempotencyKey: null,
-            responseCacheControl: null,
-          },
-          {
-            method: 'POST',
-            path: '/v1/quotes/mint',
-            capability: 'wallet:admin',
-            requestSchema: 'CreateMintQuoteRequest',
-            responseSchema: 'MintQuote',
-            successStatuses: [201],
-            idempotencyKey: 'optional',
-            responseCacheControl: null,
-          },
-          {
-            method: 'GET',
-            path: '/v1/quotes/mint/pending',
-            capability: 'wallet:read',
-            requestSchema: 'NoBody',
-            responseSchema: 'PendingMintQuotes',
-            successStatuses: [200],
-            idempotencyKey: null,
-            responseCacheControl: null,
-          },
-          {
-            method: 'GET',
-            path: '/v1/quotes/mint/{quoteId}',
-            capability: 'wallet:read',
-            requestSchema: 'NoBody',
-            responseSchema: 'MintQuote',
-            successStatuses: [200],
-            idempotencyKey: null,
-            responseCacheControl: null,
-          },
-          {
-            method: 'POST',
-            path: '/v1/quotes/mint/{quoteId}/refresh',
-            capability: 'wallet:admin',
-            requestSchema: 'NoBody',
-            responseSchema: 'MintQuote',
-            successStatuses: [200],
-            idempotencyKey: 'optional',
-            responseCacheControl: null,
-          },
-          {
-            method: 'POST',
-            path: '/v1/quotes/melt',
-            capability: 'wallet:admin',
-            requestSchema: 'CreateMeltQuoteRequest',
-            responseSchema: 'MeltQuote',
-            successStatuses: [201],
-            idempotencyKey: 'optional',
-            responseCacheControl: null,
-          },
-          {
-            method: 'GET',
-            path: '/v1/quotes/melt/pending',
-            capability: 'wallet:read',
-            requestSchema: 'NoBody',
-            responseSchema: 'PendingMeltQuotes',
-            successStatuses: [200],
-            idempotencyKey: null,
-            responseCacheControl: null,
-          },
-          {
-            method: 'GET',
-            path: '/v1/quotes/melt/{quoteId}',
-            capability: 'wallet:read',
-            requestSchema: 'NoBody',
-            responseSchema: 'MeltQuote',
-            successStatuses: [200],
-            idempotencyKey: null,
-            responseCacheControl: null,
-          },
-          {
-            method: 'POST',
-            path: '/v1/quotes/melt/{quoteId}/refresh',
-            capability: 'wallet:admin',
-            requestSchema: 'NoBody',
-            responseSchema: 'MeltQuote',
-            successStatuses: [200],
-            idempotencyKey: 'optional',
-            responseCacheControl: null,
-          },
-          {
-            method: 'POST',
-            path: '/v1/operations/mint',
-            capability: 'wallet:admin',
-            requestSchema: 'CreateMintOperationRequest',
-            responseSchema: 'MintOperation',
-            successStatuses: [201],
-            idempotencyKey: 'optional',
-            responseCacheControl: null,
-          },
-          {
-            method: 'GET',
-            path: '/v1/operations/mint/pending',
-            capability: 'wallet:read',
-            requestSchema: 'NoBody',
-            responseSchema: 'MintOperations',
-            successStatuses: [200],
-            idempotencyKey: null,
-            responseCacheControl: null,
-          },
-          {
-            method: 'GET',
-            path: '/v1/operations/mint/in-flight',
-            capability: 'wallet:read',
-            requestSchema: 'NoBody',
-            responseSchema: 'MintOperations',
-            successStatuses: [200],
-            idempotencyKey: null,
-            responseCacheControl: null,
-          },
-          {
-            method: 'GET',
-            path: '/v1/operations/mint/{operationId}',
-            capability: 'wallet:read',
-            requestSchema: 'NoBody',
-            responseSchema: 'MintOperation',
-            successStatuses: [200],
-            idempotencyKey: null,
-            responseCacheControl: null,
-          },
-          {
-            method: 'POST',
-            path: '/v1/operations/mint/{operationId}/execute',
-            capability: 'wallet:admin',
-            requestSchema: 'NoBody',
-            responseSchema: 'MintOperation',
-            successStatuses: [200],
-            idempotencyKey: 'optional',
-            responseCacheControl: null,
-          },
-          {
-            method: 'GET',
-            path: '/v1/operations/mint/{operationId}/result',
-            capability: 'wallet:read',
-            requestSchema: 'NoBody',
-            responseSchema: 'Never',
-            successStatuses: [],
-            idempotencyKey: null,
-            responseCacheControl: 'no-store',
-          },
-          {
-            method: 'POST',
-            path: '/v1/operations/mint/{operationId}/refresh',
-            capability: 'wallet:admin',
-            requestSchema: 'NoBody',
-            responseSchema: 'MintOperation',
-            successStatuses: [200],
-            idempotencyKey: 'optional',
-            responseCacheControl: null,
-          },
-          {
-            method: 'POST',
-            path: '/v1/operations/melt',
-            capability: 'wallet:admin',
-            requestSchema: 'CreateMeltOperationRequest',
-            responseSchema: 'MeltOperation',
-            successStatuses: [201],
-            idempotencyKey: 'optional',
-            responseCacheControl: null,
-          },
-          {
-            method: 'GET',
-            path: '/v1/operations/melt/prepared',
-            capability: 'wallet:read',
-            requestSchema: 'NoBody',
-            responseSchema: 'MeltOperations',
-            successStatuses: [200],
-            idempotencyKey: null,
-            responseCacheControl: null,
-          },
-          {
-            method: 'GET',
-            path: '/v1/operations/melt/in-flight',
-            capability: 'wallet:read',
-            requestSchema: 'NoBody',
-            responseSchema: 'MeltOperations',
-            successStatuses: [200],
-            idempotencyKey: null,
-            responseCacheControl: null,
-          },
-          {
-            method: 'GET',
-            path: '/v1/operations/melt/{operationId}',
-            capability: 'wallet:read',
-            requestSchema: 'NoBody',
-            responseSchema: 'MeltOperation',
-            successStatuses: [200],
-            idempotencyKey: null,
-            responseCacheControl: null,
-          },
-          {
-            method: 'POST',
-            path: '/v1/operations/melt/{operationId}/execute',
-            capability: 'wallet:admin',
-            requestSchema: 'NoBody',
-            responseSchema: 'ExecuteMeltOperationResponse',
-            successStatuses: [200],
-            idempotencyKey: 'optional',
-            responseCacheControl: 'no-store',
-          },
-          {
-            method: 'GET',
-            path: '/v1/operations/melt/{operationId}/result',
-            capability: 'wallet:read',
-            requestSchema: 'NoBody',
-            responseSchema: 'MeltResult',
-            successStatuses: [200],
-            idempotencyKey: null,
-            responseCacheControl: 'no-store',
-          },
-          {
-            method: 'POST',
-            path: '/v1/operations/melt/{operationId}/cancel',
-            capability: 'wallet:admin',
-            requestSchema: 'NoBody',
-            responseSchema: 'MeltOperation',
-            successStatuses: [200],
-            idempotencyKey: 'optional',
-            responseCacheControl: null,
-          },
-          {
-            method: 'POST',
-            path: '/v1/operations/melt/{operationId}/refresh',
-            capability: 'wallet:admin',
-            requestSchema: 'NoBody',
-            responseSchema: 'MeltOperation',
-            successStatuses: [200],
-            idempotencyKey: 'optional',
-            responseCacheControl: null,
-          },
-          {
-            method: 'POST',
-            path: '/v1/operations/melt/{operationId}/reclaim',
-            capability: 'wallet:admin',
-            requestSchema: 'NoBody',
-            responseSchema: 'MeltOperation',
-            successStatuses: [200],
-            idempotencyKey: 'optional',
-            responseCacheControl: null,
-          },
-          {
-            method: 'POST',
-            path: '/v1/operations/send',
-            capability: 'wallet:admin',
-            requestSchema: 'CreateSendOperationRequest',
-            responseSchema: 'SendOperation',
-            successStatuses: [201],
-            idempotencyKey: 'optional',
-            responseCacheControl: null,
-          },
-          {
-            method: 'GET',
-            path: '/v1/operations/send/prepared',
-            capability: 'wallet:read',
-            requestSchema: 'NoBody',
-            responseSchema: 'SendOperations',
-            successStatuses: [200],
-            idempotencyKey: null,
-            responseCacheControl: null,
-          },
-          {
-            method: 'GET',
-            path: '/v1/operations/send/in-flight',
-            capability: 'wallet:read',
-            requestSchema: 'NoBody',
-            responseSchema: 'SendOperations',
-            successStatuses: [200],
-            idempotencyKey: null,
-            responseCacheControl: null,
-          },
-          {
-            method: 'GET',
-            path: '/v1/operations/send/{operationId}',
-            capability: 'wallet:read',
-            requestSchema: 'NoBody',
-            responseSchema: 'SendOperation',
-            successStatuses: [200],
-            idempotencyKey: null,
-            responseCacheControl: null,
-          },
-          {
-            method: 'POST',
-            path: '/v1/operations/send/{operationId}/execute',
-            capability: 'wallet:admin',
-            requestSchema: 'NoBody',
-            responseSchema: 'ExecuteSendOperationResponse',
-            successStatuses: [200],
-            idempotencyKey: 'optional',
-            responseCacheControl: 'no-store',
-          },
-          {
-            method: 'GET',
-            path: '/v1/operations/send/{operationId}/result',
-            capability: 'wallet:read',
-            requestSchema: 'NoBody',
-            responseSchema: 'SendResult',
-            successStatuses: [200],
-            idempotencyKey: null,
-            responseCacheControl: 'no-store',
-          },
-          {
-            method: 'POST',
-            path: '/v1/operations/send/{operationId}/cancel',
-            capability: 'wallet:admin',
-            requestSchema: 'NoBody',
-            responseSchema: 'SendOperation',
-            successStatuses: [200],
-            idempotencyKey: 'optional',
-            responseCacheControl: null,
-          },
-          {
-            method: 'POST',
-            path: '/v1/operations/send/{operationId}/refresh',
-            capability: 'wallet:admin',
-            requestSchema: 'NoBody',
-            responseSchema: 'SendOperation',
-            successStatuses: [200],
-            idempotencyKey: 'optional',
-            responseCacheControl: null,
-          },
-          {
-            method: 'POST',
-            path: '/v1/operations/send/{operationId}/reclaim',
-            capability: 'wallet:admin',
-            requestSchema: 'NoBody',
-            responseSchema: 'SendOperation',
-            successStatuses: [200],
-            idempotencyKey: 'optional',
-            responseCacheControl: null,
-          },
-          {
-            method: 'POST',
-            path: '/v1/operations/receive',
-            capability: 'wallet:admin',
-            requestSchema: 'CreateReceiveOperationRequest',
-            responseSchema: 'ReceiveOperation',
-            successStatuses: [201],
-            idempotencyKey: 'optional',
-            responseCacheControl: null,
-          },
-          {
-            method: 'GET',
-            path: '/v1/operations/receive/prepared',
-            capability: 'wallet:read',
-            requestSchema: 'NoBody',
-            responseSchema: 'ReceiveOperations',
-            successStatuses: [200],
-            idempotencyKey: null,
-            responseCacheControl: null,
-          },
-          {
-            method: 'GET',
-            path: '/v1/operations/receive/in-flight',
-            capability: 'wallet:read',
-            requestSchema: 'NoBody',
-            responseSchema: 'ReceiveOperations',
-            successStatuses: [200],
-            idempotencyKey: null,
-            responseCacheControl: null,
-          },
-          {
-            method: 'GET',
-            path: '/v1/operations/receive/{operationId}',
-            capability: 'wallet:read',
-            requestSchema: 'NoBody',
-            responseSchema: 'ReceiveOperation',
-            successStatuses: [200],
-            idempotencyKey: null,
-            responseCacheControl: null,
-          },
-          {
-            method: 'POST',
-            path: '/v1/operations/receive/{operationId}/execute',
-            capability: 'wallet:admin',
-            requestSchema: 'NoBody',
-            responseSchema: 'ReceiveOperation',
-            successStatuses: [200],
-            idempotencyKey: 'optional',
-            responseCacheControl: null,
-          },
-          {
-            method: 'GET',
-            path: '/v1/operations/receive/{operationId}/result',
-            capability: 'wallet:read',
-            requestSchema: 'NoBody',
-            responseSchema: 'Never',
-            successStatuses: [],
-            idempotencyKey: null,
-            responseCacheControl: 'no-store',
-          },
-          {
-            method: 'POST',
-            path: '/v1/operations/receive/{operationId}/cancel',
-            capability: 'wallet:admin',
-            requestSchema: 'NoBody',
-            responseSchema: 'ReceiveOperation',
-            successStatuses: [200],
-            idempotencyKey: 'optional',
-            responseCacheControl: null,
-          },
-          {
-            method: 'POST',
-            path: '/v1/operations/receive/{operationId}/refresh',
-            capability: 'wallet:admin',
-            requestSchema: 'NoBody',
-            responseSchema: 'ReceiveOperation',
-            successStatuses: [200],
-            idempotencyKey: 'optional',
-            responseCacheControl: null,
-          },
-          {
-            method: 'POST',
-            path: '/v1/admin/wallet/initialize',
-            capability: 'wallet:admin',
-            requestSchema: 'InitializeWalletRequest',
-            responseSchema: 'InitializeWalletResponse',
-            successStatuses: [201, 202],
-            idempotencyKey: 'optional',
-            responseCacheControl: 'no-store',
-          },
-          {
-            method: 'POST',
-            path: '/v1/admin/wallet/recovery-material',
-            capability: 'wallet:admin',
-            requestSchema: 'WalletRecoveryMaterialRequest',
-            responseSchema: 'WalletRecoveryMaterialResponse',
-            successStatuses: [200],
-            idempotencyKey: null,
-            responseCacheControl: 'no-store',
-          },
-          {
-            method: 'POST',
-            path: '/v1/admin/session/start',
-            capability: 'wallet:admin',
-            requestSchema: 'StartSessionRequest',
-            responseSchema: 'LifecycleStatus',
-            successStatuses: [200, 202],
-            idempotencyKey: 'optional',
-            responseCacheControl: null,
-          },
-          {
-            method: 'POST',
-            path: '/v1/admin/session/stop',
-            capability: 'wallet:admin',
-            requestSchema: 'StopSessionRequest',
-            responseSchema: 'LifecycleStatus',
-            successStatuses: [200, 202],
-            idempotencyKey: 'optional',
-            responseCacheControl: null,
-          },
-          {
-            method: 'POST',
-            path: '/v1/admin/process/stop',
-            capability: 'wallet:admin',
-            requestSchema: 'ProcessShutdownRequest',
-            responseSchema: 'ProcessShutdownResponse',
-            successStatuses: [202],
-            idempotencyKey: 'optional',
-            responseCacheControl: null,
-          },
-        ] as const
-      ).toSorted(byRoute),
-    );
+    expect(actual.toSorted(byRoute)).toEqual(expected.toSorted(byRoute));
   });
 
   test('authenticates and accepts Cocod Process shutdown', async () => {

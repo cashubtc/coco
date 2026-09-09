@@ -41,9 +41,6 @@ const BALANCES_ROUTE = {
   capability: 'wallet:read',
   requestSchema: noBodySchema,
   responseSchema: balancesSchema,
-  successStatuses: [200],
-  idempotencyKey: null,
-  responseCacheControl: null,
   parameters: BALANCE_PARAMETERS,
 } as const satisfies V1RouteMetadata<null, BalancesDocument>;
 

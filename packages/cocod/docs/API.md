@@ -173,9 +173,11 @@ The list above is the currently callable HTTP interface. See the
 [accepted network interface v1](network-interface-v1.md) for the complete resource surface and
 legacy replacement map.
 
-The [OpenAPI v1 contract](openapi-v1.json) is generated from runtime route metadata and schemas and
-is also served by authenticated `GET /v1/openapi.json`. The [NPC extension contract](daemon-api.json)
-describes the only intentionally retained unversioned operational routes; NPC is outside v1.
+Authenticated `GET /v1/openapi.json` serves the OpenAPI v1 contract generated from runtime metadata
+and schemas. To export it without running the daemon, run
+`bun scripts/generate-v1-interface.ts > openapi.json` from `packages/cocod`.
+The [NPC extension contract](daemon-api.json) describes the only intentionally retained unversioned
+operational routes; NPC is outside v1.
 
 Mutation request amounts are positive decimal integer strings. Accounting and resource response
 fields may contain `"0"`.
