@@ -1,3 +1,8 @@
+import { CashuMintMetadataRemote } from './infra/CashuMintMetadataRemote.ts';
+import { StoredMintQueries } from './mints/MintMetadata.ts';
+import { CoreMintMetadataTransactions } from './transactions/mints/MintMetadataTransactions.ts';
+import { MintWalletFactory } from './infra/mint/MintWallet.ts';
+import { createCoreTransactionModuleFactory } from './transactions/CoreTransaction.ts';
 import type { OutputDataCreator } from '@cashu/cashu-ts';
 import { HandlerMintRemote } from './infra/mint/HandlerMintRemote.ts';
 import { CoreMintTransactions } from './transactions/mint/MintTransactions.ts';
@@ -914,15 +919,27 @@ export class Manager {
     const keyRingLogger = this.getChildLogger('KeyRingService');
     const historyLogger = this.getChildLogger('HistoryService');
     const tokenLogger = this.getChildLogger('TokenService');
+    const seedService = new SeedService(seedGetter);
+    const coreTransactionRunner = new RepositoryCoreTransactionRunner(
+      repositories,
+      createCoreTransactionModuleFactory(this.outputDataCreator),
+    );
+    const mintQueries = new StoredMintQueries(
+      repositories.mintRepository,
+      repositories.keysetRepository,
+    );
     const mintService = new MintService(
       repositories.mintRepository,
       repositories.keysetRepository,
       this.mintAdapter,
+      {
+        queries: mintQueries,
+        remote: new CashuMintMetadataRemote(this.mintAdapter),
+        transactions: new CoreMintMetadataTransactions(coreTransactionRunner),
+      },
       mintLogger,
       this.eventBus,
     );
-    const seedService = new SeedService(seedGetter);
-    const coreTransactionRunner = new RepositoryCoreTransactionRunner(repositories);
     const keyRingTransactions = new CoreKeyRingTransactions(coreTransactionRunner);
     const keypairDerivation = new KeypairDerivation(() => seedService.getSeed());
     const p2pkSigner = new KeypairP2pkSigner(repositories.keyRingRepository);
@@ -1054,22 +1071,17 @@ export class Manager {
 
     const mintOperationLogger = this.getChildLogger('MintOperationService');
     const mintOperationService = new MintOperationService({
+      mintQueries,
+      mintMetadataRefresh: mintService,
+      loadSeed: () => seedService.getSeed(),
       operations: repositories.mintOperationRepository,
       proofs: repositories.proofRepository,
       quotes: quoteLifecycle,
       transactions: new CoreMintTransactions(coreTransactionRunner),
       remote: new HandlerMintRemote(
         mintHandlerProvider,
-        walletService,
-        mintService,
+        new MintWalletFactory(this.mintAdapter, this.mintRequestProvider, this.outputDataCreator),
         this.mintAdapter,
-        () => seedService.getSeed(),
-        (operation) =>
-          proofService.recoverProofsFromOutputData(operation.mintUrl, operation.outputData, {
-            unit: operation.unit,
-            persistRecoveredProofs: false,
-          }),
-        this.outputDataCreator,
         mintOperationLogger,
       ),
       events: this.eventBus,

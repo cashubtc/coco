@@ -1,3 +1,4 @@
+import type { ScopedOutputCommands } from '../outputs/ScopedOutputCommands.ts';
 import { Amount } from '@cashu/cashu-ts';
 import { ProofValidationError, UnknownMintError } from '../../../models/Error.ts';
 import {
@@ -33,7 +34,10 @@ export type ScopedMintCommands = MintCommands;
 
 /** Existing Mint lifecycle mutations, using only repositories from one runner-owned scope. */
 export class RepositoryMintCommands implements ScopedMintCommands {
-  constructor(private readonly scope: RepositoryTransactionScope) {}
+  constructor(
+    private readonly scope: RepositoryTransactionScope,
+    private readonly outputs: ScopedOutputCommands,
+  ) {}
 
   private async requireOperation(id: string) {
     const operation = await this.scope.mintOperationRepository.getById(id);
@@ -54,7 +58,8 @@ export class RepositoryMintCommands implements ScopedMintCommands {
   }
 
   async prepare(input: PrepareMintInput): Promise<PreparedMintCommit> {
-    const { operation, keysetId } = input;
+    const { operation, activeKeys, seed } = input;
+    const keysetId = activeKeys.id;
     const quote = await this.scope.mintQuoteRepository.getMintQuote(
       operation.mintUrl,
       operation.method,
@@ -88,9 +93,15 @@ export class RepositoryMintCommands implements ScopedMintCommands {
           `Mint quote ${quote.quoteId} is already tracked by operation ${siblings[0]!.id} in state ${siblings[0]!.state}`,
         );
     }
-    const counter =
-      (await this.scope.counterRepository.getCounter(operation.mintUrl, keysetId))?.counter ?? 0;
-    const outputData = input.derive(counter);
+    const allocated = await this.outputs.allocate({
+      mintUrl: operation.mintUrl,
+      unit: operation.unit,
+      activeKeys,
+      seed,
+      keepAmount: operation.amount,
+      sendAmount: Amount.zero(),
+    });
+    const { outputData } = allocated;
     if (
       !outputData.keep.length ||
       outputData.send.length ||
@@ -103,15 +114,11 @@ export class RepositoryMintCommands implements ScopedMintCommands {
       new Set(outputData.keep.map((output) => output.secret)).size !== outputData.keep.length
     )
       throw new ProofValidationError('Invalid Mint output allocation');
-    const nextCounter = counter + outputData.keep.length;
-    if (!Number.isSafeInteger(nextCounter))
-      throw new ProofValidationError('Mint output counter exhausted');
     const pending: PendingMintOperation = { ...operation, outputData };
-    await this.scope.counterRepository.setCounter(operation.mintUrl, keysetId, nextCounter);
     await this.scope.mintOperationRepository.create(pending);
     return {
       operation: pending,
-      counter: { mintUrl: operation.mintUrl, keysetId, counter: nextCounter },
+      counter: allocated.counter!,
     };
   }
 

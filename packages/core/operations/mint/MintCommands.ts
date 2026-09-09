@@ -1,7 +1,6 @@
-import type { Proof } from '@cashu/cashu-ts';
+import type { MintKeys, Proof } from '@cashu/cashu-ts';
 import type { MintQuote } from '../../models/MintQuote.ts';
 import type { CoreProof } from '../../types.ts';
-import type { SerializedOutputData } from '../../utils.ts';
 import type { MintMethod } from './MintMethodHandler.ts';
 import type {
   MintOperation,
@@ -18,8 +17,8 @@ export type PreparedMintOperation<M extends MintMethod = MintMethod> = Omit<
 
 export interface PrepareMintInput {
   operation: PreparedMintOperation;
-  keysetId: string;
-  derive(counter: number): SerializedOutputData;
+  activeKeys: MintKeys;
+  seed: Uint8Array;
 }
 
 export interface AuthorizeMintInput {

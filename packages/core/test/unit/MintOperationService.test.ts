@@ -1,3 +1,7 @@
+import { createCoreTransactionModuleFactory } from '../../transactions/CoreTransaction.ts';
+import { StoredMintQueries } from '../../mints/MintMetadata.ts';
+import { makeOutputDataCreator } from '../fixtures/OutputDataCreator.ts';
+import type { SerializedOutputData } from '../../utils.ts';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
 import { CoreMintTransactions } from '../../transactions/mint/MintTransactions.ts';
@@ -439,8 +443,8 @@ describe('MintOperationService', () => {
       logger,
     });
 
+    const plans = new WeakMap<Uint8Array, SerializedOutputData>();
     remote = {
-      isTrusted: (url) => mintService.isTrustedMint(url),
       prepare: async (operation, quote) => {
         const selectedHandler = handlerProvider.get(operation.method);
         await selectedHandler.validateQuoteForPrepare?.(quote);
@@ -459,7 +463,21 @@ describe('MintOperationService', () => {
         });
         // The old method fixtures provide a deterministic plan. Allocation is now owned by the gateway.
         const plan = (prepared as PendingMintOperation).outputData;
-        return { operation: prepared, keysetId, derive: () => plan };
+        const seed = new Uint8Array(64);
+        plans.set(seed, plan);
+        await repositories.keysetRepository.addKeyset({
+          mintUrl: operation.mintUrl,
+          id: keysetId,
+          unit: operation.unit,
+          active: true,
+          keypairs: {},
+          feePpk: 0,
+        });
+        return {
+          operation: prepared,
+          activeKeys: { id: keysetId, unit: operation.unit, keys: {} },
+          seed,
+        };
       },
       execute: async (operation) => {
         const { wallet } = await walletService.getWalletWithActiveKeysetId(
@@ -470,7 +488,7 @@ describe('MintOperationService', () => {
           .get(operation.method)
           .execute({ operation, wallet, mintAdapter, logger });
       },
-      recoverExecuting: async (operation, localClaimabilityFacts) => {
+      recoverExecuting: async (operation, localClaimabilityFacts, metadata) => {
         const { wallet } = await walletService.getWalletWithActiveKeysetId(
           operation.mintUrl,
           operation.unit,
@@ -481,7 +499,7 @@ describe('MintOperationService', () => {
           mintAdapter,
           logger,
           localClaimabilityFacts,
-          restoreOutputs: () => remote.restoreOutputs(operation),
+          restoreOutputs: () => remote.restoreOutputs(operation, metadata),
         });
       },
       observePending: (operation) =>
@@ -509,8 +527,22 @@ describe('MintOperationService', () => {
           }),
         ),
       ),
+      createCoreTransactionModuleFactory(
+        makeOutputDataCreator({
+          createDeterministicData: (_amount, seed) => deserializeOutputData(plans.get(seed)!).keep,
+        }),
+      ),
     );
     service = new MintOperationService({
+      mintQueries: { isTrustedMint: (url) => mintService.isTrustedMint(url) },
+      mintMetadataRefresh: {
+        refreshAndCommitIfStale: async (url) =>
+          (await new StoredMintQueries(
+            repositories.mintRepository,
+            repositories.keysetRepository,
+          ).getMetadata(url))!,
+      },
+      loadSeed: async () => new Uint8Array(64),
       operations: operationRepo,
       proofs: proofRepo,
       quotes: quoteLifecycle,

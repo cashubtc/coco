@@ -1,3 +1,8 @@
+import { createMintServiceForMetadata } from '../fixtures/MintMetadataRefresh.ts';
+import { testMintKeypairs, testMintKeysetId } from '../fixtures/MintMetadata.ts';
+import { StoredMintQueries } from '../../mints/MintMetadata.ts';
+import { createCoreTransactionModuleFactory } from '../../transactions/CoreTransaction.ts';
+import { MintWalletFactory } from '../../infra/mint/MintWallet.ts';
 import {
   Amount,
   Mint,
@@ -37,7 +42,7 @@ import { overrideTransactions } from '../overrideTransactions.ts';
 import { makeOutputDataCreator } from '../fixtures/OutputDataCreator.ts';
 
 const mintUrl = 'https://mint.test';
-const keysetId = 'keyset';
+const keysetId = testMintKeysetId();
 const timestamp = 1_700_000_000_123;
 
 async function fixture(repositories: Repositories, method: 'bolt11' | 'onchain' = 'bolt11') {
@@ -51,10 +56,43 @@ async function fixture(repositories: Repositories, method: 'bolt11' | 'onchain' 
       pubkey: '',
       version: 'test/1',
       contact: [],
-      nuts: { '4': { methods: [], disabled: false }, '5': { methods: [], disabled: false } },
+      nuts: {
+        '4': {
+          methods: [
+            {
+              method: 'bolt11',
+              unit: 'sat',
+              method_name: null,
+              min_amount: null,
+              max_amount: null,
+            },
+          ],
+          disabled: false,
+        },
+        '5': { methods: [], disabled: false },
+      },
     },
     createdAt: timestamp,
     updatedAt: timestamp,
+  });
+  await repositories.keysetRepository.addKeyset({
+    mintUrl,
+    id: keysetId,
+    unit: 'sat',
+    active: true,
+    feePpk: 0,
+    keypairs: testMintKeypairs,
+  });
+  const creator = makeOutputDataCreator({
+    createDeterministicData: (_amount, _seed, counter) =>
+      [8, 2].map(
+        (amount, index) =>
+          new OutputData(
+            { id: keysetId, amount: Amount.from(amount), B_: `B_${counter + index}` },
+            1n,
+            new TextEncoder().encode(`secret_${counter + index}`),
+          ),
+      ),
   });
   const common = {
     quote: 'quote',
@@ -91,21 +129,13 @@ async function fixture(repositories: Repositories, method: 'bolt11' | 'onchain' 
       createdAt: timestamp,
       updatedAt: timestamp,
     },
-    keysetId,
-    derive: (counter) =>
-      serializeOutputData({
-        keep: [8, 2].map(
-          (amount, index) =>
-            new OutputData(
-              { id: keysetId, amount: Amount.from(amount), B_: `B_${counter + index}` },
-              1n,
-              new TextEncoder().encode(`secret_${counter + index}`),
-            ),
-        ),
-        send: [],
-      }),
+    activeKeys: { id: keysetId, unit: 'sat', keys: { ...testMintKeypairs } },
+    seed: new Uint8Array(64),
   });
-  const runner = new RepositoryCoreTransactionRunner(repositories);
+  const runner = new RepositoryCoreTransactionRunner(
+    repositories,
+    createCoreTransactionModuleFactory(creator),
+  );
   const transactions = new CoreMintTransactions(runner);
   async function authorize(id = 'mint') {
     await transactions.prepare(input(id));
@@ -121,7 +151,7 @@ async function fixture(repositories: Repositories, method: 'bolt11' | 'onchain' 
       C: `C_${output.blindedMessage.B_}`,
     }));
   }
-  return { repositories, quote, input, runner, transactions, authorize, proofs };
+  return { repositories, quote, input, runner, transactions, authorize, proofs, creator };
 }
 
 const adapters = [
@@ -246,6 +276,36 @@ for (const adapter of adapters)
         db.close();
       }
     });
+
+    it.each(['deactivated', 'unit changed', 'keys replaced'] as const)(
+      'rejects allocation when the selected keyset is %s before commit',
+      async (change) => {
+        const db = adapter.create();
+        try {
+          const f = await fixture(db.repositories);
+          const input = f.input();
+          await f.repositories.keysetRepository.deleteKeyset(mintUrl, keysetId);
+          await f.repositories.keysetRepository.addKeyset({
+            mintUrl,
+            id: keysetId,
+            unit: change === 'unit changed' ? 'usd' : 'sat',
+            active: change !== 'deactivated',
+            feePpk: 0,
+            keypairs:
+              change === 'keys replaced'
+                ? { ...testMintKeypairs, '1': testMintKeypairs['2'] }
+                : testMintKeypairs,
+          });
+          await expect(f.transactions.prepare(input)).rejects.toThrow('changed after preflight');
+          expect(await f.repositories.counterRepository.getCounter(mintUrl, keysetId)).toBeNull();
+          expect(
+            await f.repositories.mintOperationRepository.getById(input.operation.id),
+          ).toBeNull();
+        } finally {
+          db.close();
+        }
+      },
+    );
 
     it('atomically settles proofs, legacy BOLT11 accounting, and finalized operation state', async () => {
       const db = adapter.create();
@@ -405,7 +465,12 @@ describe('Mint transaction orchestration', () => {
         expect(inTransaction).toBe(true);
         expect(Amount.from(amount).equals(Amount.from(10))).toBe(true);
         expect(providedSeed).toBe(seed);
-        return deserializeOutputData(f.input().derive(counter)).keep;
+        return f.creator.createDeterministicData(
+          amount,
+          providedSeed,
+          counter,
+          f.input().activeKeys,
+        );
       },
     );
     const handler = new MintBolt11Handler({
@@ -416,32 +481,26 @@ describe('Mint transaction orchestration', () => {
     });
     const remote = new HandlerMintRemote(
       new MintHandlerProvider({ bolt11: handler }),
-      {
-        getWalletWithActiveKeysetId: async () => {
-          expect(inTransaction).toBe(false);
-          return {
-            wallet: new Wallet(new Mint(mintUrl)),
-            keysetId,
-            unit: 'sat',
-            keyset: { id: keysetId, unit: 'sat', active: true, input_fee_ppk: 0 },
-            keys: { id: keysetId, unit: 'sat', keys: {} },
-          };
+      new MintWalletFactory(
+        { getAuthProvider: () => undefined },
+        {
+          getRequestFn: () => async () => {
+            throw new Error('Unexpected mint request');
+          },
         },
-      },
-      {
-        isTrustedMint: async () => true,
-        assertMethodUnitSupported: async () => {
-          expect(inTransaction).toBe(false);
-        },
-      },
+      ),
       {} as MintAdapter,
-      getSeed,
-      async () => {
-        throw new Error('Unexpected Restore');
-      },
-      makeOutputDataCreator({ createDeterministicData: derive }),
     );
-    const prepared = await remote.prepare({ ...f.input().operation, state: 'init' }, f.quote);
+    const metadata = (await new StoredMintQueries(
+      f.repositories.mintRepository,
+      f.repositories.keysetRepository,
+    ).getMetadata(mintUrl))!;
+    const prepared = await remote.prepare(
+      { ...f.input().operation, state: 'init' },
+      f.quote,
+      metadata,
+      await getSeed(),
+    );
     expect(derive).not.toHaveBeenCalled();
     expect(await f.repositories.counterRepository.getCounter(mintUrl, keysetId)).toBeNull();
     await f.repositories.counterRepository.setCounter(mintUrl, keysetId, 7);
@@ -454,16 +513,132 @@ describe('Mint transaction orchestration', () => {
       }
     });
     const result = await new CoreMintTransactions(
-      new RepositoryCoreTransactionRunner(controlled),
+      new RepositoryCoreTransactionRunner(
+        controlled,
+        createCoreTransactionModuleFactory(
+          makeOutputDataCreator({ createDeterministicData: derive }),
+        ),
+      ),
     ).prepare(prepared);
     expect(result.counter.counter).toBe(9);
     expect(derive).toHaveBeenCalledTimes(1);
     expect(getSeed).toHaveBeenCalledTimes(1);
   });
 
+  it('retains the independently committed metadata refresh when Mint preparation rolls back', async () => {
+    const f = await fixture(new MemoryRepositories());
+    const mint = await f.repositories.mintRepository.getMintByUrl(mintUrl);
+    await f.repositories.mintRepository.updateMint({ ...mint, updatedAt: 0 });
+    let inTransaction = false;
+    const controlled = overrideTransactions(f.repositories, (work) =>
+      f.repositories.withTransaction(async (scope) => {
+        inTransaction = true;
+        const operations = new Proxy(scope.mintOperationRepository, {
+          get(target, property) {
+            if (property === 'create')
+              return async () => {
+                throw new Error('operation write failed');
+              };
+            const value = Reflect.get(target, property, target);
+            return typeof value === 'function' ? value.bind(target) : value;
+          },
+        });
+        try {
+          return await work({ ...scope, mintOperationRepository: operations });
+        } finally {
+          inTransaction = false;
+        }
+      }),
+    );
+    const events = new EventBus<CoreEvents>();
+    const refreshed = mock(async () => {
+      expect(inTransaction).toBe(false);
+      expect((await f.repositories.mintRepository.getMintByUrl(mintUrl)).mintInfo.name).toBe(
+        'Refreshed',
+      );
+    });
+    events.on('mint:updated', refreshed);
+    const pending = mock(() => {});
+    events.on('mint-op:pending', pending);
+    const fetchMintMetadata = mock(async () => {
+      expect(inTransaction).toBe(false);
+      return {
+        mintUrl,
+        mintInfo: { ...mint.mintInfo, name: 'Refreshed' },
+        keysets: [
+          {
+            mintUrl,
+            id: keysetId,
+            unit: 'sat',
+            active: true,
+            keypairs: testMintKeypairs,
+            feePpk: 0,
+          },
+        ],
+        observedAt: Math.floor(Date.now() / 1000),
+      };
+    });
+    const refresh = createMintServiceForMetadata(controlled, { fetchMintMetadata }, events);
+    const handler = new MintBolt11Handler({
+      getMintQuoteKeyPair: async () => null,
+      generateMintQuoteKeyPair: async () => {
+        throw new Error('Unexpected key allocation');
+      },
+    });
+    const remote = new HandlerMintRemote(
+      new MintHandlerProvider({ bolt11: handler }),
+      new MintWalletFactory(
+        { getAuthProvider: () => undefined },
+        {
+          getRequestFn: () => async () => {
+            throw new Error('Unexpected mint request');
+          },
+        },
+      ),
+      {} as MintAdapter,
+    );
+    const service = new MintOperationService({
+      mintQueries: new StoredMintQueries(
+        f.repositories.mintRepository,
+        f.repositories.keysetRepository,
+      ),
+      mintMetadataRefresh: refresh,
+      loadSeed: async () => {
+        expect(inTransaction).toBe(false);
+        return new Uint8Array(64);
+      },
+      operations: f.repositories.mintOperationRepository,
+      proofs: f.repositories.proofRepository,
+      quotes: {
+        requireMintQuoteRefForPrepare: async () => f.quote,
+        getMintQuote: async () => f.quote,
+        getPendingMintQuotes: async () => [],
+      },
+      remote,
+      events,
+      transactions: new CoreMintTransactions(
+        new RepositoryCoreTransactionRunner(
+          controlled,
+          createCoreTransactionModuleFactory(f.creator),
+        ),
+      ),
+    });
+    await expect(
+      service.prepare({ mintUrl, method: 'bolt11', quoteId: f.quote.quoteId }, Amount.from(10)),
+    ).rejects.toThrow('operation write failed');
+    expect(fetchMintMetadata).toHaveBeenCalledTimes(1);
+    expect(refreshed).toHaveBeenCalledTimes(1);
+    expect(pending).not.toHaveBeenCalled();
+    expect((await f.repositories.mintRepository.getMintByUrl(mintUrl)).mintInfo.name).toBe(
+      'Refreshed',
+    );
+    expect(await f.repositories.counterRepository.getCounter(mintUrl, keysetId)).toBeNull();
+    expect(await f.repositories.mintOperationRepository.getByMintUrl(mintUrl)).toEqual([]);
+  });
+
   it('keeps derivation inputs stable across rollback and bounded conflict retries', async () => {
     const f = await fixture(new MemoryRepositories());
-    const derive = mock(f.input().derive);
+    const derive = mock(f.creator.createDeterministicData);
     let conflict = true;
     const controlled = overrideTransactions(f.repositories, (work) =>
       f.repositories.withTransaction(async (scope) => {
@@ -475,9 +650,20 @@ describe('Mint transaction orchestration', () => {
         return result;
       }),
     );
-    const transactions = new CoreMintTransactions(new RepositoryCoreTransactionRunner(controlled));
-    const committed = await transactions.prepare({ ...f.input(), derive });
-    expect(derive.mock.calls).toEqual([[0], [0]]);
+    const transactions = new CoreMintTransactions(
+      new RepositoryCoreTransactionRunner(
+        controlled,
+        createCoreTransactionModuleFactory(
+          makeOutputDataCreator({ createDeterministicData: derive }),
+        ),
+      ),
+    );
+    const input = f.input();
+    const committed = await transactions.prepare(input);
+    expect(derive.mock.calls).toEqual([
+      [input.operation.amount, input.seed, 0, input.activeKeys],
+      [input.operation.amount, input.seed, 0, input.activeKeys],
+    ]);
     expect(committed.operation.createdAt).toBe(timestamp);
     expect(committed.operation.updatedAt).toBe(timestamp);
     expect(await f.repositories.counterRepository.getCounter(mintUrl, keysetId)).toMatchObject({
@@ -511,7 +697,6 @@ describe('Mint transaction orchestration', () => {
       return { status: 'ISSUED' as const, proofs: f.proofs(operation) };
     });
     const remote: MintRemote = {
-      isTrusted: async () => true,
       prepare: async () => {
         throw new Error('unexpected preparation');
       },
@@ -527,6 +712,15 @@ describe('Mint transaction orchestration', () => {
       },
     };
     const service = new MintOperationService({
+      mintQueries: { isTrustedMint: async () => true },
+      mintMetadataRefresh: {
+        refreshAndCommitIfStale: async () =>
+          (await new StoredMintQueries(
+            f.repositories.mintRepository,
+            f.repositories.keysetRepository,
+          ).getMetadata(mintUrl))!,
+      },
+      loadSeed: async () => new Uint8Array(64),
       operations: f.repositories.mintOperationRepository,
       proofs: f.repositories.proofRepository,
       remote,

@@ -1,5 +1,6 @@
-import { OutputData, type OutputDataCreator, type Proof } from '@cashu/cashu-ts';
 import type { Logger } from '../../logging/Logger.ts';
+import type { MintMetadata } from '../../mints/MintMetadata.ts';
+import { assertMethodUnitCapability } from '../../mints/MintCapabilities.ts';
 import { mintQuoteToMethodSnapshot, type MintQuote } from '../../models/MintQuote.ts';
 import type {
   ExecutingMintOperation,
@@ -8,68 +9,50 @@ import type {
   PendingOrLaterOperation,
 } from '../../operations/mint/MintOperation.ts';
 import type { MintRemote } from '../../operations/mint/MintRemote.ts';
-import type { MintService } from '../../services/MintService.ts';
-import type { WalletService } from '../../services/WalletService.ts';
-import { serializeOutputData } from '../../utils.ts';
 import type { MintHandlerProvider } from '../handlers/mint/MintHandlerProvider.ts';
 import type { MintAdapter } from '../MintAdapter.ts';
+import { restoreOutputProofs } from '../ProofRestore.ts';
+import type { MintWalletFactory } from './MintWallet.ts';
 
-/** Retains the existing method-specific lifecycle while returning all candidates to the owner. */
+/** Method policy and protocol effects using snapshots; no Services or persistence authority. */
 export class HandlerMintRemote implements MintRemote {
   constructor(
     private readonly handlers: MintHandlerProvider,
-    private readonly wallets: Pick<WalletService, 'getWalletWithActiveKeysetId'>,
-    private readonly mints: Pick<MintService, 'isTrustedMint' | 'assertMethodUnitSupported'>,
+    private readonly wallets: Pick<MintWalletFactory, 'create'>,
     private readonly mintAdapter: MintAdapter,
-    private readonly getSeed: () => Promise<Uint8Array>,
-    readonly restoreOutputs: (operation: PendingOrLaterOperation) => Promise<Proof[]>,
-    private readonly outputs: OutputDataCreator = OutputData,
     private readonly logger?: Logger,
   ) {}
 
-  isTrusted(mintUrl: string) {
-    return this.mints.isTrustedMint(mintUrl);
-  }
-
-  async prepare(operation: InitMintOperation, quote: MintQuote) {
+  async prepare(
+    operation: InitMintOperation,
+    quote: MintQuote,
+    metadata: MintMetadata,
+    seed: Uint8Array,
+  ) {
     const handler = this.handlers.get(operation.method);
     await handler.validateQuoteForPrepare?.(quote);
-    await this.mints.assertMethodUnitSupported(
-      operation.mintUrl,
+    assertMethodUnitCapability(
+      metadata.mint.mintInfo,
       4,
       operation.method,
       operation.method === 'onchain'
         ? operation.unit
         : { amount: operation.amount, unit: operation.unit },
     );
-    const { keys, keysetId } = await this.wallets.getWalletWithActiveKeysetId(
-      operation.mintUrl,
-      operation.unit,
-    );
+    const wallet = this.wallets.create(metadata, operation.unit);
+    const activeKeys = wallet.keyChain.getCheapestKeyset().toMintKeys();
+    if (!activeKeys) throw new Error('Active mint keyset has no keys');
     const prepared = await handler.prepare({
       operation,
       importedQuote: mintQuoteToMethodSnapshot(quote),
     });
-    const seed = await this.getSeed();
-    return {
-      operation: prepared,
-      keysetId,
-      derive: (counter: number) =>
-        serializeOutputData({
-          keep: this.outputs.createDeterministicData(prepared.amount, seed, counter, keys),
-          send: [],
-        }),
-    };
+    return { operation: prepared, activeKeys, seed };
   }
 
-  async execute(operation: ExecutingMintOperation) {
-    const { wallet } = await this.wallets.getWalletWithActiveKeysetId(
-      operation.mintUrl,
-      operation.unit,
-    );
+  async execute(operation: ExecutingMintOperation, metadata: MintMetadata) {
     return this.handlers.get(operation.method).execute({
       operation,
-      wallet,
+      wallet: this.wallets.create(metadata, operation.unit),
       mintAdapter: this.mintAdapter,
       logger: this.logger,
     });
@@ -78,18 +61,15 @@ export class HandlerMintRemote implements MintRemote {
   async recoverExecuting(
     operation: ExecutingMintOperation,
     localClaimabilityFacts: Parameters<MintRemote['recoverExecuting']>[1],
+    metadata: MintMetadata,
   ) {
-    const { wallet } = await this.wallets.getWalletWithActiveKeysetId(
-      operation.mintUrl,
-      operation.unit,
-    );
     return this.handlers.get(operation.method).recoverExecuting({
       operation,
-      wallet,
+      wallet: this.wallets.create(metadata, operation.unit),
       mintAdapter: this.mintAdapter,
       logger: this.logger,
       localClaimabilityFacts,
-      restoreOutputs: () => this.restoreOutputs(operation),
+      restoreOutputs: () => this.restoreOutputs(operation, metadata),
     });
   }
 
@@ -99,5 +79,14 @@ export class HandlerMintRemote implements MintRemote {
       mintAdapter: this.mintAdapter,
       logger: this.logger,
     });
+  }
+
+  restoreOutputs(operation: PendingOrLaterOperation, metadata: MintMetadata) {
+    return restoreOutputProofs(
+      this.wallets.create(metadata, operation.unit),
+      metadata.keysets,
+      operation.unit,
+      operation.outputData,
+    );
   }
 }

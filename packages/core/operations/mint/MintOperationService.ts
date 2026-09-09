@@ -1,3 +1,5 @@
+import type { MintQueries } from '../../mints/MintMetadata.ts';
+import type { MintService } from '../../services/MintService.ts';
 import { Amount, type Proof } from '@cashu/cashu-ts';
 import type { MintCommit, MintQuoteCommit, SettleMintInput } from './MintCommands.ts';
 import { mintLocalClaimabilityFacts } from './MintLocalClaimability.ts';
@@ -55,6 +57,9 @@ export interface ClaimMintQuoteOptions {
 }
 
 export interface MintOperationDependencies {
+  mintQueries: Pick<MintQueries, 'isTrustedMint'>;
+  mintMetadataRefresh: Pick<MintService, 'refreshAndCommitIfStale'>;
+  loadSeed(): Promise<Uint8Array>;
   operations: MintOperationQueries;
   proofs: MintProofQueries;
   quotes: MintQuoteQueries;
@@ -104,7 +109,7 @@ export class MintOperationService {
     const quote = await this.deps.quotes.requireMintQuoteRefForPrepare(quoteRef);
     const amount = Amount.from(requestedAmount);
     if (amount.isZero()) throw new ProofValidationError('Amount must be a positive number');
-    if (!(await this.deps.remote.isTrusted(quote.mintUrl)))
+    if (!(await this.deps.mintQueries.isTrustedMint(quote.mintUrl)))
       throw new UnknownMintError(`Mint ${quote.mintUrl} is not trusted`);
     const fixedAmount = getMintQuoteAmount(quote);
     if (fixedAmount && !fixedAmount.equals(amount)) {
@@ -128,7 +133,9 @@ export class MintOperationService {
         { amount, unit: quote.unit },
         { quoteId: quote.quoteId },
       );
-      const input = await this.deps.remote.prepare(operation, quote);
+      const metadata = await this.deps.mintMetadataRefresh.refreshAndCommitIfStale(quote.mintUrl);
+      const seed = await this.deps.loadSeed();
+      const input = await this.deps.remote.prepare(operation, quote, metadata, seed);
       const prepared = await this.deps.transactions.prepare(input);
       await this.emit('counter:updated', prepared.counter);
       await this.publish({ operation: prepared.operation, changed: true, proofs: [] });
@@ -205,10 +212,13 @@ export class MintOperationService {
           }'`,
         );
       }
-      if (!(await this.deps.remote.isTrusted(operation.mintUrl))) {
+      if (!(await this.deps.mintQueries.isTrustedMint(operation.mintUrl))) {
         throw new UnknownMintError(`Mint ${operation.mintUrl} is not trusted`);
       }
 
+      const metadata = await this.deps.mintMetadataRefresh.refreshAndCommitIfStale(
+        operation.mintUrl,
+      );
       const authorized = await this.deps.transactions.authorize({
         operationId,
         timestamp: Date.now(),
@@ -219,7 +229,7 @@ export class MintOperationService {
       const executing = authorized.operation;
 
       try {
-        const result = await this.deps.remote.execute(executing);
+        const result = await this.deps.remote.execute(executing, metadata);
 
         switch (result.status) {
           case 'ISSUED': {
@@ -323,7 +333,7 @@ export class MintOperationService {
       const pendingOps = await this.deps.operations.getByState('pending');
       for (const op of pendingOps) {
         try {
-          if (await this.deps.remote.isTrusted(op.mintUrl)) {
+          if (await this.deps.mintQueries.isTrustedMint(op.mintUrl)) {
             await this.checkPendingOperation(op.id);
             pendingCount++;
           } else {
@@ -402,7 +412,7 @@ export class MintOperationService {
         return;
       }
 
-      if (!(await this.deps.remote.isTrusted(executing.mintUrl))) {
+      if (!(await this.deps.mintQueries.isTrustedMint(executing.mintUrl))) {
         this.deps.logger?.warn(
           'Mint is not trusted, skipping recovery of executing mint operation',
           {
@@ -419,9 +429,13 @@ export class MintOperationService {
         executing.method,
         executing.quoteId,
       );
+      const metadata = await this.deps.mintMetadataRefresh.refreshAndCommitIfStale(
+        executing.mintUrl,
+      );
       const result = await this.deps.remote.recoverExecuting(
         executing,
         mintLocalClaimabilityFacts(siblings, executing.id),
+        metadata,
       );
 
       switch (result.status) {
@@ -592,7 +606,7 @@ export class MintOperationService {
     const claimed: MintOperation[] = [];
 
     for (const quote of quotes) {
-      if (!(await this.deps.remote.isTrusted(quote.mintUrl))) {
+      if (!(await this.deps.mintQueries.isTrustedMint(quote.mintUrl))) {
         this.deps.logger?.debug('Skipping pending mint quote for untrusted mint', {
           mintUrl: quote.mintUrl,
           method: quote.method,
@@ -742,7 +756,10 @@ export class MintOperationService {
     if (!(await this.hasSavedOutputs(operation))) {
       const secrets = new Set(candidates.map((proof) => proof.secret));
       if (!getOutputProofSecrets(operation).every((secret) => secrets.has(secret))) {
-        proofs = [...proofs, ...(await this.deps.remote.restoreOutputs(operation))];
+        const metadata = await this.deps.mintMetadataRefresh.refreshAndCommitIfStale(
+          operation.mintUrl,
+        );
+        proofs = [...proofs, ...(await this.deps.remote.restoreOutputs(operation, metadata))];
       }
     }
     const committed = await this.deps.transactions.settle({
