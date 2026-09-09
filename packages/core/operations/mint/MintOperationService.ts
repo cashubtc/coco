@@ -1,3 +1,5 @@
+import type { MintMetadata, MintQueries } from '../../mints/MintMetadata.ts';
+import type { MintService } from '../../services/MintService.ts';
 import { OperationInProgressError } from '../../models/Error.ts';
 import type { MintCommit } from './MintCommands.ts';
 import { Amount } from '@cashu/cashu-ts';
@@ -36,6 +38,9 @@ export interface MintQuoteAccess {
   refreshMintQuote(mintUrl: string, method: MintMethod, quoteId: string): Promise<MintQuote>;
 }
 export interface MintOperationDependencies {
+  mintQueries: Pick<MintQueries, 'isTrustedMint'>;
+  mintMetadataRefresh: Pick<MintService, 'refreshAndCommitIfStale'>;
+  loadSeed(): Promise<Uint8Array>;
   operations: MintOperationQueries;
   proofs: MintProofQueries;
   recovery: MintRecoveryQueries;
@@ -92,7 +97,11 @@ export class MintOperationService {
     const quote = await this.deps.quotes.requireMintQuoteRefForPrepare(ref);
     const amount = Amount.from(requestedAmount);
     if (amount.isZero()) throw new Error('Mint amount must be positive');
-    const preflight = await this.deps.remote.preflight(quote, amount);
+    if (!(await this.deps.mintQueries.isTrustedMint(quote.mintUrl)))
+      throw new Error('Mint is not trusted');
+    const metadata = await this.deps.mintMetadataRefresh.refreshAndCommitIfStale(quote.mintUrl);
+    const seed = await this.deps.loadSeed();
+    const preflight = await this.deps.remote.preflight(quote, amount, metadata, seed);
     const prepared = await this.deps.transactions.prepare({
       ...preflight,
       id: generateSubId(),
@@ -126,13 +135,16 @@ export class MintOperationService {
       if (operation.state === 'finalized' || operation.state === 'failed') return operation;
       if (operation.state !== 'pending')
         throw new Error(`Cannot execute operation ${id} in state ${operation.state}`);
-      const material = await this.deps.remote.prepareRequest(operation);
+      const metadata = await this.deps.mintMetadataRefresh.refreshAndCommitIfStale(
+        operation.mintUrl,
+      );
+      const material = await this.deps.remote.prepareRequest(operation, metadata);
       const authorized = await this.deps.transactions.authorize({ operationId: id, ...material });
       await this.publish(authorized);
       // Only the caller that committed authorization may transmit. Other coordinators restore.
       if (!authorized.changed || !authorized.recovery || authorized.operation.state !== 'executing')
         return authorized.operation;
-      return await this.transmit(authorized.operation, authorized.recovery, commits);
+      return await this.transmit(authorized.operation, authorized.recovery, commits, metadata);
     } finally {
       // Settlement stays locked; its listeners may re-enter the operation after release.
       release();
@@ -144,9 +156,10 @@ export class MintOperationService {
     operation: ExecutingMintOperation,
     recovery: MintRecoveryRecord,
     commits: MintCommit[],
+    metadata: MintMetadata,
   ): Promise<MintOperation> {
     try {
-      const receipts = await this.deps.remote.issue(operation, recovery);
+      const receipts = await this.deps.remote.issue(operation, recovery, metadata);
       const result = await this.deps.transactions.applyEvidence(operation.id, receipts);
       commits.push(result);
       return result.operation;
@@ -162,7 +175,7 @@ export class MintOperationService {
         );
         commits.push(rejected);
         if (rejected.changed && rejected.operation.state === 'executing' && rejected.recovery)
-          return this.transmit(rejected.operation, rejected.recovery, commits);
+          return this.transmit(rejected.operation, rejected.recovery, commits, metadata);
         if (rejected.operation.state === 'failed') return rejected.operation;
       }
       await this.deps.transactions.noteAmbiguity(operation.id, recovery.revision, message);
@@ -210,16 +223,25 @@ export class MintOperationService {
         return saved.operation;
     }
     if (recovery.receipts.length) {
-      const checked = await this.deps.remote
-        .checkReceipts(operation, recovery.receipts)
-        .catch(() => recovery!.receipts);
+      let checked = recovery.receipts;
+      try {
+        const metadata = await this.deps.mintMetadataRefresh.refreshAndCommitIfStale(
+          operation.mintUrl,
+        );
+        checked = await this.deps.remote.checkReceipts(operation, recovery.receipts, metadata);
+      } catch {
+        // Preserve existing receipts when metadata or spendability cannot be refreshed.
+      }
       const local = await this.deps.transactions.applyEvidence(operation.id, checked);
       commits.push(local);
       if (local.operation.state === 'finalized') return local.operation;
       recovery = local.recovery ?? recovery;
     }
     try {
-      const receipts = await this.deps.remote.restore(operation);
+      const metadata = await this.deps.mintMetadataRefresh.refreshAndCommitIfStale(
+        operation.mintUrl,
+      );
+      const receipts = await this.deps.remote.restore(operation, metadata);
       const result = await this.deps.transactions.applyEvidence(operation.id, receipts);
       commits.push(result);
       if (result.operation.state === 'finalized') return result.operation;
@@ -265,7 +287,7 @@ export class MintOperationService {
         if (this.isOperationLocked(operation.id)) continue;
         try {
           if (operation.state === 'init') await this.deps.transactions.migrate(operation.id);
-          else if (await this.deps.remote.isTrusted(operation.mintUrl)) {
+          else if (await this.deps.mintQueries.isTrustedMint(operation.mintUrl)) {
             const migrated = await this.deps.transactions.migrate(operation.id);
             await this.publish(migrated);
             if (migrated.operation.state === 'pending')
@@ -286,7 +308,7 @@ export class MintOperationService {
         const operation = await this.getOperation(recovery.operationId);
         if (
           operation?.state === 'finalized' &&
-          (await this.deps.remote.isTrusted(operation.mintUrl))
+          (await this.deps.mintQueries.isTrustedMint(operation.mintUrl))
         ) {
           const commits: MintCommit[] = [];
           try {
@@ -359,7 +381,8 @@ export class MintOperationService {
       if (!quote) throw new Error('Mint quote not found');
       const assessment = await this.getMintQuoteClaimability(mintUrl, method, quoteId);
       if (assessment?.status === 'claimable' && assessment.claimAmount) {
-        const amount = await this.deps.remote.selectAmount(quote, assessment.claimAmount);
+        const metadata = await this.deps.mintMetadataRefresh.refreshAndCommitIfStale(quote.mintUrl);
+        const amount = await this.deps.remote.selectAmount(quote, assessment.claimAmount, metadata);
         if (!amount.isZero()) {
           const operation = await this.prepare(quote, amount);
           claimed.push(await this.execute(operation.id));
@@ -371,7 +394,7 @@ export class MintOperationService {
   async claimPendingMintQuotes(options: ClaimMintQuoteOptions = {}) {
     const result: MintOperation[] = [];
     for (const quote of await this.deps.quotes.getPendingMintQuotes()) {
-      if (await this.deps.remote.isTrusted(quote.mintUrl))
+      if (await this.deps.mintQueries.isTrustedMint(quote.mintUrl))
         result.push(
           ...(await this.claimMintQuote(quote.mintUrl, quote.method, quote.quoteId, options)),
         );

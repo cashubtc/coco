@@ -1,4 +1,4 @@
-import { Amount } from '@cashu/cashu-ts';
+import { Amount, deriveKeysetId } from '@cashu/cashu-ts';
 import { Manager } from '@cashu/coco-core';
 import {
   type AuthSession,
@@ -1150,6 +1150,101 @@ export async function runMintOperationRepositoryContract(
   const { describe, it, expect } = runner;
 
   describe('MintOperationRepository contract', () => {
+    for (const changeBeforeCommit of [false, true]) {
+      it(`Mint preparation ${changeBeforeCommit ? 'rejects a keyset changed during preflight' : 'commits allocated outputs and their counter together'}`, async () => {
+        const { repositories, dispose } = await options.createRepositories();
+        const mint = createDummyMint();
+        const keypairs = {
+          '1': '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798',
+          '2': '02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5',
+        };
+        const keyset = {
+          mintUrl: mint.mintUrl,
+          id: deriveKeysetId(keypairs, { unit: 'sat' }),
+          unit: 'sat',
+          active: true,
+          feePpk: 0,
+          keypairs,
+        };
+        const manager = new Manager(repositories, async () => {
+          if (changeBeforeCommit)
+            await repositories.keysetRepository.updateKeyset({ ...keyset, active: false });
+          return new Uint8Array(64);
+        });
+        const counters: number[] = [];
+        manager.on('counter:updated', ({ counter }) => {
+          counters.push(counter);
+        });
+        try {
+          await repositories.mintRepository.addOrUpdateMint({
+            ...mint,
+            updatedAt: Math.floor(Date.now() / 1000),
+            mintInfo: {
+              ...mint.mintInfo,
+              nuts: {
+                '5': { disabled: false, methods: [] },
+                '4': {
+                  disabled: false,
+                  methods: [
+                    {
+                      method: 'bolt11',
+                      unit: 'sat',
+                      method_name: null,
+                      min_amount: null,
+                      max_amount: null,
+                    },
+                  ],
+                },
+              },
+            },
+          });
+          await repositories.keysetRepository.addKeyset(keyset);
+          await repositories.counterRepository.setCounter(mint.mintUrl, keyset.id, 7);
+          const quote = createDummyMintQuote({
+            state: 'PAID',
+            amountPaid: Amount.from(3),
+            expiry: Math.floor(Date.now() / 1000) + 3600,
+          });
+          await repositories.mintQuoteRepository.upsertMintQuote(quote);
+          const prepare = manager.ops.mint.prepare({ quote, amount: 3 });
+          if (changeBeforeCommit) {
+            const outcome = await settle(prepare);
+            expect(outcome.status).toBe('rejected');
+            if (outcome.status === 'rejected') {
+              expect(
+                outcome.reason instanceof Error &&
+                  outcome.reason.message.includes('changed after preflight'),
+              ).toBe(true);
+            }
+            expect(
+              await repositories.mintOperationRepository.getByMintUrl(mint.mintUrl),
+            ).toHaveLength(0);
+            expect(
+              (await repositories.counterRepository.getCounter(mint.mintUrl, keyset.id))?.counter,
+            ).toBe(7);
+            expect(counters).toHaveLength(0);
+          } else {
+            const operation = await prepare;
+            expect(operation.outputData.keep.length).toBe(2);
+            expect(
+              operation.outputData.keep.every((output) => output.blindedMessage.id === keyset.id),
+            ).toBe(true);
+            expect((await repositories.mintOperationRepository.getById(operation.id))?.state).toBe(
+              'pending',
+            );
+            expect(
+              (await repositories.counterRepository.getCounter(mint.mintUrl, keyset.id))?.counter,
+            ).toBe(9);
+            expect(counters).toHaveLength(1);
+            expect(counters[0]).toBe(9);
+          }
+        } finally {
+          await manager.dispose();
+          await dispose();
+        }
+      });
+    }
+
     it('preserves caller-owned millisecond timestamps across Mint transitions', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {

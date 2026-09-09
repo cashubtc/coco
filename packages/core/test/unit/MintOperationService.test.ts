@@ -141,10 +141,10 @@ for (const method of ['bolt11', 'bolt12', 'onchain'] as const)
         if (phase === 'recovery') {
           const authorized = await f.transactions.authorize({
             operationId: operation.id,
-            ...(await f.remote.prepareRequest(operation)),
+            ...(await f.remote.prepareRequest(operation, await f.metadata())),
           });
           // Simulate issuance whose response was lost before local settlement.
-          await f.remote.issue(operation, authorized.recovery!);
+          await f.remote.issue(operation, authorized.recovery!, await f.metadata());
         }
 
         let executionAnnounced = false;
@@ -196,9 +196,9 @@ for (const method of ['bolt11', 'bolt12', 'onchain'] as const)
         if (phase === 'recovery') {
           const authorized = await f.transactions.authorize({
             operationId: operation.id,
-            ...(await f.remote.prepareRequest(operation)),
+            ...(await f.remote.prepareRequest(operation, await f.metadata())),
           });
-          await f.remote.issue(operation, authorized.recovery!);
+          await f.remote.issue(operation, authorized.recovery!, await f.metadata());
         }
 
         const observed: string[] = [];
@@ -323,7 +323,12 @@ describe('Mint transaction failure boundaries', () => {
   it('rolls back output allocation when preparation cannot persist its operation', async () => {
     const f = await mintFixture();
     const quote = await f.quote();
-    const preflight = await f.remote.preflight(quote, Amount.from(100));
+    const preflight = await f.remote.preflight(
+      quote,
+      Amount.from(100),
+      await f.metadata(),
+      await f.loadSeed(),
+    );
     await f.transactions.prepare({ ...preflight, id: 'same-id', quote, amount: Amount.from(100) });
     const before = await f.repositories.counterRepository.getCounter(f.mintUrl, f.keysetId);
     await expect(
@@ -336,9 +341,9 @@ describe('Mint transaction failure boundaries', () => {
   it('atomically rolls back proof writes if finalization cannot commit, then recovers after restart', async () => {
     const f = await mintFixture();
     const operation = await f.service.prepare(await f.quote(), Amount.from(100));
-    const material = await f.remote.prepareRequest(operation);
+    const material = await f.remote.prepareRequest(operation, await f.metadata());
     const authorized = await f.transactions.authorize({ operationId: operation.id, ...material });
-    const receipts = await f.remote.issue(operation, authorized.recovery!);
+    const receipts = await f.remote.issue(operation, authorized.recovery!, await f.metadata());
     const original = f.repositories.withTransaction.bind(f.repositories);
     f.repositories.withTransaction = (command) =>
       original(async (scope) => {
@@ -361,7 +366,7 @@ describe('Mint transaction failure boundaries', () => {
     const operation = await f.service.prepare(await f.quote(), Amount.from(100));
     await f.transactions.authorize({
       operationId: operation.id,
-      ...(await f.remote.prepareRequest(operation)),
+      ...(await f.remote.prepareRequest(operation, await f.metadata())),
     });
     expect((await f.restart().execute(operation.id)).state).toBe('executing');
     expect(f.calls.filter((c) => c.path === '/v1/mint/bolt11')).toHaveLength(0);
@@ -373,14 +378,14 @@ describe('Mint transaction failure boundaries', () => {
     const b = await f.service.prepare(await f.quote(), Amount.from(30));
     const first = await f.transactions.authorize({
       operationId: a.id,
-      ...(await f.remote.prepareRequest(a)),
+      ...(await f.remote.prepareRequest(a, await f.metadata())),
     });
     const second = await f.transactions.authorize({
       operationId: b.id,
-      ...(await f.remote.prepareRequest(b)),
+      ...(await f.remote.prepareRequest(b, await f.metadata())),
     });
     await f.transactions.reject(a.id, first.recovery!.revision, 'definitive rejection', false);
-    const receipts = await f.remote.issue(b, second.recovery!);
+    const receipts = await f.remote.issue(b, second.recovery!, await f.metadata());
     await f.transactions.applyEvidence(b.id, receipts);
     expect(
       (await f.service.getMintQuoteClaimability(
@@ -409,14 +414,14 @@ describe('SDK quote compatibility', () => {
     const operation = await f.service.prepare(await f.quote(), Amount.from(100));
     const authorized = await f.transactions.authorize({
       operationId: operation.id,
-      ...(await f.remote.prepareRequest(operation)),
+      ...(await f.remote.prepareRequest(operation, await f.metadata())),
     });
     const keyset = f.wallet.getKeyset(f.keysetId);
     f.wallet.loadMintFromCache(f.wallet.getMintInfo(), {
       mintUrl: f.mintUrl,
       keysets: [{ ...keyset.toMintKeyset(), active: false, keys: keyset.keys }],
     });
-    const receipts = await f.remote.issue(operation, authorized.recovery!);
+    const receipts = await f.remote.issue(operation, authorized.recovery!, await f.metadata());
     expect((await f.transactions.applyEvidence(operation.id, receipts)).operation.state).toBe(
       'finalized',
     );

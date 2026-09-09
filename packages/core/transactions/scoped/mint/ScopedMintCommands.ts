@@ -1,3 +1,4 @@
+import type { ScopedOutputCommands } from '../outputs/ScopedOutputCommands.ts';
 import { Amount } from '@cashu/cashu-ts';
 import { assessMintQuoteClaimability } from '../../../models/MintQuoteClaimability.ts';
 import type {
@@ -25,7 +26,10 @@ export type ScopedMintCommands = MintCommands;
 
 /** All repositories belong to one already-open scope. This module cannot open transactions. */
 export class RepositoryMintCommands implements ScopedMintCommands {
-  constructor(private readonly scope: RepositoryTransactionScope) {}
+  constructor(
+    private readonly scope: RepositoryTransactionScope,
+    private readonly outputs: ScopedOutputCommands,
+  ) {}
 
   private async requireOperation(id: string) {
     const operation = await this.scope.mintOperationRepository.getById(id);
@@ -41,7 +45,8 @@ export class RepositoryMintCommands implements ScopedMintCommands {
   }
 
   async prepare(input: PrepareMintInput): Promise<PreparedMintCommit> {
-    const { quote, amount, id, keysetId } = input;
+    const { quote, amount, id, activeKeys, seed } = input;
+    const keysetId = activeKeys.id;
     const canonical = await this.scope.mintQuoteRepository.getMintQuote(
       quote.mintUrl,
       quote.method,
@@ -57,9 +62,15 @@ export class RepositoryMintCommands implements ScopedMintCommands {
     if (!(await this.scope.mintRepository.isTrustedMint(quote.mintUrl)))
       throw new Error('Mint is not trusted');
     if (amount.isZero()) throw new Error('Mint amount must be positive');
-    const current = await this.scope.counterRepository.getCounter(quote.mintUrl, keysetId);
-    const counter = current?.counter ?? 0;
-    const outputData = input.derive(counter);
+    const allocated = await this.outputs.allocate({
+      mintUrl: quote.mintUrl,
+      unit: quote.unit,
+      activeKeys,
+      seed,
+      keepAmount: amount,
+      sendAmount: Amount.zero(),
+    });
+    const { outputData } = allocated;
     if (
       outputData.keep.length === 0 ||
       outputData.send.length !== 0 ||
@@ -69,8 +80,6 @@ export class RepositoryMintCommands implements ScopedMintCommands {
       new Set(outputData.keep.map((o) => o.secret)).size !== outputData.keep.length
     )
       throw new Error('Invalid Mint output allocation');
-    const nextCounter = counter + outputData.keep.length;
-    if (!Number.isSafeInteger(nextCounter)) throw new Error('Mint output counter exhausted');
     const operation: PendingMintOperation = {
       id,
       mintUrl: quote.mintUrl,
@@ -87,10 +96,9 @@ export class RepositoryMintCommands implements ScopedMintCommands {
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
-    await this.scope.counterRepository.setCounter(quote.mintUrl, keysetId, nextCounter);
     await this.scope.mintOperationRepository.create(operation);
     await this.scope.mintRecoveryRepository.set(newMintRecovery(id));
-    return { operation, counter: { mintUrl: quote.mintUrl, keysetId, counter: nextCounter } };
+    return { operation, counter: allocated.counter! };
   }
 
   /** Migrate the entire sibling set before any admission, preserving every unknown commitment. */

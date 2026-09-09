@@ -1,10 +1,10 @@
+import type { MintMetadata } from '../../mints/MintMetadata.ts';
 import {
-  Amount,
-  OutputData,
-  isBlsKeyset,
-  type OutputDataCreator,
-  type Wallet,
-} from '@cashu/cashu-ts';
+  assertMethodUnitCapability,
+  getMethodUnitCapability,
+} from '../../mints/MintCapabilities.ts';
+import type { MintWalletFactory } from './MintWallet.ts';
+import { Amount, isBlsKeyset, type Wallet } from '@cashu/cashu-ts';
 import { bytesToHex } from '@noble/curves/utils.js';
 import type { MintQuote } from '../../models/MintQuote.ts';
 import type {
@@ -17,32 +17,15 @@ import type {
 } from '../../operations/mint/MintRecovery.ts';
 import type { MintRemote } from '../../operations/mint/MintRemote.ts';
 import type { KeyRingService } from '../../services/KeyRingService.ts';
-import type { MintService } from '../../services/MintService.ts';
-import type { SeedService } from '../../services/SeedService.ts';
-import type { WalletService } from '../../services/WalletService.ts';
 import { deserializeOutputData, serializeOutputData } from '../../utils.ts';
 
 export class SdkMintRemote implements MintRemote {
   constructor(
-    private readonly wallets: Pick<WalletService, 'getWallet' | 'getWalletWithActiveKeysetId'>,
-    private readonly mints: Pick<
-      MintService,
-      'isTrustedMint' | 'assertMethodUnitSupported' | 'getMintMethodUnitCapability'
-    >,
-    private readonly seeds: Pick<SeedService, 'getSeed'>,
+    private readonly wallets: Pick<MintWalletFactory, 'create'>,
     private readonly keys: Pick<KeyRingService, 'getMintQuoteKeyPair'>,
-    private readonly outputs: OutputDataCreator = OutputData,
   ) {}
-  isTrusted(mintUrl: string) {
-    return this.mints.isTrustedMint(mintUrl);
-  }
-  async selectAmount(quote: MintQuote, available: Amount) {
-    const capability = await this.mints.getMintMethodUnitCapability(
-      quote.mintUrl,
-      4,
-      quote.method,
-      quote.unit,
-    );
+  async selectAmount(quote: MintQuote, available: Amount, metadata: MintMetadata) {
+    const capability = getMethodUnitCapability(metadata.mint.mintInfo, 4, quote.method, quote.unit);
     if (!capability.supported) return Amount.zero();
     const amount =
       capability.maxAmount && available.greaterThan(capability.maxAmount)
@@ -50,26 +33,17 @@ export class SdkMintRemote implements MintRemote {
         : available;
     return capability.minAmount && amount.lessThan(capability.minAmount) ? Amount.zero() : amount;
   }
-  async preflight(quote: MintQuote, amount: Amount) {
-    if (!(await this.isTrusted(quote.mintUrl))) throw new Error('Mint is not trusted');
-    await this.mints.assertMethodUnitSupported(quote.mintUrl, 4, quote.method, {
+  async preflight(quote: MintQuote, amount: Amount, metadata: MintMetadata, seed: Uint8Array) {
+    if (!metadata.mint.trusted) throw new Error('Mint is not trusted');
+    assertMethodUnitCapability(metadata.mint.mintInfo, 4, quote.method, {
       amount,
       unit: quote.unit,
     });
     await this.signingKey(quote.method, quote.pubkey);
-    const { keysetId, keys } = await this.wallets.getWalletWithActiveKeysetId(
-      quote.mintUrl,
-      quote.unit,
-    );
-    const seed = await this.seeds.getSeed();
-    return {
-      keysetId,
-      derive: (counter: number) =>
-        serializeOutputData({
-          keep: this.outputs.createDeterministicData(amount, seed, counter, keys),
-          send: [],
-        }),
-    };
+    const wallet = this.wallets.create(metadata, quote.unit);
+    const activeKeys = wallet.keyChain.getCheapestKeyset().toMintKeys();
+    if (!activeKeys) throw new Error('Active mint keyset has no keys');
+    return { activeKeys, seed };
   }
   private async signingKey(method: string, pubkey?: string) {
     if (!pubkey) {
@@ -80,8 +54,8 @@ export class SdkMintRemote implements MintRemote {
     if (!key) throw new Error('Missing owned Mint quote key');
     return bytesToHex(key.secretKey);
   }
-  async prepareRequest(operation: PendingMintOperation) {
-    const wallet = await this.wallets.getWallet(operation.mintUrl, operation.unit);
+  async prepareRequest(operation: PendingMintOperation, metadata: MintMetadata) {
+    const wallet = this.wallets.create(metadata, operation.unit);
     const data = deserializeOutputData(operation.outputData).keep;
     if (!data.length) throw new Error('Missing Mint output data');
     const privkey = await this.signingKey(operation.method, operation.pubkey);
@@ -108,10 +82,14 @@ export class SdkMintRemote implements MintRemote {
       legacySignature: preview.legacySignature,
     };
   }
-  async issue(operation: PendingOrLaterOperation, recovery: MintRecoveryRecord) {
+  async issue(
+    operation: PendingOrLaterOperation,
+    recovery: MintRecoveryRecord,
+    metadata: MintMetadata,
+  ) {
     if (!recovery.request || recovery.request.quote !== operation.quoteId)
       throw new Error('Missing exact Mint request');
-    const wallet = await this.wallets.getWallet(operation.mintUrl, operation.unit);
+    const wallet = this.wallets.create(metadata, operation.unit);
     const data = deserializeOutputData(operation.outputData).keep;
     if (!data.length) throw new Error('Missing Mint outputs');
     // Validate historical keys before I/O. completeMint uses getKeyset, not active-keyset admission.
@@ -135,8 +113,8 @@ export class SdkMintRemote implements MintRemote {
       }),
     );
   }
-  async restore(operation: PendingOrLaterOperation) {
-    const wallet = await this.wallets.getWallet(operation.mintUrl, operation.unit);
+  async restore(operation: PendingOrLaterOperation, metadata: MintMetadata) {
+    const wallet = this.wallets.create(metadata, operation.unit);
     const data = deserializeOutputData(operation.outputData).keep;
     if (!data.length) throw new Error('Missing Mint outputs');
     const result = await wallet.mint.restore({ outputs: data.map((o) => o.blindedMessage) });
@@ -171,8 +149,12 @@ export class SdkMintRemote implements MintRemote {
     });
     return this.checkStates(wallet, receipts);
   }
-  async checkReceipts(operation: PendingOrLaterOperation, receipts: MintIssuanceReceipt[]) {
-    const wallet = await this.wallets.getWallet(operation.mintUrl, operation.unit);
+  async checkReceipts(
+    operation: PendingOrLaterOperation,
+    receipts: MintIssuanceReceipt[],
+    metadata: MintMetadata,
+  ) {
+    const wallet = this.wallets.create(metadata, operation.unit);
     return this.checkStates(wallet, receipts);
   }
   private async checkStates(wallet: Wallet, receipts: MintIssuanceReceipt[]) {

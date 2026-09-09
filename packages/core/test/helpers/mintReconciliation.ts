@@ -1,3 +1,4 @@
+import { StoredMintQueries } from '../../mints/MintMetadata.ts';
 import {
   Amount,
   Mint,
@@ -203,29 +204,22 @@ export async function mintFixture(
   async function quote(): Promise<MintQuote> {
     return (await repositories.mintQuoteRepository.getMintQuote(mintUrl, method, 'quote'))!;
   }
+  await repositories.keysetRepository.addKeyset({
+    mintUrl,
+    id: keysetId,
+    unit: 'sat',
+    active: true,
+    feePpk: 0,
+    keypairs,
+  });
+  const mintQueries = new StoredMintQueries(
+    repositories.mintRepository,
+    repositories.keysetRepository,
+  );
+  const metadata = async () => (await mintQueries.getMetadata(mintUrl))!;
+  const loadSeed = async () => new Uint8Array(64).fill(7);
   const remote = new SdkMintRemote(
-    {
-      getWallet: async () => wallet,
-      getWalletWithActiveKeysetId: async () => ({
-        wallet,
-        keysetId,
-        keyset: { id: keysetId, unit: 'sat', active: true, input_fee_ppk: 0 },
-        keys: { id: keysetId, unit: 'sat', keys: keypairs },
-        unit: 'sat',
-      }),
-    },
-    {
-      isTrustedMint: (url) => repositories.mintRepository.isTrustedMint(url),
-      assertMethodUnitSupported: async () => {},
-      getMintMethodUnitCapability: async () => ({
-        nut: 4,
-        method,
-        unit: 'sat',
-        supported: true,
-        disabled: false,
-      }),
-    },
-    { getSeed: async () => new Uint8Array(64).fill(7) },
+    { create: () => wallet },
     {
       getMintQuoteKeyPair: async () => ({
         publicKeyHex: quotePubkey,
@@ -239,6 +233,9 @@ export async function mintFixture(
   const transactions = new CoreMintTransactions(new RepositoryCoreTransactionRunner(repositories));
   function service() {
     return new MintOperationService({
+      mintQueries,
+      mintMetadataRefresh: { refreshAndCommitIfStale: metadata },
+      loadSeed,
       operations: repositories.mintOperationRepository,
       proofs: repositories.proofRepository,
       recovery: repositories.mintRecoveryRepository,
@@ -254,6 +251,8 @@ export async function mintFixture(
     });
   }
   return {
+    metadata,
+    loadSeed,
     service: service(),
     restart: service,
     repositories,

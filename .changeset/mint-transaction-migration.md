@@ -18,3 +18,9 @@ Manager and the public MintOps API retain their interfaces.
 Mint repositories must preserve caller-owned millisecond timestamps on create and update. The
 existing timestamp columns remain compatible with old rows; no schema migration or recovery table
 is introduced. Core uses conditional state and timestamp checks to ignore stale transition results.
+
+Mint preparation and recovery now use an explicit, independently committed metadata refresh and
+read-only snapshots. Reuse the shared metadata gateway, transport, and Output Allocation from the
+Send migration; allocation revalidates the persisted keyset's activity, unit, and keys before
+committing its counter and operation. Method capability checks share pure snapshot logic with
+MintService. Custom MintService construction supplies the metadata action dependencies.

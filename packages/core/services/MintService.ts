@@ -1,4 +1,16 @@
+import {
+  getMethodUnitCapability,
+  assertMethodUnitCapability,
+  type MethodUnitCapability,
+} from '../mints/MintCapabilities.ts';
 import { Amount, isBlsKeyset, type AmountLike } from '@cashu/cashu-ts';
+import {
+  MINT_REFRESH_TTL_S,
+  type MintMetadata,
+  type MintQueries,
+} from '@core/mints/MintMetadata.ts';
+import type { MintMetadataRemote } from '@core/mints/MintMetadataRemote.ts';
+import type { MintMetadataTransactions } from '@core/transactions/mints/MintMetadataTransactions.ts';
 import {
   KeysetSyncError,
   MintFetchError,
@@ -15,8 +27,6 @@ import type { MintInfo } from '../types';
 import type { Logger } from '../logging/Logger.ts';
 import { normalizeMintUrl } from '../utils';
 import { DEFAULT_UNIT, normalizeUnit, normalizeUnitAmount, type UnitAmount } from '../amounts.ts';
-
-const MINT_REFRESH_TTL_S = 60 * 5;
 
 function excludeBlsKeysets<T extends { id: string }>(keysets: T[]): T[] {
   // TODO: Admit BLS keysets after every proof-state lookup uses curve-aware Y derivation.
@@ -48,18 +58,7 @@ function supportsNut29MintQuoteCheckFromInfo(mintInfo: MintInfo, method: string)
   );
 }
 
-export interface MethodUnitCapability {
-  supported: boolean;
-  disabled: boolean;
-  nut: 4 | 5;
-  method: string;
-  unit: string;
-  minAmount?: Amount | null;
-  maxAmount?: Amount | null;
-  options?: unknown;
-  legacySatAllowed?: boolean;
-  reason?: string;
-}
+export type { MethodUnitCapability } from '../mints/MintCapabilities.ts';
 
 /** Operation side for Payment Method Capability discovery. */
 export type PaymentMethodCapabilityOperationKind = 'mint' | 'melt';
@@ -116,6 +115,13 @@ type NutSupportSettings = {
 
 export type TopLevelNutCapability = 11 | 20;
 
+/** Explicit dependencies of the independently committed metadata refresh action. */
+export interface MintMetadataRefreshDependencies {
+  queries: MintQueries;
+  remote: MintMetadataRemote;
+  transactions: MintMetadataTransactions;
+}
+
 export class MintService {
   private readonly mintRepo: MintRepository;
   private readonly keysetRepo: KeysetRepository;
@@ -127,6 +133,7 @@ export class MintService {
     mintRepo: MintRepository,
     keysetRepo: KeysetRepository,
     mintAdapter: MintAdapter,
+    private readonly metadata: MintMetadataRefreshDependencies,
     logger?: Logger,
     eventBus?: EventBus<CoreEvents>,
   ) {
@@ -212,33 +219,41 @@ export class MintService {
     return await this.mintRepo.isTrustedMint(normalizeMintUrl(mintUrl));
   }
 
-  async ensureUpdatedMint(mintUrl: string): Promise<{ mint: Mint; keysets: Keyset[] }> {
+  /**
+   * May fetch remotely and independently commit metadata, even if the caller later fails.
+   * Fresh metadata needs no transaction. Returns after commit and attempted event publication;
+   * listener failures are logged and cannot turn an already committed refresh into a failure.
+   * Call only outside a Wallet transaction; runtime nesting rejection is not yet universal.
+   */
+  async refreshAndCommitIfStale(mintUrl: string): Promise<MintMetadata> {
     mintUrl = normalizeMintUrl(mintUrl);
-    let mint = await this.mintRepo.getMintByUrl(mintUrl).catch(() => null);
+    const cached = await this.metadata.queries.getMetadata(mintUrl);
+    if (cached && cached.mint.updatedAt >= Math.floor(Date.now() / 1000) - MINT_REFRESH_TTL_S)
+      return cached;
+    const observation = await this.metadata.remote.fetchMintMetadata(
+      mintUrl,
+      cached?.keysets ?? [],
+    );
+    const refreshed = await this.metadata.transactions.applyObservation(observation);
+    await this.publishCommittedEvent('mint:metadata-refreshed', { mintUrl });
+    await this.publishCommittedEvent('mint:updated', refreshed);
+    return refreshed;
+  }
 
-    if (!mint) {
-      // Mint doesn't exist, create it as untrusted
-      const now = Math.floor(Date.now() / 1000);
-      mint = {
-        mintUrl,
-        name: mintUrl,
-        mintInfo: {} as MintInfo,
-        trusted: false,
-        createdAt: now,
-        updatedAt: 0,
-      };
+  private async publishCommittedEvent<E extends 'mint:metadata-refreshed' | 'mint:updated'>(
+    event: E,
+    payload: CoreEvents[E],
+  ): Promise<void> {
+    try {
+      await this.eventBus?.emit(event, payload, { throwOnError: true });
+    } catch (error) {
+      this.logger?.error('Failed to publish committed mint metadata event', { event, error });
     }
+  }
 
-    const now = Math.floor(Date.now() / 1000);
-    if (mint.updatedAt < now - MINT_REFRESH_TTL_S) {
-      this.logger?.debug('Refreshing stale mint', { mintUrl });
-      const updated = await this.updateMint(mint);
-      await this.eventBus?.emit('mint:updated', updated);
-      return updated;
-    }
-
-    const keysets = excludeBlsKeysets(await this.keysetRepo.getKeysetsByMintUrl(mint.mintUrl));
-    return { mint, keysets };
+  /** Compatibility wrapper; new internal callers use the explicitly committing action. */
+  async ensureUpdatedMint(mintUrl: string): Promise<{ mint: Mint; keysets: Keyset[] }> {
+    return this.refreshAndCommitIfStale(mintUrl);
   }
 
   async deleteMint(mintUrl: string): Promise<void> {
@@ -349,63 +364,12 @@ export class MintService {
     unit: string,
   ): Promise<MethodUnitCapability> {
     this.assertMethodCapabilityNut(nut);
-    const normalizedMintUrl = normalizeMintUrl(mintUrl);
-    const normalizedUnit = normalizeUnit(unit, { defaultUnit: DEFAULT_UNIT });
-    const mintInfo = await this.getMintInfo(normalizedMintUrl);
-    const settings = this.getNutMethodSettings(mintInfo, nut);
-    const nutName = this.formatNut(nut);
-
-    if (settings?.disabled === true) {
-      return {
-        supported: false,
-        disabled: true,
-        nut,
-        method,
-        unit: normalizedUnit,
-        reason: `${nutName} is disabled`,
-      };
-    }
-
-    if (!settings || !Array.isArray(settings.methods)) {
-      return {
-        supported: false,
-        disabled: false,
-        nut,
-        method,
-        unit: normalizedUnit,
-        reason: `${nutName} method metadata is missing`,
-      };
-    }
-
-    const matchingMethod = settings.methods.find((entry) => {
-      try {
-        return entry.method === method && normalizeUnit(entry.unit) === normalizedUnit;
-      } catch {
-        return false;
-      }
-    });
-
-    if (!matchingMethod) {
-      return {
-        supported: false,
-        disabled: false,
-        nut,
-        method,
-        unit: normalizedUnit,
-        reason: `${nutName} method ${method} does not support unit ${normalizedUnit}`,
-      };
-    }
-
-    return {
-      supported: true,
-      disabled: false,
+    return getMethodUnitCapability(
+      await this.getMintInfo(normalizeMintUrl(mintUrl)),
       nut,
       method,
-      unit: normalizedUnit,
-      minAmount: this.parseOptionalAmount(matchingMethod.min_amount),
-      maxAmount: this.parseOptionalAmount(matchingMethod.max_amount),
-      options: matchingMethod.options,
-    };
+      unit,
+    );
   }
 
   async listPaymentMethodCapabilities(
@@ -456,36 +420,8 @@ export class MintService {
     method: string,
     scope: string | UnitAmount,
   ): Promise<void> {
-    let unit: string;
-    let requestedAmount: Amount | undefined;
-    if (typeof scope === 'string') {
-      unit = scope;
-    } else {
-      const intent = normalizeUnitAmount(scope);
-      unit = intent.unit;
-      requestedAmount = intent.amount;
-    }
-    const capability = await this.getMintMethodUnitCapability(mintUrl, nut, method, unit);
-    if (!capability.supported) {
-      throw new ProofValidationError(
-        capability.reason ??
-          `${this.formatNut(nut)} method ${method} does not support unit ${capability.unit}`,
-      );
-    }
-
-    if (requestedAmount === undefined) return;
-
-    const amountRequirement = `${this.formatNut(nut)} method ${method} unit ${capability.unit}`;
-    if (capability.minAmount && requestedAmount.lessThan(capability.minAmount)) {
-      throw new ProofValidationError(
-        `${amountRequirement} requires amount >= ${capability.minAmount}`,
-      );
-    }
-    if (capability.maxAmount && requestedAmount.greaterThan(capability.maxAmount)) {
-      throw new ProofValidationError(
-        `${amountRequirement} requires amount <= ${capability.maxAmount}`,
-      );
-    }
+    this.assertMethodCapabilityNut(nut);
+    assertMethodUnitCapability(await this.getMintInfo(mintUrl), nut, method, scope);
   }
 
   async getAllMints(): Promise<Mint[]> {

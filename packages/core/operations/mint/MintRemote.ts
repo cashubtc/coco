@@ -1,3 +1,4 @@
+import type { MintMetadata } from '../../mints/MintMetadata.ts';
 import type { Amount } from '@cashu/cashu-ts';
 import type { MintQuote } from '../../models/MintQuote.ts';
 import type { PrepareMintInput } from './MintCommands.ts';
@@ -9,19 +10,26 @@ export interface MintRemote {
   preflight(
     quote: MintQuote,
     amount: Amount,
-  ): Promise<Pick<PrepareMintInput, 'keysetId' | 'derive'>>;
+    metadata: MintMetadata,
+    seed: Uint8Array,
+  ): Promise<Pick<PrepareMintInput, 'activeKeys' | 'seed'>>;
   prepareRequest(
     operation: PendingMintOperation,
+    metadata: MintMetadata,
   ): Promise<{ request: MintRequestRecord; legacySignature?: string }>;
   issue(
     operation: PendingOrLaterOperation,
     recovery: MintRecoveryRecord,
+    metadata: MintMetadata,
   ): Promise<MintIssuanceReceipt[]>;
-  restore(operation: PendingOrLaterOperation): Promise<MintIssuanceReceipt[]>;
+  restore(
+    operation: PendingOrLaterOperation,
+    metadata: MintMetadata,
+  ): Promise<MintIssuanceReceipt[]>;
   checkReceipts(
     operation: PendingOrLaterOperation,
     receipts: MintIssuanceReceipt[],
+    metadata: MintMetadata,
   ): Promise<MintIssuanceReceipt[]>;
-  selectAmount(quote: MintQuote, available: Amount): Promise<Amount>;
-  isTrusted(mintUrl: string): Promise<boolean>;
+  selectAmount(quote: MintQuote, available: Amount, metadata: MintMetadata): Promise<Amount>;
 }

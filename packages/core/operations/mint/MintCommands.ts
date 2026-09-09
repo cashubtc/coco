@@ -1,17 +1,15 @@
-import type { Amount } from '@cashu/cashu-ts';
+import type { Amount, MintKeys } from '@cashu/cashu-ts';
 import type { MintQuote } from '../../models/MintQuote.ts';
 import type { MintOperation, PendingMintOperation } from './MintOperation.ts';
 import type { MintIssuanceReceipt, MintRecoveryRecord, MintRequestRecord } from './MintRecovery.ts';
 import type { CoreProof } from '../../types.ts';
-import type { SerializedOutputData } from '../../utils.ts';
 
 export interface PrepareMintInput {
   id: string;
   quote: MintQuote;
   amount: Amount;
-  keysetId: string;
-  /** Synchronous derivation bound to a preloaded seed and keyset. No I/O. */
-  derive(counter: number): SerializedOutputData;
+  activeKeys: MintKeys;
+  seed: Uint8Array;
 }
 export interface PreparedMintCommit {
   operation: PendingMintOperation;

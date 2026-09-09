@@ -21,11 +21,18 @@ for (const storage of ['memory', 'sqlite'] as const) {
       await repositories.mintRepository.addOrUpdateMint(
         await fixture.repositories.mintRepository.getMintByUrl(fixture.mintUrl),
       );
+      for (const keyset of (await fixture.metadata()).keysets)
+        await repositories.keysetRepository.addKeyset(keyset);
       const quote = await fixture.quote();
       await repositories.mintQuoteRepository.upsertMintQuote(quote);
       const amount = Amount.from(100);
       const mintInput = {
-        ...(await fixture.remote.preflight(quote, amount)),
+        ...(await fixture.remote.preflight(
+          quote,
+          amount,
+          await fixture.metadata(),
+          await fixture.loadSeed(),
+        )),
         id: 'composed-mint',
         quote,
         amount,
@@ -40,6 +47,43 @@ for (const storage of ['memory', 'sqlite'] as const) {
       );
       return { repositories, runner, mintInput, keyInput, database, opens: () => opens };
     }
+
+    it.each(['deactivated', 'unit changed', 'keys replaced'] as const)(
+      'rejects Mint allocation when its keyset is %s after preflight',
+      async (change) => {
+        const f = await setup();
+        try {
+          const input = f.mintInput;
+          const keyset = (await f.repositories.keysetRepository.getKeysetById(
+            input.quote.mintUrl,
+            input.activeKeys.id,
+          ))!;
+          await f.repositories.keysetRepository.deleteKeyset(
+            input.quote.mintUrl,
+            input.activeKeys.id,
+          );
+          await f.repositories.keysetRepository.addKeyset({
+            ...keyset,
+            active: change !== 'deactivated',
+            unit: change === 'unit changed' ? 'usd' : keyset.unit,
+            keypairs: change === 'keys replaced' ? {} : keyset.keypairs,
+          });
+          await expect(f.runner.run((scope) => scope.mints.prepare(input))).rejects.toThrow(
+            'changed after preflight',
+          );
+          expect(await f.repositories.mintOperationRepository.getById(input.id)).toBeNull();
+          expect(await f.repositories.mintRecoveryRepository.get(input.id)).toBeNull();
+          expect(
+            await f.repositories.counterRepository.getCounter(
+              input.quote.mintUrl,
+              input.activeKeys.id,
+            ),
+          ).toBeNull();
+        } finally {
+          f.database?.close();
+        }
+      },
+    );
 
     it('commits both domains through one scope and rolls both back on failure', async () => {
       const f = await setup();
@@ -59,7 +103,7 @@ for (const storage of ['memory', 'sqlite'] as const) {
         expect(
           await f.repositories.counterRepository.getCounter(
             f.mintInput.quote.mintUrl,
-            f.mintInput.keysetId,
+            f.mintInput.activeKeys.id,
           ),
         ).toBeNull();
 
@@ -79,7 +123,7 @@ for (const storage of ['memory', 'sqlite'] as const) {
         expect(
           await f.repositories.counterRepository.getCounter(
             f.mintInput.quote.mintUrl,
-            f.mintInput.keysetId,
+            f.mintInput.activeKeys.id,
           ),
         ).toEqual(committed.mint.counter);
         expect(await f.repositories.mintRecoveryRepository.get(f.mintInput.id)).toMatchObject({
@@ -107,7 +151,7 @@ for (const storage of ['memory', 'sqlite'] as const) {
         expect(
           await f.repositories.counterRepository.getCounter(
             f.mintInput.quote.mintUrl,
-            f.mintInput.keysetId,
+            f.mintInput.activeKeys.id,
           ),
         ).toBeNull();
       } finally {
