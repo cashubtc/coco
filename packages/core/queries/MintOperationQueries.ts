@@ -1,24 +1,20 @@
-import type { MintQuote } from '../models/MintQuote.ts';
-import type { MintQuoteRef } from '../models/QuoteIdentity.ts';
-import type { MintMethod } from '../operations/mint/MintMethodHandler.ts';
 import type { MintOperation, MintOperationState } from '../operations/mint/MintOperation.ts';
+import type { MintRecoveryRecord } from '../operations/mint/MintRecovery.ts';
 import type { CoreProof } from '../types.ts';
 
+/** Read-only capabilities; repository adapters satisfy these without another implementation. */
 export interface MintOperationQueries {
   getById(id: string): Promise<MintOperation | null>;
   getByState(state: MintOperationState): Promise<MintOperation[]>;
-  getPending(): Promise<MintOperation[]>;
   getByMintUrl(mintUrl: string): Promise<MintOperation[]>;
   getByQuoteId(mintUrl: string, method: string, quoteId: string): Promise<MintOperation[]>;
+  getPending(): Promise<MintOperation[]>;
+}
+export interface MintRecoveryQueries {
+  get(id: string): Promise<MintRecoveryRecord | null>;
+  getAll(): Promise<MintRecoveryRecord[]>;
 }
 
 export interface MintProofQueries {
-  getProofBySecret(mintUrl: string, secret: string): Promise<CoreProof | null>;
-}
-
-/** Read-only access to canonical quotes. Import and observation are separate mutations. */
-export interface MintQuoteQueries {
-  requireMintQuoteRefForPrepare(ref: MintQuoteRef): Promise<MintQuote>;
-  getMintQuote(mintUrl: string, method: MintMethod, quoteId: string): Promise<MintQuote | null>;
-  getPendingMintQuotes(): Promise<MintQuote[]>;
+  getProofsByOperationId(mintUrl: string, operationId: string): Promise<CoreProof[]>;
 }

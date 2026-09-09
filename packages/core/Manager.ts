@@ -4,89 +4,89 @@ import { CoreMintMetadataTransactions } from './transactions/mints/MintMetadataT
 import { MintWalletFactory } from './infra/mint/MintWallet.ts';
 import { createCoreTransactionModuleFactory } from './transactions/CoreTransaction.ts';
 import type { OutputDataCreator } from '@cashu/cashu-ts';
-import { HandlerMintRemote } from './infra/mint/HandlerMintRemote.ts';
+import { SdkMintRemote } from './infra/mint/SdkMintRemote.ts';
+import { isMintQuotePending } from './models/MintQuote.ts';
 import { CoreMintTransactions } from './transactions/mint/MintTransactions.ts';
 
-import type {
-  Repositories,
-  LegacyMintQuoteRepository,
-  MintOperationRepository,
-  SendOperationRepository,
-  MeltOperationRepository,
-  ReceiveOperationRepository,
-  PaymentRequestReceiveOperationRepository,
-  PaymentRequestReceiveAttemptRepository,
-} from './repositories';
 import {
-  CounterService,
-  MintService,
-  MintOperationWatcherService,
-  MintOperationProcessor,
-  MeltQuoteWatcherService,
-  MeltSettlementProcessor,
-  ProofService,
-  WalletService,
-  SeedService,
-  WalletRestoreService,
-  ProofStateWatcherService,
-  HistoryService,
-  KeyRingService,
-  PaymentRequestService,
-  PaymentRequestReceiveService,
-  AuthSessionService,
-  AuthService,
-  TokenService,
-} from './services';
-import { SendOperationService } from './operations/send/SendOperationService';
-import { MeltOperationService } from './operations/melt/MeltOperationService';
-import { MintOperationService } from './operations/mint/MintOperationService';
-import { ReceiveOperationService } from './operations/receive/ReceiveOperationService';
-import { MintScopedLock } from './operations/MintScopedLock';
+  AuthApi,
+  HistoryApi,
+  KeyRingApi,
+  MeltOpsApi,
+  MintApi,
+  MintOpsApi,
+  OpsApi,
+  PaymentRequestsApi,
+  QuoteApi,
+  ReceiveOpsApi,
+  SendOpsApi,
+  WalletApi,
+} from './api';
+import { EventBus, type CoreEvents } from './events';
 import {
-  SubscriptionManager,
-  type WebSocketFactory,
-  PollingTransport,
-  MintAdapter,
-  MintRequestProvider,
+  DefaultSendHandler,
   MeltBolt11Handler,
   MeltBolt12Handler,
-  MeltOnchainHandler,
   MeltHandlerProvider,
-  SendHandlerProvider,
-  DefaultSendHandler,
-  P2pkSendHandler,
+  MeltOnchainHandler,
+  MintAdapter,
   MintBolt11Handler,
   MintBolt12Handler,
   MintHandlerProvider,
   MintOnchainHandler,
+  MintRequestProvider,
+  P2pkSendHandler,
   PaymentRequestReceiveTransportHandlerProvider,
+  PollingTransport,
+  SendHandlerProvider,
+  SubscriptionManager,
+  type WebSocketFactory,
 } from './infra';
-import { EventBus, type CoreEvents } from './events';
-import { type Logger, NullLogger } from './logging';
-import {
-  MintApi,
-  WalletApi,
-  HistoryApi,
-  KeyRingApi,
-  AuthApi,
-  OpsApi,
-  SendOpsApi,
-  ReceiveOpsApi,
-  MeltOpsApi,
-  MintOpsApi,
-  QuoteApi,
-  PaymentRequestsApi,
-} from './api';
-import { PluginHost } from './plugins/PluginHost.ts';
-import type { MintMethodQuoteSnapshot } from './operations/mint';
-import type { Plugin, PluginExtensions, ServiceMap } from './plugin.ts';
-import { QuoteLifecycle } from './quotes/QuoteLifecycle.ts';
+import { NullLogger, type Logger } from './logging';
 import {
   getMintQuoteAmount,
   isStatefulMintQuote,
   mintQuoteToMethodSnapshot,
 } from './models/MintQuote.ts';
-import { assessMintQuoteClaimability } from './models/MintQuoteClaimability.ts';
+import { MeltOperationService } from './operations/melt/MeltOperationService';
+import type { MintMethodQuoteSnapshot } from './operations/mint';
+import { MintOperationService } from './operations/mint/MintOperationService';
+import { MintScopedLock } from './operations/MintScopedLock';
+import { ReceiveOperationService } from './operations/receive/ReceiveOperationService';
+import { SendOperationService } from './operations/send/SendOperationService';
+import type { Plugin, PluginExtensions, ServiceMap } from './plugin.ts';
+import { PluginHost } from './plugins/PluginHost.ts';
+import { QuoteLifecycle } from './quotes/QuoteLifecycle.ts';
+import type {
+  LegacyMintQuoteRepository,
+  MeltOperationRepository,
+  MintOperationRepository,
+  PaymentRequestReceiveAttemptRepository,
+  PaymentRequestReceiveOperationRepository,
+  ReceiveOperationRepository,
+  Repositories,
+  SendOperationRepository,
+} from './repositories';
+import {
+  AuthService,
+  AuthSessionService,
+  CounterService,
+  HistoryService,
+  KeyRingService,
+  MeltQuoteWatcherService,
+  MeltSettlementProcessor,
+  MintOperationProcessor,
+  MintOperationWatcherService,
+  MintService,
+  PaymentRequestReceiveService,
+  PaymentRequestService,
+  ProofService,
+  ProofStateWatcherService,
+  SeedService,
+  TokenService,
+  WalletRestoreService,
+  WalletService,
+} from './services';
 import { RepositoryCoreTransactionRunner } from './transactions/CoreTransaction.ts';
 import { CoreKeyRingTransactions } from './transactions/keypairs/KeyRingTransactions.ts';
 import { KeypairDerivation } from './keypairs/KeypairDerivation.ts';
@@ -671,7 +671,7 @@ export class Manager {
         continue;
       }
 
-      if (assessMintQuoteClaimability(quote).status === 'complete') {
+      if (!isMintQuotePending(quote)) {
         skipped.push(quote.quote);
         continue;
       }
@@ -1076,17 +1076,15 @@ export class Manager {
       loadSeed: () => seedService.getSeed(),
       operations: repositories.mintOperationRepository,
       proofs: repositories.proofRepository,
+      recovery: repositories.mintRecoveryRepository,
       quotes: quoteLifecycle,
-      transactions: new CoreMintTransactions(coreTransactionRunner),
-      remote: new HandlerMintRemote(
-        mintHandlerProvider,
+      remote: new SdkMintRemote(
         new MintWalletFactory(this.mintAdapter, this.mintRequestProvider, this.outputDataCreator),
-        this.mintAdapter,
-        mintOperationLogger,
+        keyRingService,
       ),
+      transactions: new CoreMintTransactions(coreTransactionRunner),
       events: this.eventBus,
       logger: mintOperationLogger,
-      mintScopedLock,
     });
     const mintOperationRepository = repositories.mintOperationRepository;
 

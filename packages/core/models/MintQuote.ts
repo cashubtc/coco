@@ -1,22 +1,22 @@
 import {
   Amount,
+  type MintQuoteOnchainResponse as CashuMintQuoteOnchainResponse,
   type MintQuoteBolt11Response,
   type MintQuoteBolt12Response,
-  type MintQuoteOnchainResponse as CashuMintQuoteOnchainResponse,
 } from '@cashu/cashu-ts';
-import { MintQuoteValidationError } from './Error';
-import {
-  mintQuoteObservationFromBolt11Response,
-  mintQuoteObservationFromBolt12Response,
-  mintQuoteObservationFromOnchainResponse,
-} from './MintQuoteObservationFactory';
 import type {
   MintMethod,
   MintMethodQuoteData,
   MintMethodQuoteSnapshot,
   MintMethodRemoteState,
 } from '../operations/mint/MintMethodHandler';
+import { MintQuoteValidationError } from './Error';
 import { assessMintQuoteClaimability } from './MintQuoteClaimability.ts';
+import {
+  mintQuoteObservationFromBolt11Response,
+  mintQuoteObservationFromBolt12Response,
+  mintQuoteObservationFromOnchainResponse,
+} from './MintQuoteObservationFactory';
 
 export type MintQuoteOnchainResponse = CashuMintQuoteOnchainResponse;
 
@@ -163,6 +163,12 @@ export function getMintQuoteAvailableAmount(quote: MintQuote): Amount {
 }
 
 export function isMintQuotePending(quote: MintQuote): boolean {
+  if (
+    quote.method === 'bolt11' &&
+    !quote.amountPaid.isZero() &&
+    quote.amountIssued.equals(quote.amountPaid)
+  )
+    return false;
   const { status } = assessMintQuoteClaimability(quote);
   return status === 'waiting' || status === 'claimable';
 }

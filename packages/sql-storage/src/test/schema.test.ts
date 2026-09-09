@@ -53,6 +53,7 @@ const EXPECTED_MIGRATION_IDS = [
   '036_quote_identity_unique_indexes',
   '037_mint_quote_accounting',
   '038_keypair_derivation_allocations',
+  '039_mint_recovery',
 ] as const;
 
 async function allocateP2pkKey(db: SqlDatabase) {
@@ -1164,3 +1165,59 @@ describe('shared SQL schema migrations', () => {
     },
   );
 });
+
+itWithDatabase(
+  'upgrades Mint recovery storage without rewriting legacy operations or counters',
+  async (db) => {
+    await ensureSchemaUpTo(db, '039_mint_recovery');
+    await db.run(
+      `INSERT INTO coco_cashu_mint_operations
+    (id, mintUrl, quoteId, state, createdAt, updatedAt, method, methodDataJson, amount, unit, request, expiry, outputDataJson)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        'legacy-mint',
+        'https://mint.test',
+        'quote',
+        'pending',
+        1,
+        2,
+        'bolt11',
+        '{}',
+        '100',
+        'sat',
+        'request',
+        1,
+        '{"keep":[],"send":[]}',
+      ],
+    );
+    await db.run('INSERT INTO coco_cashu_counters (mintUrl, keysetId, counter) VALUES (?, ?, ?)', [
+      'https://mint.test',
+      'keyset',
+      41,
+    ]);
+    const before = await db.get('SELECT * FROM coco_cashu_mint_operations WHERE id = ?', [
+      'legacy-mint',
+    ]);
+    await ensureSchemaUpTo(db);
+    await db.run('INSERT INTO coco_cashu_mint_recovery (operationId, data) VALUES (?, ?)', [
+      'legacy-mint',
+      '{"version":1}',
+    ]);
+    await ensureSchemaUpTo(db);
+    expect(
+      await db.get('SELECT * FROM coco_cashu_mint_operations WHERE id = ?', ['legacy-mint']),
+    ).toEqual(before);
+    expect(
+      (await db.get<{ counter: number }>(
+        'SELECT counter FROM coco_cashu_counters WHERE keysetId = ?',
+        ['keyset'],
+      ))!.counter,
+    ).toBe(41);
+    expect(
+      (await db.get<{ data: string }>(
+        'SELECT data FROM coco_cashu_mint_recovery WHERE operationId = ?',
+        ['legacy-mint'],
+      ))!.data,
+    ).toBe('{"version":1}');
+  },
+);

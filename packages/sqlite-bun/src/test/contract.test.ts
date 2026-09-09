@@ -1,26 +1,27 @@
-import { describe, it, expect } from 'bun:test';
+import {
+  runKeypairAllocationContract,
+  allocateKeypairForTest,
+  runAuthSessionRepositoryContract,
+  runMeltOperationRepositoryContract,
+  runMeltQuoteRepositoryContract,
+  runMintOperationRepositoryContract,
+  runMintQuoteRepositoryContract,
+  runMintRecoveryRepositoryContract,
+  runPaymentRequestReceiveRepositoryContract,
+  runProofRepositoryContract,
+  runReceiveOperationRepositoryContract,
+  runRepositoryTransactionContract,
+  runSendOperationRepositoryContract,
+} from '@cashu/coco-adapter-tests';
+import { runSqlDatabaseContract } from '@cashu/coco-sql-storage/test';
 import { Database } from 'bun:sqlite';
+import { describe, expect, it } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Worker } from 'node:worker_threads';
-import {
-  runRepositoryTransactionContract,
-  runKeypairAllocationContract,
-  allocateKeypairForTest,
-  runAuthSessionRepositoryContract,
-  runProofRepositoryContract,
-  runMintOperationRepositoryContract,
-  runMintQuoteRepositoryContract,
-  runPaymentRequestReceiveRepositoryContract,
-  runReceiveOperationRepositoryContract,
-  runSendOperationRepositoryContract,
-  runMeltOperationRepositoryContract,
-  runMeltQuoteRepositoryContract,
-} from '@cashu/coco-adapter-tests';
-import { runSqlDatabaseContract } from '@cashu/coco-sql-storage/test';
-import { SqliteRepositories as Repositories } from '../index.ts';
 import { SqliteDb } from '../db.ts';
+import { SqliteRepositories as Repositories } from '../index.ts';
 
 async function createRepositories() {
   const rawDatabase = new Database(':memory:');
@@ -252,3 +253,5 @@ describe('hydration corruption guard', () => {
     }
   });
 });
+
+runMintRecoveryRepositoryContract({ createRepositories }, { describe, it, expect });

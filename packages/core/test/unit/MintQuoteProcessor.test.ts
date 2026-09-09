@@ -243,7 +243,7 @@ describe('MintOperationProcessor', () => {
     expect(finalizeCalls).toEqual([]);
   });
 
-  it('skips onchain balance quotes with no locally claimable value', async () => {
+  it('delegates zero-balance onchain updates for exact-output recovery', async () => {
     mockMintOperationService = {
       ...mockMintOperationService,
       async getMintQuoteClaimability() {
@@ -272,13 +272,15 @@ describe('MintOperationProcessor', () => {
     });
     await processor.waitForCompletion();
 
-    expect(claimCalls).toEqual([]);
+    expect(claimCalls).toEqual([
+      { mintUrl: 'https://mint.test', method: 'onchain', quoteId: 'onchain-quote-empty' },
+    ]);
   });
 
-  it('logs and skips onchain balance quotes when claimability assessment fails', async () => {
+  it('logs a failed quote reconciliation without starting another claim', async () => {
     mockMintOperationService = {
       ...mockMintOperationService,
-      async getMintQuoteClaimability() {
+      async claimMintQuote() {
         throw new Error('claimability check failed');
       },
     } as unknown as MintOperationService;
@@ -400,7 +402,7 @@ describe('MintOperationProcessor', () => {
     },
   );
 
-  it('skips quote updates with no locally claimable value', async () => {
+  it('delegates zero-balance BOLT11 updates for exact-output recovery', async () => {
     mockMintOperationService = {
       ...mockMintOperationService,
       async getMintQuoteClaimability() {
@@ -430,11 +432,13 @@ describe('MintOperationProcessor', () => {
 
     await processor.waitForCompletion();
 
-    expect(claimCalls).toEqual([]);
+    expect(claimCalls).toEqual([
+      { mintUrl: 'https://mint.test', method: 'bolt11', quoteId: 'quote-4' },
+    ]);
     expect(finalizeCalls).toEqual([]);
   });
 
-  it('coalesces quote updates during an active assessment into one follow-up claim', async () => {
+  it('coalesces quote updates during active reconciliation into one follow-up', async () => {
     let releaseAssessment!: () => void;
     const assessmentGate = new Promise<void>((resolve) => {
       releaseAssessment = resolve;
@@ -442,13 +446,13 @@ describe('MintOperationProcessor', () => {
     let assessmentCalls = 0;
     mockMintOperationService = {
       ...mockMintOperationService,
-      async getMintQuoteClaimability() {
+      async claimMintQuote(mintUrl: string, method: string, quoteId: string) {
         assessmentCalls++;
         if (assessmentCalls === 1) {
           await assessmentGate;
-          return { status: 'waiting' };
         }
-        return { status: 'claimable' };
+        claimCalls.push({ mintUrl, method, quoteId });
+        return [];
       },
     } as unknown as MintOperationService;
     processor = new MintOperationProcessor(
@@ -479,6 +483,7 @@ describe('MintOperationProcessor', () => {
 
     expect(assessmentCalls).toBe(2);
     expect(claimCalls).toEqual([
+      { mintUrl: 'https://mint.test', method: 'bolt11', quoteId: 'quote-5' },
       { mintUrl: 'https://mint.test', method: 'bolt11', quoteId: 'quote-5' },
     ]);
     expect(finalizeCalls).toEqual([]);

@@ -1,21 +1,22 @@
-import { describe, it, expect } from 'vitest';
 import { Amount } from '@cashu/cashu-ts';
-import Dexie from 'dexie';
 import {
-  runRepositoryTransactionContract,
   createDummyMint,
   runKeypairAllocationContract,
   allocateKeypairForTest,
   runAuthSessionRepositoryContract,
-  runProofRepositoryContract,
-  runMintOperationRepositoryContract,
-  runMintQuoteRepositoryContract,
-  runPaymentRequestReceiveRepositoryContract,
-  runReceiveOperationRepositoryContract,
-  runSendOperationRepositoryContract,
   runMeltOperationRepositoryContract,
   runMeltQuoteRepositoryContract,
+  runMintOperationRepositoryContract,
+  runMintQuoteRepositoryContract,
+  runMintRecoveryRepositoryContract,
+  runPaymentRequestReceiveRepositoryContract,
+  runProofRepositoryContract,
+  runReceiveOperationRepositoryContract,
+  runRepositoryTransactionContract,
+  runSendOperationRepositoryContract,
 } from '@cashu/coco-adapter-tests';
+import Dexie from 'dexie';
+import { describe, expect, it } from 'vitest';
 import { IndexedDbRepositories } from '../index.ts';
 
 let dbCounter = 0;
@@ -624,3 +625,5 @@ describe('hydration corruption guard', () => {
     }
   });
 });
+
+runMintRecoveryRepositoryContract({ createRepositories }, { describe, it, expect });

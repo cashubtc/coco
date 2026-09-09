@@ -1,17 +1,20 @@
-import type { EventBus, CoreEvents } from '@core/events';
-import type { Logger } from '../../logging/Logger.ts';
+import type { CoreEvents, EventBus } from '@core/events';
 import type { SubscriptionManager, UnsubscribeHandler } from '@core/infra/SubscriptionManager.ts';
-import type { MintService } from '../MintService';
+import type { SubscriptionKind } from '@core/infra/SubscriptionProtocol.ts';
 import type {
   MintMethod,
   MintMethodQuoteSnapshot,
   MintOperationService,
   PendingMintOperation,
 } from '@core/operations/mint';
-import type { SubscriptionKind } from '@core/infra/SubscriptionProtocol.ts';
-import { mintQuoteToMethodSnapshot, type MintQuote } from '../../models/MintQuote.ts';
-import { assessMintQuoteClaimability } from '../../models/MintQuoteClaimability.ts';
+import type { Logger } from '../../logging/Logger.ts';
+import {
+  isMintQuotePending,
+  mintQuoteToMethodSnapshot,
+  type MintQuote,
+} from '../../models/MintQuote.ts';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
+import type { MintService } from '../MintService';
 
 type QuoteKey = string; // `${mintUrl}::${method}::${quoteId}`
 
@@ -140,7 +143,7 @@ export class MintOperationWatcherService {
       if (!policy) return;
 
       const key = toKey(quote.mintUrl, quote.method, quote.quoteId);
-      if (assessMintQuoteClaimability(quote).status === 'complete') {
+      if (!isMintQuotePending(quote)) {
         await this.stopWatching(key);
         return;
       }
@@ -524,7 +527,7 @@ export class MintOperationWatcherService {
         record.method,
         methodPayload,
       );
-      if (assessMintQuoteClaimability(quote).status === 'complete') {
+      if (!isMintQuotePending(quote)) {
         await this.stopWatching(key);
       }
     } catch (err) {

@@ -1,44 +1,46 @@
 import type {
-  Repositories,
-  RepositoryTransactionScope,
-  MintRepository,
-  KeysetRepository,
-  KeyRingRepository,
-  CounterRepository,
-  ProofRepository,
-  MeltQuoteRepository,
-  MintQuoteRepository,
-  LegacyMintQuoteRepository,
-  HistoryProjectionRepository,
-  SendOperationRepository,
-  MeltOperationRepository,
   AuthSessionRepository,
+  CounterRepository,
+  HistoryProjectionRepository,
+  KeyRingRepository,
+  KeysetRepository,
+  LegacyMintQuoteRepository,
+  MeltOperationRepository,
+  MeltQuoteRepository,
   MintOperationRepository,
-  ReceiveOperationRepository,
+  MintQuoteRepository,
+  MintRecoveryRepository,
+  MintRepository,
   PaymentRequestReceiveAttemptRepository,
   PaymentRequestReceiveOperationRepository,
+  ProofRepository,
+  ReceiveOperationRepository,
+  Repositories,
+  RepositoryTransactionScope,
+  SendOperationRepository,
 } from '@cashu/coco-core/adapter';
 import { RepositoryTransactionConflictError } from '@cashu/coco-core/adapter';
 import type { SqlDatabase } from './index.ts';
-import { ensureSchema } from './schema.ts';
-import { SqliteMintRepository } from './repositories/MintRepository.ts';
-import { SqliteKeysetRepository } from './repositories/KeysetRepository.ts';
-import { SqliteKeyRingRepository } from './repositories/KeyRingRepository.ts';
-import { SqliteCounterRepository } from './repositories/CounterRepository.ts';
-import { SqliteProofRepository } from './repositories/ProofRepository.ts';
-import { SqliteMeltQuoteRepository } from './repositories/MeltQuoteRepository.ts';
-import { SqliteMintQuoteRepository } from './repositories/MintQuoteRepository.ts';
-import { SqliteLegacyMintQuoteRepository } from './repositories/LegacyMintQuoteRepository.ts';
-import { SqliteHistoryRepository } from './repositories/HistoryRepository.ts';
-import { SqliteSendOperationRepository } from './repositories/SendOperationRepository.ts';
-import { SqliteMeltOperationRepository } from './repositories/MeltOperationRepository.ts';
 import { SqliteAuthSessionRepository } from './repositories/AuthSessionRepository.ts';
+import { SqliteCounterRepository } from './repositories/CounterRepository.ts';
+import { SqliteHistoryRepository } from './repositories/HistoryRepository.ts';
+import { SqliteKeyRingRepository } from './repositories/KeyRingRepository.ts';
+import { SqliteKeysetRepository } from './repositories/KeysetRepository.ts';
+import { SqliteLegacyMintQuoteRepository } from './repositories/LegacyMintQuoteRepository.ts';
+import { SqliteMeltOperationRepository } from './repositories/MeltOperationRepository.ts';
+import { SqliteMeltQuoteRepository } from './repositories/MeltQuoteRepository.ts';
 import { SqliteMintOperationRepository } from './repositories/MintOperationRepository.ts';
-import { SqliteReceiveOperationRepository } from './repositories/ReceiveOperationRepository.ts';
+import { SqliteMintQuoteRepository } from './repositories/MintQuoteRepository.ts';
+import { SqliteMintRecoveryRepository } from './repositories/MintRecoveryRepository.ts';
+import { SqliteMintRepository } from './repositories/MintRepository.ts';
 import {
   SqlitePaymentRequestReceiveAttemptRepository,
   SqlitePaymentRequestReceiveOperationRepository,
 } from './repositories/PaymentRequestReceiveRepository.ts';
+import { SqliteProofRepository } from './repositories/ProofRepository.ts';
+import { SqliteReceiveOperationRepository } from './repositories/ReceiveOperationRepository.ts';
+import { SqliteSendOperationRepository } from './repositories/SendOperationRepository.ts';
+import { ensureSchema } from './schema.ts';
 
 export interface SqlStorageRepositoriesOptions {
   database: SqlDatabase;
@@ -95,6 +97,7 @@ function createRepositoryScope(database: SqlDatabase): RepositoryTransactionScop
     sendOperationRepository: new SqliteSendOperationRepository(database),
     meltOperationRepository: new SqliteMeltOperationRepository(database),
     authSessionRepository: new SqliteAuthSessionRepository(database),
+    mintRecoveryRepository: new SqliteMintRecoveryRepository(database),
     mintOperationRepository: new SqliteMintOperationRepository(database),
     receiveOperationRepository: new SqliteReceiveOperationRepository(database),
     paymentRequestReceiveOperationRepository: new SqlitePaymentRequestReceiveOperationRepository(
@@ -119,6 +122,7 @@ export class SqlStorageRepositories implements Repositories {
   readonly sendOperationRepository: SendOperationRepository;
   readonly meltOperationRepository: MeltOperationRepository;
   readonly authSessionRepository: AuthSessionRepository;
+  readonly mintRecoveryRepository: MintRecoveryRepository;
   readonly mintOperationRepository: MintOperationRepository;
   readonly receiveOperationRepository: ReceiveOperationRepository;
   readonly paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
@@ -127,6 +131,7 @@ export class SqlStorageRepositories implements Repositories {
 
   constructor(options: SqlStorageRepositoriesOptions) {
     this.database = options.database;
+    this.mintRecoveryRepository = new SqliteMintRecoveryRepository(this.database);
     const repositories = createRepositoryScope(this.database);
     this.mintRepository = repositories.mintRepository;
     this.keyRingRepository = new SqliteKeyRingRepository(this.database);
@@ -180,20 +185,20 @@ export class SqlStorageRepositories implements Repositories {
 }
 
 export {
-  SqliteMintRepository,
+  SqliteAuthSessionRepository,
+  SqliteCounterRepository,
+  SqliteHistoryRepository,
   SqliteKeyRingRepository,
   SqliteKeysetRepository,
-  SqliteCounterRepository,
-  SqliteProofRepository,
-  SqliteMeltQuoteRepository,
-  SqliteMintQuoteRepository,
   SqliteLegacyMintQuoteRepository,
-  SqliteHistoryRepository,
-  SqliteSendOperationRepository,
   SqliteMeltOperationRepository,
-  SqliteAuthSessionRepository,
+  SqliteMeltQuoteRepository,
   SqliteMintOperationRepository,
-  SqliteReceiveOperationRepository,
-  SqlitePaymentRequestReceiveOperationRepository,
+  SqliteMintQuoteRepository,
+  SqliteMintRepository,
   SqlitePaymentRequestReceiveAttemptRepository,
+  SqlitePaymentRequestReceiveOperationRepository,
+  SqliteProofRepository,
+  SqliteReceiveOperationRepository,
+  SqliteSendOperationRepository,
 };

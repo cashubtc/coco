@@ -1,38 +1,30 @@
 import type { ScopedOutputCommands } from '../outputs/ScopedOutputCommands.ts';
 import { Amount } from '@cashu/cashu-ts';
-import { ProofValidationError, UnknownMintError } from '../../../models/Error.ts';
-import {
-  applyBolt11MintQuoteStateFallback,
-  getMintQuoteAmount,
-  type MintQuote,
-} from '../../../models/MintQuote.ts';
 import { assessMintQuoteClaimability } from '../../../models/MintQuoteClaimability.ts';
 import type {
-  AuthorizeMintInput,
-  FailMintInput,
-  MintCommands,
-  MintCommit,
-  MintQuoteCommit,
-  PreparedMintCommit,
-  PrepareMintInput,
-  ReturnMintToPendingInput,
-  SettleMintInput,
-} from '../../../operations/mint/MintCommands.ts';
-import { mintLocalClaimabilityFacts } from '../../../operations/mint/MintLocalClaimability.ts';
-import {
-  getOutputProofSecrets,
-  type MintOperation,
-  type PendingMintOperation,
-  type PendingOrLaterOperation,
+  MintOperation,
+  PendingMintOperation,
 } from '../../../operations/mint/MintOperation.ts';
-import { resolveMintQuoteObservation } from '../../../quotes/MintQuoteObservation.ts';
+import { mintLocalFacts } from '../../../operations/mint/MintReconciliation.ts';
+import type {
+  MintIssuanceReceipt,
+  MintRecoveryRecord,
+} from '../../../operations/mint/MintRecovery.ts';
+import { newMintRecovery } from '../../../operations/mint/MintRecovery.ts';
 import type { RepositoryTransactionScope } from '../../../repositories/index.ts';
 import type { CoreProof } from '../../../types.ts';
-import { deserializeOutputData, mapProofToCoreProof } from '../../../utils.ts';
+import { deserializeOutputData } from '../../../utils.ts';
+import type {
+  AuthorizeMintInput,
+  MintCommit,
+  MintCommands,
+  PreparedMintCommit,
+  PrepareMintInput,
+} from '../../../operations/mint/MintCommands.ts';
 
 export type ScopedMintCommands = MintCommands;
 
-/** Existing Mint lifecycle mutations, using only repositories from one runner-owned scope. */
+/** All repositories belong to one already-open scope. This module cannot open transactions. */
 export class RepositoryMintCommands implements ScopedMintCommands {
   constructor(
     private readonly scope: RepositoryTransactionScope,
@@ -45,271 +37,345 @@ export class RepositoryMintCommands implements ScopedMintCommands {
     return operation;
   }
 
-  private unchanged(operation: MintOperation): MintCommit {
-    return { operation, changed: false, proofs: [] };
-  }
-
-  private matches(current: MintOperation, expected: PendingOrLaterOperation) {
-    return current.state === expected.state && current.updatedAt === expected.updatedAt;
-  }
-
-  private nextTimestamp(operation: MintOperation, timestamp: number) {
-    return Math.max(timestamp, operation.updatedAt + 1);
+  private async requireRecord(id: string) {
+    const record = await this.scope.mintRecoveryRepository.get(id);
+    if (!record || record.version !== 1)
+      throw new Error(`Unsupported Mint recovery format for ${id}`);
+    return record;
   }
 
   async prepare(input: PrepareMintInput): Promise<PreparedMintCommit> {
-    const { operation, activeKeys, seed } = input;
+    const { quote, amount, id, activeKeys, seed } = input;
     const keysetId = activeKeys.id;
-    const quote = await this.scope.mintQuoteRepository.getMintQuote(
-      operation.mintUrl,
-      operation.method,
-      operation.quoteId,
+    const canonical = await this.scope.mintQuoteRepository.getMintQuote(
+      quote.mintUrl,
+      quote.method,
+      quote.quoteId,
     );
-    if (!quote) throw new Error(`Mint quote ${operation.quoteId} was not found`);
-    if (!(await this.scope.mintRepository.isTrustedMint(operation.mintUrl)))
-      throw new UnknownMintError(`Mint ${operation.mintUrl} is not trusted`);
-    if (operation.amount.isZero())
-      throw new ProofValidationError('Amount must be a positive number');
     if (
-      quote.request !== operation.request ||
-      quote.unit !== operation.unit ||
-      quote.pubkey !== operation.pubkey
+      !canonical ||
+      canonical.request !== quote.request ||
+      canonical.unit !== quote.unit ||
+      canonical.pubkey !== quote.pubkey
     )
       throw new Error('Mint quote changed during preparation');
-    const assessment = assessMintQuoteClaimability(quote);
-    if (assessment.status === 'complete' || assessment.status === 'invalid')
-      throw new Error(`Cannot prepare mint quote ${quote.quoteId}: quote is ${assessment.status}`);
-    const fixedAmount = getMintQuoteAmount(quote);
-    if (fixedAmount) {
-      if (!fixedAmount.equals(operation.amount))
-        throw new Error(`Mint quote ${quote.quoteId} amount does not match requested amount`);
-      const siblings = await this.scope.mintOperationRepository.getByQuoteId(
-        quote.mintUrl,
-        quote.method,
-        quote.quoteId,
-      );
-      if (siblings.length)
-        throw new Error(
-          `Mint quote ${quote.quoteId} is already tracked by operation ${siblings[0]!.id} in state ${siblings[0]!.state}`,
-        );
-    }
+    if (!(await this.scope.mintRepository.isTrustedMint(quote.mintUrl)))
+      throw new Error('Mint is not trusted');
+    if (amount.isZero()) throw new Error('Mint amount must be positive');
     const allocated = await this.outputs.allocate({
-      mintUrl: operation.mintUrl,
-      unit: operation.unit,
+      mintUrl: quote.mintUrl,
+      unit: quote.unit,
       activeKeys,
       seed,
-      keepAmount: operation.amount,
+      keepAmount: amount,
       sendAmount: Amount.zero(),
     });
     const { outputData } = allocated;
     if (
-      !outputData.keep.length ||
-      outputData.send.length ||
-      !Amount.sum(outputData.keep.map((output) => output.blindedMessage.amount)).equals(
-        operation.amount,
-      ) ||
-      outputData.keep.some((output) => output.blindedMessage.id !== keysetId) ||
-      new Set(outputData.keep.map((output) => output.blindedMessage.B_)).size !==
-        outputData.keep.length ||
-      new Set(outputData.keep.map((output) => output.secret)).size !== outputData.keep.length
+      outputData.keep.length === 0 ||
+      outputData.send.length !== 0 ||
+      !Amount.sum(outputData.keep.map((o) => o.blindedMessage.amount)).equals(amount) ||
+      outputData.keep.some((o) => o.blindedMessage.id !== keysetId) ||
+      new Set(outputData.keep.map((o) => o.blindedMessage.B_)).size !== outputData.keep.length ||
+      new Set(outputData.keep.map((o) => o.secret)).size !== outputData.keep.length
     )
-      throw new ProofValidationError('Invalid Mint output allocation');
-    const pending: PendingMintOperation = { ...operation, outputData };
-    await this.scope.mintOperationRepository.create(pending);
-    return {
-      operation: pending,
-      counter: allocated.counter!,
+      throw new Error('Invalid Mint output allocation');
+    const operation: PendingMintOperation = {
+      id,
+      mintUrl: quote.mintUrl,
+      method: quote.method,
+      methodData: {},
+      quoteId: quote.quoteId,
+      amount,
+      unit: quote.unit,
+      request: quote.request,
+      pubkey: quote.pubkey,
+      expiry: quote.expiry,
+      outputData,
+      state: 'pending',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
     };
+    await this.scope.mintOperationRepository.create(operation);
+    await this.scope.mintRecoveryRepository.set(newMintRecovery(id));
+    return { operation, counter: allocated.counter! };
+  }
+
+  /** Migrate the entire sibling set before any admission, preserving every unknown commitment. */
+  private async migrateSiblings(operation: MintOperation) {
+    const siblings = await this.scope.mintOperationRepository.getByQuoteId(
+      operation.mintUrl,
+      operation.method,
+      operation.quoteId,
+    );
+    const records = new Map<string, MintRecoveryRecord>();
+    for (const sibling of siblings) {
+      let record = await this.scope.mintRecoveryRepository.get(sibling.id);
+      if (record && record.version !== 1) throw new Error('Unsupported Mint recovery version');
+      if (!record && sibling.state !== 'init') {
+        record = {
+          ...newMintRecovery(sibling.id),
+          provenance:
+            sibling.state === 'finalized' || sibling.state === 'failed'
+              ? 'settled'
+              : 'legacy-unknown',
+        };
+        await this.scope.mintRecoveryRepository.set(record);
+      }
+      if (record) records.set(sibling.id, record);
+    }
+    return { siblings, records };
+  }
+
+  async migrate(operationId: string): Promise<MintCommit> {
+    let operation = await this.requireOperation(operationId);
+    const { records } = await this.migrateSiblings(operation);
+    const recovery = records.get(operationId);
+    let changed = false;
+    if (operation.state === 'init') {
+      await this.scope.mintOperationRepository.delete(operationId);
+    } else if (operation.state === 'pending' && recovery?.provenance === 'legacy-unknown') {
+      operation = {
+        ...operation,
+        state: 'executing',
+        error: 'Legacy submission history is unknown; exact-output recovery required',
+        updatedAt: Date.now(),
+      };
+      await this.scope.mintOperationRepository.update(operation);
+      changed = true;
+    }
+    return { operation, recovery, changed, proofs: [] };
   }
 
   async authorize(input: AuthorizeMintInput): Promise<MintCommit> {
     const operation = await this.requireOperation(input.operationId);
-    if (operation.state !== 'pending') return this.unchanged(operation);
-    if (!(await this.scope.mintRepository.isTrustedMint(operation.mintUrl)))
-      throw new UnknownMintError(`Mint ${operation.mintUrl} is not trusted`);
+    const { siblings, records } = await this.migrateSiblings(operation);
+    const recovery = records.get(operation.id);
+    if (operation.state !== 'pending' || recovery?.provenance !== 'prepared')
+      return { operation, recovery, changed: false, proofs: [] };
     const quote = await this.scope.mintQuoteRepository.getMintQuote(
       operation.mintUrl,
       operation.method,
       operation.quoteId,
     );
-    if (quote) {
-      const siblings = await this.scope.mintOperationRepository.getByQuoteId(
-        operation.mintUrl,
-        operation.method,
-        operation.quoteId,
-      );
-      const assessment = assessMintQuoteClaimability(quote, {
-        ...mintLocalClaimabilityFacts(siblings, operation.id),
-        requestedAmount: operation.amount,
-      });
-      if (assessment.status === 'invalid')
-        throw new Error(`Mint quote ${operation.quoteId} has invalid claimability accounting`);
-      if (assessment.status === 'waiting') return this.unchanged(operation);
-    }
+    if (
+      !quote ||
+      quote.request !== operation.request ||
+      quote.unit !== operation.unit ||
+      quote.pubkey !== operation.pubkey
+    )
+      throw new Error('Mint quote identity conflict');
+    if (!(await this.scope.mintRepository.isTrustedMint(operation.mintUrl)))
+      throw new Error('Mint is not trusted');
+    const assessment = assessMintQuoteClaimability(quote, {
+      ...mintLocalFacts(siblings, records, operation.id),
+      requestedAmount: operation.amount,
+    });
+    if (assessment.status === 'invalid') throw new Error('Invalid Mint quote accounting');
+    if (assessment.status !== 'claimable')
+      return { operation, recovery, changed: false, proofs: [] };
+    const expected = operation.outputData.keep.map((o) => o.blindedMessage);
+    if (
+      input.request.quote !== operation.quoteId ||
+      JSON.stringify(input.request.outputs) !== JSON.stringify(expected)
+    )
+      throw new Error('Mint request changed output identity');
+    if (operation.pubkey && !input.request.signature)
+      throw new Error('Missing Mint quote signature');
+    const facts = mintLocalFacts(siblings, records, operation.id);
+    const completed = Amount.sum(
+      siblings.filter((op) => op.state === 'finalized').map((op) => op.amount),
+    );
+    const priorBaseline = facts.finalizedAmount.subtract(completed);
+    // Advance the baseline only with no unresolved local transmission whose issuance could
+    // already be included in the remote total. Failed sibling reservations leave no holes.
+    const observedBaseline =
+      facts.reservedAmount.isZero() && quote.amountIssued.greaterThan(completed)
+        ? quote.amountIssued.subtract(completed)
+        : Amount.zero();
+    const baseline = observedBaseline.greaterThan(priorBaseline) ? observedBaseline : priorBaseline;
+    const next: MintRecoveryRecord = {
+      ...recovery,
+      issuanceBaseline: baseline.toString(),
+      revision: recovery.revision + 1,
+      provenance: 'authorized',
+      transmission: 'authorized',
+      request: input.request,
+      legacySignature: input.legacySignature,
+    };
     const executing = {
       ...operation,
       state: 'executing' as const,
-      updatedAt: this.nextTimestamp(operation, input.timestamp),
+      updatedAt: Date.now(),
       error: undefined,
     };
+    await this.scope.mintRecoveryRepository.set(next);
     await this.scope.mintOperationRepository.update(executing);
-    return { operation: executing, changed: true, proofs: [] };
+    return { operation: executing, recovery: next, changed: true, proofs: [] };
   }
 
-  async settle(input: SettleMintInput): Promise<MintCommit> {
-    const operation = await this.requireOperation(input.operation.id);
-    if (operation.state === 'init') return this.unchanged(operation);
-    const outputs = deserializeOutputData(operation.outputData);
-    const expected = [...outputs.keep, ...outputs.send];
-    const proofs: CoreProof[] = [];
-    for (const proof of input.proofs) {
-      if (
-        !expected.some(
-          (output) =>
-            new TextDecoder().decode(output.secret) === proof.secret &&
-            output.blindedMessage.id === proof.id &&
-            output.blindedMessage.amount.equals(proof.amount),
-        )
-      )
-        throw new ProofValidationError('Mint proof does not match persisted outputs');
-      const existing = await this.scope.proofRepository.getProofBySecret(
-        operation.mintUrl,
-        proof.secret,
-      );
-      if (existing) {
-        if (
-          existing.id !== proof.id ||
-          existing.C !== proof.C ||
-          existing.unit !== operation.unit ||
-          !existing.amount.equals(proof.amount) ||
-          (existing.createdByOperationId && existing.createdByOperationId !== operation.id)
-        )
-          throw new ProofValidationError('Mint proof ownership conflict');
-        continue;
-      }
-      if (!proofs.some((candidate) => candidate.secret === proof.secret))
-        proofs.push(
-          ...mapProofToCoreProof(operation.mintUrl, 'ready', [proof], {
-            unit: operation.unit,
-            createdByOperationId: operation.id,
-          }),
-        );
-    }
-    await this.scope.proofRepository.saveProofs(operation.mintUrl, proofs);
-    // Positive proofs survive a concurrent recovery transition; stale lifecycle conclusions do not.
-    if (operation.state !== 'executing' || !this.matches(operation, input.operation))
-      return { operation, changed: false, proofs };
-    const secrets = getOutputProofSecrets(operation);
-    let complete = secrets.length > 0;
-    for (const secret of secrets) {
-      if (!(await this.scope.proofRepository.getProofBySecret(operation.mintUrl, secret)))
-        complete = false;
-    }
-    // Keep the legacy distinction: an already-issued BOLT11 quote can finalize without proofs.
-    // The dependent reconciliation change replaces this quote-wide conclusion with exact evidence.
-    if (!complete && input.outcome === 'issued') return { operation, changed: false, proofs };
-    const finalized = complete || input.outcome === 'already-issued';
-    let quote: MintQuoteCommit | undefined;
-    if (finalized && operation.method === 'bolt11') {
-      const existing =
-        (await this.scope.mintQuoteRepository.getMintQuote(
-          operation.mintUrl,
-          'bolt11',
-          operation.quoteId,
-        )) ?? this.legacyQuote(operation);
-      if (existing.method !== 'bolt11') throw new Error('Mint quote method conflict');
-      quote = await this.observeQuote(
-        applyBolt11MintQuoteStateFallback(existing, 'ISSUED', input.timestamp),
-      );
-    }
-    const updated = {
-      ...operation,
-      state: finalized ? ('finalized' as const) : ('pending' as const),
-      updatedAt: this.nextTimestamp(operation, input.timestamp),
-      error: complete
-        ? undefined
-        : `Recovered issued quote ${operation.quoteId} but no proofs could be restored`,
-    };
-    await this.scope.mintOperationRepository.update(updated);
-    return { operation: updated, changed: true, proofs, quote };
-  }
-
-  private legacyQuote(operation: PendingOrLaterOperation): MintQuote<'bolt11'> {
-    return {
-      mintUrl: operation.mintUrl,
-      method: 'bolt11',
-      quoteId: operation.quoteId,
-      quote: operation.quoteId,
-      request: operation.request,
-      unit: operation.unit,
-      amount: operation.amount,
-      expiry: operation.expiry,
-      pubkey: operation.pubkey,
-      state: 'UNPAID',
-      reusable: false,
-      amountPaid: Amount.zero(),
-      amountIssued: Amount.zero(),
-      remoteUpdatedAt: null,
-      quoteData: { amount: operation.amount },
-      createdAt: operation.createdAt,
-      updatedAt: operation.updatedAt,
-    };
-  }
-
-  async returnToPending(input: ReturnMintToPendingInput): Promise<MintCommit> {
-    const operation = await this.requireOperation(input.operation.id);
-    if (operation.state !== 'executing' || !this.matches(operation, input.operation))
-      return this.unchanged(operation);
-    const pending = {
-      ...operation,
-      state: 'pending' as const,
-      updatedAt: this.nextTimestamp(operation, input.timestamp),
-      error: input.error,
-    };
-    await this.scope.mintOperationRepository.update(pending);
-    return { operation: pending, changed: true, proofs: [] };
-  }
-
-  async fail(input: FailMintInput): Promise<MintCommit> {
-    const operation = await this.requireOperation(input.operation.id);
+  async applyEvidence(operationId: string, receipts: MintIssuanceReceipt[]): Promise<MintCommit> {
+    const operation = await this.requireOperation(operationId);
+    const recovery = await this.requireRecord(operationId);
+    if (operation.state !== 'executing' && operation.state !== 'finalized')
+      return { operation, recovery, changed: false, proofs: [] };
+    const outputs = deserializeOutputData(operation.outputData).keep;
     if (
-      (operation.state !== 'pending' && operation.state !== 'executing') ||
-      !this.matches(operation, input.operation)
+      operation.outputData.send.length ||
+      !outputs.length ||
+      !Amount.sum(outputs.map((output) => output.blindedMessage.amount)).equals(operation.amount) ||
+      new Set(outputs.map((output) => output.blindedMessage.B_)).size !== outputs.length ||
+      new Set(outputs.map((output) => new TextDecoder().decode(output.secret))).size !==
+        outputs.length
+    ) {
+      throw new Error('Mint output plan does not cover the exact operation amount');
+    }
+
+    const merged = new Map(recovery.receipts.map((r) => [r.B_, r]));
+    for (const receipt of receipts) {
+      const output = outputs.find((o) => o.blindedMessage.B_ === receipt.B_);
+      if (
+        !output ||
+        receipt.proof.secret !== new TextDecoder().decode(output.secret) ||
+        receipt.proof.id !== output.blindedMessage.id ||
+        !Amount.from(receipt.proof.amount).equals(output.blindedMessage.amount)
+      )
+        throw new Error('Mint evidence does not match exact outputs');
+      const prior = merged.get(receipt.B_);
+      if (
+        prior &&
+        (prior.proof.C !== receipt.proof.C ||
+          prior.proof.id !== receipt.proof.id ||
+          prior.proof.amount !== receipt.proof.amount)
+      )
+        throw new Error('Conflicting Mint issuance evidence');
+      merged.set(
+        receipt.B_,
+        prior?.state === 'SPENT' ? prior : receipt.state === 'UNKNOWN' && prior ? prior : receipt,
+      );
+    }
+    const complete = outputs.length > 0 && merged.size === outputs.length;
+    const proofs: CoreProof[] = [];
+    if (complete) {
+      for (const receipt of merged.values()) {
+        if (receipt.state === 'UNKNOWN' || receipt.state === 'PENDING') continue; // Durable holding area; never count unknown state as ready.
+        const existing = await this.scope.proofRepository.getProofBySecret(
+          operation.mintUrl,
+          receipt.proof.secret,
+        );
+        if (existing) {
+          if (
+            existing.id !== receipt.proof.id ||
+            !existing.amount.equals(receipt.proof.amount) ||
+            existing.unit !== operation.unit ||
+            existing.C !== receipt.proof.C ||
+            (existing.createdByOperationId && existing.createdByOperationId !== operation.id)
+          )
+            throw new Error('Mint proof ownership conflict');
+          // Never overwrite a proof already reserved/spent by a later operation.
+          continue;
+        }
+        const proof: CoreProof = {
+          ...receipt.proof,
+          amount: Amount.from(receipt.proof.amount),
+          mintUrl: operation.mintUrl,
+          unit: operation.unit,
+          state:
+            receipt.state === 'UNSPENT'
+              ? 'ready'
+              : receipt.state === 'SPENT'
+                ? 'spent'
+                : 'inflight',
+          createdByOperationId: operation.id,
+        };
+        proofs.push(proof);
+      }
+      await this.scope.proofRepository.saveProofs(operation.mintUrl, proofs);
+    }
+    const next = {
+      ...recovery,
+      revision: recovery.revision + 1,
+      receipts: [...merged.values()],
+      provenance: complete ? ('settled' as const) : recovery.provenance,
+    };
+    const updated = complete
+      ? { ...operation, state: 'finalized' as const, updatedAt: Date.now(), error: undefined }
+      : {
+          ...operation,
+          error: merged.size
+            ? 'Partial issuance evidence; remaining outputs unresolved'
+            : 'Issuance outcome unresolved',
+          updatedAt: Date.now(),
+        };
+    await this.scope.mintRecoveryRepository.set(next);
+    await this.scope.mintOperationRepository.update(updated);
+    return {
+      operation: updated,
+      recovery: next,
+      changed: complete && operation.state !== 'finalized',
+      proofs,
+    };
+  }
+
+  async reject(
+    operationId: string,
+    revision: number,
+    error: string,
+    useLegacy: boolean,
+  ): Promise<MintCommit> {
+    const operation = await this.requireOperation(operationId);
+    const recovery = await this.requireRecord(operationId);
+    if (
+      operation.state !== 'executing' ||
+      recovery.revision !== revision ||
+      recovery.transmission !== 'authorized' ||
+      recovery.provenance !== 'authorized' ||
+      recovery.receipts.length
     )
-      return this.unchanged(operation);
+      return { operation, recovery, changed: false, proofs: [] };
+    if (
+      useLegacy &&
+      recovery.variant === 'current' &&
+      recovery.legacySignature &&
+      recovery.request
+    ) {
+      const next = {
+        ...recovery,
+        revision: revision + 1,
+        variant: 'legacy' as const,
+        rejectedRequest: recovery.request,
+        request: { ...recovery.request, signature: recovery.legacySignature },
+      };
+      await this.scope.mintRecoveryRepository.set(next);
+      return { operation, recovery: next, changed: true, proofs: [] };
+    }
     const failed = {
       ...operation,
       state: 'failed' as const,
-      updatedAt: this.nextTimestamp(operation, input.timestamp),
-      error: input.failure.reason,
-      terminalFailure: input.failure,
+      error,
+      terminalFailure: { reason: error, observedAt: Date.now() },
+      updatedAt: Date.now(),
     };
+    const next = {
+      ...recovery,
+      revision: revision + 1,
+      transmission: 'rejected' as const,
+      provenance: 'settled' as const,
+    };
+    await this.scope.mintRecoveryRepository.set(next);
     await this.scope.mintOperationRepository.update(failed);
-    return { operation: failed, changed: true, proofs: [] };
+    return { operation: failed, recovery: next, changed: true, proofs: [] };
   }
 
-  async observeQuote(incoming: MintQuote): Promise<MintQuoteCommit> {
-    const existing = await this.scope.mintQuoteRepository.getMintQuote(
-      incoming.mintUrl,
-      incoming.method,
-      incoming.quoteId,
-    );
-    const resolution = resolveMintQuoteObservation(existing, incoming);
-    if (!resolution.disposition.startsWith('accepted-'))
-      return { quote: resolution.resolvedQuote, changed: false };
-    await this.scope.mintQuoteRepository.upsertMintQuote(resolution.resolvedQuote);
-    return {
-      quote: (await this.scope.mintQuoteRepository.getMintQuote(
-        incoming.mintUrl,
-        incoming.method,
-        incoming.quoteId,
-      ))!,
-      changed: resolution.disposition === 'accepted-meaningful-change',
-    };
-  }
-
-  async deleteInit(operationId: string): Promise<void> {
-    const operation = await this.scope.mintOperationRepository.getById(operationId);
-    if (operation?.state === 'init') await this.scope.mintOperationRepository.delete(operationId);
+  async noteAmbiguity(operationId: string, revision: number, error: string): Promise<MintCommit> {
+    const operation = await this.requireOperation(operationId);
+    const recovery = await this.requireRecord(operationId);
+    if (operation.state !== 'executing' || recovery.revision !== revision)
+      return { operation, recovery, changed: false, proofs: [] };
+    const next = { ...recovery, revision: revision + 1, transmission: 'ambiguous' as const };
+    const updated = { ...operation, error, updatedAt: Date.now() };
+    await this.scope.mintRecoveryRepository.set(next);
+    await this.scope.mintOperationRepository.update(updated);
+    return { operation: updated, recovery: next, changed: false, proofs: [] };
   }
 }

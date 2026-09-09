@@ -1,26 +1,18 @@
-export type {
-  AuthSessionRepository,
-  CounterRepository,
-  HistoryProjectionRepository,
-  HistoryRepository,
-  KeyRingRepository,
-  KeysetRepository,
-  LegacyMintQuoteRepository,
-  MeltOperationRepository,
-  MeltQuoteRepository,
-  MintOperationRepository,
-  MintQuoteRepository,
-  MintRepository,
-  PaymentRequestReceiveAttemptRepository,
-  PaymentRequestReceiveOperationRepository,
-  ProofRepository,
-  ProofUnitFilter,
-  ReceiveOperationRepository,
-  Repositories,
-  RepositoryTransactionScope,
-  SendOperationRepository,
-} from './repositories/index.ts';
-export { RepositoryTransactionConflictError } from './repositories/index.ts';
+export { DEFAULT_UNIT, normalizeUnit } from './amounts.ts';
+export {
+  DerivationIndexExhaustedError,
+  QuoteIdentityConflictError,
+  applyBolt11MintQuoteStateFallback,
+  compareHistoryEntries,
+  deriveBolt11MintQuoteState,
+  getMintQuoteAmount,
+  getMintQuoteRemoteState,
+  isMintQuotePending,
+  isStatefulMintQuote,
+  operationHistoryId,
+  parseHistoryEntryId,
+  projectLegacyHistoryRow,
+} from './models/index.ts';
 export type {
   AuthSession,
   Counter,
@@ -38,20 +30,7 @@ export type {
   MintQuoteRef,
   QuoteIdentity,
 } from './models/index.ts';
-export {
-  applyBolt11MintQuoteStateFallback,
-  compareHistoryEntries,
-  deriveBolt11MintQuoteState,
-  getMintQuoteAmount,
-  getMintQuoteRemoteState,
-  isMintQuotePending,
-  isStatefulMintQuote,
-  operationHistoryId,
-  parseHistoryEntryId,
-  projectLegacyHistoryRow,
-  DerivationIndexExhaustedError,
-  QuoteIdentityConflictError,
-} from './models/index.ts';
+export { normalizeMeltMethodData } from './operations/index.ts';
 export type {
   MeltMethod,
   MeltMethodData,
@@ -76,9 +55,36 @@ export type {
   SendOperationState,
 } from './operations/index.ts';
 export type { MeltMethodRemoteState } from './operations/melt/MeltMethodHandler.ts';
-export { normalizeMeltMethodData } from './operations/index.ts';
+export type {
+  MintIssuanceReceipt,
+  MintRecoveryRecord,
+  MintRequestRecord,
+} from './operations/mint/MintRecovery.ts';
+export { RepositoryTransactionConflictError } from './repositories/index.ts';
+export type {
+  AuthSessionRepository,
+  CounterRepository,
+  HistoryProjectionRepository,
+  HistoryRepository,
+  KeyRingRepository,
+  KeysetRepository,
+  LegacyMintQuoteRepository,
+  MeltOperationRepository,
+  MeltQuoteRepository,
+  MintOperationRepository,
+  MintQuoteRepository,
+  MintRecoveryRepository,
+  MintRepository,
+  PaymentRequestReceiveAttemptRepository,
+  PaymentRequestReceiveOperationRepository,
+  ProofRepository,
+  ProofUnitFilter,
+  ReceiveOperationRepository,
+  Repositories,
+  RepositoryTransactionScope,
+  SendOperationRepository,
+} from './repositories/index.ts';
 export type { BalanceQuery, CoreProof, ProofState } from './types.ts';
-export { DEFAULT_UNIT, normalizeUnit } from './amounts.ts';
 export {
   deserializeAmount,
   deserializeBlindedSignatures,

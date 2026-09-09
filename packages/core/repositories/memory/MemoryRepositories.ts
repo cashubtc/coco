@@ -5,41 +5,43 @@ import type {
   KeyRingRepository,
   KeysetRepository,
   LegacyMintQuoteRepository,
-  MeltQuoteRepository,
   MeltOperationRepository,
+  MeltQuoteRepository,
+  MintOperationRepository,
   MintQuoteRepository,
+  MintRecoveryRepository,
   MintRepository,
+  PaymentRequestReceiveAttemptRepository,
+  PaymentRequestReceiveOperationRepository,
   ProofRepository,
+  ReceiveOperationRepository,
   Repositories,
   RepositoryTransactionScope,
   SendOperationRepository,
-  MintOperationRepository,
-  PaymentRequestReceiveAttemptRepository,
-  PaymentRequestReceiveOperationRepository,
-  ReceiveOperationRepository,
 } from '..';
 import { MemoryAuthSessionRepository } from './MemoryAuthSessionRepository';
 import { MemoryCounterRepository } from './MemoryCounterRepository';
 import { MemoryHistoryRepository } from './MemoryHistoryRepository';
 import { MemoryKeyRingRepository } from './MemoryKeyRingRepository';
 import { MemoryKeysetRepository } from './MemoryKeysetRepository';
+import { MemoryLegacyMintQuoteRepository } from './MemoryLegacyMintQuoteRepository';
 import { MemoryMeltOperationRepository } from './MemoryMeltOperationRepository';
 import { MemoryMeltQuoteRepository } from './MemoryMeltQuoteRepository';
-import { MemoryLegacyMintQuoteRepository } from './MemoryLegacyMintQuoteRepository';
-import { MemoryMintQuoteRepository } from './MemoryMintQuoteRepository';
-import { MemoryMintRepository } from './MemoryMintRepository';
-import { MemoryProofRepository } from './MemoryProofRepository';
-import { MemorySendOperationRepository } from './MemorySendOperationRepository';
 import { MemoryMintOperationRepository } from './MemoryMintOperationRepository';
-import { MemoryReceiveOperationRepository } from './MemoryReceiveOperationRepository';
+import { MemoryMintQuoteRepository } from './MemoryMintQuoteRepository';
+import { MemoryMintRecoveryRepository } from './MemoryMintRecoveryRepository.ts';
+import { MemoryMintRepository } from './MemoryMintRepository';
 import {
   MemoryPaymentRequestReceiveAttemptRepository,
   MemoryPaymentRequestReceiveOperationRepository,
 } from './MemoryPaymentRequestReceiveRepository';
+import { MemoryProofRepository } from './MemoryProofRepository';
+import { MemoryReceiveOperationRepository } from './MemoryReceiveOperationRepository';
 import {
   COPY_MEMORY_REPOSITORY_STATE,
   type MemoryRepositoryStateOwner,
 } from './MemoryRepositoryTransaction.ts';
+import { MemorySendOperationRepository } from './MemorySendOperationRepository';
 
 export class MemoryRepositories implements Repositories {
   mintRepository: MintRepository;
@@ -54,6 +56,7 @@ export class MemoryRepositories implements Repositories {
   sendOperationRepository: SendOperationRepository;
   meltOperationRepository: MeltOperationRepository;
   authSessionRepository: AuthSessionRepository;
+  mintRecoveryRepository: MintRecoveryRepository;
   mintOperationRepository: MintOperationRepository;
   receiveOperationRepository: ReceiveOperationRepository;
   paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
@@ -68,6 +71,7 @@ export class MemoryRepositories implements Repositories {
 
   constructor() {
     this.state = createMemoryRepositoryState();
+    this.mintRecoveryRepository = this.wrapRootRepository(this.state.mintRecoveryRepository);
     this.mintRepository = this.wrapRootRepository(this.state.mintRepository);
     this.keyRingRepository = this.wrapRootRepository(this.state.keyRingRepository);
     this.counterRepository = this.wrapRootRepository(this.state.counterRepository);
@@ -169,6 +173,7 @@ function createMemoryRepositoryState() {
   const mintQuoteRepository = new MemoryMintQuoteRepository();
 
   const state = {
+    mintRecoveryRepository: new MemoryMintRecoveryRepository(),
     mintRepository: new MemoryMintRepository(),
     keyRingRepository: new MemoryKeyRingRepository(),
     counterRepository: new MemoryCounterRepository(),

@@ -1,74 +1,41 @@
-import type { MintKeys, Proof } from '@cashu/cashu-ts';
+import type { Amount, MintKeys } from '@cashu/cashu-ts';
 import type { MintQuote } from '../../models/MintQuote.ts';
+import type { MintOperation, PendingMintOperation } from './MintOperation.ts';
+import type { MintIssuanceReceipt, MintRecoveryRecord, MintRequestRecord } from './MintRecovery.ts';
 import type { CoreProof } from '../../types.ts';
-import type { MintMethod } from './MintMethodHandler.ts';
-import type {
-  MintOperation,
-  MintOperationFailure,
-  PendingMintOperation,
-  PendingOrLaterOperation,
-} from './MintOperation.ts';
-
-/** Method validation is complete; deterministic outputs are allocated by the owning transaction. */
-export type PreparedMintOperation<M extends MintMethod = MintMethod> = Omit<
-  PendingMintOperation<M>,
-  'outputData'
->;
 
 export interface PrepareMintInput {
-  operation: PreparedMintOperation;
+  id: string;
+  quote: MintQuote;
+  amount: Amount;
   activeKeys: MintKeys;
   seed: Uint8Array;
 }
-
-export interface AuthorizeMintInput {
-  operationId: string;
-  timestamp: number;
-}
-
-export interface SettleMintInput {
-  operation: PendingOrLaterOperation;
-  proofs: Proof[];
-  outcome: 'issued' | 'already-issued' | 'recovered';
-  timestamp: number;
-}
-
-export interface ReturnMintToPendingInput {
-  operation: PendingOrLaterOperation;
-  error?: string;
-  timestamp: number;
-}
-
-export interface FailMintInput {
-  operation: PendingOrLaterOperation;
-  failure: MintOperationFailure;
-  timestamp: number;
-}
-
-export interface MintQuoteCommit {
-  quote: MintQuote;
-  changed: boolean;
-}
-
-export interface MintCommit {
-  operation: MintOperation;
-  changed: boolean;
-  proofs: CoreProof[];
-  quote?: MintQuoteCommit;
-}
-
 export interface PreparedMintCommit {
   operation: PendingMintOperation;
   counter: { mintUrl: string; keysetId: string; counter: number };
 }
-
-/** Domain mutations that can be composed inside one already-open transaction. */
+export interface AuthorizeMintInput {
+  operationId: string;
+  request: MintRequestRecord;
+  legacySignature?: string;
+}
+export interface MintCommit {
+  operation: MintOperation;
+  recovery?: MintRecoveryRecord;
+  proofs: CoreProof[];
+  changed: boolean;
+}
 export interface MintCommands {
   prepare(input: PrepareMintInput): Promise<PreparedMintCommit>;
   authorize(input: AuthorizeMintInput): Promise<MintCommit>;
-  settle(input: SettleMintInput): Promise<MintCommit>;
-  returnToPending(input: ReturnMintToPendingInput): Promise<MintCommit>;
-  fail(input: FailMintInput): Promise<MintCommit>;
-  observeQuote(quote: MintQuote): Promise<MintQuoteCommit>;
-  deleteInit(operationId: string): Promise<void>;
+  migrate(operationId: string): Promise<MintCommit>;
+  applyEvidence(operationId: string, receipts: MintIssuanceReceipt[]): Promise<MintCommit>;
+  reject(
+    operationId: string,
+    revision: number,
+    error: string,
+    useLegacy: boolean,
+  ): Promise<MintCommit>;
+  noteAmbiguity(operationId: string, revision: number, error: string): Promise<MintCommit>;
 }

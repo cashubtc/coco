@@ -1,45 +1,32 @@
-import type { MintQuote } from '../../models/MintQuote.ts';
 import type {
-  AuthorizeMintInput,
-  FailMintInput,
   MintCommands,
   PrepareMintInput,
-  ReturnMintToPendingInput,
-  SettleMintInput,
+  AuthorizeMintInput,
 } from '../../operations/mint/MintCommands.ts';
+import type { MintIssuanceReceipt } from '../../operations/mint/MintRecovery.ts';
 import type { CoreTransactionRunner } from '../CoreTransaction.ts';
 
-/** Every method owns one transaction and resolves only after its writes commit. */
 export interface MintTransactions extends MintCommands {}
 
+/** Every method opens exactly one transaction; all effects are owned by its scoped input. */
 export class CoreMintTransactions implements MintTransactions {
   constructor(private readonly runner: CoreTransactionRunner) {}
-
   prepare(input: PrepareMintInput) {
-    return this.runner.run((transaction) => transaction.mints.prepare(input));
+    return this.runner.run((tx) => tx.mints.prepare(input));
   }
-
   authorize(input: AuthorizeMintInput) {
-    return this.runner.run((transaction) => transaction.mints.authorize(input));
+    return this.runner.run((tx) => tx.mints.authorize(input));
   }
-
-  settle(input: SettleMintInput) {
-    return this.runner.run((transaction) => transaction.mints.settle(input));
+  migrate(operationId: string) {
+    return this.runner.run((tx) => tx.mints.migrate(operationId));
   }
-
-  returnToPending(input: ReturnMintToPendingInput) {
-    return this.runner.run((transaction) => transaction.mints.returnToPending(input));
+  applyEvidence(operationId: string, receipts: MintIssuanceReceipt[]) {
+    return this.runner.run((tx) => tx.mints.applyEvidence(operationId, receipts));
   }
-
-  fail(input: FailMintInput) {
-    return this.runner.run((transaction) => transaction.mints.fail(input));
+  reject(operationId: string, revision: number, error: string, useLegacy: boolean) {
+    return this.runner.run((tx) => tx.mints.reject(operationId, revision, error, useLegacy));
   }
-
-  observeQuote(quote: MintQuote) {
-    return this.runner.run((transaction) => transaction.mints.observeQuote(quote));
-  }
-
-  deleteInit(operationId: string) {
-    return this.runner.run((transaction) => transaction.mints.deleteInit(operationId));
+  noteAmbiguity(operationId: string, revision: number, error: string) {
+    return this.runner.run((tx) => tx.mints.noteAmbiguity(operationId, revision, error));
   }
 }
