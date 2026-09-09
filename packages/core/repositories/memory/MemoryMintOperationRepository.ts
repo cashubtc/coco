@@ -20,7 +20,7 @@ export class MemoryMintOperationRepository implements MintOperationRepository {
     if (!this.operations.has(operation.id)) {
       throw new Error(`MintOperation with id ${operation.id} not found`);
     }
-    this.operations.set(operation.id, cloneMemoryValue({ ...operation, updatedAt: Date.now() }));
+    this.operations.set(operation.id, cloneMemoryValue(operation));
   }
 
   async getById(id: string): Promise<MintOperation | null> {

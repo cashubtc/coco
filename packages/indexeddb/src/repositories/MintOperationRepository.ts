@@ -1,7 +1,6 @@
 import type { MintOperationRepository } from '@cashu/coco-core/adapter';
 import { deserializeAmount, serializeAmount, stringifyJson } from '@cashu/coco-core/adapter';
 import type { IdbDb, MintOperationRow } from '../lib/db.ts';
-import { getUnixTimeSeconds } from '../lib/db.ts';
 
 type MintOperation = NonNullable<Awaited<ReturnType<MintOperationRepository['getById']>>>;
 type MintOperationState = Parameters<MintOperationRepository['getByState']>[0];
@@ -35,8 +34,8 @@ const rowToOperation = (row: MintOperationRow): MintOperation => {
     mintUrl: row.mintUrl,
     method: row.method as MintOperation['method'],
     methodData: JSON.parse(row.methodDataJson) as MintMethodData,
-    createdAt: row.createdAt * 1000,
-    updatedAt: row.updatedAt * 1000,
+    createdAt: Math.round(row.createdAt * 1000),
+    updatedAt: Math.round(row.updatedAt * 1000),
     error: row.error ?? undefined,
     ...(row.terminalFailureJson
       ? { terminalFailure: JSON.parse(row.terminalFailureJson) as MintOperationFailure }
@@ -70,8 +69,8 @@ const rowToOperation = (row: MintOperationRow): MintOperation => {
 };
 
 const operationToRow = (operation: MintOperation): MintOperationRow => {
-  const createdAtSeconds = Math.floor(operation.createdAt / 1000);
-  const updatedAtSeconds = Math.floor(operation.updatedAt / 1000);
+  const createdAtSeconds = operation.createdAt / 1000;
+  const updatedAtSeconds = operation.updatedAt / 1000;
   const methodDataJson = stringifyJson(operation.methodData);
 
   if (operation.state === 'init') {
@@ -145,7 +144,6 @@ export class IdbMintOperationRepository implements MintOperationRepository {
       }
 
       const row = operationToRow(operation);
-      row.updatedAt = getUnixTimeSeconds();
       await table.put(row);
     });
   }
