@@ -11,6 +11,7 @@ import type {
   SendOperationService,
 } from '../operations/send/SendOperationService';
 import { parseUnitAmount, type UnitAmountLike } from '../amounts.ts';
+import { SendOperationNotFoundError, SendOperationStateError } from '../models/Error.ts';
 
 type NonDefaultSendMethod = Exclude<SendMethod, 'default'>;
 
@@ -95,9 +96,7 @@ export class SendOpsApi {
   ): Promise<{ operation: PendingSendOperation; token: Token }> {
     const operation = await this.resolveOperation(operationOrId);
     if (operation.state !== 'prepared') {
-      throw new Error(
-        `Cannot execute operation in state '${operation.state}'. Expected 'prepared'.`,
-      );
+      throw new SendOperationStateError(operation.id, operation.state, ['prepared']);
     }
 
     return this.sendOperationService.execute(operation, options);
@@ -140,9 +139,7 @@ export class SendOpsApi {
   async cancel(operationId: string): Promise<void> {
     const operation = await this.requireOperation(operationId);
     if (operation.state !== 'prepared') {
-      throw new Error(
-        `Cannot cancel operation in state '${operation.state}'. Expected 'prepared'.`,
-      );
+      throw new SendOperationStateError(operation.id, operation.state, ['prepared']);
     }
 
     await this.sendOperationService.rollback(operation.id);
@@ -157,9 +154,7 @@ export class SendOpsApi {
   async reclaim(operationId: string): Promise<void> {
     const operation = await this.requireOperation(operationId);
     if (operation.state !== 'pending') {
-      throw new Error(
-        `Cannot reclaim operation in state '${operation.state}'. Expected 'pending'.`,
-      );
+      throw new SendOperationStateError(operation.id, operation.state, ['pending']);
     }
 
     await this.sendOperationService.rollback(operation.id);
@@ -204,7 +199,7 @@ export class SendOpsApi {
   private async requireOperation(operationId: string): Promise<SendOperation> {
     const operation = await this.sendOperationService.getOperation(operationId);
     if (!operation) {
-      throw new Error(`Operation ${operationId} not found`);
+      throw new SendOperationNotFoundError(operationId);
     }
 
     return operation;

@@ -76,6 +76,11 @@ cocod balance
 
 ## Commands
 
+For direct API calls, read [the API reference](docs/API.md) and use the authenticated
+[OpenAPI contract](docs/openapi-v1.json). Retain the returned Quote and Operation identities
+for inspection and result recovery after a lost response. Preparation can reserve funds;
+execution is a separate command.
+
 ### Core Wallet
 
 ```bash
@@ -129,7 +134,8 @@ AGENT rule: `cocod x-cashu handle <request>` can spend funds. Prefer `cocod x-ca
 
 Compatibility: cocod accepts `creqA` and `creqB` requests. Coco enforces NUT-10 spending
 conditions: P2PK-locked requests are paid with locked outputs, and unsupported or malformed
-conditions fail with a 400 before any proofs move.
+conditions fail with a 400 before any proofs move. The CLI pays in-band requests; HTTP and Nostr
+delivery requests return `unsupported_behavior`.
 
 ```bash
 # Parse an encoded X-Cashu request from a 402 response header
@@ -149,10 +155,10 @@ Typical flow:
 ### Mints
 
 ```bash
-# Add a mint URL
+# Register a Known Mint and explicitly trust it
 cocod mints add <url>
 
-# List configured mints
+# List Known Mints
 cocod mints list
 
 # Get mint information

@@ -1,12 +1,12 @@
 import { Amount } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect, mock } from 'bun:test';
+import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
+import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
+import { CoreMintTransactions } from '../../transactions/mints/MintTransactions.ts';
 import { MintService } from '../../services/MintService';
 import { ProofValidationError } from '../../models/Error';
-import { MemoryMintRepository } from '../../repositories/memory/MemoryMintRepository';
-import { MemoryKeysetRepository } from '../../repositories/memory/MemoryKeysetRepository';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
-import type { Mint } from '../../models/Mint';
 import type { MintInfo } from '../../types';
 import type { MintAdapter } from '../../infra/MintAdapter';
 
@@ -14,8 +14,8 @@ describe('MintService', () => {
   const testMintUrl = 'https://mint.test';
   const testMintUrl2 = 'https://mint2.test';
 
-  let mintRepo: MemoryMintRepository;
-  let keysetRepo: MemoryKeysetRepository;
+  let mintRepo: MemoryRepositories['mintRepository'];
+  let keysetRepo: MemoryRepositories['keysetRepository'];
   let eventBus: EventBus<CoreEvents>;
   let service: MintService;
   let mockAdapter: MintAdapter;
@@ -51,8 +51,9 @@ describe('MintService', () => {
   };
 
   beforeEach(() => {
-    mintRepo = new MemoryMintRepository();
-    keysetRepo = new MemoryKeysetRepository();
+    const repositories = new MemoryRepositories();
+    mintRepo = repositories.mintRepository;
+    keysetRepo = repositories.keysetRepository;
     eventBus = new EventBus<CoreEvents>();
 
     // Create mock MintAdapter
@@ -65,7 +66,14 @@ describe('MintService', () => {
       checkProofStates: mock(() => Promise.resolve([])),
     } as unknown as MintAdapter;
 
-    service = new MintService(mintRepo, keysetRepo, mockAdapter, undefined, eventBus);
+    service = new MintService(
+      mintRepo,
+      keysetRepo,
+      mockAdapter,
+      new CoreMintTransactions(new RepositoryCoreTransactionRunner(repositories)),
+      undefined,
+      eventBus,
+    );
   });
 
   describe('trust management', () => {

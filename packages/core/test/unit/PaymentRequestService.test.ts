@@ -19,6 +19,7 @@ import type {
 import type { ProofService } from '../../services/ProofService';
 import type { MintService } from '../../services/MintService';
 import { PaymentRequestError } from '../../models/Error';
+import type { Logger } from '../../logging';
 
 describe('PaymentRequestService', () => {
   const testMintUrl = 'https://mint.test';
@@ -242,6 +243,63 @@ describe('PaymentRequestService', () => {
   });
 
   describe('parse', () => {
+    it('wraps malformed encodings in the typed Payment Request error', async () => {
+      let thrown: unknown;
+
+      try {
+        await service.parse('not-a-payment-request');
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeInstanceOf(PaymentRequestError);
+      expect((thrown as Error).message).toBe('Malformed encoded Payment Request');
+      expect((thrown as Error & { cause?: unknown }).cause).toBeInstanceOf(Error);
+    });
+
+    it('does not log encoded requests or decoded spending-condition internals', async () => {
+      const debug = mock(() => {});
+      const info = mock(() => {});
+      const logger = {
+        debug,
+        info,
+        warn: mock(() => {}),
+        error: mock(() => {}),
+      } satisfies Logger;
+      const loggingService = new PaymentRequestService(
+        mockSendOperationService,
+        mockProofService,
+        mockMintService,
+        logger,
+      );
+      const pr = new PaymentRequest(
+        [],
+        'private-request-id',
+        100,
+        'sat',
+        [testMintUrl],
+        'private description',
+        false,
+        p2pkNut10(),
+      );
+      const encoded = pr.toEncodedRequest();
+
+      await loggingService.parse(encoded);
+
+      const logged = JSON.stringify([debug.mock.calls, info.mock.calls]);
+      expect(logged).not.toContain(encoded);
+      expect(logged).not.toContain(testPubkey);
+      expect(logged).not.toContain('private-request-id');
+      expect(logged).not.toContain('private description');
+      expect(info).toHaveBeenCalledWith('Payment request decoded', {
+        transport: 'inband',
+        unit: 'sat',
+        hasAmount: true,
+        allowedMintCount: 1,
+        spendingConditionKind: 'P2PK',
+      });
+    });
+
     it('should decode an inband payment request', async () => {
       const pr = new PaymentRequest([], 'request-id-1', 100, 'sat', [testMintUrl], 'Test payment');
       const encoded = pr.toEncodedRequest();

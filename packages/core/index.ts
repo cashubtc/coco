@@ -136,3 +136,5 @@ export type {
   MintSwapAttention,
 } from './operations/mintSwap/MintSwapOperation.ts';
 export { parseMintSwapOperation } from './operations/mintSwap/parseMintSwapOperation.ts';
+
+export type { AddMintResult } from './services/MintService.ts';

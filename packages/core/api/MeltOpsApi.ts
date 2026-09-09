@@ -6,6 +6,7 @@ import type {
 } from '@core/operations/melt';
 import type { MeltMethod, MeltOperationService } from '@core/operations/melt';
 import type { MeltQuoteRef, QuoteIdentity } from '../models/QuoteIdentity.ts';
+import { MeltOperationNotFoundError, MeltOperationStateError } from '../models/Error.ts';
 
 /** Melt methods supported by the default `Manager` wiring. */
 export type DefaultSupportedMeltMethod = 'bolt11' | 'bolt12' | 'onchain';
@@ -73,9 +74,7 @@ export class MeltOpsApi<TSupported extends MeltMethod = DefaultSupportedMeltMeth
   ): Promise<PendingMeltOperation | FinalizedMeltOperation> {
     const operation = await this.resolveOperation(operationOrId);
     if (operation.state !== 'prepared') {
-      throw new Error(
-        `Cannot execute operation in state '${operation.state}'. Expected 'prepared'.`,
-      );
+      throw new MeltOperationStateError(operation.id, operation.state, ['prepared']);
     }
 
     return this.meltOperationService.execute(operation.id);
@@ -135,9 +134,7 @@ export class MeltOpsApi<TSupported extends MeltMethod = DefaultSupportedMeltMeth
   async cancel(operationId: string, reason?: string): Promise<void> {
     const operation = await this.requireOperation(operationId);
     if (operation.state !== 'prepared') {
-      throw new Error(
-        `Cannot cancel operation in state '${operation.state}'. Expected 'prepared'.`,
-      );
+      throw new MeltOperationStateError(operation.id, operation.state, ['prepared']);
     }
 
     await this.meltOperationService.rollback(operation.id, reason);
@@ -152,9 +149,7 @@ export class MeltOpsApi<TSupported extends MeltMethod = DefaultSupportedMeltMeth
   async reclaim(operationId: string, reason?: string): Promise<void> {
     const operation = await this.requireOperation(operationId);
     if (operation.state !== 'pending') {
-      throw new Error(
-        `Cannot reclaim operation in state '${operation.state}'. Expected 'pending'.`,
-      );
+      throw new MeltOperationStateError(operation.id, operation.state, ['pending']);
     }
 
     await this.meltOperationService.rollback(operation.id, reason);
@@ -181,7 +176,7 @@ export class MeltOpsApi<TSupported extends MeltMethod = DefaultSupportedMeltMeth
   private async requireOperation(operationId: string): Promise<MeltOperation> {
     const operation = await this.meltOperationService.getOperation(operationId);
     if (!operation) {
-      throw new Error(`Operation ${operationId} not found`);
+      throw new MeltOperationNotFoundError(operationId);
     }
 
     return operation;

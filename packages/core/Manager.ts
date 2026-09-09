@@ -81,6 +81,7 @@ import {
 } from './models/MintQuote.ts';
 import { assessMintQuoteClaimability } from './models/MintQuoteClaimability.ts';
 import { RepositoryCoreTransactionRunner } from './transactions/CoreTransaction.ts';
+import { CoreMintTransactions } from './transactions/mints/MintTransactions.ts';
 import { CoreKeyRingTransactions } from './transactions/keypairs/KeyRingTransactions.ts';
 import { KeypairDerivation } from './keypairs/KeypairDerivation.ts';
 import { KeypairP2pkSigner } from './keypairs/P2pkSigner.ts';
@@ -912,15 +913,16 @@ export class Manager {
     const keyRingLogger = this.getChildLogger('KeyRingService');
     const historyLogger = this.getChildLogger('HistoryService');
     const tokenLogger = this.getChildLogger('TokenService');
+    const coreTransactionRunner = new RepositoryCoreTransactionRunner(repositories);
     const mintService = new MintService(
       repositories.mintRepository,
       repositories.keysetRepository,
       this.mintAdapter,
+      new CoreMintTransactions(coreTransactionRunner),
       mintLogger,
       this.eventBus,
     );
     const seedService = new SeedService(seedGetter);
-    const coreTransactionRunner = new RepositoryCoreTransactionRunner(repositories);
     const keyRingTransactions = new CoreKeyRingTransactions(coreTransactionRunner);
     const keypairDerivation = new KeypairDerivation(() => seedService.getSeed());
     const p2pkSigner = new KeypairP2pkSigner(repositories.keyRingRepository);

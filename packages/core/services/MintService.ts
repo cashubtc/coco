@@ -1,20 +1,20 @@
 import { Amount, isBlsKeyset, type AmountLike } from '@cashu/cashu-ts';
-import {
-  KeysetSyncError,
-  MintFetchError,
-  ProofValidationError,
-  UnknownMintError,
-} from '../models/Error';
+import { KeysetSyncError, MintFetchError, ProofValidationError } from '../models/Error';
 import type { Mint } from '../models/Mint';
 import type { Keyset } from '../models/Keyset';
 import type { MintAdapter } from '../infra/MintAdapter';
-import type { KeysetRepository, MintRepository } from '../repositories';
+import type { MintQueries, KeysetQueries } from '../mints/MintQueries.ts';
+import type { MintTransactions } from '../transactions/mints/MintTransactions.ts';
+import type { SaveMintMetadataResult } from '../transactions/scoped/mints/ScopedMintCommands.ts';
 import { EventBus } from '../events/EventBus';
 import type { CoreEvents } from '../events/types';
 import type { MintInfo } from '../types';
 import type { Logger } from '../logging/Logger.ts';
 import { normalizeMintUrl } from '../utils';
 import { DEFAULT_UNIT, normalizeUnit, normalizeUnitAmount, type UnitAmount } from '../amounts.ts';
+
+/** Known Mint discovery result, with creation determined by the committed transaction. */
+export type AddMintResult = SaveMintMetadataResult;
 
 const MINT_REFRESH_TTL_S = 60 * 5;
 
@@ -117,21 +117,22 @@ type NutSupportSettings = {
 export type TopLevelNutCapability = 11 | 20;
 
 export class MintService {
-  private readonly mintRepo: MintRepository;
-  private readonly keysetRepo: KeysetRepository;
+  private readonly mintQueries: MintQueries;
+  private readonly keysetQueries: KeysetQueries;
   private readonly mintAdapter: MintAdapter;
   private readonly eventBus?: EventBus<CoreEvents>;
   private readonly logger?: Logger;
 
   constructor(
-    mintRepo: MintRepository,
-    keysetRepo: KeysetRepository,
+    mintQueries: MintQueries,
+    keysetQueries: KeysetQueries,
     mintAdapter: MintAdapter,
+    private readonly transactions: MintTransactions,
     logger?: Logger,
     eventBus?: EventBus<CoreEvents>,
   ) {
-    this.mintRepo = mintRepo;
-    this.keysetRepo = keysetRepo;
+    this.mintQueries = mintQueries;
+    this.keysetQueries = keysetQueries;
     this.mintAdapter = mintAdapter;
     this.logger = logger;
     this.eventBus = eventBus;
@@ -146,28 +147,25 @@ export class MintService {
    * @param options - Optional configuration
    * @param options.trusted - Whether to add the mint as trusted (default: false)
    */
-  async addMintByUrl(
-    mintUrl: string,
-    options?: { trusted?: boolean },
-  ): Promise<{ mint: Mint; keysets: Keyset[] }> {
+  async addMintByUrl(mintUrl: string, options?: { trusted?: boolean }): Promise<AddMintResult> {
     mintUrl = normalizeMintUrl(mintUrl);
     const trusted = options?.trusted ?? false;
     this.logger?.info('Adding mint by URL', { mintUrl, trusted });
-    const exists = await this.mintRepo.getMintByUrl(mintUrl).catch(() => null);
+    const exists = await this.getKnownMint(mintUrl);
 
     if (exists) {
       // If trusted option was explicitly provided and differs from current state, update it
       if (options?.trusted !== undefined && exists.trusted !== options.trusted) {
-        await this.mintRepo.setMintTrusted(mintUrl, options.trusted);
+        await this.transactions.setTrust({ mintUrl, trusted: options.trusted });
         this.logger?.info('Updated mint trust status', { mintUrl, trusted: options.trusted });
         // Emit trust change events
         if (options.trusted) {
-          await this.eventBus?.emit('mint:trusted', { mintUrl });
+          await this.publish('mint:trusted', { mintUrl });
         } else {
-          await this.eventBus?.emit('mint:untrusted', { mintUrl });
+          await this.publish('mint:untrusted', { mintUrl });
         }
         const updated = await this.ensureUpdatedMint(mintUrl);
-        await this.eventBus?.emit('mint:updated', updated);
+        await this.publish('mint:updated', updated);
         return updated;
       }
       return this.ensureUpdatedMint(mintUrl);
@@ -183,15 +181,15 @@ export class MintService {
       updatedAt: 0,
     };
     // Do not persist before successful sync; updateMint will persist on success
-    const added = await this.updateMint(newMint);
-    await this.eventBus?.emit('mint:added', added);
+    const added = await this.updateMint(newMint, options?.trusted);
+    if (added.created) await this.publish('mint:added', added);
     this.logger?.info('Mint added', { mintUrl, trusted });
     return added;
   }
 
   async updateMintData(mintUrl: string): Promise<{ mint: Mint; keysets: Keyset[] }> {
     mintUrl = normalizeMintUrl(mintUrl);
-    const mint = await this.mintRepo.getMintByUrl(mintUrl).catch(() => null);
+    const mint = await this.getKnownMint(mintUrl);
     if (!mint) {
       // Mint doesn't exist, create it as untrusted
       const now = Math.floor(Date.now() / 1000);
@@ -209,12 +207,12 @@ export class MintService {
   }
 
   async isTrustedMint(mintUrl: string): Promise<boolean> {
-    return await this.mintRepo.isTrustedMint(normalizeMintUrl(mintUrl));
+    return await this.mintQueries.isTrustedMint(normalizeMintUrl(mintUrl));
   }
 
-  async ensureUpdatedMint(mintUrl: string): Promise<{ mint: Mint; keysets: Keyset[] }> {
+  async ensureUpdatedMint(mintUrl: string): Promise<AddMintResult> {
     mintUrl = normalizeMintUrl(mintUrl);
-    let mint = await this.mintRepo.getMintByUrl(mintUrl).catch(() => null);
+    let mint = await this.getKnownMint(mintUrl);
 
     if (!mint) {
       // Mint doesn't exist, create it as untrusted
@@ -233,22 +231,20 @@ export class MintService {
     if (mint.updatedAt < now - MINT_REFRESH_TTL_S) {
       this.logger?.debug('Refreshing stale mint', { mintUrl });
       const updated = await this.updateMint(mint);
-      await this.eventBus?.emit('mint:updated', updated);
+      await this.publish('mint:updated', updated);
       return updated;
     }
 
-    const keysets = excludeBlsKeysets(await this.keysetRepo.getKeysetsByMintUrl(mint.mintUrl));
-    return { mint, keysets };
+    const keysets = excludeBlsKeysets(await this.keysetQueries.getKeysetsByMintUrl(mint.mintUrl));
+    return { mint, keysets, created: false };
   }
 
   async deleteMint(mintUrl: string): Promise<void> {
     mintUrl = normalizeMintUrl(mintUrl);
-    const mint = await this.mintRepo.getMintByUrl(mintUrl).catch(() => null);
+    const mint = await this.getKnownMint(mintUrl);
     if (!mint) return;
 
-    const keysets = await this.keysetRepo.getKeysetsByMintUrl(mintUrl);
-    await Promise.all(keysets.map((ks) => this.keysetRepo.deleteKeyset(mintUrl, ks.id)));
-    await this.mintRepo.deleteMint(mintUrl);
+    await this.transactions.delete(mintUrl);
   }
 
   async getMintInfo(mintUrl: string): Promise<MintInfo> {
@@ -489,29 +485,29 @@ export class MintService {
   }
 
   async getAllMints(): Promise<Mint[]> {
-    const mints = await this.mintRepo.getAllMints();
+    const mints = await this.mintQueries.getAllMints();
     return mints;
   }
 
   async getAllTrustedMints(): Promise<Mint[]> {
-    const mints = await this.mintRepo.getAllTrustedMints();
+    const mints = await this.mintQueries.getAllTrustedMints();
     return mints;
   }
 
   async trustMint(mintUrl: string): Promise<void> {
     mintUrl = normalizeMintUrl(mintUrl);
     this.logger?.info('Trusting mint', { mintUrl });
-    await this.mintRepo.setMintTrusted(mintUrl, true);
-    await this.eventBus?.emit('mint:trusted', { mintUrl });
-    await this.eventBus?.emit('mint:updated', await this.ensureUpdatedMint(mintUrl));
+    await this.transactions.setTrust({ mintUrl, trusted: true });
+    await this.publish('mint:trusted', { mintUrl });
+    await this.publish('mint:updated', await this.ensureUpdatedMint(mintUrl));
   }
 
   async untrustMint(mintUrl: string): Promise<void> {
     mintUrl = normalizeMintUrl(mintUrl);
     this.logger?.info('Untrusting mint', { mintUrl });
-    await this.mintRepo.setMintTrusted(mintUrl, false);
-    await this.eventBus?.emit('mint:untrusted', { mintUrl });
-    await this.eventBus?.emit('mint:updated', await this.ensureUpdatedMint(mintUrl));
+    await this.transactions.setTrust({ mintUrl, trusted: false });
+    await this.publish('mint:untrusted', { mintUrl });
+    await this.publish('mint:updated', await this.ensureUpdatedMint(mintUrl));
   }
 
   private getNutMethodSettings(mintInfo: MintInfo, nut: 4 | 5): NutMethodSettings | undefined {
@@ -570,7 +566,26 @@ export class MintService {
     return amount === undefined || amount === null ? null : Amount.from(amount);
   }
 
-  private async updateMint(mint: Mint): Promise<{ mint: Mint; keysets: Keyset[] }> {
+  private async publish<E extends keyof CoreEvents>(
+    event: E,
+    payload: CoreEvents[E],
+  ): Promise<void> {
+    try {
+      await this.eventBus?.emit(event, payload);
+    } catch (error) {
+      // A failed observer cannot turn a committed Wallet mutation into a failed command.
+      this.logger?.error('Mint event delivery failed', {
+        event,
+        error: { name: error instanceof Error ? error.name : 'UnknownError' },
+      });
+    }
+  }
+
+  private async getKnownMint(mintUrl: string): Promise<Mint | null> {
+    return (await this.mintQueries.getAllMints()).find((mint) => mint.mintUrl === mintUrl) ?? null;
+  }
+
+  private async updateMint(mint: Mint, trusted?: boolean): Promise<AddMintResult> {
     let mintInfo;
     try {
       this.logger?.debug('Fetching mint info', { mintUrl: mint.mintUrl });
@@ -589,49 +604,32 @@ export class MintService {
       this.logger?.error('Failed to fetch keysets', { mintUrl: mint.mintUrl, err });
       throw new MintFetchError(mint.mintUrl, 'Failed to fetch keysets', err);
     }
-    await Promise.all(
+    // Complete remote key discovery before opening the metadata transaction.
+    const preparedKeysets = await Promise.all(
       keysets.map(async (ks) => {
-        const existingKeyset = await this.keysetRepo.getKeysetById(mint.mintUrl, ks.id);
-        if (existingKeyset) {
-          const keysetModel: Omit<Keyset, 'keypairs' | 'updatedAt'> = {
+        const existing = await this.keysetQueries.getKeysetById(mint.mintUrl, ks.id);
+        try {
+          const keypairs =
+            existing?.keypairs ?? (await this.mintAdapter.fetchKeysForId(mint.mintUrl, ks.id));
+          return {
             mintUrl: mint.mintUrl,
             id: ks.id,
             unit: ks.unit,
             active: ks.active,
             feePpk: ks.input_fee_ppk || 0,
+            keypairs,
           };
-          return this.keysetRepo.updateKeyset(keysetModel);
-        } else {
-          try {
-            const keysRes = await this.mintAdapter.fetchKeysForId(mint.mintUrl, ks.id);
-            return this.keysetRepo.addKeyset({
-              mintUrl: mint.mintUrl,
-              id: ks.id,
-              unit: ks.unit,
-              keypairs: keysRes,
-              active: ks.active,
-              feePpk: ks.input_fee_ppk || 0,
-            });
-          } catch (err) {
-            this.logger?.error('Failed to sync keyset', {
-              mintUrl: mint.mintUrl,
-              keysetId: ks.id,
-              err,
-            });
-            throw new KeysetSyncError(mint.mintUrl, ks.id, undefined, err);
-          }
+        } catch (error) {
+          throw new KeysetSyncError(mint.mintUrl, ks.id, undefined, error);
         }
       }),
     );
-
-    // Persist mint updates only after successful fetch and keyset sync
-    mint.mintInfo = mintInfo;
-    mint.updatedAt = Math.floor(Date.now() / 1000);
-    await this.mintRepo.addOrUpdateMint(mint);
-    await this.eventBus?.emit('mint:metadata-refreshed', { mintUrl: mint.mintUrl });
-
-    const repoKeysets = excludeBlsKeysets(await this.keysetRepo.getKeysetsByMintUrl(mint.mintUrl));
-    this.logger?.info('Mint updated', { mintUrl: mint.mintUrl, keysets: repoKeysets.length });
-    return { mint, keysets: repoKeysets };
+    const result = await this.transactions.saveMetadata({
+      mint: { ...mint, mintInfo, updatedAt: Math.floor(Date.now() / 1000) },
+      keysets: preparedKeysets,
+      trusted,
+    });
+    await this.publish('mint:metadata-refreshed', { mintUrl: mint.mintUrl });
+    return { ...result, keysets: excludeBlsKeysets(result.keysets) };
   }
 }

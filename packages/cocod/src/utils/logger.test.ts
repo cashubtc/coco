@@ -31,9 +31,11 @@ describe('StructuredLogger', () => {
     });
 
     logger.info('wallet.unlock_requested', {
+      address: 'bc1-payment-destination',
       generatedMnemonic:
         'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about',
       mintUrl: 'https://mint.example.com/Bitcoin',
+      offer: 'lno1-payment-offer',
       passphrase: 'secret-passphrase',
     });
     await logger.flush();
@@ -44,8 +46,10 @@ describe('StructuredLogger', () => {
     expect(entry.event).toBe('wallet.unlock_requested');
     expect(entry.level).toBe('info');
     expect(entry.component).toBe('daemon');
+    expect(entry.address).toBe('[REDACTED]');
     expect(entry.passphrase).toBe('[REDACTED]');
     expect(entry.generatedMnemonic).toBe('[REDACTED]');
+    expect(entry.offer).toBe('[REDACTED]');
     expect(entry.mintUrl).toBe('https://mint.example.com/Bitcoin');
   });
 
