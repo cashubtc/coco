@@ -1,4 +1,4 @@
-import { Amount } from '@cashu/cashu-ts';
+import { Amount, StaleKeysetError as CashuStaleKeysetError } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
 import {
   OutputData,
@@ -47,6 +47,8 @@ import type { Logger } from '../../logging/Logger';
 import { serializeOutputData } from '../../utils';
 import type { CoreProof } from '../../types';
 import { MintQuoteValidationError, QuoteIdentityConflictError } from '../../models/Error';
+import type { MintQuoteRef } from '../../models/QuoteIdentity.ts';
+import { MintScopedLock } from '../../operations/MintScopedLock.ts';
 
 describe('MintOperationService', () => {
   const mintUrl = 'https://mint.test';
@@ -258,6 +260,21 @@ describe('MintOperationService', () => {
   const makeExecutingOp = (id: string, secret = 'out-1'): ExecutingMintOperation => ({
     ...makePendingOp(id, secret),
     state: 'executing',
+  });
+
+  const makeFailedOp = (
+    id: string,
+    secret = 'out-1',
+    retryable?: boolean,
+  ): FailedMintOperation => ({
+    ...makePendingOp(id, secret),
+    state: 'failed',
+    error: 'terminal non-issued failure',
+    terminalFailure: {
+      reason: 'terminal non-issued failure',
+      retryable,
+      observedAt: Date.now(),
+    },
   });
 
   beforeEach(async () => {
@@ -1486,6 +1503,89 @@ describe('MintOperationService', () => {
     expect(handler.prepare).toHaveBeenCalledTimes(1);
   });
 
+  it('prepare permits a successor after a fixed-quote operation has failed', async () => {
+    await persistQuote();
+    const failed = makeFailedOp('failed-attempt', 'failed-output', false);
+    await operationRepo.create(failed);
+
+    const successor = await service.prepare(
+      { mintUrl, method: 'bolt11', quoteId },
+      Amount.from(10),
+    );
+
+    expect(successor.state).toBe('pending');
+    expect(successor.id).not.toBe(failed.id);
+    expect(successor.outputData).not.toEqual(failed.outputData);
+    const operations = await operationRepo.getByQuoteId(mintUrl, 'bolt11', quoteId);
+    expect(operations).toHaveLength(2);
+    expect(operations.map((operation) => operation.state).sort()).toEqual(['failed', 'pending']);
+  });
+
+  it('prepare rejects another successor while a fixed quote has an active operation', async () => {
+    await persistQuote();
+    const failed = makeFailedOp('failed-attempt', 'failed-output');
+    const active = makePendingOp('active-successor', 'active-output');
+    await operationRepo.create(failed);
+    await operationRepo.create(active);
+
+    await expect(
+      service.prepare({ mintUrl, method: 'bolt11', quoteId }, Amount.from(10)),
+    ).rejects.toThrow(
+      `Mint quote ${quoteId} is already tracked by operation ${active.id} in state pending`,
+    );
+
+    const operations = await operationRepo.getByQuoteId(mintUrl, 'bolt11', quoteId);
+    expect(operations).toHaveLength(2);
+    expect(handler.prepare).not.toHaveBeenCalled();
+  });
+
+  it('prepare revalidates a fixed quote after waiting for its mint lock', async () => {
+    await persistQuote();
+    await operationRepo.create(makeFailedOp('failed-attempt', 'failed-output'));
+
+    const mintScopedLock = new MintScopedLock();
+    service = new MintOperationService(
+      handlerProvider,
+      operationRepo,
+      quoteLifecycle,
+      proofRepo,
+      proofService,
+      mintService,
+      walletService,
+      mintAdapter,
+      eventBus,
+      logger,
+      mintScopedLock,
+    );
+    const releaseMintLock = await mintScopedLock.acquire(mintUrl);
+    const outerQuoteRead = createDeferred();
+    const requireMintQuoteRefForPrepare =
+      quoteLifecycle.requireMintQuoteRefForPrepare.bind(quoteLifecycle);
+    quoteLifecycle.requireMintQuoteRefForPrepare = mock(async (ref: MintQuoteRef) => {
+      const quote = await requireMintQuoteRefForPrepare(ref);
+      outerQuoteRead.resolve();
+      return quote;
+    });
+
+    const preparing = service.prepare({ mintUrl, method: 'bolt11', quoteId }, Amount.from(10));
+    await outerQuoteRead.promise;
+    await quoteRepo.upsertMintQuote(
+      mintQuoteFromBolt11Response(mintUrl, {
+        quote: quoteId,
+        request: 'lnbc1test',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'ISSUED',
+      }),
+    );
+    releaseMintLock();
+
+    await expect(preparing).rejects.toThrow('quote is terminal');
+    await expect(operationRepo.getAll()).resolves.toHaveLength(1);
+    expect(handler.prepare).not.toHaveBeenCalled();
+  });
+
   it('prepare can redeem a quote imported through QuoteLifecycle', async () => {
     const pendingEvents: Array<CoreEvents['mint-op:pending']> = [];
     eventBus.on('mint-op:pending', (event) => {
@@ -1943,6 +2043,56 @@ describe('MintOperationService', () => {
     expect(result.state).toBe('finalized');
     expect(handler.recoverExecuting).toHaveBeenCalledTimes(1);
     expect(handler.execute).not.toHaveBeenCalled();
+  });
+
+  it('fails a stale mint claim and permits a caller-created successor', async () => {
+    const callOrder: string[] = [];
+    await persistQuote();
+    const pending = await service.prepare({ mintUrl, method: 'bolt11', quoteId }, Amount.from(10));
+    (handler.execute as Mock<any>).mockRejectedValue(new CashuStaleKeysetError(false));
+    const invalidateMintSnapshot = mock(async () => {
+      callOrder.push('invalidate');
+    });
+    walletService = {
+      ...walletService,
+      invalidateMintSnapshot,
+    } as unknown as WalletService;
+    const mintScopedLock = new MintScopedLock();
+    service = new MintOperationService(
+      handlerProvider,
+      operationRepo,
+      quoteLifecycle,
+      proofRepo,
+      proofService,
+      mintService,
+      walletService,
+      mintAdapter,
+      eventBus,
+      logger,
+      mintScopedLock,
+    );
+    eventBus.on('mint-op:failed', () => {
+      callOrder.push('failed');
+    });
+
+    await expect(service.execute(pending.id)).rejects.toBeInstanceOf(CashuStaleKeysetError);
+
+    const failed = await operationRepo.getById(pending.id);
+    expect(handler.execute).toHaveBeenCalledTimes(1);
+    expect(failed?.state).toBe('failed');
+    expect(failed?.terminalFailure).toMatchObject({
+      code: 'stale_keyset',
+      retryable: true,
+    });
+    expect(invalidateMintSnapshot).toHaveBeenCalledWith(mintUrl);
+    expect(callOrder).toEqual(['invalidate', 'failed']);
+
+    const successor = await service.prepare(
+      { mintUrl, method: 'bolt11', quoteId },
+      Amount.from(10),
+    );
+    expect(successor.state).toBe('pending');
+    expect(successor.id).not.toBe(pending.id);
   });
 
   it('execute rejects missing and init operations', async () => {

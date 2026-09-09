@@ -1,4 +1,8 @@
-import type { Token, ProofState as CashuProofState } from '@cashu/cashu-ts';
+import {
+  type StaleKeysetError,
+  type Token,
+  type ProofState as CashuProofState,
+} from '@cashu/cashu-ts';
 import type { SendOperationRepository, ProofRepository } from '../../repositories';
 import type {
   SendOperation,
@@ -20,7 +24,7 @@ import {
 } from './SendOperation';
 import type { SendMethod, SendMethodData } from './SendMethodHandler';
 import { SendHandlerProvider } from '../../infra/handlers/send/SendHandlerProvider';
-import type { MintService } from '../../services/MintService';
+import { asStaleKeysetError, type MintService } from '../../services/MintService';
 import type { WalletService } from '../../services/WalletService';
 import type { ProofService } from '../../services/ProofService';
 import type { EventBus } from '../../events/EventBus';
@@ -304,6 +308,10 @@ export class SendOperationService {
           failed = result.failed;
         }
       } catch (e) {
+        const staleKeysetError = asStaleKeysetError(e);
+        if (staleKeysetError) {
+          return await this.handleStaleKeyset(executing, staleKeysetError);
+        }
         // Attempt to recover the executing operation before re-throwing
         await this.tryRecoverExecutingOperation(executing);
         throw e;
@@ -332,6 +340,16 @@ export class SendOperationService {
     } finally {
       releaseLock();
     }
+  }
+
+  private async handleStaleKeyset(
+    executing: ExecutingSendOperation,
+    cause: StaleKeysetError,
+  ): Promise<never> {
+    await this.walletService.invalidateMintSnapshot(executing.mintUrl);
+    await this.proofService.restoreProofsToReady(executing.mintUrl, executing.inputProofSecrets);
+    await this.markAsRolledBack(executing, 'Mint rejected stale send outputs');
+    throw cause;
   }
 
   /**
@@ -504,11 +522,27 @@ export class SendOperationService {
         opForRollback = rollingBack;
       }
 
-      await handler.rollback({
-        ...this.buildDeps(),
-        operation: opForRollback,
-        wallet,
-      });
+      try {
+        await handler.rollback({
+          ...this.buildDeps(),
+          operation: opForRollback,
+          wallet,
+        });
+      } catch (error) {
+        const staleKeysetError = asStaleKeysetError(error);
+        if (!staleKeysetError || operation.state !== 'pending') {
+          throw error;
+        }
+
+        // The structured rejection proves the reclaim swap was not applied. Return the operation
+        // to pending so a later rollback can build fresh outputs from a refreshed Wallet Instance.
+        await this.walletService.invalidateMintSnapshot(operation.mintUrl);
+        await this.sendOperationRepository.update({
+          ...operation,
+          updatedAt: Date.now(),
+        });
+        throw staleKeysetError;
+      }
 
       await this.markAsRolledBack(opForRollback, reason);
     } finally {

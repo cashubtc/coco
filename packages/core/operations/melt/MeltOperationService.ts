@@ -1,3 +1,4 @@
+import type { StaleKeysetError } from '@cashu/cashu-ts';
 import type { MeltOperationRepository, ProofRepository } from '../../repositories';
 import type {
   MeltOperation,
@@ -18,7 +19,7 @@ import type {
   PendingCheckResult,
 } from './MeltMethodHandler';
 import { normalizeMeltMethodData } from './MeltMethodHandler';
-import type { MintService } from '../../services/MintService';
+import { asStaleKeysetError, type MintService } from '../../services/MintService';
 import type { WalletService } from '../../services/WalletService';
 import type { ProofService } from '../../services/ProofService';
 import type { EventBus } from '../../events/EventBus';
@@ -27,7 +28,7 @@ import type { Logger } from '../../logging/Logger';
 import { generateSubId, normalizeMintUrl } from '../../utils';
 import { UnknownMintError, ProofValidationError } from '../../models/Error';
 import type { MintAdapter } from '@core/infra';
-import type { MeltHandlerProvider } from '../../infra/handlers/melt';
+import { getSwapSendSecrets, type MeltHandlerProvider } from '../../infra/handlers/melt';
 import type { FinalizeResult } from './MeltMethodHandler';
 import { MintScopedLock } from '../MintScopedLock';
 import { OperationIdLock } from '../OperationIdLock';
@@ -444,6 +445,10 @@ export class MeltOperationService {
           }
         }
       } catch (e) {
+        const staleKeysetError = asStaleKeysetError(e);
+        if (staleKeysetError) {
+          return await this.handleStaleKeyset(executing, staleKeysetError);
+        }
         // Attempt to recover the executing operation before re-throwing
         await this.tryRecoverExecutingOperation(executing);
         throw e;
@@ -451,6 +456,34 @@ export class MeltOperationService {
     } finally {
       releaseLock();
     }
+  }
+
+  private async handleStaleKeyset(
+    executing: ExecutingMeltOperation,
+    cause: StaleKeysetError,
+  ): Promise<never> {
+    await this.walletService.invalidateMintSnapshot(executing.mintUrl);
+    if (executing.needsSwap && executing.swapOutputData) {
+      const swapSendSecrets = getSwapSendSecrets(executing.swapOutputData);
+      const savedSwapProofs = await this.proofRepository.getProofsBySecrets(
+        executing.mintUrl,
+        swapSendSecrets,
+      );
+      if (savedSwapProofs.length > 0) {
+        await this.proofService.restoreProofsToReady(executing.mintUrl, swapSendSecrets);
+        await this.proofService.releaseProofs(executing.mintUrl, executing.inputProofSecrets);
+      } else {
+        await this.proofService.restoreProofsToReady(
+          executing.mintUrl,
+          executing.inputProofSecrets,
+        );
+      }
+    } else {
+      await this.proofService.restoreProofsToReady(executing.mintUrl, executing.inputProofSecrets);
+    }
+
+    await this.markAsRolledBack(executing, 'Mint rejected stale melt outputs');
+    throw cause;
   }
 
   async finalize(

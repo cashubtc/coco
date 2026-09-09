@@ -3157,14 +3157,14 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       });
 
       it('should process an inband payment request', async () => {
-        const pr = new PaymentRequest(
-          [], // empty transport = inband
-          'test-request-id',
-          50,
-          testUnit,
-          [mintUrl],
-          'Test payment',
-        );
+        const pr = new PaymentRequest({
+          transport: [],
+          id: 'test-request-id',
+          amount: 50,
+          unit: testUnit,
+          mints: [mintUrl],
+          description: 'Test payment',
+        });
         const encoded = pr.toEncodedRequest();
 
         const parsed = await mgr!.paymentRequests.parse(encoded);
@@ -3177,14 +3177,14 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
       it('should process an HTTP POST payment request', async () => {
         const targetUrl = 'https://receiver.example.com/callback';
-        const pr = new PaymentRequest(
-          [{ type: PaymentRequestTransportType.POST, target: targetUrl }],
-          'test-request-id-2',
-          75,
-          testUnit,
-          [mintUrl],
-          'HTTP payment',
-        );
+        const pr = new PaymentRequest({
+          transport: [{ type: PaymentRequestTransportType.POST, target: targetUrl }],
+          id: 'test-request-id-2',
+          amount: 75,
+          unit: testUnit,
+          mints: [mintUrl],
+          description: 'HTTP payment',
+        });
         const encoded = pr.toEncodedRequest();
 
         const parsed = await mgr!.paymentRequests.parse(encoded);
@@ -3197,13 +3197,13 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       });
 
       it('should process a payment request without amount', async () => {
-        const pr = new PaymentRequest(
-          [],
-          'test-request-no-amount',
-          undefined, // no amount
-          testUnit,
-          [mintUrl],
-        );
+        const pr = new PaymentRequest({
+          transport: [],
+          id: 'test-request-no-amount',
+          amount: undefined,
+          unit: testUnit,
+          mints: [mintUrl],
+        });
         const encoded = pr.toEncodedRequest();
 
         const parsed = await mgr!.paymentRequests.parse(encoded);
@@ -3213,7 +3213,13 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       });
 
       it('should handle inband payment request with amount in request', async () => {
-        const pr = new PaymentRequest([], 'inband-with-amount', 30, testUnit, [mintUrl]);
+        const pr = new PaymentRequest({
+          transport: [],
+          id: 'inband-with-amount',
+          amount: 30,
+          unit: testUnit,
+          mints: [mintUrl],
+        });
         const encoded = pr.toEncodedRequest();
 
         const parsed = await mgr!.paymentRequests.parse(encoded);
@@ -3243,13 +3249,13 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       });
 
       it('should handle inband payment request with amount as parameter', async () => {
-        const pr = new PaymentRequest(
-          [],
-          'inband-no-amount',
-          undefined, // no amount in request
-          testUnit,
-          [mintUrl],
-        );
+        const pr = new PaymentRequest({
+          transport: [],
+          id: 'inband-no-amount',
+          amount: undefined,
+          unit: testUnit,
+          mints: [mintUrl],
+        });
         const encoded = pr.toEncodedRequest();
 
         const parsed = await mgr!.paymentRequests.parse(encoded);
@@ -3277,13 +3283,13 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
       it('should throw if mint is not in allowed mints list', async () => {
         const otherMintUrl = 'https://other-mint.example.com';
-        const pr = new PaymentRequest(
-          [],
-          'wrong-mint-request',
-          50,
-          testUnit,
-          [otherMintUrl], // only allows other mint
-        );
+        const pr = new PaymentRequest({
+          transport: [],
+          id: 'wrong-mint-request',
+          amount: 50,
+          unit: testUnit,
+          mints: [otherMintUrl],
+        });
         const encoded = pr.toEncodedRequest();
 
         const parsed = await mgr!.paymentRequests.parse(encoded);
@@ -3298,7 +3304,13 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       });
 
       it('should throw if amount is missing when preparing transaction', async () => {
-        const pr = new PaymentRequest([], 'no-amount-request', undefined, testUnit, [mintUrl]);
+        const pr = new PaymentRequest({
+          transport: [],
+          id: 'no-amount-request',
+          amount: undefined,
+          unit: testUnit,
+          mints: [mintUrl],
+        });
         const encoded = pr.toEncodedRequest();
 
         const parsed = await mgr!.paymentRequests.parse(encoded);
@@ -3310,13 +3322,13 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       });
 
       it('should decode Nostr payment requests for plugin delivery', async () => {
-        const pr = new PaymentRequest(
-          [{ type: PaymentRequestTransportType.NOSTR, target: 'npub1...' }],
-          'nostr-request',
-          50,
-          testUnit,
-          [mintUrl],
-        );
+        const pr = new PaymentRequest({
+          transport: [{ type: PaymentRequestTransportType.NOSTR, target: 'npub1...' }],
+          id: 'nostr-request',
+          amount: 50,
+          unit: testUnit,
+          mints: [mintUrl],
+        });
         const encoded = pr.toEncodedRequest();
 
         const parsed = await mgr!.paymentRequests.parse(encoded);
@@ -3330,7 +3342,13 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
       it('should complete full payment request flow with token reuse', async () => {
         // Create inband payment request
-        const pr = new PaymentRequest([], 'full-flow-test', 40, testUnit, [mintUrl]);
+        const pr = new PaymentRequest({
+          transport: [],
+          id: 'full-flow-test',
+          amount: 40,
+          unit: testUnit,
+          mints: [mintUrl],
+        });
         const encoded = pr.toEncodedRequest();
 
         // Process the payment request
@@ -3359,7 +3377,13 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       });
 
       it('should execute inband payment requests through manager.paymentRequests', async () => {
-        const pr = new PaymentRequest([], 'legacy-wallet-api', 20, testUnit, [mintUrl]);
+        const pr = new PaymentRequest({
+          transport: [],
+          id: 'legacy-wallet-api',
+          amount: 20,
+          unit: testUnit,
+          mints: [mintUrl],
+        });
         const encoded = pr.toEncodedRequest();
 
         const parsed = await mgr!.paymentRequests.parse(encoded);

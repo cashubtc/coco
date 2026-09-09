@@ -65,6 +65,7 @@ function makeService(keysets: Keyset[], outputDataCreator?: OutputDataCreator) {
     mint: makeMint(url),
     keysets: keysets.map((keyset) => ({ ...keyset, mintUrl: url })),
   }));
+  const markMintSnapshotStale = mock(async () => {});
   const getSeed = mock(async () => new Uint8Array(64).fill(1));
   const getRequestFn = mock(
     () =>
@@ -73,7 +74,7 @@ function makeService(keysets: Keyset[], outputDataCreator?: OutputDataCreator) {
   );
 
   const service = new WalletService(
-    { ensureUpdatedMint, updateMintData } as any,
+    { ensureUpdatedMint, updateMintData, markMintSnapshotStale } as any,
     { getSeed } as any,
     { getRequestFn } as any,
     undefined,
@@ -81,10 +82,78 @@ function makeService(keysets: Keyset[], outputDataCreator?: OutputDataCreator) {
     outputDataCreator,
   );
 
-  return { service, ensureUpdatedMint, updateMintData, getRequestFn };
+  return { service, ensureUpdatedMint, updateMintData, markMintSnapshotStale, getRequestFn };
 }
 
 describe('WalletService unit scoping', () => {
+  it('builds wallets that use only Coco persisted keyset snapshots', async () => {
+    const { service } = makeService([makeKeyset('sat')]);
+
+    const wallet = await service.getWallet(mintUrl, 'sat');
+
+    expect((wallet as unknown as { _strictCachedKeysets: boolean })._strictCachedKeysets).toBe(
+      true,
+    );
+  });
+
+  it('invalidates every Wallet Instance and leaves refresh to the next access', async () => {
+    const { service, ensureUpdatedMint, updateMintData, markMintSnapshotStale } = makeService([
+      makeKeyset('sat'),
+      makeKeyset('usd'),
+    ]);
+    const firstSat = await service.getWallet(mintUrl, 'sat');
+    const firstUsd = await service.getWallet(mintUrl, 'usd');
+
+    await service.invalidateMintSnapshot(mintUrl);
+    expect(markMintSnapshotStale).toHaveBeenCalledWith(mintUrl);
+    expect(updateMintData).not.toHaveBeenCalled();
+
+    const secondSat = await service.getWallet(mintUrl, 'sat');
+    const secondUsd = await service.getWallet(mintUrl, 'usd');
+
+    expect(secondSat).not.toBe(firstSat);
+    expect(secondUsd).not.toBe(firstUsd);
+    expect(ensureUpdatedMint).toHaveBeenCalledTimes(4);
+  });
+
+  it('does not let an invalidated in-flight build repopulate the Wallet Instance cache', async () => {
+    const keyset = makeKeyset('sat');
+    const { service, ensureUpdatedMint } = makeService([keyset]);
+    let finishFirstBuild!: () => void;
+    let finishSecondBuild!: () => void;
+    const firstBuildMayFinish = new Promise<void>((resolve) => {
+      finishFirstBuild = resolve;
+    });
+    const secondBuildMayFinish = new Promise<void>((resolve) => {
+      finishSecondBuild = resolve;
+    });
+    ensureUpdatedMint.mockImplementationOnce(async (url: string) => {
+      await firstBuildMayFinish;
+      return { mint: makeMint(url), keysets: [{ ...keyset, mintUrl: url }] };
+    });
+    ensureUpdatedMint.mockImplementationOnce(async (url: string) => {
+      await secondBuildMayFinish;
+      return { mint: makeMint(url), keysets: [{ ...keyset, mintUrl: url }] };
+    });
+
+    const firstWalletPromise = service.getWallet(mintUrl, 'sat');
+    await Promise.resolve();
+    service.clearCache(mintUrl);
+    const secondWalletPromise = service.getWallet(mintUrl, 'sat');
+    finishFirstBuild();
+    const firstWallet = await firstWalletPromise;
+    const joinedSecondWalletPromise = service.getWallet(mintUrl, 'sat');
+    finishSecondBuild();
+    const [secondWallet, joinedSecondWallet] = await Promise.all([
+      secondWalletPromise,
+      joinedSecondWalletPromise,
+    ]);
+
+    expect(secondWallet).not.toBe(firstWallet);
+    expect(joinedSecondWallet).toBe(secondWallet);
+    expect(ensureUpdatedMint).toHaveBeenCalledTimes(2);
+  });
+
   it('uses the supplied creator when a Wallet Instance prepares outputs', async () => {
     const output = {
       blindedMessage: { amount: Amount.from(1), id: 'custom-keyset', B_: 'custom-blinded' },

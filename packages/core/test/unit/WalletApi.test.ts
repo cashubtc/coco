@@ -474,7 +474,13 @@ describe('WalletApi - Trust Enforcement', () => {
 
   describe('encodePaymentRequest', () => {
     it('should encode payment request as creqA by default', () => {
-      const pr = new PaymentRequest([], 'test-id', 10, 'sat', [testMintUrl]);
+      const pr = new PaymentRequest({
+        transport: [],
+        id: 'test-id',
+        amount: 10,
+        unit: 'sat',
+        mints: [testMintUrl],
+      });
 
       const encoded = walletApi.encodePaymentRequest(pr);
 
@@ -482,7 +488,13 @@ describe('WalletApi - Trust Enforcement', () => {
     });
 
     it('should encode payment request as creqA when specified', () => {
-      const pr = new PaymentRequest([], 'test-id', 10, 'sat', [testMintUrl]);
+      const pr = new PaymentRequest({
+        transport: [],
+        id: 'test-id',
+        amount: 10,
+        unit: 'sat',
+        mints: [testMintUrl],
+      });
 
       const encoded = walletApi.encodePaymentRequest(pr, 'creqA');
 
@@ -490,7 +502,13 @@ describe('WalletApi - Trust Enforcement', () => {
     });
 
     it('should encode payment request as creqB when specified', () => {
-      const pr = new PaymentRequest([], 'test-id', 10, 'sat', [testMintUrl]);
+      const pr = new PaymentRequest({
+        transport: [],
+        id: 'test-id',
+        amount: 10,
+        unit: 'sat',
+        mints: [testMintUrl],
+      });
 
       const encoded = walletApi.encodePaymentRequest(pr, 'creqB');
 
