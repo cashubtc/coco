@@ -417,6 +417,24 @@ describe('initializeCoco', () => {
       await manager.disableMintOperationProcessor();
     });
 
+    it('should allocate keys atomically through the public keyring api', async () => {
+      const manager = await initializeCoco({
+        ...baseConfig,
+        ...disabledRuntime,
+        seedGetter: async () => new Uint8Array(64),
+      });
+
+      const [first, second] = await Promise.all([
+        manager.keyring.generateKeyPair(true),
+        manager.keyring.generateKeyPair(true),
+      ]);
+
+      expect(new Set([first.derivationIndex, second.derivationIndex])).toEqual(new Set([0, 1]));
+      expect(await repositories.keyRingRepository.getAllPersistedKeyPairs('p2pk')).toHaveLength(2);
+
+      await manager.dispose();
+    });
+
     it('should expose the quote api to plugins', async () => {
       let pluginQuotes: QuoteApi | undefined;
       const plugin: Plugin<['quotes']> = {
