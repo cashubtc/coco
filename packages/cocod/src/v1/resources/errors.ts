@@ -1,11 +1,19 @@
 import {
-  UnknownMintError,
-  ProofValidationError,
-  TokenValidationError,
+  MeltOperationNotFoundError,
+  MeltOperationStateError,
+  MintOperationNotFoundError,
+  MintOperationStateError,
   MintQuoteValidationError,
   OperationInProgressError,
   PaymentRequestError,
+  ProofValidationError,
+  ReceiveOperationNotFoundError,
+  ReceiveOperationStateError,
+  SendOperationNotFoundError,
+  SendOperationStateError,
+  TokenValidationError,
   UnitValidationError,
+  UnknownMintError,
 } from '@cashu/coco-core';
 import { V1HttpError } from '../contract.js';
 
@@ -22,29 +30,32 @@ export function paymentRequestCocoError(action: string, cause: unknown): V1HttpE
   return cocoError(action, cause);
 }
 
-interface OperationStateMappingError extends Error {
-  readonly operationId: string;
-  readonly state: string;
-  readonly expectedStates: readonly string[];
+const OPERATION_ERRORS = {
+  mint: [MintOperationNotFoundError, MintOperationStateError],
+  melt: [MeltOperationNotFoundError, MeltOperationStateError],
+  send: [SendOperationNotFoundError, SendOperationStateError],
+  receive: [ReceiveOperationNotFoundError, ReceiveOperationStateError],
+} as const;
+
+type OperationType = keyof typeof OPERATION_ERRORS;
+
+export function operationNotFound(type: OperationType, cause?: unknown): V1HttpError {
+  return new V1HttpError({
+    status: 404,
+    code: 'not_found',
+    message: `The ${type[0]!.toUpperCase() + type.slice(1)} Operation does not exist`,
+    retryable: false,
+    cause,
+  });
 }
 
-type OperationErrorConstructor<T extends Error> = abstract new (...args: never[]) => T;
-
-export function createOperationCocoErrorMapper({
-  type,
-  label,
-  notFoundError,
-  stateError,
-  notFound,
-}: {
-  type: 'mint' | 'melt' | 'send' | 'receive';
-  label: 'Mint' | 'Melt' | 'Send' | 'Receive';
-  notFoundError: OperationErrorConstructor<Error>;
-  stateError: OperationErrorConstructor<OperationStateMappingError>;
-  notFound: (cause?: unknown) => V1HttpError;
-}): (action: string, cause: unknown) => V1HttpError {
+export function createOperationCocoErrorMapper(
+  type: OperationType,
+): (action: string, cause: unknown) => V1HttpError {
+  const [notFoundError, stateError] = OPERATION_ERRORS[type];
+  const label = type[0]!.toUpperCase() + type.slice(1);
   return (action, cause) => {
-    if (cause instanceof notFoundError) return notFound(cause);
+    if (cause instanceof notFoundError) return operationNotFound(type, cause);
     if (cause instanceof OperationInProgressError) {
       return new V1HttpError({
         status: 409,

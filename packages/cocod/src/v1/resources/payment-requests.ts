@@ -1,28 +1,11 @@
-import {
-  defineV1Route,
-  type V1Runtime,
-  type V1RouteDefinition,
-  type V1RouteMetadata,
-} from '../contract.js';
+import { defineResourceRoute } from '../resource.js';
 import {
   evaluatePaymentRequestRequestSchema,
   paymentRequestEvaluationSchema,
-  type EvaluatePaymentRequestRequest,
   type PaymentRequestEvaluationDocument,
 } from '../schema.js';
-import { requireRunningSession } from './session.js';
 import { paymentRequestCocoError } from './errors.js';
-
-const EVALUATE_PAYMENT_REQUEST_ROUTE = {
-  method: 'POST',
-  path: '/v1/payment-requests/evaluate',
-  capability: 'wallet:read',
-  requestSchema: evaluatePaymentRequestRequestSchema,
-  responseSchema: paymentRequestEvaluationSchema,
-} as const satisfies V1RouteMetadata<
-  EvaluatePaymentRequestRequest,
-  PaymentRequestEvaluationDocument
->;
+import { requireRunningSession } from './session.js';
 
 function toPaymentRequestEvaluationDocument(request: {
   amount?: { toString(): string };
@@ -56,12 +39,14 @@ function toPaymentRequestEvaluationDocument(request: {
   };
 }
 
-export const paymentRequestsMetadata = [EVALUATE_PAYMENT_REQUEST_ROUTE];
-
-export function createPaymentRequestsRoutes(runtime: V1Runtime): V1RouteDefinition[] {
-  const evaluatePaymentRequest = defineV1Route({
-    ...EVALUATE_PAYMENT_REQUEST_ROUTE,
-    handler: async (input) => {
+export const paymentRequestsRoutes = [
+  defineResourceRoute({
+    method: 'POST',
+    path: '/v1/payment-requests/evaluate',
+    capability: 'wallet:read',
+    requestSchema: evaluatePaymentRequestRequestSchema,
+    responseSchema: paymentRequestEvaluationSchema,
+    handler: async (input, _request, { runtime }) => {
       const paymentRequests = requireRunningSession(runtime).manager.paymentRequests;
       try {
         return toPaymentRequestEvaluationDocument(await paymentRequests.parse(input.request));
@@ -69,6 +54,5 @@ export function createPaymentRequestsRoutes(runtime: V1Runtime): V1RouteDefiniti
         throw paymentRequestCocoError('evaluate the Payment Request', error);
       }
     },
-  });
-  return [evaluatePaymentRequest];
-}
+  }),
+];

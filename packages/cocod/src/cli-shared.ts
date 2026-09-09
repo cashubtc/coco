@@ -2,16 +2,23 @@ import { program } from 'commander';
 
 import { loadClientCredential } from './credentials.js';
 import {
+  CLIENT_CREDENTIAL_FILE,
+  DEFAULT_CLIENT_URL,
+  DEFAULT_SHUTDOWN_TIMEOUT_MS,
+  resolveClientEndpoint,
+  type ClientEndpoint,
+} from './utils/config.js';
+import {
   balancesSchema,
-  createMintOperationRequestSchema,
-  createMintQuoteRequestSchema,
   createMeltOperationRequestSchema,
   createMeltQuoteRequestSchema,
+  createMintOperationRequestSchema,
+  createMintQuoteRequestSchema,
   createReceiveOperationRequestSchema,
   createSendOperationRequestSchema,
   evaluatePaymentRequestRequestSchema,
-  executeSendOperationResponseSchema,
   executeMeltOperationResponseSchema,
+  executeSendOperationResponseSchema,
   healthSchema,
   historyPageSchema,
   historySchema,
@@ -19,11 +26,11 @@ import {
   knownMintSchema,
   knownMintsSchema,
   lifecycleStatusSchema,
+  meltOperationSchema,
+  meltQuoteSchema,
   mintInformationSchema,
   mintOperationSchema,
   mintQuoteSchema,
-  meltOperationSchema,
-  meltQuoteSchema,
   paymentMethodCapabilitiesSchema,
   paymentRequestEvaluationSchema,
   processShutdownResponseSchema,
@@ -33,45 +40,21 @@ import {
   v1ErrorSchema,
   walletRecoveryMaterialResponseSchema,
   type BalancesDocument,
-  type CreateMintOperationRequest,
-  type CreateMintQuoteRequest,
   type CreateMeltOperationRequest,
   type CreateMeltQuoteRequest,
+  type CreateMintOperationRequest,
+  type CreateMintQuoteRequest,
   type CreateReceiveOperationRequest,
   type CreateSendOperationRequest,
-  type ExecuteSendOperationResponseDocument,
-  type ExecuteMeltOperationResponseDocument,
-  type HealthDocument,
-  type HistoryDocument,
   type HistoryPageDocument,
   type InitializeWalletRequest,
-  type InitializeWalletResponseDocument,
   type KnownMintDocument,
-  type KnownMintsDocument,
   type LifecycleStatusDocument,
-  type MintInformationDocument,
-  type MintOperationDocument,
-  type MintQuoteDocument,
-  type MeltOperationDocument,
-  type MeltQuoteDocument,
-  type PaymentMethodCapabilitiesDocument,
-  type PaymentRequestEvaluationDocument,
-  type ProcessShutdownResponseDocument,
-  type ReceiveOperationDocument,
   type RuntimeSchema,
-  type SendOperationDocument,
   type StartSessionRequest,
   type V1ErrorCode,
   type WalletRecoveryMaterialRequest,
-  type WalletRecoveryMaterialResponseDocument,
 } from './v1/http.js';
-import {
-  CLIENT_CREDENTIAL_FILE,
-  DEFAULT_CLIENT_URL,
-  DEFAULT_SHUTDOWN_TIMEOUT_MS,
-  resolveClientEndpoint,
-  type ClientEndpoint,
-} from './utils/config.js';
 
 const SESSION_TRANSITION_POLL_INTERVAL_MS = 100;
 export const DEFAULT_SESSION_TRANSITION_TIMEOUT_MS = DEFAULT_SHUTDOWN_TIMEOUT_MS + 5_000;
@@ -113,69 +96,8 @@ export interface HistoryPagination {
   offset?: number;
   limit?: number;
 }
-
-/**
- * Typed client for cocod's implemented v1 resources.
- *
- * Responses are validated against the runtime schemas; unsuccessful responses reject with
- * `V1ClientError`.
- */
-export interface V1Client {
-  /** Checks public Cocod Process reachability without requiring a Wallet or Coco Session. */
-  health(): Promise<HealthDocument>;
-  /** Returns authenticated Wallet configuration, Wallet Seed Access, and Coco Session status. */
-  status(): Promise<LifecycleStatusDocument>;
-  /** Lists lossless balances by Mint and unit using the supplied collection filters. */
-  balances(filters?: BalanceFilters): Promise<BalancesDocument>;
-  /** Lists a safe page of Wallet history through Coco. */
-  listHistory(pagination?: HistoryPagination): Promise<HistoryPageDocument>;
-  /** Returns one safe Wallet history entry by its direct Coco identity. */
-  getHistory(historyEntryId: string): Promise<HistoryDocument>;
-  /** Lists Known Mints, optionally restricted to Trusted Mints. */
-  listMints(filters?: KnownMintFilters): Promise<KnownMintsDocument>;
-  /** Discovers and persists a Known Mint without implicitly trusting it. */
-  registerMint(mintUrl: string): Promise<KnownMintDocument>;
-  /** Returns Mint metadata through Coco and may refresh stale cached metadata. */
-  getMintInfo(mintUrl: string): Promise<MintInformationDocument>;
-  /** Approves a Known Mint for Wallet operations. */
-  trustMint(mintUrl: string): Promise<KnownMintDocument>;
-  /** Removes approval for Wallet operations without forgetting the Known Mint. */
-  untrustMint(mintUrl: string): Promise<KnownMintDocument>;
-  /** Lists Mint and Melt payment-method capabilities advertised by a Known Mint. */
-  listPaymentMethodCapabilities(mintUrl: string): Promise<PaymentMethodCapabilitiesDocument>;
-  /** Evaluates an outgoing Payment Request without preparing or executing an Operation. */
-  evaluatePaymentRequest(request: string): Promise<PaymentRequestEvaluationDocument>;
-  /** Creates a canonical Mint Quote without preparing a Mint Operation. */
-  createMintQuote(input: CreateMintQuoteRequest): Promise<MintQuoteDocument>;
-  /** Creates a canonical Melt Quote without preparing a Melt Operation. */
-  createMeltQuote(input: CreateMeltQuoteRequest): Promise<MeltQuoteDocument>;
-  /** Prepares a Mint Operation against an existing canonical Mint Quote. */
-  prepareMint(input: CreateMintOperationRequest): Promise<MintOperationDocument>;
-  /** Prepares a Melt Operation against an existing canonical Melt Quote. */
-  prepareMelt(input: CreateMeltOperationRequest): Promise<MeltOperationDocument>;
-  /** Executes a prepared Melt Operation and returns its safe state and available result. */
-  executeMelt(operationId: string): Promise<ExecuteMeltOperationResponseDocument>;
-  /** Prepares a Send Operation without producing an encoded token. */
-  prepareSend(input: CreateSendOperationRequest): Promise<SendOperationDocument>;
-  /** Executes a prepared Send Operation and returns its sensitive encoded result. */
-  executeSend(operationId: string): Promise<ExecuteSendOperationResponseDocument>;
-  /** Prepares a Receive Operation without advancing it. */
-  prepareReceive(input: CreateReceiveOperationRequest): Promise<ReceiveOperationDocument>;
-  /** Executes a prepared Receive Operation and returns its latest safe state. */
-  executeReceive(operationId: string): Promise<ReceiveOperationDocument>;
-  /** Configures a new Wallet using recovery material generated by the Cocod Process. */
-  initializeWallet(input: InitializeWalletRequest): Promise<InitializeWalletResponseDocument>;
-  /** Retrieves sensitive Wallet Recovery Material through the administrative resource. */
-  getWalletRecoveryMaterial(
-    input: WalletRecoveryMaterialRequest,
-  ): Promise<WalletRecoveryMaterialResponseDocument>;
-  /** Accepts a Coco Session start transition and returns its current status. */
-  startSession(input: StartSessionRequest): Promise<LifecycleStatusDocument>;
-  /** Accepts a Coco Session stop transition and returns its current status. */
-  stopSession(): Promise<LifecycleStatusDocument>;
-  /** Accepts graceful Cocod Process shutdown. */
-  stopProcess(): Promise<ProcessShutdownResponseDocument>;
-}
+/** Validated v1 client used by the human CLI. */
+export type V1Client = ReturnType<typeof createV1Client>;
 
 export class V1ClientError extends Error {
   override readonly name = 'V1ClientError';
@@ -205,209 +127,93 @@ export function assertHostLocalOperation(
 }
 
 /** Creates one typed client for the implemented v1 interface. */
-export function createV1Client(options: ClientCredentialOptions = {}): V1Client {
+export function createV1Client(options: ClientCredentialOptions = {}) {
   const endpoint = configuredClientEndpoint(options.url);
   const credentialFile = options.credentialFile;
 
+  const get = <T>(path: string, schema: RuntimeSchema<T>) =>
+    requestV1(endpoint, path, 'GET', undefined, schema, credentialFile);
+  const post = <T>(path: string, body: object | undefined, schema: RuntimeSchema<T>) =>
+    requestV1(endpoint, path, 'POST', body, schema, credentialFile);
   return {
-    health: () => requestV1(endpoint, '/health', 'GET', undefined, healthSchema, credentialFile),
-    status: () =>
-      requestV1(endpoint, '/v1/status', 'GET', undefined, lifecycleStatusSchema, credentialFile),
-    balances: (filters = {}) =>
-      requestV1(endpoint, balancePath(filters), 'GET', undefined, balancesSchema, credentialFile),
-    listHistory: (pagination = {}) =>
-      requestV1(
-        endpoint,
-        historyPath(pagination),
-        'GET',
-        undefined,
-        historyPageSchema,
-        credentialFile,
-      ),
-    getHistory: (historyEntryId) =>
-      requestV1(
-        endpoint,
-        `/v1/history/${encodeURIComponent(historyEntryId)}`,
-        'GET',
-        undefined,
-        historySchema,
-        credentialFile,
-      ),
-    listMints: (filters = {}) =>
-      requestV1(
-        endpoint,
-        mintListPath(filters),
-        'GET',
-        undefined,
-        knownMintsSchema,
-        credentialFile,
-      ),
-    registerMint: (mintUrl) =>
-      requestV1(endpoint, '/v1/mints', 'POST', { mintUrl }, knownMintSchema, credentialFile),
-    getMintInfo: (mintUrl) =>
-      requestV1(
-        endpoint,
-        mintResourcePath('/v1/mints/info', mintUrl),
-        'GET',
-        undefined,
-        mintInformationSchema,
-        credentialFile,
-      ),
-    trustMint: (mintUrl) =>
-      requestV1(endpoint, '/v1/mints/trust', 'POST', { mintUrl }, knownMintSchema, credentialFile),
-    untrustMint: (mintUrl) =>
-      requestV1(
-        endpoint,
-        '/v1/mints/untrust',
-        'POST',
-        { mintUrl },
-        knownMintSchema,
-        credentialFile,
-      ),
-    listPaymentMethodCapabilities: (mintUrl) =>
-      requestV1(
-        endpoint,
+    health: () => get('/health', healthSchema),
+    status: () => get('/v1/status', lifecycleStatusSchema),
+    balances: (filters: BalanceFilters = {}) => get(balancePath(filters), balancesSchema),
+    listHistory: (pagination: HistoryPagination = {}) =>
+      get(historyPath(pagination), historyPageSchema),
+    getHistory: (historyEntryId: string) =>
+      get(`/v1/history/${encodeURIComponent(historyEntryId)}`, historySchema),
+    listMints: (filters: KnownMintFilters = {}) => get(mintListPath(filters), knownMintsSchema),
+    registerMint: (mintUrl: string) => post('/v1/mints', { mintUrl }, knownMintSchema),
+    getMintInfo: (mintUrl: string) =>
+      get(mintResourcePath('/v1/mints/info', mintUrl), mintInformationSchema),
+    trustMint: (mintUrl: string) => post('/v1/mints/trust', { mintUrl }, knownMintSchema),
+    untrustMint: (mintUrl: string) => post('/v1/mints/untrust', { mintUrl }, knownMintSchema),
+    listPaymentMethodCapabilities: (mintUrl: string) =>
+      get(
         mintResourcePath('/v1/mints/payment-method-capabilities', mintUrl),
-        'GET',
-        undefined,
         paymentMethodCapabilitiesSchema,
-        credentialFile,
       ),
-    evaluatePaymentRequest: (request) =>
-      requestV1(
-        endpoint,
+    evaluatePaymentRequest: (request: string) =>
+      post(
         '/v1/payment-requests/evaluate',
-        'POST',
         evaluatePaymentRequestRequestSchema.parse({ request }),
         paymentRequestEvaluationSchema,
-        credentialFile,
       ),
-    createMintQuote: (input) =>
-      requestV1(
-        endpoint,
-        '/v1/quotes/mint',
-        'POST',
-        createMintQuoteRequestSchema.parse(input),
-        mintQuoteSchema,
-        credentialFile,
-      ),
-    createMeltQuote: (input) =>
-      requestV1(
-        endpoint,
-        '/v1/quotes/melt',
-        'POST',
-        createMeltQuoteRequestSchema.parse(input),
-        meltQuoteSchema,
-        credentialFile,
-      ),
-    prepareMint: (input) =>
-      requestV1(
-        endpoint,
+    createMintQuote: (input: CreateMintQuoteRequest) =>
+      post('/v1/quotes/mint', createMintQuoteRequestSchema.parse(input), mintQuoteSchema),
+    createMeltQuote: (input: CreateMeltQuoteRequest) =>
+      post('/v1/quotes/melt', createMeltQuoteRequestSchema.parse(input), meltQuoteSchema),
+    prepareMint: (input: CreateMintOperationRequest) =>
+      post(
         '/v1/operations/mint',
-        'POST',
         createMintOperationRequestSchema.parse(input),
         mintOperationSchema,
-        credentialFile,
       ),
-    prepareMelt: (input) =>
-      requestV1(
-        endpoint,
+    prepareMelt: (input: CreateMeltOperationRequest) =>
+      post(
         '/v1/operations/melt',
-        'POST',
         createMeltOperationRequestSchema.parse(input),
         meltOperationSchema,
-        credentialFile,
       ),
-    executeMelt: (operationId) =>
-      requestV1(
-        endpoint,
+    executeMelt: (operationId: string) =>
+      post(
         `/v1/operations/melt/${encodeURIComponent(operationId)}/execute`,
-        'POST',
         undefined,
         executeMeltOperationResponseSchema,
-        credentialFile,
       ),
-    prepareSend: (input) =>
-      requestV1(
-        endpoint,
+    prepareSend: (input: CreateSendOperationRequest) =>
+      post(
         '/v1/operations/send',
-        'POST',
         createSendOperationRequestSchema.parse(input),
         sendOperationSchema,
-        credentialFile,
       ),
-    executeSend: (operationId) =>
-      requestV1(
-        endpoint,
+    executeSend: (operationId: string) =>
+      post(
         `/v1/operations/send/${encodeURIComponent(operationId)}/execute`,
-        'POST',
         undefined,
         executeSendOperationResponseSchema,
-        credentialFile,
       ),
-    prepareReceive: (input) =>
-      requestV1(
-        endpoint,
+    prepareReceive: (input: CreateReceiveOperationRequest) =>
+      post(
         '/v1/operations/receive',
-        'POST',
         createReceiveOperationRequestSchema.parse(input),
         receiveOperationSchema,
-        credentialFile,
       ),
-    executeReceive: (operationId) =>
-      requestV1(
-        endpoint,
+    executeReceive: (operationId: string) =>
+      post(
         `/v1/operations/receive/${encodeURIComponent(operationId)}/execute`,
-        'POST',
         undefined,
         receiveOperationSchema,
-        credentialFile,
       ),
-    initializeWallet: (input) =>
-      requestV1(
-        endpoint,
-        '/v1/admin/wallet/initialize',
-        'POST',
-        input,
-        initializeWalletResponseSchema,
-        credentialFile,
-      ),
-    getWalletRecoveryMaterial: (input) =>
-      requestV1(
-        endpoint,
-        '/v1/admin/wallet/recovery-material',
-        'POST',
-        input,
-        walletRecoveryMaterialResponseSchema,
-        credentialFile,
-      ),
-    startSession: (input) =>
-      requestV1(
-        endpoint,
-        '/v1/admin/session/start',
-        'POST',
-        input,
-        lifecycleStatusSchema,
-        credentialFile,
-      ),
-    stopSession: () =>
-      requestV1(
-        endpoint,
-        '/v1/admin/session/stop',
-        'POST',
-        {},
-        lifecycleStatusSchema,
-        credentialFile,
-      ),
-    stopProcess: () =>
-      requestV1(
-        endpoint,
-        '/v1/admin/process/stop',
-        'POST',
-        {},
-        processShutdownResponseSchema,
-        credentialFile,
-      ),
+    initializeWallet: (input: InitializeWalletRequest) =>
+      post('/v1/admin/wallet/initialize', input, initializeWalletResponseSchema),
+    getWalletRecoveryMaterial: (input: WalletRecoveryMaterialRequest) =>
+      post('/v1/admin/wallet/recovery-material', input, walletRecoveryMaterialResponseSchema),
+    startSession: (input: StartSessionRequest) =>
+      post('/v1/admin/session/start', input, lifecycleStatusSchema),
+    stopSession: () => post('/v1/admin/session/stop', {}, lifecycleStatusSchema),
+    stopProcess: () => post('/v1/admin/process/stop', {}, processShutdownResponseSchema),
   };
 }
 
@@ -899,4 +705,4 @@ function explicitEndpointUnavailable(url: string): Error {
   );
 }
 
-export { program, callDaemon };
+export { callDaemon, program };

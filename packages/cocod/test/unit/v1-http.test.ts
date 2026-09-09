@@ -203,6 +203,175 @@ describe('v1 HTTP route interface', () => {
     });
   }
 
+  test('protects every resource before invoking Coco and prevents sensitive responses from being cached', async () => {
+    const credential = await createCredential();
+    const called = mock(() => {
+      throw new Error('Unauthorized work reached the runtime');
+    });
+    const runtime: V1Runtime = {
+      getStatus: called,
+      getRunningSession: called,
+      initializeWallet: called,
+      getWalletRecoveryMaterial: called,
+      startSession: called,
+      stopSession: called,
+    };
+    const definitions = createV1RouteDefinitions(runtime, '0.0.17', { request: called });
+    const routes = buildV1Routes(definitions, credential.credentials);
+    await setCapabilities(credential.verifierFile, ['wallet:read']);
+    for (const definition of definitions) {
+      const { method, path } = definition;
+      if (path === '/health') continue;
+      const readOnly = method === 'GET' || path === '/v1/payment-requests/evaluate';
+      expect(definition.capability).toBe(readOnly ? 'wallet:read' : 'wallet:admin');
+      const key = path.replace(/\{([^}]+)\}/g, ':$1');
+      const handler = routes[key]![method]!;
+      const response = await handler(new Request(`http://localhost${path}`, { method }));
+      expect(response.status).toBe(401);
+      expect(await response.json()).toMatchObject({ error: { code: 'unauthenticated' } });
+      const sensitive =
+        path.endsWith('/result') ||
+        path === '/v1/events' ||
+        path.startsWith('/v1/admin/wallet/') ||
+        /^\/v1\/operations\/(send|melt)\/.*\/execute$/.test(path);
+      if (sensitive) expect(response.headers.get('cache-control')).toBe('no-store');
+      if (!readOnly) {
+        const forbidden = await handler(
+          new Request(`http://localhost${path}`, {
+            method,
+            headers: { Authorization: `Bearer ${credential.plaintext}` },
+          }),
+        );
+        expect(forbidden.status).toBe(403);
+        if (sensitive) expect(forbidden.headers.get('cache-control')).toBe('no-store');
+      }
+    }
+    expect(called).not.toHaveBeenCalled();
+  });
+
+  for (const [type, fixture, overrides, expected, inFlightStates] of [
+    [
+      'mint',
+      mintOperationFixture,
+      {
+        state: 'failed',
+        terminalFailure: {
+          reason: 'Missing NUT-20 mint quote key must-not-leak',
+          code: 'missing_quote_pubkey',
+          retryable: false,
+          observedAt: 1_786_838_520_000,
+        },
+      },
+      {
+        state: 'failed',
+        failure: {
+          reason: 'The Mint Operation failed',
+          code: 'missing_quote_pubkey',
+          retryable: false,
+          observedAt: '2026-08-16T00:02:00.000Z',
+        },
+      },
+      ['executing'],
+    ],
+    [
+      'melt',
+      meltOperationFixture,
+      {
+        state: 'finalized',
+        changeAmount: toAmount(1),
+        effectiveFee: toAmount(2),
+        finalizedData: { preimage: 'must-not-leak' },
+      },
+      { state: 'finalized', changeAmount: '1', effectiveFee: '2' },
+      ['executing', 'pending', 'rolling_back'],
+    ],
+    [
+      'send',
+      sendOperationFixture,
+      {
+        state: 'pending',
+        token: { mint: 'https://mint.example.com', proofs: [{ secret: 'must-not-leak' }] },
+      },
+      {
+        state: 'pending',
+        method: 'default',
+        requestedAmount: '25',
+        inputAmount: '27',
+        fee: '2',
+        needsSwap: true,
+      },
+      ['pending'],
+    ],
+    [
+      'receive',
+      receiveOperationFixture,
+      { state: 'finalized' },
+      { state: 'finalized', amount: '25', fee: '2' },
+      ['executing'],
+    ],
+  ] as const) {
+    test(`${type} reads project safe state and paginate canonical collections deterministically`, async () => {
+      const credential = await createCredential();
+      const readyState = type === 'mint' ? 'pending' : 'prepared';
+      const get = mock(async () => fixture(overrides));
+      const listReady = mock(async () => [
+        fixture({ id: 'old', createdAt: 1_786_838_400_000, state: readyState }),
+        fixture({ id: 'new-b', createdAt: 1_786_838_600_000, state: readyState }),
+        fixture({ id: 'new-a', createdAt: 1_786_838_600_000, state: readyState }),
+      ]);
+      const listInFlight = mock(async () =>
+        inFlightStates.map((state, index) =>
+          fixture({
+            id: state,
+            state,
+            createdAt: 1_786_838_500_000 - index * 20_000,
+          }),
+        ),
+      );
+      const routes = createWalletTestRoutes(
+        {
+          ops: {
+            [type]: {
+              get,
+              [type === 'mint' ? 'listPending' : 'listPrepared']: listReady,
+              listInFlight,
+            },
+          },
+        },
+        credential.credentials,
+      );
+      const path = `/v1/operations/${type}`;
+      const fetched = await routes[`${path}/:operationId`]!.GET!(
+        authorizedRequest(`${path}/${type}-operation-1`, credential.plaintext),
+      );
+      const body = await fetched.json();
+      expect(fetched.status).toBe(200);
+      expect(body).toMatchObject({
+        id: `${type}-operation-1`,
+        type,
+        mintUrl: 'https://mint.example.com',
+        unit: 'sat',
+        createdAt: '2026-08-16T00:00:00.000Z',
+        updatedAt: '2026-08-16T00:01:00.000Z',
+        ...expected,
+      });
+      expect(JSON.stringify(body)).not.toContain('must-not-leak');
+      expect(get).toHaveBeenCalledWith(`${type}-operation-1`);
+      for (const [collection, query, items, offset, limit] of [
+        [readyState, '?offset=1&limit=1', [{ id: 'new-b', state: readyState }], 1, 1],
+        ['in-flight', '', inFlightStates.map((state) => ({ id: state, state })), 0, 20],
+      ] as const) {
+        const response = await routes[`${path}/${collection}`]!.GET!(
+          authorizedRequest(`${path}/${collection}${query}`, credential.plaintext),
+        );
+        expect(response.status).toBe(200);
+        expect(await response.json()).toMatchObject({ items, offset, limit });
+      }
+      expect(listReady).toHaveBeenCalledWith();
+      expect(listInFlight).toHaveBeenCalledWith();
+    });
+  }
+
   test('lists and inspects safe history documents through Coco ordering and identities', async () => {
     const credential = await createCredential();
     const entries = [
@@ -739,67 +908,6 @@ describe('v1 HTTP route interface', () => {
     expect(prepare).not.toHaveBeenCalled();
   });
 
-  test('inspects and paginates pending and in-flight Mint Operations from Coco', async () => {
-    const credential = await createCredential();
-    const operation = (id: string, createdAt: number, state: 'pending' | 'executing') =>
-      mintOperationFixture({ id, createdAt, updatedAt: createdAt, state });
-    const get = mock(async () =>
-      mintOperationFixture({
-        state: 'failed',
-        terminalFailure: {
-          reason: 'Missing NUT-20 mint quote key for pubkey 02must-not-leak',
-          code: 'missing_quote_pubkey',
-          retryable: false,
-          observedAt: 1_786_838_520_000,
-        },
-      }),
-    );
-    const listPending = mock(async () => [
-      operation('old', 1_786_838_400_000, 'pending'),
-      operation('new-b', 1_786_838_600_000, 'pending'),
-      operation('new-a', 1_786_838_600_000, 'pending'),
-    ]);
-    const listInFlight = mock(async () => [operation('executing', 1_786_838_500_000, 'executing')]);
-    const routes = createWalletTestRoutes(
-      { ops: { mint: { get, listPending, listInFlight } } },
-      credential.credentials,
-    );
-
-    const fetched = await routes['/v1/operations/mint/:operationId']!.GET!(
-      authorizedRequest('/v1/operations/mint/mint-operation-1', credential.plaintext),
-    );
-    const pending = await routes['/v1/operations/mint/pending']!.GET!(
-      authorizedRequest('/v1/operations/mint/pending?offset=1&limit=1', credential.plaintext),
-    );
-    const inFlight = await routes['/v1/operations/mint/in-flight']!.GET!(
-      authorizedRequest('/v1/operations/mint/in-flight', credential.plaintext),
-    );
-    const fetchedDocument = await fetched.json();
-
-    expect(fetchedDocument).toMatchObject({
-      id: 'mint-operation-1',
-      state: 'failed',
-      failure: {
-        reason: 'The Mint Operation failed',
-        code: 'missing_quote_pubkey',
-        retryable: false,
-        observedAt: '2026-08-16T00:02:00.000Z',
-      },
-    });
-    expect(JSON.stringify(fetchedDocument)).not.toContain('02must-not-leak');
-    expect(JSON.stringify(fetchedDocument)).not.toContain('Missing NUT-20');
-    expect(await pending.json()).toMatchObject({
-      items: [{ id: 'new-b', state: 'pending' }],
-      offset: 1,
-      limit: 1,
-    });
-    expect(await inFlight.json()).toMatchObject({
-      items: [{ id: 'executing', state: 'executing' }],
-      offset: 0,
-      limit: 20,
-    });
-  });
-
   test('executes and refreshes Mint Operations while keeping pending payment pending', async () => {
     const credential = await createCredential();
     const pending = mintOperationFixture();
@@ -917,70 +1025,6 @@ describe('v1 HTTP route interface', () => {
     });
     expect(prepare).toHaveBeenCalledWith({ quote });
     expect(execute).not.toHaveBeenCalled();
-  });
-
-  test('inspects and paginates prepared and in-flight Melt Operations from Coco', async () => {
-    const credential = await createCredential();
-    const operation = (
-      id: string,
-      createdAt: number,
-      state: 'prepared' | 'executing' | 'pending' | 'rolling_back',
-    ) => meltOperationFixture({ id, createdAt, updatedAt: createdAt, state });
-    const get = mock(async () =>
-      meltOperationFixture({
-        state: 'finalized',
-        changeAmount: toAmount(1),
-        effectiveFee: toAmount(2),
-        finalizedData: { preimage: 'must-not-leak' },
-      }),
-    );
-    const listPrepared = mock(async () => [
-      operation('old', 1_786_838_400_000, 'prepared'),
-      operation('new-b', 1_786_838_600_000, 'prepared'),
-      operation('new-a', 1_786_838_600_000, 'prepared'),
-    ]);
-    const listInFlight = mock(async () => [
-      operation('executing', 1_786_838_500_000, 'executing'),
-      operation('pending', 1_786_838_480_000, 'pending'),
-      operation('rolling-back', 1_786_838_460_000, 'rolling_back'),
-    ]);
-    const routes = createWalletTestRoutes(
-      { ops: { melt: { get, listPrepared, listInFlight } } },
-      credential.credentials,
-    );
-
-    const fetched = await routes['/v1/operations/melt/:operationId']!.GET!(
-      authorizedRequest('/v1/operations/melt/melt-operation-1', credential.plaintext),
-    );
-    const prepared = await routes['/v1/operations/melt/prepared']!.GET!(
-      authorizedRequest('/v1/operations/melt/prepared?offset=1&limit=1', credential.plaintext),
-    );
-    const inFlight = await routes['/v1/operations/melt/in-flight']!.GET!(
-      authorizedRequest('/v1/operations/melt/in-flight', credential.plaintext),
-    );
-    const fetchedDocument = await fetched.json();
-
-    expect(fetchedDocument).toMatchObject({
-      id: 'melt-operation-1',
-      state: 'finalized',
-      changeAmount: '1',
-      effectiveFee: '2',
-    });
-    expect(JSON.stringify(fetchedDocument)).not.toContain('must-not-leak');
-    expect(await prepared.json()).toMatchObject({
-      items: [{ id: 'new-b', state: 'prepared' }],
-      offset: 1,
-      limit: 1,
-    });
-    expect(await inFlight.json()).toMatchObject({
-      items: [
-        { id: 'executing', state: 'executing' },
-        { id: 'pending', state: 'pending' },
-        { id: 'rolling-back', state: 'rolling_back' },
-      ],
-      offset: 0,
-      limit: 20,
-    });
   });
 
   test('executes a Melt Operation and recovers its payment result from Coco', async () => {
@@ -1349,73 +1393,6 @@ describe('v1 HTTP route interface', () => {
     expect(prepare).not.toHaveBeenCalled();
   });
 
-  test('inspects a Send Operation without exposing its token or recovery data', async () => {
-    const credential = await createCredential();
-    const operation = sendOperationFixture({
-      state: 'pending' as const,
-      token: { mint: 'https://mint.example.com', proofs: [{ secret: 'must-not-leak' }] },
-    });
-    const get = mock(async () => operation);
-    const routes = createWalletTestRoutes({ ops: { send: { get } } }, credential.credentials);
-
-    const response = await routes['/v1/operations/send/:operationId']!.GET!(
-      authorizedRequest('/v1/operations/send/send-operation-1', credential.plaintext),
-    );
-
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({
-      id: 'send-operation-1',
-      type: 'send',
-      state: 'pending',
-      mintUrl: 'https://mint.example.com',
-      unit: 'sat',
-      method: 'default',
-      requestedAmount: '25',
-      inputAmount: '27',
-      fee: '2',
-      needsSwap: true,
-      createdAt: '2026-08-16T00:00:00.000Z',
-      updatedAt: '2026-08-16T00:01:00.000Z',
-    });
-    expect(get).toHaveBeenCalledWith('send-operation-1');
-  });
-
-  test('paginates prepared and in-flight Send Operation collections from Coco', async () => {
-    const credential = await createCredential();
-    const operation = (id: string, createdAt: number, state: 'prepared' | 'pending') =>
-      sendOperationFixture({ id, createdAt, updatedAt: createdAt, state });
-    const listPrepared = mock(async () => [
-      operation('old', 1_786_838_400_000, 'prepared'),
-      operation('new-b', 1_786_838_600_000, 'prepared'),
-      operation('new-a', 1_786_838_600_000, 'prepared'),
-    ]);
-    const listInFlight = mock(async () => [operation('pending', 1_786_838_500_000, 'pending')]);
-    const routes = createWalletTestRoutes(
-      { ops: { send: { listPrepared, listInFlight } } },
-      credential.credentials,
-    );
-
-    const prepared = await routes['/v1/operations/send/prepared']!.GET!(
-      authorizedRequest('/v1/operations/send/prepared?offset=1&limit=1', credential.plaintext),
-    );
-    const inFlight = await routes['/v1/operations/send/in-flight']!.GET!(
-      authorizedRequest('/v1/operations/send/in-flight', credential.plaintext),
-    );
-
-    expect(await prepared.json()).toMatchObject({
-      items: [{ id: 'new-b', state: 'prepared' }],
-      offset: 1,
-      limit: 1,
-    });
-    expect(await inFlight.json()).toMatchObject({
-      items: [{ id: 'pending', state: 'pending' }],
-      offset: 0,
-      limit: 20,
-    });
-    expect(listPrepared).toHaveBeenCalledWith();
-    expect(listInFlight).toHaveBeenCalledWith();
-  });
-
   test('executes a Send Operation and returns its sensitive encoded result', async () => {
     const credential = await createCredential();
     const token = { mint: 'https://mint.example.com', proofs: [] };
@@ -1522,67 +1499,6 @@ describe('v1 HTTP route interface', () => {
     expect(prepare).toHaveBeenCalledTimes(1);
   });
 
-  test('authenticates Send Operation resources before calling Coco', async () => {
-    const credential = await createCredential();
-    const get = mock(async () => sendOperationFixture());
-    const routes = createWalletTestRoutes({ ops: { send: { get } } }, credential.credentials);
-
-    const response = await routes['/v1/operations/send/:operationId']!.GET!(
-      new Request('http://localhost/v1/operations/send/send-operation-1'),
-    );
-
-    expect(response.status).toBe(401);
-    expect(await response.json()).toMatchObject({ error: { code: 'unauthenticated' } });
-    expect(get).not.toHaveBeenCalled();
-  });
-
-  test('marks authentication failures from sensitive Send routes as non-cacheable', async () => {
-    const credential = await createCredential();
-    const execute = mock(async () => {
-      throw new Error('execute was not expected');
-    });
-    const get = mock(async () => {
-      throw new Error('get was not expected');
-    });
-    const routes = createWalletTestRoutes(
-      { ops: { send: { execute, get } } },
-      credential.credentials,
-    );
-
-    const responses = await Promise.all([
-      routes['/v1/operations/send/:operationId/execute']!.POST!(
-        new Request('http://localhost/v1/operations/send/send-operation-1/execute', {
-          method: 'POST',
-        }),
-      ),
-      routes['/v1/operations/send/:operationId/result']!.GET!(
-        new Request('http://localhost/v1/operations/send/send-operation-1/result'),
-      ),
-    ]);
-
-    for (const response of responses) {
-      expect(response.status).toBe(401);
-      expect(response.headers.get('cache-control')).toBe('no-store');
-    }
-
-    await setCapabilities(credential.verifierFile, ['wallet:read']);
-    const forbiddenExecute = await routes['/v1/operations/send/:operationId/execute']!.POST!(
-      authorizedPostRequest('/v1/operations/send/send-operation-1/execute', credential.plaintext),
-    );
-    expect(forbiddenExecute.status).toBe(403);
-    expect(forbiddenExecute.headers.get('cache-control')).toBe('no-store');
-
-    await setCapabilities(credential.verifierFile, ['wallet:admin']);
-    const forbiddenResult = await routes['/v1/operations/send/:operationId/result']!.GET!(
-      authorizedRequest('/v1/operations/send/send-operation-1/result', credential.plaintext),
-    );
-    expect(forbiddenResult.status).toBe(403);
-    expect(forbiddenResult.headers.get('cache-control')).toBe('no-store');
-
-    expect(execute).not.toHaveBeenCalled();
-    expect(get).not.toHaveBeenCalled();
-  });
-
   test('maps untyped Coco Send failures without exposing their message', async () => {
     const credential = await createCredential();
     const prepare = mock(async () => {
@@ -1644,53 +1560,6 @@ describe('v1 HTTP route interface', () => {
     expect(JSON.stringify(body)).not.toContain('must-not-leak');
     expect(prepare).toHaveBeenCalledWith({ token: 'cashuBmust-not-leak' });
     expect(execute).not.toHaveBeenCalled();
-  });
-
-  test('inspects and paginates safe Receive Operations from Coco', async () => {
-    const credential = await createCredential();
-    const operation = (id: string, createdAt: number, state: 'prepared' | 'executing') =>
-      receiveOperationFixture({ id, createdAt, updatedAt: createdAt, state });
-    const get = mock(async () => receiveOperationFixture({ state: 'finalized' as const }));
-    const listPrepared = mock(async () => [
-      operation('old', 1_786_838_400_000, 'prepared'),
-      operation('new-b', 1_786_838_600_000, 'prepared'),
-      operation('new-a', 1_786_838_600_000, 'prepared'),
-    ]);
-    const listInFlight = mock(async () => [operation('executing', 1_786_838_500_000, 'executing')]);
-    const routes = createWalletTestRoutes(
-      { ops: { receive: { get, listPrepared, listInFlight } } },
-      credential.credentials,
-    );
-
-    const fetched = await routes['/v1/operations/receive/:operationId']!.GET!(
-      authorizedRequest('/v1/operations/receive/receive-operation-1', credential.plaintext),
-    );
-    const prepared = await routes['/v1/operations/receive/prepared']!.GET!(
-      authorizedRequest('/v1/operations/receive/prepared?offset=1&limit=1', credential.plaintext),
-    );
-    const inFlight = await routes['/v1/operations/receive/in-flight']!.GET!(
-      authorizedRequest('/v1/operations/receive/in-flight', credential.plaintext),
-    );
-
-    expect(await fetched.json()).toMatchObject({
-      id: 'receive-operation-1',
-      state: 'finalized',
-      amount: '25',
-      fee: '2',
-    });
-    expect(await prepared.json()).toMatchObject({
-      items: [{ id: 'new-b', state: 'prepared' }],
-      offset: 1,
-      limit: 1,
-    });
-    expect(await inFlight.json()).toMatchObject({
-      items: [{ id: 'executing', state: 'executing' }],
-      offset: 0,
-      limit: 20,
-    });
-    expect(get).toHaveBeenCalledWith('receive-operation-1');
-    expect(listPrepared).toHaveBeenCalledWith();
-    expect(listInFlight).toHaveBeenCalledWith();
   });
 
   test('executes a Receive Operation and returns the finalized safe Operation directly', async () => {
@@ -2328,31 +2197,6 @@ describe('v1 HTTP route interface', () => {
     expect(response.status).toBe(404);
     expect(await response.json()).toMatchObject({ error: { code: 'not_found' } });
     expect(refresh).not.toHaveBeenCalled();
-  });
-
-  test('authenticates Quote resources before calling Coco', async () => {
-    const credential = await createCredential();
-    const create = mock(async () => {
-      throw new Error('Coco should not be called');
-    });
-    const routes = createWalletTestRoutes({ quotes: { mint: { create } } }, credential.credentials);
-
-    const response = await routes['/v1/quotes/mint']!.POST!(
-      new Request('http://localhost/v1/quotes/mint', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          mintUrl: 'https://mint.example.com',
-          method: 'bolt11',
-          amount: '25',
-          unit: 'sat',
-        }),
-      }),
-    );
-
-    expect(response.status).toBe(401);
-    expect(await response.json()).toMatchObject({ error: { code: 'unauthenticated' } });
-    expect(create).not.toHaveBeenCalled();
   });
 
   test('rejects malformed Quote identities and pagination before calling Coco', async () => {
@@ -3046,177 +2890,6 @@ describe('v1 HTTP route interface', () => {
         error: { code: testCase.code, retryable: testCase.retryable },
       });
     }
-  });
-
-  test('declares the supported route contracts', () => {
-    type Contract = {
-      method: 'GET' | 'POST';
-      path: string;
-      capability: ClientCapability | null;
-      requestSchema: string;
-      responseSchema: string;
-      successStatuses: readonly number[];
-      idempotencyKey: 'optional' | null;
-      responseCacheControl: 'no-store' | null;
-    };
-    const read = (
-      path: string,
-      responseSchema: string,
-      options: Partial<Contract> = {},
-    ): Contract => ({
-      method: 'GET',
-      path,
-      capability: 'wallet:read',
-      requestSchema: 'NoBody',
-      responseSchema,
-      successStatuses: [200],
-      idempotencyKey: null,
-      responseCacheControl: null,
-      ...options,
-    });
-    const write = (
-      path: string,
-      requestSchema: string,
-      responseSchema: string,
-      options: Partial<Contract> = {},
-    ): Contract => ({
-      ...read(path, responseSchema),
-      method: 'POST',
-      capability: 'wallet:admin',
-      requestSchema,
-      idempotencyKey: 'optional',
-      ...options,
-    });
-    const expected = [
-      read('/health', 'Health', { capability: null }),
-      read('/v1/openapi.json', 'OpenApiDocument'),
-      read('/v1/status', 'LifecycleStatus'),
-      write(
-        '/v1/payment-requests/evaluate',
-        'EvaluatePaymentRequestRequest',
-        'PaymentRequestEvaluation',
-        { capability: 'wallet:read', idempotencyKey: null },
-      ),
-      read('/v1/balances', 'Balances'),
-      read('/v1/history', 'HistoryPage'),
-      read('/v1/history/{historyEntryId}', 'History'),
-      read('/v1/events', 'ResourceInvalidationEvent', { responseCacheControl: 'no-store' }),
-      read('/v1/mints', 'KnownMints'),
-      write('/v1/mints', 'MintUrlRequest', 'KnownMint', { successStatuses: [200, 201] }),
-      write('/v1/mints/trust', 'MintUrlRequest', 'KnownMint'),
-      write('/v1/mints/untrust', 'MintUrlRequest', 'KnownMint'),
-      read('/v1/mints/info', 'MintInformation'),
-      read('/v1/mints/payment-method-capabilities', 'PaymentMethodCapabilities'),
-      write('/v1/quotes/mint', 'CreateMintQuoteRequest', 'MintQuote', { successStatuses: [201] }),
-      read('/v1/quotes/mint/pending', 'PendingMintQuotes'),
-      read('/v1/quotes/mint/{quoteId}', 'MintQuote'),
-      write('/v1/quotes/mint/{quoteId}/refresh', 'NoBody', 'MintQuote'),
-      write('/v1/quotes/melt', 'CreateMeltQuoteRequest', 'MeltQuote', { successStatuses: [201] }),
-      read('/v1/quotes/melt/pending', 'PendingMeltQuotes'),
-      read('/v1/quotes/melt/{quoteId}', 'MeltQuote'),
-      write('/v1/quotes/melt/{quoteId}/refresh', 'NoBody', 'MeltQuote'),
-      write('/v1/operations/mint', 'CreateMintOperationRequest', 'MintOperation', {
-        successStatuses: [201],
-      }),
-      read('/v1/operations/mint/pending', 'MintOperations'),
-      read('/v1/operations/mint/in-flight', 'MintOperations'),
-      read('/v1/operations/mint/{operationId}', 'MintOperation'),
-      write('/v1/operations/mint/{operationId}/execute', 'NoBody', 'MintOperation'),
-      read('/v1/operations/mint/{operationId}/result', 'Never', {
-        successStatuses: [],
-        responseCacheControl: 'no-store',
-      }),
-      write('/v1/operations/mint/{operationId}/refresh', 'NoBody', 'MintOperation'),
-      write('/v1/operations/melt', 'CreateMeltOperationRequest', 'MeltOperation', {
-        successStatuses: [201],
-      }),
-      read('/v1/operations/melt/prepared', 'MeltOperations'),
-      read('/v1/operations/melt/in-flight', 'MeltOperations'),
-      read('/v1/operations/melt/{operationId}', 'MeltOperation'),
-      write('/v1/operations/melt/{operationId}/execute', 'NoBody', 'ExecuteMeltOperationResponse', {
-        responseCacheControl: 'no-store',
-      }),
-      read('/v1/operations/melt/{operationId}/result', 'MeltResult', {
-        responseCacheControl: 'no-store',
-      }),
-      write('/v1/operations/melt/{operationId}/cancel', 'NoBody', 'MeltOperation'),
-      write('/v1/operations/melt/{operationId}/refresh', 'NoBody', 'MeltOperation'),
-      write('/v1/operations/melt/{operationId}/reclaim', 'NoBody', 'MeltOperation'),
-      write('/v1/operations/send', 'CreateSendOperationRequest', 'SendOperation', {
-        successStatuses: [201],
-      }),
-      read('/v1/operations/send/prepared', 'SendOperations'),
-      read('/v1/operations/send/in-flight', 'SendOperations'),
-      read('/v1/operations/send/{operationId}', 'SendOperation'),
-      write('/v1/operations/send/{operationId}/execute', 'NoBody', 'ExecuteSendOperationResponse', {
-        responseCacheControl: 'no-store',
-      }),
-      read('/v1/operations/send/{operationId}/result', 'SendResult', {
-        responseCacheControl: 'no-store',
-      }),
-      write('/v1/operations/send/{operationId}/cancel', 'NoBody', 'SendOperation'),
-      write('/v1/operations/send/{operationId}/refresh', 'NoBody', 'SendOperation'),
-      write('/v1/operations/send/{operationId}/reclaim', 'NoBody', 'SendOperation'),
-      write('/v1/operations/receive', 'CreateReceiveOperationRequest', 'ReceiveOperation', {
-        successStatuses: [201],
-      }),
-      read('/v1/operations/receive/prepared', 'ReceiveOperations'),
-      read('/v1/operations/receive/in-flight', 'ReceiveOperations'),
-      read('/v1/operations/receive/{operationId}', 'ReceiveOperation'),
-      write('/v1/operations/receive/{operationId}/execute', 'NoBody', 'ReceiveOperation'),
-      read('/v1/operations/receive/{operationId}/result', 'Never', {
-        successStatuses: [],
-        responseCacheControl: 'no-store',
-      }),
-      write('/v1/operations/receive/{operationId}/cancel', 'NoBody', 'ReceiveOperation'),
-      write('/v1/operations/receive/{operationId}/refresh', 'NoBody', 'ReceiveOperation'),
-      write('/v1/admin/wallet/initialize', 'InitializeWalletRequest', 'InitializeWalletResponse', {
-        successStatuses: [201, 202],
-        responseCacheControl: 'no-store',
-      }),
-      write(
-        '/v1/admin/wallet/recovery-material',
-        'WalletRecoveryMaterialRequest',
-        'WalletRecoveryMaterialResponse',
-        { idempotencyKey: null, responseCacheControl: 'no-store' },
-      ),
-      write('/v1/admin/session/start', 'StartSessionRequest', 'LifecycleStatus', {
-        successStatuses: [200, 202],
-      }),
-      write('/v1/admin/session/stop', 'StopSessionRequest', 'LifecycleStatus', {
-        successStatuses: [200, 202],
-      }),
-      write('/v1/admin/process/stop', 'ProcessShutdownRequest', 'ProcessShutdownResponse', {
-        successStatuses: [202],
-      }),
-    ];
-    const actual = createLifecycleTestRouteDefinitions(
-      statusRuntime(unconfiguredStatus()),
-      '0.0.17',
-    ).map(
-      ({
-        method,
-        path,
-        capability,
-        requestSchema,
-        responseSchema,
-        successStatuses,
-        idempotencyKey,
-        responseCacheControl,
-      }) => ({
-        method,
-        path,
-        capability,
-        requestSchema: requestSchema.name,
-        responseSchema: responseSchema.name,
-        successStatuses,
-        idempotencyKey,
-        responseCacheControl,
-      }),
-    );
-    const byRoute = (a: { method: string; path: string }, b: { method: string; path: string }) =>
-      `${a.method} ${a.path}`.localeCompare(`${b.method} ${b.path}`);
-    expect(actual.toSorted(byRoute)).toEqual(expected.toSorted(byRoute));
   });
 
   test('authenticates and accepts Cocod Process shutdown', async () => {

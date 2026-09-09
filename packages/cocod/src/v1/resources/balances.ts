@@ -1,16 +1,15 @@
-import { normalizeMintUrl, type BalanceQuery } from '@cashu/coco-core';
+import { type BalanceQuery } from '@cashu/coco-core';
+import { V1HttpError, type V1RouteParameter } from '../contract.js';
+import { defineResourceRoute } from '../resource.js';
+import { balancesSchema, noBodySchema } from '../schema.js';
 import { cocoError } from './errors.js';
 import {
-  defineV1Route,
-  V1HttpError,
-  type V1Runtime,
-  type V1RouteDefinition,
-  type V1RouteMetadata,
-  type V1RouteParameter,
-} from '../contract.js';
-import { balancesSchema, noBodySchema, type BalancesDocument } from '../schema.js';
+  TRUSTED_ONLY_QUERY_PARAMETER,
+  parseMintUrl,
+  parseQuery,
+  queryParameterNames,
+} from './parameters.js';
 import { requireRunningSession } from './session.js';
-import { TRUSTED_ONLY_QUERY_PARAMETER, parseQuery, queryParameterNames } from './parameters.js';
 
 const BALANCE_PARAMETERS = [
   {
@@ -35,38 +34,16 @@ const BALANCE_PARAMETERS = [
   TRUSTED_ONLY_QUERY_PARAMETER,
 ] as const satisfies readonly V1RouteParameter[];
 
-const BALANCES_ROUTE = {
-  method: 'GET',
-  path: '/v1/balances',
-  capability: 'wallet:read',
-  requestSchema: noBodySchema,
-  responseSchema: balancesSchema,
-  parameters: BALANCE_PARAMETERS,
-} as const satisfies V1RouteMetadata<null, BalancesDocument>;
-
 function parseBalanceScope(request: Request): BalanceQuery {
   const query = parseQuery(
     request,
-    queryParameterNames(BALANCES_ROUTE.parameters),
+    queryParameterNames(BALANCE_PARAMETERS),
     'The balance filters are invalid',
   );
 
-  const rawMintUrls = query.getAll('mintUrl');
-  let mintUrls: string[];
-  try {
-    mintUrls = rawMintUrls.map((mintUrl) => {
-      if (mintUrl.length === 0) {
-        throw new Error('Mint URL is empty');
-      }
-      const parsed = new URL(mintUrl);
-      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-        throw new Error('Mint URL must use HTTP or HTTPS');
-      }
-      return normalizeMintUrl(mintUrl);
-    });
-  } catch (error) {
-    throw invalidBalanceQuery(error);
-  }
+  const mintUrls = query
+    .getAll('mintUrl')
+    .map((url) => parseMintUrl(url, 'The balance filters are invalid'));
 
   const units = query.getAll('unit');
   if (units.some((unit) => unit.length === 0)) {
@@ -98,12 +75,15 @@ function invalidBalanceQuery(cause?: unknown): V1HttpError {
   });
 }
 
-export const balancesMetadata = [BALANCES_ROUTE];
-
-export function createBalancesRoutes(runtime: V1Runtime): V1RouteDefinition[] {
-  const balances = defineV1Route({
-    ...BALANCES_ROUTE,
-    handler: async (_input, request) => {
+export const balancesRoutes = [
+  defineResourceRoute({
+    method: 'GET',
+    path: '/v1/balances',
+    capability: 'wallet:read',
+    requestSchema: noBodySchema,
+    responseSchema: balancesSchema,
+    parameters: BALANCE_PARAMETERS,
+    handler: async (_input, request, { runtime }) => {
       const session = requireRunningSession(runtime);
       const scope = parseBalanceScope(request);
 
@@ -124,6 +104,5 @@ export function createBalancesRoutes(runtime: V1Runtime): V1RouteDefinition[] {
         throw cocoError('return Wallet balances', error);
       }
     },
-  });
-  return [balances];
-}
+  }),
+];

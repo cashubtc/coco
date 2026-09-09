@@ -1,45 +1,34 @@
-import { cocoError } from './errors.js';
-import { normalizeMintUrl, type MintQuote, type MeltQuote } from '@cashu/coco-core';
+import { normalizeMintUrl, type MeltQuote, type MintQuote } from '@cashu/coco-core';
+import { V1HttpError, V1HttpResponse, type V1RouteParameter } from '../contract.js';
+import { defineResourceRoute, type ResourceRoute } from '../resource.js';
 import {
-  defineV1Route,
-  V1HttpError,
-  V1HttpResponse,
-  type V1Runtime,
-  type V1RouteDefinition,
-  type V1RouteMetadata,
-  type V1RouteParameter,
-} from '../contract.js';
-import {
-  createMintQuoteRequestSchema,
   createMeltQuoteRequestSchema,
+  createMintQuoteRequestSchema,
   meltQuoteSchema,
   mintQuoteSchema,
   noBodySchema,
-  pendingMintQuotesSchema,
   pendingMeltQuotesSchema,
-  type CreateMintQuoteRequest,
-  type CreateMeltQuoteRequest,
-  type MintQuoteDocument,
+  pendingMintQuotesSchema,
   type MeltQuoteDocument,
-  type PendingMintQuotesDocument,
-  type PendingMeltQuotesDocument,
+  type MintQuoteDocument,
+  type RuntimeSchema,
 } from '../schema.js';
-import { requireRunningSession, type RunningSession } from './session.js';
+import { cocoError, quoteNotFound } from './errors.js';
 import {
-  parseQuery,
-  invalidQuery,
-  queryParameterNames,
-  PAGE_PARAMETERS,
-  MAX_PAGE_LIMIT,
   DEFAULT_PAGE_LIMIT,
-  parsePageInteger,
-  pathParameter,
-  parsePathIdentity,
-  parseMintUrl,
+  invalidQuery,
+  MAX_PAGE_LIMIT,
   MINT_URL_QUERY_PARAMETER,
+  PAGE_PARAMETERS,
+  parseMintUrl,
+  parsePageInteger,
+  parsePathIdentity,
+  parseQuery,
   parseSingleMintUrlQuery,
+  pathParameter,
+  queryParameterNames,
 } from './parameters.js';
-import { quoteNotFound } from './errors.js';
+import { requireRunningSession, type RunningSession } from './session.js';
 
 const QUOTE_METHOD_QUERY_PARAMETER = {
   name: 'method',
@@ -47,82 +36,6 @@ const QUOTE_METHOD_QUERY_PARAMETER = {
   required: false,
   schema: { type: 'string', enum: ['bolt11', 'bolt12', 'onchain'] },
 } as const satisfies V1RouteParameter;
-
-const CREATE_MINT_QUOTE_ROUTE = {
-  method: 'POST',
-  path: '/v1/quotes/mint',
-  capability: 'wallet:admin',
-  requestSchema: createMintQuoteRequestSchema,
-  responseSchema: mintQuoteSchema,
-  successStatuses: [201],
-  idempotencyKey: 'optional',
-} as const satisfies V1RouteMetadata<CreateMintQuoteRequest, MintQuoteDocument>;
-
-const GET_MINT_QUOTE_ROUTE = {
-  method: 'GET',
-  path: '/v1/quotes/mint/{quoteId}',
-  capability: 'wallet:read',
-  requestSchema: noBodySchema,
-  responseSchema: mintQuoteSchema,
-  parameters: [pathParameter('quoteId'), MINT_URL_QUERY_PARAMETER],
-} as const satisfies V1RouteMetadata<null, MintQuoteDocument>;
-
-const LIST_PENDING_MINT_QUOTES_ROUTE = {
-  method: 'GET',
-  path: '/v1/quotes/mint/pending',
-  capability: 'wallet:read',
-  requestSchema: noBodySchema,
-  responseSchema: pendingMintQuotesSchema,
-  parameters: [QUOTE_METHOD_QUERY_PARAMETER, ...PAGE_PARAMETERS],
-} as const satisfies V1RouteMetadata<null, PendingMintQuotesDocument>;
-
-const REFRESH_MINT_QUOTE_ROUTE = {
-  method: 'POST',
-  path: '/v1/quotes/mint/{quoteId}/refresh',
-  capability: 'wallet:admin',
-  requestSchema: noBodySchema,
-  responseSchema: mintQuoteSchema,
-  idempotencyKey: 'optional',
-  parameters: [pathParameter('quoteId'), MINT_URL_QUERY_PARAMETER],
-} as const satisfies V1RouteMetadata<null, MintQuoteDocument>;
-
-const CREATE_MELT_QUOTE_ROUTE = {
-  method: 'POST',
-  path: '/v1/quotes/melt',
-  capability: 'wallet:admin',
-  requestSchema: createMeltQuoteRequestSchema,
-  responseSchema: meltQuoteSchema,
-  successStatuses: [201],
-  idempotencyKey: 'optional',
-} as const satisfies V1RouteMetadata<CreateMeltQuoteRequest, MeltQuoteDocument>;
-
-const GET_MELT_QUOTE_ROUTE = {
-  method: 'GET',
-  path: '/v1/quotes/melt/{quoteId}',
-  capability: 'wallet:read',
-  requestSchema: noBodySchema,
-  responseSchema: meltQuoteSchema,
-  parameters: [pathParameter('quoteId'), MINT_URL_QUERY_PARAMETER],
-} as const satisfies V1RouteMetadata<null, MeltQuoteDocument>;
-
-const LIST_PENDING_MELT_QUOTES_ROUTE = {
-  method: 'GET',
-  path: '/v1/quotes/melt/pending',
-  capability: 'wallet:read',
-  requestSchema: noBodySchema,
-  responseSchema: pendingMeltQuotesSchema,
-  parameters: [QUOTE_METHOD_QUERY_PARAMETER, ...PAGE_PARAMETERS],
-} as const satisfies V1RouteMetadata<null, PendingMeltQuotesDocument>;
-
-const REFRESH_MELT_QUOTE_ROUTE = {
-  method: 'POST',
-  path: '/v1/quotes/melt/{quoteId}/refresh',
-  capability: 'wallet:admin',
-  requestSchema: noBodySchema,
-  responseSchema: meltQuoteSchema,
-  idempotencyKey: 'optional',
-  parameters: [pathParameter('quoteId'), MINT_URL_QUERY_PARAMETER],
-} as const satisfies V1RouteMetadata<null, MeltQuoteDocument>;
 
 type QuoteIdentityInput = { mintUrl: string; quoteId: string };
 
@@ -137,19 +50,22 @@ interface QuoteReadAdapter<TQuote> {
 }
 
 function createQuoteReadRouteDefinitions<TQuote extends PaginatedQuote, TDocument>(options: {
-  runtime: V1Runtime;
   type: 'mint' | 'melt';
-  label: 'Mint' | 'Melt';
-  listRoute: V1RouteMetadata<null, { items: TDocument[]; offset: number; limit: number }>;
-  getRoute: V1RouteMetadata<null, TDocument>;
-  refreshRoute: V1RouteMetadata<null, TDocument>;
+  schema: RuntimeSchema<TDocument>;
+  collectionSchema: RuntimeSchema<{ items: TDocument[]; offset: number; limit: number }>;
   getAdapter(session: RunningSession): QuoteReadAdapter<TQuote>;
   toDocument(quote: TQuote): TDocument;
-}): Array<V1RouteDefinition> {
-  const { runtime, type, label, getAdapter, toDocument } = options;
-  const list = defineV1Route({
-    ...options.listRoute,
-    handler: async (_input, request) => {
+}): ResourceRoute[] {
+  const { type, schema, collectionSchema, getAdapter, toDocument } = options;
+  const label = type === 'mint' ? 'Mint' : 'Melt';
+  const list = defineResourceRoute({
+    method: 'GET',
+    path: `/v1/quotes/${type}/pending`,
+    capability: 'wallet:read',
+    requestSchema: noBodySchema,
+    responseSchema: collectionSchema,
+    parameters: [QUOTE_METHOD_QUERY_PARAMETER, ...PAGE_PARAMETERS],
+    handler: async (_input, request, { runtime }) => {
       const adapter = getAdapter(requireRunningSession(runtime));
       const { method, offset, limit } = parsePendingQuoteQuery(request, type);
       try {
@@ -160,13 +76,18 @@ function createQuoteReadRouteDefinitions<TQuote extends PaginatedQuote, TDocumen
           .map(toDocument);
         return { items, offset, limit };
       } catch (error) {
-        throw quoteCocoError(`list pending ${label} Quotes`, error);
+        throw cocoError(`list pending ${label} Quotes`, error);
       }
     },
   });
-  const get = defineV1Route({
-    ...options.getRoute,
-    handler: async (_input, request) => {
+  const get = defineResourceRoute({
+    method: 'GET',
+    path: `/v1/quotes/${type}/{quoteId}`,
+    capability: 'wallet:read',
+    requestSchema: noBodySchema,
+    responseSchema: schema,
+    parameters: [pathParameter('quoteId'), MINT_URL_QUERY_PARAMETER],
+    handler: async (_input, request, { runtime }) => {
       const adapter = getAdapter(requireRunningSession(runtime));
       const identity = parseQuoteIdentity(request, type, false);
       try {
@@ -175,13 +96,19 @@ function createQuoteReadRouteDefinitions<TQuote extends PaginatedQuote, TDocumen
         return toDocument(quote);
       } catch (error) {
         if (error instanceof V1HttpError) throw error;
-        throw quoteCocoError(`return the ${label} Quote`, error);
+        throw cocoError(`return the ${label} Quote`, error);
       }
     },
   });
-  const refresh = defineV1Route({
-    ...options.refreshRoute,
-    handler: async (_input, request) => {
+  const refresh = defineResourceRoute({
+    method: 'POST',
+    path: `/v1/quotes/${type}/{quoteId}/refresh`,
+    capability: 'wallet:admin',
+    requestSchema: noBodySchema,
+    responseSchema: schema,
+    idempotencyKey: 'optional',
+    parameters: [pathParameter('quoteId'), MINT_URL_QUERY_PARAMETER],
+    handler: async (_input, request, { runtime }) => {
       const adapter = getAdapter(requireRunningSession(runtime));
       const identity = parseQuoteIdentity(request, type, true);
       try {
@@ -189,7 +116,7 @@ function createQuoteReadRouteDefinitions<TQuote extends PaginatedQuote, TDocumen
         return toDocument(await adapter.refresh(identity));
       } catch (error) {
         if (error instanceof V1HttpError) throw error;
-        throw quoteCocoError(`reconcile the ${label} Quote`, error);
+        throw cocoError(`reconcile the ${label} Quote`, error);
       }
     },
   });
@@ -208,19 +135,12 @@ function parseQuoteIdentity(
   };
 }
 
-function quoteCocoError(action: string, cause: unknown): V1HttpError {
-  return cocoError(action, cause);
-}
-
 function parsePendingQuoteQuery(
   request: Request,
   type: 'mint' | 'melt',
 ): { method?: 'bolt11' | 'bolt12' | 'onchain'; offset: number; limit: number } {
   const message = `The pending ${type === 'mint' ? 'Mint' : 'Melt'} Quote filters are invalid`;
-  const parameters =
-    type === 'mint'
-      ? LIST_PENDING_MINT_QUOTES_ROUTE.parameters
-      : LIST_PENDING_MELT_QUOTES_ROUTE.parameters;
+  const parameters = [QUOTE_METHOD_QUERY_PARAMETER, ...PAGE_PARAMETERS];
   const query = parseQuery(request, queryParameterNames(parameters), message);
   const methods = query.getAll('method');
   if (
@@ -318,21 +238,16 @@ function parseQuoteIdPath(request: Request, type: 'mint' | 'melt', refresh: bool
   return parsePathIdentity(request, prefix, suffix, message);
 }
 
-export const quotesMetadata = [
-  CREATE_MINT_QUOTE_ROUTE,
-  LIST_PENDING_MINT_QUOTES_ROUTE,
-  GET_MINT_QUOTE_ROUTE,
-  REFRESH_MINT_QUOTE_ROUTE,
-  CREATE_MELT_QUOTE_ROUTE,
-  LIST_PENDING_MELT_QUOTES_ROUTE,
-  GET_MELT_QUOTE_ROUTE,
-  REFRESH_MELT_QUOTE_ROUTE,
-];
-
-export function createQuotesRoutes(runtime: V1Runtime): V1RouteDefinition[] {
-  const createMintQuote = defineV1Route({
-    ...CREATE_MINT_QUOTE_ROUTE,
-    handler: async (input) => {
+export const quotesRoutes = [
+  defineResourceRoute({
+    method: 'POST',
+    path: '/v1/quotes/mint',
+    capability: 'wallet:admin',
+    requestSchema: createMintQuoteRequestSchema,
+    responseSchema: mintQuoteSchema,
+    successStatuses: [201],
+    idempotencyKey: 'optional',
+    handler: async (input, _request, { runtime }) => {
       const session = requireRunningSession(runtime);
       const mintUrl =
         input.mintUrl === undefined
@@ -363,20 +278,23 @@ export function createQuotesRoutes(runtime: V1Runtime): V1RouteDefinition[] {
         throw cocoError('create the Mint Quote', error);
       }
     },
-  });
-  const mintQuoteRoutes = createQuoteReadRouteDefinitions({
-    runtime,
+  }),
+  ...createQuoteReadRouteDefinitions({
     type: 'mint',
-    label: 'Mint',
-    listRoute: LIST_PENDING_MINT_QUOTES_ROUTE,
-    getRoute: GET_MINT_QUOTE_ROUTE,
-    refreshRoute: REFRESH_MINT_QUOTE_ROUTE,
+    schema: mintQuoteSchema,
+    collectionSchema: pendingMintQuotesSchema,
     getAdapter: (session) => session.manager.quotes.mint,
     toDocument: toMintQuoteDocument,
-  });
-  const createMeltQuote = defineV1Route({
-    ...CREATE_MELT_QUOTE_ROUTE,
-    handler: async (input) => {
+  }),
+  defineResourceRoute({
+    method: 'POST',
+    path: '/v1/quotes/melt',
+    capability: 'wallet:admin',
+    requestSchema: createMeltQuoteRequestSchema,
+    responseSchema: meltQuoteSchema,
+    successStatuses: [201],
+    idempotencyKey: 'optional',
+    handler: async (input, _request, { runtime }) => {
       const session = requireRunningSession(runtime);
       const mintUrl =
         input.mintUrl === undefined
@@ -406,16 +324,12 @@ export function createQuotesRoutes(runtime: V1Runtime): V1RouteDefinition[] {
         throw cocoError('create the Melt Quote', error);
       }
     },
-  });
-  const meltQuoteRoutes = createQuoteReadRouteDefinitions({
-    runtime,
+  }),
+  ...createQuoteReadRouteDefinitions({
     type: 'melt',
-    label: 'Melt',
-    listRoute: LIST_PENDING_MELT_QUOTES_ROUTE,
-    getRoute: GET_MELT_QUOTE_ROUTE,
-    refreshRoute: REFRESH_MELT_QUOTE_ROUTE,
+    schema: meltQuoteSchema,
+    collectionSchema: pendingMeltQuotesSchema,
     getAdapter: (session) => session.manager.quotes.melt,
     toDocument: toMeltQuoteDocument,
-  });
-  return [createMintQuote, ...mintQuoteRoutes, createMeltQuote, ...meltQuoteRoutes];
-}
+  }),
+];

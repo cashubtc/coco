@@ -1,33 +1,15 @@
-export interface CreateV1RouteDefinitionsOptions {
-  eventAuthorizationRevalidationIntervalMs?: number;
-}
 import { normalizeMintUrl, type CoreEvents } from '@cashu/coco-core';
 import type { AppLogger } from '../../utils/logger.js';
-import {
-  defineV1Route,
-  V1HttpStreamResponse,
-  type V1Runtime,
-  type V1RouteDefinition,
-  type V1RouteMetadata,
-} from '../contract.js';
+import { V1HttpStreamResponse } from '../contract.js';
+import { defineResourceRoute } from '../resource.js';
 import {
   noBodySchema,
   resourceInvalidationEventSchema,
   type ResourceInvalidationEventDocument,
 } from '../schema.js';
-import { requireRunningSession } from './session.js';
-import { parseQuery } from './parameters.js';
 import { toHistoryDocument } from './history-projection.js';
-
-const EVENTS_ROUTE = {
-  method: 'GET',
-  path: '/v1/events',
-  capability: 'wallet:read',
-  requestSchema: noBodySchema,
-  responseSchema: resourceInvalidationEventSchema,
-  responseCacheControl: 'no-store',
-  responseMediaType: 'text/event-stream',
-} as const satisfies V1RouteMetadata<null, ResourceInvalidationEventDocument>;
+import { parseQuery } from './parameters.js';
+import { requireRunningSession } from './session.js';
 
 type CocoPublicEventSource = {
   on<E extends keyof CoreEvents>(
@@ -227,16 +209,20 @@ function createResourceInvalidationStream(
   });
 }
 
-export const eventsMetadata = [EVENTS_ROUTE];
-
-export function createEventsRoutes(
-  runtime: V1Runtime,
-  logger?: AppLogger,
-  options: CreateV1RouteDefinitionsOptions = {},
-): V1RouteDefinition[] {
-  const events = defineV1Route({
-    ...EVENTS_ROUTE,
-    handler: (_input, request, { reauthorize }) => {
+export const eventsRoutes = [
+  defineResourceRoute({
+    method: 'GET',
+    path: '/v1/events',
+    capability: 'wallet:read',
+    requestSchema: noBodySchema,
+    responseSchema: resourceInvalidationEventSchema,
+    responseCacheControl: 'no-store',
+    responseMediaType: 'text/event-stream',
+    handler: (
+      _input,
+      request,
+      { runtime, logger, eventAuthorizationRevalidationIntervalMs, reauthorize },
+    ) => {
       parseQuery(request, [], 'The Event stream query is invalid');
       const manager = requireRunningSession(runtime).manager;
       return new V1HttpStreamResponse(
@@ -244,7 +230,7 @@ export function createEventsRoutes(
           manager,
           request,
           reauthorize,
-          options.eventAuthorizationRevalidationIntervalMs ?? EVENT_KEEP_ALIVE_INTERVAL_MS,
+          eventAuthorizationRevalidationIntervalMs ?? EVENT_KEEP_ALIVE_INTERVAL_MS,
           logger,
           () =>
             runtime.getStatus().cocoSession.state === 'running' &&
@@ -254,6 +240,5 @@ export function createEventsRoutes(
         { Connection: 'keep-alive' },
       );
     },
-  });
-  return [events];
-}
+  }),
+];

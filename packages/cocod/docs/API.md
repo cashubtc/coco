@@ -169,9 +169,9 @@ no-store`, `Retry-After`, `WWW-Authenticate`, `X-Request-ID`, and `Allow`. These
 - `GET /npc/address`
 - `POST /npc/username`
 
-The list above is the currently callable HTTP interface. See the
-[accepted network interface v1](network-interface-v1.md) for the complete resource surface and
-legacy replacement map.
+The list above is the currently callable HTTP interface. The
+[network interface design](network-interface-v1.md) describes lifecycle behavior and the legacy
+replacement map.
 
 Authenticated `GET /v1/openapi.json` serves the OpenAPI v1 contract generated from runtime metadata
 and schemas. To export it without running the daemon, run
@@ -182,9 +182,17 @@ operational routes; NPC is outside v1.
 Mutation request amounts are positive decimal integer strings. Accounting and resource response
 fields may contain `"0"`.
 
-The event stream has a bounded queue and may drop invalidation hints for a slow consumer. It
-periodically revalidates the original Client Credential and closes after that credential is rotated
-or otherwise loses authorization.
+### Balances and Known Mints
+
+Balances accept repeatable `mintUrl` and `unit` filters plus optional `trustedOnly`. Each item keeps
+the Mint, unit, and separate `spendable`, `reserved`, and `total` amounts; values are not combined
+across units.
+
+Mint registration accepts `{ mintUrl }`, normalizes the URL, and returns the Known Mint directly:
+`201` for creation or `200` if already known. New Mints are untrusted, and repeat registration
+preserves existing trust. The explicit trust/untrust commands accept the same body. The human
+`mints add` command registers and then trusts the Mint. Mint information reads may refresh stale
+metadata through Coco; there is no separate forced-refresh command.
 
 ### Quote resources
 
@@ -358,6 +366,27 @@ expose reclaim or any other command absent from `manager.ops.receive`.
 
 The human `receive cashu` command preserves its one-shot behavior by preparing and then executing
 through these v1 resources and printing the received amount.
+
+### History and events
+
+History accepts `offset` and `limit` (defaults `0` and `20`, maximum `100`) and preserves Coco's
+ordering and identities. Singular lookups accept operation identities such as `send:{operationId}`
+or legacy identities such as `legacy:{legacyHistoryId}`. Missing entries return `not_found`.
+History documents omit tokens, proofs, payment requests, metadata, recovery material, and raw errors.
+
+SSE frames contain `{ type, timestamp, data }`. The supported invalidations are:
+
+| Type                | Data                                              |
+| ------------------- | ------------------------------------------------- |
+| `history.updated`   | The same safe document returned by history lookup |
+| `operation.updated` | `{ operationType, operationId, mintUrl }`         |
+| `quote.updated`     | `{ quoteType, mintUrl, method, quoteId }`         |
+| `mint.updated`      | `{ mintUrl }`                                     |
+| `balance.updated`   | `{ mintUrl }`                                     |
+
+Fetch initial state through the resource endpoints and refetch after invalidations. For Mint events,
+refetch `/v1/mints` and select the matching normalized URL. Events reflect only transitions Coco
+publishes; they do not promise complete transition coverage, event IDs, or replay.
 
 ### Stream reconnection and client errors
 

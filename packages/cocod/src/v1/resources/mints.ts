@@ -1,86 +1,25 @@
 import { normalizeMintUrl, type Mint } from '@cashu/coco-core';
-import { cocoError } from './errors.js';
-import {
-  defineV1Route,
-  V1HttpError,
-  V1HttpResponse,
-  type V1Runtime,
-  type V1RouteDefinition,
-  type V1RouteMetadata,
-} from '../contract.js';
+import { V1HttpError, V1HttpResponse } from '../contract.js';
+import { defineResourceRoute } from '../resource.js';
 import {
   knownMintSchema,
   knownMintsSchema,
   mintInformationSchema,
   mintUrlRequestSchema,
-  paymentMethodCapabilitiesSchema,
   noBodySchema,
+  paymentMethodCapabilitiesSchema,
   type KnownMintDocument,
-  type KnownMintsDocument,
-  type MintInformationDocument,
-  type MintUrlRequest,
-  type PaymentMethodCapabilitiesDocument,
 } from '../schema.js';
-import { requireRunningSession } from './session.js';
+import { cocoError } from './errors.js';
 import {
+  MINT_URL_QUERY_PARAMETER,
   TRUSTED_ONLY_QUERY_PARAMETER,
-  parseQuery,
   invalidQuery,
   parseMintUrl,
-  MINT_URL_QUERY_PARAMETER,
+  parseQuery,
   parseSingleMintUrlQuery,
 } from './parameters.js';
-
-const CREATE_MINT_ROUTE = {
-  method: 'POST',
-  path: '/v1/mints',
-  capability: 'wallet:admin',
-  requestSchema: mintUrlRequestSchema,
-  responseSchema: knownMintSchema,
-  successStatuses: [200, 201],
-  idempotencyKey: 'optional',
-} as const satisfies V1RouteMetadata<MintUrlRequest, KnownMintDocument>;
-
-const LIST_MINTS_ROUTE = {
-  method: 'GET',
-  path: '/v1/mints',
-  capability: 'wallet:read',
-  requestSchema: noBodySchema,
-  responseSchema: knownMintsSchema,
-  parameters: [TRUSTED_ONLY_QUERY_PARAMETER],
-} as const satisfies V1RouteMetadata<null, KnownMintsDocument>;
-
-const TRUST_MINT_ROUTE = {
-  method: 'POST',
-  path: '/v1/mints/trust',
-  capability: 'wallet:admin',
-  requestSchema: mintUrlRequestSchema,
-  responseSchema: knownMintSchema,
-  idempotencyKey: 'optional',
-} as const satisfies V1RouteMetadata<MintUrlRequest, KnownMintDocument>;
-
-const UNTRUST_MINT_ROUTE = {
-  ...TRUST_MINT_ROUTE,
-  path: '/v1/mints/untrust',
-} as const satisfies V1RouteMetadata<MintUrlRequest, KnownMintDocument>;
-
-const MINT_INFO_ROUTE = {
-  method: 'GET',
-  path: '/v1/mints/info',
-  capability: 'wallet:read',
-  requestSchema: noBodySchema,
-  responseSchema: mintInformationSchema,
-  parameters: [MINT_URL_QUERY_PARAMETER],
-} as const satisfies V1RouteMetadata<null, MintInformationDocument>;
-
-const PAYMENT_METHOD_CAPABILITIES_ROUTE = {
-  method: 'GET',
-  path: '/v1/mints/payment-method-capabilities',
-  capability: 'wallet:read',
-  requestSchema: noBodySchema,
-  responseSchema: paymentMethodCapabilitiesSchema,
-  parameters: [MINT_URL_QUERY_PARAMETER],
-} as const satisfies V1RouteMetadata<null, PaymentMethodCapabilitiesDocument>;
+import { requireRunningSession } from './session.js';
 
 function toJsonObject(value: unknown): Record<string, unknown> {
   const serialized = JSON.stringify(value);
@@ -126,33 +65,48 @@ function knownMintNotFound(): V1HttpError {
   });
 }
 
-export const mintsMetadata = [
-  LIST_MINTS_ROUTE,
-  CREATE_MINT_ROUTE,
-  TRUST_MINT_ROUTE,
-  UNTRUST_MINT_ROUTE,
-  MINT_INFO_ROUTE,
-  PAYMENT_METHOD_CAPABILITIES_ROUTE,
-];
-
-export function createMintsRoutes(runtime: V1Runtime): V1RouteDefinition[] {
-  const createMint = defineV1Route({
-    ...CREATE_MINT_ROUTE,
-    handler: async (input) => {
+const changeMintTrust = (trusted: boolean) =>
+  defineResourceRoute({
+    method: 'POST',
+    path: `/v1/mints/${trusted ? 'trust' : 'untrust'}`,
+    capability: 'wallet:admin',
+    requestSchema: mintUrlRequestSchema,
+    responseSchema: knownMintSchema,
+    idempotencyKey: 'optional',
+    handler: async (input, _request, { runtime }) => {
       const session = requireRunningSession(runtime);
       const mintUrl = parseMintUrl(input.mintUrl, 'The Mint URL is invalid');
-
       try {
-        const { mint, created } = await session.manager.mint.addMint(mintUrl);
-        return new V1HttpResponse(toKnownMintDocument(mint), created ? 201 : 200);
+        const existing = await findKnownMint(session.manager.mint, mintUrl);
+        if (!existing) {
+          throw knownMintNotFound();
+        }
+        if (trusted) {
+          await session.manager.mint.trustMint(mintUrl);
+        } else {
+          await session.manager.mint.untrustMint(mintUrl);
+        }
+        const updated = await findKnownMint(session.manager.mint, mintUrl);
+        if (!updated) {
+          throw new Error('Coco did not return the Known Mint after changing trust');
+        }
+        return toKnownMintDocument(updated);
       } catch (error) {
-        throw cocoError('register the Mint', error);
+        if (error instanceof V1HttpError) throw error;
+        throw cocoError(`${trusted ? 'trust' : 'untrust'} the Mint`, error);
       }
     },
   });
-  const listMints = defineV1Route({
-    ...LIST_MINTS_ROUTE,
-    handler: async (_input, request) => {
+
+export const mintsRoutes = [
+  defineResourceRoute({
+    method: 'GET',
+    path: '/v1/mints',
+    capability: 'wallet:read',
+    requestSchema: noBodySchema,
+    responseSchema: knownMintsSchema,
+    parameters: [TRUSTED_ONLY_QUERY_PARAMETER],
+    handler: async (_input, request, { runtime }) => {
       const session = requireRunningSession(runtime);
       const trustedOnly = parseTrustedOnly(request, 'The Known Mint filters are invalid');
       try {
@@ -164,42 +118,37 @@ export function createMintsRoutes(runtime: V1Runtime): V1RouteDefinition[] {
         throw cocoError('list Known Mints', error);
       }
     },
-  });
-  const changeMintTrust = (
-    route: typeof TRUST_MINT_ROUTE | typeof UNTRUST_MINT_ROUTE,
-    trusted: boolean,
-  ) =>
-    defineV1Route({
-      ...route,
-      handler: async (input) => {
-        const session = requireRunningSession(runtime);
-        const mintUrl = parseMintUrl(input.mintUrl, 'The Mint URL is invalid');
-        try {
-          const existing = await findKnownMint(session.manager.mint, mintUrl);
-          if (!existing) {
-            throw knownMintNotFound();
-          }
-          if (trusted) {
-            await session.manager.mint.trustMint(mintUrl);
-          } else {
-            await session.manager.mint.untrustMint(mintUrl);
-          }
-          const updated = await findKnownMint(session.manager.mint, mintUrl);
-          if (!updated) {
-            throw new Error('Coco did not return the Known Mint after changing trust');
-          }
-          return toKnownMintDocument(updated);
-        } catch (error) {
-          if (error instanceof V1HttpError) throw error;
-          throw cocoError(`${trusted ? 'trust' : 'untrust'} the Mint`, error);
-        }
-      },
-    });
-  const trustMint = changeMintTrust(TRUST_MINT_ROUTE, true);
-  const untrustMint = changeMintTrust(UNTRUST_MINT_ROUTE, false);
-  const mintInfo = defineV1Route({
-    ...MINT_INFO_ROUTE,
-    handler: async (_input, request) => {
+  }),
+  defineResourceRoute({
+    method: 'POST',
+    path: '/v1/mints',
+    capability: 'wallet:admin',
+    requestSchema: mintUrlRequestSchema,
+    responseSchema: knownMintSchema,
+    successStatuses: [200, 201],
+    idempotencyKey: 'optional',
+    handler: async (input, _request, { runtime }) => {
+      const session = requireRunningSession(runtime);
+      const mintUrl = parseMintUrl(input.mintUrl, 'The Mint URL is invalid');
+
+      try {
+        const { mint, created } = await session.manager.mint.addMint(mintUrl);
+        return new V1HttpResponse(toKnownMintDocument(mint), created ? 201 : 200);
+      } catch (error) {
+        throw cocoError('register the Mint', error);
+      }
+    },
+  }),
+  changeMintTrust(true),
+  changeMintTrust(false),
+  defineResourceRoute({
+    method: 'GET',
+    path: '/v1/mints/info',
+    capability: 'wallet:read',
+    requestSchema: noBodySchema,
+    responseSchema: mintInformationSchema,
+    parameters: [MINT_URL_QUERY_PARAMETER],
+    handler: async (_input, request, { runtime }) => {
       const session = requireRunningSession(runtime);
       const mintUrl = parseSingleMintUrlQuery(request, 'The Mint information query is invalid');
       try {
@@ -213,10 +162,15 @@ export function createMintsRoutes(runtime: V1Runtime): V1RouteDefinition[] {
         throw cocoError('return Mint information', error);
       }
     },
-  });
-  const paymentMethodCapabilities = defineV1Route({
-    ...PAYMENT_METHOD_CAPABILITIES_ROUTE,
-    handler: async (_input, request) => {
+  }),
+  defineResourceRoute({
+    method: 'GET',
+    path: '/v1/mints/payment-method-capabilities',
+    capability: 'wallet:read',
+    requestSchema: noBodySchema,
+    responseSchema: paymentMethodCapabilitiesSchema,
+    parameters: [MINT_URL_QUERY_PARAMETER],
+    handler: async (_input, request, { runtime }) => {
       const session = requireRunningSession(runtime);
       const mintUrl = parseSingleMintUrlQuery(
         request,
@@ -249,6 +203,5 @@ export function createMintsRoutes(runtime: V1Runtime): V1RouteDefinition[] {
         throw cocoError('return Payment Method Capabilities', error);
       }
     },
-  });
-  return [listMints, createMint, trustMint, untrustMint, mintInfo, paymentMethodCapabilities];
-}
+  }),
+];

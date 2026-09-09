@@ -108,7 +108,6 @@ export const noSuccessResponseSchema: RuntimeSchema<never> = {
   },
 };
 
-/** Runtime and generated schema for `GET /health`. */
 export const healthSchema = namedSchema(
   'Health',
   z.strictObject({
@@ -128,7 +127,6 @@ export const openApiDocumentSchema: RuntimeSchema<unknown> = namedSchema(
   }),
 );
 
-/** Runtime and generated schema for the common v1 error document. */
 export const v1ErrorSchema = namedSchema(
   'Error',
   z.strictObject({
@@ -141,40 +139,33 @@ export const v1ErrorSchema = namedSchema(
   }),
 );
 
-/** Runtime and generated schema for authenticated lifecycle status. */
 export const lifecycleStatusSchema = namedSchema('LifecycleStatus', lifecycleStatusDocumentSchema);
 
-/** Runtime and generated schema for Wallet initialization requests. */
 export const initializeWalletRequestSchema = namedSchema(
   'InitializeWalletRequest',
   sensitivePassphraseRequestSchema,
 );
 
-/** Runtime and generated schema for Wallet Recovery Material retrieval requests. */
 export const walletRecoveryMaterialRequestSchema = namedSchema(
   'WalletRecoveryMaterialRequest',
   sensitivePassphraseRequestSchema,
 );
 
-/** Runtime and generated schema for Coco Session start requests. */
 export const startSessionRequestSchema = namedSchema(
   'StartSessionRequest',
   sensitivePassphraseRequestSchema,
 );
 
-/** Runtime and generated schema for Coco Session stop requests. */
 export const stopSessionRequestSchema = namedSchema(
   'StopSessionRequest',
   z.record(z.string(), z.never()),
 );
 
-/** Runtime and generated schema for Cocod Process shutdown requests. */
 export const processShutdownRequestSchema = namedSchema(
   'ProcessShutdownRequest',
   z.record(z.string(), z.never()),
 );
 
-/** Runtime and generated schema for the sensitive Wallet initialization response. */
 export const initializeWalletResponseSchema = namedSchema(
   'InitializeWalletResponse',
   z.strictObject({
@@ -183,13 +174,11 @@ export const initializeWalletResponseSchema = namedSchema(
   }),
 );
 
-/** Runtime and generated schema for sensitive Wallet Recovery Material responses. */
 export const walletRecoveryMaterialResponseSchema = namedSchema(
   'WalletRecoveryMaterialResponse',
   z.strictObject({ mnemonic: sensitiveStringSchema }),
 );
 
-/** Runtime and generated schema for accepted Cocod Process shutdown. */
 export const processShutdownResponseSchema = namedSchema(
   'ProcessShutdownResponse',
   z.strictObject({ status: z.literal('stopping') }),
@@ -198,7 +187,6 @@ export const processShutdownResponseSchema = namedSchema(
 const decimalAmountSchema = z.string().regex(/^(0|[1-9]\d*)$/);
 const positiveDecimalAmountSchema = z.string().regex(/^[1-9]\d*$/);
 
-/** Runtime and generated schema for safe Wallet balances. */
 export const balancesSchema = namedSchema(
   'Balances',
   z.strictObject({
@@ -251,10 +239,8 @@ const historyDocumentSchema = z.xor([
   }),
 ]);
 
-/** Runtime and generated schema for one safe Wallet history entry. */
 export const historySchema = namedSchema('History', historyDocumentSchema);
 
-/** Runtime and generated schema for offset-paginated safe Wallet history. */
 export const historyPageSchema = namedSchema(
   'HistoryPage',
   z.strictObject({
@@ -267,7 +253,6 @@ export const historyPageSchema = namedSchema(
 const invalidationTimestamp = rfc3339UtcSchema;
 const mintInvalidationDataSchema = z.strictObject({ mintUrl: nonEmptyStringSchema });
 
-/** Runtime and generated schema for one SSE resource invalidation event. */
 export const resourceInvalidationEventSchema = namedSchema(
   'ResourceInvalidationEvent',
   z.xor([
@@ -316,22 +301,18 @@ const knownMintDocumentSchema = z.strictObject({
   updatedAt: rfc3339UtcSchema,
 });
 
-/** Runtime and generated schema for a request identifying a Mint by URL. */
 export const mintUrlRequestSchema = namedSchema(
   'MintUrlRequest',
   z.strictObject({ mintUrl: z.string() }),
 );
 
-/** Runtime and generated schema for one safe Known Mint resource. */
 export const knownMintSchema = namedSchema('KnownMint', knownMintDocumentSchema);
 
-/** Runtime and generated schema for the Known Mint collection. */
 export const knownMintsSchema = namedSchema(
   'KnownMints',
   z.strictObject({ items: z.array(knownMintDocumentSchema) }),
 );
 
-/** Runtime and generated schema for refreshed Mint metadata. */
 export const mintInformationSchema = namedSchema(
   'MintInformation',
   z.strictObject({
@@ -350,13 +331,11 @@ const paymentMethodCapabilitySchema = z.strictObject({
   options: z.unknown().optional(),
 });
 
-/** Runtime and generated schema for Mint and Melt payment-method capabilities. */
 export const paymentMethodCapabilitiesSchema = namedSchema(
   'PaymentMethodCapabilities',
   z.strictObject({ items: z.array(paymentMethodCapabilitySchema) }),
 );
 
-/** Runtime and generated schema for outgoing Payment Request evaluation input. */
 export const evaluatePaymentRequestRequestSchema = namedSchema(
   'EvaluatePaymentRequestRequest',
   z.strictObject({ request: nonEmptySensitiveStringSchema }),
@@ -368,7 +347,6 @@ const paymentRequestSpendingConditionSchema = z.xor([
   z.strictObject({ kind: z.literal('malformed'), nut10Kind: z.string() }),
 ]);
 
-/** Runtime and generated schema for safe outgoing Payment Request evaluation. */
 export const paymentRequestEvaluationSchema = namedSchema(
   'PaymentRequestEvaluation',
   z.strictObject({
@@ -381,7 +359,6 @@ export const paymentRequestEvaluationSchema = namedSchema(
   }),
 );
 
-/** Runtime and generated schema for method-specific Mint Quote creation. */
 export const createMintQuoteRequestSchema = quoteMethodSchema(
   'CreateMintQuoteRequest',
   'mint',
@@ -442,20 +419,13 @@ const mintQuoteDocumentSchema = z.xor([
   }),
 ]);
 
-/** Runtime and generated schema for one safe canonical Mint Quote. */
 export const mintQuoteSchema = namedSchema('MintQuote', mintQuoteDocumentSchema);
 
-/** Runtime and generated schema for pending canonical Mint Quotes. */
 export const pendingMintQuotesSchema = namedSchema(
   'PendingMintQuotes',
-  z.strictObject({
-    items: z.array(mintQuoteDocumentSchema),
-    offset: z.int().min(0),
-    limit: z.int().min(1),
-  }),
+  pageDocumentSchema(mintQuoteDocumentSchema),
 );
 
-/** Runtime and generated schema for method-specific Melt Quote creation. */
 export const createMeltQuoteRequestSchema = quoteMethodSchema(
   'CreateMeltQuoteRequest',
   'melt',
@@ -518,20 +488,13 @@ const meltQuoteDocumentSchema = z.xor([
   }),
 ]);
 
-/** Runtime and generated schema for one safe canonical Melt Quote. */
 export const meltQuoteSchema = namedSchema('MeltQuote', meltQuoteDocumentSchema);
 
-/** Runtime and generated schema for pending canonical Melt Quotes. */
 export const pendingMeltQuotesSchema = namedSchema(
   'PendingMeltQuotes',
-  z.strictObject({
-    items: z.array(meltQuoteDocumentSchema),
-    offset: z.int().min(0),
-    limit: z.int().min(1),
-  }),
+  pageDocumentSchema(meltQuoteDocumentSchema),
 );
 
-/** Runtime and generated schema for quote-backed Mint Operation preparation. */
 export const createMintOperationRequestSchema = namedSchema(
   'CreateMintOperationRequest',
   z.strictObject({
@@ -563,20 +526,13 @@ const mintOperationDocumentSchema = z.strictObject({
   updatedAt: rfc3339UtcSchema,
 });
 
-/** Runtime and generated schema for one safe Mint Operation. */
 export const mintOperationSchema = namedSchema('MintOperation', mintOperationDocumentSchema);
 
-/** Runtime and generated schema for paginated safe Mint Operations. */
 export const mintOperationsSchema = namedSchema(
   'MintOperations',
-  z.strictObject({
-    items: z.array(mintOperationDocumentSchema),
-    offset: z.int().min(0),
-    limit: z.int().min(1),
-  }),
+  pageDocumentSchema(mintOperationDocumentSchema),
 );
 
-/** Runtime and generated schema for quote-backed Melt Operation preparation. */
 export const createMeltOperationRequestSchema = namedSchema(
   'CreateMeltOperationRequest',
   z.strictObject({
@@ -626,17 +582,11 @@ const meltOperationDocumentSchema = z.xor([
   }),
 ]);
 
-/** Runtime and generated schema for one safe Melt Operation. */
 export const meltOperationSchema = namedSchema('MeltOperation', meltOperationDocumentSchema);
 
-/** Runtime and generated schema for paginated safe Melt Operations. */
 export const meltOperationsSchema = namedSchema(
   'MeltOperations',
-  z.strictObject({
-    items: z.array(meltOperationDocumentSchema),
-    offset: z.int().min(0),
-    limit: z.int().min(1),
-  }),
+  pageDocumentSchema(meltOperationDocumentSchema),
 );
 
 const meltResultDocumentSchema = z.xor([
@@ -644,10 +594,8 @@ const meltResultDocumentSchema = z.xor([
   z.strictObject({ preimage: z.never().optional(), outpoint: sensitiveStringSchema }),
 ]);
 
-/** Runtime and generated schema for a sensitive Melt Operation settlement result. */
 export const meltResultSchema = namedSchema('MeltResult', meltResultDocumentSchema);
 
-/** Runtime and generated schema for Melt Operation execution. */
 export const executeMeltOperationResponseSchema = namedSchema(
   'ExecuteMeltOperationResponse',
   z.strictObject({
@@ -661,7 +609,6 @@ const paymentRequestSendSourceSchema = z.strictObject({
   request: nonEmptySensitiveStringSchema,
 });
 
-/** Runtime and generated schema for Cashu Send Operation preparation. */
 export const createSendOperationRequestSchema = namedSchema(
   'CreateSendOperationRequest',
   z.xor([
@@ -711,31 +658,22 @@ const sendOperationDocumentSchema = z.xor([
   }),
 ]);
 
-/** Runtime and generated schema for one safe Send Operation. */
 export const sendOperationSchema = namedSchema('SendOperation', sendOperationDocumentSchema);
 
-/** Runtime and generated schema for paginated safe Send Operations. */
 export const sendOperationsSchema = namedSchema(
   'SendOperations',
-  z.strictObject({
-    items: z.array(sendOperationDocumentSchema),
-    offset: z.int().min(0),
-    limit: z.int().min(1),
-  }),
+  pageDocumentSchema(sendOperationDocumentSchema),
 );
 
 const sendResultDocumentSchema = z.strictObject({ token: sensitiveStringSchema });
 
-/** Runtime and generated schema for a sensitive Send Operation result. */
 export const sendResultSchema = namedSchema('SendResult', sendResultDocumentSchema);
 
-/** Runtime and generated schema for Send Operation execution with its result. */
 export const executeSendOperationResponseSchema = namedSchema(
   'ExecuteSendOperationResponse',
   z.strictObject({ operation: sendOperationDocumentSchema, result: sendResultDocumentSchema }),
 );
 
-/** Runtime and generated schema for Cashu Receive Operation preparation. */
 export const createReceiveOperationRequestSchema = namedSchema(
   'CreateReceiveOperationRequest',
   z.strictObject({ token: nonEmptySensitiveStringSchema }),
@@ -760,20 +698,14 @@ const receiveOperationDocumentSchema = z.xor([
   }),
 ]);
 
-/** Runtime and generated schema for one safe Receive Operation. */
 export const receiveOperationSchema = namedSchema(
   'ReceiveOperation',
   receiveOperationDocumentSchema,
 );
 
-/** Runtime and generated schema for paginated safe Receive Operations. */
 export const receiveOperationsSchema = namedSchema(
   'ReceiveOperations',
-  z.strictObject({
-    items: z.array(receiveOperationDocumentSchema),
-    offset: z.int().min(0),
-    limit: z.int().min(1),
-  }),
+  pageDocumentSchema(receiveOperationDocumentSchema),
 );
 
 /** Common v1 error response returned without a legacy envelope. */
@@ -996,4 +928,8 @@ function quoteMethodSchema<const Schema extends z.ZodType>(
       return runtimeSchema.parse(value);
     },
   };
+}
+
+function pageDocumentSchema<T extends z.ZodType>(item: T) {
+  return z.strictObject({ items: z.array(item), offset: z.int().min(0), limit: z.int().min(1) });
 }

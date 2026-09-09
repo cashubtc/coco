@@ -28,6 +28,17 @@ const LIMIT_PARAMETER = {
 
 export const PAGE_PARAMETERS = [OFFSET_PARAMETER, LIMIT_PARAMETER] as const;
 
+export function parsePageQuery(
+  request: Request,
+  message: string,
+): { offset: number; limit: number } {
+  const query = parseQuery(request, queryParameterNames(PAGE_PARAMETERS), message);
+  return {
+    offset: parsePageInteger(query.getAll('offset'), 0, Number.MAX_SAFE_INTEGER, 0, message),
+    limit: parsePageInteger(query.getAll('limit'), 1, MAX_PAGE_LIMIT, DEFAULT_PAGE_LIMIT, message),
+  };
+}
+
 export const MINT_URL_QUERY_PARAMETER = {
   name: 'mintUrl',
   in: 'query',
@@ -113,6 +124,22 @@ export function parsePathIdentity(
   } catch (error) {
     throw invalidQuery(message, error);
   }
+}
+
+export function parseOperationId(
+  request: Request,
+  type: 'mint' | 'melt' | 'send' | 'receive',
+  command?: string,
+): string {
+  const label = type[0]!.toUpperCase() + type.slice(1);
+  const message = `The ${label} Operation identity is invalid`;
+  parseQuery(request, [], message);
+  return parsePathIdentity(
+    request,
+    `/v1/operations/${type}/`,
+    command ? `/${command}` : '',
+    message,
+  );
 }
 
 export function parseQuery(request: Request, allowedKeys: readonly string[], message: string) {

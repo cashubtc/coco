@@ -22,10 +22,10 @@ export interface V1RouteParameter {
   readonly explode?: boolean;
 }
 
-type V1RouteHandler<TRequest, TResponse> = (
+type V1RouteHandler<TRequest, TResponse, TContext> = (
   input: TRequest,
   request: Request,
-  context: V1RouteHandlerContext,
+  context: TContext,
 ) =>
   | Promise<TResponse | V1HttpResponse<TResponse> | V1HttpStreamResponse>
   | TResponse
@@ -53,11 +53,12 @@ export interface V1RouteMetadata<TRequest = unknown, TResponse = unknown> {
 }
 
 /** Executable v1 route definition formed by binding a handler to route metadata. */
-export interface V1RouteDefinition<TRequest = unknown, TResponse = unknown> extends V1RouteMetadata<
-  TRequest,
-  TResponse
-> {
-  readonly handler: V1RouteHandler<TRequest, TResponse>;
+export interface V1RouteDefinition<
+  TRequest = unknown,
+  TResponse = unknown,
+  TContext = V1RouteHandlerContext,
+> extends V1RouteMetadata<TRequest, TResponse> {
+  readonly handler: V1RouteHandler<TRequest, TResponse, TContext>;
 }
 
 /** Transport metadata for a stable v1 HTTP failure. */
@@ -108,9 +109,9 @@ export interface V1Runtime {
 }
 
 /** Preserves handler input/output types while erasing them for the common route runner. */
-export function defineV1Route<TRequest, TResponse>(
-  definition: V1RouteDefinition<TRequest, TResponse>,
-): V1RouteDefinition {
+export function defineV1Route<TRequest, TResponse, TContext = V1RouteHandlerContext>(
+  definition: V1RouteDefinition<TRequest, TResponse, TContext>,
+): V1RouteDefinition<unknown, unknown, TContext> {
   return {
     ...definition,
     successStatuses: definition.successStatuses ?? [200],

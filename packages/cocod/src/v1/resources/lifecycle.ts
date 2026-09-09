@@ -1,13 +1,7 @@
 import { CocodRuntimeError } from '../../runtime-error.js';
-import type { ProcessShutdownCoordinator } from '../../process-shutdown.js';
 import type { AppLogger } from '../../utils/logger.js';
-import {
-  defineV1Route,
-  V1HttpResponse,
-  type V1Runtime,
-  type V1RouteDefinition,
-  type V1RouteMetadata,
-} from '../contract.js';
+import { V1HttpResponse } from '../contract.js';
+import { defineResourceRoute } from '../resource.js';
 import {
   healthSchema,
   initializeWalletRequestSchema,
@@ -21,86 +15,7 @@ import {
   toLifecycleStatusDocument,
   walletRecoveryMaterialRequestSchema,
   walletRecoveryMaterialResponseSchema,
-  type HealthDocument,
-  type InitializeWalletRequest,
-  type InitializeWalletResponseDocument,
-  type LifecycleStatusDocument,
-  type ProcessShutdownRequest,
-  type ProcessShutdownResponseDocument,
-  type StartSessionRequest,
-  type StopSessionRequest,
-  type WalletRecoveryMaterialRequest,
-  type WalletRecoveryMaterialResponseDocument,
 } from '../schema.js';
-
-const HEALTH_ROUTE = {
-  method: 'GET',
-  path: '/health',
-  capability: null,
-  requestSchema: noBodySchema,
-  responseSchema: healthSchema,
-} as const satisfies V1RouteMetadata<null, HealthDocument>;
-
-const STATUS_ROUTE = {
-  method: 'GET',
-  path: '/v1/status',
-  capability: 'wallet:read',
-  requestSchema: noBodySchema,
-  responseSchema: lifecycleStatusSchema,
-} as const satisfies V1RouteMetadata<null, LifecycleStatusDocument>;
-
-const INITIALIZE_WALLET_ROUTE = {
-  method: 'POST',
-  path: '/v1/admin/wallet/initialize',
-  capability: 'wallet:admin',
-  requestSchema: initializeWalletRequestSchema,
-  responseSchema: initializeWalletResponseSchema,
-  successStatuses: [201, 202],
-  idempotencyKey: 'optional',
-  responseCacheControl: 'no-store',
-} as const satisfies V1RouteMetadata<InitializeWalletRequest, InitializeWalletResponseDocument>;
-
-const WALLET_RECOVERY_MATERIAL_ROUTE = {
-  method: 'POST',
-  path: '/v1/admin/wallet/recovery-material',
-  capability: 'wallet:admin',
-  requestSchema: walletRecoveryMaterialRequestSchema,
-  responseSchema: walletRecoveryMaterialResponseSchema,
-  responseCacheControl: 'no-store',
-} as const satisfies V1RouteMetadata<
-  WalletRecoveryMaterialRequest,
-  WalletRecoveryMaterialResponseDocument
->;
-
-const START_SESSION_ROUTE = {
-  method: 'POST',
-  path: '/v1/admin/session/start',
-  capability: 'wallet:admin',
-  requestSchema: startSessionRequestSchema,
-  responseSchema: lifecycleStatusSchema,
-  successStatuses: [200, 202],
-  idempotencyKey: 'optional',
-} as const satisfies V1RouteMetadata<StartSessionRequest, LifecycleStatusDocument>;
-
-const STOP_SESSION_ROUTE = {
-  method: 'POST',
-  path: '/v1/admin/session/stop',
-  capability: 'wallet:admin',
-  requestSchema: stopSessionRequestSchema,
-  responseSchema: lifecycleStatusSchema,
-  successStatuses: [200, 202],
-  idempotencyKey: 'optional',
-} as const satisfies V1RouteMetadata<StopSessionRequest, LifecycleStatusDocument>;
-
-const STOP_PROCESS_ROUTE = {
-  method: 'POST',
-  path: '/v1/admin/process/stop',
-  capability: 'wallet:admin',
-  requestSchema: processShutdownRequestSchema,
-  responseSchema: processShutdownResponseSchema,
-  successStatuses: [202],
-  idempotencyKey: 'optional',
-} as const satisfies V1RouteMetadata<ProcessShutdownRequest, ProcessShutdownResponseDocument>;
 
 function observeDetachedTransition(
   completion: Promise<void>,
@@ -118,33 +33,34 @@ function observeDetachedTransition(
   });
 }
 
-export const lifecycleMetadata = [
-  HEALTH_ROUTE,
-  STATUS_ROUTE,
-  INITIALIZE_WALLET_ROUTE,
-  WALLET_RECOVERY_MATERIAL_ROUTE,
-  START_SESSION_ROUTE,
-  STOP_SESSION_ROUTE,
-  STOP_PROCESS_ROUTE,
-];
-
-export function createLifecycleRoutes(
-  runtime: V1Runtime,
-  daemonVersion: string,
-  processShutdown: Pick<ProcessShutdownCoordinator, 'request'>,
-  logger?: AppLogger,
-): V1RouteDefinition[] {
-  const health = defineV1Route({
-    ...HEALTH_ROUTE,
+export const lifecycleRoutes = [
+  defineResourceRoute({
+    method: 'GET',
+    path: '/health',
+    capability: null,
+    requestSchema: noBodySchema,
+    responseSchema: healthSchema,
     handler: () => ({ status: 'ok', interfaceVersion: '1' }),
-  });
-  const status = defineV1Route({
-    ...STATUS_ROUTE,
-    handler: () => toLifecycleStatusDocument(runtime.getStatus(), daemonVersion),
-  });
-  const initializeWallet = defineV1Route({
-    ...INITIALIZE_WALLET_ROUTE,
-    handler: async (input) => {
+  }),
+  defineResourceRoute({
+    method: 'GET',
+    path: '/v1/status',
+    capability: 'wallet:read',
+    requestSchema: noBodySchema,
+    responseSchema: lifecycleStatusSchema,
+    handler: (_input, _request, { runtime, daemonVersion }) =>
+      toLifecycleStatusDocument(runtime.getStatus(), daemonVersion),
+  }),
+  defineResourceRoute({
+    method: 'POST',
+    path: '/v1/admin/wallet/initialize',
+    capability: 'wallet:admin',
+    requestSchema: initializeWalletRequestSchema,
+    responseSchema: initializeWalletResponseSchema,
+    successStatuses: [201, 202],
+    idempotencyKey: 'optional',
+    responseCacheControl: 'no-store',
+    handler: async (input, _request, { runtime, daemonVersion }) => {
       const result = await runtime.initializeWallet(input);
       return new V1HttpResponse(
         {
@@ -154,15 +70,26 @@ export function createLifecycleRoutes(
         result.requiresPassphrase ? 201 : 202,
       );
     },
-  });
-  const walletRecoveryMaterial = defineV1Route({
-    ...WALLET_RECOVERY_MATERIAL_ROUTE,
-    handler: async (input) =>
+  }),
+  defineResourceRoute({
+    method: 'POST',
+    path: '/v1/admin/wallet/recovery-material',
+    capability: 'wallet:admin',
+    requestSchema: walletRecoveryMaterialRequestSchema,
+    responseSchema: walletRecoveryMaterialResponseSchema,
+    responseCacheControl: 'no-store',
+    handler: async (input, _request, { runtime }) =>
       new V1HttpResponse({ mnemonic: await runtime.getWalletRecoveryMaterial(input) }),
-  });
-  const startSession = defineV1Route({
-    ...START_SESSION_ROUTE,
-    handler: async (input) => {
+  }),
+  defineResourceRoute({
+    method: 'POST',
+    path: '/v1/admin/session/start',
+    capability: 'wallet:admin',
+    requestSchema: startSessionRequestSchema,
+    responseSchema: lifecycleStatusSchema,
+    successStatuses: [200, 202],
+    idempotencyKey: 'optional',
+    handler: async (input, _request, { runtime, daemonVersion, logger }) => {
       const previousState = runtime.getStatus().cocoSession.state;
       const transition = runtime.startSession(input);
       await transition.accepted;
@@ -170,10 +97,16 @@ export function createLifecycleRoutes(
       const result = toLifecycleStatusDocument(runtime.getStatus(), daemonVersion);
       return new V1HttpResponse(result, previousState === 'running' ? 200 : 202);
     },
-  });
-  const stopSession = defineV1Route({
-    ...STOP_SESSION_ROUTE,
-    handler: () => {
+  }),
+  defineResourceRoute({
+    method: 'POST',
+    path: '/v1/admin/session/stop',
+    capability: 'wallet:admin',
+    requestSchema: stopSessionRequestSchema,
+    responseSchema: lifecycleStatusSchema,
+    successStatuses: [200, 202],
+    idempotencyKey: 'optional',
+    handler: (_input, _request, { runtime, daemonVersion, logger }) => {
       const previousState = runtime.getStatus().cocoSession.state;
       const completion = runtime.stopSession();
       observeDetachedTransition(completion, 'session_stop', logger);
@@ -181,21 +114,18 @@ export function createLifecycleRoutes(
       const alreadyStopped = previousState === 'stopped' && result.cocoSession.state === 'stopped';
       return new V1HttpResponse(result, alreadyStopped ? 200 : 202);
     },
-  });
-  const stopProcess = defineV1Route({
-    ...STOP_PROCESS_ROUTE,
-    handler: () => {
+  }),
+  defineResourceRoute({
+    method: 'POST',
+    path: '/v1/admin/process/stop',
+    capability: 'wallet:admin',
+    requestSchema: processShutdownRequestSchema,
+    responseSchema: processShutdownResponseSchema,
+    successStatuses: [202],
+    idempotencyKey: 'optional',
+    handler: (_input, _request, { processShutdown }) => {
       void processShutdown.request('http_stop');
       return new V1HttpResponse({ status: 'stopping' }, 202);
     },
-  });
-  return [
-    health,
-    status,
-    initializeWallet,
-    walletRecoveryMaterial,
-    startSession,
-    stopSession,
-    stopProcess,
-  ];
-}
+  }),
+];
