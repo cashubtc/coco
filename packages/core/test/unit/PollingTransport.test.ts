@@ -1,5 +1,5 @@
 import { Amount } from '@cashu/cashu-ts';
-import { describe, it, expect, beforeEach, mock } from 'bun:test';
+import { describe, it, expect, beforeEach, afterEach, mock, spyOn } from 'bun:test';
 import { PollingTransport } from '../../infra/PollingTransport';
 import type { MintAdapter } from '../../infra/MintAdapter';
 import { NullLogger } from '../../logging';
@@ -55,6 +55,217 @@ const createDelayedMockMintAdapter = (delayMs: number): MintAdapter =>
     checkMeltQuoteState: mock(() => Promise.resolve({})),
     checkProofStates: mock(() => Promise.resolve([])),
   }) as unknown as MintAdapter;
+
+describe('PollingTransport scheduler wake-ups', () => {
+  const mintUrl = 'https://mint.example.com';
+  type Timer = ReturnType<typeof setTimeout>;
+  let now: number;
+  let nextTimerId: number;
+  let timers: Map<Timer, { callback: () => void; delay: number }>;
+  let restoreClock: () => void;
+  let transport: PollingTransport;
+  let polling: MintQuotePollingOperation;
+  const check = mock(async () => ({ outcomes: [], responseFailures: [] }));
+  // Let the polling promise chain settle without advancing the controlled clock.
+  const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+  beforeEach(() => {
+    now = 1000;
+    nextTimerId = 0;
+    timers = new Map();
+    const dateSpy = spyOn(Date, 'now').mockImplementation(() => now);
+    const setControlledTimeout = ((callback: () => void, delay = 0) => {
+      const id = ++nextTimerId as unknown as Timer;
+      timers.set(id, { callback, delay });
+      return id;
+    }) as typeof setTimeout;
+    const timeoutSpy = spyOn(globalThis, 'setTimeout').mockImplementation(setControlledTimeout);
+    const clearSpy = spyOn(globalThis, 'clearTimeout').mockImplementation((id) => {
+      timers.delete(id as Timer);
+    });
+    restoreClock = () => {
+      dateSpy.mockRestore();
+      timeoutSpy.mockRestore();
+      clearSpy.mockRestore();
+    };
+    check.mockReset();
+    check.mockImplementation(async () => ({ outcomes: [], responseFailures: [] }));
+    polling = { getMintQuotePollingLimit: mock(async () => 1), checkMintQuotesForPolling: check };
+    transport = new PollingTransport(
+      createMockMintAdapter(),
+      { intervalMs: 20 },
+      undefined,
+      polling,
+    );
+  });
+
+  afterEach(() => {
+    transport.closeAll();
+    restoreClock();
+  });
+
+  function fireNextTimer(at: number): void {
+    expect(timers.size).toBe(1);
+    const [id, timer] = timers.entries().next().value!;
+    timers.delete(id);
+    now = at;
+    timer.callback();
+  }
+
+  it('re-arms an early timer without polling before the deadline', async () => {
+    subscribeToQuotes(transport, mintUrl, 'bolt11', 'sub', ['quote']);
+    await settle();
+    expect(check).toHaveBeenCalledTimes(1);
+    expect([...timers.values()].map(({ delay }) => delay)).toEqual([20]);
+
+    fireNextTimer(1019);
+    await settle();
+    expect(check).toHaveBeenCalledTimes(1);
+    expect([...timers.values()].map(({ delay }) => delay)).toEqual([1]);
+
+    fireNextTimer(1020);
+    await settle();
+    expect(check).toHaveBeenCalledTimes(2);
+    expect([...timers.values()].map(({ delay }) => delay)).toEqual([20]);
+  });
+
+  it('keeps one wake-up across new interests and repeated resume calls', async () => {
+    subscribeToQuotes(transport, mintUrl, 'bolt11', 'first', ['quote-a']);
+    await settle();
+    now = 1010;
+    subscribeToQuotes(transport, mintUrl, 'bolt11', 'second', ['quote-b']);
+    transport.resume();
+    transport.resume();
+    await settle();
+    expect(check).toHaveBeenCalledTimes(1);
+    expect(timers.size).toBe(1);
+
+    fireNextTimer(1020);
+    await settle();
+    expect(check).toHaveBeenCalledTimes(2);
+    expect(timers.size).toBe(1);
+  });
+
+  it('cancels paused timers and resumes at the remaining deadline', async () => {
+    subscribeToQuotes(transport, mintUrl, 'bolt11', 'sub', ['quote']);
+    await settle();
+    const staleCallback = [...timers.values()][0]!.callback;
+    transport.pause();
+    expect(timers.size).toBe(0);
+
+    now = 1010;
+    transport.resume();
+    staleCallback();
+    await settle();
+    expect(check).toHaveBeenCalledTimes(1);
+    expect([...timers.values()].map(({ delay }) => delay)).toEqual([10]);
+    fireNextTimer(1020);
+    await settle();
+    expect(check).toHaveBeenCalledTimes(2);
+  });
+
+  it('resumes immediately after the deadline and cancels an overdue wake-up', async () => {
+    subscribeToQuotes(transport, mintUrl, 'bolt11', 'sub', ['quote']);
+    await settle();
+    now = 1030;
+    transport.resume();
+    transport.resume();
+    await settle();
+    expect(check).toHaveBeenCalledTimes(2);
+    expect([...timers.values()].map(({ delay }) => delay)).toEqual([20]);
+  });
+
+  it('waits for an in-flight poll before scheduling another turn', async () => {
+    let finish!: () => void;
+    check.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      return { outcomes: [], responseFailures: [] };
+    });
+    subscribeToQuotes(transport, mintUrl, 'bolt11', 'sub', ['quote']);
+    await settle();
+    now = 1030;
+    transport.pause();
+    transport.resume();
+    subscribeToQuotes(transport, mintUrl, 'bolt11', 'late', ['quote-b']);
+    expect(check).toHaveBeenCalledTimes(1);
+    expect(timers.size).toBe(0);
+    transport.pause();
+    finish();
+    await settle();
+    expect(timers.size).toBe(0);
+
+    now = 1040;
+    transport.resume();
+    expect([...timers.values()].map(({ delay }) => delay)).toEqual([10]);
+    fireNextTimer(1050);
+    await settle();
+    expect(check).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps other mints scheduled when one mint closes', async () => {
+    const otherMint = 'https://other-mint.example.com';
+    transport.setIntervalForMint(otherMint, 50);
+    subscribeToQuotes(transport, mintUrl, 'bolt11', 'first', ['quote-a']);
+    subscribeToQuotes(transport, otherMint, 'bolt11', 'second', ['quote-b']);
+    await settle();
+    expect(check).toHaveBeenCalledTimes(2);
+    expect(timers.size).toBe(2);
+
+    transport.closeMint(mintUrl);
+    expect([...timers.values()].map(({ delay }) => delay)).toEqual([50]);
+    fireNextTimer(1050);
+    await settle();
+    expect(check).toHaveBeenCalledTimes(3);
+    expect(check).toHaveBeenLastCalledWith('bolt11', [{ mintUrl: otherMint, quoteId: 'quote-b' }]);
+    transport.closeAll();
+    expect(timers.size).toBe(0);
+  });
+
+  for (const close of ['closeMint', 'closeAll'] as const) {
+    it(`${close} cancels timers and ignores stale callbacks after reopening`, async () => {
+      subscribeToQuotes(transport, mintUrl, 'bolt11', 'old', ['quote-a']);
+      await settle();
+      const staleCallback = [...timers.values()][0]!.callback;
+      transport[close](mintUrl);
+      expect(timers.size).toBe(0);
+      now = 1020;
+      staleCallback();
+      await settle();
+      expect(check).toHaveBeenCalledTimes(1);
+      expect(timers.size).toBe(0);
+
+      subscribeToQuotes(transport, mintUrl, 'bolt11', 'new', ['quote-b']);
+      await settle();
+      now = 1040;
+      staleCallback();
+      await settle();
+      expect(check).toHaveBeenCalledTimes(2);
+      fireNextTimer(1040);
+      await settle();
+      expect(check).toHaveBeenCalledTimes(3);
+    });
+
+    it(`${close} prevents an in-flight completion from scheduling another turn`, async () => {
+      let finish!: () => void;
+      check.mockImplementationOnce(async () => {
+        await new Promise<void>((resolve) => {
+          finish = resolve;
+        });
+        return { outcomes: [], responseFailures: [] };
+      });
+      subscribeToQuotes(transport, mintUrl, 'bolt11', 'old', ['quote-a']);
+      await settle();
+      transport[close](mintUrl);
+      finish();
+      await settle();
+      expect(timers.size).toBe(0);
+      transport.resume();
+      expect(check).toHaveBeenCalledTimes(1);
+    });
+  }
+});
 
 describe('PollingTransport per-mint intervals', () => {
   let transport: PollingTransport;

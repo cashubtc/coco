@@ -86,15 +86,22 @@ Use the actual generated version in the commit message.
 git tag vX.Y.Z
 ```
 
-8. Push the commit and tag:
+8. Push the source branch and tag. For a release cut directly from `master`:
 
 ```bash
 git push origin master
 git push origin vX.Y.Z
 ```
 
-If the stable release was finalized on a prerelease branch, fast-forward `master`
-to the stable release commit before pushing `master` and the tag.
+For a stable release finalized on a prerelease branch:
+
+```bash
+git push origin release/X.Y.Z-rc
+git push origin vX.Y.Z
+```
+
+Keep the stable tag on the release commit so it preserves the selected RC source
+cutoff while development continues on `master`.
 
 9. Create a GitHub Release for the tag. Do not mark it as a prerelease.
 
@@ -109,6 +116,17 @@ with `bunx changeset publish`.
 npm view @cashu/coco-core dist-tags
 npm view @cashu/coco-core@latest version
 ```
+
+11. If the release was finalized on a prerelease branch, open a follow-up PR that
+    merges the stable release commit into current `master`.
+
+Use a merge commit to preserve release ancestry; `master` may have advanced beyond
+the RC cutoff, so a fast-forward may not be possible. Preserve newer source changes
+and pending changesets while bringing in the released package versions, internal
+dependency versions, changelogs, and removal of consumed changesets. Refresh
+`bun.lock` with `bun install`, then verify a frozen install, build, and typecheck.
+Merge the PR with a merge commit so the release remains an ancestor of `master`.
+The existing stable tag stays unchanged.
 
 ## RC Releases
 

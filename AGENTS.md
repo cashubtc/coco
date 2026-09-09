@@ -28,6 +28,17 @@ Use the five default mattpocock/skills triage labels. See `docs/agents/triage-la
 This is a multi-context repository. Route domain work through the context map and read every
 relevant glossary and ADR. See `docs/agents/domain.md`.
 
+### Transaction design
+
+Before changing or reviewing Wallet persistence, operation coordination, or storage adapters, read
+[TRANSACTION_DESIGN.md](TRANSACTION_DESIGN.md) and
+[ADR-0011](packages/core/docs/adr/0011-use-domain-transaction-gateways.md).
+Apply the design's naming, dependency, and transaction ownership rules to every affected module,
+including helpers and composition-root wiring. Before handoff, complete the design's
+[agent review steps](TRANSACTION_DESIGN.md#agent-review) and report the transaction boundaries
+checked, relevant verification, and any remaining deviations. Passing typecheck alone does not
+establish adherence. When changing the contract, update the design and ADR in the same PR.
+
 ## File router
 
 - Wallet behavior and public APIs: `packages/core`. Start in `api/` for public wrappers,

@@ -1,0 +1,59 @@
+import type { Repositories, RepositoryTransactionScope } from '@core/repositories';
+import { RepositoryTransactionConflictError } from '@core/repositories';
+import {
+  RepositoryKeypairCommands,
+  type ScopedKeypairCommands,
+} from './scoped/keypairs/ScopedKeypairCommands.ts';
+import { TransactionLifetime } from './scoped/TransactionLifetime.ts';
+
+/**
+ * Scoped commands sharing one adapter transaction attempt. Await mutations sequentially unless
+ * their independence is established; lifetime tracking does not serialize conflicting work.
+ */
+export interface CoreTransaction {
+  readonly keypairs: ScopedKeypairCommands;
+}
+
+export interface CoreTransactionRunner {
+  run<T>(work: (transaction: CoreTransaction) => Promise<T>): Promise<T>;
+}
+
+type TransactionModuleFactory = (repositories: RepositoryTransactionScope) => CoreTransaction;
+
+function createTransactionModules(repositories: RepositoryTransactionScope): CoreTransaction {
+  return {
+    keypairs: new RepositoryKeypairCommands(repositories.keyRingRepository),
+  };
+}
+
+const MAX_TRANSACTION_ATTEMPTS = 3;
+
+/** Internal adapter-backed transaction runner owned by the composition root. */
+export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
+  constructor(
+    private readonly repositories: Repositories,
+    private readonly createModules: TransactionModuleFactory = createTransactionModules,
+  ) {}
+
+  async run<T>(work: (transaction: CoreTransaction) => Promise<T>): Promise<T> {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await this.repositories.withTransaction((repositories) => {
+          const lifetime = new TransactionLifetime();
+          return lifetime.run(() =>
+            work(lifetime.bind(this.createModules(lifetime.bind(repositories)))),
+          );
+        });
+      } catch (error) {
+        if (
+          !(error instanceof RepositoryTransactionConflictError) ||
+          attempt >= MAX_TRANSACTION_ATTEMPTS
+        ) {
+          throw error;
+        }
+        // Yield outside the failed transaction so competing writers can finish before retrying.
+        await new Promise((resolve) => setTimeout(resolve, attempt * 5));
+      }
+    }
+  }
+}
