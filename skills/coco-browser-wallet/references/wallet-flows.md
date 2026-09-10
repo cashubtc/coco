@@ -17,9 +17,18 @@ pasted token, QR code, or payment request.
 
 ## Amounts, balances, and history
 
-Bare amount inputs mean sats. Validate positive integer amounts in the selected unit; retain
-Coco's `Amount` representation for arithmetic and use `.toString()` for display rather than
-coercing large values through JavaScript `number`.
+For APIs accepting `UnitAmountLike`, such as `ops.send.prepare()` and `quotes.mint.create()`,
+bare amounts default to sats when no explicit or contextual unit is supplied. Use unit-coupled
+inputs such as `{ amount: 5, unit: 'usd' }` on those APIs to select a custom unit.
+
+`ops.mint.prepare({ quote, amount })` instead accepts `AmountLike` and derives the unit from the
+canonical stored quote. With a USD quote, `{ quote: usdQuote, amount: 25 }` means 25 USD units.
+Pass the amount alone in that field; a unit-coupled object is not accepted. Label and validate
+the mint amount using the quote's unit.
+
+Validate positive integer amounts in the selected unit; retain Coco's `Amount` representation
+for arithmetic and use `.toString()` for display rather than coercing large values through
+JavaScript `number`.
 
 ```ts
 const byMint = await coco.wallet.balances.byMint();
@@ -34,9 +43,8 @@ if a displayed balance becomes stale. Refresh balance/history views from Coco ev
 derived-data hooks.
 
 For multiple units, read [Multi-Unit Support](https://cashubtc.github.io/coco/pages/multi-unit-support).
-Use `byMintAndUnit()` / `totalByUnit()` and unit-coupled inputs such as
-`{ amount: 5, unit: 'usd' }`; show totals separately by unit. The default `byMint()` and `total()`
-views are sat-scoped.
+Use `byMintAndUnit()` / `totalByUnit()` and show totals separately by unit. The default `byMint()`
+and `total()` views are sat-scoped.
 
 ## Receive ecash
 
