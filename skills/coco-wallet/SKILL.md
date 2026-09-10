@@ -1,6 +1,6 @@
 ---
 name: coco-wallet
-description: Build Cashu wallets with Coco on any platform. Use when integrating Coco APIs, implementing ecash or Lightning flows, or handling Wallet identity and Operation Recovery.
+description: Build Cashu wallets with Coco on any platform. Use when integrating Coco APIs, implementing ecash or quote-backed payments, or handling Wallet identity and Operation Recovery.
 ---
 
 # Build a wallet with Coco
@@ -60,9 +60,23 @@ error state, and session ownership prevents duplicate initialization or abandone
 
 ## 3. Implement the requested wallet flows
 
-Read the relevant sections of [Wallet flows](references/wallet-flows.md) for mint trust, balances,
-ecash send/receive, Lightning mint/melt, or seed import and Restore. Build the requested subset;
-use the advanced-feature links there only when those features are needed.
+Read [Wallet basics](references/wallet-basics.md) for shared mint trust, amount, balance, and
+history rules. Then load only the references for the requested features:
+
+| Task                                                  | Reference                                          |
+| ----------------------------------------------------- | -------------------------------------------------- |
+| Send an ecash token                                   | [Send ecash](references/ecash-send.md)             |
+| Receive an ecash token                                | [Receive ecash](references/ecash-receive.md)       |
+| Mint or melt using a BOLT11 invoice                   | [BOLT11](references/bolt11.md)                     |
+| Mint or melt using a BOLT12 offer                     | [BOLT12](references/bolt12.md)                     |
+| Mint from an onchain deposit or melt to an address    | [Onchain](references/onchain.md)                   |
+| Pay or create a Cashu payment request                 | [Payment requests](references/payment-requests.md) |
+| Send or receive locked ecash, or manage spending keys | [P2PK](references/p2pk.md)                         |
+| Import Wallet Recovery Material or reconstruct proofs | [Wallet Import and Restore](references/restore.md) |
+
+Each payment-method reference loads [Shared mint and melt lifecycle](references/quote-operations.md).
+Read that common reference once when implementing a mint or melt; the method files add their
+specific inputs and decisions. Implement the requested subset.
 
 Prepare operations in response to a user action. Preparation can reserve funds and persist work.
 Show the selected mint, unit, amount, and fees before executing a payment. Serialize actions for

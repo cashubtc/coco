@@ -7,12 +7,14 @@ behavior lives in one general skill; platform skills add runtime-specific setup 
 
 | Skill                                                                                            | Use it for                                                                                                                               |
 | ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| [`coco-wallet`](https://github.com/cashubtc/coco/tree/master/skills/coco-wallet)                 | Wallet identity, public APIs, mint trust, amounts, ecash and Lightning flows, and Operation Recovery on any platform.                    |
+| [`coco-wallet`](https://github.com/cashubtc/coco/tree/master/skills/coco-wallet)                 | Wallet identity, public APIs, mint trust, amounts, ecash, Lightning and onchain flows, and Operation Recovery on any platform.           |
 | [`coco-browser-wallet`](https://github.com/cashubtc/coco/tree/master/skills/coco-browser-wallet) | Browser setup with IndexedDB, client-only initialization, tab ownership, and optional React providers and hooks. Requires `coco-wallet`. |
 
 `coco-wallet` can be used on its own with the target runtime's adapter documentation. The browser
-skill explicitly loads that shared workflow and supplies the browser requirements. Wallet-flow
-reference material belongs to the general skill; React guidance belongs to the browser skill.
+skill explicitly loads that shared workflow and supplies the browser requirements. The general
+skill routes to separate references for ecash send, ecash receive, BOLT11, BOLT12, onchain,
+payment requests, P2PK, and Restore. Agents load only the requested flows; wallet basics and
+quote-lifecycle rules each have one shared reference. React guidance belongs to the browser skill.
 
 Both skills work with the app's existing framework and package manager and direct the agent to
 check installed API versions and peer dependencies. Browser apps use `@cashu/coco-core` and
