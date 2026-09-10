@@ -39,8 +39,7 @@ const history = await coco.history.getPaginatedHistory(0, 25);
 
 Balance snapshots contain `spendable`, `reserved`, and `total`. Check spendable funds at the
 selected mint; another mint's funds do not cover that payment. Preparation remains authoritative
-if a displayed balance becomes stale. Refresh balance/history views from Coco events or React
-derived-data hooks.
+if a displayed balance becomes stale. Refresh balance/history views from Coco events.
 
 For multiple units, read [Multi-Unit Support](https://cashubtc.github.io/coco/pages/multi-unit-support).
 Use `byMintAndUnit()` / `totalByUnit()` and show totals separately by unit. The default `byMint()`

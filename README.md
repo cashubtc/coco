@@ -69,8 +69,9 @@ The core exposes a minimal plugin API to hook into lifecycle events with access 
 
 ## Agent skills
 
-Use the [Coco browser wallet skill](./skills/coco-browser-wallet/SKILL.md) to help your coding
-agent build a browser Cashu wallet with IndexedDB persistence and optional React bindings.
+Use [coco-wallet](./skills/coco-wallet/SKILL.md) for shared Cashu wallet guidance across platforms.
+For browser apps, also install [coco-browser-wallet](./skills/coco-browser-wallet/SKILL.md) for
+IndexedDB persistence, browser lifecycle, and optional React bindings.
 See [Consumer Skills](./packages/docs/pages/consumer-skills.md) for installation and an example prompt.
 
 ## Development
