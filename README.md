@@ -67,6 +67,12 @@ The core exposes a minimal plugin API to hook into lifecycle events with access 
 - See `packages/core/README.md` → Plugins for details and examples.
 - Register at construction or via `manager.use(plugin)`; dispose with `manager.dispose()`.
 
+## Agent skills
+
+Use the [Coco browser wallet skill](./skills/coco-browser-wallet/SKILL.md) to help your coding
+agent build a browser Cashu wallet with IndexedDB persistence and optional React bindings.
+See [Consumer Skills](./packages/docs/pages/consumer-skills.md) for installation and an example prompt.
+
 ## Development
 
 This repo uses Bun workspaces. Most packages build with `tsdown`; the React
