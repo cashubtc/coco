@@ -25,14 +25,16 @@ export interface CoreTransactionRunner {
 
 type TransactionModuleFactory = (repositories: RepositoryTransactionScope) => CoreTransaction;
 
-export function createCoreTransactionModuleFactory(): TransactionModuleFactory {
-  return (repositories) => ({
+export function createCoreTransactionModules(
+  repositories: RepositoryTransactionScope,
+): CoreTransaction {
+  return {
     mintMetadata: new RepositoryMintMetadataCommands(
       repositories.mintRepository,
       repositories.keysetRepository,
     ),
     keypairs: new RepositoryKeypairCommands(repositories.keyRingRepository),
-  });
+  };
 }
 
 const MAX_TRANSACTION_ATTEMPTS = 3;
@@ -41,7 +43,7 @@ const MAX_TRANSACTION_ATTEMPTS = 3;
 export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
   constructor(
     private readonly repositories: Repositories,
-    private readonly createModules: TransactionModuleFactory = createCoreTransactionModuleFactory(),
+    private readonly createModules: TransactionModuleFactory = createCoreTransactionModules,
   ) {}
 
   async run<T>(work: (transaction: CoreTransaction) => Promise<T>): Promise<T> {

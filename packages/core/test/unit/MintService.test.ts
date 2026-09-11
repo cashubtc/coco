@@ -73,7 +73,7 @@ describe('MintService', () => {
       mintRepo,
       keysetRepo,
       mockAdapter,
-      createMintMetadataRefreshDependencies(repositories, mockAdapter),
+      createMintMetadataRefreshDependencies(repositories),
       undefined,
       eventBus,
     );

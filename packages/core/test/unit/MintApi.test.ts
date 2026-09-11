@@ -52,7 +52,7 @@ describe('MintApi payment method capabilities', () => {
       mintRepo,
       keysetRepo,
       adapter,
-      createMintMetadataRefreshDependencies(repositories, adapter),
+      createMintMetadataRefreshDependencies(repositories),
     );
     await mintRepo.addOrUpdateMint({
       mintUrl,

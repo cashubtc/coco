@@ -97,7 +97,7 @@ describe('QuoteLifecycle mint quote polling', () => {
       mintRepository,
       repositories.keysetRepository,
       mintAdapter,
-      createMintMetadataRefreshDependencies(repositories, mintAdapter),
+      createMintMetadataRefreshDependencies(repositories),
       undefined,
       eventBus,
     );

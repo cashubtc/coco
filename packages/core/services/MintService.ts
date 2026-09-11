@@ -120,10 +120,9 @@ type NutSupportSettings = {
 
 export type TopLevelNutCapability = 11 | 20;
 
-/** Explicit dependencies of the independently committed metadata refresh action. */
+/** Query and transaction dependencies of the independently committed metadata refresh action. */
 export interface MintMetadataRefreshDependencies {
   queries: MintQueries;
-  remote: Pick<MintAdapter, 'fetchMintMetadata'>;
   transactions: MintMetadataTransactions;
 }
 
@@ -236,10 +235,7 @@ export class MintService {
     const cached = await this.metadata.queries.getMetadata(mintUrl);
     if (cached && cached.mint.updatedAt >= Math.floor(Date.now() / 1000) - MINT_REFRESH_TTL_S)
       return cached;
-    const observation = await this.metadata.remote.fetchMintMetadata(
-      mintUrl,
-      cached?.keysets ?? [],
-    );
+    const observation = await this.mintAdapter.fetchMintMetadata(mintUrl, cached?.keysets ?? []);
     const result = await this.metadata.transactions.applyObservation(observation);
     if (result.applied) {
       await this.publishCommittedEvent('mint:metadata-refreshed', { mintUrl });

@@ -925,7 +925,6 @@ export class Manager {
       this.mintAdapter,
       {
         queries: mintQueries,
-        remote: this.mintAdapter,
         transactions: new CoreMintMetadataTransactions(coreTransactionRunner),
       },
       mintLogger,

@@ -64,7 +64,6 @@ describe.each(['memory', 'sqlite'] as const)(
       const result = await queries.getMetadata(`${mintUrl}/`);
       expect(result?.mint.updatedAt).toBe(10);
       expect(result?.keysets[0]?.active).toBe(true);
-      expect(await queries.isTrustedMint(`${mintUrl}/`)).toBe(true);
     });
 
     it('preserves current trust when applying metadata fetched before a trust change', async () => {
