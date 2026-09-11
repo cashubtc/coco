@@ -229,6 +229,7 @@ export class MintService {
    * May fetch remotely and independently commit metadata, even if the caller later fails.
    * Fresh metadata needs no transaction. Returns after commit and attempted event publication;
    * listener failures are logged and cannot turn an already committed refresh into a failure.
+   * Older or equal-timestamp observations return the committed snapshot without publishing events.
    * Call only outside a Wallet transaction; runtime nesting rejection is not yet universal.
    */
   async refreshAndCommitIfStale(mintUrl: string): Promise<MintMetadata> {
@@ -240,10 +241,12 @@ export class MintService {
       mintUrl,
       cached?.keysets ?? [],
     );
-    const refreshed = await this.metadata.transactions.applyObservation(observation);
-    await this.publishCommittedEvent('mint:metadata-refreshed', { mintUrl });
-    await this.publishCommittedEvent('mint:updated', refreshed);
-    return refreshed;
+    const result = await this.metadata.transactions.applyObservation(observation);
+    if (result.applied) {
+      await this.publishCommittedEvent('mint:metadata-refreshed', { mintUrl });
+      await this.publishCommittedEvent('mint:updated', result.metadata);
+    }
+    return result.metadata;
   }
 
   private async publishCommittedEvent<E extends 'mint:metadata-refreshed' | 'mint:updated'>(

@@ -28,6 +28,10 @@ events; Send can reuse the action without reproducing that workflow. Its commit 
 survives a later Send failure. Gateways and scoped commands cannot depend on this action or any
 other coordinator, and coordinator dependencies must remain acyclic.
 
+The mint metadata gateway returns whether it applied the observation alongside the committed
+snapshot. Older observations and timestamp ties are ignored, retaining the first commit on ties.
+The refresh action publishes events only for applied observations.
+
 ## Considered Options
 
 Broad Service dependencies and transaction-scoped Service clones obscure effects and transaction

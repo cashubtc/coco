@@ -18,6 +18,12 @@ export interface MintMetadataObservation {
   observedAt: number;
 }
 
+/** The authoritative snapshot and whether this observation changed it. */
+export interface MintMetadataApplyResult {
+  metadata: MintMetadata;
+  applied: boolean;
+}
+
 export interface MintQueries {
   isTrustedMint(mintUrl: string): Promise<boolean>;
   getMetadata(mintUrl: string): Promise<MintMetadata | null>;

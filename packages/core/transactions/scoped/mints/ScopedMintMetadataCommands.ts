@@ -1,9 +1,9 @@
 import { isBlsKeyset } from '@cashu/cashu-ts';
-import type { MintMetadata, MintMetadataObservation } from '@core/mints/MintMetadata.ts';
+import type { MintMetadataApplyResult, MintMetadataObservation } from '@core/mints/MintMetadata.ts';
 import type { MintRepository, KeysetRepository } from '@core/repositories';
 
 export interface ScopedMintMetadataCommands {
-  applyObservation(observation: MintMetadataObservation): Promise<MintMetadata>;
+  applyObservation(observation: MintMetadataObservation): Promise<MintMetadataApplyResult>;
 }
 
 /** Cache persistence shared by owning transactions; remote metadata cannot change mint trust. */
@@ -13,16 +13,20 @@ export class RepositoryMintMetadataCommands implements ScopedMintMetadataCommand
     private readonly keysets: KeysetRepository,
   ) {}
 
-  async applyObservation(observation: MintMetadataObservation): Promise<MintMetadata> {
+  async applyObservation(observation: MintMetadataObservation): Promise<MintMetadataApplyResult> {
     const current = (await this.mints.getAllMints()).find(
       (mint) => mint.mintUrl === observation.mintUrl,
     );
-    if (current && current.updatedAt > observation.observedAt) {
+    // Request timestamps have second precision, so keep the first commit on ties.
+    if (current && current.updatedAt >= observation.observedAt) {
       return {
-        mint: current,
-        keysets: (await this.keysets.getKeysetsByMintUrl(current.mintUrl)).filter(
-          (keyset) => !isBlsKeyset(keyset.id),
-        ),
+        applied: false,
+        metadata: {
+          mint: current,
+          keysets: (await this.keysets.getKeysetsByMintUrl(current.mintUrl)).filter(
+            (keyset) => !isBlsKeyset(keyset.id),
+          ),
+        },
       };
     }
     for (const keyset of observation.keysets) {
@@ -45,6 +49,9 @@ export class RepositoryMintMetadataCommands implements ScopedMintMetadataCommand
     };
     await this.mints.addOrUpdateMint(mint);
     const keysets = await this.keysets.getKeysetsByMintUrl(mint.mintUrl);
-    return { mint, keysets: keysets.filter((keyset) => !isBlsKeyset(keyset.id)) };
+    return {
+      applied: true,
+      metadata: { mint, keysets: keysets.filter((keyset) => !isBlsKeyset(keyset.id)) },
+    };
   }
 }

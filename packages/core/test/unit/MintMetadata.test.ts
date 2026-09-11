@@ -74,9 +74,10 @@ describe.each(['memory', 'sqlite'] as const)(
         new RepositoryCoreTransactionRunner(repositories),
       );
       const result = await transactions.applyObservation(observation);
-      expect(result.mint.trusted).toBe(false);
-      expect(result.mint.mintInfo.name).toBe('Refreshed');
-      expect(result.keysets[0]?.active).toBe(false);
+      expect(result.applied).toBe(true);
+      expect(result.metadata.mint.trusted).toBe(false);
+      expect(result.metadata.mint.mintInfo.name).toBe('Refreshed');
+      expect(result.metadata.keysets[0]?.active).toBe(false);
     });
 
     it('ignores observations older than the committed mint snapshot', async () => {
@@ -86,10 +87,34 @@ describe.each(['memory', 'sqlite'] as const)(
         new RepositoryCoreTransactionRunner(repositories),
       );
       const result = await transactions.applyObservation(observation);
-      expect(result.mint.updatedAt).toBe(30);
-      expect(result.mint.mintInfo).toEqual(testMintInfo);
-      expect(result.keysets[0]?.active).toBe(true);
+      expect(result.applied).toBe(false);
+      expect(result.metadata.mint.updatedAt).toBe(30);
+      expect(result.metadata.mint.mintInfo).toEqual(testMintInfo);
+      expect(result.metadata.keysets[0]?.active).toBe(true);
       expect((await repositories.mintRepository.getMintByUrl(mintUrl)).updatedAt).toBe(30);
+    });
+
+    it('keeps the first committed snapshot when observations have equal timestamps', async () => {
+      await repositories.mintRepository.addNewMint(original);
+      await repositories.keysetRepository.addKeyset(keyset);
+      const transactions = new CoreMintMetadataTransactions(
+        new RepositoryCoreTransactionRunner(repositories),
+      );
+      const committed = await transactions.applyObservation(observation);
+      const result = await transactions.applyObservation({
+        ...observation,
+        mintInfo: testMintInfo,
+        keysets: [keyset],
+      });
+      expect(committed.applied).toBe(true);
+      expect(result.applied).toBe(false);
+      expect(result.metadata).toEqual(committed.metadata);
+      expect((await repositories.mintRepository.getMintByUrl(mintUrl)).mintInfo.name).toBe(
+        'Refreshed',
+      );
+      expect((await repositories.keysetRepository.getKeysetById(mintUrl, keyset.id))?.active).toBe(
+        false,
+      );
     });
 
     it('rolls back keyset refreshes if the mint snapshot cannot be persisted', async () => {
