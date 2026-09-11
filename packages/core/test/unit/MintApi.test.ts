@@ -1,7 +1,7 @@
 import { Amount } from '@cashu/cashu-ts';
 import { describe, expect, it, mock } from 'bun:test';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
-import { CashuMintMetadataRemote } from '../../infra/CashuMintMetadataRemote.ts';
+import { MintRequestProvider } from '../../infra/MintRequestProvider.ts';
 import { createMintMetadataRefreshDependencies } from '../fixtures/MintMetadataRefresh.ts';
 
 import { MintApi } from '../../api/MintApi';
@@ -14,7 +14,7 @@ import {
   type PaymentMethodCapabilityCheck,
 } from '../../services/MintService';
 import type { Mint } from '../../models/Mint';
-import type { MintAdapter } from '../../infra/MintAdapter';
+import { MintAdapter } from '../../infra/MintAdapter';
 import type { MintInfo } from '../../types';
 
 describe('MintApi payment method capabilities', () => {
@@ -43,16 +43,16 @@ describe('MintApi payment method capabilities', () => {
     const repositories = new MemoryRepositories();
     const mintRepo = repositories.mintRepository;
     const keysetRepo = repositories.keysetRepository;
-    const adapter = {
+    const adapter = Object.assign(new MintAdapter(new MintRequestProvider()), {
       fetchMintInfo: mock(async () => mintInfo),
       fetchKeysets: mock(async () => ({ keysets })),
       fetchKeysForId: mock(async () => ({ '1': 'key-1' })),
-    } as unknown as MintAdapter;
+    });
     const service = new MintService(
       mintRepo,
       keysetRepo,
       adapter,
-      createMintMetadataRefreshDependencies(repositories, new CashuMintMetadataRemote(adapter)),
+      createMintMetadataRefreshDependencies(repositories, adapter),
     );
     await mintRepo.addOrUpdateMint({
       mintUrl,

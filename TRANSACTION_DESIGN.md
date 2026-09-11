@@ -103,7 +103,7 @@ shows the intended Send composition once that separate migration adopts the acti
 ```text
 SendOperationService
   -> MintService.refreshAndCommitIfStale
-       -> MintQueries / CashuMintMetadataRemote (outside transactions)
+       -> MintQueries / MintMetadataRemote via MintAdapter (outside transactions)
        -> MintMetadataTransactions.applyObservation (one committed transaction)
        -> publish mint events
   -> finish Send preflight

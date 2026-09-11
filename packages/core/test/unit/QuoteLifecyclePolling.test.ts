@@ -1,12 +1,12 @@
 import { Amount } from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it, mock } from 'bun:test';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
-import { CashuMintMetadataRemote } from '../../infra/CashuMintMetadataRemote.ts';
+import { MintRequestProvider } from '../../infra/MintRequestProvider.ts';
 import type { MintMetadataObservation } from '../../mints/MintMetadata.ts';
 import { createMintMetadataRefreshDependencies } from '../fixtures/MintMetadataRefresh.ts';
 import { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
-import type { MintAdapter } from '../../infra/MintAdapter.ts';
+import { MintAdapter } from '../../infra/MintAdapter.ts';
 import { PollingTransport } from '../../infra/PollingTransport.ts';
 import type { MeltHandlerProvider } from '../../infra/handlers/melt/index.ts';
 import type { MintHandlerProvider } from '../../infra/handlers/mint/index.ts';
@@ -58,19 +58,18 @@ describe('QuoteLifecycle mint quote polling', () => {
   let mintQuoteRepository: MemoryMintQuoteRepository;
   let mintRepository: MemoryMintRepository;
   let mintService: MintService;
-  let metadataRemote: CashuMintMetadataRemote;
   let quoteLifecycle: QuoteLifecycle;
   let fetchRemoteMintQuote: ReturnType<typeof mock>;
 
   beforeEach(async () => {
     eventBus = new EventBus<CoreEvents>();
     mintQuoteRepository = new MemoryMintQuoteRepository();
-    mintAdapter = {
+    mintAdapter = Object.assign(new MintAdapter(new MintRequestProvider()), {
       checkMintQuoteBatch: mock(async () => []),
       checkMintQuote: mock(async (_mintUrl: string, _method: string, quoteId: string) =>
         bolt11PollingSnapshot(quoteId),
       ),
-    } as unknown as MintAdapter;
+    });
 
     const repositories = new MemoryRepositories();
     mintRepository = repositories.mintRepository as MemoryMintRepository;
@@ -94,12 +93,11 @@ describe('QuoteLifecycle mint quote polling', () => {
         },
       } as never,
     });
-    metadataRemote = new CashuMintMetadataRemote(mintAdapter);
     mintService = new MintService(
       mintRepository,
       repositories.keysetRepository,
       mintAdapter,
-      createMintMetadataRefreshDependencies(repositories, metadataRemote),
+      createMintMetadataRefreshDependencies(repositories, mintAdapter),
       undefined,
       eventBus,
     );
@@ -725,14 +723,12 @@ describe('QuoteLifecycle mint quote polling', () => {
       const started = new Promise<void>((resolve) => {
         markStarted = resolve;
       });
-      metadataRemote.fetchMintMetadata = mock<CashuMintMetadataRemote['fetchMintMetadata']>(
-        async () => ({
-          mintUrl,
-          mintInfo: mint.mintInfo,
-          keysets: [],
-          observedAt,
-        }),
-      ).mockImplementationOnce(() => {
+      mintAdapter.fetchMintMetadata = mock<MintAdapter['fetchMintMetadata']>(async () => ({
+        mintUrl,
+        mintInfo: mint.mintInfo,
+        keysets: [],
+        observedAt,
+      })).mockImplementationOnce(() => {
         markStarted();
         return new Promise<MintMetadataObservation>((resolve) => {
           releaseObservation = resolve;

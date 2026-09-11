@@ -1,7 +1,7 @@
 import { Amount } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect, mock } from 'bun:test';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
-import { CashuMintMetadataRemote } from '../../infra/CashuMintMetadataRemote.ts';
+import { MintRequestProvider } from '../../infra/MintRequestProvider.ts';
 import { createMintMetadataRefreshDependencies } from '../fixtures/MintMetadataRefresh.ts';
 import { MintService } from '../../services/MintService';
 import { ProofValidationError } from '../../models/Error';
@@ -11,7 +11,7 @@ import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { Mint } from '../../models/Mint';
 import type { MintInfo } from '../../types';
-import type { MintAdapter } from '../../infra/MintAdapter';
+import { MintAdapter } from '../../infra/MintAdapter';
 
 describe('MintService', () => {
   const testMintUrl = 'https://mint.test';
@@ -60,20 +60,20 @@ describe('MintService', () => {
     eventBus = new EventBus<CoreEvents>();
 
     // Create mock MintAdapter
-    mockAdapter = {
+    mockAdapter = Object.assign(new MintAdapter(new MintRequestProvider()), {
       fetchMintInfo: mock(() => Promise.resolve(mockMintInfo)),
       fetchKeysets: mock(() => Promise.resolve({ keysets: mockKeysets })),
       fetchKeysForId: mock(() => Promise.resolve(mockKeys)),
       checkMintQuote: mock(() => Promise.resolve({})),
       checkMeltQuoteState: mock(() => Promise.resolve({})),
       checkProofStates: mock(() => Promise.resolve([])),
-    } as unknown as MintAdapter;
+    });
 
     service = new MintService(
       mintRepo,
       keysetRepo,
       mockAdapter,
-      createMintMetadataRefreshDependencies(repositories, new CashuMintMetadataRemote(mockAdapter)),
+      createMintMetadataRefreshDependencies(repositories, mockAdapter),
       undefined,
       eventBus,
     );

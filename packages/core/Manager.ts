@@ -1,5 +1,4 @@
 import type { OutputDataCreator } from '@cashu/cashu-ts';
-import { CashuMintMetadataRemote } from './infra/CashuMintMetadataRemote.ts';
 import { CoreMintMetadataTransactions } from './transactions/mints/MintMetadataTransactions.ts';
 import { StoredMintQueries } from './mints/MintMetadata.ts';
 
@@ -926,7 +925,7 @@ export class Manager {
       this.mintAdapter,
       {
         queries: mintQueries,
-        remote: new CashuMintMetadataRemote(this.mintAdapter),
+        remote: this.mintAdapter,
         transactions: new CoreMintMetadataTransactions(coreTransactionRunner),
       },
       mintLogger,
