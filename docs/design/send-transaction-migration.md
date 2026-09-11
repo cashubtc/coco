@@ -65,6 +65,15 @@ inputs, returns them to ready, releases reservations, and records `rolled_back` 
 Spent inputs, missing ownership, and changed revisions cannot authorize this release. Events follow
 commit; recovery does not contact the mint for this unsubmitted local send.
 
+Pending completion also accepts already-spent inputs whose reservations were released before an
+older finalizer could save `finalized`. This rule applies through the shared completion transaction
+for recovery, refresh, explicit finalization, and proof-state notifications. Send proofs must match
+the persisted token; swap outputs retain their creation ownership check. Missing reservations are
+accepted only for locally spent inputs, never for inputs owned by another operation. Individual
+proof observations can still leave a Send pending. Once all token proofs are spent, completion
+releases only remaining owned input reservations and records `finalized` in the same transaction;
+post-commit events report only the reservations actually released.
+
 Legacy swap handlers could save outputs and spend inputs before persisting `pending`. Recovery
 claims therefore accept operation-owned ready or spent inputs. After observing remote spent inputs,
 recovery combines existing operation-created outputs with any missing restored outputs and uses the

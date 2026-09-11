@@ -592,11 +592,19 @@ export class RepositorySendCommands implements ScopedSendCommands {
     if (sendBySecret.size !== expectedSecrets.length) {
       throw new ProofValidationError('Cannot complete Send operation: missing send proof metadata');
     }
+    if (
+      !current.token ||
+      current.token.mint !== current.mintUrl ||
+      normalizeUnit(current.token.unit) !== normalizeUnit(current.unit) ||
+      !sameProofSet(current.token.proofs, sendProofs)
+    ) {
+      throw new ProofValidationError('Send proofs do not match the persisted token');
+    }
     for (const secret of expectedSecrets) {
       const proof = sendBySecret.get(secret);
       const owned = current.needsSwap
         ? proof?.createdByOperationId === current.id
-        : proof?.usedByOperationId === current.id;
+        : proof && canCompleteWithInput(proof, current.id);
       if (
         !proof ||
         !owned ||
@@ -643,7 +651,7 @@ export class RepositorySendCommands implements ScopedSendCommands {
       const proof = inputBySecret.get(secret);
       if (
         !proof ||
-        proof.usedByOperationId !== current.id ||
+        !canCompleteWithInput(proof, current.id) ||
         proof.mintUrl !== current.mintUrl ||
         normalizeUnit(proof.unit) !== normalizeUnit(current.unit) ||
         proof.state !== 'spent'
@@ -651,7 +659,12 @@ export class RepositorySendCommands implements ScopedSendCommands {
         throw new ProofValidationError(`Send input ${secret} is not spent and operation-owned`);
       }
     }
-    await this.proofs.releaseOwned(current.mintUrl, current.id, current.inputProofSecrets);
+    const releasedInputSecrets = inputs
+      .filter((proof) => proof.usedByOperationId === current.id)
+      .map((proof) => proof.secret);
+    if (releasedInputSecrets.length > 0) {
+      await this.proofs.releaseOwned(current.mintUrl, current.id, releasedInputSecrets);
+    }
 
     const finalized: FinalizedSendOperation = {
       ...current,
@@ -675,7 +688,7 @@ export class RepositorySendCommands implements ScopedSendCommands {
     return {
       operation: finalized,
       spentProofSecrets: newlySpent,
-      releasedInputSecrets: [...current.inputProofSecrets],
+      releasedInputSecrets,
       committed: true,
     };
   }
@@ -891,6 +904,14 @@ export class RepositorySendCommands implements ScopedSendCommands {
       state: 'ready',
     });
   }
+}
+
+/** Completion can resume after an old finalizer released already-spent inputs before crashing. */
+function canCompleteWithInput(proof: CoreProof, operationId: string): boolean {
+  return (
+    proof.usedByOperationId === operationId ||
+    (proof.usedByOperationId == null && proof.state === 'spent')
+  );
 }
 
 function getIdempotentExactResult(

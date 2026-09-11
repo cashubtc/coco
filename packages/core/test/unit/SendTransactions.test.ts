@@ -1035,6 +1035,259 @@ describe('SendTransactions cancellation and completion', () => {
   });
 });
 
+describe.each(['exact', 'swap'] as const)(
+  'SendTransactions %s completion after reservation release',
+  (method) => {
+    async function pending(repositories = new MemoryRepositories(), revision = 0) {
+      const environment = await setup(repositories);
+      const id = 'released-send';
+      const needsSwap = method === 'swap';
+      const inputs: CoreProof[] = [0, 1].map((index) => ({
+        ...proof(`input-${index}`, 5),
+        state: needsSwap ? 'spent' : 'inflight',
+        usedByOperationId: id,
+      }));
+      const sendProofs: CoreProof[] = needsSwap
+        ? [0, 1].map((index) => ({
+            ...proof(`send-${index}`, 5),
+            state: 'inflight',
+            createdByOperationId: id,
+          }))
+        : inputs;
+      const operation: PendingSendOperation = {
+        ...createSendOperation(
+          id,
+          mintUrl,
+          { amount: Amount.from(10), unit: 'sat' },
+          { method: 'default', methodData: {} },
+        ),
+        state: 'pending',
+        revision,
+        needsSwap,
+        fee: Amount.zero(),
+        inputAmount: Amount.from(10),
+        inputProofSecrets: inputs.map((input) => input.secret),
+        outputData: needsSwap
+          ? {
+              keep: [],
+              send: sendProofs.map((proof) => ({
+                blindedMessage: { id: proof.id, amount: 5, B_: `B-${proof.secret}` },
+                secret: Buffer.from(proof.secret).toString('hex'),
+                blindingFactor: '01',
+              })),
+            }
+          : undefined,
+        token: { mint: mintUrl, unit: 'sat', proofs: sendProofs },
+      };
+      await repositories.sendOperationRepository.create(operation);
+      await repositories.proofRepository.saveProofs(
+        mintUrl,
+        needsSwap ? [...inputs, ...sendProofs] : inputs,
+      );
+      return { ...environment, operation, inputs, sendProofs };
+    }
+
+    it.each([0, 3])('completes spent inputs already released at revision %i', async (revision) => {
+      const { repositories, transactions, operation, sendProofs } = await pending(
+        undefined,
+        revision,
+      );
+      await repositories.proofRepository.setProofState(
+        mintUrl,
+        sendProofs.map((proof) => proof.secret),
+        'spent',
+      );
+      // The old finalizer could commit this release and crash before persisting finalized.
+      await repositories.proofRepository.releaseProofs(mintUrl, operation.inputProofSecrets);
+
+      const result = await transactions.completePending({
+        operationId: operation.id,
+        updatedAt: 400,
+      });
+
+      expect(result.operation.state).toBe('finalized');
+      expect(result.operation.revision).toBe(revision + 1);
+      expect(result.releasedInputSecrets).toEqual([]);
+      expect(result.spentProofSecrets).toEqual([]);
+      expect(
+        (await transactions.completePending({ operationId: operation.id, updatedAt: 500 }))
+          .committed,
+      ).toBe(false);
+    });
+
+    it('releases and reports only reservations still owned by the Send', async () => {
+      const { repositories, transactions, operation, inputs, sendProofs } = await pending();
+      await repositories.proofRepository.setProofState(
+        mintUrl,
+        sendProofs.map((proof) => proof.secret),
+        'spent',
+      );
+      await repositories.proofRepository.releaseProofs(mintUrl, [inputs[0]!.secret]);
+
+      const result = await transactions.completePending({
+        operationId: operation.id,
+        updatedAt: 400,
+      });
+
+      expect(result.operation.state).toBe('finalized');
+      expect(result.releasedInputSecrets).toEqual([inputs[1]!.secret]);
+      for (const input of inputs) {
+        expect(
+          (await repositories.proofRepository.getProofBySecret(mintUrl, input.secret))
+            ?.usedByOperationId,
+        ).toBeUndefined();
+      }
+    });
+
+    it('records individual observations without finalizing an unclaimed token', async () => {
+      const { repositories, transactions, operation, inputs, sendProofs } = await pending();
+      if (method === 'swap') {
+        await repositories.proofRepository.releaseProofs(mintUrl, operation.inputProofSecrets);
+      }
+      const first = await transactions.completePending({
+        operationId: operation.id,
+        updatedAt: 400,
+        spentProofSecrets: [sendProofs[0]!.secret],
+      });
+      expect(first.operation.state).toBe('pending');
+      expect(first.spentProofSecrets).toEqual([sendProofs[0]!.secret]);
+      expect(first.releasedInputSecrets).toEqual([]);
+      expect(
+        (await repositories.proofRepository.getProofBySecret(mintUrl, sendProofs[1]!.secret))
+          ?.state,
+      ).toBe('inflight');
+
+      if (method === 'exact') {
+        await repositories.proofRepository.releaseProofs(mintUrl, [inputs[0]!.secret]);
+      }
+      const last = await transactions.completePending({
+        operationId: operation.id,
+        updatedAt: 500,
+        spentProofSecrets: [sendProofs[1]!.secret],
+      });
+      expect(last.operation.state).toBe('finalized');
+      expect(last.spentProofSecrets).toEqual([sendProofs[1]!.secret]);
+      expect(last.releasedInputSecrets).toEqual(method === 'exact' ? [inputs[1]!.secret] : []);
+    });
+
+    it.each(['ready', 'inflight', 'foreign-owner', 'token-mismatch', 'missing-token'] as const)(
+      'rejects %s data without changing proofs or operation state',
+      async (invalid) => {
+        const { repositories, transactions, operation, inputs, sendProofs } = await pending();
+        await repositories.proofRepository.setProofState(
+          mintUrl,
+          sendProofs.map((proof) => proof.secret),
+          'spent',
+        );
+        await repositories.proofRepository.releaseProofs(mintUrl, operation.inputProofSecrets);
+        if (invalid === 'ready' || invalid === 'inflight') {
+          await repositories.proofRepository.setProofState(mintUrl, [inputs[0]!.secret], invalid);
+        } else if (invalid === 'foreign-owner') {
+          await repositories.proofRepository.setProofState(mintUrl, [inputs[0]!.secret], 'ready');
+          await repositories.proofRepository.reserveProofs(
+            mintUrl,
+            [inputs[0]!.secret],
+            'another-operation',
+          );
+          await repositories.proofRepository.setProofState(mintUrl, [inputs[0]!.secret], 'spent');
+        } else {
+          await repositories.sendOperationRepository.update({
+            ...operation,
+            token:
+              invalid === 'missing-token'
+                ? undefined
+                : {
+                    ...operation.token!,
+                    proofs: operation.token!.proofs.map((proof) => ({
+                      ...proof,
+                      C: 'different-signature',
+                    })),
+                  },
+          });
+        }
+        const before = await repositories.proofRepository.getProofsBySecrets(mintUrl, [
+          ...new Set([...operation.inputProofSecrets, ...sendProofs.map((proof) => proof.secret)]),
+        ]);
+        const operationBefore = await repositories.sendOperationRepository.getById(operation.id);
+
+        await expect(
+          transactions.completePending({
+            operationId: operation.id,
+            updatedAt: 400,
+            spentProofSecrets: sendProofs.map((proof) => proof.secret),
+          }),
+        ).rejects.toThrow();
+
+        expect(await repositories.sendOperationRepository.getById(operation.id)).toEqual(
+          operationBefore,
+        );
+        expect(
+          await repositories.proofRepository.getProofsBySecrets(
+            mintUrl,
+            before.map((proof) => proof.secret),
+          ),
+        ).toEqual(before);
+      },
+    );
+
+    if (method === 'swap') {
+      it('requires token proofs to retain their creation ownership', async () => {
+        const { repositories, transactions, operation, sendProofs } = await pending();
+        await repositories.proofRepository.releaseProofs(mintUrl, operation.inputProofSecrets);
+        await repositories.proofRepository.setCreatedByOperation(
+          mintUrl,
+          [sendProofs[0]!.secret],
+          'another-operation',
+        );
+
+        await expect(
+          transactions.completePending({
+            operationId: operation.id,
+            updatedAt: 400,
+            spentProofSecrets: sendProofs.map((proof) => proof.secret),
+          }),
+        ).rejects.toThrow('not inflight and operation-owned');
+
+        expect((await repositories.sendOperationRepository.getById(operation.id))?.state).toBe(
+          'pending',
+        );
+        expect(
+          (await repositories.proofRepository.getProofBySecret(mintUrl, sendProofs[0]!.secret))
+            ?.state,
+        ).toBe('inflight');
+      });
+    }
+
+    it('rolls back remaining reservation releases when finalization conflicts', async () => {
+      const { repositories, transactions, operation, inputs, sendProofs } = await pending(
+        new RejectingSendTransitionRepositories(),
+      );
+      await repositories.proofRepository.setProofState(
+        mintUrl,
+        sendProofs.map((proof) => proof.secret),
+        'spent',
+      );
+      await repositories.proofRepository.releaseProofs(mintUrl, [inputs[0]!.secret]);
+
+      await expect(
+        transactions.completePending({ operationId: operation.id, updatedAt: 400 }),
+      ).rejects.toThrow('pending-state or revision conflict');
+
+      expect((await repositories.sendOperationRepository.getById(operation.id))?.state).toBe(
+        'pending',
+      );
+      expect(
+        (await repositories.proofRepository.getProofBySecret(mintUrl, inputs[0]!.secret))
+          ?.usedByOperationId,
+      ).toBeUndefined();
+      expect(
+        (await repositories.proofRepository.getProofBySecret(mintUrl, inputs[1]!.secret))
+          ?.usedByOperationId,
+      ).toBe(operation.id);
+    });
+  },
+);
+
 describe('SendTransactions reclaim', () => {
   async function pending(repositories = new MemoryRepositories()) {
     const environment = await setup(repositories);

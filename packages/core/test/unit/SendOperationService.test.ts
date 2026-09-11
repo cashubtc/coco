@@ -35,6 +35,7 @@ import type { SendTransactions } from '../../transactions/send/SendTransactions.
 import type { RepositoryTransactionScope } from '../../repositories';
 import { MintOperationError, NetworkError } from '../../models/Error.ts';
 import { makeOutputDataCreator } from '../fixtures/OutputDataCreator.ts';
+import { SendOpsApi } from '../../api/SendOpsApi.ts';
 
 class CountingMemoryRepositories extends MemoryRepositories {
   transactionCount = 0;
@@ -646,6 +647,49 @@ describe('SendOperationService', () => {
     expect(repositories.transactionCount).toBe(1);
     expect((await sendOpRepo.getById(pendingOp.id))?.state).toBe('finalized');
   });
+
+  it.each(['recovery', 'refresh', 'finalize', 'notification'] as const)(
+    'finishes an already released Send through %s and only publishes committed changes',
+    async (path) => {
+      const proof = makeProof('released-input', 100);
+      await proofRepo.saveProofs(mintUrl, [proof]);
+      const prepared = await service.prepare(await service.init(mintUrl, unitAmount(100)));
+      const { operation } = await service.execute(prepared);
+      await sendOpRepo.update({ ...operation, revision: 0 });
+      await proofRepo.setProofState(mintUrl, [proof.secret], 'spent');
+      await proofRepo.releaseProofs(mintUrl, [proof.secret]);
+      remote.checkProofStates.mockResolvedValue([
+        { Y: 'released-input-Y', state: 'SPENT', witness: null },
+      ]);
+      const releases = mock(() => {});
+      const finalized = mock(async () => {
+        expect(repositories.transactionOpen).toBe(false);
+        expect((await sendOpRepo.getById(operation.id))?.state).toBe('finalized');
+      });
+      eventBus.on('proofs:released', releases);
+      eventBus.on('send:finalized', finalized);
+      const api = new SendOpsApi(service);
+      const complete = () => {
+        switch (path) {
+          case 'recovery':
+            return api.recovery.run();
+          case 'refresh':
+            return api.refresh(operation.id);
+          case 'finalize':
+            return api.finalize(operation.id);
+          case 'notification':
+            return service.recordProofSpent(operation.id, proof.secret);
+        }
+      };
+
+      await complete();
+      await complete();
+
+      expect((await sendOpRepo.getById(operation.id))?.state).toBe('finalized');
+      expect(finalized).toHaveBeenCalledTimes(1);
+      expect(releases).not.toHaveBeenCalled();
+    },
+  );
 
   it('preserves empty pending default-token reclaim through its transaction gateway', async () => {
     const pendingOp: PendingSendOperation = {

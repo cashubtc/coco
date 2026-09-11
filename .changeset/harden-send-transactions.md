@@ -29,3 +29,7 @@ callers reuse the same action.
 Recover legacy exact Sends stranded in `executing` by atomically releasing their unsubmitted
 inputs. Resume legacy swaps with locally spent inputs or previously saved outputs without
 duplicating proofs or resetting later output spending and reservations.
+
+Complete pending Sends whose spent input reservations were already released before an interrupted
+finalization. Preserve partial proof observations and conflicting-owner checks, and publish release
+events only for reservations actually released by completion.

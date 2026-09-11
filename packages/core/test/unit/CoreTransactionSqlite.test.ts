@@ -6,11 +6,14 @@ import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransact
 import { SqlStorageRepositories } from '../../../sql-storage/src/repositories.ts';
 import { SqliteDb } from '../../../sqlite-bun/src/db.ts';
 import { CoreSendTransactions } from '../../transactions/send/SendTransactions.ts';
-import type { ExecutingSendOperation } from '../../operations/send/SendOperation.ts';
+import type {
+  ExecutingSendOperation,
+  PendingSendOperation,
+} from '../../operations/send/SendOperation.ts';
 import type { CoreProof } from '../../types.ts';
 
 describe('CoreTransaction with SQLite', () => {
-  it.each(['exact', 'swap', 'conflict'] as const)(
+  it.each(['exact', 'swap', 'conflict', 'pending-exact', 'pending-swap'] as const)(
     'recovers legacy Send persistence atomically (%s)',
     async (scenario) => {
       const database = new Database(':memory:');
@@ -21,6 +24,8 @@ describe('CoreTransaction with SQLite', () => {
       );
       const mintUrl = 'https://mint.test';
       const amount = Amount.from(10);
+      const needsSwap = scenario === 'swap' || scenario === 'pending-swap';
+      const pending = scenario === 'pending-exact' || scenario === 'pending-swap';
       const input: CoreProof = {
         id: 'keyset',
         secret: 'input',
@@ -28,20 +33,20 @@ describe('CoreTransaction with SQLite', () => {
         amount,
         mintUrl,
         unit: 'sat',
-        state: scenario === 'swap' ? 'spent' : 'inflight',
-        usedByOperationId: 'legacy',
+        state: needsSwap || pending ? 'spent' : 'inflight',
+        usedByOperationId: pending ? undefined : 'legacy',
       };
       const send: CoreProof = {
         ...input,
         secret: 'output',
         C: 'C-output',
-        state: 'inflight',
+        state: pending ? 'spent' : 'inflight',
         usedByOperationId: undefined,
         createdByOperationId: 'legacy',
       };
-      const operation: ExecutingSendOperation = {
+      const operation: ExecutingSendOperation | PendingSendOperation = {
         id: 'legacy',
-        state: 'executing',
+        state: pending ? 'pending' : 'executing',
         amount,
         mintUrl,
         unit: 'sat',
@@ -49,31 +54,43 @@ describe('CoreTransaction with SQLite', () => {
         methodData: {},
         createdAt: 1000,
         updatedAt: 1000,
-        needsSwap: scenario === 'swap',
+        needsSwap,
         inputProofSecrets: [input.secret],
         inputAmount: amount,
         fee: Amount.zero(),
-        outputData:
-          scenario === 'swap'
-            ? {
-                keep: [],
-                send: [
-                  {
-                    blindedMessage: { id: send.id, amount: 10, B_: 'B-output' },
-                    secret: Buffer.from(send.secret).toString('hex'),
-                    blindingFactor: '01',
-                  },
-                ],
-              }
-            : undefined,
+        outputData: needsSwap
+          ? {
+              keep: [],
+              send: [
+                {
+                  blindedMessage: { id: send.id, amount: 10, B_: 'B-output' },
+                  secret: Buffer.from(send.secret).toString('hex'),
+                  blindingFactor: '01',
+                },
+              ],
+            }
+          : undefined,
+        ...(pending
+          ? { token: { mint: mintUrl, unit: 'sat', proofs: needsSwap ? [send] : [input] } }
+          : {}),
       };
       try {
         await repositories.sendOperationRepository.create(operation);
-        await repositories.proofRepository.saveProofs(
-          mintUrl,
-          scenario === 'swap' ? [input, send] : [input],
-        );
-        if (scenario === 'swap') {
+        await repositories.proofRepository.saveProofs(mintUrl, needsSwap ? [input, send] : [input]);
+        if (pending) {
+          const result = await transactions.completePending({
+            operationId: operation.id,
+            updatedAt: 2000,
+          });
+          expect(result.releasedInputSecrets).toEqual([]);
+          expect(await repositories.sendOperationRepository.getById(operation.id)).toMatchObject({
+            state: 'finalized',
+            revision: 1,
+          });
+          expect(
+            (await repositories.proofRepository.getProofBySecret(mintUrl, input.secret))?.state,
+          ).toBe('spent');
+        } else if (scenario === 'swap') {
           const storedSend = await repositories.proofRepository.getProofBySecret(
             mintUrl,
             send.secret,
