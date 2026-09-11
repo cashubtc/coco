@@ -4,7 +4,6 @@ import {
   type MintMetadata,
   type MintQueries,
 } from '@core/mints/MintMetadata.ts';
-import type { MintMetadataRemote } from '@core/mints/MintMetadataRemote.ts';
 import type { MintMetadataTransactions } from '@core/transactions/mints/MintMetadataTransactions.ts';
 import {
   KeysetSyncError,
@@ -124,7 +123,7 @@ export type TopLevelNutCapability = 11 | 20;
 /** Explicit dependencies of the independently committed metadata refresh action. */
 export interface MintMetadataRefreshDependencies {
   queries: MintQueries;
-  remote: MintMetadataRemote;
+  remote: Pick<MintAdapter, 'fetchMintMetadata'>;
   transactions: MintMetadataTransactions;
 }
 

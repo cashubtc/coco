@@ -18,7 +18,6 @@ import type { MintInfo } from '../types';
 import type { MintRequestProvider } from './MintRequestProvider.ts';
 import type { Keyset, KeysetKeypairs } from '../models/Keyset.ts';
 import type { MintMetadataObservation } from '../mints/MintMetadata.ts';
-import type { MintMetadataRemote } from '../mints/MintMetadataRemote.ts';
 import { KeysetSyncError, MintFetchError } from '../models/Error.ts';
 import type { MintMethod } from '../operations/mint/MintMethodHandler.ts';
 
@@ -34,7 +33,7 @@ type NormalizedMintQuoteSnapshot<M extends MintMethod> = M extends 'bolt11'
  * All requests are rate-limited through the MintRequestProvider,
  * sharing the same rate limits with other components (e.g., WalletService).
  */
-export class MintAdapter implements MintMetadataRemote {
+export class MintAdapter {
   private cashuMints: Record<string, Mint> = {};
   private readonly requestProvider: MintRequestProvider;
   private readonly authProviders = new Map<string, AuthProvider>();

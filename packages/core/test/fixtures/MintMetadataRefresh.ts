@@ -1,7 +1,6 @@
 import { mock } from 'bun:test';
 import { MintService } from '../../services/MintService.ts';
 import type { MintAdapter } from '../../infra/MintAdapter.ts';
-import type { MintMetadataRemote } from '../../mints/MintMetadataRemote.ts';
 import { StoredMintQueries } from '../../mints/MintMetadata.ts';
 import { CoreMintMetadataTransactions } from '../../transactions/mints/MintMetadataTransactions.ts';
 import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
@@ -11,7 +10,7 @@ import type { CoreEvents } from '../../events/types.ts';
 
 export function createMintMetadataRemoteDouble() {
   return {
-    fetchMintMetadata: mock<MintMetadataRemote['fetchMintMetadata']>(async () => {
+    fetchMintMetadata: mock<MintAdapter['fetchMintMetadata']>(async () => {
       throw new Error('Unexpected mint metadata refresh');
     }),
   };
@@ -19,7 +18,7 @@ export function createMintMetadataRemoteDouble() {
 
 export function createMintMetadataRefreshDependencies(
   repositories: Repositories,
-  remote: MintMetadataRemote = createMintMetadataRemoteDouble(),
+  remote: Pick<MintAdapter, 'fetchMintMetadata'> = createMintMetadataRemoteDouble(),
 ) {
   return {
     queries: new StoredMintQueries(repositories.mintRepository, repositories.keysetRepository),
@@ -33,7 +32,7 @@ export function createMintMetadataRefreshDependencies(
 /** Exercise the real shared action; legacy MintService methods are outside this fixture's scope. */
 export function createMintServiceForMetadata(
   repositories: Repositories,
-  remote: MintMetadataRemote = createMintMetadataRemoteDouble(),
+  remote: Pick<MintAdapter, 'fetchMintMetadata'> = createMintMetadataRemoteDouble(),
   events = new EventBus<CoreEvents>(),
 ) {
   const unusedAdapter = {} as MintAdapter;
