@@ -70,10 +70,48 @@ state transitions, remote effects, and recovery. Both occupy the same architectu
 layer and may be invoked by public APIs or background processors.
 
 Services depend on narrow Queries, local capabilities, remote interfaces where
-needed, and their own domain's transaction gateway. Wallet mutations go through
-that gateway; Services do not receive the raw runner or live transaction scopes,
+needed, and their own domain's transaction gateway. They may also invoke a narrow, explicitly
+committing action owned by another coordinator as an independently committed prerequisite (see
+below). Wallet mutations owned by a coordinator go through its gateway; Services do not receive
+the raw runner or live transaction scopes,
 write through repositories, or compose other Services to construct an atomic
 transition. Events describing committed changes are published after commit.
+
+### Independently Committed Actions
+
+A coordinator may expose a narrow action that completes an independent domain change before its
+caller continues. Its method name must disclose persistence, such as
+`MintService.refreshAndCommitIfStale(mintUrl)`. Its contract must disclose remote I/O, independent
+commit semantics, and post-commit event handling. The caller receives only that action, for example
+`Pick<MintService, 'refreshAndCommitIfStale'>`, not the whole Service. Dependency chains must remain
+acyclic.
+
+The action owns freshness policy, remote observation, its own domain gateway call, and post-commit
+events. It returns after any transaction commits and event publication is attempted. A cached path
+may open no transaction. A committed metadata refresh survives a later Send preparation failure;
+that independence is what permits this composition. Changes that must commit or roll back together
+still compose scoped commands within one owning transition.
+
+```text
+SendOperationService
+  -> MintService.refreshAndCommitIfStale
+       -> MintQueries / CashuMintMetadataRemote (outside transactions)
+       -> MintMetadataTransactions.applyObservation (one committed transaction)
+       -> publish mint events
+  -> finish Send preflight
+  -> SendTransactions.prepare (a separate committed transaction)
+```
+
+An independently committed action is application orchestration, not a Query, local preflight
+capability, or `*Transactions` gateway. Gateways and scoped commands must never acquire such an
+action, including through callbacks or helpers. Coordinators still cannot receive the runner or a
+live transaction scope. A narrow interface and an explicit name communicate effects; neither alone
+enforces the dependency rules.
+
+Runtime rejection of nested Wallet transactions is not yet uniform: IndexedDB rejects ambient
+Wallet transactions, while the core runner has no universal guard and root Memory/SQLite calls
+can queue behind an outer transaction awaiting them. Consistent rejection across adapters is
+follow-up work; callers must not rely on a runtime exception to enforce this contract today.
 
 Shared algorithms, read-only access, and transactional invariants belong in
 behavior-specific capabilities, `<Domain>Queries`, and `Scoped*Commands`.
@@ -206,7 +244,9 @@ These dependencies expose their effects:
 - the Operation Service's own `*Transactions` interface commits local state; and
 - a publisher emits live events after commit.
 
-Broad regular Services are not substitutes for those interfaces. For example, depending on a
+Broad regular Services are not substitutes for those interfaces. An independently committed
+action is the explicit exception described above; a pure-looking helper may not conceal it.
+For example, depending on a
 whole `KeyRingService` when only P2PK signing is needed conceals both authority and effects.
 `KeyRingService` remains the user-facing keyring management module; internal consumers should use
 narrow capabilities such as `P2pkSigner` or keypair Queries as they migrate.
@@ -571,12 +611,12 @@ effect.
 Agents and human reviewers apply these rules to module dependencies, including authority supplied
 through helpers, callbacks, and composition-root wiring:
 
-| Module                                            | Forbidden dependencies                                                                                                                                       |
-| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Transaction-scoped implementation                 | Services/coordinators, remote infrastructure, live event bus, raw runner, root repository containers, concrete storage adapters, application-scoped gateways |
-| Application-scoped `*Transactions` implementation | regular Services, remote infrastructure, live event bus, repositories, application-scoped gateways                                                           |
-| Service / Operation Service                       | other Services/coordinators, repositories, `CoreTransactionRunner`, live scoped commands, another domain's transaction gateway                               |
-| Query or local preflight capability               | Services/coordinators, repository mutation interfaces, transaction modules, remote infrastructure, live event bus                                            |
+| Module                                            | Forbidden dependencies                                                                                                                                                                       |
+| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Transaction-scoped implementation                 | Services/coordinators, remote infrastructure, live event bus, raw runner, root repository containers, concrete storage adapters, application-scoped gateways                                 |
+| Application-scoped `*Transactions` implementation | regular Services, remote infrastructure, live event bus, repositories, application-scoped gateways                                                                                           |
+| Service / Operation Service                       | broad Service/coordinator interfaces (narrow independently committed actions are allowed), repositories, `CoreTransactionRunner`, live scoped commands, another domain's transaction gateway |
+| Query or local preflight capability               | Services/coordinators, repository mutation interfaces, transaction modules, remote infrastructure, live event bus                                                                            |
 
 Scoped implementations import repository contracts with `import type`; runtime repository helpers
 and concrete adapters cannot be used to acquire an opener. Repository adapters and composition-root
@@ -605,7 +645,9 @@ storage adapters:
    awaited sequentially and that each concurrent group preserves its invariants when interleaved.
 3. Trace effects across that boundary: asynchronous preflight and remote I/O occur outside it,
    derivation inside it is synchronous, retry-sensitive inputs remain stable, and live events follow
-   commit. Queries and preflight capabilities must remain non-mutating.
+   commit. Queries and preflight capabilities must remain non-mutating. For independently committed
+   actions, verify the call name and interface disclose persistence, the dependency graph is acyclic,
+   the action finishes outside the caller's transaction, and its commit may survive caller failure.
 4. Run the relevant behavior tests from the testing contract below. Add or adjust tests when a
    changed invariant needs coverage. Resolve new design violations before handoff; identify remaining
    legacy deviations and their owning migration without treating them as permission for new ones.

@@ -9,7 +9,7 @@ import type {
  * Keeps wiring concerns out of the core send domain.
  */
 export class SendHandlerProvider {
-  private registry: Partial<SendMethodHandlerRegistry> = {};
+  private registry: Partial<Record<SendMethod, SendMethodHandler>> = {};
 
   constructor(initialHandlers?: Partial<SendMethodHandlerRegistry>) {
     if (initialHandlers) {

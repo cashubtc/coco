@@ -1,5 +1,8 @@
 import type { OutputDataCreator } from '@cashu/cashu-ts';
-
+import { CashuMintMetadataRemote } from './infra/CashuMintMetadataRemote.ts';
+import { CoreMintMetadataTransactions } from './transactions/mints/MintMetadataTransactions.ts';
+import { StoredMintQueries } from './mints/MintMetadata.ts';
+import { CashuSendRemote } from './infra/handlers/send/CashuSendRemote.ts';
 import type {
   Repositories,
   LegacyMintQuoteRepository,
@@ -80,7 +83,11 @@ import {
   mintQuoteToMethodSnapshot,
 } from './models/MintQuote.ts';
 import { assessMintQuoteClaimability } from './models/MintQuoteClaimability.ts';
-import { RepositoryCoreTransactionRunner } from './transactions/CoreTransaction.ts';
+import {
+  RepositoryCoreTransactionRunner,
+  createCoreTransactionModuleFactory,
+} from './transactions/CoreTransaction.ts';
+import { CoreSendTransactions } from './transactions/send/SendTransactions.ts';
 import { CoreKeyRingTransactions } from './transactions/keypairs/KeyRingTransactions.ts';
 import { KeypairDerivation } from './keypairs/KeypairDerivation.ts';
 import { KeypairP2pkSigner } from './keypairs/P2pkSigner.ts';
@@ -912,15 +919,27 @@ export class Manager {
     const keyRingLogger = this.getChildLogger('KeyRingService');
     const historyLogger = this.getChildLogger('HistoryService');
     const tokenLogger = this.getChildLogger('TokenService');
+    const seedService = new SeedService(seedGetter);
+    const coreTransactionRunner = new RepositoryCoreTransactionRunner(
+      repositories,
+      createCoreTransactionModuleFactory(this.outputDataCreator),
+    );
+    const mintQueries = new StoredMintQueries(
+      repositories.mintRepository,
+      repositories.keysetRepository,
+    );
     const mintService = new MintService(
       repositories.mintRepository,
       repositories.keysetRepository,
       this.mintAdapter,
+      {
+        queries: mintQueries,
+        remote: new CashuMintMetadataRemote(this.mintAdapter),
+        transactions: new CoreMintMetadataTransactions(coreTransactionRunner),
+      },
       mintLogger,
       this.eventBus,
     );
-    const seedService = new SeedService(seedGetter);
-    const coreTransactionRunner = new RepositoryCoreTransactionRunner(repositories);
     const keyRingTransactions = new CoreKeyRingTransactions(coreTransactionRunner);
     const keypairDerivation = new KeypairDerivation(() => seedService.getSeed());
     const p2pkSigner = new KeypairP2pkSigner(repositories.keyRingRepository);
@@ -972,19 +991,27 @@ export class Manager {
     const sendOperationLogger = this.getChildLogger('SendOperationService');
     const sendHandlerProvider = new SendHandlerProvider({
       default: new DefaultSendHandler(),
-      p2pk: new P2pkSendHandler(this.outputDataCreator),
+      p2pk: new P2pkSendHandler(),
     });
-    const sendOperationService = new SendOperationService(
-      repositories.sendOperationRepository,
-      repositories.proofRepository,
-      proofService,
-      mintService,
-      walletService,
-      this.eventBus,
-      sendHandlerProvider,
-      sendOperationLogger,
+    const sendTransactions = new CoreSendTransactions(coreTransactionRunner);
+    const sendOperationService = new SendOperationService({
+      operationQueries: repositories.sendOperationRepository,
+      proofQueries: repositories.proofRepository,
+      transactions: sendTransactions,
+      mintQueries,
+      mintMetadataRefresh: mintService,
+      remote: new CashuSendRemote(
+        this.mintAdapter,
+        this.mintRequestProvider,
+        this.outputDataCreator,
+      ),
+      loadSeed: () => seedService.getSeed(),
+      eventBus: this.eventBus,
+      handlerProvider: sendHandlerProvider,
+      outputDataCreator: this.outputDataCreator,
+      logger: sendOperationLogger,
       mintScopedLock,
-    );
+    });
     const sendOperationRepository = repositories.sendOperationRepository;
 
     const tokenService = new TokenService(mintService, tokenLogger);

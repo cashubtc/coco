@@ -1,5 +1,22 @@
+import { OutputData, type OutputDataCreator } from '@cashu/cashu-ts';
 import type { Repositories, RepositoryTransactionScope } from '@core/repositories';
 import { RepositoryTransactionConflictError } from '@core/repositories';
+import {
+  RepositoryMintMetadataCommands,
+  type ScopedMintMetadataCommands,
+} from './scoped/mints/ScopedMintMetadataCommands.ts';
+import {
+  RepositoryProofCommands,
+  type ScopedProofCommands,
+} from './scoped/proofs/ScopedProofCommands.ts';
+import {
+  RepositoryOutputCommands,
+  type ScopedOutputCommands,
+} from './scoped/outputs/ScopedOutputCommands.ts';
+import {
+  RepositorySendCommands,
+  type ScopedSendCommands,
+} from './scoped/send/ScopedSendCommands.ts';
 import {
   RepositoryKeypairCommands,
   type ScopedKeypairCommands,
@@ -11,7 +28,11 @@ import { TransactionLifetime } from './scoped/TransactionLifetime.ts';
  * their independence is established; lifetime tracking does not serialize conflicting work.
  */
 export interface CoreTransaction {
+  readonly mintMetadata: ScopedMintMetadataCommands;
   readonly keypairs: ScopedKeypairCommands;
+  readonly proofs: ScopedProofCommands;
+  readonly outputs: ScopedOutputCommands;
+  readonly sends: ScopedSendCommands;
 }
 
 export interface CoreTransactionRunner {
@@ -20,9 +41,35 @@ export interface CoreTransactionRunner {
 
 type TransactionModuleFactory = (repositories: RepositoryTransactionScope) => CoreTransaction;
 
-function createTransactionModules(repositories: RepositoryTransactionScope): CoreTransaction {
-  return {
-    keypairs: new RepositoryKeypairCommands(repositories.keyRingRepository),
+export function createCoreTransactionModuleFactory(
+  outputDataCreator: OutputDataCreator = OutputData,
+): TransactionModuleFactory {
+  return (repositories) => {
+    const mintMetadata = new RepositoryMintMetadataCommands(
+      repositories.mintRepository,
+      repositories.keysetRepository,
+    );
+    const proofs = new RepositoryProofCommands(
+      repositories.proofRepository,
+      repositories.keysetRepository,
+    );
+    const outputs = new RepositoryOutputCommands(
+      repositories.counterRepository,
+      repositories.keysetRepository,
+      outputDataCreator,
+    );
+    return {
+      mintMetadata,
+      keypairs: new RepositoryKeypairCommands(repositories.keyRingRepository),
+      proofs,
+      outputs,
+      sends: new RepositorySendCommands(
+        repositories.sendOperationRepository,
+        proofs,
+        outputs,
+        mintMetadata,
+      ),
+    };
   };
 }
 
@@ -32,7 +79,7 @@ const MAX_TRANSACTION_ATTEMPTS = 3;
 export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
   constructor(
     private readonly repositories: Repositories,
-    private readonly createModules: TransactionModuleFactory = createTransactionModules,
+    private readonly createModules: TransactionModuleFactory = createCoreTransactionModuleFactory(),
   ) {}
 
   async run<T>(work: (transaction: CoreTransaction) => Promise<T>): Promise<T> {

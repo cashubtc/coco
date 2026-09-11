@@ -125,6 +125,16 @@ export class OperationInProgressError extends Error {
   }
 }
 
+export class SendOperationConflictError extends Error {
+  readonly operationId: string;
+
+  constructor(operationId: string, message?: string) {
+    super(message ?? `Send operation ${operationId} changed concurrently`);
+    this.name = 'SendOperationConflictError';
+    this.operationId = operationId;
+  }
+}
+
 export class AuthSessionError extends Error {
   readonly mintUrl: string;
   constructor(mintUrl: string, message?: string, cause?: unknown) {

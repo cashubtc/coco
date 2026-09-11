@@ -7,7 +7,7 @@
  *   │         │            │                      │
  *   └─────────┴────────────┴──────────────────────┴──► rolled_back
  *
- * - init: Operation created, nothing reserved yet
+ * - init: Transient operation intent; persisted rows exist only for legacy cleanup
  * - prepared: Proofs reserved, outputs created, ready to execute
  * - executing: Swap/token creation in progress
  * - pending: Token returned to consumer, awaiting confirmation (proofs spent)
@@ -61,8 +61,30 @@ interface SendOperationBase<M extends SendMethod = SendMethod> {
   /** Timestamp when the operation was last updated */
   updatedAt: number;
 
+  /**
+   * Monotonic persistence revision used by conditional state transitions.
+   *
+   * This remains optional at the public type boundary so operation objects created by older Coco
+   * versions remain source-compatible. Repositories normalize a missing legacy revision to 0.
+   */
+  revision?: number;
+
   /** Error message if the operation failed */
   error?: string;
+
+  /**
+   * Normalized token memo fixed before a swap request is submitted.
+   *
+   * Swap recovery uses this durable value to reconstruct the same token metadata after a crash
+   * between the mint response and the local result transaction.
+   */
+  executionMemo?: string;
+
+  /** Reclaim's separate output plan; never replaces the original Send request. */
+  reclaimData?: {
+    inputProofSecrets: string[];
+    outputData: SerializedOutputData;
+  };
 }
 
 /**
@@ -94,8 +116,8 @@ interface PreparedData {
 
 /**
  * Token data available once a send has been executed.
- * For P2PK sends, this is the canonical persisted token copy because the send
- * proofs are intentionally not stored in the wallet proof repository.
+ * The token is the canonical shareable copy for default and P2PK sends; the transaction also
+ * retains the corresponding inflight proof metadata for completion and Operation Recovery.
  */
 interface SendTokenData {
   token?: Token;
@@ -306,5 +328,20 @@ export function createSendOperation<M extends SendMethod = SendMethod>(
     methodData: options.methodData,
     createdAt: now,
     updatedAt: now,
+    revision: 0,
   };
+}
+
+/** Older P2PK recovery could persist pending without a token after all outputs were spent. */
+export function isLegacyTokenlessP2pkSend(
+  operation: SendOperation,
+): operation is PendingSendOperation & { outputData: SerializedOutputData } {
+  return (
+    operation.state === 'pending' &&
+    operation.method === 'p2pk' &&
+    operation.needsSwap &&
+    (operation.revision ?? 0) === 0 &&
+    operation.token == null &&
+    !!operation.outputData?.send.length
+  );
 }

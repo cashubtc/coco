@@ -2095,6 +2095,103 @@ export async function runSendOperationRepositoryContract(
         await dispose();
       }
     });
+
+    it('keeps nested Send request data independent of caller-owned objects', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = createDummyPreparedSendOperation({ id: 'immutable-send-request' });
+        const original = JSON.stringify(operation);
+        await repositories.sendOperationRepository.create(operation);
+        operation.inputProofSecrets.push('caller-mutation');
+        const read = await repositories.sendOperationRepository.getById(operation.id);
+        if (!read || read.state !== 'prepared') throw new Error('Missing prepared Send');
+        expect(read.inputProofSecrets.includes('caller-mutation')).toBe(false);
+        read.inputProofSecrets.push('query-mutation');
+        const stored = await repositories.sendOperationRepository.getById(operation.id);
+        expect(
+          JSON.stringify(stored && 'inputProofSecrets' in stored ? stored.inputProofSecrets : []),
+        ).toBe(JSON.stringify(JSON.parse(original).inputProofSecrets));
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('preserves the separate reclaim output plan through create, update, and transition', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const original = createDummyPreparedSendOperation({ id: 'send-reclaim-plan' });
+        const reclaimData = {
+          inputProofSecrets: ['reclaim-input'],
+          outputData: { keep: [], send: [] },
+        };
+        const operation: SendOperation = { ...original, state: 'rolling_back', reclaimData };
+        await repositories.sendOperationRepository.create(operation);
+        let stored = await repositories.sendOperationRepository.getById(operation.id);
+        expect(JSON.stringify(stored!.reclaimData)).toBe(JSON.stringify(reclaimData));
+        expect(
+          JSON.stringify(stored && 'outputData' in stored ? stored.outputData : undefined),
+        ).toBe(JSON.stringify(original.outputData));
+        await repositories.sendOperationRepository.update({ ...operation, error: 'interrupted' });
+        stored = await repositories.sendOperationRepository.getById(operation.id);
+        expect(JSON.stringify(stored!.reclaimData)).toBe(JSON.stringify(reclaimData));
+        expect(
+          await repositories.sendOperationRepository.transition({
+            operationId: operation.id,
+            expectedState: 'rolling_back',
+            expectedRevision: stored!.revision ?? 0,
+            next: { ...operation, state: 'rolled_back' },
+          }),
+        ).toBe(true);
+        stored = await repositories.sendOperationRepository.getById(operation.id);
+        expect(JSON.stringify(stored!.reclaimData)).toBe(JSON.stringify(reclaimData));
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('normalizes legacy revisions and allows only one conditional transition winner', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const prepared = createDummyPreparedSendOperation({
+          id: 'send-cas',
+          revision: undefined,
+        });
+        await repositories.sendOperationRepository.create(prepared);
+
+        const legacy = await repositories.sendOperationRepository.getById(prepared.id);
+        expect(legacy?.revision).toBe(0);
+
+        const next = {
+          ...prepared,
+          state: 'executing',
+          updatedAt: 1234,
+          executionMemo: 'persisted before transport',
+        } as SendOperation;
+        const winners = await Promise.all([
+          repositories.sendOperationRepository.transition({
+            operationId: prepared.id,
+            expectedState: 'prepared',
+            expectedRevision: 0,
+            next,
+          }),
+          repositories.sendOperationRepository.transition({
+            operationId: prepared.id,
+            expectedState: 'prepared',
+            expectedRevision: 0,
+            next,
+          }),
+        ]);
+        expect(winners.filter(Boolean)).toHaveLength(1);
+
+        const stored = await repositories.sendOperationRepository.getById(prepared.id);
+        expect(stored?.state).toBe('executing');
+        expect(stored?.revision).toBe(1);
+        expect(stored?.updatedAt).toBe(1000);
+        expect(stored?.executionMemo).toBe('persisted before transport');
+      } finally {
+        await dispose();
+      }
+    });
   });
 }
 
@@ -2287,6 +2384,55 @@ export async function runProofRepositoryContract(
   const { describe, it, expect } = runner;
 
   describe('ProofRepository contract', () => {
+    it('preserves request material across metadata mutations and caller-owned snapshots', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const proof = {
+          ...createDummyProof(),
+          dleq: { e: 'e', s: 's', r: 'r' },
+          witness: '{"signatures":["signature"]}',
+        };
+        const material = (value: CoreProof) =>
+          JSON.stringify({
+            id: value.id,
+            amount: value.amount,
+            secret: value.secret,
+            C: value.C,
+            dleq: value.dleq,
+            witness: value.witness,
+          });
+        const expected = material(proof);
+        await repositories.proofRepository.saveProofs(proof.mintUrl, [proof]);
+        proof.dleq.e = 'caller-mutation';
+        const queried = await repositories.proofRepository.getProofBySecret(
+          proof.mintUrl,
+          proof.secret,
+        );
+        expect(material(queried!)).toBe(expected);
+        queried!.dleq!.s = 'query-mutation';
+        await repositories.proofRepository.reserveProofs(
+          proof.mintUrl,
+          [proof.secret],
+          'request-owner',
+        );
+        await repositories.proofRepository.setProofState(proof.mintUrl, [proof.secret], 'inflight');
+        await repositories.proofRepository.setCreatedByOperation(
+          proof.mintUrl,
+          [proof.secret],
+          'creator',
+        );
+        await repositories.proofRepository.setProofState(proof.mintUrl, [proof.secret], 'spent');
+        await repositories.proofRepository.releaseProofs(proof.mintUrl, [proof.secret]);
+        const stored = await repositories.proofRepository.getProofBySecret(
+          proof.mintUrl,
+          proof.secret,
+        );
+        expect(material(stored!)).toBe(expected);
+      } finally {
+        await dispose();
+      }
+    });
+
     it('returns matches for a mint', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {
