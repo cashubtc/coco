@@ -15,7 +15,11 @@ import {
   createCoreTransactionModuleFactory,
 } from '../../transactions/CoreTransaction.ts';
 import { CoreSendTransactions } from '../../transactions/send/SendTransactions.ts';
-import type { ExecuteExactSendInput, PrepareSendInput } from '../../transactions/send/types.ts';
+import type {
+  CompletePendingSendInput,
+  ExecuteExactSendInput,
+  PrepareSendInput,
+} from '../../transactions/send/types.ts';
 import type { CoreProof } from '../../types.ts';
 import { getSecretsFromSerializedOutputData } from '../../utils.ts';
 import { makeOutputDataCreator } from '../fixtures/OutputDataCreator.ts';
@@ -1428,5 +1432,192 @@ describe('SendTransactions reclaim', () => {
       'rolling_back',
     );
     expect(await repositories.proofRepository.getAvailableProofs(mintUrl)).toEqual([]);
+  });
+});
+
+describe('SendTransactions legacy tokenless P2PK completion', () => {
+  async function pending(repositories = new MemoryRepositories()) {
+    const environment = await setup(repositories);
+    const id = 'legacy-p2pk';
+    const input = { ...proof('input'), state: 'spent' as const, usedByOperationId: id };
+    const send = { ...proof('send'), state: 'inflight' as const, createdByOperationId: id };
+    const operation: PendingSendOperation = {
+      ...createSendOperation(
+        id,
+        mintUrl,
+        { amount: Amount.from(10), unit: 'sat' },
+        {
+          method: 'p2pk',
+          methodData: { pubkey: 'pubkey' },
+        },
+      ),
+      state: 'pending',
+      revision: 0,
+      needsSwap: true,
+      fee: Amount.zero(),
+      inputAmount: Amount.from(10),
+      inputProofSecrets: [input.secret],
+      outputData: {
+        keep: [],
+        send: [
+          {
+            blindedMessage: { id: keysetId, amount: 10, B_: 'B-send' },
+            secret: Buffer.from(send.secret).toString('hex'),
+            blindingFactor: '01',
+          },
+        ],
+      },
+    };
+    await repositories.sendOperationRepository.create(operation);
+    await repositories.proofRepository.saveProofs(mintUrl, [input]);
+    const completion: CompletePendingSendInput = {
+      operationId: id,
+      updatedAt: 400,
+      spentProofSecrets: [send.secret],
+      legacyP2pkOutputObservation: {
+        expectedRevision: 0,
+        mintUrl,
+        unit: 'sat',
+        outputData: structuredClone(operation.outputData!),
+      },
+    };
+    return { ...environment, operation, input, send, completion };
+  }
+
+  it.each(['reserved', 'released'] as const)(
+    'completes missing spent outputs with %s inputs',
+    async (ownership) => {
+      const { repositories, transactions, operation, input, completion } = await pending();
+      if (ownership === 'released')
+        await repositories.proofRepository.releaseProofs(mintUrl, [input.secret]);
+      const result = await transactions.completePending(completion);
+      expect(result.operation).toMatchObject({ state: 'finalized', revision: 1 });
+      expect(result.operation.token).toBeUndefined();
+      expect(result.spentProofSecrets).toEqual([]);
+      expect(result.releasedInputSecrets).toEqual(ownership === 'reserved' ? [input.secret] : []);
+      expect(await repositories.proofRepository.getProofBySecret(mintUrl, 'send')).toBeNull();
+      expect((await transactions.completePending(completion)).committed).toBe(false);
+      expect((await repositories.sendOperationRepository.getById(operation.id))?.state).toBe(
+        'finalized',
+      );
+    },
+  );
+
+  it.each([
+    'missing',
+    'incomplete',
+    'duplicate',
+    'foreign-secret',
+    'revision',
+    'mint',
+    'unit',
+    'allocation',
+    'method',
+    'current-revision',
+    'token',
+    'exact',
+  ] as const)(
+    'rejects %s evidence without changing the operation or releasing inputs',
+    async (invalid) => {
+      const { repositories, transactions, operation, input, send, completion } = await pending();
+      switch (invalid) {
+        case 'missing':
+          delete completion.legacyP2pkOutputObservation;
+          break;
+        case 'incomplete':
+          completion.spentProofSecrets = [];
+          break;
+        case 'duplicate':
+          completion.spentProofSecrets = [send.secret, send.secret];
+          break;
+        case 'foreign-secret':
+          completion.spentProofSecrets = ['foreign'];
+          break;
+        case 'revision':
+          completion.legacyP2pkOutputObservation!.expectedRevision = 1;
+          break;
+        case 'mint':
+          completion.legacyP2pkOutputObservation!.mintUrl = 'https://other.test';
+          break;
+        case 'unit':
+          completion.legacyP2pkOutputObservation!.unit = 'usd';
+          break;
+        case 'allocation':
+          completion.legacyP2pkOutputObservation!.outputData.send[0]!.blindedMessage.B_ = 'changed';
+          break;
+        case 'method':
+          await repositories.sendOperationRepository.update({
+            ...operation,
+            method: 'default',
+            methodData: {},
+          });
+          break;
+        case 'current-revision':
+          await repositories.sendOperationRepository.update({ ...operation, revision: 1 });
+          break;
+        case 'token':
+          await repositories.sendOperationRepository.update({
+            ...operation,
+            token: { mint: mintUrl, unit: 'sat', proofs: [send] },
+          });
+          break;
+        case 'exact':
+          await repositories.sendOperationRepository.update({ ...operation, needsSwap: false });
+          break;
+      }
+      const before = await repositories.sendOperationRepository.getById(operation.id);
+      await expect(transactions.completePending(completion)).rejects.toThrow();
+      expect(await repositories.sendOperationRepository.getById(operation.id)).toEqual(before);
+      expect(
+        await repositories.proofRepository.getProofBySecret(mintUrl, input.secret),
+      ).toMatchObject(input);
+    },
+  );
+
+  it.each([
+    'input-owner',
+    'input-state',
+    'output-owner',
+    'output-state',
+    'output-id',
+    'output-amount',
+    'transition',
+  ] as const)('rolls back all proof writes after %s conflicts', async (conflict) => {
+    const { repositories, transactions, operation, input, send, completion } = await pending(
+      conflict === 'transition' ? new RejectingSendTransitionRepositories() : undefined,
+    );
+    const storedInput: CoreProof = { ...input };
+    const storedSend: CoreProof = { ...send };
+    switch (conflict) {
+      case 'input-owner':
+        storedInput.usedByOperationId = 'other';
+        break;
+      case 'input-state':
+        storedInput.state = 'ready';
+        break;
+      case 'output-owner':
+        storedSend.createdByOperationId = 'other';
+        break;
+      case 'output-state':
+        storedSend.state = 'ready';
+        break;
+      case 'output-id':
+        storedSend.id = 'other';
+        break;
+      case 'output-amount':
+        storedSend.amount = Amount.from(20);
+        break;
+    }
+    await repositories.proofRepository.deleteProofs(mintUrl, [input.secret]);
+    await repositories.proofRepository.saveProofs(mintUrl, [storedInput, storedSend]);
+    const before = await repositories.sendOperationRepository.getById(operation.id);
+    await expect(transactions.completePending(completion)).rejects.toThrow();
+    expect(await repositories.sendOperationRepository.getById(operation.id)).toEqual(before);
+    expect(
+      await repositories.proofRepository.getProofBySecret(mintUrl, input.secret),
+    ).toMatchObject(storedInput);
+    expect(await repositories.proofRepository.getProofBySecret(mintUrl, send.secret)).toMatchObject(
+      storedSend,
+    );
   });
 });

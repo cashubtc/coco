@@ -18,6 +18,7 @@ import type {
 } from './SendOperation';
 import {
   createSendOperation,
+  isLegacyTokenlessP2pkSend,
   getSendProofSecrets,
   type CreateSendOperationOptions,
 } from './SendOperation';
@@ -28,6 +29,7 @@ import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
 import {
   generateSubId,
+  getProofStateInputsFromSerializedOutputs,
   getSecretsFromSerializedOutputData,
   mapProofToCoreProof,
 } from '../../utils';
@@ -48,6 +50,7 @@ import type {
   CompletedReclaim,
   CancelledPreparedSend,
   CompletedPendingSend,
+  CompletePendingSendInput,
   FailedSwapExecution,
   SwapTransportRequest,
 } from '../../transactions/send/types.ts';
@@ -474,31 +477,39 @@ export class SendOperationService {
       if (operation.state !== 'pending') {
         throw new Error(`Cannot finalize operation in state ${operation.state}`);
       }
-      const sendSecrets = getSendProofSecrets(operation);
-      const localProofs = await this.proofQueries.getProofsBySecrets(
-        operation.mintUrl,
-        sendSecrets,
-      );
-      const locallySpent =
-        localProofs.length === new Set(sendSecrets).size &&
-        localProofs.every((proof) => proof.state === 'spent');
-      let observedSpentSecrets: string[] | undefined;
-      if (!locallySpent) {
-        const states = await this.checkProofStatesWithMint(
-          operation.mintUrl,
-          sendSecrets,
-          operation.unit,
-        );
-        if (!states.every((state) => state.state === 'SPENT')) {
+      if (isLegacyTokenlessP2pkSend(operation)) {
+        const observation = await this.observeLegacyTokenlessP2pk(operation);
+        if (!observation) {
           throw new ProofValidationError(`Cannot finalize unspent Send operation ${operationId}`);
         }
-        observedSpentSecrets = sendSecrets;
+        result = await this.transactions.completePending(observation);
+      } else {
+        const sendSecrets = getSendProofSecrets(operation);
+        const localProofs = await this.proofQueries.getProofsBySecrets(
+          operation.mintUrl,
+          sendSecrets,
+        );
+        const locallySpent =
+          localProofs.length === new Set(sendSecrets).size &&
+          localProofs.every((proof) => proof.state === 'spent');
+        let observedSpentSecrets: string[] | undefined;
+        if (!locallySpent) {
+          const states = await this.checkProofStatesWithMint(
+            operation.mintUrl,
+            sendSecrets,
+            operation.unit,
+          );
+          if (!states.every((state) => state.state === 'SPENT')) {
+            throw new ProofValidationError(`Cannot finalize unspent Send operation ${operationId}`);
+          }
+          observedSpentSecrets = sendSecrets;
+        }
+        result = await this.transactions.completePending({
+          operationId,
+          updatedAt: Date.now(),
+          spentProofSecrets: observedSpentSecrets,
+        });
       }
-      result = await this.transactions.completePending({
-        operationId,
-        updatedAt: Date.now(),
-        spentProofSecrets: observedSpentSecrets,
-      });
     } finally {
       releaseLock?.();
     }
@@ -869,9 +880,20 @@ export class SendOperationService {
     const latest = await this.operationQueries.getById(op.id);
     if (!latest || latest.state !== 'pending') return;
     const sendSecrets = getSendProofSecrets(latest);
-    let sendStates: CashuProofState[];
+    let completion: CompletePendingSendInput | null;
     try {
-      sendStates = await this.checkProofStatesWithMint(latest.mintUrl, sendSecrets, latest.unit);
+      if (isLegacyTokenlessP2pkSend(latest)) {
+        completion = await this.observeLegacyTokenlessP2pk(latest);
+      } else {
+        const states = await this.checkProofStatesWithMint(
+          latest.mintUrl,
+          sendSecrets,
+          latest.unit,
+        );
+        completion = states.every((state) => state.state === 'SPENT')
+          ? { operationId: latest.id, updatedAt: Date.now(), spentProofSecrets: sendSecrets }
+          : null;
+      }
     } catch (_e) {
       this.logger?.warn('Could not reach mint for recovery, will retry later', {
         operationId: latest.id,
@@ -880,18 +902,14 @@ export class SendOperationService {
       return;
     }
 
-    if (!sendStates.every((state) => state.state === 'SPENT')) {
+    if (!completion) {
       this.logger?.debug('Pending operation token not yet claimed, leaving as pending', {
         operationId: latest.id,
       });
       return;
     }
 
-    const result = await this.transactions.completePending({
-      operationId: latest.id,
-      updatedAt: Date.now(),
-      spentProofSecrets: sendSecrets,
-    });
+    const result = await this.transactions.completePending(completion);
     await this.publishCompletedSend(result);
     this.logger?.info('Send operation finalized during recovery', { operationId: latest.id });
   }
@@ -903,13 +921,51 @@ export class SendOperationService {
   async recordProofSpent(operationId: string, secret: string): Promise<boolean> {
     const operation = await this.operationQueries.getById(operationId);
     if (!operation || operation.state !== 'pending') return false;
-    const result = await this.transactions.completePending({
-      operationId,
-      updatedAt: Date.now(),
-      spentProofSecrets: [secret],
-    });
+    if (!getSendProofSecrets(operation).includes(secret)) {
+      throw new ProofValidationError(`Proof ${secret} does not belong to Send operation`);
+    }
+    const completion = isLegacyTokenlessP2pkSend(operation)
+      ? await this.observeLegacyTokenlessP2pk(operation)
+      : { operationId, updatedAt: Date.now(), spentProofSecrets: [secret] };
+    if (!completion) return true;
+    const result = await this.transactions.completePending(completion);
     await this.publishCompletedSend(result);
     return true;
+  }
+
+  private async observeLegacyTokenlessP2pk(
+    operation: PendingSendOperation & {
+      outputData: NonNullable<PendingSendOperation['outputData']>;
+    },
+  ): Promise<CompletePendingSendInput | null> {
+    const outputData = structuredClone(operation.outputData);
+    const proofInputs = getProofStateInputsFromSerializedOutputs(outputData.send);
+    if (
+      proofInputs.some((proof) => !proof.id || !proof.secret) ||
+      new Set(proofInputs.map((proof) => proof.secret)).size !== proofInputs.length
+    ) {
+      throw new ProofValidationError('Cannot check legacy P2PK Send: invalid output allocation');
+    }
+    const remote = this.remote.open(
+      await this.mintMetadataRefresh.refreshAndCommitIfStale(operation.mintUrl),
+      operation.unit,
+    );
+    const states = await remote.checkProofStates(proofInputs);
+    if (states.length !== proofInputs.length) {
+      throw new ProofValidationError('Cannot check legacy P2PK Send: incomplete mint response');
+    }
+    if (!states.every((state) => state.state === 'SPENT')) return null;
+    return {
+      operationId: operation.id,
+      updatedAt: Date.now(),
+      spentProofSecrets: proofInputs.map((proof) => proof.secret),
+      legacyP2pkOutputObservation: {
+        expectedRevision: operation.revision ?? 0,
+        mintUrl: operation.mintUrl,
+        unit: operation.unit,
+        outputData,
+      },
+    };
   }
 
   /**

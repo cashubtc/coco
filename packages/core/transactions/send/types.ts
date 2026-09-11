@@ -130,6 +130,13 @@ export interface CompletePendingSendInput {
   updatedAt: number;
   /** Proof-state observations made outside the transaction. */
   spentProofSecrets?: string[];
+  /** Full SPENT observation for a legacy tokenless P2PK allocation, pinned before mint I/O. */
+  legacyP2pkOutputObservation?: {
+    expectedRevision: number;
+    mintUrl: string;
+    unit: string;
+    outputData: SerializedOutputData;
+  };
 }
 
 export interface CompletedPendingSend {

@@ -74,6 +74,15 @@ proof observations can still leave a Send pending. Once all token proofs are spe
 releases only remaining owned input reservations and records `finalized` in the same transaction;
 post-commit events report only the reservations actually released.
 
+A narrow exception handles revision-zero P2PK swap Sends whose old recovery saved `pending` without
+a token after restore omitted spent outputs. The coordinator checks every saved send output using
+its keyset ID and secret before entering the completion transaction. Full SPENT observations carry
+the revision, mint, unit, and output allocation snapshot; the command revalidates these against the
+current operation before allowing absent output rows. Existing output rows still require matching
+allocation, creation ownership, unit, and inflight/spent state. It records spent state only for
+existing inflight rows, validates spent inputs and their ownership as usual, and finalizes atomically
+without fabricating proof metadata or a token. Partial or unavailable observations preserve pending.
+
 Legacy swap handlers could save outputs and spend inputs before persisting `pending`. Recovery
 claims therefore accept operation-owned ready or spent inputs. After observing remote spent inputs,
 recovery combines existing operation-created outputs with any missing restored outputs and uses the

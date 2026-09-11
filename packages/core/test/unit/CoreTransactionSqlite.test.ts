@@ -13,7 +13,16 @@ import type {
 import type { CoreProof } from '../../types.ts';
 
 describe('CoreTransaction with SQLite', () => {
-  it.each(['exact', 'swap', 'conflict', 'pending-exact', 'pending-swap'] as const)(
+  const legacyScenarios = [
+    'exact',
+    'swap',
+    'conflict',
+    'pending-exact',
+    'pending-swap',
+    'tokenless-p2pk',
+    'tokenless-conflict',
+  ] as const;
+  it.each([...legacyScenarios])(
     'recovers legacy Send persistence atomically (%s)',
     async (scenario) => {
       const database = new Database(':memory:');
@@ -24,8 +33,9 @@ describe('CoreTransaction with SQLite', () => {
       );
       const mintUrl = 'https://mint.test';
       const amount = Amount.from(10);
-      const needsSwap = scenario === 'swap' || scenario === 'pending-swap';
-      const pending = scenario === 'pending-exact' || scenario === 'pending-swap';
+      const tokenless = scenario === 'tokenless-p2pk' || scenario === 'tokenless-conflict';
+      const needsSwap = scenario === 'swap' || scenario === 'pending-swap' || tokenless;
+      const pending = scenario === 'pending-exact' || scenario === 'pending-swap' || tokenless;
       const input: CoreProof = {
         id: 'keyset',
         secret: 'input',
@@ -34,7 +44,7 @@ describe('CoreTransaction with SQLite', () => {
         mintUrl,
         unit: 'sat',
         state: needsSwap || pending ? 'spent' : 'inflight',
-        usedByOperationId: pending ? undefined : 'legacy',
+        usedByOperationId: pending && !tokenless ? undefined : 'legacy',
       };
       const send: CoreProof = {
         ...input,
@@ -50,8 +60,8 @@ describe('CoreTransaction with SQLite', () => {
         amount,
         mintUrl,
         unit: 'sat',
-        method: 'default',
-        methodData: {},
+        method: tokenless ? 'p2pk' : 'default',
+        methodData: tokenless ? { pubkey: 'pubkey' } : {},
         createdAt: 1000,
         updatedAt: 1000,
         needsSwap,
@@ -70,19 +80,57 @@ describe('CoreTransaction with SQLite', () => {
               ],
             }
           : undefined,
-        ...(pending
+        ...(pending && !tokenless
           ? { token: { mint: mintUrl, unit: 'sat', proofs: needsSwap ? [send] : [input] } }
           : {}),
       };
       try {
         await repositories.sendOperationRepository.create(operation);
-        await repositories.proofRepository.saveProofs(mintUrl, needsSwap ? [input, send] : [input]);
+        await repositories.proofRepository.saveProofs(
+          mintUrl,
+          needsSwap && !tokenless ? [input, send] : [input],
+        );
         if (pending) {
-          const result = await transactions.completePending({
+          const completion = {
             operationId: operation.id,
             updatedAt: 2000,
-          });
-          expect(result.releasedInputSecrets).toEqual([]);
+            ...(tokenless
+              ? {
+                  spentProofSecrets: [send.secret],
+                  legacyP2pkOutputObservation: {
+                    expectedRevision: 0,
+                    mintUrl,
+                    unit: 'sat',
+                    outputData: operation.outputData!,
+                  },
+                }
+              : {}),
+          };
+          if (scenario === 'tokenless-conflict') {
+            database.exec(`
+              CREATE TRIGGER reject_completion BEFORE UPDATE ON coco_cashu_send_operations
+              WHEN NEW.state = 'finalized'
+              BEGIN SELECT RAISE(ABORT, 'completion failed'); END;
+            `);
+            await expect(transactions.completePending(completion)).rejects.toThrow(
+              'completion failed',
+            );
+            expect((await repositories.sendOperationRepository.getById(operation.id))?.state).toBe(
+              'pending',
+            );
+            expect(
+              await repositories.proofRepository.getProofBySecret(mintUrl, input.secret),
+            ).toMatchObject(input);
+            return;
+          }
+          const result = await transactions.completePending(completion);
+          expect(result.releasedInputSecrets).toEqual(tokenless ? [input.secret] : []);
+          if (tokenless) {
+            expect(result.operation.token).toBeUndefined();
+            expect(
+              await repositories.proofRepository.getProofBySecret(mintUrl, send.secret),
+            ).toBeNull();
+          }
           expect(await repositories.sendOperationRepository.getById(operation.id)).toMatchObject({
             state: 'finalized',
             revision: 1,

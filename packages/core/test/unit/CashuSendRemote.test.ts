@@ -15,7 +15,7 @@ import { CashuSendRemote } from '../../infra/handlers/send/CashuSendRemote.ts';
 import type { MintRequestFn } from '../../infra/MintRequestProvider.ts';
 import type { MintMetadata } from '../../mints/MintMetadata.ts';
 import { ProofValidationError } from '../../models/Error.ts';
-import { serializeOutputData } from '../../utils.ts';
+import { getProofStateInputsFromSerializedOutputs, serializeOutputData } from '../../utils.ts';
 import { testMintInfo } from '../fixtures/MintMetadata.ts';
 
 const mintUrl = 'https://mint.test';
@@ -231,6 +231,26 @@ describe('CashuSendRemote', () => {
       expect(states.map((state) => state.state)).toEqual(['UNSPENT']);
     },
   );
+
+  it('checks a saved P2PK allocation without proof signatures or amounts', async () => {
+    const { remote, calls } = environment();
+    const send = OutputData.createP2PKData(
+      { kind: 'P2PK', data: keys.keys['1']! },
+      Amount.from(8),
+      keys,
+    );
+    const inputs = getProofStateInputsFromSerializedOutputs(
+      serializeOutputData({ keep: [], send }).send,
+    );
+
+    const states = await remote.open(metadata, unit).checkProofStates(inputs);
+
+    expect(inputs).toEqual([{ id: keys.id, secret: new TextDecoder().decode(send[0]!.secret) }]);
+    expect(states.map((state) => state.state)).toEqual(['UNSPENT']);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.endpoint).toBe(`${mintUrl}/v1/checkstate`);
+    expect(calls[0]!.body!.Ys).toEqual(states.map((state) => state.Y));
+  });
 
   it('restores and reclaims only the supplied output plan', async () => {
     const { remote, calls } = environment();

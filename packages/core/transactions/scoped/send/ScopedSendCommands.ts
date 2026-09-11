@@ -13,6 +13,7 @@ import type {
 } from '@core/operations/send/SendOperation.ts';
 import {
   getSendProofSecrets,
+  isLegacyTokenlessP2pkSend,
   getKeepProofSecrets,
   isTerminalOperation,
 } from '@core/operations/send/SendOperation.ts';
@@ -587,21 +588,48 @@ export class RepositorySendCommands implements ScopedSendCommands {
       }
     }
 
+    const legacyObservation = input.legacyP2pkOutputObservation;
+    if (
+      legacyObservation &&
+      (!isLegacyTokenlessP2pkSend(current) ||
+        legacyObservation.expectedRevision !== revision ||
+        legacyObservation.mintUrl !== current.mintUrl ||
+        legacyObservation.unit !== current.unit ||
+        JSON.stringify(legacyObservation.outputData) !== JSON.stringify(current.outputData) ||
+        observedSecrets.length !== expectedSecrets.length)
+    ) {
+      throw new ProofValidationError(
+        'Cannot complete legacy P2PK Send: stale or incomplete observation',
+      );
+    }
+
     const sendProofs = await this.proofs.getProofsBySecrets(current.mintUrl, expectedSecrets);
     const sendBySecret = new Map(sendProofs.map((proof) => [proof.secret, proof]));
-    if (sendBySecret.size !== expectedSecrets.length) {
+    if (!legacyObservation && sendBySecret.size !== expectedSecrets.length) {
       throw new ProofValidationError('Cannot complete Send operation: missing send proof metadata');
     }
     if (
-      !current.token ||
-      current.token.mint !== current.mintUrl ||
-      normalizeUnit(current.token.unit) !== normalizeUnit(current.unit) ||
-      !sameProofSet(current.token.proofs, sendProofs)
+      !legacyObservation &&
+      (!current.token ||
+        current.token.mint !== current.mintUrl ||
+        normalizeUnit(current.token.unit) !== normalizeUnit(current.unit) ||
+        !sameProofSet(current.token.proofs, sendProofs))
     ) {
       throw new ProofValidationError('Send proofs do not match the persisted token');
     }
     for (const secret of expectedSecrets) {
       const proof = sendBySecret.get(secret);
+      if (legacyObservation) {
+        // Old restore omitted spent outputs. Validate any surviving rows without recreating them.
+        if (!proof) continue;
+        const output = legacyObservation.outputData.send[expectedSecrets.indexOf(secret)]!;
+        if (
+          proof.id !== output.blindedMessage.id ||
+          !Amount.from(proof.amount).equals(Amount.from(output.blindedMessage.amount))
+        ) {
+          throw new ProofValidationError('Legacy P2PK proof does not match allocated output');
+        }
+      }
       const owned = current.needsSwap
         ? proof?.createdByOperationId === current.id
         : proof && canCompleteWithInput(proof, current.id);
@@ -617,7 +645,7 @@ export class RepositorySendCommands implements ScopedSendCommands {
     }
 
     const newlySpent = observedSecrets.filter(
-      (secret) => sendBySecret.get(secret)?.state !== 'spent',
+      (secret) => sendBySecret.get(secret)?.state === 'inflight',
     );
     if (newlySpent.length > 0) {
       await this.proofs.recordSpent({

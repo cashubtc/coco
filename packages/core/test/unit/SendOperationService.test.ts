@@ -691,6 +691,163 @@ describe('SendOperationService', () => {
     },
   );
 
+  describe('legacy tokenless P2PK completion', () => {
+    async function persistTokenlessPending(): Promise<PendingSendOperation> {
+      const prepared = await makeSwapPrepared('legacy-tokenless');
+      const output = prepared.outputData!.send[0]!;
+      const operation: PendingSendOperation = {
+        ...prepared,
+        method: 'p2pk',
+        methodData: {
+          pubkey: '02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9',
+        },
+        state: 'pending',
+        revision: 0,
+        token: undefined,
+        outputData: {
+          keep: [],
+          send: [
+            { ...output, blindedMessage: { ...output.blindedMessage, amount: 50 } },
+            {
+              ...output,
+              blindedMessage: { ...output.blindedMessage, amount: 50, B_: 'second-output' },
+              secret: Buffer.from('legacy-tokenless-send-2').toString('hex'),
+            },
+          ],
+        },
+      };
+      await sendOpRepo.update(operation);
+      await proofRepo.setProofState(mintUrl, operation.inputProofSecrets, 'spent');
+      remote.checkProofStates.mockImplementation(async (proofs) => {
+        expect(repositories.transactionOpen).toBe(false);
+        return proofs.map((proof) => ({ Y: `Y-${proof.secret}`, state: 'SPENT', witness: null }));
+      });
+      return (await sendOpRepo.getById(operation.id)) as PendingSendOperation;
+    }
+
+    it.each(['recovery', 'refresh', 'finalize', 'notification'] as const)(
+      'verifies the persisted allocation through %s without fabricating a token or proofs',
+      async (path) => {
+        const operation = await persistTokenlessPending();
+        const api = new SendOpsApi(service);
+        const finalized = mock(async () => {
+          expect(repositories.transactionOpen).toBe(false);
+          expect((await sendOpRepo.getById(operation.id))?.state).toBe('finalized');
+        });
+        const saved = mock(() => {});
+        const released = mock(() => {});
+        eventBus.on('send:finalized', finalized);
+        eventBus.on('proofs:saved', saved);
+        eventBus.on('proofs:released', released);
+        const complete = () => {
+          switch (path) {
+            case 'recovery':
+              return api.recovery.run();
+            case 'refresh':
+              return api.refresh(operation.id);
+            case 'finalize':
+              return api.finalize(operation.id);
+            case 'notification':
+              return service.recordProofSpent(operation.id, 'legacy-tokenless-send');
+          }
+        };
+
+        await complete();
+        await complete();
+
+        expect(remote.checkProofStates).toHaveBeenCalledTimes(1);
+        expect(remote.checkProofStates).toHaveBeenCalledWith([
+          { id: keysetId, secret: 'legacy-tokenless-send' },
+          { id: keysetId, secret: 'legacy-tokenless-send-2' },
+        ]);
+        const stored = await sendOpRepo.getById(operation.id);
+        expect(stored).toMatchObject({ state: 'finalized', revision: 1, token: undefined });
+        expect(stored && 'outputData' in stored ? stored.outputData : undefined).toEqual(
+          operation.outputData,
+        );
+        expect(
+          await proofRepo.getProofsBySecrets(mintUrl, [
+            'legacy-tokenless-send',
+            'legacy-tokenless-send-2',
+          ]),
+        ).toEqual([]);
+        expect(
+          (await proofRepo.getProofBySecret(mintUrl, operation.inputProofSecrets[0]!))
+            ?.usedByOperationId,
+        ).toBeUndefined();
+        expect(finalized).toHaveBeenCalledTimes(1);
+        expect(released).toHaveBeenCalledTimes(1);
+        expect(saved).not.toHaveBeenCalled();
+        expect(remote.swap).not.toHaveBeenCalled();
+        expect(remote.restoreOutputs).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(['UNSPENT', 'PENDING', 'incomplete', 'offline'] as const)(
+      'preserves the pending operation and reservations after %s observations',
+      async (outcome) => {
+        const operation = await persistTokenlessPending();
+        remote.checkProofStates.mockImplementation(async () => {
+          if (outcome === 'offline') throw new Error('mint unavailable');
+          const spent = { Y: 'Y-first', state: 'SPENT' as const, witness: null };
+          return outcome === 'incomplete'
+            ? [spent]
+            : [spent, { Y: 'Y-second', state: outcome, witness: null }];
+        });
+
+        await expect(service.finalize(operation.id)).rejects.toThrow();
+        await new SendOpsApi(service).refresh(operation.id);
+
+        expect(await sendOpRepo.getById(operation.id)).toEqual(operation);
+        expect(
+          (await proofRepo.getProofBySecret(mintUrl, operation.inputProofSecrets[0]!))
+            ?.usedByOperationId,
+        ).toBe(operation.id);
+      },
+    );
+
+    it('rejects a stale observation when the operation changes during the mint check', async () => {
+      const operation = await persistTokenlessPending();
+      remote.checkProofStates.mockImplementation(async (proofs) => {
+        await sendOpRepo.update({ ...operation, revision: 1 });
+        return proofs.map((proof) => ({ Y: `Y-${proof.secret}`, state: 'SPENT', witness: null }));
+      });
+
+      await expect(service.finalize(operation.id)).rejects.toThrow('legacy P2PK');
+
+      expect((await sendOpRepo.getById(operation.id))?.state).toBe('pending');
+      expect(
+        (await proofRepo.getProofBySecret(mintUrl, operation.inputProofSecrets[0]!))
+          ?.usedByOperationId,
+      ).toBe(operation.id);
+    });
+
+    it('updates existing owned output proofs while leaving absent outputs unmaterialized', async () => {
+      const operation = await persistTokenlessPending();
+      await proofRepo.saveProofs(mintUrl, [
+        {
+          ...makeProof('legacy-tokenless-send', 50),
+          state: 'inflight',
+          createdByOperationId: operation.id,
+        },
+      ]);
+      const spent = mock(() => {});
+      eventBus.on('proofs:state-changed', spent);
+
+      await service.finalize(operation.id);
+
+      expect((await proofRepo.getProofBySecret(mintUrl, 'legacy-tokenless-send'))?.state).toBe(
+        'spent',
+      );
+      expect(await proofRepo.getProofBySecret(mintUrl, 'legacy-tokenless-send-2')).toBeNull();
+      expect(spent).toHaveBeenCalledWith({
+        mintUrl,
+        secrets: ['legacy-tokenless-send'],
+        state: 'spent',
+      });
+    });
+  });
+
   it('preserves empty pending default-token reclaim through its transaction gateway', async () => {
     const pendingOp: PendingSendOperation = {
       id: 'send-op-legacy-reclaim',

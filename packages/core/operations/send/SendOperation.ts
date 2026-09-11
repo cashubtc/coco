@@ -331,3 +331,17 @@ export function createSendOperation<M extends SendMethod = SendMethod>(
     revision: 0,
   };
 }
+
+/** Older P2PK recovery could persist pending without a token after all outputs were spent. */
+export function isLegacyTokenlessP2pkSend(
+  operation: SendOperation,
+): operation is PendingSendOperation & { outputData: SerializedOutputData } {
+  return (
+    operation.state === 'pending' &&
+    operation.method === 'p2pk' &&
+    operation.needsSwap &&
+    (operation.revision ?? 0) === 0 &&
+    operation.token == null &&
+    !!operation.outputData?.send.length
+  );
+}

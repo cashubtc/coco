@@ -1,5 +1,5 @@
 ---
-'@cashu/coco-core': minor
+'@cashu/coco-core': major
 '@cashu/coco-indexeddb': patch
 '@cashu/coco-sqlite': patch
 '@cashu/coco-sqlite-bun': patch
@@ -33,3 +33,13 @@ duplicating proofs or resetting later output spending and reservations.
 Complete pending Sends whose spent input reservations were already released before an interrupted
 finalization. Preserve partial proof observations and conflicting-owner checks, and publish release
 events only for reservations actually released by completion.
+
+Breaking adapter contract: custom `SendOperationRepository` implementations must now implement
+`transition`. It must atomically compare the persisted state and revision (missing legacy revisions
+count as zero), apply the next operation with revision incremented by one, and return `false` without
+writing on a mismatch. Use the caller's repository transaction so proof writes roll back if the
+transition fails. Bundled adapters implement this contract.
+
+Finalize legacy pending P2PK sends whose old recovery omitted both the token and spent output proofs.
+Verify every persisted send output with the mint and revalidate the allocation and revision in the
+completion transaction. Preserve unresolved operations and never fabricate missing proofs or tokens.
