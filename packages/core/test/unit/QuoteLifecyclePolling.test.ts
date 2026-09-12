@@ -1,8 +1,12 @@
 import { Amount } from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it, mock } from 'bun:test';
+import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
+import { MintRequestProvider } from '../../infra/MintRequestProvider.ts';
+import type { MintMetadataObservation } from '../../mints/MintMetadata.ts';
+import { createMintMetadataRefreshDependencies } from '../fixtures/MintMetadataRefresh.ts';
 import { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
-import type { MintAdapter } from '../../infra/MintAdapter.ts';
+import { MintAdapter } from '../../infra/MintAdapter.ts';
 import { PollingTransport } from '../../infra/PollingTransport.ts';
 import type { MeltHandlerProvider } from '../../infra/handlers/melt/index.ts';
 import type { MintHandlerProvider } from '../../infra/handlers/mint/index.ts';
@@ -22,9 +26,8 @@ import {
 } from '../normalizedMintQuoteFixtures.ts';
 import type { CompatibleMintQuoteBolt11Response } from '../../operations/mint/MintMethodHandler.ts';
 import type { ProofRepository } from '../../repositories/index.ts';
-import { MemoryKeysetRepository } from '../../repositories/memory/MemoryKeysetRepository.ts';
 import { MemoryMintQuoteRepository } from '../../repositories/memory/MemoryMintQuoteRepository.ts';
-import { MemoryMintRepository } from '../../repositories/memory/MemoryMintRepository.ts';
+import type { MemoryMintRepository } from '../../repositories/memory/MemoryMintRepository.ts';
 import { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
 import { MintService } from '../../services/MintService.ts';
 import type { ProofService } from '../../services/ProofService.ts';
@@ -61,14 +64,15 @@ describe('QuoteLifecycle mint quote polling', () => {
   beforeEach(async () => {
     eventBus = new EventBus<CoreEvents>();
     mintQuoteRepository = new MemoryMintQuoteRepository();
-    mintAdapter = {
+    mintAdapter = Object.assign(new MintAdapter(new MintRequestProvider()), {
       checkMintQuoteBatch: mock(async () => []),
       checkMintQuote: mock(async (_mintUrl: string, _method: string, quoteId: string) =>
         bolt11PollingSnapshot(quoteId),
       ),
-    } as unknown as MintAdapter;
+    });
 
-    mintRepository = new MemoryMintRepository();
+    const repositories = new MemoryRepositories();
+    mintRepository = repositories.mintRepository as MemoryMintRepository;
     await mintRepository.addOrUpdateMint({
       mintUrl,
       name: 'test mint',
@@ -91,8 +95,9 @@ describe('QuoteLifecycle mint quote polling', () => {
     });
     mintService = new MintService(
       mintRepository,
-      new MemoryKeysetRepository(),
+      repositories.keysetRepository,
       mintAdapter,
+      createMintMetadataRefreshDependencies(repositories),
       undefined,
       eventBus,
     );
@@ -704,6 +709,57 @@ describe('QuoteLifecycle mint quote polling', () => {
 
     expect(await quoteLifecycle.getMintQuotePollingLimit(mintUrl, 'bolt11')).toBe(100);
   });
+
+  it.each([0, 1])(
+    'retains polling suppression when an observation is ignored (%i seconds older)',
+    async (age) => {
+      await persistBolt11Quote('quote-a');
+      await persistBolt11Quote('quote-b');
+      const mint = await mintRepository.getMintByUrl(mintUrl);
+      await mintRepository.updateMint({ ...mint, updatedAt: 0 });
+      const observedAt = Math.floor(Date.now() / 1000);
+      let releaseObservation!: (observation: MintMetadataObservation) => void;
+      let markStarted!: () => void;
+      const started = new Promise<void>((resolve) => {
+        markStarted = resolve;
+      });
+      mintAdapter.fetchMintMetadata = mock<MintAdapter['fetchMintMetadata']>(async () => ({
+        mintUrl,
+        mintInfo: mint.mintInfo,
+        keysets: [],
+        observedAt,
+      })).mockImplementationOnce(() => {
+        markStarted();
+        return new Promise<MintMetadataObservation>((resolve) => {
+          releaseObservation = resolve;
+        });
+      });
+      const delayedRefresh = mintService.refreshAndCommitIfStale(mintUrl);
+      await started;
+      const committed = await mintService.refreshAndCommitIfStale(mintUrl);
+      (mintAdapter.checkMintQuoteBatch as ReturnType<typeof mock>).mockRejectedValueOnce(
+        new HttpResponseError('not implemented', 405),
+      );
+      await quoteLifecycle.checkMintQuotesForPolling('bolt11', [
+        { mintUrl, quoteId: 'quote-a' },
+        { mintUrl, quoteId: 'quote-b' },
+      ]);
+      expect(await quoteLifecycle.getMintQuotePollingLimit(mintUrl, 'bolt11')).toBe(1);
+      const published = mock(() => {});
+      eventBus.on('mint:metadata-refreshed', published);
+      eventBus.on('mint:updated', published);
+      releaseObservation({
+        mintUrl,
+        mintInfo: { ...mint.mintInfo, name: 'Ignored observation' },
+        keysets: [],
+        observedAt: observedAt - age,
+      });
+      expect(await delayedRefresh).toEqual(committed);
+      expect(await quoteLifecycle.getMintQuotePollingLimit(mintUrl, 'bolt11')).toBe(1);
+      expect(published).not.toHaveBeenCalled();
+      expect(await mintRepository.getMintByUrl(mintUrl)).toEqual(committed.mint);
+    },
+  );
 
   it('does not carry downgrade state into a new Coco Session', async () => {
     await persistBolt11Quote('quote-a');

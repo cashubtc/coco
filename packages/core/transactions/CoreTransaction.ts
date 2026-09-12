@@ -1,6 +1,10 @@
 import type { Repositories, RepositoryTransactionScope } from '@core/repositories';
 import { RepositoryTransactionConflictError } from '@core/repositories';
 import {
+  RepositoryMintMetadataCommands,
+  type ScopedMintMetadataCommands,
+} from './scoped/mints/ScopedMintMetadataCommands.ts';
+import {
   RepositoryKeypairCommands,
   type ScopedKeypairCommands,
 } from './scoped/keypairs/ScopedKeypairCommands.ts';
@@ -11,6 +15,7 @@ import { TransactionLifetime } from './scoped/TransactionLifetime.ts';
  * their independence is established; lifetime tracking does not serialize conflicting work.
  */
 export interface CoreTransaction {
+  readonly mintMetadata: ScopedMintMetadataCommands;
   readonly keypairs: ScopedKeypairCommands;
 }
 
@@ -20,8 +25,14 @@ export interface CoreTransactionRunner {
 
 type TransactionModuleFactory = (repositories: RepositoryTransactionScope) => CoreTransaction;
 
-function createTransactionModules(repositories: RepositoryTransactionScope): CoreTransaction {
+export function createCoreTransactionModules(
+  repositories: RepositoryTransactionScope,
+): CoreTransaction {
   return {
+    mintMetadata: new RepositoryMintMetadataCommands(
+      repositories.mintRepository,
+      repositories.keysetRepository,
+    ),
     keypairs: new RepositoryKeypairCommands(repositories.keyRingRepository),
   };
 }
@@ -32,7 +43,7 @@ const MAX_TRANSACTION_ATTEMPTS = 3;
 export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
   constructor(
     private readonly repositories: Repositories,
-    private readonly createModules: TransactionModuleFactory = createTransactionModules,
+    private readonly createModules: TransactionModuleFactory = createCoreTransactionModules,
   ) {}
 
   async run<T>(work: (transaction: CoreTransaction) => Promise<T>): Promise<T> {

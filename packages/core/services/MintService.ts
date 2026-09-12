@@ -1,5 +1,11 @@
 import { Amount, isBlsKeyset, type AmountLike } from '@cashu/cashu-ts';
 import {
+  MINT_REFRESH_TTL_S,
+  type MintMetadata,
+  type MintQueries,
+} from '@core/mints/MintMetadata.ts';
+import type { MintMetadataTransactions } from '@core/transactions/mints/MintMetadataTransactions.ts';
+import {
   KeysetSyncError,
   MintFetchError,
   ProofValidationError,
@@ -15,8 +21,6 @@ import type { MintInfo } from '../types';
 import type { Logger } from '../logging/Logger.ts';
 import { normalizeMintUrl } from '../utils';
 import { DEFAULT_UNIT, normalizeUnit, normalizeUnitAmount, type UnitAmount } from '../amounts.ts';
-
-const MINT_REFRESH_TTL_S = 60 * 5;
 
 function excludeBlsKeysets<T extends { id: string }>(keysets: T[]): T[] {
   // TODO: Admit BLS keysets after every proof-state lookup uses curve-aware Y derivation.
@@ -116,6 +120,12 @@ type NutSupportSettings = {
 
 export type TopLevelNutCapability = 11 | 20;
 
+/** Query and transaction dependencies of the independently committed metadata refresh action. */
+export interface MintMetadataRefreshDependencies {
+  queries: MintQueries;
+  transactions: MintMetadataTransactions;
+}
+
 export class MintService {
   private readonly mintRepo: MintRepository;
   private readonly keysetRepo: KeysetRepository;
@@ -127,6 +137,7 @@ export class MintService {
     mintRepo: MintRepository,
     keysetRepo: KeysetRepository,
     mintAdapter: MintAdapter,
+    private readonly metadata: MintMetadataRefreshDependencies,
     logger?: Logger,
     eventBus?: EventBus<CoreEvents>,
   ) {
@@ -212,33 +223,41 @@ export class MintService {
     return await this.mintRepo.isTrustedMint(normalizeMintUrl(mintUrl));
   }
 
-  async ensureUpdatedMint(mintUrl: string): Promise<{ mint: Mint; keysets: Keyset[] }> {
+  /**
+   * May fetch remotely and independently commit metadata, even if the caller later fails.
+   * Fresh metadata needs no transaction. Returns after commit and attempted event publication;
+   * listener failures are logged and cannot turn an already committed refresh into a failure.
+   * Older or equal-timestamp observations return the committed snapshot without publishing events.
+   * Call only outside a Wallet transaction; runtime nesting rejection is not yet universal.
+   */
+  async refreshAndCommitIfStale(mintUrl: string): Promise<MintMetadata> {
     mintUrl = normalizeMintUrl(mintUrl);
-    let mint = await this.mintRepo.getMintByUrl(mintUrl).catch(() => null);
-
-    if (!mint) {
-      // Mint doesn't exist, create it as untrusted
-      const now = Math.floor(Date.now() / 1000);
-      mint = {
-        mintUrl,
-        name: mintUrl,
-        mintInfo: {} as MintInfo,
-        trusted: false,
-        createdAt: now,
-        updatedAt: 0,
-      };
+    const cached = await this.metadata.queries.getMetadata(mintUrl);
+    if (cached && cached.mint.updatedAt >= Math.floor(Date.now() / 1000) - MINT_REFRESH_TTL_S)
+      return cached;
+    const observation = await this.mintAdapter.fetchMintMetadata(mintUrl, cached?.keysets ?? []);
+    const result = await this.metadata.transactions.applyObservation(observation);
+    if (result.applied) {
+      await this.publishCommittedEvent('mint:metadata-refreshed', { mintUrl });
+      await this.publishCommittedEvent('mint:updated', result.metadata);
     }
+    return result.metadata;
+  }
 
-    const now = Math.floor(Date.now() / 1000);
-    if (mint.updatedAt < now - MINT_REFRESH_TTL_S) {
-      this.logger?.debug('Refreshing stale mint', { mintUrl });
-      const updated = await this.updateMint(mint);
-      await this.eventBus?.emit('mint:updated', updated);
-      return updated;
+  private async publishCommittedEvent<E extends 'mint:metadata-refreshed' | 'mint:updated'>(
+    event: E,
+    payload: CoreEvents[E],
+  ): Promise<void> {
+    try {
+      await this.eventBus?.emit(event, payload, { throwOnError: true });
+    } catch (error) {
+      this.logger?.error('Failed to publish committed mint metadata event', { event, error });
     }
+  }
 
-    const keysets = excludeBlsKeysets(await this.keysetRepo.getKeysetsByMintUrl(mint.mintUrl));
-    return { mint, keysets };
+  /** Compatibility wrapper; new internal callers use the explicitly committing action. */
+  async ensureUpdatedMint(mintUrl: string): Promise<{ mint: Mint; keysets: Keyset[] }> {
+    return this.refreshAndCommitIfStale(mintUrl);
   }
 
   async deleteMint(mintUrl: string): Promise<void> {
