@@ -405,4 +405,81 @@ describe('RepositoryCoreTransactionRunner', () => {
     expect(result).toEqual({ ok: false, error: undefined });
     expect(await repositories.keyRingRepository.getAllPersistedKeyPairs('p2pk')).toHaveLength(0);
   });
+
+  it('recursively binds a nested Mint Swap capability and drains omitted calls', async () => {
+    const repositories = new MemoryRepositories();
+    type NestedTransaction = CoreTransaction & {
+      mintSwap: {
+        operationRepository: {
+          persist(): Promise<void>;
+        };
+      };
+    };
+    let capturedRepository!: NestedTransaction['mintSwap']['operationRepository'];
+    let capturedMethod!: () => Promise<void>;
+    const runner = new RepositoryCoreTransactionRunner(repositories, (scope) =>
+      Object.freeze({
+        keypairs: new RepositoryKeypairCommands(scope.keyRingRepository),
+        mintSwap: Object.freeze({
+          operationRepository: Object.freeze({
+            persist: () => scope.counterRepository.setCounter('https://source.test', 'swap', 1),
+          }),
+        }),
+      }),
+    ) as unknown as {
+      run<T>(work: (transaction: NestedTransaction) => Promise<T>): Promise<T>;
+    };
+
+    await runner.run(async (transaction) => {
+      capturedRepository = transaction.mintSwap.operationRepository;
+      capturedMethod = capturedRepository.persist;
+      expect(transaction.mintSwap).toBe(transaction.mintSwap);
+      expect(transaction.mintSwap.operationRepository).toBe(capturedRepository);
+      expect(capturedRepository.persist).toBe(capturedMethod);
+      void capturedMethod();
+    });
+
+    expect(await repositories.counterRepository.getCounter('https://source.test', 'swap')).toEqual({
+      mintUrl: 'https://source.test',
+      keysetId: 'swap',
+      counter: 1,
+    });
+    await expect(capturedRepository.persist()).rejects.toThrow(
+      'Wallet transaction scope is closed',
+    );
+    await expect(capturedMethod()).rejects.toThrow('Wallet transaction scope is closed');
+  });
+
+  it('lets a caught nested capability failure poison the transaction attempt', async () => {
+    const repositories = new MemoryRepositories();
+    const failure = new Error('nested Mint Swap persistence failed');
+    type NestedTransaction = CoreTransaction & {
+      mintSwap: { operationRepository: { fail(): Promise<void> } };
+    };
+    let captured!: NestedTransaction['mintSwap']['operationRepository'];
+    const runner = new RepositoryCoreTransactionRunner(repositories, (scope) => ({
+      keypairs: new RepositoryKeypairCommands(scope.keyRingRepository),
+      mintSwap: {
+        operationRepository: {
+          async fail() {
+            await scope.counterRepository.setCounter('https://source.test', 'swap', 1);
+            throw failure;
+          },
+        },
+      },
+    })) as unknown as {
+      run<T>(work: (transaction: NestedTransaction) => Promise<T>): Promise<T>;
+    };
+
+    await expect(
+      runner.run(async (transaction) => {
+        captured = transaction.mintSwap.operationRepository;
+        await transaction.mintSwap.operationRepository.fail().catch(() => {});
+      }),
+    ).rejects.toBe(failure);
+    expect(
+      await repositories.counterRepository.getCounter('https://source.test', 'swap'),
+    ).toBeNull();
+    await expect(captured.fail()).rejects.toThrow('Wallet transaction scope is closed');
+  });
 });

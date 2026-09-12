@@ -1506,6 +1506,48 @@ const MIGRATIONS: readonly Migration[] = [
       GROUP BY purpose;
     `,
   },
+  {
+    id: '039_mint_swap_operations',
+    sql: `
+      CREATE TABLE coco_cashu_mint_swap_operations (
+        id TEXT PRIMARY KEY,
+        state TEXT NOT NULL CHECK (state IN (
+          'preparing', 'prepared', 'source_pending', 'destination_funded',
+          'destination_pending', 'completed', 'cancelled', 'failed', 'needs_attention'
+        )),
+        revision INTEGER NOT NULL CHECK (revision >= 0),
+        nextAttemptAt INTEGER,
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL,
+        sourceQuoteMintUrl TEXT NOT NULL,
+        sourceQuoteMethod TEXT NOT NULL,
+        sourceQuoteId TEXT NOT NULL,
+        destinationQuoteMintUrl TEXT NOT NULL,
+        destinationQuoteMethod TEXT NOT NULL,
+        destinationQuoteId TEXT NOT NULL,
+        sourceOperationId TEXT NOT NULL,
+        destinationOperationId TEXT NOT NULL,
+        recordJson TEXT NOT NULL
+      );
+
+      CREATE UNIQUE INDEX ux_coco_cashu_mint_swap_source_quote
+        ON coco_cashu_mint_swap_operations(
+          sourceQuoteMintUrl, sourceQuoteMethod, sourceQuoteId
+        );
+      CREATE UNIQUE INDEX ux_coco_cashu_mint_swap_destination_quote
+        ON coco_cashu_mint_swap_operations(
+          destinationQuoteMintUrl, destinationQuoteMethod, destinationQuoteId
+        );
+      CREATE UNIQUE INDEX ux_coco_cashu_mint_swap_source_child
+        ON coco_cashu_mint_swap_operations(sourceOperationId);
+      CREATE UNIQUE INDEX ux_coco_cashu_mint_swap_destination_child
+        ON coco_cashu_mint_swap_operations(destinationOperationId);
+      CREATE INDEX idx_coco_cashu_mint_swap_state_revision
+        ON coco_cashu_mint_swap_operations(state, revision);
+      CREATE INDEX idx_coco_cashu_mint_swap_state_due
+        ON coco_cashu_mint_swap_operations(state, nextAttemptAt, createdAt, id);
+    `,
+  },
 ];
 
 // Export for testing

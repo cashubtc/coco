@@ -22,6 +22,7 @@ import type { Mint } from '../models/Mint';
 import type { SendOperation, SendOperationState } from '../operations/send/SendOperation';
 import type { CoreProof, ProofState } from '../types';
 import type { MintMethodRemoteState } from '../operations/mint/MintMethodHandler';
+import type { MintSwapPersistence } from '../operations/mintSwap/MintSwapOperationRepository.ts';
 
 export interface ProofUnitFilter {
   unit?: string;
@@ -379,6 +380,8 @@ interface RepositoriesBase {
   receiveOperationRepository: ReceiveOperationRepository;
   paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
   paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
+  /** Dormant feature capability, exposed only by adapters configured for Mint Swap persistence. */
+  mintSwap?: MintSwapPersistence;
 }
 
 export interface Repositories extends RepositoriesBase {
