@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, mock } from 'bun:test';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 import { MintRequestProvider } from '../../infra/MintRequestProvider.ts';
 import type { MintMetadataObservation } from '../../mints/MintMetadata.ts';
-import { createMintMetadataRefreshDependencies } from '../fixtures/MintMetadataRefresh.ts';
+import { createMintServiceDependencies } from '../fixtures/MintMetadataRefresh.ts';
 import { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
 import { MintAdapter } from '../../infra/MintAdapter.ts';
@@ -94,10 +94,8 @@ describe('QuoteLifecycle mint quote polling', () => {
       } as never,
     });
     mintService = new MintService(
-      mintRepository,
-      repositories.keysetRepository,
       mintAdapter,
-      createMintMetadataRefreshDependencies(repositories),
+      createMintServiceDependencies(repositories),
       undefined,
       eventBus,
     );

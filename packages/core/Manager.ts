@@ -1,5 +1,5 @@
 import type { OutputDataCreator } from '@cashu/cashu-ts';
-import { CoreMintMetadataTransactions } from './transactions/mints/MintMetadataTransactions.ts';
+import { CoreMintTransactions } from './transactions/mints/MintTransactions.ts';
 import { StoredMintQueries } from './mints/MintMetadata.ts';
 
 import type {
@@ -920,12 +920,10 @@ export class Manager {
       repositories.keysetRepository,
     );
     const mintService = new MintService(
-      repositories.mintRepository,
-      repositories.keysetRepository,
       this.mintAdapter,
       {
         queries: mintQueries,
-        transactions: new CoreMintMetadataTransactions(coreTransactionRunner),
+        transactions: new CoreMintTransactions(coreTransactionRunner),
       },
       mintLogger,
       this.eventBus,

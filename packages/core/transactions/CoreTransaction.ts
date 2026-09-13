@@ -1,9 +1,9 @@
 import type { Repositories, RepositoryTransactionScope } from '@core/repositories';
 import { RepositoryTransactionConflictError } from '@core/repositories';
 import {
-  RepositoryMintMetadataCommands,
-  type ScopedMintMetadataCommands,
-} from './scoped/mints/ScopedMintMetadataCommands.ts';
+  RepositoryMintCommands,
+  type ScopedMintCommands,
+} from './scoped/mints/ScopedMintCommands.ts';
 import {
   RepositoryKeypairCommands,
   type ScopedKeypairCommands,
@@ -15,7 +15,7 @@ import { TransactionLifetime } from './scoped/TransactionLifetime.ts';
  * their independence is established; lifetime tracking does not serialize conflicting work.
  */
 export interface CoreTransaction {
-  readonly mintMetadata: ScopedMintMetadataCommands;
+  readonly mints: ScopedMintCommands;
   readonly keypairs: ScopedKeypairCommands;
 }
 
@@ -29,10 +29,7 @@ export function createCoreTransactionModules(
   repositories: RepositoryTransactionScope,
 ): CoreTransaction {
   return {
-    mintMetadata: new RepositoryMintMetadataCommands(
-      repositories.mintRepository,
-      repositories.keysetRepository,
-    ),
+    mints: new RepositoryMintCommands(repositories.mintRepository, repositories.keysetRepository),
     keypairs: new RepositoryKeypairCommands(repositories.keyRingRepository),
   };
 }
