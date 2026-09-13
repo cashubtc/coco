@@ -1,77 +1,38 @@
-import {
-  createMintServiceForMetadata,
-  createMintMetadataRemoteDouble,
-} from '../fixtures/MintMetadataRefresh.ts';
-import { testMintInfo, testMintKeypairs, testMintKeysetId } from '../fixtures/MintMetadata.ts';
+import { Amount, type OutputDataCreator, type OutputDataLike, type Token } from '@cashu/cashu-ts';
+import { beforeEach, describe, expect, it, mock } from 'bun:test';
+import { createSendEnvironment } from '../fixtures/SendEnvironment.ts';
+import { preparedSend, pendingSend } from '../fixtures/SendOperation.ts';
+import { testMintInfo, testMintKeysetId } from '../fixtures/MintMetadata.ts';
 import { deserializeOutputData } from '../../utils.ts';
-import { createSendRemoteDouble } from '../fixtures/SendRemote.ts';
-import {
-  Amount,
-  type OutputDataCreator,
-  type OutputDataLike,
-  type Token,
-  type Wallet,
-} from '@cashu/cashu-ts';
-import { beforeEach, describe, expect, it, mock, type Mock } from 'bun:test';
-import { SendOperationService } from '../../operations/send/SendOperationService';
-import { DefaultSendHandler } from '../../infra/handlers/send/DefaultSendHandler';
-import { P2pkSendHandler } from '../../infra/handlers/send/P2pkSendHandler';
-import { SendHandlerProvider } from '../../infra/handlers/send/SendHandlerProvider';
-import { MemorySendOperationRepository } from '../../repositories/memory/MemorySendOperationRepository';
-import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepository';
-import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
-import type { Logger } from '../../logging/Logger';
 import type { CoreProof } from '../../types';
 import type {
   PreparedSendOperation,
   PendingSendOperation,
 } from '../../operations/send/SendOperation';
-import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
-import { CoreSendTransactions } from '../../transactions/send/SendTransactions.ts';
-import type { SendTransactions } from '../../transactions/send/SendTransactions.ts';
-import type { RepositoryTransactionScope } from '../../repositories';
 import { MintOperationError, NetworkError } from '../../models/Error.ts';
 import { makeOutputDataCreator } from '../fixtures/OutputDataCreator.ts';
 import { SendOpsApi } from '../../api/SendOpsApi.ts';
 
-class CountingMemoryRepositories extends MemoryRepositories {
-  transactionCount = 0;
-  transactionOpen = false;
-
-  override withTransaction<T>(
-    fn: (repositories: RepositoryTransactionScope) => Promise<T>,
-  ): Promise<T> {
-    this.transactionCount++;
-    return super.withTransaction(async (scope) => {
-      this.transactionOpen = true;
-      try {
-        return await fn(scope);
-      } finally {
-        this.transactionOpen = false;
-      }
-    });
-  }
-}
+type Environment = Awaited<ReturnType<typeof createSendEnvironment>>;
 
 describe('SendOperationService', () => {
   const mintUrl = 'https://mint.test';
   const keysetId = testMintKeysetId();
   const usdKeysetId = testMintKeysetId('usd');
 
-  let sendOpRepo: MemorySendOperationRepository;
-  let proofRepo: MemoryProofRepository;
-  let mintQueries: Pick<CountingMemoryRepositories['mintRepository'], 'isTrustedMint'>;
-  let metadataRemote: ReturnType<typeof createMintMetadataRemoteDouble>;
-  let remote: ReturnType<typeof createSendRemoteDouble>;
-  let eventBus: EventBus<CoreEvents>;
-  let logger: Logger;
-  let handlerProvider: SendHandlerProvider;
-  let service: SendOperationService;
-  let loadSeed: Mock<() => Promise<Uint8Array>>;
-  let sendTransactions: SendTransactions;
-  let repositories: CountingMemoryRepositories;
+  let environment: Environment;
+  let repositories: Environment['repositories'];
+  let sendOpRepo: Environment['repositories']['sendOperationRepository'];
+  let proofRepo: Environment['repositories']['proofRepository'];
+  let metadataRemote: Environment['metadataRemote'];
+  let remote: Environment['remote'];
+  let eventBus: Environment['eventBus'];
+  let logger: Environment['logger'];
+  let service: Environment['service'];
+  let loadSeed: Environment['loadSeed'];
+  let sendTransactions: Environment['transactions'];
 
   const makeProof = (secret: string, amount: number, unit = 'sat'): CoreProof =>
     ({
@@ -90,113 +51,51 @@ describe('SendOperationService', () => {
   });
 
   const buildService = (outputDataCreator?: OutputDataCreator) =>
-    new SendOperationService({
-      operationQueries: sendOpRepo,
-      proofQueries: proofRepo,
-      transactions: sendTransactions,
-      mintQueries,
-      mintMetadataRefresh: createMintServiceForMetadata(repositories, metadataRemote, eventBus),
-      remote,
-      loadSeed,
-      eventBus,
-      handlerProvider,
-      outputDataCreator,
-      logger,
-    });
+    environment.buildService({ eventBus, outputDataCreator });
+
+  const prepareExact = async (secret = 'proof-1', amount = 100) => {
+    await proofRepo.saveProofs(mintUrl, [makeProof(secret, amount)]);
+    return service.prepare(await service.init(mintUrl, unitAmount(amount)));
+  };
 
   const makeSwapPrepared = async (id: string): Promise<PreparedSendOperation> => {
     const input = makeProof(`${id}-input`, 100);
     await proofRepo.saveProofs(mintUrl, [input]);
     await proofRepo.reserveProofs(mintUrl, [input.secret], id);
-    const prepared: PreparedSendOperation = {
-      id,
-      state: 'prepared',
-      mintUrl,
-      amount: Amount.from(100),
-      unit: 'sat',
-      createdAt: 100,
-      updatedAt: 200,
-      revision: 0,
-      needsSwap: true,
-      fee: Amount.zero(),
-      inputAmount: Amount.from(100),
-      inputProofSecrets: [input.secret],
-      outputData: {
-        keep: [],
-        send: [
-          {
-            blindedMessage: { amount: 100, id: keysetId, B_: `B-${id}` },
-            blindingFactor: '01',
-            secret: Buffer.from(`${id}-send`).toString('hex'),
-          },
-        ],
-      },
-      method: 'default',
-      methodData: { forceSwap: true },
-    };
+    const prepared = preparedSend(id, [input], [makeProof(`${id}-send`, 100)]);
     await sendOpRepo.create(prepared);
     return prepared;
   };
 
-  const useSwapWallet = (send: Wallet['send']): void => {
-    remote.swap.mockImplementation((request) => {
-      const data = deserializeOutputData(request.outputData);
-      return send(request.amount, request.inputProofs, undefined, {
-        send: { type: 'custom', data: data.send },
-        keep: { type: 'custom', data: data.keep },
-      });
-    });
+  const completionPaths = ['recovery', 'refresh', 'finalize', 'notification'] as const;
+  const completeThrough = (
+    path: (typeof completionPaths)[number],
+    operationId: string,
+    secret: string,
+  ) => {
+    const api = new SendOpsApi(service);
+    return {
+      recovery: () => api.recovery.run(),
+      refresh: () => api.refresh(operationId),
+      finalize: () => api.finalize(operationId),
+      notification: () => service.recordProofSpent(operationId, secret),
+    }[path]();
   };
 
   beforeEach(async () => {
-    repositories = new CountingMemoryRepositories();
-    sendOpRepo = repositories.sendOperationRepository as MemorySendOperationRepository;
-    proofRepo = repositories.proofRepository as MemoryProofRepository;
-    sendTransactions = new CoreSendTransactions(new RepositoryCoreTransactionRunner(repositories));
-    await repositories.keysetRepository.addKeyset({
-      mintUrl,
-      id: keysetId,
-      unit: 'sat',
-      keypairs: testMintKeypairs,
-      active: true,
-      feePpk: 0,
-    });
-    await repositories.keysetRepository.addKeyset({
-      mintUrl,
-      id: usdKeysetId,
-      unit: 'usd',
-      keypairs: testMintKeypairs,
-      active: true,
-      feePpk: 0,
-    });
-    eventBus = new EventBus<CoreEvents>();
-
-    await repositories.mintRepository.addNewMint({
-      mintUrl,
-      name: 'Test',
-      trusted: true,
-      mintInfo: testMintInfo,
-      createdAt: 1,
-      updatedAt: Math.floor(Date.now() / 1000),
-    });
-    mintQueries = repositories.mintRepository;
-    remote = createSendRemoteDouble();
-    metadataRemote = createMintMetadataRemoteDouble();
-    loadSeed = mock(async () => new Uint8Array(32).fill(1));
-
-    logger = {
-      debug: mock(() => {}),
-      info: mock(() => {}),
-      warn: mock(() => {}),
-      error: mock(() => {}),
-    } as Logger;
-
-    handlerProvider = new SendHandlerProvider({
-      default: new DefaultSendHandler(),
-      p2pk: new P2pkSendHandler(),
-    });
-
-    service = buildService();
+    environment = await createSendEnvironment(['sat', 'usd']);
+    ({
+      repositories,
+      remote,
+      metadataRemote,
+      eventBus,
+      logger,
+      loadSeed,
+      service,
+      transactions: sendTransactions,
+    } = environment);
+    sendOpRepo = repositories.sendOperationRepository;
+    proofRepo = repositories.proofRepository;
   });
 
   it('prepares concurrent sends from the same mint without reusing proofs', async () => {
@@ -337,10 +236,7 @@ describe('SendOperationService', () => {
   });
 
   it('emits send:pending after the pending state is persisted', async () => {
-    await proofRepo.saveProofs(mintUrl, [makeProof('proof-1', 100)]);
-
-    const initOp = await service.init(mintUrl, unitAmount(100));
-    const preparedOp = await service.prepare(initOp);
+    const preparedOp = await prepareExact();
     let persistedState: string | undefined;
     let lockedDuringEvent = false;
     let proofStateDuringEvent: string | undefined;
@@ -364,9 +260,7 @@ describe('SendOperationService', () => {
   });
 
   it('executes an exact match without opening a remote session', async () => {
-    await proofRepo.saveProofs(mintUrl, [makeProof('proof-1', 100)]);
-    const initOp = await service.init(mintUrl, unitAmount(100));
-    const preparedOp = await service.prepare(initOp);
+    const preparedOp = await prepareExact();
 
     const result = await service.execute(preparedOp);
 
@@ -378,9 +272,7 @@ describe('SendOperationService', () => {
   });
 
   it('uses only the caller operation id and reloads authoritative exact-send data', async () => {
-    await proofRepo.saveProofs(mintUrl, [makeProof('proof-1', 100)]);
-    const initOp = await service.init(mintUrl, unitAmount(100));
-    const preparedOp = await service.prepare(initOp);
+    const preparedOp = await prepareExact();
 
     const result = await service.execute({
       ...preparedOp,
@@ -393,9 +285,7 @@ describe('SendOperationService', () => {
   });
 
   it('logs a post-commit listener failure without misreporting the exact Send', async () => {
-    await proofRepo.saveProofs(mintUrl, [makeProof('proof-1', 100)]);
-    const initOp = await service.init(mintUrl, unitAmount(100));
-    const preparedOp = await service.prepare(initOp);
+    const preparedOp = await prepareExact();
     eventBus.on('send:pending', () => {
       throw new Error('listener failed');
     });
@@ -416,15 +306,13 @@ describe('SendOperationService', () => {
     let revisionDuringTransport: number | undefined;
     let memoDuringTransport: string | undefined;
     let pendingEventLocked = true;
-    const send = mock(async (_amount, inputs, _includeFees, outputConfig) => {
+    remote.swap.mockImplementation(async (request) => {
       const stored = await sendOpRepo.getById(prepared.id);
       stateDuringTransport = stored?.state;
       revisionDuringTransport = stored?.revision;
       memoDuringTransport = stored?.executionMemo;
-      expect(inputs.map((proof: CoreProof) => proof.secret)).toEqual(prepared.inputProofSecrets);
-      expect(outputConfig.send.data[0]?.secret).toEqual(
-        new TextEncoder().encode(`${prepared.id}-send`),
-      );
+      expect(request.inputProofs.map((proof) => proof.secret)).toEqual(prepared.inputProofSecrets);
+      expect(request.outputData).toEqual(prepared.outputData!);
       return {
         keep: [],
         send: [
@@ -437,7 +325,6 @@ describe('SendOperationService', () => {
         ],
       };
     });
-    useSwapWallet(send);
     eventBus.on('send:pending', () => {
       pendingEventLocked = service.isOperationLocked(prepared.id);
     });
@@ -461,11 +348,7 @@ describe('SendOperationService', () => {
 
   it('leaves an ambiguous swap failure executing for recovery', async () => {
     const prepared = await makeSwapPrepared('swap-ambiguous');
-    useSwapWallet(
-      mock(async () => {
-        throw new NetworkError('connection lost');
-      }),
-    );
+    remote.swap.mockRejectedValue(new NetworkError('connection lost'));
 
     await expect(service.execute(prepared)).rejects.toThrow('connection lost');
 
@@ -484,11 +367,7 @@ describe('SendOperationService', () => {
       const prepared = await makeSwapPrepared(`swap-error-${code}`);
       const rolledBack = mock(() => {});
       eventBus.on('send:rolled-back', rolledBack);
-      useSwapWallet(
-        mock(async () => {
-          throw new MintOperationError(code, 'uncertain swap outcome');
-        }),
-      );
+      remote.swap.mockRejectedValue(new MintOperationError(code, 'uncertain swap outcome'));
 
       await expect(service.execute(prepared)).rejects.toThrow('uncertain swap outcome');
 
@@ -524,11 +403,7 @@ describe('SendOperationService', () => {
 
   it('atomically rolls back a definitive mint rejection after the transport boundary', async () => {
     const prepared = await makeSwapPrepared('swap-rejected');
-    useSwapWallet(
-      mock(async () => {
-        throw new MintOperationError(12001, 'Keyset is not known');
-      }),
-    );
+    remote.swap.mockRejectedValue(new MintOperationError(12001, 'Keyset is not known'));
     let rolledBackEventLocked = true;
     eventBus.on('send:rolled-back', () => {
       rolledBackEventLocked = service.isOperationLocked(prepared.id);
@@ -548,19 +423,17 @@ describe('SendOperationService', () => {
 
   it('returns committed swap state when a live event listener fails', async () => {
     const prepared = await makeSwapPrepared('swap-event-failure');
-    useSwapWallet(
-      mock(async () => ({
-        keep: [],
-        send: [
-          {
-            id: keysetId,
-            secret: `${prepared.id}-send`,
-            amount: Amount.from(100),
-            C: 'C-swap-send',
-          },
-        ],
-      })),
-    );
+    remote.swap.mockResolvedValue({
+      keep: [],
+      send: [
+        {
+          id: keysetId,
+          secret: `${prepared.id}-send`,
+          amount: Amount.from(100),
+          C: 'C-swap-send',
+        },
+      ],
+    });
     eventBus = new EventBus<CoreEvents>({ throwOnError: true });
     eventBus.on('send:pending', () => {
       throw new Error('listener failed');
@@ -598,21 +471,9 @@ describe('SendOperationService', () => {
   });
 
   it('serializes competing finalization attempts and returns idempotently', async () => {
-    const pendingOp: PendingSendOperation = {
-      id: 'send-op-pending',
-      state: 'pending',
-      mintUrl,
-      amount: Amount.from(100),
-      unit: 'sat',
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      needsSwap: false,
-      fee: Amount.from(0),
-      inputAmount: Amount.from(100),
-      inputProofSecrets: ['proof-1'],
-      token: { mint: mintUrl, unit: 'sat', proofs: [makeProof('proof-1', 100)] },
-      method: 'default',
-      methodData: {},
+    const pendingOp = {
+      ...pendingSend('send-op-pending', [makeProof('proof-1', 100)]),
+      revision: undefined,
     };
     await sendOpRepo.create(pendingOp);
     await proofRepo.saveProofs(mintUrl, [
@@ -628,21 +489,9 @@ describe('SendOperationService', () => {
   });
 
   it('keeps finalization persistence inside the Send transaction gateway', async () => {
-    const pendingOp: PendingSendOperation = {
-      id: 'send-op-custom-finalize',
-      state: 'pending',
-      mintUrl,
-      amount: Amount.from(100),
-      unit: 'sat',
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      needsSwap: false,
-      fee: Amount.from(0),
-      inputAmount: Amount.from(100),
-      inputProofSecrets: ['proof-1'],
-      token: { mint: mintUrl, unit: 'sat', proofs: [makeProof('proof-1', 100)] },
-      method: 'default',
-      methodData: {},
+    const pendingOp = {
+      ...pendingSend('send-op-custom-finalize', [makeProof('proof-1', 100)]),
+      revision: undefined,
     };
     await sendOpRepo.create(pendingOp);
     await proofRepo.saveProofs(mintUrl, [
@@ -655,7 +504,7 @@ describe('SendOperationService', () => {
     expect((await sendOpRepo.getById(pendingOp.id))?.state).toBe('finalized');
   });
 
-  it.each(['recovery', 'refresh', 'finalize', 'notification'] as const)(
+  it.each([...completionPaths])(
     'finishes an already released Send through %s and only publishes committed changes',
     async (path) => {
       const proof = makeProof('released-input', 100);
@@ -675,19 +524,7 @@ describe('SendOperationService', () => {
       });
       eventBus.on('proofs:released', releases);
       eventBus.on('send:finalized', finalized);
-      const api = new SendOpsApi(service);
-      const complete = () => {
-        switch (path) {
-          case 'recovery':
-            return api.recovery.run();
-          case 'refresh':
-            return api.refresh(operation.id);
-          case 'finalize':
-            return api.finalize(operation.id);
-          case 'notification':
-            return service.recordProofSpent(operation.id, proof.secret);
-        }
-      };
+      const complete = () => completeThrough(path, operation.id, proof.secret);
 
       await complete();
       await complete();
@@ -732,11 +569,10 @@ describe('SendOperationService', () => {
       return (await sendOpRepo.getById(operation.id)) as PendingSendOperation;
     }
 
-    it.each(['recovery', 'refresh', 'finalize', 'notification'] as const)(
+    it.each([...completionPaths])(
       'verifies the persisted allocation through %s without fabricating a token or proofs',
       async (path) => {
         const operation = await persistTokenlessPending();
-        const api = new SendOpsApi(service);
         const finalized = mock(async () => {
           expect(repositories.transactionOpen).toBe(false);
           expect((await sendOpRepo.getById(operation.id))?.state).toBe('finalized');
@@ -746,18 +582,7 @@ describe('SendOperationService', () => {
         eventBus.on('send:finalized', finalized);
         eventBus.on('proofs:saved', saved);
         eventBus.on('proofs:released', released);
-        const complete = () => {
-          switch (path) {
-            case 'recovery':
-              return api.recovery.run();
-            case 'refresh':
-              return api.refresh(operation.id);
-            case 'finalize':
-              return api.finalize(operation.id);
-            case 'notification':
-              return service.recordProofSpent(operation.id, 'legacy-tokenless-send');
-          }
-        };
+        const complete = () => completeThrough(path, operation.id, 'legacy-tokenless-send');
 
         await complete();
         await complete();
@@ -856,23 +681,7 @@ describe('SendOperationService', () => {
   });
 
   it('preserves empty pending default-token reclaim through its transaction gateway', async () => {
-    const pendingOp: PendingSendOperation = {
-      id: 'send-op-legacy-reclaim',
-      state: 'pending',
-      mintUrl,
-      amount: Amount.from(100),
-      unit: 'sat',
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      revision: 1,
-      needsSwap: false,
-      fee: Amount.zero(),
-      inputAmount: Amount.from(100),
-      inputProofSecrets: ['proof-1'],
-      token: { mint: mintUrl, unit: 'sat', proofs: [makeProof('proof-1', 100)] },
-      method: 'default',
-      methodData: {},
-    };
+    const pendingOp = pendingSend('send-op-legacy-reclaim', [makeProof('proof-1', 100)]);
     await sendOpRepo.create(pendingOp);
 
     await service.rollback(pendingOp.id, 'Reclaimed by user');
@@ -884,45 +693,25 @@ describe('SendOperationService', () => {
     expect(stored?.error).toBe('Reclaimed by user');
   });
 
-  it('persists memo on the token when execute is called with a memo option', async () => {
-    await proofRepo.saveProofs(mintUrl, [makeProof('proof-1', 100)]);
-
-    const initOp = await service.init(mintUrl, unitAmount(100));
-    const preparedOp = await service.prepare(initOp);
-    const result = await service.execute(preparedOp, { memo: 'hello' });
-
-    expect(result.token.memo).toBe('hello');
-    const persisted = await sendOpRepo.getById(preparedOp.id);
-    expect((persisted as PendingSendOperation).token?.memo).toBe('hello');
-  });
-
-  it('omits memo from token when memo is whitespace-only', async () => {
-    await proofRepo.saveProofs(mintUrl, [makeProof('proof-1', 100)]);
-
-    const initOp = await service.init(mintUrl, unitAmount(100));
-    const preparedOp = await service.prepare(initOp);
-    const result = await service.execute(preparedOp, { memo: '   ' });
-
-    expect(result.token.memo).toBeUndefined();
-    const persisted = await sendOpRepo.getById(preparedOp.id);
-    expect((persisted as PendingSendOperation).token?.memo).toBeUndefined();
-  });
-
-  it('emits send:pending event with memo-bearing token', async () => {
-    await proofRepo.saveProofs(mintUrl, [makeProof('proof-1', 100)]);
-
-    const initOp = await service.init(mintUrl, unitAmount(100));
-    const preparedOp = await service.prepare(initOp);
-
+  it.each([
+    { memo: 'hello', expected: 'hello' },
+    { memo: '  padded memo  ', expected: 'padded memo' },
+    { memo: '   ', expected: undefined },
+  ])('returns, persists, and emits the normalized memo "$memo"', async ({ memo, expected }) => {
+    const prepared = await prepareExact();
     let eventToken: Token | undefined;
     eventBus.on('send:pending', ({ token }) => {
       eventToken = token;
     });
 
-    await service.execute(preparedOp, { memo: 'event-memo' });
+    const result = await service.execute(prepared, { memo });
 
-    expect(eventToken?.memo).toBe('event-memo');
+    expect(result.token.memo).toBe(expected);
+    expect(eventToken).toEqual(result.token);
+    const stored = await sendOpRepo.getById(prepared.id);
+    expect(stored && 'token' in stored ? stored.token : undefined).toEqual(result.token);
   });
+
   it('rechecks mint trust inside preparation after asynchronous preflight', async () => {
     await proofRepo.saveProofs(mintUrl, [makeProof('trust-input', 10)]);
     const intent = await service.init(mintUrl, unitAmount(10));

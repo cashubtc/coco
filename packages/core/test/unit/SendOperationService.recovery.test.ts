@@ -1,15 +1,11 @@
-import { createMintServiceForMetadata } from '../fixtures/MintMetadataRefresh.ts';
-import { testMintInfo, testMintKeypairs, testMintKeysetId } from '../fixtures/MintMetadata.ts';
-import { deserializeOutputData } from '../../utils.ts';
-import { createSendRemoteDouble } from '../fixtures/SendRemote.ts';
 import { Amount, type ProofState as CashuProofState } from '@cashu/cashu-ts';
-import { beforeEach, describe, expect, it, mock, type Mock } from 'bun:test';
+import { beforeEach, describe, expect, it, mock } from 'bun:test';
+import { createSendEnvironment } from '../fixtures/SendEnvironment.ts';
+import { preparedSend, pendingSend } from '../fixtures/SendOperation.ts';
+import type { SwapTransportRequest } from '../../transactions/send/types.ts';
+import { testMintKeysetId } from '../fixtures/MintMetadata.ts';
 import { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
-import { DefaultSendHandler } from '../../infra/handlers/send/DefaultSendHandler.ts';
-import { P2pkSendHandler } from '../../infra/handlers/send/P2pkSendHandler.ts';
-import { SendHandlerProvider } from '../../infra/handlers/send/SendHandlerProvider.ts';
-import type { Logger } from '../../logging/Logger.ts';
 import { MintOperationError } from '../../models/Error.ts';
 import type {
   ExecutingSendOperation,
@@ -18,11 +14,6 @@ import type {
   PreparedSendOperation,
   RolledBackSendOperation,
 } from '../../operations/send/SendOperation.ts';
-import { SendOperationService } from '../../operations/send/SendOperationService.ts';
-import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
-import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
-import { CoreSendTransactions } from '../../transactions/send/SendTransactions.ts';
-import type { SendTransactions } from '../../transactions/send/SendTransactions.ts';
 import type { CoreProof } from '../../types.ts';
 
 const mintUrl = 'https://mint.test';
@@ -41,18 +32,13 @@ function coreProof(secret: string, overrides: Partial<CoreProof> = {}): CoreProo
   };
 }
 
-async function replayResult(
-  _amount: Amount,
-  _inputs: CoreProof[],
-  _fees: boolean | undefined,
-  config: { send: { data: Array<{ secret: Uint8Array }> } },
-) {
+async function replayResult(request: SwapTransportRequest) {
   return {
     keep: [],
     send: [
       {
         id: keysetId,
-        secret: new TextDecoder().decode(config.send.data[0]!.secret),
+        secret: Buffer.from(request.outputData.send[0]!.secret, 'hex').toString(),
         amount: Amount.from(10),
         C: 'C-replayed',
       },
@@ -61,106 +47,31 @@ async function replayResult(
 }
 
 function executingOperation(id: string): ExecutingSendOperation {
-  const sendSecret = `${id}-send`;
   return {
-    id,
+    ...preparedSend(id, [coreProof(`${id}-input`)], [coreProof(`${id}-send`)]),
     state: 'executing',
-    mintUrl,
-    amount: Amount.from(10),
-    unit: 'sat',
-    method: 'default',
-    methodData: { forceSwap: true },
-    createdAt: 100,
-    updatedAt: 200,
     revision: 1,
-    needsSwap: true,
-    fee: Amount.zero(),
-    inputAmount: Amount.from(10),
-    inputProofSecrets: [`${id}-input`],
-    outputData: {
-      keep: [],
-      send: [
-        {
-          blindedMessage: { amount: 10, id: keysetId, B_: `B-${id}` },
-          blindingFactor: '01',
-          secret: Buffer.from(sendSecret).toString('hex'),
-        },
-      ],
-    },
     executionMemo: 'persisted memo',
   };
 }
 
-describe('SendOperationService executing recovery', () => {
-  let repositories: MemoryRepositories;
-  let service: SendOperationService;
-  let wallet: {
-    send: Mock<typeof replayResult>;
-    checkProofsStates: Mock<(proofs: CoreProof[]) => Promise<CashuProofState[]>>;
-  };
-  let remote: ReturnType<typeof createSendRemoteDouble>;
-  let logger: Logger;
-  let eventBus: EventBus<CoreEvents>;
-  let transactions: SendTransactions;
+type Environment = Awaited<ReturnType<typeof createSendEnvironment>>;
 
-  function buildService(serviceEvents = eventBus): SendOperationService {
-    return new SendOperationService({
-      operationQueries: repositories.sendOperationRepository,
-      proofQueries: repositories.proofRepository,
-      transactions,
-      mintQueries: repositories.mintRepository,
-      mintMetadataRefresh: createMintServiceForMetadata(repositories, undefined, serviceEvents),
-      remote,
-      loadSeed: async () => new Uint8Array(32),
-      eventBus: serviceEvents,
-      handlerProvider: new SendHandlerProvider({
-        default: new DefaultSendHandler(),
-        p2pk: new P2pkSendHandler(),
-      }),
-      logger,
-    });
-  }
+describe('SendOperationService executing recovery', () => {
+  let environment: Environment;
+  let repositories: Environment['repositories'];
+  let service: Environment['service'];
+  let remote: Environment['remote'];
+  let logger: Environment['logger'];
+  let eventBus: Environment['eventBus'];
+  let transactions: Environment['transactions'];
+
+  const buildService = (serviceEvents = eventBus) =>
+    environment.buildService({ eventBus: serviceEvents });
 
   beforeEach(async () => {
-    repositories = new MemoryRepositories();
-    wallet = {
-      send: mock(async () => ({ send: [], keep: [] })),
-      checkProofsStates: mock(async () => []),
-    };
-    await repositories.mintRepository.addNewMint({
-      mintUrl,
-      name: 'Test',
-      trusted: true,
-      mintInfo: testMintInfo,
-      createdAt: 1,
-      updatedAt: Math.floor(Date.now() / 1000),
-    });
-    await repositories.keysetRepository.addKeyset({
-      mintUrl,
-      id: keysetId,
-      unit: 'sat',
-      active: true,
-      feePpk: 0,
-      keypairs: testMintKeypairs,
-    });
-    remote = createSendRemoteDouble();
-    remote.swap.mockImplementation((request) =>
-      wallet.send(request.amount, request.inputProofs as CoreProof[], undefined, {
-        send: { data: deserializeOutputData(request.outputData).send },
-      }),
-    );
-    remote.checkProofStates.mockImplementation((proofs) =>
-      wallet.checkProofsStates(proofs as CoreProof[]),
-    );
-    logger = {
-      debug: mock(() => {}),
-      info: mock(() => {}),
-      warn: mock(() => {}),
-      error: mock(() => {}),
-    };
-    eventBus = new EventBus<CoreEvents>();
-    transactions = new CoreSendTransactions(new RepositoryCoreTransactionRunner(repositories));
-    service = buildService();
+    environment = await createSendEnvironment();
+    ({ repositories, service, remote, logger, eventBus, transactions } = environment);
   });
 
   async function persistExecuting(operation: ExecutingSendOperation): Promise<void> {
@@ -181,35 +92,7 @@ describe('SendOperationService executing recovery', () => {
       ? coreProof(sendSecret, { state: 'inflight', createdByOperationId: id })
       : input;
     await repositories.proofRepository.saveProofs(mintUrl, needsSwap ? [input, send] : [input]);
-    const pending: PendingSendOperation = {
-      id,
-      state: 'pending',
-      mintUrl,
-      amount: Amount.from(10),
-      unit: 'sat',
-      method: 'default',
-      methodData: needsSwap ? { forceSwap: true } : {},
-      createdAt: 100,
-      updatedAt: 200,
-      revision: needsSwap ? 2 : 1,
-      needsSwap,
-      fee: Amount.zero(),
-      inputAmount: Amount.from(10),
-      inputProofSecrets: [inputSecret],
-      outputData: needsSwap
-        ? {
-            keep: [],
-            send: [
-              {
-                blindedMessage: { amount: 10, id: keysetId, B_: `B-${id}` },
-                blindingFactor: '01',
-                secret: Buffer.from(sendSecret).toString('hex'),
-              },
-            ],
-          }
-        : undefined,
-      token: { mint: mintUrl, unit: 'sat', proofs: [send] },
-    };
+    const pending = pendingSend(id, [input], needsSwap ? [send] : undefined);
     await repositories.sendOperationRepository.create(pending);
     return pending;
   }
@@ -217,44 +100,25 @@ describe('SendOperationService executing recovery', () => {
   it('restarts from executing and replays the exact persisted request once when inputs are unspent', async () => {
     const operation = executingOperation('restart-replay');
     await persistExecuting(operation);
-    wallet.checkProofsStates.mockImplementation(async (proofs: CoreProof[]) =>
+    remote.checkProofStates.mockImplementation(async (proofs) =>
       proofs.map(
         (proof) =>
           ({
-            state: proof.secret.endsWith('-input') ? 'UNSPENT' : 'UNSPENT',
+            state: 'UNSPENT',
             Y: `Y-${proof.secret}`,
           }) as CashuProofState,
       ),
     );
-    wallet.send.mockImplementation(
-      async (
-        _amount: Amount,
-        inputs: CoreProof[],
-        _includeFees: boolean | undefined,
-        outputConfig: { send: { data: Array<{ secret: Uint8Array }> } },
-      ) => {
-        expect(inputs.map((proof: CoreProof) => proof.secret)).toEqual(operation.inputProofSecrets);
-        expect(outputConfig.send.data[0]?.secret).toEqual(
-          new TextEncoder().encode(`${operation.id}-send`),
-        );
-        return {
-          keep: [],
-          send: [
-            {
-              id: keysetId,
-              secret: `${operation.id}-send`,
-              amount: Amount.from(10),
-              C: 'C-replayed',
-            },
-          ],
-        };
-      },
-    );
+    remote.swap.mockImplementation(async (request) => {
+      expect(request.inputProofs.map((proof) => proof.secret)).toEqual(operation.inputProofSecrets);
+      expect(request.outputData).toEqual(operation.outputData!);
+      return replayResult(request);
+    });
 
     await service.recoverPendingOperations();
     await service.recoverPendingOperations();
 
-    expect(wallet.send).toHaveBeenCalledTimes(1);
+    expect(remote.swap).toHaveBeenCalledTimes(1);
     const stored = await repositories.sendOperationRepository.getById(operation.id);
     expect(stored?.state).toBe('pending');
     expect(stored?.revision).toBe(3);
@@ -270,7 +134,7 @@ describe('SendOperationService executing recovery', () => {
       releaseChecks = resolve;
     });
     let checkCount = 0;
-    wallet.checkProofsStates.mockImplementation(async (proofs: CoreProof[]) => {
+    remote.checkProofStates.mockImplementation(async (proofs) => {
       checkCount++;
       if (checkCount === 2) releaseChecks();
       await bothChecked;
@@ -278,7 +142,7 @@ describe('SendOperationService executing recovery', () => {
         (proof) => ({ state: 'UNSPENT', Y: `Y-${proof.secret}` }) as CashuProofState,
       );
     });
-    wallet.send.mockImplementation(replayResult);
+    remote.swap.mockImplementation(replayResult);
     const secondSession = buildService(new EventBus<CoreEvents>());
 
     await Promise.all([
@@ -286,7 +150,7 @@ describe('SendOperationService executing recovery', () => {
       secondSession.recoverPendingOperations(),
     ]);
 
-    expect(wallet.send).toHaveBeenCalledTimes(1);
+    expect(remote.swap).toHaveBeenCalledTimes(1);
     const stored = await repositories.sendOperationRepository.getById(operation.id);
     expect(stored?.state).toBe('pending');
     expect(stored?.revision).toBe(3);
@@ -295,7 +159,7 @@ describe('SendOperationService executing recovery', () => {
   it('applies fully restored outputs through the normal result transaction', async () => {
     const operation = executingOperation('restart-restore');
     await persistExecuting(operation);
-    wallet.checkProofsStates.mockImplementation(async (proofs: CoreProof[]) =>
+    remote.checkProofStates.mockImplementation(async (proofs) =>
       proofs.map(
         (proof) =>
           ({
@@ -315,7 +179,7 @@ describe('SendOperationService executing recovery', () => {
 
     await service.recoverPendingOperations();
 
-    expect(wallet.send).not.toHaveBeenCalled();
+    expect(remote.swap).not.toHaveBeenCalled();
     expect(remote.restoreOutputs).toHaveBeenCalledWith(operation.outputData);
     expect((await repositories.sendOperationRepository.getById(operation.id))?.state).toBe(
       'pending',
@@ -401,7 +265,7 @@ describe('SendOperationService executing recovery', () => {
       }),
       spentChange,
     ]);
-    wallet.checkProofsStates.mockImplementation(async (proofs: CoreProof[]) =>
+    remote.checkProofStates.mockImplementation(async (proofs) =>
       proofs.map(
         (proof) =>
           ({
@@ -435,7 +299,7 @@ describe('SendOperationService executing recovery', () => {
       });
       await repositories.proofRepository.saveProofs(mintUrl, [sendProof]);
       await repositories.proofRepository.setProofState(mintUrl, operation.inputProofSecrets, state);
-      wallet.checkProofsStates.mockImplementation(async (proofs: CoreProof[]) =>
+      remote.checkProofStates.mockImplementation(async (proofs) =>
         proofs.map(
           (proof) =>
             ({
@@ -479,7 +343,7 @@ describe('SendOperationService executing recovery', () => {
       coreProof(operation.inputProofSecrets[1]!, { usedByOperationId: operation.id }),
     ]);
     await repositories.sendOperationRepository.create(operation);
-    wallet.checkProofsStates.mockResolvedValue([
+    remote.checkProofStates.mockResolvedValue([
       { state: 'SPENT', Y: 'Y-a' },
       { state: 'UNSPENT', Y: 'Y-b' },
     ] as CashuProofState[]);
@@ -491,14 +355,14 @@ describe('SendOperationService executing recovery', () => {
     expect(stored && 'outputData' in stored ? stored.outputData : undefined).toEqual(
       operation.outputData,
     );
-    expect(wallet.send).not.toHaveBeenCalled();
+    expect(remote.swap).not.toHaveBeenCalled();
     expect(remote.restoreOutputs).not.toHaveBeenCalled();
   });
 
   it('keeps an unreachable recovery attempt executing', async () => {
     const operation = executingOperation('restart-offline');
     await persistExecuting(operation);
-    wallet.checkProofsStates.mockRejectedValue(new Error('mint unavailable'));
+    remote.checkProofStates.mockRejectedValue(new Error('mint unavailable'));
 
     await service.recoverPendingOperations();
 
@@ -580,7 +444,7 @@ describe('SendOperationService executing recovery', () => {
   it('finalizes exact and swapped pending sends after definitive spent observations', async () => {
     const exact = await persistPending('pending-exact', false);
     const swapped = await persistPending('pending-swap', true);
-    wallet.checkProofsStates.mockImplementation(async (proofs: CoreProof[]) =>
+    remote.checkProofStates.mockImplementation(async (proofs) =>
       proofs.map((proof) => ({ state: 'SPENT', Y: `Y-${proof.secret}` }) as CashuProofState),
     );
     const finalizedIds: string[] = [];
@@ -598,7 +462,7 @@ describe('SendOperationService executing recovery', () => {
   it('keeps pending sends unchanged when proofs are unspent or the mint is unreachable', async () => {
     const unspent = await persistPending('pending-unspent', false);
     const offline = await persistPending('pending-offline', false);
-    wallet.checkProofsStates.mockImplementation(async (proofs: CoreProof[]) => {
+    remote.checkProofStates.mockImplementation(async (proofs) => {
       if (proofs[0]?.secret.startsWith(offline.id)) throw new Error('mint offline');
       return proofs.map(
         (proof) => ({ state: 'UNSPENT', Y: `Y-${proof.secret}` }) as CashuProofState,
@@ -657,13 +521,13 @@ describe('SendOperationService executing recovery', () => {
     const replayed = executingOperation('continue-replayed');
     await persistExecuting(offline);
     await persistExecuting(replayed);
-    wallet.checkProofsStates.mockImplementation(async (proofs: CoreProof[]) => {
+    remote.checkProofStates.mockImplementation(async (proofs) => {
       if (proofs[0]?.secret.startsWith(offline.id)) throw new Error('mint offline');
       return proofs.map(
         (proof) => ({ state: 'UNSPENT', Y: `Y-${proof.secret}` }) as CashuProofState,
       );
     });
-    wallet.send.mockImplementation(replayResult);
+    remote.swap.mockImplementation(replayResult);
 
     await service.recoverPendingOperations();
 
@@ -693,14 +557,14 @@ describe('SendOperationService executing recovery', () => {
     await persistExecuting(executing);
     await persistPending('ordered-pending', false);
     const checkedSecrets: string[] = [];
-    wallet.checkProofsStates.mockImplementation(async (proofs: CoreProof[]) => {
+    remote.checkProofStates.mockImplementation(async (proofs) => {
       expect(await repositories.sendOperationRepository.getById(init.id)).toBeNull();
       checkedSecrets.push(proofs[0]!.secret);
       return proofs.map(
         (proof) => ({ state: 'UNSPENT', Y: `Y-${proof.secret}` }) as CashuProofState,
       );
     });
-    wallet.send.mockImplementation(replayResult);
+    remote.swap.mockImplementation(replayResult);
 
     await service.recoverPendingOperations();
 
@@ -711,10 +575,10 @@ describe('SendOperationService executing recovery', () => {
   it('retains an executing request after an unknown mint error during recovery', async () => {
     const operation = executingOperation('unknown-replay-error');
     await persistExecuting(operation);
-    wallet.checkProofsStates.mockResolvedValue([
+    remote.checkProofStates.mockResolvedValue([
       { state: 'UNSPENT', Y: 'Y-input' },
     ] as CashuProofState[]);
-    wallet.send.mockRejectedValue(new MintOperationError(99999, 'unknown mint failure'));
+    remote.swap.mockRejectedValue(new MintOperationError(99999, 'unknown mint failure'));
 
     await service.recoverPendingOperations();
 
@@ -747,7 +611,7 @@ describe('SendOperationService executing recovery', () => {
       releaseOriginal = resolve;
     });
     let submissions = 0;
-    wallet.send.mockImplementation(async (...args) => {
+    remote.swap.mockImplementation(async (...args) => {
       if (++submissions === 1) {
         originalStarted();
         await originalResponse;
@@ -755,7 +619,7 @@ describe('SendOperationService executing recovery', () => {
       }
       throw new MintOperationError(12002, 'keyset rotated after original submission');
     });
-    wallet.checkProofsStates.mockResolvedValue([
+    remote.checkProofStates.mockResolvedValue([
       { state: 'UNSPENT', Y: 'Y-input' },
     ] as CashuProofState[]);
     const original = service.execute(prepared);

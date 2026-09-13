@@ -1,14 +1,19 @@
-import { testMintInfo } from '../fixtures/MintMetadata.ts';
-import { overrideTransactions } from '../overrideTransactions.ts';
 import { Amount, type MintKeys, type OutputDataLike } from '@cashu/cashu-ts';
 import { describe, expect, it } from 'bun:test';
+import { preparedSend, pendingSend } from '../fixtures/SendOperation.ts';
+import { testMintInfo } from '../fixtures/MintMetadata.ts';
+import { overrideTransactions } from '../overrideTransactions.ts';
 import {
   createSendOperation,
   type ExecutingSendOperation,
   type PendingSendOperation,
   type PreparedSendOperation,
 } from '../../operations/send';
-import type { RepositoryTransactionScope, SendOperationRepository } from '../../repositories';
+import type {
+  Repositories,
+  RepositoryTransactionScope,
+  SendOperationRepository,
+} from '../../repositories';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 import {
   RepositoryCoreTransactionRunner,
@@ -67,7 +72,7 @@ function output(amount: Amount, counter: number): OutputDataLike {
   };
 }
 
-async function setup(repositories = new MemoryRepositories()) {
+async function setup(repositories: Repositories = new MemoryRepositories()) {
   await repositories.mintRepository.addNewMint({
     mintUrl,
     name: 'Test',
@@ -144,32 +149,39 @@ describe('SendTransactions preparation', () => {
     expect(await repositories.sendOperationRepository.getByState('init')).toEqual([]);
   });
 
-  it('rolls back reservation and counter allocation when final operation persistence conflicts', async () => {
-    const { repositories, transactions } = await setup();
+  it('rolls back proofs, counters, and the operation when persistence fails after allocation', async () => {
+    const { repositories } = await setup();
     await repositories.proofRepository.saveProofs(mintUrl, [proof('proof-1')]);
     await repositories.counterRepository.setCounter(mintUrl, keysetId, 5);
-    const existing: PreparedSendOperation = {
-      ...operation('send-conflict'),
-      state: 'prepared',
-      needsSwap: false,
-      fee: Amount.zero(),
-      inputAmount: Amount.from(10),
-      inputProofSecrets: ['other-proof'],
-      revision: 0,
-    };
-    await repositories.sendOperationRepository.create(existing);
+    const failing = overrideTransactions(repositories, (work) =>
+      repositories.withTransaction((scope) => {
+        const create = scope.sendOperationRepository.create.bind(scope.sendOperationRepository);
+        scope.sendOperationRepository.create = async (operation) => {
+          await create(operation);
+          // Establish that all three writes happened before testing their rollback.
+          expect(await scope.proofRepository.getProofBySecret(mintUrl, 'proof-1')).toMatchObject({
+            usedByOperationId: operation.id,
+          });
+          expect((await scope.counterRepository.getCounter(mintUrl, keysetId))?.counter).toBe(6);
+          expect(await scope.sendOperationRepository.getById(operation.id)).toMatchObject({
+            state: 'prepared',
+          });
+          throw new Error('operation persistence failed');
+        };
+        return work(scope);
+      }),
+    );
+    const { transactions } = await setup(failing);
 
-    await expect(transactions.prepare(prepareInput('send-conflict'))).rejects.toThrow(
-      'Send operation id send-conflict already exists',
+    await expect(transactions.prepare(prepareInput('send-failure'))).rejects.toThrow(
+      'operation persistence failed',
     );
 
-    expect(
-      (await repositories.proofRepository.getProofBySecret(mintUrl, 'proof-1'))?.usedByOperationId,
-    ).toBeUndefined();
+    expect(await repositories.proofRepository.getProofBySecret(mintUrl, 'proof-1')).toEqual(
+      proof('proof-1'),
+    );
     expect((await repositories.counterRepository.getCounter(mintUrl, keysetId))?.counter).toBe(5);
-    expect((await repositories.sendOperationRepository.getById('send-conflict'))?.state).toBe(
-      'prepared',
-    );
+    expect(await repositories.sendOperationRepository.getById('send-failure')).toBeNull();
   });
 
   it('gives one concurrent reservation winner for the same authoritative proof', async () => {
@@ -191,27 +203,33 @@ describe('SendTransactions preparation', () => {
     expect(['send-a', 'send-b']).toContain(storedProof!.usedByOperationId!);
   });
 
-  it('rejects a persisted legacy init row before mutating proofs or counters', async () => {
-    const { repositories, transactions } = await setup();
-    await repositories.proofRepository.saveProofs(mintUrl, [proof('legacy-proof')]);
-    await repositories.counterRepository.setCounter(mintUrl, keysetId, 5);
-    const legacy = operation('legacy-send');
-    delete legacy.revision;
-    await repositories.sendOperationRepository.create(legacy);
+  it.each(['init', 'prepared'] as const)(
+    'rejects an existing %s operation before mutating proofs or counters',
+    async (state) => {
+      const { repositories, transactions } = await setup();
+      const input = proof('legacy-proof');
+      await repositories.proofRepository.saveProofs(mintUrl, [input]);
+      await repositories.counterRepository.setCounter(mintUrl, keysetId, 5);
+      const existing = {
+        ...(state === 'init' ? operation('legacy-send') : preparedSend('legacy-send', [input])),
+        revision: undefined,
+      };
+      await repositories.sendOperationRepository.create(existing);
 
-    await expect(
-      transactions.prepare({ ...prepareInput('legacy-send'), operation: legacy }),
-    ).rejects.toThrow('Send operation id legacy-send already exists');
+      await expect(transactions.prepare(prepareInput(existing.id))).rejects.toThrow(
+        'Send operation id legacy-send already exists',
+      );
 
-    expect(
-      (await repositories.proofRepository.getProofBySecret(mintUrl, 'legacy-proof'))
-        ?.usedByOperationId,
-    ).toBeUndefined();
-    expect((await repositories.counterRepository.getCounter(mintUrl, keysetId))?.counter).toBe(5);
-    const stored = await repositories.sendOperationRepository.getById('legacy-send');
-    expect(stored?.state).toBe('init');
-    expect(stored?.revision).toBe(0);
-  });
+      expect(await repositories.proofRepository.getProofBySecret(mintUrl, input.secret)).toEqual(
+        input,
+      );
+      expect((await repositories.counterRepository.getCounter(mintUrl, keysetId))?.counter).toBe(5);
+      expect(await repositories.sendOperationRepository.getById(existing.id)).toEqual({
+        ...existing,
+        revision: 0,
+      });
+    },
+  );
 
   it('allocates distinct counter positions across concurrent preparations', async () => {
     const { repositories, transactions } = await setup();
@@ -407,7 +425,7 @@ describe('SendTransactions exact-match execution', () => {
 });
 
 describe('SendTransactions legacy exact recovery', () => {
-  async function persistLegacy(repositories: MemoryRepositories) {
+  async function persistLegacy(repositories: Repositories) {
     const legacy: ExecutingSendOperation = {
       ...operation('legacy-exact', false),
       state: 'executing',
@@ -828,15 +846,7 @@ describe('SendTransactions cancellation and completion', () => {
     const input = proof(`${id}-input`);
     await repositories.proofRepository.saveProofs(mintUrl, [input]);
     await repositories.proofRepository.reserveProofs(mintUrl, [input.secret], id);
-    const prepared: PreparedSendOperation = {
-      ...operation(id, false),
-      state: 'prepared',
-      revision: 0,
-      needsSwap: false,
-      fee: Amount.zero(),
-      inputAmount: Amount.from(10),
-      inputProofSecrets: [input.secret],
-    };
+    const prepared = preparedSend(id, [input]);
     await repositories.sendOperationRepository.create(prepared);
     return prepared;
   }
@@ -1057,30 +1067,9 @@ describe.each(['exact', 'swap'] as const)(
             createdByOperationId: id,
           }))
         : inputs;
-      const operation: PendingSendOperation = {
-        ...createSendOperation(
-          id,
-          mintUrl,
-          { amount: Amount.from(10), unit: 'sat' },
-          { method: 'default', methodData: {} },
-        ),
-        state: 'pending',
+      const operation = {
+        ...pendingSend(id, inputs, needsSwap ? sendProofs : undefined),
         revision,
-        needsSwap,
-        fee: Amount.zero(),
-        inputAmount: Amount.from(10),
-        inputProofSecrets: inputs.map((input) => input.secret),
-        outputData: needsSwap
-          ? {
-              keep: [],
-              send: sendProofs.map((proof) => ({
-                blindedMessage: { id: proof.id, amount: 5, B_: `B-${proof.secret}` },
-                secret: Buffer.from(proof.secret).toString('hex'),
-                blindingFactor: '01',
-              })),
-            }
-          : undefined,
-        token: { mint: mintUrl, unit: 'sat', proofs: sendProofs },
       };
       await repositories.sendOperationRepository.create(operation);
       await repositories.proofRepository.saveProofs(
@@ -1441,31 +1430,11 @@ describe('SendTransactions legacy tokenless P2PK completion', () => {
     const input = { ...proof('input'), state: 'spent' as const, usedByOperationId: id };
     const send = { ...proof('send'), state: 'inflight' as const, createdByOperationId: id };
     const operation: PendingSendOperation = {
-      ...createSendOperation(
-        id,
-        mintUrl,
-        { amount: Amount.from(10), unit: 'sat' },
-        {
-          method: 'p2pk',
-          methodData: { pubkey: 'pubkey' },
-        },
-      ),
-      state: 'pending',
+      ...pendingSend(id, [input], [send]),
+      method: 'p2pk',
+      methodData: { pubkey: 'pubkey' },
       revision: 0,
-      needsSwap: true,
-      fee: Amount.zero(),
-      inputAmount: Amount.from(10),
-      inputProofSecrets: [input.secret],
-      outputData: {
-        keep: [],
-        send: [
-          {
-            blindedMessage: { id: keysetId, amount: 10, B_: 'B-send' },
-            secret: Buffer.from(send.secret).toString('hex'),
-            blindingFactor: '01',
-          },
-        ],
-      },
+      token: undefined,
     };
     await repositories.sendOperationRepository.create(operation);
     await repositories.proofRepository.saveProofs(mintUrl, [input]);
