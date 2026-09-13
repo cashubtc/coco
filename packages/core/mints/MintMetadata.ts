@@ -25,6 +25,9 @@ export interface MintMetadataApplyResult {
 }
 
 export interface MintQueries {
+  getAllMints(): Promise<Mint[]>;
+  getAllTrustedMints(): Promise<Mint[]>;
+  isTrustedMint(mintUrl: string): Promise<boolean>;
   getMetadata(mintUrl: string): Promise<MintMetadata | null>;
 }
 
@@ -33,9 +36,23 @@ export class StoredMintQueries implements MintQueries {
   constructor(
     private readonly mints: {
       getAllMints(): Promise<Mint[]>;
+      getAllTrustedMints(): Promise<Mint[]>;
+      isTrustedMint(mintUrl: string): Promise<boolean>;
     },
     private readonly keysets: { getKeysetsByMintUrl(mintUrl: string): Promise<Keyset[]> },
   ) {}
+
+  getAllMints(): Promise<Mint[]> {
+    return this.mints.getAllMints();
+  }
+
+  getAllTrustedMints(): Promise<Mint[]> {
+    return this.mints.getAllTrustedMints();
+  }
+
+  isTrustedMint(mintUrl: string): Promise<boolean> {
+    return this.mints.isTrustedMint(normalizeMintUrl(mintUrl));
+  }
 
   async getMetadata(mintUrl: string): Promise<MintMetadata | null> {
     mintUrl = normalizeMintUrl(mintUrl);

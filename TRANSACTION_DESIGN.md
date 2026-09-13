@@ -93,8 +93,10 @@ that independence is what permits this composition. Changes that must commit or 
 still compose scoped commands within one owning transition.
 
 Mint metadata application returns the committed snapshot and an applied/ignored disposition from
-inside its transaction. An observation with an older or equal timestamp is ignored; second-level
-timestamp ties keep the first committed snapshot. The refresh action publishes events only for an
+inside its transaction. Stale refresh and add ignore observations with an older or equal timestamp;
+second-level timestamp ties keep the first committed snapshot. Explicit forced refresh accepts an
+equal timestamp so repeated refreshes within one second still apply fetched changes, but ignores
+an older observation. The refresh action publishes events only for an
 applied observation, so an ignored observation cannot reset batch-polling suppression.
 
 The metadata action is implemented as groundwork for the Send migration. The following diagram
@@ -104,7 +106,7 @@ shows the intended Send composition once that separate migration adopts the acti
 SendOperationService
   -> MintService.refreshAndCommitIfStale
        -> MintQueries / MintAdapter.fetchMintMetadata (outside transactions)
-       -> MintMetadataTransactions.applyObservation (one committed transaction)
+       -> MintTransactions.applyObservation (one committed transaction)
        -> publish mint events
   -> finish Send preflight
   -> SendTransactions.prepare (a separate committed transaction)
@@ -662,6 +664,29 @@ storage adapters:
 5. Report the transaction boundaries inspected, verification performed, and any unresolved deviations
    in the handoff or PR description. Update this design and ADR-0011 together when the agreed contract
    changes.
+
+## Mint Management
+
+`MintService` receives `MintQueries`, the remote metadata adapter, and `MintTransactions`; it has
+no repository or runner dependency. `ScopedMintCommands` owns mint and keyset persistence using
+repositories bound to the same transaction scope. Add, stale refresh, and forced refresh share
+metadata application rules and preserve trust read inside that scope unless add explicitly requests
+a trust change. Remote observations alone cannot grant or revoke trust.
+
+Each add commits its metadata, keysets, and explicit trust choice atomically. When preflight finds
+fresh metadata, add can omit fetching but still reads current state inside its transaction. If the
+mint was deleted in the meantime, add rejects instead of recreating it from a cached snapshot.
+Creation and trust-change events are selected from the transaction's result. Forced refresh always
+fetches; stale refresh keeps its transaction-free cache path and independent commit semantics.
+
+Trust and untrust each own one transaction, retaining the existing independent trust commit before
+an optional stale metadata refresh. A later fetch failure does not undo that trust choice. Delete
+reads the mint and all its keysets inside one transaction and removes them atomically. All mint
+mutation events follow commit; listener failures are logged and do not reject committed work.
+
+Nullable single-mint lookup and stronger metadata observation ordering remain tracked in #491 and
+#492. The existing second-level timestamps cannot fully order concurrent observations, especially
+forced refreshes with equal timestamps. Uniform nested-transaction rejection remains in #483.
 
 ## Incremental Migration
 

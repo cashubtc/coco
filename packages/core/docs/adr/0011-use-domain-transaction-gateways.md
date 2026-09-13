@@ -28,9 +28,11 @@ events; Send can reuse the action without reproducing that workflow. Its commit 
 survives a later Send failure. Gateways and scoped commands cannot depend on this action or any
 other coordinator, and coordinator dependencies must remain acyclic.
 
-The mint metadata gateway returns whether it applied the observation alongside the committed
-snapshot. Older observations and timestamp ties are ignored, retaining the first commit on ties.
-The refresh action publishes events only for applied observations.
+`MintTransactions` returns whether it applied the observation alongside the committed snapshot.
+Stale refresh and add ignore older observations and timestamp ties, retaining the first commit on
+ties. Forced refresh accepts equal timestamps to preserve explicit refreshes within one second,
+while still ignoring older observations. The refresh action publishes events only for applied
+observations.
 
 ## Considered Options
 
@@ -49,8 +51,14 @@ checker because partial static analysis adds maintenance cost without establishi
 The design adds interfaces and stricter dependency boundaries. Adoption is incremental: Keypair
 Allocation establishes the baseline, and other workflows migrate through their own gateways while
 reusing shared scoped commands. Consistent fail-fast rejection of nested Wallet transactions remains
-follow-up work and must distinguish nesting from legitimate concurrent calls. Existing legacy
-MintService add, forced-update, trust, and delete paths remain outside this metadata-action migration.
+follow-up work and must distinguish nesting from legitimate concurrent calls.
+
+MintService add, forced refresh, trust, and delete now use the same mint gateway and scoped commands
+as stale refresh. Add commits metadata, keysets, and explicit trust together; metadata alone preserves
+current trust. Delete removes the mint and its keysets together. Trust changes retain their independent
+commit before any subsequent stale refresh. MintService no longer receives repositories. Nullable
+single-mint lookup (#491), stronger observation ordering (#492), and uniform nesting rejection (#483)
+remain separate follow-ups.
 
 [Transaction Design](../../../../TRANSACTION_DESIGN.md) is the authoritative implementation
 contract for naming, dependencies, scope lifetime, concurrency, retries, and review requirements.

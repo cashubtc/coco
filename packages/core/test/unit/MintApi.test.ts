@@ -2,7 +2,7 @@ import { Amount } from '@cashu/cashu-ts';
 import { describe, expect, it, mock } from 'bun:test';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 import { MintRequestProvider } from '../../infra/MintRequestProvider.ts';
-import { createMintMetadataRefreshDependencies } from '../fixtures/MintMetadataRefresh.ts';
+import { createMintServiceDependencies } from '../fixtures/MintMetadataRefresh.ts';
 
 import { MintApi } from '../../api/MintApi';
 import { ProofValidationError } from '../../models/Error';
@@ -42,18 +42,12 @@ describe('MintApi payment method capabilities', () => {
   const createApi = async (mintInfo: MintInfo, updatedAt = now) => {
     const repositories = new MemoryRepositories();
     const mintRepo = repositories.mintRepository;
-    const keysetRepo = repositories.keysetRepository;
     const adapter = Object.assign(new MintAdapter(new MintRequestProvider()), {
       fetchMintInfo: mock(async () => mintInfo),
       fetchKeysets: mock(async () => ({ keysets })),
       fetchKeysForId: mock(async () => ({ '1': 'key-1' })),
     });
-    const service = new MintService(
-      mintRepo,
-      keysetRepo,
-      adapter,
-      createMintMetadataRefreshDependencies(repositories),
-    );
+    const service = new MintService(adapter, createMintServiceDependencies(repositories));
     await mintRepo.addOrUpdateMint({
       mintUrl,
       name: mintUrl,

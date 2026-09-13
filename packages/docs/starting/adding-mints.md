@@ -75,6 +75,16 @@ await coco.mint.untrustMint(mintUrl);
 const trustedMints = await coco.mint.getAllTrustedMints();
 ```
 
+## Persistence and Events
+
+`addMint()` saves fetched mint information, keysets, and any explicit trust choice together. If
+fetching or persistence fails, that call leaves no partial add or trust change. Omitting `trusted`
+preserves an existing mint's trust status; metadata refreshes also preserve concurrent trust changes.
+
+`trustMint()` and `untrustMint()` save the trust choice before refreshing stale metadata. If that
+later refresh fails, the trust choice remains saved. Mint events are published after persistence;
+listener failures do not undo the change or reject an otherwise successful call.
+
 ## Error Handling
 
 Attempting wallet operations with untrusted mints will throw an error:
