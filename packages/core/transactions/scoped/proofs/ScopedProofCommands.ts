@@ -32,7 +32,7 @@ export interface ScopedProofCommands extends ProofQueries {
   }>;
   getFee(mintUrl: string, unit: string, proofs: readonly CoreProof[]): Promise<Amount>;
   getOwned(input: OwnedProofsInput): Promise<CoreProof[]>;
-  markInflight(input: Omit<OwnedProofsInput, 'state' | 'ownership'>): Promise<void>;
+  markInflight(input: Omit<OwnedProofsInput, 'state'>): Promise<void>;
   /** The owning transition must establish that these inputs were never submitted or shared. */
   releaseUnsubmitted(input: Omit<OwnedProofsInput, 'state' | 'ownership'>): Promise<void>;
   settleSpend(input: OwnedProofsInput & { outputs: CoreProof[] }): Promise<void>;
@@ -98,8 +98,15 @@ export class RepositoryProofCommands implements ScopedProofCommands {
     });
   }
 
-  async markInflight(input: Omit<OwnedProofsInput, 'state' | 'ownership'>): Promise<void> {
-    await this.getOwned({ ...input, state: 'ready' });
+  async markInflight(input: Omit<OwnedProofsInput, 'state'>): Promise<void> {
+    const proofs = await this.getOwned({ ...input, state: 'ready' });
+    if (
+      proofs.some(
+        (proof) => proof.usedByOperationId != null && proof.usedByOperationId !== input.operationId,
+      )
+    ) {
+      throw new ProofValidationError('Cannot mark proofs reserved by another operation inflight');
+    }
     await this.proofs.setProofState(input.mintUrl, input.secrets, 'inflight');
   }
 

@@ -385,6 +385,7 @@ export class RepositorySendCommands implements ScopedSendCommands {
       return {
         operation: current,
         savedProofs: [],
+        inflightProofSecrets: [],
         spentInputSecrets: [],
         committed: false,
       };
@@ -413,8 +414,22 @@ export class RepositorySendCommands implements ScopedSendCommands {
         'Swap output already exists with conflicting proof data or ownership',
       );
     }
-    // A legacy result may already have saved some or all outputs. Keep their current state and
-    // reservations: change can have been spent or reserved by another operation before recovery.
+    // Old default recovery saved send outputs as ready. Remove those from the available balance
+    // before publishing their pending token, without taking another operation's reservation.
+    const sendSecrets = new Set(input.sendProofs.map((proof) => proof.secret));
+    const inflightProofSecrets = existing
+      .filter((proof) => sendSecrets.has(proof.secret) && proof.state === 'ready')
+      .map((proof) => proof.secret);
+    if (inflightProofSecrets.length > 0) {
+      await this.proofs.markInflight({
+        mintUrl: current.mintUrl,
+        unit: current.unit,
+        operationId: current.id,
+        secrets: inflightProofSecrets,
+        ownership: 'created',
+      });
+    }
+    // Preserve change reservations and spending, as well as already inflight or spent send outputs.
     const savedProofs = outputs.filter((proof) => !existingSecrets.has(proof.secret));
     await this.proofs.settleSpend({
       mintUrl: current.mintUrl,
@@ -448,6 +463,7 @@ export class RepositorySendCommands implements ScopedSendCommands {
     return {
       operation: pending,
       savedProofs,
+      inflightProofSecrets,
       spentInputSecrets: [...current.inputProofSecrets],
       committed: true,
     };

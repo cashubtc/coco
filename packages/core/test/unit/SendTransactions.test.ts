@@ -524,6 +524,83 @@ function swapProof(
 }
 
 describe('SendTransactions swap execution', () => {
+  it.each(['ready', 'inflight', 'spent'] as const)(
+    'reconciles existing %s send outputs while preserving reserved change',
+    async (state) => {
+      const { repositories, transactions } = await setup();
+      await repositories.proofRepository.saveProofs(mintUrl, [proof('legacy-input', 20)]);
+      const prepared = (await transactions.prepare(prepareInput('legacy-outputs'))).operation;
+      const executing: ExecutingSendOperation = { ...prepared, state: 'executing', revision: 0 };
+      await repositories.sendOperationRepository.update(executing);
+      const { keepSecrets, sendSecrets } = getSecretsFromSerializedOutputData(
+        executing.outputData!,
+      );
+      const keep = swapProof(executing, keepSecrets[0]!, 'ready');
+      const send = swapProof(executing, sendSecrets[0]!, 'inflight');
+      const reservedChange = { ...keep, usedByOperationId: 'later-send' };
+      await repositories.proofRepository.saveProofs(mintUrl, [reservedChange, { ...send, state }]);
+      const input = {
+        operationId: executing.id,
+        updatedAt: 300,
+        keepProofs: [keep],
+        sendProofs: [send],
+        token: { mint: mintUrl, unit: 'sat', proofs: [send] },
+      };
+
+      const result = await transactions.applyResult(input);
+
+      expect(result.operation.state).toBe('pending');
+      expect(result.inflightProofSecrets).toEqual(state === 'ready' ? [send.secret] : []);
+      expect(result.savedProofs).toEqual([]);
+      expect(await repositories.proofRepository.getAvailableProofs(mintUrl)).toEqual([]);
+      expect(await repositories.proofRepository.getProofBySecret(mintUrl, send.secret)).toEqual({
+        ...send,
+        state: state === 'ready' ? 'inflight' : state,
+      });
+      expect(await repositories.proofRepository.getProofBySecret(mintUrl, keep.secret)).toEqual(
+        reservedChange,
+      );
+      const replay = await transactions.applyResult(input);
+      expect(replay.committed).toBe(false);
+      expect(replay.inflightProofSecrets).toEqual([]);
+    },
+  );
+
+  it('leaves recovery executing when a legacy ready send output is reserved elsewhere', async () => {
+    const { repositories, transactions } = await setup();
+    const input = { ...proof('legacy-input'), usedByOperationId: 'legacy-reserved-output' };
+    const send = {
+      ...proof('legacy-send'),
+      state: 'inflight' as const,
+      createdByOperationId: input.usedByOperationId,
+    };
+    const executing: ExecutingSendOperation = {
+      ...preparedSend(input.usedByOperationId, [input], [send]),
+      state: 'executing',
+    };
+    const reservedSend = { ...send, state: 'ready' as const, usedByOperationId: 'later-send' };
+    await repositories.sendOperationRepository.create(executing);
+    await repositories.proofRepository.saveProofs(mintUrl, [input, reservedSend]);
+
+    await expect(
+      transactions.applyResult({
+        operationId: executing.id,
+        updatedAt: 300,
+        keepProofs: [],
+        sendProofs: [send],
+        token: { mint: mintUrl, unit: 'sat', proofs: [send] },
+      }),
+    ).rejects.toThrow('reserved by another operation');
+
+    expect(await repositories.sendOperationRepository.getById(executing.id)).toEqual(executing);
+    expect(await repositories.proofRepository.getProofBySecret(mintUrl, input.secret)).toEqual(
+      input,
+    );
+    expect(await repositories.proofRepository.getProofBySecret(mintUrl, send.secret)).toEqual(
+      reservedSend,
+    );
+  });
+
   it('settles a legacy partial result without resetting existing output state or ownership', async () => {
     const { repositories, transactions } = await setup();
     await repositories.proofRepository.saveProofs(mintUrl, [proof('legacy-swap-input', 20)]);

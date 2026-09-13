@@ -11,8 +11,82 @@ import type {
   PendingSendOperation,
 } from '../../operations/send/SendOperation.ts';
 import type { CoreProof } from '../../types.ts';
+import { preparedSend } from '../fixtures/SendOperation.ts';
 
 describe('CoreTransaction with SQLite', () => {
+  it('rolls back legacy send output reconciliation when the pending transition fails', async () => {
+    const database = new Database(':memory:');
+    const repositories = new SqlStorageRepositories({ database: new SqliteDb({ database }) });
+    await repositories.init();
+    const transactions = new CoreSendTransactions(
+      new RepositoryCoreTransactionRunner(repositories),
+    );
+    const mintUrl = 'https://mint.test';
+    const input: CoreProof = {
+      id: 'keyset',
+      mintUrl,
+      unit: 'sat',
+      amount: Amount.from(10),
+      secret: 'input',
+      C: 'C-input',
+      state: 'ready',
+      usedByOperationId: 'legacy',
+    };
+    const send: CoreProof = {
+      ...input,
+      secret: 'send',
+      C: 'C-send',
+      state: 'inflight',
+      usedByOperationId: undefined,
+      createdByOperationId: 'legacy',
+    };
+    const executing: ExecutingSendOperation = {
+      ...preparedSend('legacy', [input], [send]),
+      state: 'executing',
+    };
+    try {
+      await repositories.sendOperationRepository.create(executing);
+      await repositories.proofRepository.saveProofs(mintUrl, [input, { ...send, state: 'ready' }]);
+      const beforeOperation = await repositories.sendOperationRepository.getById(executing.id);
+      const beforeProofs = await repositories.proofRepository.getProofsBySecrets(mintUrl, [
+        'input',
+        'send',
+      ]);
+      database.exec(`
+        CREATE TRIGGER reject_pending BEFORE UPDATE ON coco_cashu_send_operations
+        WHEN NEW.state = 'pending'
+        BEGIN SELECT RAISE(ABORT, 'pending transition failed'); END;
+      `);
+
+      const result = {
+        operationId: executing.id,
+        updatedAt: 2000,
+        keepProofs: [],
+        sendProofs: [send],
+        token: { mint: mintUrl, unit: 'sat', proofs: [send] },
+      };
+      await expect(transactions.applyResult(result)).rejects.toThrow('pending transition failed');
+      expect(await repositories.sendOperationRepository.getById(executing.id)).toEqual(
+        beforeOperation,
+      );
+      expect(
+        await repositories.proofRepository.getProofsBySecrets(mintUrl, ['input', 'send']),
+      ).toEqual(beforeProofs);
+
+      database.exec('DROP TRIGGER reject_pending');
+      await transactions.applyResult(result);
+      expect((await repositories.sendOperationRepository.getById(executing.id))?.state).toBe(
+        'pending',
+      );
+      expect((await repositories.proofRepository.getProofBySecret(mintUrl, 'send'))?.state).toBe(
+        'inflight',
+      );
+      expect(await repositories.proofRepository.getAvailableProofs(mintUrl)).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
   const legacyScenarios = [
     'exact',
     'swap',

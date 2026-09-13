@@ -288,6 +288,60 @@ describe('SendOperationService executing recovery', () => {
     expect(remote.swap).not.toHaveBeenCalled();
   });
 
+  it('recovers legacy ready send outputs without making the pending token locally spendable', async () => {
+    const operation = { ...executingOperation('legacy-ready-output'), revision: undefined };
+    await persistExecuting(operation);
+    await repositories.proofRepository.setProofState(mintUrl, operation.inputProofSecrets, 'spent');
+    const sendProof = coreProof(`${operation.id}-send`, {
+      state: 'ready',
+      createdByOperationId: operation.id,
+    });
+    // Old default recovery saved all restored outputs as ready before saving rolled_back.
+    await repositories.proofRepository.saveProofs(mintUrl, [sendProof]);
+    remote.checkProofStates.mockImplementation(async (proofs) =>
+      proofs.map((proof) => ({
+        state: proof.secret.endsWith('-input') ? 'SPENT' : 'UNSPENT',
+        Y: `Y-${proof.secret}`,
+        witness: null,
+      })),
+    );
+    const events: string[] = [];
+    eventBus.on('send:pending', async () => {
+      expect(repositories.transactionOpen).toBe(false);
+      expect(await repositories.proofRepository.getAvailableProofs(mintUrl)).toEqual([]);
+      events.push('pending');
+    });
+    eventBus.on('proofs:state-changed', ({ secrets, state }) => {
+      if (state === 'inflight' && secrets.includes(sendProof.secret)) events.push('inflight');
+    });
+
+    await service.recoverPendingOperations();
+    await service.recoverPendingOperations();
+
+    expect(await service.getOperation(operation.id)).toMatchObject({
+      state: 'pending',
+      token: { proofs: [expect.objectContaining({ secret: sendProof.secret })] },
+    });
+    expect(await repositories.proofRepository.getAvailableProofs(mintUrl)).toEqual([]);
+    expect(await repositories.proofRepository.getProofBySecret(mintUrl, sendProof.secret)).toEqual({
+      ...sendProof,
+      state: 'inflight',
+    });
+    expect(events).toEqual(['pending', 'inflight']);
+    expect(remote.swap).not.toHaveBeenCalled();
+    expect(remote.restoreOutputs).not.toHaveBeenCalled();
+
+    remote.checkProofStates.mockImplementation(async (proofs) =>
+      proofs.map((proof) => ({ state: 'SPENT', Y: `Y-${proof.secret}`, witness: null })),
+    );
+    await service.finalize(operation.id);
+
+    expect((await service.getOperation(operation.id))?.state).toBe('finalized');
+    expect(
+      (await repositories.proofRepository.getProofBySecret(mintUrl, sendProof.secret))?.state,
+    ).toBe('spent');
+  });
+
   it.each(['ready', 'spent'] as const)(
     'recovers a legacy swap after saving outputs with %s inputs',
     async (state) => {

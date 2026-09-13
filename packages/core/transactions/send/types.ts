@@ -93,6 +93,8 @@ export interface ApplySwapResultInput {
 export interface AppliedSwapResult {
   operation: PendingSendOperation;
   savedProofs: CoreProof[];
+  /** Existing legacy send outputs moved from ready to inflight in this commit. */
+  inflightProofSecrets: string[];
   spentInputSecrets: string[];
   /** False when an equivalent result had already committed. */
   committed: boolean;

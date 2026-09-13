@@ -1050,6 +1050,13 @@ export class SendOperationService {
       token: result.operation.token!,
     });
     await this.publishSavedProofs(result.operation.mintUrl, result.savedProofs);
+    if (result.inflightProofSecrets.length > 0) {
+      await this.publishCommittedEvent('proofs:state-changed', {
+        mintUrl: result.operation.mintUrl,
+        secrets: result.inflightProofSecrets,
+        state: 'inflight',
+      });
+    }
     await this.publishCommittedEvent('proofs:state-changed', {
       mintUrl: result.operation.mintUrl,
       secrets: result.spentInputSecrets,

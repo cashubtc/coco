@@ -89,10 +89,14 @@ Legacy swap handlers could save outputs and spend inputs before persisting `pend
 claims therefore accept operation-owned ready or spent inputs. After observing remote spent inputs,
 recovery combines existing operation-created outputs with any missing restored outputs and uses the
 normal `applyResult` transaction. That transaction validates the immutable output plan, rejects
-conflicting stored proof data or creation ownership, saves only missing outputs, and preserves the
-current state and reservations of existing outputs. In particular, recovered change never becomes
-spendable again if another operation already used it. Failure release still requires ready inputs;
-ambiguous outcomes retain their request and resources.
+conflicting stored proof data or creation ownership and saves only missing outputs. Existing change
+retains its state and reservations, so it never becomes spendable again if another operation already
+used it. Old default recovery could save send outputs as `ready` before recording `rolled_back`.
+Before exposing those outputs in a pending token, `applyResult` moves them to `inflight` in the same
+transaction, rejecting reservations owned by another operation. Existing inflight or spent send
+outputs retain their state. The coordinator publishes the newly inflight proof event after commit
+and after the pending event so watchers can observe the recovered token. Failure release still
+requires ready inputs; ambiguous outcomes retain their request and resources.
 
 Reclaim has a separate optional `reclaimData` field containing its input references and output plan.
 The `pending` to `rolling_back` transaction commits this plan with its Output Allocation. The result
