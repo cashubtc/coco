@@ -1,5 +1,4 @@
 import type { OutputDataCreator } from '@cashu/cashu-ts';
-import { CashuMintMetadataRemote } from './infra/CashuMintMetadataRemote.ts';
 import { CoreMintMetadataTransactions } from './transactions/mints/MintMetadataTransactions.ts';
 import { StoredMintQueries } from './mints/MintMetadata.ts';
 import { CashuSendRemote } from './infra/handlers/send/CashuSendRemote.ts';
@@ -85,7 +84,7 @@ import {
 import { assessMintQuoteClaimability } from './models/MintQuoteClaimability.ts';
 import {
   RepositoryCoreTransactionRunner,
-  createCoreTransactionModuleFactory,
+  createCoreTransactionModules,
 } from './transactions/CoreTransaction.ts';
 import { CoreSendTransactions } from './transactions/send/SendTransactions.ts';
 import { CoreKeyRingTransactions } from './transactions/keypairs/KeyRingTransactions.ts';
@@ -920,9 +919,8 @@ export class Manager {
     const historyLogger = this.getChildLogger('HistoryService');
     const tokenLogger = this.getChildLogger('TokenService');
     const seedService = new SeedService(seedGetter);
-    const coreTransactionRunner = new RepositoryCoreTransactionRunner(
-      repositories,
-      createCoreTransactionModuleFactory(this.outputDataCreator),
+    const coreTransactionRunner = new RepositoryCoreTransactionRunner(repositories, (scope) =>
+      createCoreTransactionModules(scope, this.outputDataCreator),
     );
     const mintQueries = new StoredMintQueries(
       repositories.mintRepository,
@@ -934,7 +932,6 @@ export class Manager {
       this.mintAdapter,
       {
         queries: mintQueries,
-        remote: new CashuMintMetadataRemote(this.mintAdapter),
         transactions: new CoreMintMetadataTransactions(coreTransactionRunner),
       },
       mintLogger,
@@ -998,7 +995,7 @@ export class Manager {
       operationQueries: repositories.sendOperationRepository,
       proofQueries: repositories.proofRepository,
       transactions: sendTransactions,
-      mintQueries,
+      mintQueries: repositories.mintRepository,
       mintMetadataRefresh: mintService,
       remote: new CashuSendRemote(
         this.mintAdapter,

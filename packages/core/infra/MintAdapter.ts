@@ -1,5 +1,6 @@
 import {
   Mint,
+  isBlsKeyset,
   type CheckStatePayload,
   type Keys,
   type OutputDataLike,
@@ -15,7 +16,9 @@ import {
 } from '@cashu/cashu-ts';
 import type { MintInfo } from '../types';
 import type { MintRequestProvider } from './MintRequestProvider.ts';
-import type { KeysetKeypairs } from '../models/Keyset.ts';
+import type { Keyset, KeysetKeypairs } from '../models/Keyset.ts';
+import type { MintMetadataObservation } from '../mints/MintMetadata.ts';
+import { KeysetSyncError, MintFetchError } from '../models/Error.ts';
 import type { MintMethod } from '../operations/mint/MintMethodHandler.ts';
 
 type NormalizedMintQuoteSnapshot<M extends MintMethod> = M extends 'bolt11'
@@ -73,6 +76,41 @@ export class MintAdapter {
       throw new Error(`Expected 1 keyset for ${id}, got ${keysets.length}`);
     }
     return keysets[0].keys as KeysetKeypairs;
+  }
+
+  /** Fetches a metadata observation, reusing known keys without accessing Wallet storage. */
+  async fetchMintMetadata(
+    mintUrl: string,
+    knownKeysets: readonly Keyset[],
+  ): Promise<MintMetadataObservation> {
+    const observedAt = Math.floor(Date.now() / 1000);
+    const mintInfo = await this.fetchMintInfo(mintUrl).catch((error: unknown) => {
+      throw new MintFetchError(mintUrl, undefined, error);
+    });
+    const result = await this.fetchKeysets(mintUrl).catch((error: unknown) => {
+      throw new MintFetchError(mintUrl, 'Failed to fetch keysets', error);
+    });
+    const keysets = await Promise.all(
+      result.keysets
+        .filter((keyset) => !isBlsKeyset(keyset.id))
+        .map(async (keyset) => {
+          const known = knownKeysets.find((candidate) => candidate.id === keyset.id);
+          const keypairs =
+            known?.keypairs ??
+            (await this.fetchKeysForId(mintUrl, keyset.id).catch((error: unknown) => {
+              throw new KeysetSyncError(mintUrl, keyset.id, undefined, error);
+            }));
+          return {
+            mintUrl,
+            id: keyset.id,
+            unit: keyset.unit,
+            active: keyset.active,
+            feePpk: keyset.input_fee_ppk || 0,
+            keypairs,
+          };
+        }),
+    );
+    return { mintUrl, mintInfo, keysets, observedAt };
   }
 
   private getCashuMint(mintUrl: string): Mint {

@@ -41,35 +41,34 @@ export interface CoreTransactionRunner {
 
 type TransactionModuleFactory = (repositories: RepositoryTransactionScope) => CoreTransaction;
 
-export function createCoreTransactionModuleFactory(
+export function createCoreTransactionModules(
+  repositories: RepositoryTransactionScope,
   outputDataCreator: OutputDataCreator = OutputData,
-): TransactionModuleFactory {
-  return (repositories) => {
-    const mintMetadata = new RepositoryMintMetadataCommands(
-      repositories.mintRepository,
-      repositories.keysetRepository,
-    );
-    const proofs = new RepositoryProofCommands(
-      repositories.proofRepository,
-      repositories.keysetRepository,
-    );
-    const outputs = new RepositoryOutputCommands(
-      repositories.counterRepository,
-      repositories.keysetRepository,
-      outputDataCreator,
-    );
-    return {
-      mintMetadata,
-      keypairs: new RepositoryKeypairCommands(repositories.keyRingRepository),
+): CoreTransaction {
+  const mintMetadata = new RepositoryMintMetadataCommands(
+    repositories.mintRepository,
+    repositories.keysetRepository,
+  );
+  const proofs = new RepositoryProofCommands(
+    repositories.proofRepository,
+    repositories.keysetRepository,
+  );
+  const outputs = new RepositoryOutputCommands(
+    repositories.counterRepository,
+    repositories.keysetRepository,
+    outputDataCreator,
+  );
+  return {
+    mintMetadata,
+    keypairs: new RepositoryKeypairCommands(repositories.keyRingRepository),
+    proofs,
+    outputs,
+    sends: new RepositorySendCommands(
+      repositories.sendOperationRepository,
       proofs,
       outputs,
-      sends: new RepositorySendCommands(
-        repositories.sendOperationRepository,
-        proofs,
-        outputs,
-        mintMetadata,
-      ),
-    };
+      mintMetadata,
+    ),
   };
 }
 
@@ -79,7 +78,7 @@ const MAX_TRANSACTION_ATTEMPTS = 3;
 export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
   constructor(
     private readonly repositories: Repositories,
-    private readonly createModules: TransactionModuleFactory = createCoreTransactionModuleFactory(),
+    private readonly createModules: TransactionModuleFactory = createCoreTransactionModules,
   ) {}
 
   async run<T>(work: (transaction: CoreTransaction) => Promise<T>): Promise<T> {

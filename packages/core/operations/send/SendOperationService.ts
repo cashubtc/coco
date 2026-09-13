@@ -8,7 +8,7 @@ import {
 import type { MintService } from '@core/services/MintService.ts';
 import type { ProofQueries } from '@core/proofs/ProofQueries.ts';
 import { createKeyChain } from '@core/proofs/KeysetSelection.ts';
-import type { MintMetadata, MintQueries } from '@core/mints/MintMetadata.ts';
+import type { MintMetadata } from '@core/mints/MintMetadata.ts';
 import type {
   SendOperation,
   InitSendOperation,
@@ -32,6 +32,7 @@ import {
   getProofStateInputsFromSerializedOutputs,
   getSecretsFromSerializedOutputData,
   mapProofToCoreProof,
+  normalizeMintUrl,
 } from '../../utils';
 import {
   MintOperationError,
@@ -71,7 +72,7 @@ export interface SendOperationServiceDependencies {
   operationQueries: SendOperationQueries;
   proofQueries: ProofQueries;
   transactions: SendTransactions;
-  mintQueries: Pick<MintQueries, 'isTrustedMint'>;
+  mintQueries: { isTrustedMint(mintUrl: string): Promise<boolean> };
   mintMetadataRefresh: Pick<MintService, 'refreshAndCommitIfStale'>;
   remote: SendRemote;
   loadSeed: () => Promise<Uint8Array>;
@@ -100,7 +101,7 @@ export class SendOperationService {
   private readonly operationQueries: SendOperationQueries;
   private readonly proofQueries: ProofQueries;
   private readonly transactions: SendTransactions;
-  private readonly mintQueries: Pick<MintQueries, 'isTrustedMint'>;
+  private readonly mintQueries: SendOperationServiceDependencies['mintQueries'];
   private readonly mintMetadataRefresh: Pick<MintService, 'refreshAndCommitIfStale'>;
   private readonly remote: SendRemote;
   private readonly loadSeed: () => Promise<Uint8Array>;
@@ -166,6 +167,7 @@ export class SendOperationService {
       methodData: {} as SendMethodData<M>,
     },
   ): Promise<InitSendOperation> {
+    mintUrl = normalizeMintUrl(mintUrl);
     const parsed = normalizeUnitAmount(amount);
     const trusted = await this.mintQueries.isTrustedMint(mintUrl);
     if (!trusted) {

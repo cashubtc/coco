@@ -3,7 +3,6 @@ import {
   createMintMetadataRemoteDouble,
 } from '../fixtures/MintMetadataRefresh.ts';
 import { testMintInfo, testMintKeypairs, testMintKeysetId } from '../fixtures/MintMetadata.ts';
-import { StoredMintQueries } from '../../mints/MintMetadata.ts';
 import { deserializeOutputData } from '../../utils.ts';
 import { createSendRemoteDouble } from '../fixtures/SendRemote.ts';
 import {
@@ -63,7 +62,7 @@ describe('SendOperationService', () => {
 
   let sendOpRepo: MemorySendOperationRepository;
   let proofRepo: MemoryProofRepository;
-  let mintQueries: StoredMintQueries;
+  let mintQueries: Pick<CountingMemoryRepositories['mintRepository'], 'isTrustedMint'>;
   let metadataRemote: ReturnType<typeof createMintMetadataRemoteDouble>;
   let remote: ReturnType<typeof createSendRemoteDouble>;
   let eventBus: EventBus<CoreEvents>;
@@ -180,7 +179,7 @@ describe('SendOperationService', () => {
       createdAt: 1,
       updatedAt: Math.floor(Date.now() / 1000),
     });
-    mintQueries = new StoredMintQueries(repositories.mintRepository, repositories.keysetRepository);
+    mintQueries = repositories.mintRepository;
     remote = createSendRemoteDouble();
     metadataRemote = createMintMetadataRemoteDouble();
     loadSeed = mock(async () => new Uint8Array(32).fill(1));
@@ -230,6 +229,14 @@ describe('SendOperationService', () => {
     ).toBeUndefined();
     expect(await sendOpRepo.getById(init.id)).toBeNull();
     expect(await repositories.counterRepository.getCounter(mintUrl, keysetId)).toBeNull();
+  });
+
+  it('normalizes the mint URL before querying trust through the repository', async () => {
+    await proofRepo.saveProofs(mintUrl, [makeProof('normalized-input', 10)]);
+    const operation = await service.init(`${mintUrl}/`, unitAmount(10));
+    const prepared = await service.prepare(operation);
+    expect(prepared.mintUrl).toBe(mintUrl);
+    expect(prepared.inputProofSecrets).toEqual(['normalized-input']);
   });
 
   it('lets the P2PK handler fix randomized outputs before atomic preparation', async () => {

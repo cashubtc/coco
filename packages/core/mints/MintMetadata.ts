@@ -18,8 +18,13 @@ export interface MintMetadataObservation {
   observedAt: number;
 }
 
+/** The authoritative snapshot and whether this observation changed it. */
+export interface MintMetadataApplyResult {
+  metadata: MintMetadata;
+  applied: boolean;
+}
+
 export interface MintQueries {
-  isTrustedMint(mintUrl: string): Promise<boolean>;
   getMetadata(mintUrl: string): Promise<MintMetadata | null>;
 }
 
@@ -27,15 +32,10 @@ export interface MintQueries {
 export class StoredMintQueries implements MintQueries {
   constructor(
     private readonly mints: {
-      isTrustedMint(mintUrl: string): Promise<boolean>;
       getAllMints(): Promise<Mint[]>;
     },
     private readonly keysets: { getKeysetsByMintUrl(mintUrl: string): Promise<Keyset[]> },
   ) {}
-
-  isTrustedMint(mintUrl: string): Promise<boolean> {
-    return this.mints.isTrustedMint(normalizeMintUrl(mintUrl));
-  }
 
   async getMetadata(mintUrl: string): Promise<MintMetadata | null> {
     mintUrl = normalizeMintUrl(mintUrl);

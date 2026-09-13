@@ -12,7 +12,7 @@ import type { RepositoryTransactionScope, SendOperationRepository } from '../../
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 import {
   RepositoryCoreTransactionRunner,
-  createCoreTransactionModuleFactory,
+  createCoreTransactionModules,
 } from '../../transactions/CoreTransaction.ts';
 import { CoreSendTransactions } from '../../transactions/send/SendTransactions.ts';
 import type {
@@ -87,9 +87,8 @@ async function setup(repositories = new MemoryRepositories()) {
   const outputDataCreator = makeOutputDataCreator({
     createDeterministicData: (amount, _seed, counter) => [output(Amount.from(amount), counter)],
   });
-  const runner = new RepositoryCoreTransactionRunner(
-    repositories,
-    createCoreTransactionModuleFactory(outputDataCreator),
+  const runner = new RepositoryCoreTransactionRunner(repositories, (scope) =>
+    createCoreTransactionModules(scope, outputDataCreator),
   );
   return { repositories, transactions: new CoreSendTransactions(runner) };
 }

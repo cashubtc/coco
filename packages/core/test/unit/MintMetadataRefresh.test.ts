@@ -170,4 +170,22 @@ describe('MintService.refreshAndCommitIfStale', () => {
     expect(remote.fetchMintMetadata).toHaveBeenCalledWith(mintUrl, []);
     expect((await repositories.mintRepository.getMintByUrl(mintUrl)).trusted).toBe(false);
   });
+
+  it('retains its independent commit when the caller later rolls back a transaction', async () => {
+    const { repositories, service } = await environment();
+    await service.refreshAndCommitIfStale(mintUrl);
+    await expect(
+      repositories.withTransaction(async (scope) => {
+        const mint = await scope.mintRepository.getMintByUrl(mintUrl);
+        await scope.mintRepository.updateMint({ ...mint, name: 'Caller change' });
+        throw new Error('caller failed');
+      }),
+    ).rejects.toThrow('caller failed');
+    const persisted = await repositories.mintRepository.getMintByUrl(mintUrl);
+    expect(persisted.name).toBe('Test');
+    expect(persisted.mintInfo.name).toBe('Refreshed');
+    expect((await repositories.keysetRepository.getKeysetById(mintUrl, keyset.id))?.active).toBe(
+      false,
+    );
+  });
 });

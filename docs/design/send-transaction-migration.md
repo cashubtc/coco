@@ -1,7 +1,8 @@
 # Send transaction migration
 
-PR #463 adapts Send to the transaction architecture merged in PR #461. The baseline is master at
-`a8952b3491c7e5eee67f5e186f6ade3db52727c0`, including the final input naming and coverage conventions.
+PR #463 adapts Send to the transaction architecture merged in PR #461 and reuses the mint metadata
+groundwork merged in PR #489. The baseline is master at
+`8e6796e2c47f6bd5a51e21efeb04630c8b13e4d7`.
 [Transaction Design](../../TRANSACTION_DESIGN.md) and
 [ADR-0011](../../packages/core/docs/adr/0011-use-domain-transaction-gateways.md) govern the migration.
 
@@ -23,14 +24,15 @@ cancellation, pending default-token reclaim, and cleanup to the current transact
 - `ScopedSendCommands` composes proof reservation and settlement, Output Allocation, and operation
   persistence inside one adapter scope. Shared proof and output implementations live under
   `transactions/scoped/`; selection, fee calculation, and output validation are reusable pure logic.
-- `MintQueries` and `ProofQueries` read existing storage. Send receives only mint trust queries and
+- Mint trust queries and `ProofQueries` read existing storage. Send receives the mint repository
+  through its narrow trust-read interface and
   `Pick<MintService, 'refreshAndCommitIfStale'>`. The shared action owns freshness policy,
-  `CashuMintMetadataRemote` fetching, `MintMetadataTransactions.applyObservation`, and post-commit
+  `MintAdapter.fetchMintMetadata`, `MintMetadataTransactions.applyObservation`, and post-commit
   mint events. Its independent commit survives a later Send failure. `ensureUpdatedMint` delegates
   to the same action for legacy callers. Send's gateway and remote interface no longer own metadata
   refresh. Preparation still rechecks trust and active keys in its reservation transaction.
 - Existing MintService add, forced-update, trust, and delete paths retain their legacy dependencies;
-  their full migration is separate. The new shared action only acquires Queries, remote observation,
+  their full migration is separate. The shared action only acquires Queries, remote observation,
   its own gateway, and event publication through its implementation dependencies.
 - `CashuSendRemote` constructs a Wallet Instance from committed metadata and performs swap,
   proof-state checks, and reclaim without persistence authority. Remote output restoration and

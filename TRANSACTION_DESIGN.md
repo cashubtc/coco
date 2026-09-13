@@ -92,10 +92,17 @@ may open no transaction. A committed metadata refresh survives a later Send prep
 that independence is what permits this composition. Changes that must commit or roll back together
 still compose scoped commands within one owning transition.
 
+Mint metadata application returns the committed snapshot and an applied/ignored disposition from
+inside its transaction. An observation with an older or equal timestamp is ignored; second-level
+timestamp ties keep the first committed snapshot. The refresh action publishes events only for an
+applied observation, so an ignored observation cannot reset batch-polling suppression.
+
+Send reuses the metadata action through the following composition:
+
 ```text
 SendOperationService
   -> MintService.refreshAndCommitIfStale
-       -> MintQueries / CashuMintMetadataRemote (outside transactions)
+       -> MintQueries / MintAdapter.fetchMintMetadata (outside transactions)
        -> MintMetadataTransactions.applyObservation (one committed transaction)
        -> publish mint events
   -> finish Send preflight

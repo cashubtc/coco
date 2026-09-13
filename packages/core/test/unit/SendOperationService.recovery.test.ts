@@ -1,6 +1,5 @@
 import { createMintServiceForMetadata } from '../fixtures/MintMetadataRefresh.ts';
 import { testMintInfo, testMintKeypairs, testMintKeysetId } from '../fixtures/MintMetadata.ts';
-import { StoredMintQueries } from '../../mints/MintMetadata.ts';
 import { deserializeOutputData } from '../../utils.ts';
 import { createSendRemoteDouble } from '../fixtures/SendRemote.ts';
 import { Amount, type ProofState as CashuProofState } from '@cashu/cashu-ts';
@@ -109,10 +108,7 @@ describe('SendOperationService executing recovery', () => {
       operationQueries: repositories.sendOperationRepository,
       proofQueries: repositories.proofRepository,
       transactions,
-      mintQueries: new StoredMintQueries(
-        repositories.mintRepository,
-        repositories.keysetRepository,
-      ),
+      mintQueries: repositories.mintRepository,
       mintMetadataRefresh: createMintServiceForMetadata(repositories, undefined, serviceEvents),
       remote,
       loadSeed: async () => new Uint8Array(32),

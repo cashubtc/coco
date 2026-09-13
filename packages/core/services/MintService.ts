@@ -4,7 +4,6 @@ import {
   type MintMetadata,
   type MintQueries,
 } from '@core/mints/MintMetadata.ts';
-import type { MintMetadataRemote } from '@core/mints/MintMetadataRemote.ts';
 import type { MintMetadataTransactions } from '@core/transactions/mints/MintMetadataTransactions.ts';
 import {
   KeysetSyncError,
@@ -121,10 +120,9 @@ type NutSupportSettings = {
 
 export type TopLevelNutCapability = 11 | 20;
 
-/** Explicit dependencies of the independently committed metadata refresh action. */
+/** Query and transaction dependencies of the independently committed metadata refresh action. */
 export interface MintMetadataRefreshDependencies {
   queries: MintQueries;
-  remote: MintMetadataRemote;
   transactions: MintMetadataTransactions;
 }
 
@@ -229,6 +227,7 @@ export class MintService {
    * May fetch remotely and independently commit metadata, even if the caller later fails.
    * Fresh metadata needs no transaction. Returns after commit and attempted event publication;
    * listener failures are logged and cannot turn an already committed refresh into a failure.
+   * Older or equal-timestamp observations return the committed snapshot without publishing events.
    * Call only outside a Wallet transaction; runtime nesting rejection is not yet universal.
    */
   async refreshAndCommitIfStale(mintUrl: string): Promise<MintMetadata> {
@@ -236,14 +235,13 @@ export class MintService {
     const cached = await this.metadata.queries.getMetadata(mintUrl);
     if (cached && cached.mint.updatedAt >= Math.floor(Date.now() / 1000) - MINT_REFRESH_TTL_S)
       return cached;
-    const observation = await this.metadata.remote.fetchMintMetadata(
-      mintUrl,
-      cached?.keysets ?? [],
-    );
-    const refreshed = await this.metadata.transactions.applyObservation(observation);
-    await this.publishCommittedEvent('mint:metadata-refreshed', { mintUrl });
-    await this.publishCommittedEvent('mint:updated', refreshed);
-    return refreshed;
+    const observation = await this.mintAdapter.fetchMintMetadata(mintUrl, cached?.keysets ?? []);
+    const result = await this.metadata.transactions.applyObservation(observation);
+    if (result.applied) {
+      await this.publishCommittedEvent('mint:metadata-refreshed', { mintUrl });
+      await this.publishCommittedEvent('mint:updated', result.metadata);
+    }
+    return result.metadata;
   }
 
   private async publishCommittedEvent<E extends 'mint:metadata-refreshed' | 'mint:updated'>(
