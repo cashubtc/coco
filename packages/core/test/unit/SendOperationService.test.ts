@@ -14,6 +14,10 @@ import type {
 import { MintOperationError, NetworkError } from '../../models/Error.ts';
 import { makeOutputDataCreator } from '../fixtures/OutputDataCreator.ts';
 import { SendOpsApi } from '../../api/SendOpsApi.ts';
+import { ProofStateWatcherService } from '../../services/watchers/ProofStateWatcherService.ts';
+import type { SubscriptionManager, SubscriptionCallback } from '../../infra/SubscriptionManager.ts';
+import type { MintService } from '../../services/MintService.ts';
+import type { ProofService } from '../../services/ProofService.ts';
 
 type Environment = Awaited<ReturnType<typeof createSendEnvironment>>;
 
@@ -258,6 +262,70 @@ describe('SendOperationService', () => {
     expect(proofStateDuringEvent).toBe('inflight');
     expect(lockedDuringEvent).toBe(false);
   });
+
+  it.each(['exact', 'swap'] as const)(
+    'publishes pending before an immediate watcher notification finalizes the %s send',
+    async (mode) => {
+      const prepared =
+        mode === 'exact' ? await prepareExact() : await makeSwapPrepared('event-order');
+      remote.swap.mockResolvedValue({ keep: [], send: [makeProof('event-order-send', 100)] });
+
+      let notifySpent!: () => Promise<void>;
+      const subscriptions = {
+        subscribe: async (
+          _mintUrl: string,
+          _kind: string,
+          filters: string[],
+          callback: SubscriptionCallback<{ Y: string; state: 'SPENT' }>,
+        ) => {
+          notifySpent = async () => {
+            await callback({ Y: filters[0]!, state: 'SPENT' });
+          };
+          return { subId: 'event-order-sub', unsubscribe: async () => {} };
+        },
+      };
+      const setProofState = mock(async () => {});
+      const watcher = new ProofStateWatcherService(
+        subscriptions as unknown as SubscriptionManager,
+        { isTrustedMint: async () => true } as unknown as MintService,
+        { setProofState } as unknown as ProofService,
+        proofRepo,
+        eventBus,
+        logger,
+        { watchExistingInflightOnStart: false },
+      );
+      watcher.setSendOperationService(service);
+      await watcher.start();
+
+      const events: string[] = [];
+      eventBus.on('send:pending', () => {
+        events.push('pending');
+      });
+      eventBus.on('send:finalized', () => {
+        events.push('finalized');
+      });
+      // Deliver the mint notification after the watcher subscribes, while the
+      // proof event that enabled watching is still being dispatched.
+      eventBus.on('proofs:state-changed', async ({ state }) => {
+        if (mode === 'exact' && state === 'inflight') await notifySpent();
+      });
+      eventBus.on('proofs:saved', async ({ proofs }) => {
+        if (mode === 'swap' && proofs.some((proof) => proof.state === 'inflight')) {
+          await notifySpent();
+        }
+      });
+
+      try {
+        await service.execute(prepared);
+
+        expect((await sendOpRepo.getById(prepared.id))?.state).toBe('finalized');
+        expect(events).toEqual(['pending', 'finalized']);
+        expect(setProofState).not.toHaveBeenCalled();
+      } finally {
+        await watcher.stop();
+      }
+    },
+  );
 
   it('executes an exact match without opening a remote session', async () => {
     const preparedOp = await prepareExact();

@@ -382,16 +382,17 @@ export class SendOperationService {
     }
 
     if (result.committed) {
-      await this.publishCommittedEvent('proofs:state-changed', {
-        mintUrl: result.operation.mintUrl,
-        secrets: result.operation.inputProofSecrets,
-        state: 'inflight',
-      });
+      // Publish pending before proof events can trigger watcher finalization.
       await this.publishCommittedEvent('send:pending', {
         mintUrl: result.operation.mintUrl,
         operationId: result.operation.id,
         operation: result.operation,
         token: result.token,
+      });
+      await this.publishCommittedEvent('proofs:state-changed', {
+        mintUrl: result.operation.mintUrl,
+        secrets: result.operation.inputProofSecrets,
+        state: 'inflight',
       });
     }
 
@@ -1041,17 +1042,18 @@ export class SendOperationService {
   private async publishAppliedSwap(result: AppliedSwapResult): Promise<void> {
     if (!result.committed) return;
 
-    await this.publishSavedProofs(result.operation.mintUrl, result.savedProofs);
-    await this.publishCommittedEvent('proofs:state-changed', {
-      mintUrl: result.operation.mintUrl,
-      secrets: result.spentInputSecrets,
-      state: 'spent',
-    });
+    // Saved inflight proofs can immediately trigger watcher finalization.
     await this.publishCommittedEvent('send:pending', {
       mintUrl: result.operation.mintUrl,
       operationId: result.operation.id,
       operation: result.operation,
       token: result.operation.token!,
+    });
+    await this.publishSavedProofs(result.operation.mintUrl, result.savedProofs);
+    await this.publishCommittedEvent('proofs:state-changed', {
+      mintUrl: result.operation.mintUrl,
+      secrets: result.spentInputSecrets,
+      state: 'spent',
     });
   }
 

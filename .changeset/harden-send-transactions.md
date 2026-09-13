@@ -29,6 +29,9 @@ Complete pending Sends whose spent input reservations were already released befo
 finalization. Preserve partial proof observations and conflicting-owner checks, and publish release
 events only for reservations actually released by completion.
 
+Publish pending Send events before proof events enable watcher finalization, preserving pending
+then finalized notification order when a mint immediately reports outgoing proofs as spent.
+
 Breaking adapter contract: custom `SendOperationRepository` implementations must now implement
 `transition`. It must atomically compare the persisted state and revision (missing legacy revisions
 count as zero), apply the next operation with revision incremented by one, and return `false` without
