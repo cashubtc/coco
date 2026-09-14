@@ -28,6 +28,21 @@ export class IdbMintRepository implements MintRepository {
     } satisfies Mint;
   }
 
+  async findMintByUrl(mintUrl: string): Promise<Mint | null> {
+    const row = (await (this.db as any).table('coco_cashu_mints').get(mintUrl)) as
+      | MintRow
+      | undefined;
+    if (!row) return null;
+    return {
+      mintUrl: row.mintUrl,
+      name: row.name,
+      mintInfo: JSON.parse(row.mintInfo),
+      trusted: row.trusted ?? true,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    } satisfies Mint;
+  }
+
   async getAllMints(): Promise<Mint[]> {
     const rows = (await (this.db as any).table('coco_cashu_mints').toArray()) as MintRow[];
     return rows.map(

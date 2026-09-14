@@ -31,6 +31,8 @@ export interface ProofUnitFilter {
 export interface MintRepository {
   isTrustedMint(mintUrl: string): Promise<boolean>;
   getMintByUrl(mintUrl: string): Promise<Mint>;
+  /** Like {@link getMintByUrl}, but returns `null` instead of throwing when the mint is absent. */
+  findMintByUrl(mintUrl: string): Promise<Mint | null>;
   getAllMints(): Promise<Mint[]>;
   getAllTrustedMints(): Promise<Mint[]>;
   addNewMint(mint: Mint): Promise<void>;

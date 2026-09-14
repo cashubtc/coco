@@ -22,6 +22,10 @@ export class MemoryMintRepository implements MintRepository {
     return mint;
   }
 
+  async findMintByUrl(mintUrl: string): Promise<Mint | null> {
+    return this.mints.get(mintUrl) ?? null;
+  }
+
   async getAllMints(): Promise<Mint[]> {
     return Array.from(this.mints.values());
   }
