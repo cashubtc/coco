@@ -11,6 +11,8 @@ proof ownership, deterministic output allocation, and operation state commit ato
 requests outside storage transactions and retain exact requests and reservations after ambiguous
 outcomes or replay rejections.
 
+- Preserve the committed input order during swap submission and replay so retries can retrieve
+  cached mint responses after an interrupted request.
 - Recover legacy executing and pending Sends without duplicating proofs, resetting spent change,
   or releasing another operation's reservations. Mark recovered ready send outputs inflight
   atomically with their pending token. Finalize eligible legacy pending P2PK Sends without

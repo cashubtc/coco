@@ -10,7 +10,7 @@ import {
   type MintKeys,
   type Proof,
 } from '@cashu/cashu-ts';
-import { describe, expect, it, mock } from 'bun:test';
+import { describe, expect, it, mock, spyOn } from 'bun:test';
 import { CashuSendRemote } from '../../infra/handlers/send/CashuSendRemote.ts';
 import type { MintRequestFn } from '../../infra/MintRequestProvider.ts';
 import type { MintMetadata } from '../../mints/MintMetadata.ts';
@@ -37,14 +37,13 @@ const metadata: MintMetadata = {
   ],
 };
 
-function inputProof(): Proof {
-  const secret = 'synthetic-input';
+function inputProof(secret = 'synthetic-input', amount = 16): Proof {
   const signature = createBlindSignature(
     hashToCurve(new TextEncoder().encode(secret)),
-    keyset.privKeys['16']!,
+    keyset.privKeys[String(amount)]!,
     keys.id,
   );
-  return { id: keys.id, secret, amount: Amount.from(16), C: signature.C_.toHex(true) };
+  return { id: keys.id, secret, amount: Amount.from(amount), C: signature.C_.toHex(true) };
 }
 
 type WireOutput = { id: string; amount: number; B_: string };
@@ -89,6 +88,65 @@ function environment(signingKeyset = keyset) {
 }
 
 describe('CashuSendRemote', () => {
+  it.each(['default', 'p2pk'] as const)(
+    'replays the identical %s swap request after losing a cached response',
+    async (method) => {
+      const inputs = [inputProof('input-a', 2), inputProof('input-b', 2)];
+      const keep = OutputData.createDeterministicData(Amount.from(1), seed, 0, keys);
+      const send =
+        method === 'default'
+          ? OutputData.createDeterministicData(Amount.from(3), seed, 1, keys)
+          : OutputData.createP2PKData(
+              { kind: 'P2PK', data: keys.keys['1']! },
+              Amount.from(3),
+              keys,
+            );
+      const swapRequest = {
+        mintUrl,
+        unit,
+        amount: Amount.from(3),
+        inputProofs: inputs,
+        outputData: serializeOutputData({ keep, send }),
+      };
+      const bodies: string[] = [];
+      const cache = new Map<string, { signatures: ReturnType<typeof sign> }>();
+      const request: MintRequestFn = async <T>({
+        endpoint,
+        requestBody,
+      }: Parameters<MintRequestFn>[0]): Promise<T> => {
+        expect(endpoint).toBe(`${mintUrl}/v1/swap`);
+        const body = JSON.stringify(requestBody);
+        bodies.push(body);
+        const cached = cache.get(body);
+        if (cached) return cached as T;
+        if (cache.size > 0) throw new Error('Inputs already spent; cached response missed');
+        cache.set(body, { signatures: sign(requestBody!.outputs as WireOutput[]) });
+        throw new Error('Swap response lost');
+      };
+      const remote = new CashuSendRemote(
+        { getAuthProvider: () => undefined },
+        { getRequestFn: () => request },
+      );
+      const random = spyOn(Math, 'random').mockReturnValue(0);
+      try {
+        await expect(remote.open(metadata, unit).swap(swapRequest)).rejects.toThrow(
+          'Swap response lost',
+        );
+        random.mockReturnValue(0.999);
+        const result = await remote.open(metadata, unit).swap(swapRequest);
+        expect(bodies).toHaveLength(2);
+        expect(bodies[1]).toBe(bodies[0]);
+        expect(JSON.parse(bodies[0]!).inputs.map((proof: Proof) => proof.secret)).toEqual(
+          inputs.map((proof) => proof.secret),
+        );
+        expect(sumProofs(result.send).toString()).toBe('3');
+        expect(sumProofs(result.keep).toString()).toBe('1');
+      } finally {
+        random.mockRestore();
+      }
+    },
+  );
+
   it.each(['swap', 'reclaim'] as const)(
     'unblinds %s with the persisted output keyset when another active keyset is cheaper',
     async (operation) => {

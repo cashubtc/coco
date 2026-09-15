@@ -1,4 +1,10 @@
-import { Mint, Wallet, type OutputDataCreator, type OutputDataLike } from '@cashu/cashu-ts';
+import {
+  Mint,
+  Wallet,
+  normalizeProofAmounts,
+  type OutputDataCreator,
+  type OutputDataLike,
+} from '@cashu/cashu-ts';
 import type { MintMetadata } from '@core/mints/MintMetadata.ts';
 import { ProofValidationError } from '@core/models/Error.ts';
 import type { SendRemote, SendRemoteSession } from '@core/operations/send/SendRemote.ts';
@@ -23,7 +29,12 @@ export class CashuSendRemote implements SendRemote {
         customRequest: this.requests.getRequestFn(mintUrl),
         authProvider: this.mint.getAuthProvider(mintUrl),
       }),
-      { unit, outputDataCreator: this.outputDataCreator },
+      {
+        unit,
+        outputDataCreator: this.outputDataCreator,
+        // Send preparation already committed these inputs. Preserve their order on every replay.
+        selectProofs: (proofs) => ({ keep: [], send: normalizeProofAmounts(proofs) }),
+      },
     );
     wallet.loadMintFromCache(
       metadata.mint.mintInfo,
