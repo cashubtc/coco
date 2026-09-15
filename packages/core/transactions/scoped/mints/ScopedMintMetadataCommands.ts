@@ -1,8 +1,10 @@
 import { isBlsKeyset } from '@cashu/cashu-ts';
+import { UnknownMintError } from '@core/models/Error.ts';
 import type { MintMetadataApplyResult, MintMetadataObservation } from '@core/mints/MintMetadata.ts';
 import type { MintRepository, KeysetRepository } from '@core/repositories';
 
 export interface ScopedMintMetadataCommands {
+  assertTrusted(mintUrl: string): Promise<void>;
   applyObservation(observation: MintMetadataObservation): Promise<MintMetadataApplyResult>;
 }
 
@@ -12,6 +14,11 @@ export class RepositoryMintMetadataCommands implements ScopedMintMetadataCommand
     private readonly mints: MintRepository,
     private readonly keysets: KeysetRepository,
   ) {}
+
+  async assertTrusted(mintUrl: string): Promise<void> {
+    if (!(await this.mints.isTrustedMint(mintUrl)))
+      throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
+  }
 
   async applyObservation(observation: MintMetadataObservation): Promise<MintMetadataApplyResult> {
     const current = (await this.mints.getAllMints()).find(

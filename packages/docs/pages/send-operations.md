@@ -234,12 +234,44 @@ await coco.ops.send.recovery.run();
 
 ### Executing State Recovery
 
-The `executing` state is the most critical for recovery. If a crash occurs during a swap:
+For swap sends, recovery checks the original inputs with the mint and uses the saved output plan:
 
-1. **Swap didn't happen**: Proofs are released, operation rolled back
-2. **Swap completed**: Output proofs are recovered via the mint's restore endpoint
+- **All inputs unspent**: Replays the persisted swap request with the same inputs and outputs. A
+  successful replay saves the token and moves the operation to `pending`.
+- **All inputs spent**: Reconstructs outputs from locally saved proofs and the mint's restore
+  endpoint, then saves the token and moves the operation to `pending`.
+- **Mixed, pending, or unknown input states; incomplete restored outputs; or a failed replay**:
+  Leaves the operation `executing` with its recovery data and reservations intact for a later retry.
+  A replay rejection alone does not establish that the original request failed.
 
-This ensures no funds are lost even if the app crashes mid-swap.
+Legacy exact-match sends stranded in `executing` are handled separately: recovery returns their
+unsubmitted, operation-owned inputs to ready, releases their reservations, and records `rolled_back`.
+
+### Retrieving a Recovered Token
+
+Startup recovery runs before `initializeCoco()` returns. Query persisted operations afterward to
+find a recovered token, or use `get(operationId)` when you already know its ID:
+
+```ts
+const operations = await coco.ops.send.listInFlight();
+for (const operation of operations) {
+  if (operation.state === 'pending' && operation.token) {
+    // Offer this saved token to the user for delivery to the recipient.
+    console.log(operation.id, operation.token);
+  }
+}
+
+const operation = await coco.ops.send.get(operationId);
+```
+
+For recovery triggered after initialization, subscribe to `send:pending` before calling
+`coco.ops.send.recovery.run()` to receive newly recovered tokens. Recovery can finalize a send
+immediately if its token has already been spent; finalized operations are available through `get`.
+
+Older P2PK recovery could leave a `pending` operation without a token or local output proofs after
+its outputs were spent. Coco checks every saved send output with the mint and finalizes only when
+all are spent. It does not create a replacement token. Unspent, pending, incomplete, or unavailable
+mint responses leave the operation pending for a later check.
 
 ## Events
 
