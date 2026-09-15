@@ -27,6 +27,7 @@ function parseInputProofs(
 function rowToOperation(row: ReceiveOperationRow): ReceiveOperation {
   const base = {
     id: row.id,
+    revision: row.revision ?? 0,
     mintUrl: row.mintUrl,
     unit: row.unit ?? 'sat',
     amount: deserializeAmount(row.amount),
@@ -67,6 +68,7 @@ function operationToRow(op: ReceiveOperation): ReceiveOperationRow {
   if (op.state === 'init') {
     return {
       id: op.id,
+      revision: op.revision ?? 0,
       mintUrl: op.mintUrl,
       unit: getOperationUnit(op),
       amount: serializeAmount(op.amount),
@@ -83,6 +85,7 @@ function operationToRow(op: ReceiveOperation): ReceiveOperationRow {
 
   return {
     id: op.id,
+    revision: op.revision ?? 0,
     mintUrl: op.mintUrl,
     unit: getOperationUnit(op),
     amount: serializeAmount(op.amount),
@@ -125,6 +128,25 @@ export class IdbReceiveOperationRepository implements ReceiveOperationRepository
       const row = operationToRow(operation);
       row.updatedAt = getUnixTimeSeconds();
       await table.put(row);
+    });
+  }
+
+  async transition(
+    input: Parameters<ReceiveOperationRepository['transition']>[0],
+  ): Promise<boolean> {
+    if (input.next.id !== input.operationId)
+      throw new Error('Receive operation transition cannot change the operation id');
+    return this.db.runTransaction('rw', ['coco_cashu_receive_operations'], async (tx) => {
+      const table = tx.table('coco_cashu_receive_operations');
+      const row = await table.get(input.operationId);
+      if (
+        !row ||
+        row.state !== input.expectedState ||
+        (row.revision ?? 0) !== input.expectedRevision
+      )
+        return false;
+      await table.put(operationToRow({ ...input.next, revision: input.expectedRevision + 1 }));
+      return true;
     });
   }
 

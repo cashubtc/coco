@@ -1,3 +1,4 @@
+import { prepareProofsForReceiving } from '../proofs/ProofPreparation.ts';
 import { restoreOutputProofs } from '../infra/ProofRestore.ts';
 import {
   Amount,
@@ -835,70 +836,7 @@ export class ProofService {
   }
 
   async prepareProofsForReceiving(proofs: Proof[]): Promise<Proof[]> {
-    this.logger?.debug('Preparing proofs for receiving', { totalProofs: proofs.length });
-
-    const preparedProofs = [...proofs];
-    let regularProofCount = 0;
-    let p2pkProofCount = 0;
-
-    for (let i = 0; i < preparedProofs.length; i++) {
-      const proof = preparedProofs[i];
-      if (!proof) continue;
-
-      // Try to parse as P2PK proof
-      let parsedSecret: [string, { nonce: string; data: string; tags: string[][] }];
-      try {
-        parsedSecret = JSON.parse(proof.secret);
-      } catch (parseError) {
-        // Not a JSON secret (regular proof), skip P2PK processing
-        this.logger?.debug('Regular proof detected, skipping P2PK processing', {
-          proofIndex: i,
-        });
-        regularProofCount++;
-        continue;
-      }
-
-      // Check if it's a P2PK proof
-      if (parsedSecret[0] !== 'P2PK') {
-        this.logger?.error('Unsupported locking script type', {
-          proofIndex: i,
-          scriptType: parsedSecret[0],
-        });
-        throw new ProofValidationError('Only P2PK locking scripts are supported');
-      }
-
-      // Validate multisig is not used
-      const additionalKeysTag = parsedSecret[1].tags?.find((tag) => tag[0] === 'pubkeys');
-      if (additionalKeysTag && additionalKeysTag[1] && additionalKeysTag[1].length > 0) {
-        this.logger?.error('Multisig P2PK proof detected', { proofIndex: i });
-        throw new ProofValidationError('Multisig is not supported');
-      }
-
-      // Sign the proof - if this fails, we abort the entire operation
-      try {
-        preparedProofs[i] = await this.signer.signProof(proof, parsedSecret[1].data);
-        this.logger?.debug('P2PK proof signed successfully', {
-          proofIndex: i,
-          recipient: parsedSecret[1].data,
-        });
-        p2pkProofCount++;
-      } catch (error) {
-        this.logger?.error('Failed to sign P2PK proof for receiving', {
-          proofIndex: i,
-          recipient: parsedSecret[1].data,
-          error,
-        });
-        throw error;
-      }
-    }
-
-    this.logger?.info('Proofs prepared for receiving', {
-      totalProofs: proofs.length,
-      regularProofs: regularProofCount,
-      p2pkProofs: p2pkProofCount,
-    });
-
-    return preparedProofs;
+    return prepareProofsForReceiving(proofs, this.signer);
   }
 
   async createBlankOutputs(mintUrl: string, intent: UnitAmount): Promise<OutputDataLike[]> {

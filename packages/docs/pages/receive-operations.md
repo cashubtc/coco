@@ -9,7 +9,7 @@ token details, recover after crashes, and avoid duplicate receives.
 The canonical API is exposed through `coco.ops.receive`:
 
 - `prepare({ token })` decodes and validates a token, calculates fees, and
-  creates deterministic receive outputs
+  atomically persists signed inputs, fees, and deterministic receive outputs
 - `execute(operationOrId)` receives the prepared token and saves the new proofs
 - `get(operationId)` returns a persisted receive operation
 - `listPrepared()` lists receives waiting for user confirmation
@@ -22,18 +22,18 @@ The canonical API is exposed through `coco.ops.receive`:
 
 Receive operations progress through the following states:
 
-| State         | Description                                                   |
-| ------------- | ------------------------------------------------------------- |
-| `init`        | Token decoded and validated, but outputs are not prepared yet |
-| `prepared`    | Fees calculated, output data persisted, ready to execute      |
-| `executing`   | Receive request is in progress at the mint                    |
-| `finalized`   | New proofs were saved locally                                 |
-| `rolled_back` | Operation was cancelled or could not be recovered             |
+| State         | Description                                                      |
+| ------------- | ---------------------------------------------------------------- |
+| `init`        | Legacy persisted draft; new prepares do not persist this state   |
+| `prepared`    | Fees calculated, output data persisted, ready to execute         |
+| `executing`   | Receive request is in progress at the mint                       |
+| `finalized`   | New proofs were saved locally                                    |
+| `rolled_back` | Cancelled before submission, or proven to have issued no outputs |
 
 ```
-init -> prepared -> executing -> finalized
-  |        |             |
-  +--------+-------------+-> rolled_back
+prepared -> executing -> finalized
+    |            |
+    +------------+-> rolled_back
 ```
 
 ## Lifecycle Actions
@@ -68,6 +68,16 @@ if (userConfirmed) {
 `init` operations, leaves `prepared` operations for user decision, and tries to
 complete or roll back `executing` operations based on mint state.
 
+Preparation commits the operation together with its output allocation. Finalization commits issued
+proofs with the operation state. Cancelling a prepared operation does not reuse its allocated
+counter positions.
+
+A timeout or pending/unknown mint error can leave an operation `executing`. Reuse its operation ID
+with `refresh`; starting another Receive does not resolve the original request. Recovery replays
+persisted inputs and outputs without loading the seed or signing keys. When inputs are spent,
+Restore must establish what happened to those exact outputs. Partial or malformed evidence keeps
+the operation recoverable. Outputs already spent by a later operation are not credited again.
+
 Use `refresh(operationId)` for explicit recovery UI:
 
 ```ts
@@ -83,6 +93,9 @@ if (operation.state === 'rolled_back') {
 ```
 
 ## Events
+
+Events describe committed state. A listener failure does not undo a successful Receive. Delivery
+remains best effort across process crashes.
 
 ```ts
 coco.on('receive-op:prepared', ({ operationId, operation }) => {

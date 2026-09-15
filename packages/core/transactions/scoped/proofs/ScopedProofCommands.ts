@@ -1,4 +1,4 @@
-import { selectProofsRGLI, type Amount, type SelectProofs } from '@cashu/cashu-ts';
+import { Amount, selectProofsRGLI, type Proof, type SelectProofs } from '@cashu/cashu-ts';
 import { normalizeUnit } from '@core/amounts.ts';
 import { ProofValidationError } from '@core/models/Error.ts';
 import { createKeyChain } from '@core/proofs/KeysetSelection.ts';
@@ -30,7 +30,14 @@ export interface ScopedProofCommands extends ProofQueries {
     fee: Amount;
     needsSwap: boolean;
   }>;
-  getFee(mintUrl: string, unit: string, proofs: readonly CoreProof[]): Promise<Amount>;
+  getFee(mintUrl: string, unit: string, proofs: readonly Proof[]): Promise<Amount>;
+  /** Save issuance evidence without resetting later spending, reservations, or origin metadata. */
+  reconcileIssued(input: {
+    mintUrl: string;
+    unit: string;
+    operationId: string;
+    proofs: CoreProof[];
+  }): Promise<{ savedProofs: CoreProof[]; spentSecrets: string[] }>;
   getOwned(input: OwnedProofsInput): Promise<CoreProof[]>;
   markInflight(input: Omit<OwnedProofsInput, 'state'>): Promise<void>;
   /** The owning transition must establish that these inputs were never submitted or shared. */
@@ -66,11 +73,60 @@ export class RepositoryProofCommands implements ScopedProofCommands {
     return { ...selected, proofs: selected.proofs as CoreProof[] };
   }
 
-  async getFee(mintUrl: string, unit: string, proofs: readonly CoreProof[]): Promise<Amount> {
+  async getFee(mintUrl: string, unit: string, proofs: readonly Proof[]): Promise<Amount> {
     return calculateProofFee(
       proofs,
       createKeyChain(mintUrl, unit, await this.keysets.getKeysetsByMintUrl(mintUrl)),
     );
+  }
+
+  async reconcileIssued(input: {
+    mintUrl: string;
+    unit: string;
+    operationId: string;
+    proofs: CoreProof[];
+  }) {
+    const existing = await this.proofs.getProofsBySecrets(
+      input.mintUrl,
+      input.proofs.map((proof) => proof.secret),
+    );
+    const bySecret = new Map(existing.map((proof) => [proof.secret, proof]));
+    const savedProofs: CoreProof[] = [];
+    const spentSecrets: string[] = [];
+    if (new Set(input.proofs.map((proof) => proof.secret)).size !== input.proofs.length) {
+      throw new ProofValidationError('Duplicate issued proofs');
+    }
+    for (const proof of input.proofs) {
+      if (
+        proof.mintUrl !== input.mintUrl ||
+        normalizeUnit(proof.unit) !== normalizeUnit(input.unit)
+      ) {
+        throw new ProofValidationError('Issued proof has a different mint or unit');
+      }
+      const stored = bySecret.get(proof.secret);
+      if (!stored) {
+        if (proof.createdByOperationId !== input.operationId || proof.usedByOperationId != null) {
+          throw new ProofValidationError('Invalid new issued proof ownership');
+        }
+        savedProofs.push(proof);
+      } else {
+        // Witnesses/DLEQ may differ after a later spend or Restore; the signed value must match.
+        if (
+          stored.id !== proof.id ||
+          stored.C !== proof.C ||
+          !Amount.from(stored.amount).equals(proof.amount) ||
+          stored.mintUrl !== input.mintUrl ||
+          normalizeUnit(stored.unit) !== normalizeUnit(input.unit) ||
+          (stored.createdByOperationId != null && stored.createdByOperationId !== input.operationId)
+        ) {
+          throw new ProofValidationError('Issued proof conflicts with persisted proof');
+        }
+        if (proof.state === 'spent' && stored.state !== 'spent') spentSecrets.push(proof.secret);
+      }
+    }
+    if (savedProofs.length) await this.proofs.saveProofs(input.mintUrl, savedProofs);
+    if (spentSecrets.length) await this.proofs.setProofState(input.mintUrl, spentSecrets, 'spent');
+    return { savedProofs, spentSecrets };
   }
 
   async getOwned(input: OwnedProofsInput): Promise<CoreProof[]> {
