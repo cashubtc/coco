@@ -44,23 +44,30 @@ export class IdbMintSwapOperationRepository implements MintSwapOperationReposito
     command: Parameters<MintSwapOperationRepository['transition']>[0],
   ): Promise<boolean> {
     return this.db.runTransaction('rw', [STORE], async () => {
-      const currentRow = await this.table().get(command.operationId);
-      if (
-        !currentRow ||
-        currentRow.state !== command.expectedState ||
-        currentRow.revision !== command.expectedRevision
-      ) {
-        return false;
-      }
+      let transitioned = false;
+      // Collection.modify holds Dexie's write lock across the guard and replacement, including
+      // concurrent calls that reuse one ambient Wallet transaction.
+      await this.table()
+        .where(':id')
+        .equals(command.operationId)
+        .modify((currentRow, context) => {
+          if (
+            currentRow.state !== command.expectedState ||
+            currentRow.revision !== command.expectedRevision
+          ) {
+            return false;
+          }
 
-      const current = fromRow(currentRow);
-      const next = parseMintSwapOperation({
-        ...command.next,
-        revision: command.expectedRevision + 1,
-      });
-      validateMintSwapTransition(current, next);
-      await this.table().put(toRow(next));
-      return true;
+          const current = fromRow(currentRow);
+          const next = parseMintSwapOperation({
+            ...command.next,
+            revision: command.expectedRevision + 1,
+          });
+          validateMintSwapTransition(current, next);
+          context.value = toRow(next);
+          transitioned = true;
+        });
+      return transitioned;
     });
   }
 

@@ -404,6 +404,39 @@ export function runMintSwapPersistenceContract(
       }
     });
 
+    it('has one winner for concurrent transitions in the same transaction scope', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = fixtures('scoped-concurrent');
+        await requireMintSwap(repositories).create(operation.preparing);
+
+        const transitions = await repositories.withTransaction(async (scope) => {
+          const repository = requireMintSwap(scope);
+          return Promise.all([
+            repository.transition({
+              operationId: operation.preparing.id,
+              expectedState: 'preparing',
+              expectedRevision: 0,
+              next: operation.prepared,
+            }),
+            repository.transition({
+              operationId: operation.preparing.id,
+              expectedState: 'preparing',
+              expectedRevision: 0,
+              next: operation.prepared,
+            }),
+          ]);
+        });
+
+        expect(transitions.filter(Boolean)).toHaveLength(1);
+        expect(
+          (await requireMintSwap(repositories).getById(operation.preparing.id))?.revision,
+        ).toBe(1);
+      } finally {
+        await dispose();
+      }
+    });
+
     it('uses portable JavaScript ordering and applies the due limit afterward', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {
