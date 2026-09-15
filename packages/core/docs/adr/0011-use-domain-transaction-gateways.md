@@ -29,8 +29,17 @@ survives a later Send failure. Gateways and scoped commands cannot depend on thi
 other coordinator, and coordinator dependencies must remain acyclic.
 
 The mint metadata gateway returns whether it applied the observation alongside the committed
-snapshot. Older observations and timestamp ties are ignored, retaining the first commit on ties.
-The refresh action publishes events only for applied observations.
+snapshot. Observations must match the revision read before remote I/O. Invalidation and applied
+refreshes advance that revision; invalidation also clears freshness. Older observations and ordinary
+timestamp ties are ignored. Forced refresh can replace a same-second snapshot with a matching
+revision. The refresh action publishes events only for applied observations. Send rejection commits
+metadata invalidation and its resource transition together through scoped commands.
+
+Explicit registration uses a separate gateway method to combine the caller's trust intent with
+metadata application. A superseded observation cannot overwrite metadata, but the registration's
+explicit trust choice still commits against the current row. Ordinary observations preserve trust.
+Creation and trust-change results drive events after commit. Adapter writes preserve the stored
+metadata revision when the caller omits it.
 
 ## Considered Options
 
@@ -49,8 +58,9 @@ checker because partial static analysis adds maintenance cost without establishi
 The design adds interfaces and stricter dependency boundaries. Adoption is incremental: Keypair
 Allocation establishes the baseline, and other workflows migrate through their own gateways while
 reusing shared scoped commands. Consistent fail-fast rejection of nested Wallet transactions remains
-follow-up work and must distinguish nesting from legitimate concurrent calls. Existing legacy
-MintService add, forced-update, trust, and delete paths remain outside this metadata-action migration.
+follow-up work and must distinguish nesting from legitimate concurrent calls. Mint registration and
+forced refresh now share the metadata gateway. Existing MintService trust
+and delete paths remain outside this metadata-action migration.
 
 [Transaction Design](../../../../TRANSACTION_DESIGN.md) is the authoritative implementation
 contract for naming, dependencies, scope lifetime, concurrency, retries, and review requirements.

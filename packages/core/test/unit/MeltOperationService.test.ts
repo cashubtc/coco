@@ -1,3 +1,4 @@
+import { StaleKeysetError, MintOperationError } from '@cashu/cashu-ts';
 import { Amount } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
 import { MeltOperationService } from '../../operations/melt/MeltOperationService.ts';
@@ -270,11 +271,14 @@ describe('MeltOperationService', () => {
     } as unknown as ProofService;
 
     mintService = {
+      invalidateAndCommitKeysets: mock(async () => {}),
       isTrustedMint: mock(async () => true),
       assertMethodUnitSupported: mock(async () => {}),
     } as unknown as MintService;
 
     walletService = {
+      getWallet: async (url: string, unit: string) =>
+        (await walletService.getWalletWithActiveKeysetId(url, unit)).wallet,
       getWalletWithActiveKeysetId: mock(async () => ({ wallet: {} })),
     } as unknown as WalletService;
 
@@ -315,6 +319,24 @@ describe('MeltOperationService', () => {
     );
     await persistMeltQuote();
   });
+
+  it.each([new StaleKeysetError(false), new MintOperationError(12002, 'Inactive')])(
+    'invalidates rejected keysets and returns the original recovered melt outcome (%p)',
+    async (error) => {
+      const prepared = makePreparedOp('stale-melt');
+      await meltOperationRepository.create(prepared);
+      (handler.execute as Mock<any>).mockRejectedValue(error);
+      (handler.recoverExecuting as Mock<any>).mockImplementation(async ({ operation }: any) => ({
+        status: 'PENDING',
+        pending: { ...operation, state: 'pending' },
+      }));
+      const result = await service.execute(prepared.id);
+      expect(result.state).toBe('pending');
+      expect(result.id).toBe(prepared.id);
+      expect(mintService.invalidateAndCommitKeysets).toHaveBeenCalledWith(mintUrl);
+      expect(handler.execute).toHaveBeenCalledTimes(1);
+    },
+  );
 
   describe('init', () => {
     it('creates an init operation for trusted mint', async () => {

@@ -1,4 +1,10 @@
-import { Amount, type MintQuoteBolt12Response, type Wallet } from '@cashu/cashu-ts';
+import { getOutputKeysetId, assertOutputKeysetActive } from '../../../proofs/OutputKeyset.ts';
+import {
+  Amount,
+  StaleKeysetError,
+  type MintQuoteBolt12Response,
+  type Wallet,
+} from '@cashu/cashu-ts';
 import { assertSameUnit, normalizeUnitAmount } from '@core/amounts';
 import type { KeyRingService } from '@core/services';
 import { deserializeOutputData, mapProofToCoreProof, serializeOutputData } from '@core/utils';
@@ -137,16 +143,18 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
     }
 
     try {
+      assertOutputKeysetActive(ctx.wallet, getOutputKeysetId(outputData.keep));
       const proofs = await ctx.wallet.mintProofsBolt12(
         ctx.operation.amount,
         remoteQuote,
         bytesToHex(quoteKey.secretKey),
-        undefined,
+        { keysetId: getOutputKeysetId(outputData.keep) },
         { type: 'custom', data: outputData.keep },
       );
 
       return { status: 'ISSUED', proofs };
     } catch (error) {
+      if (error instanceof StaleKeysetError) throw error;
       if (this.isAlreadyIssuedError(error)) {
         return { status: 'ALREADY_ISSUED' };
       }
@@ -228,11 +236,12 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
 
     const outputData = deserializeOutputData(operation.outputData);
     try {
+      assertOutputKeysetActive(ctx.wallet, getOutputKeysetId(outputData.keep));
       const proofs = await ctx.wallet.mintProofsBolt12(
         operation.amount,
         remoteQuote,
         bytesToHex(quoteKey.secretKey),
-        undefined,
+        { keysetId: getOutputKeysetId(outputData.keep) },
         { type: 'custom', data: outputData.keep },
       );
 
@@ -246,6 +255,7 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
 
       return { status: 'FINALIZED' };
     } catch (error) {
+      if (error instanceof StaleKeysetError) throw error;
       if (this.isAlreadyIssuedError(error)) {
         return (
           (await this.recoverSignedOutputs(ctx)) ?? {

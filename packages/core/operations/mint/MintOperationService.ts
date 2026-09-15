@@ -1,3 +1,4 @@
+import { isKeysetRejection } from '../../proofs/OutputKeyset.ts';
 import { Amount, type Proof } from '@cashu/cashu-ts';
 import type { MintOperationRepository, ProofRepository } from '../../repositories';
 import type {
@@ -210,7 +211,11 @@ export class MintOperationService {
     }
 
     if (fixedAmount) {
-      const existing = await this.getOperationByQuote(quote.mintUrl, method, quote.quoteId);
+      const siblings = await this.getOperationsForQuote(quote.mintUrl, method, quote.quoteId);
+      const existing = siblings.find(
+        (operation) =>
+          !(operation.state === 'failed' && operation.terminalFailure?.code === 'stale_keyset'),
+      );
       if (existing) {
         throw new Error(
           `Mint quote ${quote.quoteId} is already tracked by operation ${existing.id} in state ${existing.state}`,
@@ -297,6 +302,7 @@ export class MintOperationService {
 
         const pendingOp: PendingMintOperation = {
           ...pending,
+          hasSubmitted: false,
           state: 'pending',
           updatedAt: Date.now(),
         };
@@ -408,6 +414,7 @@ export class MintOperationService {
       const executing: ExecutingMintOperation = {
         ...pendingOp,
         state: 'executing',
+        hasSubmitted: true,
         updatedAt: Date.now(),
         error: undefined,
       };
@@ -421,10 +428,7 @@ export class MintOperationService {
 
       try {
         const handler = this.handlerProvider.get(executing.method);
-        const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
-          executing.mintUrl,
-          executing.unit,
-        );
+        const wallet = await this.walletService.getWallet(executing.mintUrl, executing.unit);
         const result = await handler.execute({
           ...this.buildDeps(),
           operation: executing as any,
@@ -458,6 +462,14 @@ export class MintOperationService {
             throw new Error(result.error ?? 'Mint execution failed');
         }
       } catch (e) {
+        if (isKeysetRejection(e)) {
+          await this.mintService.invalidateAndCommitKeysets(executing.mintUrl);
+          // Only a never-submitted claim can safely release its quote reservation here.
+          if (pendingOp.hasSubmitted === false) {
+            return this.failOperation(executing, e.message, 'stale_keyset');
+          }
+          throw e;
+        }
         await this.tryRecoverExecutingOperation(executing);
 
         const current = await this.mintOperationRepository.getById(operationId);
@@ -632,21 +644,27 @@ export class MintOperationService {
       }
 
       const handler = this.handlerProvider.get(executing.method);
-      const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
-        executing.mintUrl,
-        executing.unit,
-      );
+      const wallet = await this.walletService.getWallet(executing.mintUrl, executing.unit);
       const siblings = await this.mintOperationRepository.getByQuoteId(
         executing.mintUrl,
         executing.method,
         executing.quoteId,
       );
-      const result = await handler.recoverExecuting({
-        ...this.buildDeps(),
-        operation: executing as any,
-        wallet,
-        localClaimabilityFacts: this.getLocalClaimabilityFacts(siblings, executing.id),
-      });
+      let result;
+      try {
+        result = await handler.recoverExecuting({
+          ...this.buildDeps(),
+          operation: executing as any,
+          wallet,
+          localClaimabilityFacts: this.getLocalClaimabilityFacts(siblings, executing.id),
+        });
+      } catch (error) {
+        if (isKeysetRejection(error)) {
+          await this.mintService.invalidateAndCommitKeysets(executing.mintUrl);
+        }
+        // A rejection of a replay cannot prove an earlier submission had no effect.
+        throw error;
+      }
 
       switch (result.status) {
         case 'FINALIZED': {
@@ -1095,6 +1113,7 @@ export class MintOperationService {
   private async failOperation(
     op: ExecutingMintOperation,
     error: string,
+    code?: string,
   ): Promise<FailedMintOperation> {
     const current = await this.mintOperationRepository.getById(op.id);
     if (!current) {
@@ -1120,6 +1139,7 @@ export class MintOperationService {
       error,
       terminalFailure: {
         reason: error,
+        ...(code ? { code, retryable: true } : {}),
         observedAt: Date.now(),
       },
     };

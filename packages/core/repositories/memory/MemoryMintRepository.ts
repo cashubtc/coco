@@ -31,15 +31,20 @@ export class MemoryMintRepository implements MintRepository {
   }
 
   async addNewMint(mint: Mint): Promise<void> {
-    this.mints.set(mint.mintUrl, mint);
+    const metadataRevision =
+      mint.metadataRevision ?? this.mints.get(mint.mintUrl)?.metadataRevision;
+    this.mints.set(
+      mint.mintUrl,
+      metadataRevision === undefined ? mint : { ...mint, metadataRevision },
+    );
   }
 
   async addOrUpdateMint(mint: Mint): Promise<void> {
-    this.mints.set(mint.mintUrl, mint);
+    await this.addNewMint(mint);
   }
 
   async updateMint(mint: Mint): Promise<void> {
-    this.mints.set(mint.mintUrl, mint);
+    await this.addNewMint(mint);
   }
 
   async setMintTrusted(mintUrl: string, trusted: boolean): Promise<void> {

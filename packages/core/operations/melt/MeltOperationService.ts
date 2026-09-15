@@ -1,3 +1,4 @@
+import { isKeysetRejection } from '../../proofs/OutputKeyset.ts';
 import type { MeltOperationRepository, ProofRepository } from '../../repositories';
 import type {
   MeltOperation,
@@ -376,10 +377,7 @@ export class MeltOperationService {
 
       try {
         const handler = this.handlerProvider.get(executing.method);
-        const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
-          executing.mintUrl,
-          executing.unit,
-        );
+        const wallet = await this.walletService.getWallet(executing.mintUrl, executing.unit);
         const operationProofs = await this.proofRepository.getProofsByOperationId(
           executing.mintUrl,
           executing.id,
@@ -444,8 +442,16 @@ export class MeltOperationService {
           }
         }
       } catch (e) {
+        const staleKeyset = isKeysetRejection(e);
+        if (staleKeyset) {
+          await this.mintService.invalidateAndCommitKeysets(executing.mintUrl);
+        }
         // Attempt to recover the executing operation before re-throwing
         await this.tryRecoverExecutingOperation(executing);
+        if (staleKeyset) {
+          const recovered = await this.meltOperationRepository.getById(operationId);
+          if (recovered?.state === 'finalized' || recovered?.state === 'pending') return recovered;
+        }
         throw e;
       }
     } finally {
@@ -834,10 +840,7 @@ export class MeltOperationService {
 
       const executing = current as ExecutingMeltOperation;
       const handler = this.handlerProvider.get(executing.method);
-      const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
-        executing.mintUrl,
-        executing.unit,
-      );
+      const wallet = await this.walletService.getWallet(executing.mintUrl, executing.unit);
 
       const result = await handler.recoverExecuting({
         ...this.buildDeps(),

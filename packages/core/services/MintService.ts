@@ -1,16 +1,11 @@
-import { Amount, isBlsKeyset, type AmountLike } from '@cashu/cashu-ts';
+import { Amount, type AmountLike } from '@cashu/cashu-ts';
 import {
   MINT_REFRESH_TTL_S,
   type MintMetadata,
   type MintQueries,
 } from '@core/mints/MintMetadata.ts';
 import type { MintMetadataTransactions } from '@core/transactions/mints/MintMetadataTransactions.ts';
-import {
-  KeysetSyncError,
-  MintFetchError,
-  ProofValidationError,
-  UnknownMintError,
-} from '../models/Error';
+import { MintFetchError, ProofValidationError, UnknownMintError } from '../models/Error';
 import type { Mint } from '../models/Mint';
 import type { Keyset } from '../models/Keyset';
 import type { MintAdapter } from '../infra/MintAdapter';
@@ -21,11 +16,6 @@ import type { MintInfo } from '../types';
 import type { Logger } from '../logging/Logger.ts';
 import { normalizeMintUrl } from '../utils';
 import { DEFAULT_UNIT, normalizeUnit, normalizeUnitAmount, type UnitAmount } from '../amounts.ts';
-
-function excludeBlsKeysets<T extends { id: string }>(keysets: T[]): T[] {
-  // TODO: Admit BLS keysets after every proof-state lookup uses curve-aware Y derivation.
-  return keysets.filter((keyset) => !isBlsKeyset(keyset.id));
-}
 
 function supportsNut29MintQuoteCheckFromInfo(mintInfo: MintInfo, method: string): boolean {
   const nuts = mintInfo.nuts as unknown;
@@ -184,39 +174,13 @@ export class MintService {
       return this.ensureUpdatedMint(mintUrl);
     }
 
-    const now = Math.floor(Date.now() / 1000);
-    const newMint: Mint = {
-      mintUrl,
-      name: mintUrl,
-      mintInfo: {} as MintInfo,
-      trusted,
-      createdAt: now,
-      updatedAt: 0,
-    };
-    // Do not persist before successful sync; updateMint will persist on success
-    const added = await this.updateMint(newMint);
-    await this.eventBus?.emit('mint:added', added);
+    const added = await this.refreshAndCommit(mintUrl, true, { trusted: options?.trusted });
     this.logger?.info('Mint added', { mintUrl, trusted });
     return added;
   }
 
-  async updateMintData(mintUrl: string): Promise<{ mint: Mint; keysets: Keyset[] }> {
-    mintUrl = normalizeMintUrl(mintUrl);
-    const mint = await this.mintRepo.getMintByUrl(mintUrl).catch(() => null);
-    if (!mint) {
-      // Mint doesn't exist, create it as untrusted
-      const now = Math.floor(Date.now() / 1000);
-      const newMint: Mint = {
-        mintUrl,
-        name: mintUrl,
-        mintInfo: {} as MintInfo,
-        trusted: false,
-        createdAt: now,
-        updatedAt: 0,
-      };
-      return this.updateMint(newMint);
-    }
-    return this.updateMint(mint);
+  async updateMintData(mintUrl: string): Promise<MintMetadata> {
+    return this.refreshAndCommit(normalizeMintUrl(mintUrl), true);
   }
 
   async isTrustedMint(mintUrl: string): Promise<boolean> {
@@ -231,27 +195,71 @@ export class MintService {
    * Call only outside a Wallet transaction; runtime nesting rejection is not yet universal.
    */
   async refreshAndCommitIfStale(mintUrl: string): Promise<MintMetadata> {
-    mintUrl = normalizeMintUrl(mintUrl);
-    const cached = await this.metadata.queries.getMetadata(mintUrl);
-    if (cached && cached.mint.updatedAt >= Math.floor(Date.now() / 1000) - MINT_REFRESH_TTL_S)
-      return cached;
-    const observation = await this.mintAdapter.fetchMintMetadata(mintUrl, cached?.keysets ?? []);
-    const result = await this.metadata.transactions.applyObservation(observation);
-    if (result.applied) {
-      await this.publishCommittedEvent('mint:metadata-refreshed', { mintUrl });
-      await this.publishCommittedEvent('mint:updated', result.metadata);
-    }
-    return result.metadata;
+    return this.refreshAndCommit(normalizeMintUrl(mintUrl), false);
   }
 
-  private async publishCommittedEvent<E extends 'mint:metadata-refreshed' | 'mint:updated'>(
-    event: E,
-    payload: CoreEvents[E],
-  ): Promise<void> {
+  /** Independently commits invalidation without remote I/O. Existing operation outputs are retained. */
+  async invalidateAndCommitKeysets(mintUrl: string): Promise<void> {
+    await this.metadata.transactions.invalidate(normalizeMintUrl(mintUrl));
+  }
+
+  private async refreshAndCommit(
+    mintUrl: string,
+    force: boolean,
+    registration?: { trusted?: boolean },
+  ): Promise<MintMetadata> {
+    // Retry a response superseded by invalidation. Never return a durably stale snapshot as fresh.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const cached = await this.metadata.queries.getMetadata(mintUrl);
+      if (
+        !force &&
+        cached &&
+        cached.mint.updatedAt >= Math.floor(Date.now() / 1000) - MINT_REFRESH_TTL_S
+      )
+        return cached;
+      const observation = await this.mintAdapter.fetchMintMetadata(mintUrl, cached?.keysets ?? []);
+      const input = {
+        ...observation,
+        expectedRevision: cached?.mint.metadataRevision ?? 0,
+        force,
+      };
+      const registered = registration
+        ? await this.metadata.transactions.register({
+            observation: input,
+            trusted: registration.trusted,
+          })
+        : undefined;
+      const result = registered ?? (await this.metadata.transactions.applyObservation(input));
+      if (result.applied) {
+        await this.publishCommittedEvent('mint:metadata-refreshed', { mintUrl });
+      }
+      if (registered?.trustChanged) {
+        await this.publishCommittedEvent(
+          result.metadata.mint.trusted ? 'mint:trusted' : 'mint:untrusted',
+          { mintUrl },
+        );
+      }
+      if (result.applied || registered?.trustChanged) {
+        await this.publishCommittedEvent('mint:updated', result.metadata);
+      }
+      if (registered?.created) await this.publishCommittedEvent('mint:added', result.metadata);
+      if (result.metadata.mint.updatedAt > 0) return result.metadata;
+    }
+    throw new MintFetchError(mintUrl, 'Mint metadata changed repeatedly during refresh');
+  }
+
+  private async publishCommittedEvent<
+    E extends
+      | 'mint:metadata-refreshed'
+      | 'mint:updated'
+      | 'mint:trusted'
+      | 'mint:untrusted'
+      | 'mint:added',
+  >(event: E, payload: CoreEvents[E]): Promise<void> {
     try {
       await this.eventBus?.emit(event, payload, { throwOnError: true });
     } catch (error) {
-      this.logger?.error('Failed to publish committed mint metadata event', { event, error });
+      this.logger?.error('Failed to publish committed mint event', { event, error });
     }
   }
 
@@ -587,70 +595,5 @@ export class MintService {
 
   private parseOptionalAmount(amount: AmountLike | null | undefined): Amount | null {
     return amount === undefined || amount === null ? null : Amount.from(amount);
-  }
-
-  private async updateMint(mint: Mint): Promise<{ mint: Mint; keysets: Keyset[] }> {
-    let mintInfo;
-    try {
-      this.logger?.debug('Fetching mint info', { mintUrl: mint.mintUrl });
-      mintInfo = await this.mintAdapter.fetchMintInfo(mint.mintUrl);
-    } catch (err) {
-      this.logger?.error('Failed to fetch mint info', { mintUrl: mint.mintUrl, err });
-      throw new MintFetchError(mint.mintUrl, undefined, err);
-    }
-
-    let keysets;
-    try {
-      this.logger?.debug('Fetching keysets', { mintUrl: mint.mintUrl });
-      ({ keysets } = await this.mintAdapter.fetchKeysets(mint.mintUrl));
-      keysets = excludeBlsKeysets(keysets);
-    } catch (err) {
-      this.logger?.error('Failed to fetch keysets', { mintUrl: mint.mintUrl, err });
-      throw new MintFetchError(mint.mintUrl, 'Failed to fetch keysets', err);
-    }
-    await Promise.all(
-      keysets.map(async (ks) => {
-        const existingKeyset = await this.keysetRepo.getKeysetById(mint.mintUrl, ks.id);
-        if (existingKeyset) {
-          const keysetModel: Omit<Keyset, 'keypairs' | 'updatedAt'> = {
-            mintUrl: mint.mintUrl,
-            id: ks.id,
-            unit: ks.unit,
-            active: ks.active,
-            feePpk: ks.input_fee_ppk || 0,
-          };
-          return this.keysetRepo.updateKeyset(keysetModel);
-        } else {
-          try {
-            const keysRes = await this.mintAdapter.fetchKeysForId(mint.mintUrl, ks.id);
-            return this.keysetRepo.addKeyset({
-              mintUrl: mint.mintUrl,
-              id: ks.id,
-              unit: ks.unit,
-              keypairs: keysRes,
-              active: ks.active,
-              feePpk: ks.input_fee_ppk || 0,
-            });
-          } catch (err) {
-            this.logger?.error('Failed to sync keyset', {
-              mintUrl: mint.mintUrl,
-              keysetId: ks.id,
-              err,
-            });
-            throw new KeysetSyncError(mint.mintUrl, ks.id, undefined, err);
-          }
-        }
-      }),
-    );
-
-    // Persist mint updates only after successful fetch and keyset sync
-    mint.mintInfo = mintInfo;
-    mint.updatedAt = Math.floor(Date.now() / 1000);
-    await this.mintRepo.addOrUpdateMint(mint);
-    await this.eventBus?.emit('mint:metadata-refreshed', { mintUrl: mint.mintUrl });
-
-    const repoKeysets = excludeBlsKeysets(await this.keysetRepo.getKeysetsByMintUrl(mint.mintUrl));
-    this.logger?.info('Mint updated', { mintUrl: mint.mintUrl, keysets: repoKeysets.length });
-    return { mint, keysets: repoKeysets };
   }
 }

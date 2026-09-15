@@ -1,4 +1,4 @@
-import { Amount } from '@cashu/cashu-ts';
+import { Amount, StaleKeysetError } from '@cashu/cashu-ts';
 import type { Proof, SerializedBlindedSignature, Wallet } from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it, mock, type Mock } from 'bun:test';
 import { EventBus } from '../../events/EventBus';
@@ -188,6 +188,7 @@ describe('MeltBolt11Handler', () => {
 
     // Mock wallet
     mockWallet = {
+      keyChain: { getKeyset: () => ({ isActive: true }) },
       createMeltQuoteBolt11: mock(() =>
         Promise.resolve({
           quote: 'quote-123',
@@ -760,6 +761,23 @@ describe('MeltBolt11Handler', () => {
     });
 
     describe('swap-then-melt execution', () => {
+      it('rejects an inactive persisted swap keyset before changing proof state', async () => {
+        const operation = makeExecutingOp('op-rotated', {
+          needsSwap: true,
+          inputProofSecrets: ['input-1'],
+          swapOutputData: createSwapOutputDataWithAmounts(90, 110),
+        });
+        const inputProofs = [makeProof('input-1', 200)];
+        (proofRepository.getProofsByOperationId as Mock<any>).mockResolvedValue(inputProofs);
+        mockWallet.keyChain.getKeyset = mock(() => ({ isActive: false })) as any;
+
+        await expect(
+          handler.execute(buildExecuteContext(operation, inputProofs)),
+        ).rejects.toBeInstanceOf(StaleKeysetError);
+        expect(mockWallet.send).not.toHaveBeenCalled();
+        expect(proofService.setProofState).not.toHaveBeenCalled();
+      });
+
       it('should execute swap before melt', async () => {
         const swapOutputData = createSwapOutputDataWithAmounts(90, 110);
         const operation = makeExecutingOp('op-1', {

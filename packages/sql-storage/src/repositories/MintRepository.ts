@@ -24,8 +24,9 @@ export class SqliteMintRepository implements MintRepository {
       trusted: number;
       createdAt: number;
       updatedAt: number;
+      metadataRevision: number;
     }>(
-      'SELECT mintUrl, name, mintInfo, trusted, createdAt, updatedAt FROM coco_cashu_mints WHERE mintUrl = ? LIMIT 1',
+      'SELECT mintUrl, name, mintInfo, trusted, createdAt, updatedAt, metadataRevision FROM coco_cashu_mints WHERE mintUrl = ? LIMIT 1',
       [mintUrl],
     );
     if (!row) {
@@ -38,6 +39,7 @@ export class SqliteMintRepository implements MintRepository {
       trusted: row.trusted === 1,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
+      metadataRevision: row.metadataRevision ?? 0,
     } satisfies Mint;
   }
 
@@ -49,7 +51,10 @@ export class SqliteMintRepository implements MintRepository {
       trusted: number;
       createdAt: number;
       updatedAt: number;
-    }>('SELECT mintUrl, name, mintInfo, trusted, createdAt, updatedAt FROM coco_cashu_mints');
+      metadataRevision: number;
+    }>(
+      'SELECT mintUrl, name, mintInfo, trusted, createdAt, updatedAt, metadataRevision FROM coco_cashu_mints',
+    );
     return rows.map(
       (r) =>
         ({
@@ -59,6 +64,7 @@ export class SqliteMintRepository implements MintRepository {
           trusted: r.trusted === 1,
           createdAt: r.createdAt,
           updatedAt: r.updatedAt,
+          metadataRevision: r.metadataRevision ?? 0,
         }) satisfies Mint,
     );
   }
@@ -71,8 +77,9 @@ export class SqliteMintRepository implements MintRepository {
       trusted: number;
       createdAt: number;
       updatedAt: number;
+      metadataRevision: number;
     }>(
-      'SELECT mintUrl, name, mintInfo, trusted, createdAt, updatedAt FROM coco_cashu_mints WHERE trusted = 1',
+      'SELECT mintUrl, name, mintInfo, trusted, createdAt, updatedAt, metadataRevision FROM coco_cashu_mints WHERE trusted = 1',
     );
     return rows.map(
       (r) =>
@@ -83,20 +90,22 @@ export class SqliteMintRepository implements MintRepository {
           trusted: r.trusted === 1,
           createdAt: r.createdAt,
           updatedAt: r.updatedAt,
+          metadataRevision: r.metadataRevision ?? 0,
         }) satisfies Mint,
     );
   }
 
   async addNewMint(mint: Mint): Promise<void> {
     await this.db.run(
-      `INSERT INTO coco_cashu_mints (mintUrl, name, mintInfo, trusted, createdAt, updatedAt)
-       VALUES (?, ?, ?, ?, ?, ?)
+      `INSERT INTO coco_cashu_mints (mintUrl, name, mintInfo, trusted, createdAt, updatedAt, metadataRevision)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(mintUrl) DO UPDATE SET
          name=excluded.name,
          mintInfo=excluded.mintInfo,
          trusted=excluded.trusted,
          createdAt=excluded.createdAt,
-         updatedAt=excluded.updatedAt`,
+         updatedAt=excluded.updatedAt,
+         metadataRevision=COALESCE(?, coco_cashu_mints.metadataRevision)`,
       [
         mint.mintUrl,
         mint.name,
@@ -104,19 +113,22 @@ export class SqliteMintRepository implements MintRepository {
         mint.trusted ? 1 : 0,
         mint.createdAt,
         mint.updatedAt,
+        mint.metadataRevision ?? 0,
+        mint.metadataRevision ?? null,
       ],
     );
   }
 
   async addOrUpdateMint(mint: Mint): Promise<void> {
     await this.db.run(
-      `INSERT INTO coco_cashu_mints (mintUrl, name, mintInfo, trusted, createdAt, updatedAt)
-       VALUES (?, ?, ?, ?, ?, ?)
+      `INSERT INTO coco_cashu_mints (mintUrl, name, mintInfo, trusted, createdAt, updatedAt, metadataRevision)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(mintUrl) DO UPDATE SET
          name=excluded.name,
          mintInfo=excluded.mintInfo,
          trusted=excluded.trusted,
-         updatedAt=excluded.updatedAt`,
+         updatedAt=excluded.updatedAt,
+         metadataRevision=COALESCE(?, coco_cashu_mints.metadataRevision)`,
       [
         mint.mintUrl,
         mint.name,
@@ -124,6 +136,8 @@ export class SqliteMintRepository implements MintRepository {
         mint.trusted ? 1 : 0,
         mint.createdAt,
         mint.updatedAt,
+        mint.metadataRevision ?? 0,
+        mint.metadataRevision ?? null,
       ],
     );
   }

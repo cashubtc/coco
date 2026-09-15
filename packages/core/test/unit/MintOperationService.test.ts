@@ -1,3 +1,4 @@
+import { StaleKeysetError } from '@cashu/cashu-ts';
 import { Amount } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
 import {
@@ -346,11 +347,14 @@ describe('MintOperationService', () => {
     } as unknown as ProofService;
 
     mintService = {
+      invalidateAndCommitKeysets: mock(async () => {}),
       isTrustedMint: mock(async () => true),
       assertMethodUnitSupported: mock(async () => {}),
     } as unknown as MintService;
 
     walletService = {
+      getWallet: async (url: string, unit: string) =>
+        (await walletService.getWalletWithActiveKeysetId(url, unit)).wallet,
       getWalletWithActiveKeysetId: mock(async (_mintUrl: string, unit: string) => ({
         wallet: {
           createMintQuoteBolt11: mock(async (amount: Amount) => ({
@@ -401,6 +405,72 @@ describe('MintOperationService', () => {
       mintAdapter,
       eventBus,
     );
+  });
+
+  it('fails a never-submitted stale claim and allows a successor for the same paid quote', async () => {
+    await persistQuote();
+    const pending = await service.prepare({ mintUrl, method: 'bolt11', quoteId }, Amount.from(10));
+    expect(pending.hasSubmitted).toBe(false);
+    const error = new StaleKeysetError(false);
+    (handler.execute as Mock<any>).mockRejectedValue(error);
+    const failed = await service.execute(pending.id);
+    expect(failed.state).toBe('failed');
+    expect(failed.terminalFailure).toMatchObject({ code: 'stale_keyset', retryable: true });
+    expect(mintService.invalidateAndCommitKeysets).toHaveBeenCalledWith(mintUrl);
+    expect(handler.recoverExecuting).not.toHaveBeenCalled();
+    expect('outputData' in failed ? failed.outputData : undefined).toEqual(pending.outputData);
+    const successor = await service.prepare(
+      { mintUrl, method: 'bolt11', quoteId },
+      Amount.from(10),
+    );
+    expect(successor.id).not.toBe(pending.id);
+    expect(successor.hasSubmitted).toBe(false);
+    await expect(
+      service.prepare({ mintUrl, method: 'bolt11', quoteId }, Amount.from(10)),
+    ).rejects.toThrow('already tracked');
+  });
+
+  it.each([true, undefined])(
+    'keeps previously submitted or legacy stale claims recoverable (%p)',
+    async (hasSubmitted) => {
+      await persistQuote();
+      const pending = { ...makePendingOp('stale-retry'), hasSubmitted };
+      await operationRepo.create(pending);
+      const error = new StaleKeysetError(false);
+      (handler.execute as Mock<any>).mockRejectedValue(error);
+      await expect(service.execute(pending.id)).rejects.toBe(error);
+      expect(await operationRepo.getById(pending.id)).toMatchObject({
+        state: 'executing',
+        outputData: pending.outputData,
+        hasSubmitted: true,
+      });
+      await expect(
+        service.prepare({ mintUrl, method: 'bolt11', quoteId }, Amount.from(10)),
+      ).rejects.toThrow('already tracked');
+    },
+  );
+
+  it('invalidates stale recovery without terminalizing a possibly issued claim', async () => {
+    const operation = makeExecutingOp('stale-recovery');
+    await operationRepo.create(operation);
+    (handler.recoverExecuting as Mock<any>).mockRejectedValue(new StaleKeysetError(false));
+    await service.recoverPendingOperations();
+    expect(mintService.invalidateAndCommitKeysets).toHaveBeenCalledWith(mintUrl);
+    expect(await operationRepo.getById(operation.id)).toMatchObject({
+      state: 'executing',
+      outputData: operation.outputData,
+    });
+  });
+
+  it('leaves the claim executing if durable keyset invalidation fails', async () => {
+    await persistQuote();
+    const pending = await service.prepare({ mintUrl, method: 'bolt11', quoteId }, Amount.from(10));
+    (handler.execute as Mock<any>).mockRejectedValue(new StaleKeysetError(false));
+    (mintService.invalidateAndCommitKeysets as Mock<any>).mockRejectedValue(
+      new Error('invalidation failed'),
+    );
+    await expect(service.execute(pending.id)).rejects.toThrow('invalidation failed');
+    expect((await operationRepo.getById(pending.id))?.state).toBe('executing');
   });
 
   it('prepare persists a pending operation and emits mint-op:pending', async () => {

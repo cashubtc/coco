@@ -1,5 +1,7 @@
+import { isKeysetRejection } from '../../proofs/OutputKeyset.ts';
 import {
   OutputData,
+  StaleKeysetError,
   type OutputDataCreator,
   type Proof,
   type Token,
@@ -66,14 +68,14 @@ const DEFINITIVE_SWAP_MINT_ERROR_CODES = new Set([
 
 type SwapExecutionOutcome =
   | { status: 'PENDING'; result: AppliedSwapResult }
-  | { status: 'FAILED'; result: FailedSwapExecution; error: MintOperationError };
+  | { status: 'FAILED'; result: FailedSwapExecution; error: MintOperationError | StaleKeysetError };
 
 export interface SendOperationServiceDependencies {
   operationQueries: SendOperationQueries;
   proofQueries: ProofQueries;
   transactions: SendTransactions;
   mintQueries: { isTrustedMint(mintUrl: string): Promise<boolean> };
-  mintMetadataRefresh: Pick<MintService, 'refreshAndCommitIfStale'>;
+  mintMetadataRefresh: Pick<MintService, 'refreshAndCommitIfStale' | 'invalidateAndCommitKeysets'>;
   remote: SendRemote;
   loadSeed: () => Promise<Uint8Array>;
   eventBus: Pick<EventBus<CoreEvents>, 'emit'>;
@@ -102,7 +104,10 @@ export class SendOperationService {
   private readonly proofQueries: ProofQueries;
   private readonly transactions: SendTransactions;
   private readonly mintQueries: SendOperationServiceDependencies['mintQueries'];
-  private readonly mintMetadataRefresh: Pick<MintService, 'refreshAndCommitIfStale'>;
+  private readonly mintMetadataRefresh: Pick<
+    MintService,
+    'refreshAndCommitIfStale' | 'invalidateAndCommitKeysets'
+  >;
   private readonly remote: SendRemote;
   private readonly loadSeed: () => Promise<Uint8Array>;
   private readonly eventBus: Pick<EventBus<CoreEvents>, 'emit'>;
@@ -330,6 +335,9 @@ export class SendOperationService {
     } catch (error) {
       // A rejected replay cannot rule out an earlier submission still completing.
       if (submission === 'replay' || !this.isDefinitiveSwapFailure(error)) {
+        if (isKeysetRejection(error)) {
+          await this.mintMetadataRefresh.invalidateAndCommitKeysets(operation.mintUrl);
+        }
         throw error;
       }
       const failed = await this.transactions.failExecution({
@@ -337,6 +345,7 @@ export class SendOperationService {
         expectedRevision: operation.revision ?? 0,
         updatedAt: Date.now(),
         error: error.message,
+        invalidateKeysets: isKeysetRejection(error),
       });
       return { status: 'FAILED', result: failed, error };
     }
@@ -564,9 +573,21 @@ export class SendOperationService {
             operationId,
           });
         }
-        const proofs = begun.operation.reclaimData
-          ? await remote.reclaim(begun.inputProofs, begun.operation.reclaimData.outputData)
-          : [];
+        let proofs: Proof[];
+        try {
+          proofs = begun.operation.reclaimData
+            ? await remote.reclaim(begun.inputProofs, begun.operation.reclaimData.outputData)
+            : [];
+        } catch (error) {
+          if (isKeysetRejection(error)) {
+            await this.transactions.rejectReclaim({
+              operationId,
+              expectedRevision: begun.operation.revision ?? 0,
+              updatedAt: Date.now(),
+            });
+          }
+          throw error;
+        }
         reclaimed = await this.transactions.completeReclaim({
           operationId,
           updatedAt: Date.now(),
@@ -1125,8 +1146,11 @@ export class SendOperationService {
     return keys;
   }
 
-  private isDefinitiveSwapFailure(error: unknown): error is MintOperationError {
-    return error instanceof MintOperationError && DEFINITIVE_SWAP_MINT_ERROR_CODES.has(error.code);
+  private isDefinitiveSwapFailure(error: unknown): error is MintOperationError | StaleKeysetError {
+    return (
+      isKeysetRejection(error) ||
+      (error instanceof MintOperationError && DEFINITIVE_SWAP_MINT_ERROR_CODES.has(error.code))
+    );
   }
 
   private async publishCommittedEvent<E extends keyof CoreEvents>(

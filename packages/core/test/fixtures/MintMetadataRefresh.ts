@@ -26,7 +26,7 @@ export function createMintMetadataRefreshDependencies(repositories: Repositories
   };
 }
 
-/** Exercise the real shared action; legacy MintService methods are outside this fixture's scope. */
+/** Exercise the shared metadata and registration actions with a controllable remote. */
 export function createMintServiceForMetadata(
   repositories: Repositories,
   remote: Pick<MintAdapter, 'fetchMintMetadata'> = createMintMetadataRemoteDouble(),

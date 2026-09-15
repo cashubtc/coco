@@ -1,4 +1,6 @@
+import { getOutputKeysetId, assertOutputKeysetActive } from '../proofs/OutputKeyset.ts';
 import {
+  StaleKeysetError,
   type Proof,
   Mint,
   Wallet,
@@ -58,10 +60,11 @@ export class WalletRestoreService {
     const requestFn = this.requestProvider.getRequestFn(mintUrl);
     const sweepWallet = new Wallet(new Mint(mintUrl, { customRequest: requestFn }), {
       bip39seed,
+      strictCachedKeysets: true,
       unit: normalizedUnit,
       outputDataCreator: this.outputDataCreator,
     });
-    await sweepWallet.loadMint();
+    sweepWallet.loadMintFromCache(wallet.getMintInfo().cache, wallet.keyChain.cache);
 
     const { proofs } = await sweepWallet.batchRestore({
       gapLimit: this.restoreGapLimit,
@@ -156,12 +159,23 @@ export class WalletRestoreService {
       send: { type: 'custom', data: outputResults.send },
       keep: { type: 'custom', data: outputResults.keep },
     };
-    const { send, keep } = await wallet.send(
-      sweepTotalAmount,
-      checkedProofs.ready,
-      undefined,
-      outputConfig,
-    );
+    let result;
+    try {
+      const outputKeysetId = getOutputKeysetId([...outputResults.keep, ...outputResults.send]);
+      assertOutputKeysetActive(wallet, outputKeysetId);
+      result = await wallet.send(
+        sweepTotalAmount,
+        checkedProofs.ready,
+        { keysetId: outputKeysetId },
+        outputConfig,
+      );
+    } catch (error) {
+      if (error instanceof StaleKeysetError) {
+        await this.walletService.invalidateAndCommitKeysets(mintUrl);
+      }
+      throw error;
+    }
+    const { send, keep } = result;
     await this.proofService.saveProofs(
       mintUrl,
       mapProofToCoreProof(mintUrl, 'ready', [...keep, ...send], { unit: normalizedUnit }),

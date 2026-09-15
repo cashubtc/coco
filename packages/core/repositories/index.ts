@@ -28,6 +28,7 @@ export interface ProofUnitFilter {
   units?: string[];
 }
 
+/** Mint writes preserve an existing metadata revision when the optional input field is omitted. */
 export interface MintRepository {
   isTrustedMint(mintUrl: string): Promise<boolean>;
   getMintByUrl(mintUrl: string): Promise<Mint>;

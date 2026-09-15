@@ -17,6 +17,7 @@ import type {
   CompletedPendingSend,
   CompletePendingSendInput,
   CompleteReclaimInput,
+  RejectReclaimInput,
   ExecuteExactSendInput,
   ExecuteExactSendResult,
   FailedSwapExecution,
@@ -39,6 +40,7 @@ export interface SendTransactions {
   cleanupLegacyInit(operationId: string): Promise<CleanupLegacyInitResult>;
   beginReclaim(input: BeginReclaimInput): Promise<BegunReclaim>;
   completeReclaim(input: CompleteReclaimInput): Promise<CompletedReclaim>;
+  rejectReclaim(input: RejectReclaimInput): Promise<void>;
 }
 
 export class CoreSendTransactions implements SendTransactions {
@@ -90,6 +92,10 @@ export class CoreSendTransactions implements SendTransactions {
 
   beginReclaim(input: BeginReclaimInput): Promise<BegunReclaim> {
     return this.runner.run((transaction) => transaction.sends.beginReclaim(input));
+  }
+
+  rejectReclaim(input: RejectReclaimInput): Promise<void> {
+    return this.runner.run((transaction) => transaction.sends.rejectReclaim(input));
   }
 
   completeReclaim(input: CompleteReclaimInput): Promise<CompletedReclaim> {

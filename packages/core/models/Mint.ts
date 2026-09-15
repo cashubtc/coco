@@ -7,4 +7,6 @@ export interface Mint {
   trusted: boolean;
   createdAt: number;
   updatedAt: number;
+  /** Metadata revision. Omitted writes preserve the stored revision; new rows default to zero. */
+  metadataRevision?: number;
 }

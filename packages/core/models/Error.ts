@@ -1,6 +1,12 @@
 import type { KeypairPurpose } from './Keypair.ts';
 
-export { HttpResponseError, MintOperationError, NetworkError } from '@cashu/cashu-ts';
+export {
+  HttpResponseError,
+  MintOperationError,
+  NetworkError,
+  StaleKeysetError,
+  UnknownKeysetError,
+} from '@cashu/cashu-ts';
 
 export class UnknownMintError extends Error {
   constructor(message: string) {

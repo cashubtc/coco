@@ -157,6 +157,7 @@ describe('MintBolt12Handler', () => {
 
   beforeEach(() => {
     wallet = {
+      keyChain: { getKeyset: () => ({ isActive: true }) },
       createMintQuoteBolt12: mock(async () => quote()),
       mintProofsBolt12: mock(async () => []),
     } as unknown as Wallet;
@@ -422,7 +423,7 @@ describe('MintBolt12Handler', () => {
     expect(call[0]).toEqual(Amount.from(10));
     expect(call[1].quote).toBe(quoteId);
     expect(call[2]).toBe(bytesToHex(secretKey));
-    expect(call[3]).toBeUndefined();
+    expect(call[3]).toEqual({ keysetId: 'keyset-1' });
     expect(call[4].type).toBe('custom');
     expect(call[4].data).toHaveLength(1);
     expect(call[4].data[0].blindedMessage.B_).toBe('B_out_1');

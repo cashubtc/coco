@@ -118,6 +118,7 @@ export function getUnixTimeSeconds(): number {
 
 // Table types, declared to help repositories with typings
 export interface MintRow {
+  metadataRevision?: number;
   mintUrl: string;
   name: string;
   mintInfo: string; // JSON string
@@ -323,6 +324,7 @@ export interface AuthSessionRow {
 }
 
 export interface MintOperationRow {
+  hasSubmitted?: boolean;
   id: string;
   mintUrl: string;
   quoteId?: string | null;

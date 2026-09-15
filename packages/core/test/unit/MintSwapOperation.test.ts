@@ -204,15 +204,20 @@ describe('Mint Swap identity and serialization boundaries', () => {
     },
   );
 
+  it.each(['18446744073709551616', 18446744073709551616n])(
+    'rejects amounts above uint64: %p',
+    (destinationAmount) => {
+      expect(() => parseMintSwapOperation({ ...raw(), destinationAmount })).toThrow(TypeError);
+    },
+  );
+
   it('accepts exact integer strings and bigints beyond safe-number range', () => {
     const value = raw();
     delete value.sourceDebitCap;
-    value.destinationAmount = '900719925474099300000';
-    expect(parseMintSwapOperation(value).destinationAmount.toBigInt()).toBe(900719925474099300000n);
-    value.destinationAmount = 900719925474099300001n;
-    expect(parseMintSwapOperation(value).destinationAmount.toString()).toBe(
-      '900719925474099300001',
-    );
+    value.destinationAmount = '9007199254740993000';
+    expect(parseMintSwapOperation(value).destinationAmount.toBigInt()).toBe(9007199254740993000n);
+    value.destinationAmount = 9007199254740993001n;
+    expect(parseMintSwapOperation(value).destinationAmount.toString()).toBe('9007199254740993001');
   });
 
   it('rejects missing common fields', () => {
