@@ -46,15 +46,45 @@ export class TokenService {
     }
 
     try {
-      const keysetIds = mintKeysets.map((keyset) => keyset.id);
-      const decoded = typeof token === 'string' ? getDecodedToken(token, keysetIds) : token;
+      let refreshed = false;
+      let decoded: Token;
+      if (typeof token === 'string') {
+        try {
+          decoded = getDecodedToken(
+            token,
+            mintKeysets.map((keyset) => keyset.id),
+          );
+        } catch {
+          // Token structure must be readable before a missing compressed keyset triggers I/O.
+          getTokenMetadata(token);
+          ({ keysets: mintKeysets } = await this.mintService.updateMintData(mintUrl));
+          refreshed = true;
+          decoded = getDecodedToken(
+            token,
+            mintKeysets.map((keyset) => keyset.id),
+          );
+        }
+      } else {
+        decoded = token;
+      }
+      if (decoded.proofs.some((proof) => isBlsKeyset(proof.id))) {
+        throw new ProofValidationError('BLS v3 keysets are not supported');
+      }
+      if (decoded.proofs.some((proof) => !mintKeysets.some((keyset) => keyset.id === proof.id))) {
+        if (!refreshed) ({ keysets: mintKeysets } = await this.mintService.updateMintData(mintUrl));
+        if (typeof token === 'string')
+          decoded = getDecodedToken(
+            token,
+            mintKeysets.map((keyset) => keyset.id),
+          );
+        if (decoded.proofs.some((proof) => !mintKeysets.some((keyset) => keyset.id === proof.id))) {
+          throw new ProofValidationError('Token contains a keyset unknown to this mint');
+        }
+      }
       const decodedForUnitResolution =
         typeof token === 'string' && !encodedTokenMetadataHasExplicitUnit(token)
           ? { ...decoded, unit: undefined }
           : decoded;
-      if (decoded.proofs.some((proof) => isBlsKeyset(proof.id))) {
-        throw new ProofValidationError('BLS v3 keysets are not supported');
-      }
       const unit = this.resolveTokenUnit(decodedForUnitResolution, mintKeysets, expectedUnit);
       return { ...decoded, unit };
     } catch (err) {

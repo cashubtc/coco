@@ -18,6 +18,15 @@ export interface MintMetadataObservation {
   observedAt: number;
 }
 
+export interface ApplyMintMetadataInput extends MintMetadataObservation {
+  /** Revision read before remote I/O. A different committed revision supersedes this response. */
+  expectedRevision: number;
+  /** Explicit refresh may replace a snapshot observed within the same protocol second. */
+  force?: boolean;
+  /** Used only when first registering a mint; observations never overwrite existing trust. */
+  initialTrust?: boolean;
+}
+
 /** The authoritative snapshot and whether this observation changed it. */
 export interface MintMetadataApplyResult {
   metadata: MintMetadata;

@@ -25,6 +25,7 @@ export class IdbMintRepository implements MintRepository {
       trusted: row.trusted ?? true,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
+      metadataRevision: row.metadataRevision ?? 0,
     } satisfies Mint;
   }
 
@@ -39,6 +40,7 @@ export class IdbMintRepository implements MintRepository {
           trusted: r.trusted ?? true,
           createdAt: r.createdAt,
           updatedAt: r.updatedAt,
+          metadataRevision: r.metadataRevision ?? 0,
         }) satisfies Mint,
     );
   }
@@ -56,6 +58,7 @@ export class IdbMintRepository implements MintRepository {
             trusted: r.trusted ?? true,
             createdAt: r.createdAt,
             updatedAt: r.updatedAt,
+            metadataRevision: r.metadataRevision ?? 0,
           }) satisfies Mint,
       );
   }
@@ -68,6 +71,7 @@ export class IdbMintRepository implements MintRepository {
       trusted: mint.trusted,
       createdAt: mint.createdAt,
       updatedAt: mint.updatedAt,
+      metadataRevision: mint.metadataRevision ?? 0,
     };
     await (this.db as any).table('coco_cashu_mints').put(row);
   }
@@ -83,6 +87,7 @@ export class IdbMintRepository implements MintRepository {
       trusted: mint.trusted,
       createdAt: existing?.createdAt ?? mint.createdAt,
       updatedAt: mint.updatedAt,
+      metadataRevision: mint.metadataRevision ?? 0,
     };
     await (this.db as any).table('coco_cashu_mints').put(row);
   }

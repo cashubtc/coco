@@ -57,7 +57,7 @@ function makeKeyset(unit: string): Keyset {
 }
 
 function makeService(keysets: Keyset[], outputDataCreator?: OutputDataCreator) {
-  const ensureUpdatedMint = mock(async (url: string) => ({
+  const refreshAndCommitIfStale = mock(async (url: string) => ({
     mint: makeMint(url),
     keysets: keysets.map((keyset) => ({ ...keyset, mintUrl: url })),
   }));
@@ -73,7 +73,7 @@ function makeService(keysets: Keyset[], outputDataCreator?: OutputDataCreator) {
   );
 
   const service = new WalletService(
-    { ensureUpdatedMint, updateMintData } as any,
+    { refreshAndCommitIfStale, updateMintData } as any,
     { getSeed } as any,
     { getRequestFn } as any,
     undefined,
@@ -81,7 +81,7 @@ function makeService(keysets: Keyset[], outputDataCreator?: OutputDataCreator) {
     outputDataCreator,
   );
 
-  return { service, ensureUpdatedMint, updateMintData, getRequestFn };
+  return { service, refreshAndCommitIfStale, updateMintData, getRequestFn };
 }
 
 describe('WalletService unit scoping', () => {
@@ -165,7 +165,10 @@ describe('WalletService unit scoping', () => {
   });
 
   it('builds and caches separate wallets per mint unit', async () => {
-    const { service, ensureUpdatedMint } = makeService([makeKeyset('sat'), makeKeyset('usd')]);
+    const { service, refreshAndCommitIfStale } = makeService([
+      makeKeyset('sat'),
+      makeKeyset('usd'),
+    ]);
 
     const satWallet = await service.getWallet(mintUrl, 'sat');
     const usdWallet = await service.getWallet(mintUrl, 'USD');
@@ -175,7 +178,7 @@ describe('WalletService unit scoping', () => {
     expect(usdWallet.unit).toBe('usd');
     expect(usdWallet).toBe(cachedUsdWallet);
     expect(satWallet).not.toBe(usdWallet);
-    expect(ensureUpdatedMint).toHaveBeenCalledTimes(2);
+    expect(refreshAndCommitIfStale).toHaveBeenCalledTimes(3);
   });
 
   it('returns the active keyset for the requested unit', async () => {
@@ -206,7 +209,10 @@ describe('WalletService unit scoping', () => {
   });
 
   it('can clear one unit cache without clearing other units', async () => {
-    const { service, ensureUpdatedMint } = makeService([makeKeyset('sat'), makeKeyset('usd')]);
+    const { service, refreshAndCommitIfStale } = makeService([
+      makeKeyset('sat'),
+      makeKeyset('usd'),
+    ]);
 
     const satWallet = await service.getWallet(mintUrl, 'sat');
     const usdWallet = await service.getWallet(mintUrl, 'usd');
@@ -217,6 +223,6 @@ describe('WalletService unit scoping', () => {
 
     expect(rebuiltSatWallet).not.toBe(satWallet);
     expect(cachedUsdWallet).toBe(usdWallet);
-    expect(ensureUpdatedMint).toHaveBeenCalledTimes(3);
+    expect(refreshAndCommitIfStale).toHaveBeenCalledTimes(4);
   });
 });

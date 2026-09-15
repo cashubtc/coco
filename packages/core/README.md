@@ -211,6 +211,25 @@ Initialize Coco with the built-in storage adapter for your runtime. The package 
 `MemoryRepositories` for in-memory tests and examples. See [Storage Adapters](../docs/pages/storage-adapters.md)
 for setup and storage-security guidance.
 
+## Keyset rotation and recovery
+
+Coco uses cashu-ts 5.0.0-rc.9. Update core and your storage adapter together; SQL adapters apply
+additive metadata and operation migrations on initialization.
+
+A mint can rotate keys after an operation is prepared. Coco keeps that operation's persisted
+outputs and refreshes keyset metadata for future preparations. A definitively rejected first Send
+or Receive becomes `rolled_back`. A never-submitted Mint claim becomes `failed` with
+`terminalFailure.code === 'stale_keyset'`; a new operation may claim its still-paid quote.
+
+A stale rejection during recovery leaves the operation in flight because an earlier submission
+may still have succeeded. Inspect the operation by ID and continue its recovery or Wallet Restore.
+Do not infer that a new payment is safe solely from `StaleKeysetError`. A rejected first Send reclaim
+returns to `pending` with the original token intact so it can be reclaimed again after refresh.
+
+Payment Requests keep Coco's existing accounting. Requests using an advisory mint list or
+payment-method fees are rejected explicitly. cashu-ts Amount values must fit in uint64
+(`0` through `18446744073709551615`); use strings or bigint beyond JavaScript's safe integer range.
+
 ## Public API surface
 
 ### Manager

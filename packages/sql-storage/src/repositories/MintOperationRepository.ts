@@ -28,6 +28,7 @@ interface MintOperationRow {
   lastObservedRemoteStateAt: number | null;
   terminalFailureJson: string | null;
   outputDataJson: string | null;
+  hasSubmitted: number | null;
 }
 
 const persistedStates = ['pending', 'executing', 'finalized', 'failed'] as const;
@@ -60,6 +61,7 @@ const rowToOperation = (row: MintOperationRow): MintOperation => {
     createdAt: row.createdAt * 1000,
     updatedAt: row.updatedAt * 1000,
     error: row.error ?? undefined,
+    hasSubmitted: row.hasSubmitted == null ? undefined : row.hasSubmitted === 1,
     ...(row.terminalFailureJson
       ? { terminalFailure: JSON.parse(row.terminalFailureJson) as MintOperationFailure }
       : {}),
@@ -98,6 +100,7 @@ const operationToParams = (operation: MintOperation): SqlValue[] => {
 
   if (operation.state === 'init') {
     return [
+      operation.hasSubmitted === undefined ? null : Number(operation.hasSubmitted),
       operation.id,
       operation.mintUrl,
       operation.quoteId,
@@ -120,6 +123,7 @@ const operationToParams = (operation: MintOperation): SqlValue[] => {
   }
 
   return [
+    operation.hasSubmitted === undefined ? null : Number(operation.hasSubmitted),
     operation.id,
     operation.mintUrl,
     operation.quoteId,
@@ -160,8 +164,8 @@ export class SqliteMintOperationRepository implements MintOperationRepository {
     const params = operationToParams(operation);
     await this.db.run(
       `INSERT INTO coco_cashu_mint_operations
-        (id, mintUrl, quoteId, state, createdAt, updatedAt, error, method, methodDataJson, amount, unit, request, expiry, pubkey, lastObservedRemoteState, lastObservedRemoteStateAt, terminalFailureJson, outputDataJson)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (hasSubmitted, id, mintUrl, quoteId, state, createdAt, updatedAt, error, method, methodDataJson, amount, unit, request, expiry, pubkey, lastObservedRemoteState, lastObservedRemoteStateAt, terminalFailureJson, outputDataJson)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       params,
     );
   }
@@ -180,9 +184,10 @@ export class SqliteMintOperationRepository implements MintOperationRepository {
     if (operation.state === 'init') {
       await this.db.run(
         `UPDATE coco_cashu_mint_operations
-         SET quoteId = ?, state = ?, updatedAt = ?, error = ?, method = ?, methodDataJson = ?, amount = ?, unit = ?, terminalFailureJson = ?
+         SET hasSubmitted = ?, quoteId = ?, state = ?, updatedAt = ?, error = ?, method = ?, methodDataJson = ?, amount = ?, unit = ?, terminalFailureJson = ?
          WHERE id = ?`,
         [
+          operation.hasSubmitted === undefined ? null : Number(operation.hasSubmitted),
           operation.quoteId,
           operation.state,
           updatedAtSeconds,
@@ -200,9 +205,10 @@ export class SqliteMintOperationRepository implements MintOperationRepository {
 
     await this.db.run(
       `UPDATE coco_cashu_mint_operations
-       SET quoteId = ?, state = ?, updatedAt = ?, error = ?, method = ?, methodDataJson = ?, amount = ?, unit = ?, request = ?, expiry = ?, pubkey = ?, lastObservedRemoteState = ?, lastObservedRemoteStateAt = ?, terminalFailureJson = ?, outputDataJson = ?
+       SET hasSubmitted = ?, quoteId = ?, state = ?, updatedAt = ?, error = ?, method = ?, methodDataJson = ?, amount = ?, unit = ?, request = ?, expiry = ?, pubkey = ?, lastObservedRemoteState = ?, lastObservedRemoteStateAt = ?, terminalFailureJson = ?, outputDataJson = ?
        WHERE id = ?`,
       [
+        operation.hasSubmitted === undefined ? null : Number(operation.hasSubmitted),
         operation.quoteId,
         operation.state,
         updatedAtSeconds,

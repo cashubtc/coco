@@ -38,6 +38,7 @@ const rowToOperation = (row: MintOperationRow): MintOperation => {
     createdAt: row.createdAt * 1000,
     updatedAt: row.updatedAt * 1000,
     error: row.error ?? undefined,
+    hasSubmitted: row.hasSubmitted,
     ...(row.terminalFailureJson
       ? { terminalFailure: JSON.parse(row.terminalFailureJson) as MintOperationFailure }
       : {}),
@@ -83,6 +84,7 @@ const operationToRow = (operation: MintOperation): MintOperationRow => {
       createdAt: createdAtSeconds,
       updatedAt: updatedAtSeconds,
       error: operation.error ?? null,
+      hasSubmitted: operation.hasSubmitted,
       method: operation.method,
       methodDataJson,
       amount: serializeAmount(operation.amount),
@@ -102,6 +104,7 @@ const operationToRow = (operation: MintOperation): MintOperationRow => {
     createdAt: createdAtSeconds,
     updatedAt: updatedAtSeconds,
     error: operation.error ?? null,
+    hasSubmitted: operation.hasSubmitted,
     method: operation.method,
     methodDataJson,
     amount: serializeAmount(operation.amount),

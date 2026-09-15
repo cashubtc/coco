@@ -3,6 +3,7 @@ import {
   deriveKeysetId,
   OutputData,
   Wallet,
+  KeyChain,
   type OutputDataLike,
   type Proof,
   type ProofState,
@@ -29,7 +30,13 @@ describe('WalletRestoreService', () => {
   });
 
   const mintUrl = 'https://mint.test';
-  const keysetId = 'keyset-1';
+  const keypairs = { '1': '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798' };
+  const keysetId = deriveKeysetId(keypairs);
+  const mintInfo = { name: 'Test', version: 'test', nuts: {} };
+  const keyChain = KeyChain.fromCache(mintUrl, 'sat', {
+    mintUrl,
+    keysets: [{ id: keysetId, unit: 'sat', active: true, input_fee_ppk: 0, keys: keypairs }],
+  });
   const bip39seed = new Uint8Array(64).fill(7);
 
   let proofService: ProofService;
@@ -54,7 +61,13 @@ describe('WalletRestoreService', () => {
       createOutputsAndIncrementCounters: mock(() =>
         Promise.resolve({
           keep: [],
-          send: [{ amount: Amount.from(100), counter: 1, id: keysetId }],
+          send: [
+            new OutputData(
+              { amount: Amount.from(100), id: keysetId, B_: 'unused' },
+              1n,
+              new Uint8Array([1]),
+            ),
+          ],
         }),
       ),
       saveProofs: mock(() => Promise.resolve()),
@@ -70,6 +83,8 @@ describe('WalletRestoreService', () => {
       getWalletWithActiveKeysetId: mock(() =>
         Promise.resolve({
           wallet: {
+            keyChain,
+            getMintInfo: () => ({ cache: mintInfo }),
             send: mock(() =>
               Promise.resolve({
                 send: [makeProof(100, 'send-proof')],
@@ -154,6 +169,9 @@ describe('WalletRestoreService', () => {
           },
         );
       });
+      const source = new Wallet(mintUrl, { bip39seed });
+      await source.loadMint();
+      walletService.getWalletWithActiveKeysetId = mock(async () => ({ wallet: source }) as any);
       const restoreRequest = mock(async () => ({ outputs: [], signatures: [] }));
       Wallet.prototype.batchRestore = mock(async function (this: Wallet, config) {
         this.mint.restore = restoreRequest;

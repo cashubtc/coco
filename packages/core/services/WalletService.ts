@@ -9,6 +9,7 @@ import {
   type AuthProvider,
   type OutputDataCreator,
 } from '@cashu/cashu-ts';
+import type { MintMetadata } from '../mints/MintMetadata.ts';
 import type { MintService } from './MintService';
 import type { Logger } from '../logging/Logger.ts';
 import type { SeedService } from './SeedService.ts';
@@ -18,15 +19,14 @@ import { normalizeMintUrl } from '../utils.ts';
 
 interface CachedWallet {
   wallet: Wallet;
-  lastCheck: number;
+  revision: number;
 }
 
 export class WalletService {
   private walletCache: Map<string, CachedWallet> = new Map();
-  private readonly CACHE_TTL = 5 * 60 * 1000;
   private readonly mintService: MintService;
   private readonly seedService: SeedService;
-  private inFlight: Map<string, Promise<Wallet>> = new Map();
+  private inFlight = new Map<string, { revision: number; promise: Promise<Wallet> }>();
   private readonly logger?: Logger;
   private readonly requestProvider: MintRequestProvider;
   private readonly authProviderGetter?: (mintUrl: string) => AuthProvider | undefined;
@@ -57,26 +57,31 @@ export class WalletService {
     const normalizedUnit = normalizeUnit(unit);
     const cacheKey = this.getWalletCacheKey(normalizedMintUrl, normalizedUnit);
 
-    // Serve from cache when fresh
+    // Read committed freshness before consulting the instance cache. Invalidation also works
+    // across Coco Sessions and after restart; old Wallet Instances cannot revive a stale snapshot.
+    const metadata = await this.mintService.refreshAndCommitIfStale(normalizedMintUrl);
+    const revision = metadata.mint.metadataRevision ?? 0;
     const cached = this.walletCache.get(cacheKey);
-    const now = Date.now();
-    if (cached && now - cached.lastCheck < this.CACHE_TTL) {
-      this.logger?.debug('Wallet served from cache', {
-        mintUrl: normalizedMintUrl,
-        unit: normalizedUnit,
-      });
-      return cached.wallet;
-    }
+    if (cached?.revision === revision) return cached.wallet;
 
-    // De-duplicate concurrent requests per mintUrl
     const existing = this.inFlight.get(cacheKey);
-    if (existing) return existing;
+    if (existing?.revision === revision) return existing.promise;
 
-    const promise = this.buildWallet(normalizedMintUrl, normalizedUnit).finally(() => {
-      this.inFlight.delete(cacheKey);
-    });
-    this.inFlight.set(cacheKey, promise);
-    return promise;
+    const build = {
+      revision,
+      promise: this.buildWallet(normalizedMintUrl, normalizedUnit, metadata)
+        .then((wallet) => {
+          if (this.inFlight.get(cacheKey) === build) {
+            this.walletCache.set(cacheKey, { wallet, revision });
+          }
+          return wallet;
+        })
+        .finally(() => {
+          if (this.inFlight.get(cacheKey) === build) this.inFlight.delete(cacheKey);
+        }),
+    };
+    this.inFlight.set(cacheKey, build);
+    return build.promise;
   }
 
   async getWalletWithActiveKeysetId(
@@ -166,6 +171,12 @@ export class WalletService {
     return this.getWallet(normalizedMintUrl, normalizedUnit);
   }
 
+  /** Independently commits keyset invalidation; the next wallet lookup refreshes metadata. */
+  async invalidateAndCommitKeysets(mintUrl: string): Promise<void> {
+    this.clearCache(mintUrl);
+    await this.mintService.invalidateAndCommitKeysets(mintUrl);
+  }
+
   private getWalletCacheKey(mintUrl: string, unit: string): string {
     return `${normalizeMintUrl(mintUrl)}::${normalizeUnit(unit, { defaultUnit: DEFAULT_UNIT })}`;
   }
@@ -174,10 +185,14 @@ export class WalletService {
     return normalizeUnit(unit || DEFAULT_UNIT, { defaultUnit: DEFAULT_UNIT });
   }
 
-  private async buildWallet(mintUrl: string, unit: string): Promise<Wallet> {
+  private async buildWallet(
+    mintUrl: string,
+    unit: string,
+    metadata: MintMetadata,
+  ): Promise<Wallet> {
     const normalizedMintUrl = normalizeMintUrl(mintUrl);
     const normalizedUnit = normalizeUnit(unit);
-    const { mint, keysets } = await this.mintService.ensureUpdatedMint(normalizedMintUrl);
+    const { mint, keysets } = metadata;
 
     const validKeysets = keysets.filter(
       (keyset) =>
@@ -214,6 +229,7 @@ export class WalletService {
       new Mint(normalizedMintUrl, { customRequest: requestFn, authProvider }),
       {
         unit: normalizedUnit,
+        strictCachedKeysets: true,
         // @ts-ignore
         logger:
           this.logger && this.logger.child ? this.logger.child({ module: 'Wallet' }) : undefined,
@@ -222,11 +238,6 @@ export class WalletService {
       },
     );
     wallet.loadMintFromCache(mint.mintInfo, cache);
-
-    this.walletCache.set(this.getWalletCacheKey(normalizedMintUrl, normalizedUnit), {
-      wallet,
-      lastCheck: Date.now(),
-    });
 
     this.logger?.info('Wallet built', {
       mintUrl: normalizedMintUrl,

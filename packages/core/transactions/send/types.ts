@@ -101,6 +101,7 @@ export interface AppliedSwapResult {
 }
 
 export interface FailSwapExecutionInput {
+  invalidateKeysets?: boolean;
   operationId: string;
   expectedRevision: number;
   updatedAt: number;
@@ -186,4 +187,11 @@ export interface CompletedReclaim {
   savedProofs: CoreProof[];
   spentProofSecrets: string[];
   releasedProofSecrets: string[];
+}
+
+/** Rejection of the first reclaim submission; no resources are released. */
+export interface RejectReclaimInput {
+  operationId: string;
+  expectedRevision: number;
+  updatedAt: number;
 }

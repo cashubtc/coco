@@ -1,4 +1,5 @@
-import { Amount, type MintQuoteBolt11Response } from '@cashu/cashu-ts';
+import { getOutputKeysetId, assertOutputKeysetActive } from '../../../proofs/OutputKeyset.ts';
+import { Amount, StaleKeysetError, type MintQuoteBolt11Response } from '@cashu/cashu-ts';
 import { bytesToHex } from '@noble/curves/utils.js';
 import { assertSameUnit } from '@core/amounts';
 import type {
@@ -122,10 +123,11 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
     const signingOptions = await this.getMintQuoteSigningOptions(ctx.operation.pubkey);
 
     try {
+      assertOutputKeysetActive(ctx.wallet, getOutputKeysetId(outputData.keep));
       const proofs = await ctx.wallet.mintProofsBolt11(
         ctx.operation.amount,
         ctx.operation.quoteId,
-        signingOptions,
+        { ...signingOptions, keysetId: getOutputKeysetId(outputData.keep) },
         {
           type: 'custom',
           data: outputData.keep,
@@ -134,6 +136,7 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
 
       return { status: 'ISSUED', proofs };
     } catch (err) {
+      if (err instanceof StaleKeysetError) throw err;
       if (err instanceof MintOperationError && err.code === 20002) {
         return { status: 'ALREADY_ISSUED' };
       }
@@ -200,10 +203,11 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
       const outputData = deserializeOutputData(ctx.operation.outputData);
       try {
         const signingOptions = await this.getMintQuoteSigningOptions(ctx.operation.pubkey);
+        assertOutputKeysetActive(ctx.wallet, getOutputKeysetId(outputData.keep));
         const proofs = await ctx.wallet.mintProofsBolt11(
           ctx.operation.amount,
           ctx.operation.quoteId,
-          signingOptions,
+          { ...signingOptions, keysetId: getOutputKeysetId(outputData.keep) },
           {
             type: 'custom',
             data: outputData.keep,
@@ -220,6 +224,7 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
 
         return { status: 'FINALIZED' };
       } catch (err) {
+        if (err instanceof StaleKeysetError) throw err;
         if (err instanceof MintOperationError) {
           if (err.code === 20002) {
             // Quote already issued; fall through to proof recovery

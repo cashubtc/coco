@@ -1,5 +1,7 @@
+import { getOutputKeysetId, assertOutputKeysetActive } from '../../../proofs/OutputKeyset.ts';
 import {
   Amount,
+  StaleKeysetError,
   type MintQuoteOnchainResponse as CashuMintQuoteOnchainResponse,
   type Wallet,
 } from '@cashu/cashu-ts';
@@ -131,11 +133,12 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
       );
     }
 
+    assertOutputKeysetActive(ctx.wallet, getOutputKeysetId(outputData.keep));
     const proofs = await ctx.wallet.mintProofsOnchain(
       ctx.operation.amount,
       remoteQuote as CashuMintQuoteOnchainResponse,
       bytesToHex(quoteKey.secretKey),
-      undefined,
+      { keysetId: getOutputKeysetId(outputData.keep) },
       { type: 'custom', data: outputData.keep },
     );
 
@@ -216,11 +219,12 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
 
     const outputData = deserializeOutputData(operation.outputData);
     try {
+      assertOutputKeysetActive(ctx.wallet, getOutputKeysetId(outputData.keep));
       const proofs = await ctx.wallet.mintProofsOnchain(
         operation.amount,
         remoteQuote as CashuMintQuoteOnchainResponse,
         bytesToHex(quoteKey.secretKey),
-        undefined,
+        { keysetId: getOutputKeysetId(outputData.keep) },
         { type: 'custom', data: outputData.keep },
       );
 
@@ -234,6 +238,7 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
 
       return { status: 'FINALIZED' };
     } catch (error) {
+      if (error instanceof StaleKeysetError) throw error;
       if (this.isAlreadyIssuedError(error)) {
         return (
           (await this.recoverSignedOutputs(ctx)) ?? {

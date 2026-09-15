@@ -56,6 +56,8 @@ const EXPECTED_MIGRATION_IDS = [
   '039_send_operation_revision',
   '040_send_execution_memo',
   '041_send_reclaim_data',
+  '042_mint_metadata_revision',
+  '043_mint_submission_marker',
 ] as const;
 
 async function allocateP2pkKey(db: SqlDatabase) {
@@ -209,6 +211,32 @@ describe('shared SQL schema migrations', () => {
     const busyTimeout = await db.get<{ timeout: number }>('PRAGMA busy_timeout');
     expect(busyTimeout?.timeout).toBe(5000);
   });
+
+  itWithDatabase(
+    'migrates metadata revisions without declaring legacy mint claims unsubmitted',
+    async (db) => {
+      await ensureSchemaUpTo(db, '042_mint_metadata_revision');
+      await db.run(`INSERT INTO coco_cashu_mints (mintUrl, name, mintInfo, trusted, createdAt, updatedAt)
+      VALUES ('https://mint.test', 'Test', '{}', 0, 1, 123)`);
+      await db.run(`INSERT INTO coco_cashu_mint_operations
+      (id, mintUrl, quoteId, state, createdAt, updatedAt, method, methodDataJson, amount, unit, outputDataJson)
+      VALUES ('legacy', 'https://mint.test', 'quote', 'pending', 1, 1, 'bolt11', '{}', '10', 'sat', '{"keep":[],"send":[]}')`);
+      await ensureSchemaUpTo(db);
+      const repositories = new SqlStorageRepositories({ database: db });
+      expect(await repositories.mintRepository.getMintByUrl('https://mint.test')).toMatchObject({
+        trusted: false,
+        updatedAt: 123,
+        metadataRevision: 0,
+      });
+      const operation = await repositories.mintOperationRepository.getById('legacy');
+      expect(operation?.hasSubmitted).toBeUndefined();
+      expect(operation?.state).toBe('pending');
+      expect(operation && 'outputData' in operation ? operation.outputData : undefined).toEqual({
+        keep: [],
+        send: [],
+      });
+    },
+  );
 
   itWithDatabase('backfills legacy Send operation revisions to zero', async (db) => {
     await ensureSchemaUpTo(db, '039_send_operation_revision');

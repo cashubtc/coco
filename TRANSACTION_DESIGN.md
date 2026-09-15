@@ -93,9 +93,19 @@ that independence is what permits this composition. Changes that must commit or 
 still compose scoped commands within one owning transition.
 
 Mint metadata application returns the committed snapshot and an applied/ignored disposition from
-inside its transaction. An observation with an older or equal timestamp is ignored; second-level
-timestamp ties keep the first committed snapshot. The refresh action publishes events only for an
-applied observation, so an ignored observation cannot reset batch-polling suppression.
+inside its transaction. Every observation carries the metadata revision read before remote I/O.
+A conflicting revision is ignored, including when invalidation occurred during the request.
+Applying metadata or invalidating it increments the revision atomically. Ordinary timestamp ties
+keep the first committed snapshot; an explicit forced refresh can replace a same-second snapshot
+only when its revision still matches. Invalidation sets freshness to zero and preserves mint trust.
+The refresh action publishes events only for an applied observation, so an ignored observation
+cannot reset batch-polling suppression.
+
+Mint registration and forced refresh use this gateway too. Wallet Instance reuse checks committed
+metadata freshness and revision. Send's first rejected execution couples invalidation and proof
+release in `SendTransactions.failExecution`; first reclaim rejection couples invalidation and the
+return to `pending` in `SendTransactions.rejectReclaim`. A rejected replay invalidates metadata as
+an independently committed action and retains the operation's exact request and reservations.
 
 Send reuses the metadata action through the following composition:
 

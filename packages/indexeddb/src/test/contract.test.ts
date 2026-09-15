@@ -143,7 +143,10 @@ describe('indexeddb Wallet transaction boundaries', () => {
         );
       });
 
-      expect(await repositories.mintRepository.getAllMints()).toContainEqual(walletMint);
+      expect(await repositories.mintRepository.getAllMints()).toContainEqual({
+        ...walletMint,
+        metadataRevision: 0,
+      });
     } finally {
       unrelated.close();
       await Dexie.delete(unrelatedName);

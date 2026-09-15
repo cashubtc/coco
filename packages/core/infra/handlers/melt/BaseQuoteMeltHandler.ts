@@ -1,3 +1,4 @@
+import { getOutputKeysetId, assertOutputKeysetActive } from '../../../proofs/OutputKeyset.ts';
 import {
   Amount,
   OutputData,
@@ -543,10 +544,9 @@ export abstract class BaseQuoteMeltHandler<M extends MeltMethod> implements Melt
 
     const swapData = deserializeOutputData(swapOutputData);
     const sendAmount = OutputData.sumOutputAmounts(swapData.send);
-    const { wallet } = await ctx.walletService.getWalletWithActiveKeysetId(
-      mintUrl,
-      ctx.operation.unit,
-    );
+    const { wallet } = ctx;
+    const keysetId = getOutputKeysetId([...swapData.keep, ...swapData.send]);
+    assertOutputKeysetActive(wallet, keysetId);
 
     ctx.logger?.debug('Executing pre-melt swap', {
       operationId,
@@ -559,7 +559,7 @@ export abstract class BaseQuoteMeltHandler<M extends MeltMethod> implements Melt
       send: { type: 'custom', data: swapData.send },
       keep: { type: 'custom', data: swapData.keep },
     };
-    const { send, keep } = await wallet.send(sendAmount, inputProofs, undefined, outputConfig);
+    const { send, keep } = await wallet.send(sendAmount, inputProofs, { keysetId }, outputConfig);
     await ctx.proofService.setProofState(mintUrl, inputProofSecrets, 'spent');
 
     const newProofs = [

@@ -180,6 +180,7 @@ describe('MintOnchainHandler', () => {
     handler = new MintOnchainHandler(keyRingService);
 
     wallet = {
+      keyChain: { getKeyset: () => ({ isActive: true }) },
       createMintQuoteOnchain: mock(async () => remoteQuote),
       mintProofsOnchain: mock(async () => [
         {
@@ -324,7 +325,7 @@ describe('MintOnchainHandler', () => {
       Amount.from(10),
       remoteQuote,
       ''.padEnd(64, '0'),
-      undefined,
+      { keysetId: 'keyset-1' },
       { type: 'custom', data: deserializeOutputData(pending.outputData).keep },
     );
   });
@@ -396,7 +397,7 @@ describe('MintOnchainHandler', () => {
       Amount.from(10),
       remoteQuote,
       ''.padEnd(64, '0'),
-      undefined,
+      { keysetId: 'keyset-1' },
       { type: 'custom', data: [output] },
     );
     expect(proofService.saveProofs).toHaveBeenCalled();

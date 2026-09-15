@@ -26,6 +26,8 @@ interface MintOperationBase<M extends MintMethod = MintMethod> extends MintMetho
   updatedAt: number;
   error?: string;
   terminalFailure?: MintOperationFailure;
+  /** False only for a new, never-submitted claim. Absence on legacy records is ambiguous. */
+  hasSubmitted?: boolean;
 }
 
 export interface MintOperationFailure {
@@ -129,6 +131,7 @@ export function createMintOperation<M extends MintMethod>(
     quoteId: options.quoteId,
     id,
     state: 'init',
+    hasSubmitted: false,
     mintUrl,
     createdAt: now,
     updatedAt: now,

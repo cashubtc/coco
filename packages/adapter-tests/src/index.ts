@@ -262,6 +262,51 @@ export async function runRepositoryTransactionContract(
   const { describe, it, expect } = runner;
 
   describe('repository transactions contract', () => {
+    it('preserves metadata revisions and all three mint submission states', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const mint = { ...createDummyMint(), metadataRevision: 7 };
+        await repositories.mintRepository.addOrUpdateMint(mint);
+        await repositories.mintRepository.setMintTrusted(mint.mintUrl, false);
+        expect(
+          (await repositories.mintRepository.getMintByUrl(mint.mintUrl)).metadataRevision,
+        ).toBe(7);
+        expect((await repositories.mintRepository.getAllMints())[0]?.metadataRevision).toBe(7);
+        for (const hasSubmitted of [undefined, false, true]) {
+          const operation: MintOperation = {
+            id: `submission-${hasSubmitted}`,
+            mintUrl: mint.mintUrl,
+            quoteId: `quote-${hasSubmitted}`,
+            state: 'pending',
+            method: 'bolt11',
+            methodData: {},
+            amount: Amount.from(1),
+            unit: 'sat',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            request: 'invoice',
+            expiry: null,
+            outputData: { keep: [], send: [] },
+            hasSubmitted,
+          };
+          await repositories.mintOperationRepository.create(operation);
+          expect(
+            (await repositories.mintOperationRepository.getById(operation.id))?.hasSubmitted,
+          ).toBe(hasSubmitted);
+          await repositories.mintOperationRepository.update({
+            ...operation,
+            state: 'executing',
+            hasSubmitted: true,
+          });
+          expect(
+            (await repositories.mintOperationRepository.getById(operation.id))?.hasSubmitted,
+          ).toBe(true);
+        }
+      } finally {
+        await dispose();
+      }
+    });
+
     it('commits all repositories together', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {

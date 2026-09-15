@@ -44,6 +44,7 @@ import type {
   BeginReclaimInput,
   BegunReclaim,
   CompleteReclaimInput,
+  RejectReclaimInput,
   CompletedReclaim,
 } from '../../send/types.ts';
 import type { ScopedProofCommands } from '../proofs/ScopedProofCommands.ts';
@@ -63,6 +64,7 @@ export interface ScopedSendCommands {
   cleanupLegacyInit(operationId: string): Promise<CleanupLegacyInitResult>;
   beginReclaim(input: BeginReclaimInput): Promise<BegunReclaim>;
   completeReclaim(input: CompleteReclaimInput): Promise<CompletedReclaim>;
+  rejectReclaim(input: RejectReclaimInput): Promise<void>;
 }
 
 export class RepositorySendCommands implements ScopedSendCommands {
@@ -70,7 +72,7 @@ export class RepositorySendCommands implements ScopedSendCommands {
     private readonly sends: SendOperationRepository,
     private readonly proofs: ScopedProofCommands,
     private readonly outputs: ScopedOutputCommands,
-    private readonly mints: Pick<ScopedMintMetadataCommands, 'assertTrusted'>,
+    private readonly mints: Pick<ScopedMintMetadataCommands, 'assertTrusted' | 'invalidate'>,
   ) {}
 
   async prepare(input: PrepareSendInput): Promise<PreparedSendResult> {
@@ -494,6 +496,7 @@ export class RepositorySendCommands implements ScopedSendCommands {
         'Send failure lost an executing revision conflict',
       );
     }
+    if (input.invalidateKeysets) await this.mints.invalidate(current.mintUrl);
     await this.getOwnedReadyInputs(current);
     await this.proofs.releaseOwned(current.mintUrl, current.id, current.inputProofSecrets);
     const failed: RolledBackSendOperation = {
@@ -865,6 +868,35 @@ export class RepositorySendCommands implements ScopedSendCommands {
       );
     }
     return { operation: rollingBack, inputProofs, counter: allocation?.counter, skippedForFees };
+  }
+
+  async rejectReclaim(input: RejectReclaimInput): Promise<void> {
+    const current = await this.sends.getById(input.operationId);
+    if (
+      !current ||
+      current.state !== 'rolling_back' ||
+      (current.revision ?? 0) !== input.expectedRevision
+    ) {
+      throw new SendOperationConflictError(
+        input.operationId,
+        'Reclaim rejection lost its revision',
+      );
+    }
+    await this.mints.invalidate(current.mintUrl);
+    const transitioned = await this.sends.transition({
+      operationId: current.id,
+      expectedState: 'rolling_back',
+      expectedRevision: input.expectedRevision,
+      next: {
+        ...current,
+        state: 'pending',
+        revision: input.expectedRevision + 1,
+        updatedAt: input.updatedAt,
+        reclaimData: undefined,
+      },
+    });
+    if (!transitioned)
+      throw new SendOperationConflictError(current.id, 'Reclaim rejection lost its revision');
   }
 
   async completeReclaim(input: CompleteReclaimInput): Promise<CompletedReclaim> {

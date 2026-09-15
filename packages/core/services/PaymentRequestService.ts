@@ -163,6 +163,7 @@ export class PaymentRequestService {
    */
   async parse(paymentRequest: string): Promise<ResolvedPaymentRequest> {
     const decodedPaymentRequest = await this.readPaymentRequest(paymentRequest);
+    this.assertSupportedRequest(decodedPaymentRequest);
     const transport = this.getPaymentRequestTransport(decodedPaymentRequest);
     const unit = normalizeUnit(decodedPaymentRequest.unit, { defaultUnit: DEFAULT_UNIT });
     const spendingCondition = this.resolveSpendingCondition(decodedPaymentRequest);
@@ -190,6 +191,7 @@ export class PaymentRequestService {
     request: ResolvedPaymentRequest,
     options: { mintUrl: string; amount?: UnitAmount },
   ): Promise<PreparedPaymentRequest> {
+    this.assertSupportedRequest(request.paymentRequest);
     const { mintUrl, amount } = options;
     this.validateMint(mintUrl, request.allowedMints);
     const finalAmount = this.validateAmount(request, amount);
@@ -280,6 +282,15 @@ export class PaymentRequestService {
       decodedPaymentRequest,
     });
     return decodedPaymentRequest;
+  }
+
+  private assertSupportedRequest(request: PaymentRequest): void {
+    if (
+      (request.mintsPreferred === true && request.mints?.length) ||
+      request.supportedMethods?.length
+    ) {
+      throw new PaymentRequestError('Preferred mints and payment-method fees are not supported');
+    }
   }
 
   private validateMint(mintUrl: string, mints?: string[]): void {
@@ -529,16 +540,16 @@ export class PaymentRequestService {
 
     const paymentRequest = amountUnchanged
       ? request.paymentRequest
-      : new PaymentRequest(
-          request.paymentRequest.transport,
-          request.paymentRequest.id,
+      : new PaymentRequest({
+          transport: request.paymentRequest.transport,
+          id: request.paymentRequest.id,
           amount,
-          request.unit,
-          request.paymentRequest.mints,
-          request.paymentRequest.description,
-          request.paymentRequest.singleUse,
-          request.paymentRequest.nut10,
-        );
+          unit: request.unit,
+          mints: request.paymentRequest.mints,
+          description: request.paymentRequest.description,
+          singleUse: request.paymentRequest.singleUse,
+          nut10: request.paymentRequest.nut10,
+        });
     const spendingCondition = this.resolveSpendingCondition(paymentRequest);
     const payableMints = await this.findMatchingMints(
       paymentRequest,

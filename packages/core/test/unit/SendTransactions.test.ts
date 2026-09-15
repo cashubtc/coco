@@ -1418,6 +1418,11 @@ describe('SendTransactions reclaim', () => {
             }),
           ),
         ),
+        makeOutputDataCreator({
+          createDeterministicData: (amount, _seed, counter) => [
+            output(Amount.from(amount), counter),
+          ],
+        }),
       ),
     );
     await expect(

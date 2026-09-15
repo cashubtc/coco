@@ -1,12 +1,6 @@
-import {
-  Mint,
-  Wallet,
-  normalizeProofAmounts,
-  type OutputDataCreator,
-  type OutputDataLike,
-} from '@cashu/cashu-ts';
+import { Mint, Wallet, normalizeProofAmounts, type OutputDataCreator } from '@cashu/cashu-ts';
 import type { MintMetadata } from '@core/mints/MintMetadata.ts';
-import { ProofValidationError } from '@core/models/Error.ts';
+import { getOutputKeysetId, assertOutputKeysetActive } from '@core/proofs/OutputKeyset.ts';
 import type { SendRemote, SendRemoteSession } from '@core/operations/send/SendRemote.ts';
 import { createKeyChain } from '@core/proofs/KeysetSelection.ts';
 import { deserializeOutputData } from '@core/utils.ts';
@@ -31,6 +25,7 @@ export class CashuSendRemote implements SendRemote {
       }),
       {
         unit,
+        strictCachedKeysets: true,
         outputDataCreator: this.outputDataCreator,
         // Send preparation already committed these inputs. Preserve their order on every replay.
         selectProofs: (proofs) => ({ keep: [], send: normalizeProofAmounts(proofs) }),
@@ -44,6 +39,7 @@ export class CashuSendRemote implements SendRemote {
       swap: (request) => {
         const data = deserializeOutputData(request.outputData);
         const keysetId = getOutputKeysetId([...data.keep, ...data.send]);
+        assertOutputKeysetActive(wallet, keysetId);
         return wallet.send(
           request.amount,
           request.inputProofs,
@@ -59,6 +55,7 @@ export class CashuSendRemote implements SendRemote {
       reclaim: (proofs, outputs) => {
         const data = deserializeOutputData(outputs).keep;
         const keysetId = getOutputKeysetId(data);
+        assertOutputKeysetActive(wallet, keysetId);
         return wallet.receive(
           { mint: mintUrl, proofs, unit },
           { keysetId },
@@ -70,13 +67,4 @@ export class CashuSendRemote implements SendRemote {
       },
     };
   }
-}
-
-/** Pin unblinding to the committed output plan, even if the wallet now prefers another keyset. */
-function getOutputKeysetId(outputs: readonly OutputDataLike[]): string {
-  const keysetId = outputs[0]?.blindedMessage.id;
-  if (!keysetId || outputs.some((output) => output.blindedMessage.id !== keysetId)) {
-    throw new ProofValidationError('Send outputs must specify a single non-empty keyset id');
-  }
-  return keysetId;
 }

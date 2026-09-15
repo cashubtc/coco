@@ -1,3 +1,4 @@
+import { StaleKeysetError } from '@cashu/cashu-ts';
 import { Amount } from '@cashu/cashu-ts';
 import type {
   FinalizedReceiveOperation,
@@ -83,15 +84,15 @@ describe('ReceiveOperationService', () => {
     mockWalletReceive = mock(async () => [makeProof('n1'), makeProof('n2')]);
 
     walletService = {
+      getWallet: async (url: string, unit: string) =>
+        (await walletService.getWalletWithActiveKeysetId(url, unit)).wallet,
       getWalletWithActiveKeysetId: mock(async () => ({
         wallet: {
+          keyChain: { getKeyset: () => ({ isActive: true }) },
           unit: 'sat',
           getFeesForProofs: mock(() => Amount.zero()),
           receive: mockWalletReceive,
         },
-      })),
-      getWallet: mock(async () => ({
-        checkProofsStates: mock(async () => []),
       })),
     } as unknown as WalletService;
 
@@ -112,6 +113,7 @@ describe('ReceiveOperationService', () => {
     }));
 
     mintService = {
+      invalidateAndCommitKeysets: mock(async () => {}),
       isTrustedMint: mockIsTrustedMint,
       ensureUpdatedMint: mockEnsureUpdatedMint,
     } as unknown as MintService;
@@ -128,6 +130,20 @@ describe('ReceiveOperationService', () => {
       tokenService,
       eventBus,
     );
+  });
+
+  it('rolls back a first stale receive without replacing the output plan', async () => {
+    const token = { mint: mintUrl, unit: 'sat', proofs: [makeProof('stale-input')] };
+    const prepared = await service.prepare(await service.init(token));
+    const error = new StaleKeysetError(false);
+    mockWalletReceive.mockRejectedValue(error);
+    await expect(service.execute(prepared)).rejects.toBe(error);
+    expect(await service.getOperation(prepared.id)).toMatchObject({
+      state: 'rolled_back',
+      outputData: prepared.outputData,
+    });
+    expect(mintService.invalidateAndCommitKeysets).toHaveBeenCalledWith(mintUrl);
+    expect(mockWalletReceive).toHaveBeenCalledTimes(1);
   });
 
   it('init -> prepare -> execute via receive() finalizes and emits event', async () => {
@@ -364,6 +380,7 @@ describe('ReceiveOperationService', () => {
 
     (walletService.getWalletWithActiveKeysetId as Mock<any>).mockImplementation(async () => ({
       wallet: {
+        keyChain: { getKeyset: () => ({ isActive: true }) },
         unit: 'sat',
         getFeesForProofs: mock(() => initOp.amount),
         receive: mockWalletReceive,
@@ -380,6 +397,7 @@ describe('ReceiveOperationService', () => {
 
     (walletService.getWalletWithActiveKeysetId as Mock<any>).mockImplementation(async () => ({
       wallet: {
+        keyChain: { getKeyset: () => ({ isActive: true }) },
         unit: 'sat',
         getFeesForProofs: mock(() => initOp.amount.add(Amount.from(1))),
         receive: mockWalletReceive,

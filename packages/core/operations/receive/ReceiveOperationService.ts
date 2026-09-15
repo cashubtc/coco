@@ -1,4 +1,9 @@
 import {
+  isKeysetRejection,
+  getOutputKeysetId,
+  assertOutputKeysetActive,
+} from '../../proofs/OutputKeyset.ts';
+import {
   getTokenMetadata,
   sumProofs,
   type Proof,
@@ -299,6 +304,11 @@ export class ReceiveOperationService {
       try {
         return await this.executeInternal(executing);
       } catch (e) {
+        if (isKeysetRejection(e)) {
+          await this.mintService.invalidateAndCommitKeysets(executing.mintUrl);
+          await this.markAsRolledBack(executing, e.message);
+          throw e;
+        }
         const rollbackReason = this.getRollbackReasonForReceiveFailure(e);
         if (rollbackReason) {
           await this.markAsRolledBack(executing, rollbackReason);
@@ -321,10 +331,7 @@ export class ReceiveOperationService {
       throw new Error('Missing output data for receive operation');
     }
 
-    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
-      executing.mintUrl,
-      executing.unit,
-    );
+    const wallet = await this.walletService.getWallet(executing.mintUrl, executing.unit);
     const outputData = deserializeOutputData(executing.outputData);
 
     this.logger?.info('Receiving token', {
@@ -334,9 +341,10 @@ export class ReceiveOperationService {
       amount: executing.amount,
     });
 
+    assertOutputKeysetActive(wallet, getOutputKeysetId(outputData.keep));
     const newProofs = await wallet.receive(
       { mint: executing.mintUrl, proofs: executing.inputProofs, unit: executing.unit },
-      undefined,
+      { keysetId: getOutputKeysetId(outputData.keep) },
       { type: 'custom', data: outputData.keep },
     );
 
@@ -575,6 +583,10 @@ export class ReceiveOperationService {
         try {
           await this.executeInternal(executing);
         } catch (e) {
+          if (isKeysetRejection(e)) {
+            await this.mintService.invalidateAndCommitKeysets(executing.mintUrl);
+            throw e;
+          }
           const rollbackReason = this.getRollbackReasonForReceiveFailure(e);
           if (rollbackReason) {
             await this.markAsRolledBack(executing, rollbackReason);

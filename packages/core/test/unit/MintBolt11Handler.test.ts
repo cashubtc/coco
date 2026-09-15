@@ -214,6 +214,7 @@ describe('MintBolt11Handler', () => {
     handler = new MintBolt11Handler(keyRingService);
 
     wallet = {
+      keyChain: { getKeyset: () => ({ isActive: true }) },
       createMintQuoteBolt11: mock(async () => quote),
       createLockedMintQuote: mock(async () => ({ ...quote, pubkey: quotePubkey })),
       mintProofsBolt11: mock(async () => {
@@ -337,7 +338,7 @@ describe('MintBolt11Handler', () => {
       const call = (wallet.mintProofsBolt11 as Mock<any>).mock.calls[0];
       expect(call?.[0]).toEqual(Amount.from(10));
       expect(call?.[1]).toBe(quoteId);
-      expect(call?.[2]).toEqual({ privkey: bytesToHex(quoteSecretKey) });
+      expect(call?.[2]).toEqual({ privkey: bytesToHex(quoteSecretKey), keysetId });
       const customOutputs = call?.[3] as
         | { type: string; data: Array<{ blindedMessage: { B_: string } }> }
         | undefined;
@@ -432,7 +433,7 @@ describe('MintBolt11Handler', () => {
 
       expect(result).toEqual({ status: 'FINALIZED' });
       const call = (wallet.mintProofsBolt11 as Mock<any>).mock.calls[0];
-      expect(call?.[2]).toEqual({ privkey: bytesToHex(quoteSecretKey) });
+      expect(call?.[2]).toEqual({ privkey: bytesToHex(quoteSecretKey), keysetId });
       const customOutputs = call?.[3] as
         | { type: 'custom'; data: Array<{ blindedMessage: { B_: string } }> }
         | undefined;

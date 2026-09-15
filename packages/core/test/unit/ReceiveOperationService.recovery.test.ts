@@ -1,3 +1,4 @@
+import { StaleKeysetError } from '@cashu/cashu-ts';
 import { Amount } from '@cashu/cashu-ts';
 import type {
   InitReceiveOperation,
@@ -110,8 +111,11 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
     mockSaveProofs = mock(async () => {});
 
     walletService = {
+      getWallet: async (url: string, unit: string) =>
+        (await walletService.getWalletWithActiveKeysetId(url, unit)).wallet,
       getWalletWithActiveKeysetId: mock(async () => ({
         wallet: {
+          keyChain: { getKeyset: () => ({ isActive: true }) },
           unit: 'sat',
           receive: mockWalletReceive,
         },
@@ -123,7 +127,9 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
       saveProofs: mockSaveProofs,
     } as unknown as ProofService;
 
-    mintService = {} as MintService;
+    mintService = {
+      invalidateAndCommitKeysets: mock(async () => {}),
+    } as unknown as MintService;
 
     tokenService = new TokenService(mintService);
 
@@ -138,6 +144,18 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
       eventBus,
     );
     api = new ReceiveOpsApi(service);
+  });
+
+  it('preserves executing receives when a stale replay leaves the earlier outcome ambiguous', async () => {
+    const executing = makeExecutingOp('stale-replay', [makeProof('input')]);
+    await receiveOpRepo.create(executing);
+    mockWalletReceive.mockRejectedValue(new StaleKeysetError(false));
+    await service.recoverPendingOperations();
+    expect(await receiveOpRepo.getById(executing.id)).toMatchObject({
+      state: 'executing',
+      outputData: executing.outputData,
+    });
+    expect(mintService.invalidateAndCommitKeysets).toHaveBeenCalledWith(mintUrl);
   });
 
   it('cleans up init operations', async () => {
@@ -295,7 +313,7 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
     expect(stored?.error).toBe('Proofs already spent');
   });
 
-  it('rolls back when re-execution fails with a terminal NUT-03 keyset error', async () => {
+  it('retains recovery after a raw keyset rejection of re-execution', async () => {
     const proofs = [makeProof('p1')];
     const op = makeExecutingOp('exec-op-terminal-keyset-retry', proofs);
     await receiveOpRepo.create(op);
@@ -310,8 +328,8 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
     await service.recoverPendingOperations();
 
     const stored = await receiveOpRepo.getById(op.id);
-    expect(stored?.state).toBe('rolled_back');
-    expect(stored?.error).toBe('Keyset is inactive');
+    expect(stored?.state).toBe('executing');
+    expect(stored).toMatchObject({ outputData: op.outputData });
   });
 
   it('rolls back when re-execution fails with a generic mint protocol error', async () => {

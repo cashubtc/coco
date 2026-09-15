@@ -32,6 +32,7 @@ const observation = {
   mintInfo: { ...testMintInfo, name: 'Refreshed' },
   keysets: [{ ...keyset, active: false }],
   observedAt: 20,
+  expectedRevision: 0,
 };
 
 describe.each(['memory', 'sqlite'] as const)(

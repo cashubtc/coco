@@ -7,4 +7,6 @@ export interface Mint {
   trusted: boolean;
   createdAt: number;
   updatedAt: number;
+  /** Monotonic metadata revision; absent on snapshots written before revision tracking. */
+  metadataRevision?: number;
 }

@@ -1524,6 +1524,15 @@ const MIGRATIONS: readonly Migration[] = [
     id: '041_send_reclaim_data',
     sql: `ALTER TABLE coco_cashu_send_operations ADD COLUMN reclaimDataJson TEXT;`,
   },
+  {
+    id: '042_mint_metadata_revision',
+    sql: `ALTER TABLE coco_cashu_mints
+      ADD COLUMN metadataRevision INTEGER NOT NULL DEFAULT 0 CHECK (metadataRevision >= 0);`,
+  },
+  {
+    id: '043_mint_submission_marker',
+    sql: `ALTER TABLE coco_cashu_mint_operations ADD COLUMN hasSubmitted INTEGER;`,
+  },
 ];
 
 // Export for testing
