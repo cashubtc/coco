@@ -39,46 +39,13 @@ export interface CoreTransactionRunner {
   run<T>(work: (transaction: CoreTransaction) => Promise<T>): Promise<T>;
 }
 
-type TransactionModuleFactory = (repositories: RepositoryTransactionScope) => CoreTransaction;
-
-export function createCoreTransactionModules(
-  repositories: RepositoryTransactionScope,
-  outputDataCreator: OutputDataCreator = OutputData,
-): CoreTransaction {
-  const mintMetadata = new RepositoryMintMetadataCommands(
-    repositories.mintRepository,
-    repositories.keysetRepository,
-  );
-  const proofs = new RepositoryProofCommands(
-    repositories.proofRepository,
-    repositories.keysetRepository,
-  );
-  const outputs = new RepositoryOutputCommands(
-    repositories.counterRepository,
-    repositories.keysetRepository,
-    outputDataCreator,
-  );
-  return {
-    mintMetadata,
-    keypairs: new RepositoryKeypairCommands(repositories.keyRingRepository),
-    proofs,
-    outputs,
-    sends: new RepositorySendCommands(
-      repositories.sendOperationRepository,
-      proofs,
-      outputs,
-      mintMetadata,
-    ),
-  };
-}
-
 const MAX_TRANSACTION_ATTEMPTS = 3;
 
 /** Internal adapter-backed transaction runner owned by the composition root. */
 export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
   constructor(
     private readonly repositories: Repositories,
-    private readonly createModules: TransactionModuleFactory = createCoreTransactionModules,
+    private readonly outputDataCreator: OutputDataCreator = OutputData,
   ) {}
 
   async run<T>(work: (transaction: CoreTransaction) => Promise<T>): Promise<T> {
@@ -87,7 +54,7 @@ export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
         return await this.repositories.withTransaction((repositories) => {
           const lifetime = new TransactionLifetime();
           return lifetime.run(() =>
-            work(lifetime.bind(this.createModules(lifetime.bind(repositories)))),
+            work(lifetime.bind(this.createTransaction(lifetime.bind(repositories)))),
           );
         });
       } catch (error) {
@@ -101,5 +68,33 @@ export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
         await new Promise((resolve) => setTimeout(resolve, attempt * 5));
       }
     }
+  }
+
+  private createTransaction(repositories: RepositoryTransactionScope): CoreTransaction {
+    const mintMetadata = new RepositoryMintMetadataCommands(
+      repositories.mintRepository,
+      repositories.keysetRepository,
+    );
+    const proofs = new RepositoryProofCommands(
+      repositories.proofRepository,
+      repositories.keysetRepository,
+    );
+    const outputs = new RepositoryOutputCommands(
+      repositories.counterRepository,
+      repositories.keysetRepository,
+      this.outputDataCreator,
+    );
+    return {
+      mintMetadata,
+      keypairs: new RepositoryKeypairCommands(repositories.keyRingRepository),
+      proofs,
+      outputs,
+      sends: new RepositorySendCommands(
+        repositories.sendOperationRepository,
+        proofs,
+        outputs,
+        mintMetadata,
+      ),
+    };
   }
 }

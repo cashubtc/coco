@@ -82,10 +82,7 @@ import {
   mintQuoteToMethodSnapshot,
 } from './models/MintQuote.ts';
 import { assessMintQuoteClaimability } from './models/MintQuoteClaimability.ts';
-import {
-  RepositoryCoreTransactionRunner,
-  createCoreTransactionModules,
-} from './transactions/CoreTransaction.ts';
+import { RepositoryCoreTransactionRunner } from './transactions/CoreTransaction.ts';
 import { CoreSendTransactions } from './transactions/send/SendTransactions.ts';
 import { CoreKeyRingTransactions } from './transactions/keypairs/KeyRingTransactions.ts';
 import { KeypairDerivation } from './keypairs/KeypairDerivation.ts';
@@ -919,8 +916,9 @@ export class Manager {
     const historyLogger = this.getChildLogger('HistoryService');
     const tokenLogger = this.getChildLogger('TokenService');
     const seedService = new SeedService(seedGetter);
-    const coreTransactionRunner = new RepositoryCoreTransactionRunner(repositories, (scope) =>
-      createCoreTransactionModules(scope, this.outputDataCreator),
+    const coreTransactionRunner = new RepositoryCoreTransactionRunner(
+      repositories,
+      this.outputDataCreator,
     );
     const mintQueries = new StoredMintQueries(
       repositories.mintRepository,

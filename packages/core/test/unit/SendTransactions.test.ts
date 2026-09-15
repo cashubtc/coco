@@ -15,10 +15,7 @@ import type {
   SendOperationRepository,
 } from '../../repositories';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
-import {
-  RepositoryCoreTransactionRunner,
-  createCoreTransactionModules,
-} from '../../transactions/CoreTransaction.ts';
+import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
 import { CoreSendTransactions } from '../../transactions/send/SendTransactions.ts';
 import type {
   CompletePendingSendInput,
@@ -92,9 +89,7 @@ async function setup(repositories: Repositories = new MemoryRepositories()) {
   const outputDataCreator = makeOutputDataCreator({
     createDeterministicData: (amount, _seed, counter) => [output(Amount.from(amount), counter)],
   });
-  const runner = new RepositoryCoreTransactionRunner(repositories, (scope) =>
-    createCoreTransactionModules(scope, outputDataCreator),
-  );
+  const runner = new RepositoryCoreTransactionRunner(repositories, outputDataCreator);
   return { repositories, transactions: new CoreSendTransactions(runner) };
 }
 
