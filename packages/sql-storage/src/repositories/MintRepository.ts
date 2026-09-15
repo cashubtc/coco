@@ -17,28 +17,11 @@ export class SqliteMintRepository implements MintRepository {
   }
 
   async getMintByUrl(mintUrl: string): Promise<Mint> {
-    const row = await this.db.get<{
-      mintUrl: string;
-      name: string;
-      mintInfo: string;
-      trusted: number;
-      createdAt: number;
-      updatedAt: number;
-    }>(
-      'SELECT mintUrl, name, mintInfo, trusted, createdAt, updatedAt FROM coco_cashu_mints WHERE mintUrl = ? LIMIT 1',
-      [mintUrl],
-    );
-    if (!row) {
+    const mint = await this.findMintByUrl(mintUrl);
+    if (!mint) {
       throw new Error(`Mint not found: ${mintUrl}`);
     }
-    return {
-      mintUrl: row.mintUrl,
-      name: row.name,
-      mintInfo: JSON.parse(row.mintInfo),
-      trusted: row.trusted === 1,
-      createdAt: row.createdAt,
-      updatedAt: row.updatedAt,
-    } satisfies Mint;
+    return mint;
   }
 
   async findMintByUrl(mintUrl: string): Promise<Mint | null> {
