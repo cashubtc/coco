@@ -18,6 +18,9 @@ A keyset rejection invalidates the mint's snapshot. Persisted metadata revisions
 started before invalidation from restoring freshness. These writes use the metadata gateway,
 preserve current trust, and keep remote I/O outside transactions. Wallet Instances compare the
 committed revision before cache reuse.
+Legacy-shaped adapter writes that omit the revision preserve its committed value. Explicit mint
+registration applies the caller's trust preference even when another refresh registered the mint
+first; ordinary refreshes never change trust. Both registration decisions commit in one scope.
 
 For a first Send submission, rejection, proof release, and invalidation commit together. A first
 reclaim rejection returns the Send to pending with its token and proofs intact; its discarded

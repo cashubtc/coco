@@ -80,6 +80,43 @@ describe.each(['memory', 'sqlite'] as const)(
       expect(result.metadata.keysets[0]?.active).toBe(false);
     });
 
+    it('registers explicit trust even when a competing observation already committed', async () => {
+      const transactions = new CoreMintMetadataTransactions(
+        new RepositoryCoreTransactionRunner(repositories),
+      );
+      await transactions.applyObservation(observation);
+      const result = await transactions.register({
+        observation: { ...observation, mintInfo: { ...testMintInfo, name: 'Superseded' } },
+        trusted: true,
+      });
+      expect(result).toMatchObject({ applied: false, created: false, trustChanged: true });
+      expect(result.metadata.mint).toMatchObject({
+        trusted: true,
+        metadataRevision: 1,
+        mintInfo: { name: 'Refreshed' },
+      });
+      expect((await repositories.mintRepository.getMintByUrl(mintUrl)).trusted).toBe(true);
+    });
+
+    it('rolls back registration metadata when its explicit trust write fails', async () => {
+      const controlled = overrideTransactions(repositories, (fn) =>
+        repositories.withTransaction((scope) => {
+          scope.mintRepository.setMintTrusted = async () => {
+            throw new Error('trust write failed');
+          };
+          return fn(scope);
+        }),
+      );
+      const transactions = new CoreMintMetadataTransactions(
+        new RepositoryCoreTransactionRunner(controlled),
+      );
+      await expect(transactions.register({ observation, trusted: true })).rejects.toThrow(
+        'trust write failed',
+      );
+      expect(await repositories.mintRepository.getAllMints()).toEqual([]);
+      expect(await repositories.keysetRepository.getKeysetsByMintUrl(mintUrl)).toEqual([]);
+    });
+
     it('ignores observations older than the committed mint snapshot', async () => {
       await repositories.mintRepository.addNewMint({ ...original, updatedAt: 30 });
       await repositories.keysetRepository.addKeyset(keyset);

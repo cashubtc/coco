@@ -1,12 +1,18 @@
 import { isBlsKeyset } from '@cashu/cashu-ts';
 import { UnknownMintError } from '@core/models/Error.ts';
-import type { MintMetadataApplyResult, ApplyMintMetadataInput } from '@core/mints/MintMetadata.ts';
+import type {
+  MintMetadataApplyResult,
+  ApplyMintMetadataInput,
+  RegisterMintInput,
+  MintRegistrationResult,
+} from '@core/mints/MintMetadata.ts';
 import type { MintRepository, KeysetRepository } from '@core/repositories';
 
 export interface ScopedMintMetadataCommands {
   assertTrusted(mintUrl: string): Promise<void>;
   invalidate(mintUrl: string): Promise<void>;
   applyObservation(observation: ApplyMintMetadataInput): Promise<MintMetadataApplyResult>;
+  register(input: RegisterMintInput): Promise<MintRegistrationResult>;
 }
 
 /** Cache persistence shared by owning transactions; remote metadata cannot change mint trust. */
@@ -29,6 +35,20 @@ export class RepositoryMintMetadataCommands implements ScopedMintMetadataCommand
       updatedAt: 0,
       metadataRevision: (current.metadataRevision ?? 0) + 1,
     });
+  }
+
+  async register(input: RegisterMintInput): Promise<MintRegistrationResult> {
+    const mintUrl = input.observation.mintUrl;
+    const existed = (await this.mints.getAllMints()).some((mint) => mint.mintUrl === mintUrl);
+    const result = await this.applyObservation(input.observation);
+    const mint = result.metadata.mint;
+    const trustChanged = input.trusted !== undefined && input.trusted !== mint.trusted;
+    if (input.trusted !== undefined && trustChanged) {
+      // Explicit user intent still applies when a competing refresh superseded our observation.
+      await this.mints.setMintTrusted(mintUrl, input.trusted);
+      result.metadata = { ...result.metadata, mint: { ...mint, trusted: input.trusted } };
+    }
+    return { ...result, created: !existed, trustChanged: existed && trustChanged };
   }
 
   async applyObservation(observation: ApplyMintMetadataInput): Promise<MintMetadataApplyResult> {
@@ -71,7 +91,7 @@ export class RepositoryMintMetadataCommands implements ScopedMintMetadataCommand
       ...(current ?? {
         mintUrl: observation.mintUrl,
         name: observation.mintUrl,
-        trusted: observation.initialTrust ?? false,
+        trusted: false,
         createdAt: observation.observedAt,
       }),
       mintInfo: observation.mintInfo,

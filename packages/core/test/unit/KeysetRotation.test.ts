@@ -76,6 +76,32 @@ async function prepared() {
 }
 
 describe.each(['memory', 'sqlite'] as const)('keyset invalidation (%s)', (adapter) => {
+  it.each(['addNewMint', 'addOrUpdateMint', 'updateMint'] as const)(
+    'keeps delayed responses invalid after an update through %s omits the revision',
+    async (method) => {
+      const database = adapter === 'sqlite' ? new Database(':memory:') : undefined;
+      const repositories = database
+        ? new SqlStorageRepositories({ database: new SqliteDb({ database }) })
+        : new MemoryRepositories();
+      try {
+        await repositories.init();
+        await repositories.mintRepository.addNewMint(mint);
+        await repositories.keysetRepository.addKeyset(keyset);
+        const transactions = new CoreMintMetadataTransactions(
+          new RepositoryCoreTransactionRunner(repositories),
+        );
+        await transactions.invalidate(mintUrl);
+        await repositories.mintRepository[method]({ ...mint, name: 'Local name', updatedAt: 0 });
+
+        expect((await repositories.mintRepository.getMintByUrl(mintUrl)).metadataRevision).toBe(1);
+        expect((await transactions.applyObservation(observation)).applied).toBe(false);
+        expect((await repositories.mintRepository.getMintByUrl(mintUrl)).updatedAt).toBe(0);
+      } finally {
+        database?.close();
+      }
+    },
+  );
+
   it('preserves trust, rejects delayed responses, and permits a fresh same-second observation', async () => {
     const database = adapter === 'sqlite' ? new Database(':memory:') : undefined;
     const repositories = database

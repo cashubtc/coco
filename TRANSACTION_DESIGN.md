@@ -101,11 +101,19 @@ only when its revision still matches. Invalidation sets freshness to zero and pr
 The refresh action publishes events only for an applied observation, so an ignored observation
 cannot reset batch-polling suppression.
 
-Mint registration and forced refresh use this gateway too. Wallet Instance reuse checks committed
-metadata freshness and revision. Send's first rejected execution couples invalidation and proof
-release in `SendTransactions.failExecution`; first reclaim rejection couples invalidation and the
-return to `pending` in `SendTransactions.rejectReclaim`. A rejected replay invalidates metadata as
-an independently committed action and retains the operation's exact request and reservations.
+Mint registration and forced refresh use this gateway too. `MintMetadataTransactions.register`
+applies explicit user trust in the same scope as metadata application, including when another
+registration superseded its observation. Omitted trust preserves the current value; metadata
+observations alone cannot change trust. Registration reports creation and trust changes for
+post-commit events, so a competing registration does not publish a duplicate `mint:added` event.
+Adapter writes that omit `metadataRevision` preserve its stored value, keeping invalidation valid
+for callers with legacy Mint shapes.
+
+Wallet Instance reuse checks committed metadata freshness and revision. Send's first rejected
+execution couples invalidation and proof release in `SendTransactions.failExecution`. First reclaim
+rejection couples invalidation and the return to `pending` in `SendTransactions.rejectReclaim`.
+A rejected replay invalidates metadata as an independently committed action and retains the
+operation's exact request and reservations.
 
 Send reuses the metadata action through the following composition:
 

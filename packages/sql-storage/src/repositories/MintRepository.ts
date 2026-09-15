@@ -105,7 +105,7 @@ export class SqliteMintRepository implements MintRepository {
          trusted=excluded.trusted,
          createdAt=excluded.createdAt,
          updatedAt=excluded.updatedAt,
-         metadataRevision=excluded.metadataRevision`,
+         metadataRevision=COALESCE(?, coco_cashu_mints.metadataRevision)`,
       [
         mint.mintUrl,
         mint.name,
@@ -114,6 +114,7 @@ export class SqliteMintRepository implements MintRepository {
         mint.createdAt,
         mint.updatedAt,
         mint.metadataRevision ?? 0,
+        mint.metadataRevision ?? null,
       ],
     );
   }
@@ -127,7 +128,7 @@ export class SqliteMintRepository implements MintRepository {
          mintInfo=excluded.mintInfo,
          trusted=excluded.trusted,
          updatedAt=excluded.updatedAt,
-         metadataRevision=excluded.metadataRevision`,
+         metadataRevision=COALESCE(?, coco_cashu_mints.metadataRevision)`,
       [
         mint.mintUrl,
         mint.name,
@@ -136,6 +137,7 @@ export class SqliteMintRepository implements MintRepository {
         mint.createdAt,
         mint.updatedAt,
         mint.metadataRevision ?? 0,
+        mint.metadataRevision ?? null,
       ],
     );
   }

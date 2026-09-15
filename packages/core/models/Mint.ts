@@ -7,6 +7,6 @@ export interface Mint {
   trusted: boolean;
   createdAt: number;
   updatedAt: number;
-  /** Monotonic metadata revision; absent on snapshots written before revision tracking. */
+  /** Metadata revision. Omitted writes preserve the stored revision; new rows default to zero. */
   metadataRevision?: number;
 }

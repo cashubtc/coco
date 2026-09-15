@@ -35,6 +35,12 @@ timestamp ties are ignored. Forced refresh can replace a same-second snapshot wi
 revision. The refresh action publishes events only for applied observations. Send rejection commits
 metadata invalidation and its resource transition together through scoped commands.
 
+Explicit registration uses a separate gateway method to combine the caller's trust intent with
+metadata application. A superseded observation cannot overwrite metadata, but the registration's
+explicit trust choice still commits against the current row. Ordinary observations preserve trust.
+Creation and trust-change results drive events after commit. Adapter writes preserve the stored
+metadata revision when the caller omits it.
+
 ## Considered Options
 
 Broad Service dependencies and transaction-scoped Service clones obscure effects and transaction

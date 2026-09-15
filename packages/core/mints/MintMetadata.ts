@@ -23,8 +23,18 @@ export interface ApplyMintMetadataInput extends MintMetadataObservation {
   expectedRevision: number;
   /** Explicit refresh may replace a snapshot observed within the same protocol second. */
   force?: boolean;
-  /** Used only when first registering a mint; observations never overwrite existing trust. */
-  initialTrust?: boolean;
+}
+
+/** Explicit user registration is distinct from observing remote metadata. */
+export interface RegisterMintInput {
+  observation: ApplyMintMetadataInput;
+  /** Omission preserves existing trust; a new mint defaults to untrusted. */
+  trusted?: boolean;
+}
+
+export interface MintRegistrationResult extends MintMetadataApplyResult {
+  created: boolean;
+  trustChanged: boolean;
 }
 
 /** The authoritative snapshot and whether this observation changed it. */

@@ -20,6 +20,74 @@ const keyset = {
   feePpk: 0,
 };
 
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+describe('MintService concurrent registration', () => {
+  it.each([
+    { requestedTrust: true, concurrentTrust: false },
+    { requestedTrust: false, concurrentTrust: true },
+    { requestedTrust: undefined, concurrentTrust: true },
+  ])(
+    'honors explicit trust and preserves unspecified trust (%p)',
+    async ({ requestedTrust, concurrentTrust }) => {
+      const repositories = new MemoryRepositories();
+      const remote = createMintMetadataRemoteDouble();
+      const started = deferred();
+      const finish = deferred();
+      const observation = {
+        mintUrl,
+        mintInfo: testMintInfo,
+        keysets: [keyset],
+        observedAt: Math.floor(Date.now() / 1000),
+      };
+      remote.fetchMintMetadata.mockImplementation(async () => {
+        started.resolve();
+        await finish.promise;
+        return { ...observation, mintInfo: { ...testMintInfo, name: 'Delayed snapshot' } };
+      });
+      const events = new EventBus<CoreEvents>();
+      const added = mock(() => {});
+      const refreshed = mock(() => {});
+      const trustChanged = mock(async () => {
+        expect((await repositories.mintRepository.getMintByUrl(mintUrl)).trusted).toBe(
+          requestedTrust ?? concurrentTrust,
+        );
+      });
+      events.on('mint:added', added);
+      events.on('mint:metadata-refreshed', refreshed);
+      events.on('mint:trusted', trustChanged);
+      events.on('mint:untrusted', trustChanged);
+      const service = createMintServiceForMetadata(repositories, remote, events);
+      const registration = service.addMintByUrl(mintUrl, { trusted: requestedTrust });
+      await started.promise;
+
+      const concurrentRemote = createMintMetadataRemoteDouble();
+      concurrentRemote.fetchMintMetadata.mockResolvedValue(observation);
+      const concurrent = createMintServiceForMetadata(repositories, concurrentRemote);
+      if (concurrentTrust) await concurrent.addMintByUrl(mintUrl, { trusted: true });
+      else await concurrent.refreshAndCommitIfStale(mintUrl);
+      finish.resolve();
+
+      const result = await registration;
+      expect(result.mint.trusted).toBe(requestedTrust ?? concurrentTrust);
+      expect((await repositories.mintRepository.getMintByUrl(mintUrl)).trusted).toBe(
+        requestedTrust ?? concurrentTrust,
+      );
+      expect(result.mint.mintInfo).toEqual(testMintInfo);
+      expect(result.mint.metadataRevision).toBe(1);
+      expect(added).not.toHaveBeenCalled();
+      expect(refreshed).not.toHaveBeenCalled();
+      expect(trustChanged).toHaveBeenCalledTimes(requestedTrust === undefined ? 0 : 1);
+    },
+  );
+});
+
 async function environment() {
   const repositories = new MemoryRepositories();
   await repositories.mintRepository.addNewMint({

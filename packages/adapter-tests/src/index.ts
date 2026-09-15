@@ -262,6 +262,58 @@ export async function runRepositoryTransactionContract(
   const { describe, it, expect } = runner;
 
   describe('repository transactions contract', () => {
+    if (options.createSharedRepositories) {
+      it('preserves metadata revisions when independent roots register the same mint', async () => {
+        const { first, second, dispose } = await options.createSharedRepositories!();
+        try {
+          for (const method of ['addNewMint', 'addOrUpdateMint', 'updateMint'] as const) {
+            const mint = { ...createDummyMint(), mintUrl: `https://concurrent-${method}.test` };
+            await Promise.all([
+              first.mintRepository[method]({ ...mint, metadataRevision: 7 }),
+              second.mintRepository[method](mint),
+            ]);
+            expect((await first.mintRepository.getMintByUrl(mint.mintUrl)).metadataRevision).toBe(
+              7,
+            );
+          }
+        } finally {
+          await dispose();
+        }
+      });
+    }
+
+    it('preserves omitted metadata revisions through every mint write method', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const mint = createDummyMint();
+        const methods = ['addNewMint', 'addOrUpdateMint', 'updateMint'] as const;
+        for (const method of methods) {
+          const mintUrl = `${mint.mintUrl}/${method}`;
+          await repositories.mintRepository[method]({ ...mint, mintUrl });
+          expect(
+            (await repositories.mintRepository.getMintByUrl(mintUrl)).metadataRevision ?? 0,
+          ).toBe(0);
+          await repositories.mintRepository[method]({ ...mint, mintUrl, metadataRevision: 7 });
+          await repositories.mintRepository[method]({ ...mint, mintUrl, name: 'Root update' });
+          const rootUpdated = await repositories.mintRepository.getMintByUrl(mintUrl);
+          expect(rootUpdated.name).toBe('Root update');
+          expect(rootUpdated.metadataRevision).toBe(7);
+          await repositories.withTransaction(async ({ mintRepository }) => {
+            await mintRepository[method]({ ...mint, mintUrl, name: 'Scoped update' });
+          });
+          const scopedUpdated = await repositories.mintRepository.getMintByUrl(mintUrl);
+          expect(scopedUpdated.name).toBe('Scoped update');
+          expect(scopedUpdated.metadataRevision).toBe(7);
+          await repositories.mintRepository[method]({ ...mint, mintUrl, metadataRevision: 8 });
+          expect((await repositories.mintRepository.getMintByUrl(mintUrl)).metadataRevision).toBe(
+            8,
+          );
+        }
+      } finally {
+        await dispose();
+      }
+    });
+
     it('preserves metadata revisions and all three mint submission states', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {

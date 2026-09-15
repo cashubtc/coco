@@ -174,8 +174,7 @@ export class MintService {
       return this.ensureUpdatedMint(mintUrl);
     }
 
-    const added = await this.refreshAndCommit(mintUrl, true, trusted);
-    await this.eventBus?.emit('mint:added', added);
+    const added = await this.refreshAndCommit(mintUrl, true, { trusted: options?.trusted });
     this.logger?.info('Mint added', { mintUrl, trusted });
     return added;
   }
@@ -207,7 +206,7 @@ export class MintService {
   private async refreshAndCommit(
     mintUrl: string,
     force: boolean,
-    initialTrust?: boolean,
+    registration?: { trusted?: boolean },
   ): Promise<MintMetadata> {
     // Retry a response superseded by invalidation. Never return a durably stale snapshot as fresh.
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -219,29 +218,48 @@ export class MintService {
       )
         return cached;
       const observation = await this.mintAdapter.fetchMintMetadata(mintUrl, cached?.keysets ?? []);
-      const result = await this.metadata.transactions.applyObservation({
+      const input = {
         ...observation,
         expectedRevision: cached?.mint.metadataRevision ?? 0,
         force,
-        initialTrust,
-      });
+      };
+      const registered = registration
+        ? await this.metadata.transactions.register({
+            observation: input,
+            trusted: registration.trusted,
+          })
+        : undefined;
+      const result = registered ?? (await this.metadata.transactions.applyObservation(input));
       if (result.applied) {
         await this.publishCommittedEvent('mint:metadata-refreshed', { mintUrl });
+      }
+      if (registered?.trustChanged) {
+        await this.publishCommittedEvent(
+          result.metadata.mint.trusted ? 'mint:trusted' : 'mint:untrusted',
+          { mintUrl },
+        );
+      }
+      if (result.applied || registered?.trustChanged) {
         await this.publishCommittedEvent('mint:updated', result.metadata);
       }
+      if (registered?.created) await this.publishCommittedEvent('mint:added', result.metadata);
       if (result.metadata.mint.updatedAt > 0) return result.metadata;
     }
     throw new MintFetchError(mintUrl, 'Mint metadata changed repeatedly during refresh');
   }
 
-  private async publishCommittedEvent<E extends 'mint:metadata-refreshed' | 'mint:updated'>(
-    event: E,
-    payload: CoreEvents[E],
-  ): Promise<void> {
+  private async publishCommittedEvent<
+    E extends
+      | 'mint:metadata-refreshed'
+      | 'mint:updated'
+      | 'mint:trusted'
+      | 'mint:untrusted'
+      | 'mint:added',
+  >(event: E, payload: CoreEvents[E]): Promise<void> {
     try {
       await this.eventBus?.emit(event, payload, { throwOnError: true });
     } catch (error) {
-      this.logger?.error('Failed to publish committed mint metadata event', { event, error });
+      this.logger?.error('Failed to publish committed mint event', { event, error });
     }
   }
 
