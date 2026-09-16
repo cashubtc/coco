@@ -53,6 +53,9 @@ const EXPECTED_MIGRATION_IDS = [
   '036_quote_identity_unique_indexes',
   '037_mint_quote_accounting',
   '038_keypair_derivation_allocations',
+  '039_send_operation_revision',
+  '040_send_execution_memo',
+  '041_send_reclaim_data',
 ] as const;
 
 async function allocateP2pkKey(db: SqlDatabase) {
@@ -206,6 +209,88 @@ describe('shared SQL schema migrations', () => {
     const busyTimeout = await db.get<{ timeout: number }>('PRAGMA busy_timeout');
     expect(busyTimeout?.timeout).toBe(5000);
   });
+
+  itWithDatabase('backfills legacy Send operation revisions to zero', async (db) => {
+    await ensureSchemaUpTo(db, '039_send_operation_revision');
+    await db.run(
+      `INSERT INTO coco_cashu_send_operations
+        (id, mintUrl, amount, unit, state, createdAt, updatedAt, method, methodDataJson)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ['legacy-send', 'https://mint.test', '10', 'sat', 'init', 1, 1, 'default', '{}'],
+    );
+
+    await ensureSchemaUpTo(db);
+
+    expect(
+      await db.get<{ revision: number }>(
+        'SELECT revision FROM coco_cashu_send_operations WHERE id = ?',
+        ['legacy-send'],
+      ),
+    ).toEqual({ revision: 0 });
+  });
+
+  itWithDatabase('keeps legacy Send execution memos empty', async (db) => {
+    await ensureSchemaUpTo(db, '040_send_execution_memo');
+    await db.run(
+      `INSERT INTO coco_cashu_send_operations
+        (id, mintUrl, amount, unit, state, createdAt, updatedAt, method, methodDataJson)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ['legacy-send-memo', 'https://mint.test', '10', 'sat', 'init', 1, 1, 'default', '{}'],
+    );
+
+    await ensureSchemaUpTo(db);
+
+    expect(
+      await db.get<{ executionMemo: string | null }>(
+        'SELECT executionMemo FROM coco_cashu_send_operations WHERE id = ?',
+        ['legacy-send-memo'],
+      ),
+    ).toEqual({ executionMemo: null });
+  });
+
+  itWithDatabase(
+    'preserves pre-refactor Send recovery material when adding reclaim data',
+    async (db) => {
+      await ensureSchemaUpTo(db, '041_send_reclaim_data');
+      await db.run(
+        `INSERT INTO coco_cashu_send_operations
+      (id, mintUrl, amount, unit, state, createdAt, updatedAt, method, methodDataJson, needsSwap, fee, inputAmount, inputProofSecretsJson, outputDataJson, executionMemo, revision)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          'legacy-executing',
+          'https://mint.test',
+          '10',
+          'sat',
+          'executing',
+          1,
+          1,
+          'default',
+          '{}',
+          1,
+          '0',
+          '10',
+          '["original-input"]',
+          '{"keep":[],"send":[]}',
+          'saved memo',
+          7,
+        ],
+      );
+      await ensureSchemaUpTo(db);
+      expect(
+        await db.get(
+          'SELECT state, inputProofSecretsJson, outputDataJson, executionMemo, revision, reclaimDataJson FROM coco_cashu_send_operations WHERE id = ?',
+          ['legacy-executing'],
+        ),
+      ).toEqual({
+        state: 'executing',
+        inputProofSecretsJson: '["original-input"]',
+        outputDataJson: '{"keep":[],"send":[]}',
+        executionMemo: 'saved memo',
+        revision: 7,
+        reclaimDataJson: null,
+      });
+    },
+  );
 
   itWithDatabase('backfills per-purpose keypair derivation allocations', async (db) => {
     await ensureSchemaUpTo(db, '038_keypair_derivation_allocations');

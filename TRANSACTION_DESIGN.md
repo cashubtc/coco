@@ -97,8 +97,7 @@ inside its transaction. An observation with an older or equal timestamp is ignor
 timestamp ties keep the first committed snapshot. The refresh action publishes events only for an
 applied observation, so an ignored observation cannot reset batch-polling suppression.
 
-The metadata action is implemented as groundwork for the Send migration. The following diagram
-shows the intended Send composition once that separate migration adopts the action:
+Send reuses the metadata action through the following composition:
 
 ```text
 SendOperationService

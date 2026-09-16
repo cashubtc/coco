@@ -1,3 +1,4 @@
+import { restoreOutputProofs } from '../infra/ProofRestore.ts';
 import {
   Amount,
   OutputData,
@@ -1029,68 +1030,9 @@ export class ProofService {
     const unit = normalizeUnit(options.unit);
     const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl, unit);
 
-    // Deserialize OutputData
-    const outputData = deserializeOutputData(serializedOutputData);
-    const allOutputs = [...outputData.keep, ...outputData.send];
-
-    if (allOutputs.length === 0) {
-      return [];
-    }
-
-    // Build blinded messages for restore request
-    const blindedMessages = allOutputs.map((o) => o.blindedMessage);
-
-    // Fetch keysets needed to unblind restored signatures
     const { keysets } = await this.mintService.ensureUpdatedMint(mintUrl);
-    const keysetMap: { [id: string]: Keyset } = {};
-    keysets.forEach((ks) => {
-      keysetMap[ks.id] = ks;
-    });
-
-    // Call mint restore endpoint
-    const restoreResult = await wallet.mint.restore({ outputs: blindedMessages });
-
-    // Match signatures back to outputs and unblind to construct proofs
-    const restoredProofs: Proof[] = [];
-    for (let i = 0; i < restoreResult.outputs.length; i++) {
-      const output = allOutputs.find((o) => o.blindedMessage.B_ === restoreResult.outputs[i]?.B_);
-      const signature = restoreResult.signatures[i];
-      if (output && signature) {
-        const keyset = keysetMap[signature.id];
-        if (!keyset) {
-          this.logger?.warn('Missing keyset for restored signature', { id: signature.id });
-          continue;
-        }
-        assertSameUnit(
-          normalizeUnit(keyset.unit, { defaultUnit: DEFAULT_UNIT }),
-          unit,
-          'Restored proof keyset',
-        );
-        restoredProofs.push(
-          output.toProof(signature, { id: keyset.id, keys: keyset.keypairs as Keys }),
-        );
-      }
-    }
-
-    if (restoredProofs.length === 0) {
-      this.logger?.debug('No proofs found to restore', { mintUrl });
-      return [];
-    }
-
-    // Check which proofs are still unspent
-    const proofStates = await wallet.checkProofsStates(restoredProofs);
-    const unspentProofs = restoredProofs.filter((_, index) => {
-      const state = proofStates[index];
-      return state && state.state === 'UNSPENT';
-    });
-
-    if (unspentProofs.length === 0) {
-      this.logger?.debug('All restored proofs are already spent', {
-        mintUrl,
-        totalRestored: restoredProofs.length,
-      });
-      return [];
-    }
+    const unspentProofs = await restoreOutputProofs(wallet, keysets, unit, serializedOutputData);
+    if (unspentProofs.length === 0) return [];
 
     if (options?.persistRecoveredProofs !== false) {
       await this.saveProofs(
@@ -1105,9 +1047,7 @@ export class ProofService {
     this.logger?.info('Recovered proofs from output data', {
       mintUrl,
       unit,
-      totalRestored: restoredProofs.length,
       unspentCount: unspentProofs.length,
-      spentCount: restoredProofs.length - unspentProofs.length,
       persisted: options?.persistRecoveredProofs !== false,
     });
 
