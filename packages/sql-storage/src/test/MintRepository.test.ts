@@ -73,5 +73,18 @@ describe('SqliteMintRepository', () => {
 
       expect(await repository.findMintByUrl(mint.mintUrl)).toBeNull();
     });
+
+    it('propagates a genuine storage read failure instead of returning null', async () => {
+      const database = new Database(':memory:');
+      const db = createBunSqlDatabase(database);
+      await ensureSchemaUpTo(db);
+      const repository = new SqliteMintRepository(db);
+      const mint = createDummyMint('https://unreadable.mint');
+      await repository.addNewMint(mint);
+
+      await db.exec('DROP TABLE coco_cashu_mints');
+
+      await expect(repository.findMintByUrl(mint.mintUrl)).rejects.toThrow(/no such table/i);
+    });
   });
 });
