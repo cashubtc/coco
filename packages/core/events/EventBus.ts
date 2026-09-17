@@ -57,7 +57,15 @@ export class EventBus<Events extends { [K in keyof Events]: unknown }> {
     const concurrency = this.options.concurrency ?? 'sequential';
 
     if (concurrency === 'parallel') {
-      const results = await Promise.allSettled(handlers.map((h) => h(payload)));
+      const results = await Promise.allSettled(
+        handlers.map((h) => {
+          try {
+            return Promise.resolve(h(payload));
+          } catch (error) {
+            return Promise.reject(error);
+          }
+        }),
+      );
       const errors: unknown[] = [];
       for (const r of results) {
         if (r.status === 'rejected') {
