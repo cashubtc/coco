@@ -135,6 +135,17 @@ export class SendOperationConflictError extends Error {
   }
 }
 
+/**
+ * This error is thrown when a caller-supplied Send operation ID is already bound to a different
+ * intent, so the ID cannot be joined as a duplicate of the existing operation.
+ */
+export class SendOperationIntentConflictError extends SendOperationConflictError {
+  constructor(operationId: string, message?: string) {
+    super(operationId, message ?? `Send operation ${operationId} has a different intent`);
+    this.name = 'SendOperationIntentConflictError';
+  }
+}
+
 export class AuthSessionError extends Error {
   readonly mintUrl: string;
   constructor(mintUrl: string, message?: string, cause?: unknown) {
