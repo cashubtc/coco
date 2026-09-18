@@ -56,6 +56,7 @@ const EXPECTED_MIGRATION_IDS = [
   '039_send_operation_revision',
   '040_send_execution_memo',
   '041_send_reclaim_data',
+  '042_receive_operation_revision',
 ] as const;
 
 async function allocateP2pkKey(db: SqlDatabase) {
@@ -1248,4 +1249,85 @@ describe('shared SQL schema migrations', () => {
       });
     },
   );
+});
+
+describe('Receive revision migration', () => {
+  for (const oldMigration of [
+    undefined,
+    '040_receive_operation_revision',
+    '041_receive_operation_revision',
+  ]) {
+    it(`preserves legacy requests and existing revisions from ${oldMigration ?? 'no revision column'}`, async () => {
+      const database = new Database(':memory:');
+      const db = createBunSqlDatabase(database);
+      try {
+        await ensureSchemaUpTo(db, '042_receive_operation_revision');
+        if (oldMigration) {
+          await db.exec(
+            'ALTER TABLE coco_cashu_receive_operations ADD COLUMN revision INTEGER NOT NULL DEFAULT 0',
+          );
+          await db.run('INSERT INTO coco_cashu_migrations (id, appliedAt) VALUES (?, 1)', [
+            oldMigration,
+          ]);
+        }
+        const inputProofs = JSON.stringify([
+          {
+            id: 'keys',
+            amount: '3',
+            secret: 'signed-secret',
+            C: 'C',
+            witness: '{"signatures":["saved"]}',
+          },
+        ]);
+        const outputs = JSON.stringify({
+          keep: [{ secret: 'saved-output', blindingFactor: '42' }],
+          send: [],
+        });
+        const source = JSON.stringify({
+          type: 'payment-request',
+          requestOperationId: 'parent',
+          attemptId: 'attempt',
+          transport: 'inband',
+        });
+        await db.run(
+          `INSERT INTO coco_cashu_receive_operations (id, mintUrl, unit, amount, state, createdAt, updatedAt, fee, inputProofsJson, outputDataJson, sourceJson${oldMigration ? ', revision' : ''}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${oldMigration ? ', 7' : ''})`,
+          [
+            'receive',
+            'https://mint.test',
+            'sat',
+            '3',
+            'executing',
+            1,
+            1,
+            '0',
+            inputProofs,
+            outputs,
+            source,
+          ],
+        );
+        await ensureSchemaUpTo(db);
+        const row = await db.get<{
+          revision: number;
+          inputProofsJson: string;
+          outputDataJson: string;
+          sourceJson: string;
+        }>('SELECT * FROM coco_cashu_receive_operations WHERE id = ?', ['receive']);
+        expect(row!.revision).toBe(oldMigration ? 7 : 0);
+        expect(row!.inputProofsJson).toBe(inputProofs);
+        expect(row!.outputDataJson).toBe(outputs);
+        expect(row!.sourceJson).toBe(source);
+        await ensureSchemaUpTo(db);
+        expect(
+          (
+            await db.get<{ revision: number }>(
+              'SELECT revision FROM coco_cashu_receive_operations WHERE id = ?',
+              ['receive'],
+            )
+          )?.revision,
+        ).toBe(oldMigration ? 7 : 0);
+      } finally {
+        database.close();
+      }
+    });
+  }
 });

@@ -22,6 +22,10 @@ import {
   type ScopedKeypairCommands,
 } from './scoped/keypairs/ScopedKeypairCommands.ts';
 import { TransactionLifetime } from './scoped/TransactionLifetime.ts';
+import {
+  RepositoryReceiveCommands,
+  type ScopedReceiveCommands,
+} from './scoped/receive/ScopedReceiveCommands.ts';
 
 /**
  * Scoped commands sharing one adapter transaction attempt. Await mutations sequentially unless
@@ -33,6 +37,7 @@ export interface CoreTransaction {
   readonly proofs: ScopedProofCommands;
   readonly outputs: ScopedOutputCommands;
   readonly sends: ScopedSendCommands;
+  readonly receives: ScopedReceiveCommands;
 }
 
 export interface CoreTransactionRunner {
@@ -91,6 +96,12 @@ export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
       outputs,
       sends: new RepositorySendCommands(
         repositories.sendOperationRepository,
+        proofs,
+        outputs,
+        mintMetadata,
+      ),
+      receives: new RepositoryReceiveCommands(
+        repositories.receiveOperationRepository,
         proofs,
         outputs,
         mintMetadata,

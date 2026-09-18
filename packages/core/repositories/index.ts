@@ -329,6 +329,14 @@ export interface ReceiveOperationRepository {
   /** Update an existing receive operation */
   update(operation: ReceiveOperation): Promise<void>;
 
+  /** Atomically compare state/revision and replace the record, incrementing revision once. */
+  transition(input: {
+    operationId: string;
+    expectedState: ReceiveOperationState;
+    expectedRevision: number;
+    next: ReceiveOperation;
+  }): Promise<boolean>;
+
   /** Get a receive operation by ID */
   getById(id: string): Promise<ReceiveOperation | null>;
 
