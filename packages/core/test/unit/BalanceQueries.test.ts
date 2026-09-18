@@ -296,4 +296,101 @@ describe('StoredBalanceQueries', () => {
       unit: 'sat',
     });
   });
+
+  it('excludes inflight and spent proofs from every balance view', async () => {
+    const queries = new StoredBalanceQueries(proofRepo, mints as any);
+
+    await proofRepo.saveProofs(mintUrl, [
+      makeProof({ secret: 'ready-1', amount: Amount.from(100), state: 'ready' }),
+      makeProof({ secret: 'inflight-1', amount: Amount.from(9999), state: 'inflight' }),
+      makeProof({ secret: 'spent-1', amount: Amount.from(9999), state: 'spent' }),
+    ]);
+
+    await expect(queries.getBalancesByMint()).resolves.toEqual({
+      [mintUrl]: {
+        spendable: Amount.from(100),
+        reserved: Amount.zero(),
+        total: Amount.from(100),
+        unit: 'sat',
+      },
+    });
+    await expect(queries.getBalanceTotal()).resolves.toEqual({
+      spendable: Amount.from(100),
+      reserved: Amount.zero(),
+      total: Amount.from(100),
+      unit: 'sat',
+    });
+  });
+
+  it('deduplicates repeated mint URLs in an explicit selection', async () => {
+    const originalGetReadyProofs = proofRepo.getReadyProofs.bind(proofRepo);
+    proofRepo.getReadyProofs = mock((mintUrl: string, filter?: any) =>
+      originalGetReadyProofs(mintUrl, filter),
+    );
+
+    const queries = new StoredBalanceQueries(proofRepo, mints as any);
+
+    await proofRepo.saveProofs(mintUrl, [makeProof({ secret: 'dup-1', amount: Amount.from(100) })]);
+
+    await expect(queries.getBalancesByMint({ mintUrls: [mintUrl, mintUrl] })).resolves.toEqual({
+      [mintUrl]: {
+        spendable: Amount.from(100),
+        reserved: Amount.zero(),
+        total: Amount.from(100),
+        unit: 'sat',
+      },
+    });
+    expect(proofRepo.getReadyProofs).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns a zero snapshot for a scoped mint with no matching proofs', async () => {
+    const queries = new StoredBalanceQueries(proofRepo, mints as any);
+
+    await proofRepo.saveProofs(otherMintUrl, [
+      makeProof({ secret: 'unrelated-1', amount: Amount.from(500), mintUrl: otherMintUrl }),
+    ]);
+
+    await expect(queries.getBalancesByMint({ mintUrls: [mintUrl] })).resolves.toEqual({
+      [mintUrl]: {
+        spendable: Amount.zero(),
+        reserved: Amount.zero(),
+        total: Amount.zero(),
+        unit: 'sat',
+      },
+    });
+    await expect(
+      queries.getBalancesByMintAndUnit({ mintUrls: [mintUrl], units: ['sat', 'usd'] }),
+    ).resolves.toEqual({
+      [mintUrl]: {
+        sat: {
+          spendable: Amount.zero(),
+          reserved: Amount.zero(),
+          total: Amount.zero(),
+          unit: 'sat',
+        },
+        usd: {
+          spendable: Amount.zero(),
+          reserved: Amount.zero(),
+          total: Amount.zero(),
+          unit: 'usd',
+        },
+      },
+    });
+  });
+
+  it('aggregates Amount values beyond JavaScript safe-integer range', async () => {
+    const queries = new StoredBalanceQueries(proofRepo, mints as any);
+    const beyondSafeInteger = BigInt(Number.MAX_SAFE_INTEGER) + 2n;
+
+    await proofRepo.saveProofs(mintUrl, [
+      makeProof({ secret: 'big-ready', amount: Amount.from(beyondSafeInteger) }),
+      makeProof({ secret: 'big-reserved', amount: Amount.from(beyondSafeInteger) }),
+    ]);
+    await proofRepo.reserveProofs(mintUrl, ['big-reserved'], operationId);
+
+    const balances = await queries.getBalancesByMint();
+    expect(balances[mintUrl]!.spendable.toBigInt()).toEqual(beyondSafeInteger);
+    expect(balances[mintUrl]!.reserved.toBigInt()).toEqual(beyondSafeInteger);
+    expect(balances[mintUrl]!.total.toBigInt()).toEqual(beyondSafeInteger * 2n);
+  });
 });
