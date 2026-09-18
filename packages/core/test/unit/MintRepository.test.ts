@@ -266,6 +266,28 @@ export function testMintRepository(name: string, createRepository: () => Promise
       });
     });
 
+    describe('findMintByUrl', () => {
+      it('should retrieve mint with correct trust status', async () => {
+        const mint = createTestMint('https://test.mint', true);
+        await repo.addNewMint(mint);
+
+        const retrieved = await repo.findMintByUrl(mint.mintUrl);
+        expect(retrieved?.trusted).toBe(true);
+      });
+
+      it('should return null when mint does not exist', async () => {
+        expect(await repo.findMintByUrl('https://non-existent.mint')).toBeNull();
+      });
+
+      it('should return null after the mint is deleted', async () => {
+        const mint = createTestMint('https://test.mint', true);
+        await repo.addNewMint(mint);
+        await repo.deleteMint(mint.mintUrl);
+
+        expect(await repo.findMintByUrl(mint.mintUrl)).toBeNull();
+      });
+    });
+
     describe('updateMint', () => {
       it('should update mint trust status', async () => {
         const mint = createTestMint('https://test.mint', false);

@@ -30,7 +30,10 @@ export interface ProofUnitFilter {
 
 export interface MintRepository {
   isTrustedMint(mintUrl: string): Promise<boolean>;
+  /** Look up a single mint by URL, throwing if it doesn't exist. */
   getMintByUrl(mintUrl: string): Promise<Mint>;
+  /** Look up a single mint by URL, returning `null` instead of throwing when it doesn't exist. */
+  findMintByUrl(mintUrl: string): Promise<Mint | null>;
   getAllMints(): Promise<Mint[]>;
   getAllTrustedMints(): Promise<Mint[]>;
   addNewMint(mint: Mint): Promise<void>;

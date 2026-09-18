@@ -17,6 +17,14 @@ export class SqliteMintRepository implements MintRepository {
   }
 
   async getMintByUrl(mintUrl: string): Promise<Mint> {
+    const mint = await this.findMintByUrl(mintUrl);
+    if (!mint) {
+      throw new Error(`Mint not found: ${mintUrl}`);
+    }
+    return mint;
+  }
+
+  async findMintByUrl(mintUrl: string): Promise<Mint | null> {
     const row = await this.db.get<{
       mintUrl: string;
       name: string;
@@ -28,9 +36,7 @@ export class SqliteMintRepository implements MintRepository {
       'SELECT mintUrl, name, mintInfo, trusted, createdAt, updatedAt FROM coco_cashu_mints WHERE mintUrl = ? LIMIT 1',
       [mintUrl],
     );
-    if (!row) {
-      throw new Error(`Mint not found: ${mintUrl}`);
-    }
+    if (!row) return null;
     return {
       mintUrl: row.mintUrl,
       name: row.name,

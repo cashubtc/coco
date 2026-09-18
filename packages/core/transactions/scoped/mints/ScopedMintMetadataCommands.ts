@@ -21,9 +21,7 @@ export class RepositoryMintMetadataCommands implements ScopedMintMetadataCommand
   }
 
   async applyObservation(observation: MintMetadataObservation): Promise<MintMetadataApplyResult> {
-    const current = (await this.mints.getAllMints()).find(
-      (mint) => mint.mintUrl === observation.mintUrl,
-    );
+    const current = await this.mints.findMintByUrl(observation.mintUrl);
     // Request timestamps have second precision, so keep the first commit on ties.
     if (current && current.updatedAt >= observation.observedAt) {
       return {
