@@ -1,6 +1,7 @@
 import type { OutputDataCreator } from '@cashu/cashu-ts';
 import { CoreMintMetadataTransactions } from './transactions/mints/MintMetadataTransactions.ts';
 import { StoredMintQueries } from './mints/MintMetadata.ts';
+import { StoredBalanceQueries, type BalanceQueries } from './proofs/BalanceQueries.ts';
 import { CashuSendRemote } from './infra/handlers/send/CashuSendRemote.ts';
 import type {
   Repositories,
@@ -322,6 +323,7 @@ export class Manager {
   private paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
   private paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
   private proofRepository: Repositories['proofRepository'];
+  private balanceQueries: BalanceQueries;
   private readonly pluginHost: PluginHost = new PluginHost();
   private subscriptionsPaused = false;
   private originalWatcherConfig: CocoConfig['watchers'];
@@ -387,6 +389,7 @@ export class Manager {
     this.mintOperationService = core.mintOperationService;
     this.mintOperationRepository = core.mintOperationRepository;
     this.proofRepository = repositories.proofRepository;
+    this.balanceQueries = core.balanceQueries;
     this.subscriptions = this.createSubscriptionManager(webSocketFactory, subscriptions);
     const apis = this.buildApis();
     this.mint = apis.mint;
@@ -906,6 +909,7 @@ export class Manager {
     authService: AuthService;
     mintOperationService: MintOperationService;
     mintOperationRepository: MintOperationRepository;
+    balanceQueries: BalanceQueries;
   } {
     const mintLogger = this.getChildLogger('MintService');
     const walletLogger = this.getChildLogger('WalletService');
@@ -958,6 +962,10 @@ export class Manager {
       counterLogger,
       this.eventBus,
     );
+    const balanceQueries = new StoredBalanceQueries(
+      repositories.proofRepository,
+      repositories.mintRepository,
+    );
     const proofService = new ProofService(
       counterService,
       repositories.proofRepository,
@@ -968,6 +976,7 @@ export class Manager {
       proofLogger,
       this.eventBus,
       this.outputDataCreator,
+      balanceQueries,
     );
     const walletRestoreService = new WalletRestoreService(
       proofService,
@@ -1152,6 +1161,7 @@ export class Manager {
       authService,
       mintOperationService,
       mintOperationRepository,
+      balanceQueries,
     };
   }
 
@@ -1175,6 +1185,7 @@ export class Manager {
       this.receiveOperationService,
       this.tokenService,
       walletApiLogger,
+      this.balanceQueries,
     );
     const keyring = new KeyRingApi(this.keyRingService);
     const history = new HistoryApi(this.historyService);
