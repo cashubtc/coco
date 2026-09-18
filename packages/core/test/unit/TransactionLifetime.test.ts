@@ -130,4 +130,86 @@ describe('TransactionLifetime', () => {
     );
     expect(await repositories.keyRingRepository.getAllPersistedKeyPairs('p2pk')).toEqual([]);
   });
+
+  it('recursively binds a nested Mint Swap capability and drains omitted calls', async () => {
+    const repositories = new MemoryRepositories();
+    type NestedCapability = {
+      mintSwap: {
+        operationRepository: {
+          persist(): Promise<void>;
+        };
+      };
+    };
+    let capturedRepository!: NestedCapability['mintSwap']['operationRepository'];
+    let capturedMethod!: () => Promise<void>;
+
+    await repositories.withTransaction((scope) => {
+      const lifetime = new TransactionLifetime();
+      const boundScope = lifetime.bind(scope);
+      const capability = lifetime.bind(
+        Object.freeze({
+          mintSwap: Object.freeze({
+            operationRepository: Object.freeze({
+              persist: () =>
+                boundScope.counterRepository.setCounter('https://source.test', 'swap', 1),
+            }),
+          }),
+        }),
+      );
+
+      return lifetime.run(async () => {
+        capturedRepository = capability.mintSwap.operationRepository;
+        capturedMethod = capturedRepository.persist;
+        expect(capability.mintSwap).toBe(capability.mintSwap);
+        expect(capability.mintSwap.operationRepository).toBe(capturedRepository);
+        expect(capturedRepository.persist).toBe(capturedMethod);
+        void capturedMethod();
+      });
+    });
+
+    expect(await repositories.counterRepository.getCounter('https://source.test', 'swap')).toEqual({
+      mintUrl: 'https://source.test',
+      keysetId: 'swap',
+      counter: 1,
+    });
+    await expect(capturedRepository.persist()).rejects.toThrow(
+      'Wallet transaction scope is closed',
+    );
+    await expect(capturedMethod()).rejects.toThrow('Wallet transaction scope is closed');
+  });
+
+  it('lets a caught nested capability failure poison the transaction attempt', async () => {
+    const repositories = new MemoryRepositories();
+    const failure = new Error('nested Mint Swap persistence failed');
+    type NestedCapability = {
+      mintSwap: { operationRepository: { fail(): Promise<void> } };
+    };
+    let captured!: NestedCapability['mintSwap']['operationRepository'];
+
+    const result = repositories.withTransaction((scope) => {
+      const lifetime = new TransactionLifetime();
+      const boundScope = lifetime.bind(scope);
+      const capability = lifetime.bind({
+        mintSwap: {
+          operationRepository: {
+            async fail() {
+              await boundScope.counterRepository.setCounter('https://source.test', 'swap', 1);
+              throw failure;
+            },
+          },
+        },
+      });
+
+      return lifetime.run(async () => {
+        captured = capability.mintSwap.operationRepository;
+        await capability.mintSwap.operationRepository.fail().catch(() => {});
+      });
+    });
+
+    await expect(result).rejects.toBe(failure);
+    expect(
+      await repositories.counterRepository.getCounter('https://source.test', 'swap'),
+    ).toBeNull();
+    await expect(captured.fail()).rejects.toThrow('Wallet transaction scope is closed');
+  });
 });
