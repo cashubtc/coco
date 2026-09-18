@@ -19,6 +19,7 @@ import type {
 import {
   createSendOperation,
   isLegacyTokenlessP2pkSend,
+  isSameSendIntent,
   getSendProofSecrets,
   type CreateSendOperationOptions,
 } from './SendOperation';
@@ -40,6 +41,7 @@ import {
   ProofValidationError,
   OperationInProgressError,
   SendOperationConflictError,
+  SendOperationIntentConflictError,
 } from '../../models/Error';
 import { MintScopedLock } from '../MintScopedLock';
 import { OperationIdLock } from '../OperationIdLock';
@@ -63,6 +65,14 @@ import type { SendRemote, SendRemoteSession } from './SendRemote.ts';
 const DEFINITIVE_SWAP_MINT_ERROR_CODES = new Set([
   10001, 11005, 11007, 11008, 11009, 11010, 11014, 11015, 12001, 12002, 12003,
 ]);
+
+/**
+ * Bound on the wait-and-join loop `prepare()` runs for a caller-supplied operation ID.
+ *
+ * Only exceeded if the same ID is being prepared by a continuous stream of callers, which would
+ * otherwise spin forever; surfacing `OperationInProgressError` is the honest outcome there.
+ */
+const MAX_PREPARE_JOIN_ATTEMPTS = 32;
 
 type SwapExecutionOutcome =
   | { status: 'PENDING'; result: AppliedSwapResult }
@@ -178,7 +188,7 @@ export class SendOperationService {
       throw new ProofValidationError('Amount must be a positive number');
     }
 
-    const id = generateSubId();
+    const id = this.resolveOperationId(options.operationId);
     const operation = createSendOperation(id, mintUrl, parsed, options);
 
     this.logger?.debug('Send operation initialized in memory', {
@@ -193,13 +203,85 @@ export class SendOperationService {
   }
 
   /**
+   * Use the caller's operation ID verbatim when one is supplied, so it matches the host's durable
+   * command record and stays unique across restarts. Otherwise generate a sub-ID as before.
+   */
+  private resolveOperationId(operationId?: string): string {
+    if (operationId === undefined) {
+      return generateSubId();
+    }
+
+    // Identity is exact: silently trimming (or accepting a blank key) would make two different host
+    // commands collide on the same operation.
+    if (!operationId.trim() || operationId.trim() !== operationId) {
+      throw new ProofValidationError(
+        'Caller-supplied operationId must be a non-empty string without surrounding whitespace',
+      );
+    }
+
+    return operationId;
+  }
+
+  /**
    * Prepare the operation by reserving proofs and creating outputs.
    * After this step, the operation can be executed or rolled back.
    *
-   * Throws if the operation is already in progress.
+   * When the ID was supplied by the caller (`init(..., { operationId })`) this is idempotent
+   * against that ID: a repeat with the same intent joins the durable operation instead of
+   * reserving a second set of inputs, which is what makes a lost response or a restart safe to
+   * retry.
+   *
+   * Throws if the operation is already in progress, unless the in-flight prepare owns the lock for
+   * the same caller-supplied ID, in which case this call waits for it and joins the result.
    */
   async prepare(operation: InitSendOperation): Promise<PreparedSendOperation> {
-    const releaseLock = await this.acquireOperationLock(operation.id);
+    const joinable = operation.callerSuppliedId === true;
+    for (let attempt = 0; ; attempt++) {
+      if (joinable) {
+        const joined = await this.findDurableSendOperation(operation);
+        if (joined) {
+          return joined;
+        }
+      }
+
+      const releaseLock = await this.acquirePrepareLock(operation.id, joinable);
+      if (releaseLock) {
+        return this.prepareLocked(operation, releaseLock);
+      }
+      if (attempt >= MAX_PREPARE_JOIN_ATTEMPTS) {
+        throw new OperationInProgressError(operation.id);
+      }
+    }
+  }
+
+  /**
+   * Acquire the operation lock for `prepare`.
+   *
+   * Returns `null` when a concurrent prepare already owns the lock for a caller-supplied ID. The
+   * caller re-reads durable state instead of failing, which turns a concurrent retry of the same
+   * host command into a join.
+   */
+  private async acquirePrepareLock(
+    operationId: string,
+    joinable: boolean,
+  ): Promise<(() => void) | null> {
+    try {
+      return await this.acquireOperationLock(operationId);
+    } catch (error) {
+      if (!joinable || !(error instanceof OperationInProgressError)) {
+        throw error;
+      }
+      // Persistence is committed before the in-flight prepare releases its lock, so once the lock
+      // clears, durable state is authoritative and this call can only join or conflict.
+      await this.operationIdLock.waitForUnlock(operationId);
+      return null;
+    }
+  }
+
+  private async prepareLocked(
+    operation: InitSendOperation,
+    releaseLock: () => void,
+  ): Promise<PreparedSendOperation> {
     let result: PreparedSendResult;
     try {
       const releaseMintLock = await this.mintScopedLock.acquire(operation.mintUrl);
@@ -231,6 +313,35 @@ export class SendOperationService {
     }
     await this.publishPrepared(result);
     return result.operation;
+  }
+
+  /**
+   * Resolve a caller-supplied operation ID against durable state.
+   *
+   * Returns the existing operation when the durable record describes the same intent. Throws a
+   * typed conflict when the ID is already taken by a different intent, or by an operation that has
+   * already progressed past `prepared` (a re-used ID must never silently adopt a live operation).
+   */
+  private async findDurableSendOperation(
+    operation: InitSendOperation,
+  ): Promise<PreparedSendOperation | null> {
+    const existing = await this.operationQueries.getById(operation.id);
+    if (!existing) {
+      return null;
+    }
+
+    if (existing.state !== 'prepared') {
+      throw new SendOperationConflictError(
+        operation.id,
+        `Send operation ${operation.id} already exists in state '${existing.state}'`,
+      );
+    }
+
+    if (!isSameSendIntent(existing, operation)) {
+      throw new SendOperationIntentConflictError(operation.id);
+    }
+
+    return existing;
   }
 
   /**
