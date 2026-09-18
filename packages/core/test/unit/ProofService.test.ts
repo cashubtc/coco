@@ -1077,7 +1077,7 @@ describe('ProofService', () => {
     const otherMintUrl = 'https://mint.other';
     const operationId = 'op-123';
 
-    it('delegates single-mint and all-mint legacy views to BalanceQueries', async () => {
+    it('compares canonical BalanceQueries views against legacy/plugin projections on the same fixture', async () => {
       const service = new ProofService(
         counterService,
         proofRepo,
@@ -1098,32 +1098,63 @@ describe('ProofService', () => {
       ]);
       await proofRepo.reserveProofs(mintUrl, ['a1'], operationId);
 
-      await expect(service.getBalance(mintUrl)).resolves.toEqual(Amount.from(150));
-      await expect(service.getSpendableBalance(mintUrl)).resolves.toEqual(Amount.from(50));
-      await expect(service.getBalanceBreakdown(mintUrl)).resolves.toEqual({
-        ready: Amount.from(50),
-        reserved: Amount.from(100),
-        total: Amount.from(150),
-      });
-      await expect(service.getBalances()).resolves.toEqual({
-        [mintUrl]: Amount.from(150),
-        [otherMintUrl]: Amount.from(200),
-      });
-      await expect(service.getSpendableBalances()).resolves.toEqual({
-        [mintUrl]: Amount.from(50),
-        [otherMintUrl]: Amount.from(200),
-      });
-      await expect(service.getBalancesBreakdown()).resolves.toEqual({
-        [mintUrl]: { ready: Amount.from(50), reserved: Amount.from(100), total: Amount.from(150) },
+      // Canonical BalanceQueries-backed views on the same fixture.
+      const canonical = await service.getBalancesByMint();
+      expect(canonical).toEqual({
+        [mintUrl]: {
+          spendable: Amount.from(50),
+          reserved: Amount.from(100),
+          total: Amount.from(150),
+          unit: 'sat',
+        },
         [otherMintUrl]: {
-          ready: Amount.from(200),
+          spendable: Amount.from(200),
           reserved: Amount.zero(),
           total: Amount.from(200),
+          unit: 'sat',
+        },
+      });
+      const canonicalTotal = await service.getBalanceTotal({ mintUrls: [mintUrl] });
+      expect(canonicalTotal).toEqual({
+        spendable: Amount.from(50),
+        reserved: Amount.from(100),
+        total: Amount.from(150),
+        unit: 'sat',
+      });
+
+      // Legacy/plugin projections must agree with the canonical view above.
+      await expect(service.getBalance(mintUrl)).resolves.toEqual(canonical[mintUrl]!.total);
+      await expect(service.getSpendableBalance(mintUrl)).resolves.toEqual(
+        canonical[mintUrl]!.spendable,
+      );
+      await expect(service.getBalanceBreakdown(mintUrl)).resolves.toEqual({
+        ready: canonical[mintUrl]!.spendable,
+        reserved: canonical[mintUrl]!.reserved,
+        total: canonical[mintUrl]!.total,
+      });
+      await expect(service.getBalances()).resolves.toEqual({
+        [mintUrl]: canonical[mintUrl]!.total,
+        [otherMintUrl]: canonical[otherMintUrl]!.total,
+      });
+      await expect(service.getSpendableBalances()).resolves.toEqual({
+        [mintUrl]: canonical[mintUrl]!.spendable,
+        [otherMintUrl]: canonical[otherMintUrl]!.spendable,
+      });
+      await expect(service.getBalancesBreakdown()).resolves.toEqual({
+        [mintUrl]: {
+          ready: canonical[mintUrl]!.spendable,
+          reserved: canonical[mintUrl]!.reserved,
+          total: canonical[mintUrl]!.total,
+        },
+        [otherMintUrl]: {
+          ready: canonical[otherMintUrl]!.spendable,
+          reserved: canonical[otherMintUrl]!.reserved,
+          total: canonical[otherMintUrl]!.total,
         },
       });
     });
 
-    it('delegates trusted-only legacy views to BalanceQueries', async () => {
+    it('compares canonical and legacy trusted-only views on the same fixture', async () => {
       const service = new ProofService(
         counterService,
         proofRepo,
@@ -1144,14 +1175,28 @@ describe('ProofService', () => {
       ]);
       await proofRepo.reserveProofs(mintUrl, ['d1'], operationId);
 
+      const canonicalTrusted = await service.getBalancesByMint({ trustedOnly: true });
+      expect(canonicalTrusted).toEqual({
+        [mintUrl]: {
+          spendable: Amount.from(50),
+          reserved: Amount.from(100),
+          total: Amount.from(150),
+          unit: 'sat',
+        },
+      });
+
       await expect(service.getTrustedBalances()).resolves.toEqual({
-        [mintUrl]: Amount.from(150),
+        [mintUrl]: canonicalTrusted[mintUrl]!.total,
       });
       await expect(service.getTrustedSpendableBalances()).resolves.toEqual({
-        [mintUrl]: Amount.from(50),
+        [mintUrl]: canonicalTrusted[mintUrl]!.spendable,
       });
       await expect(service.getTrustedBalancesBreakdown()).resolves.toEqual({
-        [mintUrl]: { ready: Amount.from(50), reserved: Amount.from(100), total: Amount.from(150) },
+        [mintUrl]: {
+          ready: canonicalTrusted[mintUrl]!.spendable,
+          reserved: canonicalTrusted[mintUrl]!.reserved,
+          total: canonicalTrusted[mintUrl]!.total,
+        },
       });
     });
   });
