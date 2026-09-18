@@ -40,7 +40,8 @@ describe('EventBus', () => {
     });
 
     it('calls onError once per failed handler for sync, async, and mixed failures', async () => {
-      const errors: Array<{ event: keyof Events; payload: Events[keyof Events]; error: unknown }> = [];
+      const errors: Array<{ event: keyof Events; payload: Events[keyof Events]; error: unknown }> =
+        [];
       const bus = new EventBus<Events>({
         concurrency: 'parallel',
         onError: ({ event, payload, error }) => {
