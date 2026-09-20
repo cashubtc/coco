@@ -11,5 +11,6 @@ export default defineConfig([
       '@cashu/coco-sql-storage': '../sql-storage/src/index.ts',
     },
     noExternal: ['@cashu/coco-sql-storage'],
+    external: ['node:fs'],
   },
 ]);
