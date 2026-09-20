@@ -275,7 +275,15 @@ export class PaymentRequestService {
 
   private async readPaymentRequest(paymentRequest: string): Promise<PaymentRequest> {
     this.logger?.debug('Reading payment request', { paymentRequest });
-    const decodedPaymentRequest = PaymentRequest.fromEncodedRequest(paymentRequest);
+    let decodedPaymentRequest: PaymentRequest;
+    try {
+      decodedPaymentRequest = PaymentRequest.fromEncodedRequest(paymentRequest);
+    } catch (cause) {
+      throw new PaymentRequestError(
+        'Failed to decode payment request; expected a valid creqA or creqB request',
+        cause,
+      );
+    }
     this.logger?.info('Payment request decoded', {
       decodedPaymentRequest,
     });

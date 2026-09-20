@@ -167,10 +167,21 @@ export class PaymentRequestReceiveService {
         input.description,
         singleUse,
       );
-      const encodedRequest =
-        input.encoding === 'creqA'
-          ? paymentRequest.toEncodedCreqA()
-          : paymentRequest.toEncodedCreqB();
+      const encoding = input.encoding ?? 'creqB';
+      let encodedRequest: string;
+      try {
+        encodedRequest =
+          encoding === 'creqA' ? paymentRequest.toEncodedCreqA() : paymentRequest.toEncodedCreqB();
+      } catch (cause) {
+        const guidance =
+          encoding === 'creqB'
+            ? '; shorten the description or other request fields, or use creqA if supported by the other wallet'
+            : '';
+        throw new PaymentRequestError(
+          `Failed to encode payment request as ${encoding}${guidance}`,
+          cause,
+        );
+      }
       const now = Date.now();
       const operation: PaymentRequestReceiveOperation = {
         id: generateSubId(),
@@ -896,10 +907,16 @@ export class PaymentRequestReceiveService {
   }
 
   private parsePayload(payloadInput: PaymentRequestPayload | string): ParsedPaymentRequestPayload {
-    const raw =
-      typeof payloadInput === 'string'
-        ? (JSONInt.parse(payloadInput) as Partial<PaymentRequestPayload>)
-        : payloadInput;
+    let raw: Partial<PaymentRequestPayload>;
+    if (typeof payloadInput === 'string') {
+      try {
+        raw = JSONInt.parse(payloadInput) as Partial<PaymentRequestPayload>;
+      } catch (cause) {
+        throw new PaymentRequestError('Failed to parse payment request payload JSON', cause);
+      }
+    } else {
+      raw = payloadInput;
+    }
     if (!raw || typeof raw !== 'object') {
       throw new PaymentRequestError('Payment request payload must be an object');
     }
