@@ -1,0 +1,60 @@
+name: Prepare release PR
+
+on:
+  push:
+    branches:
+      - master
+      - 'release/*-rc'
+  workflow_dispatch:
+
+concurrency:
+  group: release-pr-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-pr:
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_BRANCH: ${{ github.ref_name }}
+    steps:
+      - name: Checkout release branch and tags
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+
+      - name: Check release branch state
+        id: state
+        run: bun scripts/release-pr.ts status
+
+      - name: Check dependency release age
+        if: steps.state.outputs.enabled == 'true'
+        run: bun run security:release-age
+
+      - name: Install dependencies
+        if: steps.state.outputs.enabled == 'true'
+        run: bun install --frozen-lockfile
+
+      - name: Create or update release PR
+        if: steps.state.outputs.enabled == 'true'
+        uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1.9.0 (Changesets CLI v2)
+        with:
+          version: bun run release:version
+          title: 'chore: prepare release'
+          commit: 'chore: version packages'
+          createGithubReleases: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,57 @@
+name: Release PR checks
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - 'scripts/release-pr*'
+      - 'scripts/check-release.ts'
+      - '.github/workflows/release-pr*.yml'
+      - '.changeset/config.json'
+      - 'package.json'
+      - 'bun.lock'
+  pull_request:
+    paths:
+      - 'scripts/release-pr*'
+      - 'scripts/check-release.ts'
+      - '.github/workflows/release-pr*.yml'
+      - '.changeset/**'
+      - 'packages/*/package.json'
+      - 'packages/*/CHANGELOG.md'
+      - 'package.json'
+      - 'bun.lock'
+
+permissions:
+  contents: read
+
+jobs:
+  release-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+      - run: bun install --frozen-lockfile
+      - run: bun run test:release
+
+  release-files:
+    if: github.event_name == 'pull_request' && github.head_ref == format('changeset-release/{0}', github.base_ref)
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_BRANCH: ${{ github.base_ref }}
+    steps:
+      - name: Checkout proposed release commit
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+      - run: bun scripts/release-pr.ts check
+      - run: bun run security:release-age
+      - run: bun install --frozen-lockfile
+      - run: bun run build
+      - run: bun run typecheck

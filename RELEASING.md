@@ -1,244 +1,187 @@
 # Releasing
 
-This repo publishes packages with Changesets and GitHub Releases. The release tag
-is the source of truth for npm artifacts: package versions, internal published
-package dependencies, and changelog headings must be committed before the tag is
-created.
+Changesets prepares release pull requests for `master` and `release/X.Y.Z-rc`
+branches. Maintainers review and merge the generated files, then tag that exact
+commit and publish a GitHub Release. Publishing the GitHub Release triggers npm
+publication; merging a release PR does not publish packages.
 
-The publish workflow checks out the GitHub Release tag, validates the committed
-release files, builds, and publishes. It does not create or modify release files
-in CI.
+The tag is the source of truth for npm artifacts. The publisher checks out the
+tag, validates committed versions, internal dependencies, prerelease state, and
+changelogs, then builds and publishes. It never generates release files.
 
-## Prerequisites
+## Repository Setup
 
-- Make sure all intended changes are merged into the release branch.
-- Make sure package-impacting changes have changesets in `.changeset/`.
-- Make sure the worktree is clean before generating release files:
+Enable **Settings → Actions → General → Allow GitHub Actions to create and
+approve pull requests**. The preparation workflow uses `GITHUB_TOKEN` with
+`contents: write` and `pull-requests: write`, and needs no npm credentials.
 
-```bash
-git status --short
-```
+GitHub may require a maintainer to approve workflow runs on a bot-created PR.
+Use **Approve workflows to run** when prompted and wait for checks before merging.
+For fully automatic PR checks, a repository-scoped GitHub App token can be used
+for both checkout and the Changesets action instead of `GITHUB_TOKEN`.
+See [GitHub's workflow triggering rules](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).
 
-## Stable Releases
+The workflow uses Changesets Action v1 with this repository's Changesets CLI v2.
+It maintains one PR per base branch, from `changeset-release/<base-branch>`.
+Runs are serialized per branch. **Prepare release PR** also supports a manual
+workflow dispatch for retrying a failed run on the selected branch.
 
-Use this flow for stable packages published to the default npm dist-tag.
+## Release PR Checks
 
-1. Start from the branch that will contain the release commit.
+Package changes must include changesets. The preparation workflow runs
+`bun run release:version`, which versions packages, validates the release series,
+and refreshes `bun.lock`. An RC branch must explicitly enter prerelease mode
+before automation starts. After stable finalization removes `.changeset/pre.json`,
+that branch becomes inactive.
 
-For a stable release that does not follow an RC cycle, use `master`:
+The generated PR should contain only Changesets state, package manifests,
+changelogs, and `bun.lock`. Review the package versions and changelog text. The
+**Release PR checks** workflow validates the proposed release commit, frozen
+install, build, and typecheck. It also tests the stable and RC versioning flows.
 
-```bash
-git switch master
-git pull --ff-only
-```
+A branch name does not choose a version: Changesets calculates the version from
+pending changesets. The generated version must match `X.Y.Z` in an RC branch's
+name. If it does not, correct the branch or the changesets before releasing.
 
-For a stable release after an RC cycle, use the prerelease branch that contains
-`.changeset/pre.json` and the latest RC release files:
+## Stable Releases From Master
 
-```bash
-git switch release/X.Y.Z-rc
-git pull --ff-only
-```
+1. Merge intended package changes and their changesets into `master`.
+2. Wait for the bot to create or update **chore: prepare release** against
+   `master`. New changesets update the same PR until it is merged.
+3. Review the generated files, approve workflow runs if prompted, and wait for
+   successful checks. Merge the release PR when ready.
+4. Follow **Tag And Publish** below with the merged release commit and `vX.Y.Z`.
 
-2. If the stable release follows an RC cycle, exit Changesets prerelease mode:
+During an RC cycle, leave the release PR against `master` unmerged. Finalize the
+stable release on its RC branch, then back-merge that release history. The bot
+will refresh the `master` PR using the remaining changesets.
 
-```bash
-bunx changeset pre exit
-```
+## Start An RC Cycle
 
-Skip this step when `.changeset/pre.json` is not present.
-
-3. Generate stable versions and changelogs:
-
-```bash
-bunx changeset version
-```
-
-4. Review the generated release files:
-
-```bash
-git diff
-```
-
-Confirm that publishable package versions are aligned, internal published package
-dependencies point at the same stable version, and each publishable package
-changelog starts with that version.
-
-5. Run a local build before tagging:
-
-```bash
-bun install --frozen-lockfile
-bun run build
-```
-
-6. Commit the generated release files:
-
-```bash
-git add .
-git commit -m "version: release X.Y.Z"
-```
-
-Use the actual generated version in the commit message.
-
-7. Tag the release commit:
-
-```bash
-git tag vX.Y.Z
-```
-
-8. Push the source branch and tag. For a release cut directly from `master`:
-
-```bash
-git push origin master
-git push origin vX.Y.Z
-```
-
-For a stable release finalized on a prerelease branch:
-
-```bash
-git push origin release/X.Y.Z-rc
-git push origin vX.Y.Z
-```
-
-Keep the stable tag on the release commit so it preserves the selected RC source
-cutoff while development continues on `master`.
-
-9. Create a GitHub Release for the tag. Do not mark it as a prerelease.
-
-Publishing the GitHub Release runs `.github/workflows/publish.yml`. The workflow
-checks that the tag, GitHub Release prerelease flag, committed package versions,
-internal published package dependencies, and changelogs agree before publishing
-with `bunx changeset publish`.
-
-10. Verify npm after the workflow succeeds:
-
-```bash
-npm view @cashu/coco-core dist-tags
-npm view @cashu/coco-core@latest version
-```
-
-11. If the release was finalized on a prerelease branch, open a follow-up PR that
-    merges the stable release commit into current `master`.
-
-Use a merge commit to preserve release ancestry; `master` may have advanced beyond
-the RC cutoff, so a fast-forward may not be possible. Preserve newer source changes
-and pending changesets while bringing in the released package versions, internal
-dependency versions, changelogs, and removal of consumed changesets. Refresh
-`bun.lock` with `bun install`, then verify a frozen install, build, and typecheck.
-Merge the PR with a merge commit so the release remains an ancestor of `master`.
-The existing stable tag stays unchanged.
-
-## RC Releases
-
-Use this flow for prerelease packages published to the npm `rc` dist-tag. Keep RC
-cycles on a dedicated prerelease branch instead of putting Changesets prerelease
-mode on `master`.
-
-1. Create or update the prerelease branch:
+Start from the intended source cutoff, with its pending changesets. Replace
+`X.Y.Z` with the next version calculated by Changesets (inspect
+`bunx changeset status` if needed):
 
 ```bash
 git switch master
 git pull --ff-only
 git switch -c release/X.Y.Z-rc
-```
-
-For a follow-up RC in the same cycle, switch to the existing prerelease branch
-and merge or rebase the intended changes into it.
-
-2. Enter Changesets prerelease mode only once per RC cycle:
-
-```bash
-bunx changeset pre enter rc
-```
-
-Skip this step when `.changeset/pre.json` is already present on the prerelease
-branch.
-
-3. Generate prerelease versions and changelogs:
-
-```bash
-bunx changeset version
-```
-
-For follow-up RCs in the same cycle, add or merge the new changesets, then run
-`bunx changeset version` again. Changesets increments the prerelease number from
-the committed `.changeset/pre.json` state.
-
-4. Review the generated release files:
-
-```bash
-git diff
-```
-
-Confirm that publishable package versions are aligned, internal published package
-dependencies point at the same RC version, and each publishable package changelog
-starts with that RC version.
-
-5. Run a local build before tagging:
-
-```bash
 bun install --frozen-lockfile
-bun run build
+bunx changeset pre enter rc
+git add .changeset/pre.json
+git commit -m "chore: start X.Y.Z RC cycle"
+git push -u origin release/X.Y.Z-rc
 ```
 
-6. Commit the generated release files, including `.changeset/pre.json`:
+The bot opens a release PR **against the RC branch**, preparing `X.Y.Z-rc.0`,
+changelogs, internal dependencies, the lockfile, and updated `.changeset/pre.json`.
+Review and merge it after checks pass. Follow **Tag And Publish** with the merged
+commit and `vX.Y.Z-rc.0`, marking the GitHub Release as a prerelease.
+
+The workflow must exist on the RC branch. For a branch created before this
+workflow was introduced, bring in the release automation before preparing a new
+RC. Do not add workflow changes after the selected final RC cutoff.
+
+## Follow-Up RCs
+
+Merge only the intended fixes and their changesets into `release/X.Y.Z-rc`.
+The bot prepares the next RC version PR against that branch. Review, merge, tag,
+and publish it as above. Already consumed prerelease changesets do not create
+another RC by themselves; new changesets drive the next version.
+
+Keep `.changeset/pre.json` committed throughout the cycle. Do not re-enter
+prerelease mode for each RC. Avoid merging unrelated newer `master` work into the
+RC branch.
+
+## Promote A Selected RC To Stable
+
+The RC branch must still point at the selected, tagged RC. New changes after
+that cutoff require another RC before promotion. Fetch tags and check the cutoff
+before recording the intent to exit prerelease mode:
 
 ```bash
-git add .
-git commit -m "version: release X.Y.Z-rc.N"
-```
-
-Use the actual generated RC version in the commit message.
-
-7. Tag the release commit:
-
-```bash
-git tag vX.Y.Z-rc.N
-```
-
-8. Push the prerelease branch and tag:
-
-```bash
+git switch release/X.Y.Z-rc
+git pull --ff-only
+git fetch origin --tags
+test "$(git rev-parse HEAD)" = "$(git rev-parse 'vX.Y.Z-rc.N^{commit}')"
+bunx changeset pre exit
+git add .changeset/pre.json
+git commit -m "chore: promote X.Y.Z RC to stable"
 git push origin release/X.Y.Z-rc
-git push origin vX.Y.Z-rc.N
 ```
 
-9. Create a GitHub Release for the tag and mark it as a prerelease.
+Run the commands sequentially; stop if the cutoff check fails. This commit only
+records exit intent. The bot prepares a stable version PR against the same RC
+branch. Before versioning, automation requires the branch's files to match a
+tagged RC except for `.changeset/pre.json`. The PR removes prerelease state and
+produces stable versions, dependencies, changelogs, and the refreshed lockfile.
+It does not need a new changeset just to promote the RC.
 
-Publishing the GitHub prerelease runs `.github/workflows/publish.yml`. The
-workflow checks that the tag, GitHub Release prerelease flag, committed package
-versions, internal published package dependencies, and changelogs agree before
-publishing. The release commit keeps `.changeset/pre.json`, but the workflow
-removes that file only in the CI checkout before running
-`bunx changeset publish --tag rc`; Changesets does not allow `--tag` while pre
-mode is present, and relying on implicit pre-mode tagging can send packages that
-only have prerelease versions to npm's `latest` dist-tag.
+Freeze source changes on the RC branch until promotion is complete. Review the
+stable PR against the selected RC, confirm only release metadata changed, and
+merge after checks pass. Follow **Tag And Publish** with `vX.Y.Z`, without marking
+it as a prerelease. The automated flow has an exit-intent commit and a version PR;
+the existing local release skills remain an alternative for cutting release
+metadata directly at the RC cutoff.
 
-10. Verify npm after the workflow succeeds:
+After publishing, open a separate PR merging the stable release history into
+current `master`. Use a merge commit to preserve ancestry. Preserve newer source
+changes and pending changesets while bringing in released versions, dependencies,
+changelogs, and consumed changeset removal. Refresh `bun.lock`, then verify a
+frozen install, build, and typecheck. Keep the existing stable tag unchanged.
+
+## Tag And Publish
+
+Tag the exact merged release commit, even if the branch has advanced since the
+PR merged. Use the version shown in the release files:
+
+```bash
+git fetch origin --tags
+git tag vX.Y.Z <merged-release-commit-sha>
+git push origin refs/tags/vX.Y.Z
+```
+
+For an RC, substitute `vX.Y.Z-rc.N`. Create a GitHub Release for the existing tag:
+mark RC releases as **prerelease**, and stable releases as stable. The existing
+`.github/workflows/publish.yml` validates and publishes that tagged commit.
+
+Stable packages go to npm's `latest` dist-tag. RCs explicitly use `rc`. The RC
+publisher removes `.changeset/pre.json` only in its CI checkout before running
+`bunx changeset publish --tag rc`; Changesets disallows `--tag` while prerelease
+state is present. This avoids relying on implicit prerelease dist-tag selection.
+
+Verify npm after publishing succeeds:
 
 ```bash
 npm view @cashu/coco-core dist-tags
+npm view @cashu/coco-core@latest version
 npm view @cashu/coco-core@rc version
 ```
 
-Users can install the RC with:
+Consumers can install an RC with `npm install @cashu/coco-core@rc`.
+
+## Local Preparation And Recovery
+
+To prepare release files locally instead of using the bot, start from a clean
+release branch with the appropriate prerelease state, install dependencies, then
+run:
 
 ```bash
-npm install @cashu/coco-core@rc
+RELEASE_BRANCH="$(git branch --show-current)" bun run release:version
+bun install --frozen-lockfile
+bun run build
+bun run typecheck
+git diff
 ```
 
-## If Something Looks Wrong Before Publishing
+Review and commit `.changeset/`, changed package manifests and changelogs, and
+`bun.lock` before following **Tag And Publish**. Do not merge a stale bot PR after
+preparing the same release locally.
 
-If the generated versions, changelogs, or tags are wrong before the GitHub
-Release is published, fix them before publishing. Do not rely on CI to repair
-release files.
+If versions, changelogs, or tags are wrong, fix them before publishing the GitHub
+Release. For an unpushed local release tag, correct the commit and retag locally.
+For a pushed tag, coordinate with maintainers before moving or replacing it.
 
-For an unpushed local release commit or tag, make the correction locally and
-retag the corrected commit. For a pushed tag, coordinate with maintainers before
-moving or replacing it.
-
-## If npm Publishing Fails
-
-Fix the failing condition on a new commit, create a new tag, and publish a new
-GitHub Release. Do not reuse a tag for a different package artifact after npm has
-accepted any package from that tag.
+If npm publishing fails, fix the condition on a new commit, create a new tag, and
+publish a new GitHub Release. Do not reuse a tag for a different package artifact
+after npm has accepted any package from that tag.

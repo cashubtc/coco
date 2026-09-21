@@ -219,7 +219,10 @@ you should usually include a changeset unless a maintainer tells you otherwise.
 
 Stable and prerelease npm publishes validate and publish the tagged commit.
 Package versions and changelogs must be committed before the GitHub Release is
-published. See `RELEASING.md` for the maintainer release checklist.
+published. A bot prepares version PRs for `master` and active `release/X.Y.Z-rc`
+branches from the committed changesets. Merging a version PR does not publish;
+maintainers tag its release commit and publish the GitHub Release explicitly.
+See `RELEASING.md` for setup, RC promotion, and the maintainer release checklist.
 
 ## Good contributions
 
