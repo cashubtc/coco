@@ -7,6 +7,7 @@ import {
   runRepositoryTransactionContract,
   runKeypairAllocationContract,
   runAuthSessionRepositoryContract,
+  runKeysetRepositoryContract,
   runProofRepositoryContract,
   runMintOperationRepositoryContract,
   runMintQuoteRepositoryContract,
@@ -205,6 +206,7 @@ runKeypairAllocationContract(
 runAuthSessionRepositoryContract({ createRepositories }, { describe, it, expect });
 
 runProofRepositoryContract({ createRepositories }, { describe, it, expect });
+runKeysetRepositoryContract({ createRepositories }, { describe, it, expect });
 
 runMintOperationRepositoryContract({ createRepositories }, { describe, it, expect });
 
