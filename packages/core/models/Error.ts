@@ -135,6 +135,16 @@ export class SendOperationConflictError extends Error {
   }
 }
 
+export class ReceiveOperationConflictError extends Error {
+  constructor(
+    readonly operationId: string,
+    message?: string,
+  ) {
+    super(message ?? `Receive operation ${operationId} changed concurrently`);
+    this.name = 'ReceiveOperationConflictError';
+  }
+}
+
 export class AuthSessionError extends Error {
   readonly mintUrl: string;
   constructor(mintUrl: string, message?: string, cause?: unknown) {

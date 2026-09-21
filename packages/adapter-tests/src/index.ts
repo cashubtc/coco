@@ -1787,6 +1787,163 @@ export async function runReceiveOperationRepositoryContract(
   const { describe, it, expect } = runner;
 
   describe('ReceiveOperationRepository contract', () => {
+    it('conditionally advances Receive state with monotonic revisions and unchanged request data', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = {
+          ...createDummyReceiveOperation(),
+          state: 'prepared' as const,
+          fee: Amount.from(1),
+          outputData: { keep: [], send: [] },
+        };
+        const repository = repositories.receiveOperationRepository;
+        await repository.create(operation);
+        expect((await repository.getById(operation.id))?.revision).toBe(0);
+        const executing = {
+          ...operation,
+          state: 'executing' as const,
+          revision: 99,
+          updatedAt: 2000,
+        };
+        expect(
+          await repository.transition({
+            operationId: operation.id,
+            expectedState: 'prepared',
+            expectedRevision: 1,
+            next: executing,
+          }),
+        ).toBe(false);
+        expect(
+          await repository.transition({
+            operationId: operation.id,
+            expectedState: 'prepared',
+            expectedRevision: 0,
+            next: executing,
+          }),
+        ).toBe(true);
+        expect(
+          await repository.transition({
+            operationId: operation.id,
+            expectedState: 'prepared',
+            expectedRevision: 0,
+            next: executing,
+          }),
+        ).toBe(false);
+        const stored = await repository.getById(operation.id);
+        expect(stored?.revision).toBe(1);
+        expect(JSON.stringify(stored?.inputProofs)).toBe(JSON.stringify(operation.inputProofs));
+        expect(stored?.state).toBe('executing');
+        await expectThrows(
+          () =>
+            repository.transition({
+              operationId: operation.id,
+              expectedState: 'executing',
+              expectedRevision: 1,
+              next: { ...executing, id: 'different' },
+            }),
+          expect,
+        );
+        expect((await repository.getById(operation.id))?.revision).toBe(1);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('isolates nested Receive request data on every write and read', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = {
+          ...createDummyReceiveOperation(),
+          state: 'prepared' as const,
+          fee: Amount.from(1),
+          outputData: { keep: [], send: [] },
+          source: {
+            type: 'payment-request' as const,
+            requestOperationId: 'parent',
+            attemptId: 'attempt',
+            transport: 'inband' as const,
+          },
+        };
+        operation.inputProofs[0]!.dleq = { e: 'e', s: 's', r: 'r' };
+        const repository = repositories.receiveOperationRepository;
+        await repository.create(operation);
+        operation.inputProofs[0]!.secret = 'changed';
+        operation.inputProofs[0]!.dleq!.e = 'changed';
+        operation.source.requestOperationId = 'changed';
+        const reads = [
+          (await repository.getById(operation.id))!,
+          (await repository.getByState('prepared'))[0]!,
+          (await repository.getByMintUrl(operation.mintUrl))[0]!,
+          (await repository.getByPaymentRequestAttemptId('attempt'))!,
+        ];
+        for (const snapshot of reads) {
+          expect(snapshot.inputProofs[0]!.secret).toBe('receive-secret-1');
+          expect(snapshot.inputProofs[0]!.dleq!.e).toBe('e');
+          snapshot.inputProofs[0]!.dleq!.e = 'changed again';
+        }
+        expect((await repository.getById(operation.id))!.inputProofs[0]!.dleq!.e).toBe('e');
+        const next = {
+          ...reads[0]!,
+          state: 'executing' as const,
+          fee: Amount.from(1),
+          outputData: { keep: [], send: [] },
+        };
+        await repository.transition({
+          operationId: operation.id,
+          expectedState: 'prepared',
+          expectedRevision: 0,
+          next,
+        });
+        next.inputProofs[0]!.secret = 'changed after transition';
+        const pending = (await repository.getPending())[0]!;
+        expect(pending.inputProofs[0]!.secret).toBe('receive-secret-1');
+        pending.inputProofs[0]!.secret = 'changed pending snapshot';
+        expect((await repository.getById(operation.id))!.inputProofs[0]!.secret).toBe(
+          'receive-secret-1',
+        );
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('rolls back a Receive transition with its counter allocation', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = createDummyReceiveOperation();
+        await repositories.receiveOperationRepository.create(operation);
+        await expectThrows(
+          () =>
+            repositories.withTransaction(async (scope) => {
+              await scope.counterRepository.setCounter(operation.mintUrl, 'receive-keyset', 3);
+              await scope.receiveOperationRepository.transition({
+                operationId: operation.id,
+                expectedState: 'init',
+                expectedRevision: 0,
+                next: {
+                  ...operation,
+                  state: 'prepared',
+                  fee: Amount.from(1),
+                  outputData: { keep: [], send: [] },
+                },
+              });
+              throw new Error('abort Receive transaction');
+            }),
+          expect,
+        );
+        expect((await repositories.receiveOperationRepository.getById(operation.id))?.state).toBe(
+          'init',
+        );
+        expect(
+          (await repositories.receiveOperationRepository.getById(operation.id))?.revision,
+        ).toBe(0);
+        expect(
+          await repositories.counterRepository.getCounter(operation.mintUrl, 'receive-keyset'),
+        ).toBe(null);
+      } finally {
+        await dispose();
+      }
+    });
+
     it('rehydrates persisted input proof amounts', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {

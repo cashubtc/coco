@@ -1,3 +1,5 @@
+import { CoreReceiveTransactions } from './transactions/receive/ReceiveTransactions.ts';
+import { CashuReceiveRemote } from './infra/handlers/receive/CashuReceiveRemote.ts';
 import type { OutputDataCreator } from '@cashu/cashu-ts';
 import { CoreMintMetadataTransactions } from './transactions/mints/MintMetadataTransactions.ts';
 import { StoredMintQueries } from './mints/MintMetadata.ts';
@@ -1012,18 +1014,18 @@ export class Manager {
     const tokenService = new TokenService(mintService, tokenLogger);
 
     const receiveOperationLogger = this.getChildLogger('ReceiveOperationService');
-    const receiveOperationService = new ReceiveOperationService(
-      repositories.receiveOperationRepository,
-      repositories.proofRepository,
-      proofService,
-      mintService,
-      walletService,
-      this.mintAdapter,
-      tokenService,
-      this.eventBus,
-      receiveOperationLogger,
+    const receiveOperationService = new ReceiveOperationService({
+      operations: repositories.receiveOperationRepository,
+      transactions: new CoreReceiveTransactions(coreTransactionRunner),
+      mintQueries: repositories.mintRepository,
+      mintMetadataRefresh: mintService,
+      signer: p2pkSigner,
+      loadSeed: () => seedService.getSeed(),
+      remote: new CashuReceiveRemote(this.mintAdapter, this.mintRequestProvider),
+      eventBus: this.eventBus,
+      logger: receiveOperationLogger,
       mintScopedLock,
-    );
+    });
     const receiveOperationRepository = repositories.receiveOperationRepository;
     const paymentRequestReceiveOperationRepository =
       repositories.paymentRequestReceiveOperationRepository;
