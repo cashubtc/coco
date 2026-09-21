@@ -160,6 +160,21 @@ export class AuthSessionExpiredError extends AuthSessionError {
   }
 }
 
+export class KeysetKeysConflictError extends Error {
+  readonly mintUrl: string;
+  readonly keysetId: string;
+
+  constructor(mintUrl: string, keysetId: string) {
+    super(
+      `Keyset ${keysetId} for mint ${mintUrl} is already stored with different keys; ` +
+        `a keyset id commits to its keys and they cannot change`,
+    );
+    this.name = 'KeysetKeysConflictError';
+    this.mintUrl = mintUrl;
+    this.keysetId = keysetId;
+  }
+}
+
 export class QuoteIdentityConflictError extends Error {
   readonly kind: 'mint' | 'melt';
   readonly mintUrl: string;

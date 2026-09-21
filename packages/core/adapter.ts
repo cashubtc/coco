@@ -49,7 +49,9 @@ export {
   operationHistoryId,
   parseHistoryEntryId,
   projectLegacyHistoryRow,
+  reconcileKeysetKeypairs,
   DerivationIndexExhaustedError,
+  KeysetKeysConflictError,
   QuoteIdentityConflictError,
 } from './models/index.ts';
 export type {
