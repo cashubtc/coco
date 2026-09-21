@@ -32,6 +32,14 @@ export class KeysetSyncError extends Error {
   }
 }
 
+/** The mint served keys that are not the keys its advertised keyset id commits to. */
+export class KeysetVerificationError extends KeysetSyncError {
+  constructor(mintUrl: string, keysetId: string, message: string, cause?: unknown) {
+    super(mintUrl, keysetId, message, cause);
+    this.name = 'KeysetVerificationError';
+  }
+}
+
 export class ProofValidationError extends Error {
   constructor(message: string) {
     super(message);

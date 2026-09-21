@@ -7,6 +7,7 @@ import {
 import type { MintMetadataTransactions } from '@core/transactions/mints/MintMetadataTransactions.ts';
 import {
   KeysetSyncError,
+  KeysetVerificationError,
   MintFetchError,
   ProofValidationError,
   UnknownMintError,
@@ -622,7 +623,7 @@ export class MintService {
           return this.keysetRepo.updateKeyset(keysetModel);
         } else {
           try {
-            const keysRes = await this.mintAdapter.fetchKeysForId(mint.mintUrl, ks.id);
+            const keysRes = await this.mintAdapter.fetchKeysForId(mint.mintUrl, ks);
             return this.keysetRepo.addKeyset({
               mintUrl: mint.mintUrl,
               id: ks.id,
@@ -632,11 +633,21 @@ export class MintService {
               feePpk: ks.input_fee_ppk || 0,
             });
           } catch (err) {
+            // Refusing one keyset's keys must not cost the Wallet the keysets that did verify.
+            if (err instanceof KeysetVerificationError) {
+              this.logger?.warn('Skipping keyset whose keys failed NUT-02 verification', {
+                mintUrl: mint.mintUrl,
+                keysetId: ks.id,
+                err,
+              });
+              return;
+            }
             this.logger?.error('Failed to sync keyset', {
               mintUrl: mint.mintUrl,
               keysetId: ks.id,
               err,
             });
+            if (err instanceof KeysetSyncError) throw err;
             throw new KeysetSyncError(mint.mintUrl, ks.id, undefined, err);
           }
         }
