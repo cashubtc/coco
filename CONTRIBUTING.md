@@ -107,6 +107,27 @@ Please open an issue before spending time on:
 
 This helps us agree on direction before implementation.
 
+## AI-assisted contributions
+
+We encourage AI use and AI-assisted contributions, especially to improve code
+quality, strengthen tests, and support code review.
+
+A human must remain in the loop and take responsibility for every submission:
+
+- Review and understand every change. Be prepared to explain the implementation
+  and how it fits the existing code.
+- Verify claims, run relevant checks, and report what you tested and any
+  limitations.
+- Review and edit AI-assisted PR descriptions, issues, discussions, and review
+  comments before posting. Keep them concise, accurate, and relevant.
+- Submit work that is ready for human review. Use AI to help with investigation
+  and validation, and check its results before asking maintainers to review.
+
+Do not use unattended AI agents to submit pull requests, issues, or comments
+without human review. Automated spam and repeated low-effort submissions consume
+maintainer time and may be closed or removed. Repeated disregard for these
+expectations may lead to contribution restrictions.
+
 ## Pull request expectations
 
 - Explain the problem and why your change is the right fix
