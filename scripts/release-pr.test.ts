@@ -91,6 +91,21 @@ function version(directory: string, branch = 'master', success = true) {
   return command(directory, [process.execPath, script, 'version'], branch, success);
 }
 
+function checkRelease(directory: string, tag: string, success = true) {
+  return command(
+    directory,
+    [
+      'env',
+      `RELEASE_TAG=${tag}`,
+      `RELEASE_PRERELEASE=${tag.includes('-rc.')}`,
+      process.execPath,
+      join(repository, 'scripts/check-release.ts'),
+    ],
+    'master',
+    success,
+  );
+}
+
 function frozenInstall(directory: string) {
   const lockfile = readFileSync(join(directory, 'bun.lock'), 'utf8');
   // Do not let installation alter the real workspace's linked node_modules.
@@ -113,6 +128,11 @@ test('only enables master and RC branches that explicitly entered pre or exit mo
 
 test('versions a stable fixed group, updates dependencies, and produces a frozen-installable lockfile', () => {
   const directory = fixture();
+  command(directory, ['git', 'tag', 'v1.0.0-rc.0']);
+  // A matching RC tag from unrelated history does not turn a direct release into a promotion.
+  const tree = command(directory, ['git', 'rev-parse', 'HEAD^{tree}']).trim();
+  const unrelated = command(directory, ['git', 'commit-tree', tree, '-m', 'Unrelated RC']).trim();
+  command(directory, ['git', 'tag', 'v2.0.0-rc.99', unrelated]);
   version(directory);
   expect(readJson(directory, 'packages/core/package.json').version).toBe('2.0.0');
   expect(readJson(directory, 'packages/react/package.json').peerDependencies['@fixture/core']).toBe(
@@ -121,6 +141,8 @@ test('versions a stable fixed group, updates dependencies, and produces a frozen
   expect(readFileSync(join(directory, 'packages/core/CHANGELOG.md'), 'utf8')).toContain('## 2.0.0');
   frozenInstall(directory);
   command(directory, [process.execPath, script, 'check']);
+  checkRelease(directory, 'v2.0.0');
+  expect(checkRelease(directory, 'v2.0.1', false)).toContain('Publishable package versions');
 }, 30_000);
 
 test('versions successive RCs and promotes the tagged cutoff without requiring a new changeset', () => {
@@ -156,6 +178,7 @@ test('versions successive RCs and promotes the tagged cutoff without requiring a
     'export const value = 1;\n',
   );
   command(directory, [process.execPath, script, 'check'], branch);
+  checkRelease(directory, 'v2.0.0');
   frozenInstall(directory);
   expect(command(directory, [process.execPath, script, 'status'], branch)).toContain('inactive');
   writeFileSync(join(directory, 'packages/core/index.ts'), 'export const value = 2;\n');
@@ -182,6 +205,71 @@ test('requires another tagged RC when source changes after the selected cutoff',
   commit(directory);
   expect(version(directory, branch, false)).toContain('cut another RC');
   expect(readJson(directory, 'packages/core/package.json').version).toBe('2.0.0-rc.0');
+}, 30_000);
+
+test('rejects publishing a stale stable PR merge containing source after its RC cutoff', () => {
+  const directory = fixture();
+  const branch = 'release/2.0.0-rc';
+  command(directory, ['git', 'switch', '-c', branch]);
+  command(directory, ['bunx', 'changeset', 'pre', 'enter', 'rc']);
+  version(directory, branch);
+  commit(directory);
+  command(directory, ['git', 'tag', 'v2.0.0-rc.0']);
+  checkRelease(directory, 'v2.0.0-rc.0');
+  command(directory, ['bunx', 'changeset', 'pre', 'exit']);
+  commit(directory);
+  command(directory, ['git', 'switch', '-c', 'stable-version-pr']);
+  version(directory, branch);
+  commit(directory);
+  command(directory, [process.execPath, script, 'check'], branch);
+
+  command(directory, ['git', 'switch', branch]);
+  writeFileSync(join(directory, 'packages/core/index.ts'), 'export const value = 2;\n');
+  commit(directory);
+  expect(version(directory, branch, false)).toContain('cut another RC');
+  command(directory, ['git', 'merge', '--no-ff', 'stable-version-pr', '-m', 'Merge stale PR']);
+  command(directory, ['git', 'tag', 'v2.0.0']);
+  expect(command(directory, [process.execPath, script, 'status'], branch)).toContain('inactive');
+  expect(checkRelease(directory, 'v2.0.0', false)).toContain('cut another RC');
+  expect(command(directory, [process.execPath, script, 'check'], branch, false)).toContain(
+    'cut another RC',
+  );
+  expect(
+    command(directory, [process.execPath, script, 'check-pr', 'HEAD^1', 'HEAD^2'], branch, false),
+  ).toContain('regenerate it before merging');
+}, 30_000);
+
+test('requires regenerating a release PR after its base advances even for metadata changes', () => {
+  const directory = fixture();
+  const base = command(directory, ['git', 'rev-parse', 'HEAD']).trim();
+  command(directory, ['git', 'switch', '-c', 'version-pr']);
+  version(directory);
+  commit(directory);
+  const head = command(directory, ['git', 'rev-parse', 'HEAD']).trim();
+  command(directory, ['git', 'switch', '--detach', base]);
+  command(directory, ['git', 'merge', '--no-ff', head, '-m', 'Prospective merge']);
+  command(directory, [process.execPath, script, 'check-pr', base, head]);
+
+  command(directory, ['git', 'switch', 'master']);
+  writeFileSync(join(directory, '.changeset/empty.md'), '---\n---\n\nRelease housekeeping.\n');
+  commit(directory);
+  const advancedBase = command(directory, ['git', 'rev-parse', 'HEAD']).trim();
+  command(directory, ['git', 'merge', '--no-ff', head, '-m', 'Stale prospective merge']);
+  // File validation alone passes, but the release PR must still be regenerated.
+  command(directory, [process.execPath, script, 'check']);
+  expect(
+    command(directory, [process.execPath, script, 'check-pr', advancedBase, head], 'master', false),
+  ).toContain('regenerate it before merging');
+}, 30_000);
+
+test('rejects stable publication from a shallow checkout that may hide RC ancestry', () => {
+  const directory = fixture();
+  version(directory);
+  commit(directory);
+  const shallow = mkdtempSync(join(tmpdir(), 'coco-release-shallow-'));
+  fixtures.push(shallow);
+  command(directory, ['git', 'clone', '--depth=1', `file://${directory}`, shallow]);
+  expect(checkRelease(shallow, 'v2.0.0', false)).toContain('requires full history and RC tags');
 }, 30_000);
 
 test('the skill cutoff helper accepts metadata PR merges and checks the selected ancestor', () => {

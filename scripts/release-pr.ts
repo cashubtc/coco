@@ -1,6 +1,7 @@
 import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { checkPromotionCutoff, checkStableCutoff, git } from './release-cutoff.ts';
 
 type PreState = { mode?: string; tag?: string };
 
@@ -43,50 +44,6 @@ function run(command: string[], env: Record<string, string> = {}): void {
   if (result.exitCode !== 0) throw new Error(`Command failed: ${command.join(' ')}`);
 }
 
-function git(args: string[]): string {
-  const result = Bun.spawnSync(['git', ...args], { cwd: root });
-  if (result.exitCode !== 0) throw new Error(result.stderr.toString().trim());
-  return result.stdout.toString().trim();
-}
-
-function checkPromotionCutoff(target: string, versioned = false): void {
-  const cutoff = git(['describe', '--tags', '--match', `v${target}-rc.*`, '--abbrev=0', 'HEAD']);
-  if (!new RegExp(`^v${target.replaceAll('.', '\\.')}-rc\\.\\d+$`).test(cutoff)) {
-    throw new Error(`Invalid RC cutoff tag: ${cutoff}`);
-  }
-  checkStableCutoff(cutoff, undefined, versioned);
-}
-
-function checkStableCutoff(cutoff: string, candidate?: string, versioned = true): void {
-  const cutoffCommit = git(['rev-parse', '--verify', `${cutoff}^{commit}`]);
-  const candidateCommit = git(['rev-parse', '--verify', `${candidate || 'HEAD'}^{commit}`]);
-  const ancestry = Bun.spawnSync(
-    ['git', 'merge-base', '--is-ancestor', cutoffCommit, candidateCommit],
-    {
-      cwd: root,
-    },
-  );
-  if (ancestry.exitCode !== 0) {
-    throw new Error(`Selected RC cutoff ${cutoff} must be an ancestor of the stable candidate`);
-  }
-  // An omitted candidate includes staged and unstaged local release files.
-  const revisions = candidate ? [cutoffCommit, candidateCommit] : [cutoffCommit];
-  const changed = git(['diff', '--name-only', ...revisions, '--'])
-    .split('\n')
-    .filter(Boolean);
-  if (changed.length === 0) throw new Error('Stable candidate has no release metadata changes');
-  // Before versioning, only exit intent may differ; afterward allow release files.
-  const allowed = versioned
-    ? /^(?:\.changeset\/[^/]+|packages\/[^/]+\/(?:package\.json|CHANGELOG\.md)|bun\.lock)$/
-    : /^\.changeset\/pre\.json$/;
-  if (changed.some((path) => !allowed.test(path))) {
-    throw new Error(`Stable promotion must preserve ${cutoff}; cut another RC for new changes`);
-  }
-  console.log(
-    `Verified stable candidate changes only release metadata after cutoff ${cutoffCommit}`,
-  );
-}
-
 function checkVersion(branch: string): void {
   const { version } = JSON.parse(readFileSync(resolve(root, 'packages/core/package.json'), 'utf8'));
   const match = /^(\d+\.\d+\.\d+)(-rc\.\d+)?$/.exec(version);
@@ -101,6 +58,20 @@ function checkVersion(branch: string): void {
     RELEASE_PRERELEASE: String(Boolean(match[2])),
     PRERELEASE_TAG: 'rc',
   });
+}
+
+function checkReleasePr(branch: string, base?: string, head?: string): void {
+  if (!base || !head) {
+    throw new Error('Usage: bun scripts/release-pr.ts check-pr <base-ref> <head-ref>');
+  }
+  const baseCommit = git(['rev-parse', '--verify', `${base}^{commit}`]);
+  const headCommit = git(['rev-parse', '--verify', `${head}^{commit}`]);
+  if (git(['merge-base', baseCommit, headCommit]) !== baseCommit) {
+    throw new Error('Release PR is behind its base; regenerate it before merging');
+  }
+  // The workflow checks out GitHub's prospective merge commit, so validate the
+  // files that would actually land on the release branch.
+  checkVersion(branch);
 }
 
 if (import.meta.main) {
@@ -129,7 +100,9 @@ if (import.meta.main) {
     run([process.execPath, 'install', '--lockfile-only', '--ignore-scripts']);
   } else if (command === 'check') {
     checkVersion(branch);
+  } else if (command === 'check-pr') {
+    checkReleasePr(branch, process.argv[3], process.argv[4]);
   } else {
-    throw new Error('Usage: bun scripts/release-pr.ts <status|version|check|cutoff>');
+    throw new Error('Usage: bun scripts/release-pr.ts <status|version|check|check-pr|cutoff>');
   }
 }

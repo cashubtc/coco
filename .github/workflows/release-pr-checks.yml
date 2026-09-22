@@ -5,24 +5,16 @@ on:
     branches:
       - master
     paths:
-      - 'scripts/release-pr*'
+      - 'scripts/release-*'
       - 'scripts/check-release.ts'
       - '.github/workflows/release-pr*.yml'
+      - '.github/workflows/publish.yml'
       - '.agents/skills/cut-stable-release/scripts/check-stable-cutoff.sh'
       - '.changeset/config.json'
       - 'package.json'
       - 'bun.lock'
+  # Always report the required release-files job, including on unrelated PRs.
   pull_request:
-    paths:
-      - 'scripts/release-pr*'
-      - 'scripts/check-release.ts'
-      - '.github/workflows/release-pr*.yml'
-      - '.agents/skills/cut-stable-release/scripts/check-stable-cutoff.sh'
-      - '.changeset/**'
-      - 'packages/*/package.json'
-      - 'packages/*/CHANGELOG.md'
-      - 'package.json'
-      - 'bun.lock'
 
 permissions:
   contents: read
@@ -44,15 +36,18 @@ jobs:
     env:
       RELEASE_BRANCH: ${{ github.base_ref }}
     steps:
-      - name: Checkout proposed release commit
+      - name: Checkout proposed release merge
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.11
-      - run: bun scripts/release-pr.ts check
+      - name: Validate release against its base and RC cutoff
+        env:
+          RELEASE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          RELEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: bun scripts/release-pr.ts check-pr "$RELEASE_BASE_SHA" "$RELEASE_HEAD_SHA"
       - run: bun run security:release-age
       - run: bun install --frozen-lockfile
       - run: bun run build

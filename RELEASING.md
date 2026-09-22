@@ -21,6 +21,11 @@ For fully automatic PR checks, a repository-scoped GitHub App token can be used
 for both checkout and the Changesets action instead of `GITHUB_TOKEN`.
 See [GitHub's workflow triggering rules](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).
 
+Protect `master` and `release/*-rc` with the required `release-files` check and
+**Require branches to be up to date before merging**. This prevents an earlier
+successful run from authorizing a merge after the base branch advances. See
+[GitHub's required status checks](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches#require-status-checks-before-merging).
+
 The workflow uses Changesets Action v1 with this repository's Changesets CLI v2.
 It maintains one PR per base branch, from `changeset-release/<base-branch>`.
 Runs are serialized per branch. **Prepare release PR** also supports a manual
@@ -36,8 +41,10 @@ that branch becomes inactive.
 
 The generated PR should contain only Changesets state, package manifests,
 changelogs, and `bun.lock`. Review the package versions and changelog text. The
-**Release PR checks** workflow validates the proposed release commit, frozen
-install, build, and typecheck. It also tests the stable and RC versioning flows.
+**Release PR checks** workflow requires the PR head to include its base commit
+and validates the proposed merge result, frozen install, build, and typecheck.
+If the base advances, let the bot regenerate the PR and review the new candidate.
+It also tests the stable and RC versioning flows.
 
 A branch name does not choose a version: Changesets calculates the version from
 pending changesets. The generated version must match `X.Y.Z` in an RC branch's
@@ -145,6 +152,11 @@ git push origin refs/tags/vX.Y.Z
 For an RC, substitute `vX.Y.Z-rc.N`. Create a GitHub Release for the existing tag:
 mark RC releases as **prerelease**, and stable releases as stable. The existing
 `.github/workflows/publish.yml` validates and publishes that tagged commit.
+The publisher fetches full history and tags. For stable versions with a reachable
+RC tag in the same version series, it also verifies that only release metadata
+differs from the RC cutoff. This check blocks publication of a stale promotion
+even if it was merged by bypassing branch protection. Keep RC tags available for
+this validation; direct stable releases without an ancestor RC remain supported.
 
 Stable packages go to npm's `latest` dist-tag. RCs explicitly use `rc`. The RC
 publisher removes `.changeset/pre.json` only in its CI checkout before running

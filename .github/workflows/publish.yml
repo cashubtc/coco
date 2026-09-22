@@ -15,6 +15,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -33,7 +34,7 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Check release versions
+      - name: Check release versions and RC cutoff
         env:
           PRERELEASE_TAG: rc
           RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}

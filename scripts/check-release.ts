@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { checkPublishedCutoff } from './release-cutoff.ts';
 
 type PackageJson = {
   private?: boolean;
@@ -207,6 +208,10 @@ if (mismatchedChangelogs.length > 0) {
       '\n',
     )}`,
   );
+}
+
+if (expectedReleaseKind === 'stable') {
+  checkPublishedCutoff(expectedVersion);
 }
 
 console.log(
