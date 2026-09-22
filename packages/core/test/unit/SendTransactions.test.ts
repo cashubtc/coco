@@ -561,40 +561,43 @@ describe('SendTransactions swap execution', () => {
     },
   );
 
-  it('leaves recovery executing when a legacy ready send output is reserved elsewhere', async () => {
-    const { repositories, transactions } = await setup();
-    const input = { ...proof('legacy-input'), usedByOperationId: 'legacy-reserved-output' };
-    const send = {
-      ...proof('legacy-send'),
-      state: 'inflight' as const,
-      createdByOperationId: input.usedByOperationId,
-    };
-    const executing: ExecutingSendOperation = {
-      ...preparedSend(input.usedByOperationId, [input], [send]),
-      state: 'executing',
-    };
-    const reservedSend = { ...send, state: 'ready' as const, usedByOperationId: 'later-send' };
-    await repositories.sendOperationRepository.create(executing);
-    await repositories.proofRepository.saveProofs(mintUrl, [input, reservedSend]);
+  it.each(['ready', 'inflight', 'spent'] as const)(
+    'leaves recovery executing when a legacy %s send output is reserved elsewhere',
+    async (state) => {
+      const { repositories, transactions } = await setup();
+      const input = { ...proof('legacy-input'), usedByOperationId: 'legacy-reserved-output' };
+      const send = {
+        ...proof('legacy-send'),
+        state: 'inflight' as const,
+        createdByOperationId: input.usedByOperationId,
+      };
+      const executing: ExecutingSendOperation = {
+        ...preparedSend(input.usedByOperationId, [input], [send]),
+        state: 'executing',
+      };
+      const reservedSend = { ...send, state, usedByOperationId: 'later-send' };
+      await repositories.sendOperationRepository.create(executing);
+      await repositories.proofRepository.saveProofs(mintUrl, [input, reservedSend]);
 
-    await expect(
-      transactions.applyResult({
-        operationId: executing.id,
-        updatedAt: 300,
-        keepProofs: [],
-        sendProofs: [send],
-        token: { mint: mintUrl, unit: 'sat', proofs: [send] },
-      }),
-    ).rejects.toThrow('reserved by another operation');
+      await expect(
+        transactions.applyResult({
+          operationId: executing.id,
+          updatedAt: 300,
+          keepProofs: [],
+          sendProofs: [send],
+          token: { mint: mintUrl, unit: 'sat', proofs: [send] },
+        }),
+      ).rejects.toThrow('reserved by another operation');
 
-    expect(await repositories.sendOperationRepository.getById(executing.id)).toEqual(executing);
-    expect(await repositories.proofRepository.getProofBySecret(mintUrl, input.secret)).toEqual(
-      input,
-    );
-    expect(await repositories.proofRepository.getProofBySecret(mintUrl, send.secret)).toEqual(
-      reservedSend,
-    );
-  });
+      expect(await repositories.sendOperationRepository.getById(executing.id)).toEqual(executing);
+      expect(await repositories.proofRepository.getProofBySecret(mintUrl, input.secret)).toEqual(
+        input,
+      );
+      expect(await repositories.proofRepository.getProofBySecret(mintUrl, send.secret)).toEqual(
+        reservedSend,
+      );
+    },
+  );
 
   it('settles a legacy partial result without resetting existing output state or ownership', async () => {
     const { repositories, transactions } = await setup();

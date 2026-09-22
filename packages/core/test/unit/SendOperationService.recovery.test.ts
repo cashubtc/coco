@@ -1,4 +1,4 @@
-import { Amount, type ProofState as CashuProofState } from '@cashu/cashu-ts';
+import { Amount, type ProofState as CashuProofState, type Token } from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it, mock } from 'bun:test';
 import { createSendEnvironment } from '../fixtures/SendEnvironment.ts';
 import { preparedSend, pendingSend } from '../fixtures/SendOperation.ts';
@@ -15,6 +15,7 @@ import type {
   RolledBackSendOperation,
 } from '../../operations/send/SendOperation.ts';
 import type { CoreProof } from '../../types.ts';
+import { computeYHexForSecrets } from '../../utils.ts';
 
 const mintUrl = 'https://mint.test';
 const keysetId = testMintKeysetId();
@@ -286,6 +287,66 @@ describe('SendOperationService executing recovery', () => {
       spentChange,
     );
     expect(remote.swap).not.toHaveBeenCalled();
+  });
+
+  it('does not republish a legacy output committed to a later exact Send', async () => {
+    const legacyId = 'legacy-output-reused';
+    const input = coreProof('legacy-spent-input', {
+      amount: Amount.from(8),
+      state: 'spent',
+      usedByOperationId: legacyId,
+    });
+    const output = coreProof('legacy-ready-output', {
+      amount: Amount.from(8),
+      createdByOperationId: legacyId,
+    });
+    const legacy: ExecutingSendOperation = {
+      ...preparedSend(legacyId, [input], [output]),
+      state: 'executing',
+      revision: undefined,
+    };
+    // Legacy recovery could save available outputs before persisting the operation result.
+    await repositories.sendOperationRepository.create(legacy);
+    await repositories.proofRepository.saveProofs(mintUrl, [input, output]);
+
+    const prepared = await service.prepare(
+      await service.init(mintUrl, { amount: Amount.from(8), unit: 'sat' }),
+    );
+    expect(prepared.needsSwap).toBe(false);
+    const later = await service.execute(prepared);
+    expect(later.token.proofs.map((proof) => proof.secret)).toEqual([output.secret]);
+    const committedOutput = await repositories.proofRepository.getProofBySecret(
+      mintUrl,
+      output.secret,
+    );
+    expect(committedOutput).toMatchObject({
+      state: 'inflight',
+      createdByOperationId: legacyId,
+      usedByOperationId: later.operation.id,
+    });
+
+    const republished: Token[] = [];
+    eventBus.on('send:pending', (event) => {
+      if (event.operationId === legacyId) republished.push(event.token);
+    });
+    remote.checkProofStates.mockImplementation(async (proofs) =>
+      proofs.map((proof) => ({
+        Y: computeYHexForSecrets([proof.secret])[0]!,
+        state: proof.secret === input.secret ? 'SPENT' : 'UNSPENT',
+        witness: null,
+      })),
+    );
+
+    await service.recoverPendingOperations();
+
+    expect(republished).toEqual([]);
+    expect((await service.getOperation(legacyId))?.state).toBe('executing');
+    expect(await service.getOperation(later.operation.id)).toEqual(later.operation);
+    expect(await repositories.proofRepository.getProofBySecret(mintUrl, output.secret)).toEqual(
+      committedOutput,
+    );
+    expect(remote.swap).not.toHaveBeenCalled();
+    expect(remote.restoreOutputs).not.toHaveBeenCalled();
   });
 
   it('recovers legacy ready send outputs without making the pending token locally spendable', async () => {

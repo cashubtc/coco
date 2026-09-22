@@ -414,9 +414,22 @@ export class RepositorySendCommands implements ScopedSendCommands {
         'Swap output already exists with conflicting proof data or ownership',
       );
     }
-    // Old default recovery saved send outputs as ready. Remove those from the available balance
-    // before publishing their pending token, without taking another operation's reservation.
+    // Old recovery outputs may now belong to another Send, even if already inflight or spent.
+    // Validate current use for send outputs only; change may legitimately be reserved elsewhere.
     const sendSecrets = new Set(input.sendProofs.map((proof) => proof.secret));
+    if (
+      existing.some(
+        (proof) =>
+          sendSecrets.has(proof.secret) &&
+          proof.usedByOperationId != null &&
+          proof.usedByOperationId !== current.id,
+      )
+    ) {
+      throw new ProofValidationError(
+        'Cannot apply Send result with send proofs reserved by another operation',
+      );
+    }
+    // Remove legacy ready send outputs from the available balance before publishing their token.
     const inflightProofSecrets = existing
       .filter((proof) => sendSecrets.has(proof.secret) && proof.state === 'ready')
       .map((proof) => proof.secret);
