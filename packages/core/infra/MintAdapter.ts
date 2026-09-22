@@ -1,4 +1,5 @@
 import {
+  Keyset as CashuKeyset,
   Mint,
   isBlsKeyset,
   type CheckStatePayload,
@@ -12,13 +13,15 @@ import {
   type MintQuoteBolt12Response,
   type MintQuoteOnchainResponse,
   type GetKeysetsResponse,
+  type MintKeyset,
   type AuthProvider,
 } from '@cashu/cashu-ts';
+import type { Logger } from '../logging/Logger.ts';
 import type { MintInfo } from '../types';
 import type { MintRequestProvider } from './MintRequestProvider.ts';
 import type { Keyset, KeysetKeypairs } from '../models/Keyset.ts';
 import type { MintMetadataObservation } from '../mints/MintMetadata.ts';
-import { KeysetSyncError, MintFetchError } from '../models/Error.ts';
+import { KeysetSyncError, KeysetVerificationError, MintFetchError } from '../models/Error.ts';
 import type { MintMethod } from '../operations/mint/MintMethodHandler.ts';
 
 type NormalizedMintQuoteSnapshot<M extends MintMethod> = M extends 'bolt11'
@@ -37,9 +40,11 @@ export class MintAdapter {
   private cashuMints: Record<string, Mint> = {};
   private readonly requestProvider: MintRequestProvider;
   private readonly authProviders = new Map<string, AuthProvider>();
+  private readonly logger?: Logger;
 
-  constructor(requestProvider: MintRequestProvider) {
+  constructor(requestProvider: MintRequestProvider, logger?: Logger) {
     this.requestProvider = requestProvider;
+    this.logger = logger;
   }
 
   /** Register an AuthProvider for a mint (NUT-21/22). Invalidates the cached Mint instance. */
@@ -69,13 +74,45 @@ export class MintAdapter {
     return await cashuMint.getKeySets();
   }
 
-  async fetchKeysForId(mintUrl: string, id: string): Promise<KeysetKeypairs> {
+  /**
+   * Fetches the keys a mint publishes for one of its advertised keysets.
+   *
+   * Takes the `/v1/keysets` entry rather than a bare id because a keyset id commits to its keys
+   * (NUT-02) and a v2 id also commits to `unit`, `input_fee_ppk` and `final_expiry`. `/v1/keys`
+   * omits `final_expiry`, so only the advertised entry can derive the id the keys must match.
+   * `Keyset.fromMintApi` reconciles the two responses and `verify` derives the id from the keys,
+   * so keys that contradict or do not derive the advertised keyset are rejected.
+   */
+  async fetchKeysForId(mintUrl: string, keyset: MintKeyset): Promise<KeysetKeypairs> {
     const cashuMint = this.getCashuMint(mintUrl);
-    const { keysets } = await cashuMint.getKeys(id);
-    if (keysets.length !== 1 || !keysets[0]) {
-      throw new Error(`Expected 1 keyset for ${id}, got ${keysets.length}`);
+    const { keysets } = await cashuMint.getKeys(keyset.id);
+    const [fetched] = keysets;
+    if (keysets.length !== 1 || !fetched) {
+      throw new KeysetVerificationError(
+        mintUrl,
+        keyset.id,
+        `Expected 1 keyset for ${keyset.id}, got ${keysets.length}`,
+      );
     }
-    return keysets[0].keys as KeysetKeypairs;
+    let advertised;
+    try {
+      advertised = CashuKeyset.fromMintApi(keyset, fetched);
+    } catch (error) {
+      throw new KeysetVerificationError(
+        mintUrl,
+        keyset.id,
+        `Mint served keys that contradict keyset ${keyset.id}`,
+        error,
+      );
+    }
+    if (!advertised.verify()) {
+      throw new KeysetVerificationError(
+        mintUrl,
+        keyset.id,
+        `Keys returned for keyset ${keyset.id} do not derive its id`,
+      );
+    }
+    return fetched.keys as KeysetKeypairs;
   }
 
   /** Fetches a metadata observation, reusing known keys without accessing Wallet storage. */
@@ -90,16 +127,32 @@ export class MintAdapter {
     const result = await this.fetchKeysets(mintUrl).catch((error: unknown) => {
       throw new MintFetchError(mintUrl, 'Failed to fetch keysets', error);
     });
-    const keysets = await Promise.all(
+    const observed = await Promise.all(
       result.keysets
         .filter((keyset) => !isBlsKeyset(keyset.id))
         .map(async (keyset) => {
           const known = knownKeysets.find((candidate) => candidate.id === keyset.id);
+          // Stored keys are reused only while they still derive the advertised entry. A keyset
+          // recorded without keys fails this, and so does one whose advertised unit, fee or
+          // expiry changed, which an `01`-prefixed id commits to and so cannot change under it.
           const keypairs =
-            known?.keypairs ??
-            (await this.fetchKeysForId(mintUrl, keyset.id).catch((error: unknown) => {
-              throw new KeysetSyncError(mintUrl, keyset.id, undefined, error);
-            }));
+            known && CashuKeyset.verifyKeysetId({ ...keyset, keys: known.keypairs as Keys })
+              ? known.keypairs
+              : await this.fetchKeysForId(mintUrl, keyset).catch((error: unknown) => {
+                  // Refusing one keyset's keys must not cost the Wallet the keysets that did
+                  // verify, or one bad keyset makes every balance at this mint unreachable.
+                  if (error instanceof KeysetVerificationError) {
+                    this.logger?.warn('Skipping keyset whose keys failed NUT-02 verification', {
+                      mintUrl,
+                      keysetId: keyset.id,
+                      error,
+                    });
+                    return null;
+                  }
+                  if (error instanceof KeysetSyncError) throw error;
+                  throw new KeysetSyncError(mintUrl, keyset.id, undefined, error);
+                });
+          if (keypairs === null) return null;
           return {
             mintUrl,
             id: keyset.id,
@@ -110,6 +163,7 @@ export class MintAdapter {
           };
         }),
     );
+    const keysets = observed.filter((keyset) => keyset !== null);
     return { mintUrl, mintInfo, keysets, observedAt };
   }
 
