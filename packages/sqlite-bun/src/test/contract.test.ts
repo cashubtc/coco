@@ -17,6 +17,7 @@ import {
   runSendOperationRepositoryContract,
   runMeltOperationRepositoryContract,
   runMeltQuoteRepositoryContract,
+  runMintSwapPersistenceContract,
 } from '@cashu/coco-adapter-tests';
 import { RepositoryTransactionConflictError } from '@cashu/coco-core/adapter';
 import { runSqlDatabaseContract } from '@cashu/coco-sql-storage/test';
@@ -32,6 +33,16 @@ async function createRepositories() {
     dispose: async () => {
       rawDatabase.close();
     },
+  };
+}
+
+async function createMintSwapRepositories() {
+  const rawDatabase = new Database(':memory:');
+  const repositories = new Repositories({ database: rawDatabase, mintSwap: true });
+  await repositories.init();
+  return {
+    repositories,
+    dispose: async () => rawDatabase.close(),
   };
 }
 
@@ -87,6 +98,14 @@ runRepositoryTransactionContract(
 
 runKeypairAllocationContract(
   { createRepositories, createSharedRepositories },
+  { describe, it, expect },
+);
+
+runMintSwapPersistenceContract(
+  {
+    createRepositories: createMintSwapRepositories,
+    createDisabledRepositories: createRepositories,
+  },
   { describe, it, expect },
 );
 

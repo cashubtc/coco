@@ -15,7 +15,10 @@ import {
   runSendOperationRepositoryContract,
   runMeltOperationRepositoryContract,
   runMeltQuoteRepositoryContract,
+  createMintSwapFixtures,
+  runMintSwapPersistenceContract,
 } from '@cashu/coco-adapter-tests';
+import { MintSwapIdentityConflictError } from '@cashu/coco-core/adapter';
 import { IndexedDbRepositories } from '../index.ts';
 
 let dbCounter = 0;
@@ -29,6 +32,16 @@ async function createRepositories() {
     dispose: async () => {
       repositories.db.close();
     },
+  };
+}
+
+async function createMintSwapRepositories() {
+  const dbName = `coco_cashu_mint_swap_contract_${Date.now()}_${dbCounter++}`;
+  const repositories = new IndexedDbRepositories({ name: dbName, mintSwap: true });
+  await repositories.init();
+  return {
+    repositories,
+    dispose: async () => repositories.db.close(),
   };
 }
 
@@ -74,6 +87,43 @@ runKeypairAllocationContract(
   { createRepositories, createSharedRepositories },
   { describe, it, expect },
 );
+
+runMintSwapPersistenceContract(
+  {
+    createRepositories: createMintSwapRepositories,
+    createDisabledRepositories: createRepositories,
+  },
+  { describe, it, expect },
+);
+
+describe('Mint Swap create error classification', () => {
+  it('does not relabel a non-constraint Dexie failure when an identity already exists', async () => {
+    const { repositories, dispose } = await createMintSwapRepositories();
+    const repository = repositories.mintSwap!.operationRepository;
+    const table = repositories.db.table('coco_cashu_mint_swap_operations');
+    const operation = createMintSwapFixtures('idb-create-failure').preparing;
+    const failCreate = () => {
+      throw new Error('forced mint swap create failure');
+    };
+    try {
+      await repository.create(operation);
+      table.hook('creating').subscribe(failCreate);
+
+      let thrown: unknown;
+      try {
+        await repository.create(operation);
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).not.toBeInstanceOf(MintSwapIdentityConflictError);
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message).toBe('forced mint swap create failure');
+    } finally {
+      table.hook('creating').unsubscribe(failCreate);
+      await dispose();
+    }
+  });
+});
 
 runAuthSessionRepositoryContract({ createRepositories }, { describe, it, expect });
 
@@ -309,6 +359,16 @@ describe('indexeddb quote storage constraints', () => {
           .table('coco_cashu_keypairs')
           .schema.indexes.some((index) => index.name === '[purpose+derivationIndex]'),
       ).toBe(true);
+      expect(
+        repositories.db.tables.some((table) => table.name === 'coco_cashu_mint_swap_operations'),
+      ).toBe(true);
+      const mintSwapIndexes = repositories.db.table('coco_cashu_mint_swap_operations').schema
+        .indexes;
+      expect(mintSwapIndexes.some((index) => index.name === 'sourceOperationId')).toBe(true);
+      expect(mintSwapIndexes.some((index) => index.name === 'destinationOperationId')).toBe(true);
+      expect(
+        repositories.db.tables.some((table) => table.name.includes('operation_event_outbox')),
+      ).toBe(false);
       await expect(allocateKeypairForTest(repositories, 'p2pk')).resolves.toMatchObject({
         derivationIndex: 7,
       });

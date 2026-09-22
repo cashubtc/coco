@@ -5,6 +5,7 @@ import { SqliteDb } from './db.ts';
 
 export interface SqliteRepositoriesOptions {
   database: Database;
+  mintSwap?: boolean;
 }
 
 export class SqliteRepositories implements Repositories {
@@ -24,13 +25,17 @@ export class SqliteRepositories implements Repositories {
   readonly receiveOperationRepository: Repositories['receiveOperationRepository'];
   readonly paymentRequestReceiveOperationRepository: Repositories['paymentRequestReceiveOperationRepository'];
   readonly paymentRequestReceiveAttemptRepository: Repositories['paymentRequestReceiveAttemptRepository'];
+  readonly mintSwap?: Repositories['mintSwap'];
   private readonly db: SqliteDb;
 
   private readonly repositories: SqlStorageRepositories;
 
   constructor(options: SqliteRepositoriesOptions) {
     this.db = new SqliteDb(options);
-    this.repositories = new SqlStorageRepositories({ database: this.db });
+    this.repositories = new SqlStorageRepositories({
+      database: this.db,
+      mintSwap: options.mintSwap,
+    });
     this.mintRepository = this.repositories.mintRepository;
     this.keyRingRepository = this.repositories.keyRingRepository;
     this.counterRepository = this.repositories.counterRepository;
@@ -49,6 +54,7 @@ export class SqliteRepositories implements Repositories {
       this.repositories.paymentRequestReceiveOperationRepository;
     this.paymentRequestReceiveAttemptRepository =
       this.repositories.paymentRequestReceiveAttemptRepository;
+    this.mintSwap = this.repositories.mintSwap;
   }
 
   async init(): Promise<void> {
