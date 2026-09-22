@@ -120,9 +120,10 @@ It does not need a new changeset just to promote the RC.
 Freeze source changes on the RC branch until promotion is complete. Review the
 stable PR against the selected RC, confirm only release metadata changed, and
 merge after checks pass. Follow **Tag And Publish** with `vX.Y.Z`, without marking
-it as a prerelease. The automated flow has an exit-intent commit and a version PR;
-the existing local release skills remain an alternative for cutting release
-metadata directly at the RC cutoff.
+it as a prerelease. The release skills follow this version PR flow by default;
+their explicit local fallback also supports rehearsals directly at the RC cutoff.
+Both paths use the same cutoff validator, which allows release metadata commits
+and PR merges after the selected RC while preserving its source.
 
 After publishing, open a separate PR merging the stable release history into
 current `master`. Use a merge commit to preserve ancestry. Preserve newer source

@@ -1,4 +1,4 @@
 interface:
   display_name: 'Cut Stable Release'
-  short_description: 'Finalize stable from master or an RC cutoff'
-  default_prompt: 'Use $cut-stable-release to finalize a coco stable release from master or a selected RC cutoff, validate it, commit it, tag it, and push the source branch plus tag.'
+  short_description: 'Promote an RC through a stable version PR'
+  default_prompt: 'Use $cut-stable-release to promote the selected RC through a stable version PR, verify its source cutoff, and push the tag for the merged release commit.'

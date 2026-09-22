@@ -183,3 +183,51 @@ test('requires another tagged RC when source changes after the selected cutoff',
   expect(version(directory, branch, false)).toContain('cut another RC');
   expect(readJson(directory, 'packages/core/package.json').version).toBe('2.0.0-rc.0');
 }, 30_000);
+
+test('the skill cutoff helper accepts metadata PR merges and checks the selected ancestor', () => {
+  const directory = fixture();
+  const helper = join(
+    repository,
+    '.agents/skills/cut-stable-release/scripts/check-stable-cutoff.sh',
+  );
+  const cutoff = command(directory, ['git', 'rev-parse', 'HEAD']).trim();
+  writeJson(directory, '.changeset/pre.json', { mode: 'exit', tag: 'rc' });
+  commit(directory);
+  command(directory, ['git', 'switch', '-c', 'stable-version-pr']);
+  writeJson(directory, 'packages/core/package.json', { name: '@fixture/core', version: '2.0.0' });
+  writeFileSync(join(directory, 'bun.lock'), '{}\n');
+  rmSync(join(directory, '.changeset/pre.json'));
+  commit(directory);
+  command(directory, ['git', 'switch', 'master']);
+  command(directory, [
+    'git',
+    'merge',
+    '--no-ff',
+    'stable-version-pr',
+    '-m',
+    'Merge stable version PR',
+  ]);
+
+  const check = (candidate: string, success = true) =>
+    command(directory, ['bash', helper, cutoff, candidate, directory], 'master', success);
+  expect(check('HEAD')).toContain('only release metadata');
+  expect(check(cutoff, false)).toContain('no release metadata changes');
+  expect(check('')).toContain('only release metadata');
+
+  // Named candidates are checked independently of unrelated worktree edits.
+  writeFileSync(join(directory, 'packages/core/index.ts'), 'export const value = 2;\n');
+  expect(check('', false)).toContain('cut another RC');
+  expect(check('HEAD')).toContain('only release metadata');
+  commit(directory);
+  expect(check('HEAD', false)).toContain('cut another RC');
+
+  const tree = command(directory, ['git', 'rev-parse', `${cutoff}^{tree}`]).trim();
+  const unrelated = command(directory, [
+    'git',
+    'commit-tree',
+    tree,
+    '-m',
+    'Unrelated history',
+  ]).trim();
+  expect(check(unrelated, false)).toContain('must be an ancestor');
+});

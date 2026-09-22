@@ -1,136 +1,61 @@
 ---
 name: cut-rc-release
-description: Cut a coco prerelease/RC from a dedicated `release/X.Y.Z-rc` branch. Use when the user asks to create a first or follow-up `vX.Y.Z-rc.N` release, version packages in Changesets prerelease mode, commit `.changeset/pre.json` plus package manifests and changelogs, tag the release commit, and push the prerelease branch and tag. Supports dry-run, preview, and rehearsal requests by stopping before push.
+description: Cut a first or follow-up coco RC through a release-branch version PR, or resume tagging its merged commit. Use for RC release requests; use the local path for explicit dry runs or manual fallback.
 ---
 
 # Cut RC Release
 
-## Purpose
+Prepare an RC on `release/X.Y.Z-rc` and tag the validated release commit. For
+stable promotion, use `$cut-stable-release`.
 
-Run the local git-side workflow for a coco RC release. This skill prepares the
-release commit and tag only; npm publish happens later when a GitHub prerelease
-is created for the tag.
+## Route The Request
 
-Use this for tags like `v2.0.0-rc.0`. Do not use it for stable `vX.Y.Z`
-releases; use `$cut-stable-release` instead.
+Use the bot version PR flow below by default. For a dry run, preview, rehearsal,
+or explicitly requested local fallback, read
+[Local preparation](../../../docs/agents/release-skills.md#local-preparation)
+instead. Both paths end at a pushed tag, or a local tag for a dry run; GitHub
+Release publication is a separate action.
 
-## Safety
+Read [RELEASING.md](../../../RELEASING.md) for repository setup and the current
+release commands. Work in a clean dedicated release worktree; preserve unrelated
+changes by using a separate worktree.
 
-- Work from a clean worktree. If `git status -sb` shows local changes, stop.
-- Use a dedicated prerelease branch named `release/X.Y.Z-rc`.
-- Do not run `changeset publish` and do not create a GitHub Release from this
-  skill. The publish workflow validates the committed `.changeset/pre.json`,
-  removes it only in the CI checkout, and publishes with `--tag rc`.
-- Treat `dry run`, `dry-run`, `--dry-run`, `preview`, or `rehearsal` as a
-  request to create the local commit and tag but skip pushing.
-- Networked git commands usually need escalation.
+## Prepare Or Resume The RC
 
-## Workflow
+1. **Identify the release.** Record `RELEASE_BRANCH` and the intended version
+   series from the request and pending changesets. Inspect remote state and any
+   existing version PR before changing files. A branch name does not select the
+   Changesets version. Done when the requested RC cycle and its current state
+   are known.
 
-1. Decide whether this is dry-run mode.
+2. **Choose the starting point.** For a first RC with no existing branch, create it from the
+   intended `master` cutoff and follow **Start An RC Cycle** in `RELEASING.md`.
+   Push the committed prerelease intent so the bot can prepare the version PR.
+   For a follow-up, use the existing RC branch with only the intended fixes and
+   their changesets. Preserve its prerelease state. Done when the branch has
+   `.changeset/pre.json` in `pre` mode with tag `rc`.
 
-2. Confirm the worktree is clean:
+3. **Find unconsumed work.** Changesets CLI v2 keeps consumed RC changeset files;
+   exclude IDs recorded in `pre.json.changesets` and ignore empty changesets when
+   deciding whether another RC is due. If no unconsumed package changesets remain,
+   look for the requested release's already-merged version PR and resume tagging
+   it. A new no-change RC requires an explicit request and the local path. Done
+   when either new release work or an existing release commit is identified. If
+   neither exists, report that there is no RC to cut and leave the branch unchanged.
 
-   ```bash
-   git status -sb
-   ```
+4. **Use the version PR.** Locate the PR from
+   `changeset-release/<RELEASE_BRANCH>` into `RELEASE_BRANCH`. Use **Prepare
+   release PR** on that branch to retry a failed run after fixing its cause.
+   Review versions, changelogs, dependencies, prerelease state, and lockfile;
+   require the RC series to match the branch. Continue with
+   [Finish a version PR](../../../docs/agents/release-skills.md#finish-a-version-pr).
+   Versioning is already done by the bot; tag its merged commit without running
+   `changeset version` again.
 
-3. Confirm or create the prerelease branch.
+## Derive RC Metadata
 
-   If already on `release/X.Y.Z-rc`, continue. If starting a new RC cycle from
-   `master`, sync `master` and create the prerelease branch:
-
-   ```bash
-   git fetch origin master --tags
-   git switch master
-   git pull --ff-only origin master
-   git switch -c release/X.Y.Z-rc
-   ```
-
-   If the current worktree is not a dedicated release worktree, create a new
-   worktree instead of switching a feature worktree in place.
-
-4. Confirm there are pending changesets:
-
-   ```bash
-   find .changeset -maxdepth 1 -type f -name '*.md' ! -name 'README.md' | sort
-   ```
-
-   If this is empty, stop unless the user explicitly asked for a no-change RC.
-
-5. Enter prerelease mode only when needed:
-
-   ```bash
-   test -f .changeset/pre.json || bunx changeset pre enter rc
-   ```
-
-   If `.changeset/pre.json` exists, inspect it before continuing. It must have
-   `mode: "pre"` and `tag: "rc"`.
-
-6. Generate prerelease versions and changelogs:
-
-   ```bash
-   bunx changeset version
-   ```
-
-7. Derive release metadata from the versioned files:
-
-   ```bash
-   eval "$(.agents/skills/cut-rc-release/scripts/derive-rc-release-metadata.sh)"
-   printf '%s\n' "$NEW_PACKAGE_VERSION" "$NEW_RELEASE_TAG" "$RELEASE_BRANCH" "$COMMIT_MESSAGE"
-   ```
-
-8. Validate the committed release state and build:
-
-   ```bash
-   env RELEASE_TAG="$NEW_RELEASE_TAG" RELEASE_PRERELEASE=true PRERELEASE_TAG=rc \
-     bun scripts/check-release.ts
-   bun install --frozen-lockfile
-   bun run build
-   ```
-
-9. Review the diff before committing:
-
-   ```bash
-   git diff --name-only
-   git diff --stat
-   ```
-
-   Expect only `.changeset/`, `packages/*/package.json`, and
-   `packages/*/CHANGELOG.md` release-file changes. Stop if unrelated files
-   changed.
-
-10. Commit and tag:
-
-    ```bash
-    git add .changeset packages/*/package.json packages/*/CHANGELOG.md
-    git commit -m "$COMMIT_MESSAGE"
-    git tag "$NEW_RELEASE_TAG"
-    ```
-
-11. Finish.
-
-    Normal mode:
-
-    ```bash
-    git push --atomic origin "$RELEASE_BRANCH" "refs/tags/$NEW_RELEASE_TAG"
-    ```
-
-    Dry-run mode:
-
-    ```bash
-    git status -sb
-    git log --decorate --oneline -1
-    git show --stat --decorate --no-patch HEAD
-    git tag --list "$NEW_RELEASE_TAG"
-    ```
-
-12. Report the package version, tag, release branch, commit SHA, and whether the
-    branch/tag were pushed or intentionally left local.
-
-## Notes
-
-- For a follow-up RC, merge or otherwise bring the intended changesets onto the
-  existing prerelease branch first, then run this workflow from step 4.
-- If validation fails, fix the release files before tagging. Do not bypass
-  `scripts/check-release.ts`.
+At the candidate release commit, run
+`scripts/derive-rc-release-metadata.sh` from this skill directory. Record its
+`NEW_PACKAGE_VERSION`, `NEW_RELEASE_TAG`, and `RELEASE_BRANCH`; the derived branch
+must equal the intended branch recorded above. The shared finish procedure then
+validates and tags that exact commit.

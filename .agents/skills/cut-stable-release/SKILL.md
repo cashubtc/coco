@@ -1,216 +1,76 @@
 ---
 name: cut-stable-release
-description: Cut a coco stable release from `master` or finalize a selected RC cutoff from an existing `release/X.Y.Z-rc` branch while `master` continues independently. Use when the user asks to create a stable `vX.Y.Z` release, preserve an RC's runtime source, finalize Changesets prerelease metadata, validate and build the release, commit and tag it, and push the source branch plus tag. Supports dry-run, preview, and rehearsal requests by stopping before push.
+description: Promote a selected coco RC to stable through a version PR, or resume tagging its merged commit. Also handles explicitly requested direct stable releases from master and local dry runs or manual fallback.
 ---
 
 # Cut Stable Release
 
-## Purpose
+Promote the selected RC on `release/X.Y.Z-rc`, preserving its source while
+`master` advances. For RC versions, use `$cut-rc-release`.
 
-Run the local git-side workflow for a stable coco release. This skill prepares
-the stable release commit and tag only; npm publish happens later when a GitHub
-Release is created for the tag.
+## Route The Request
 
-Use this for tags like `v2.0.0`. Use `$cut-rc-release` for RC tags like
-`v2.0.0-rc.0`.
+Default to stable promotion from an RC. Use the **Stable Releases From Master**
+path in [RELEASING.md](../../../RELEASING.md) only when the user requests a direct
+stable release; then follow the shared finish procedure without an RC cutoff.
 
-## Safety
+For a dry run, preview, rehearsal, or explicitly requested local fallback, read
+[Local preparation](../../../docs/agents/release-skills.md#local-preparation)
+instead. Both paths end at a pushed tag, or a local tag for a dry run; GitHub
+Release publication is a separate action.
 
-- Work from a clean dedicated release worktree. If `git status -sb` shows local
-  changes, stop.
-- Do not run `changeset publish` and do not create a GitHub Release from this
-  skill.
-- Stable release tags must not contain `.changeset/pre.json`; the repo
-  validator enforces this.
-- For stable-from-RC releases, preserve the selected RC as the source cutoff.
-  The stable commit may change only Changesets metadata, package manifests,
-  and package changelogs.
-- Keep `master` work that landed after the RC out of the stable tag. Back-merge
-  the stable release metadata into `master` after the release cut.
-- Treat `dry run`, `dry-run`, `--dry-run`, `preview`, or `rehearsal` as a
-  request to create the local commit and tag but skip pushing.
-- Networked git commands usually need escalation.
+Read `RELEASING.md` for setup and current release commands. Work in a clean
+dedicated release worktree; preserve unrelated changes using a separate worktree.
 
-## Choose The Path
+## Prepare Or Resume Promotion
 
-- Direct stable release: start from `master` with pending changesets and no RC
-  cycle.
-- Final stable after RCs: start from the existing `release/X.Y.Z-rc` branch,
-  require its HEAD to be the selected RC tag, then create one stable metadata
-  commit directly on that cutoff. `master` may have advanced independently.
+1. **Record the cutoff.** Fetch the RC branch and tags. Record `RELEASE_BRANCH`,
+   `RC_CUTOFF_TAG`, and its peeled commit SHA as `RC_CUTOFF_COMMIT`. Use the RC
+   selected by the user, or identify the tagged RC at branch HEAD when none was
+   specified. For a resumed promotion, recover the cutoff from task/PR context or
+   the matching reachable RC tag; clarify only if the selection remains ambiguous.
+   Keep this exact cutoff throughout the task. Done when a tagged RC
+   in the intended version series is selected.
 
-## Direct Stable Workflow
+2. **Inspect promotion state.** If a stable version PR is already open or merged,
+   resume it against the recorded cutoff. If `pre.json` already has mode `exit`,
+   resume the bot workflow. For a new promotion, require branch HEAD to equal
+   `RC_CUTOFF_COMMIT`, then follow **Promote A Selected RC To Stable** in
+   `RELEASING.md` to commit and push exit intent. Source changes after the selected
+   RC require another RC. Done when exit intent is committed or an existing stable
+   candidate is identified.
 
-1. Confirm the worktree is clean and on `master`:
+3. **Review the stable version PR.** Use the PR from
+   `changeset-release/<RELEASE_BRANCH>` into the same RC branch. Check the stable
+   version matches the cutoff's release series, prerelease state is removed,
+   and versions, dependencies, changelogs, and lockfile are updated. No new
+   changeset is needed solely for promotion. Record the PR head as
+   `RELEASE_COMMIT` and validate it with the cutoff helper below. Review manifest
+   and lockfile changes for release-version and internal-dependency bookkeeping;
+   runtime settings or external dependency changes require another RC. Done when the proposed stable commit passes release
+   checks and preserves the selected cutoff.
 
-   ```bash
-   git status -sb
-   git branch --show-current
-   ```
+4. **Finish the release.** Follow
+   [Finish a version PR](../../../docs/agents/release-skills.md#finish-a-version-pr).
+   Recheck the actual merged commit against `RC_CUTOFF_COMMIT` before tagging.
+   Report the separate back-merge into `master` as remaining work; perform it
+   only when covered by the user's request. Use the merge-commit procedure in
+   `RELEASING.md` to retain release ancestry.
 
-2. Sync `master`:
+## Validate The Selected Cutoff
 
-   ```bash
-   git fetch origin master --tags
-   git pull --ff-only origin master
-   ```
+Run this skill's helper from the candidate worktree:
 
-3. Confirm there are pending changesets:
+```bash
+.agents/skills/cut-stable-release/scripts/check-stable-cutoff.sh \
+  "$RC_CUTOFF_COMMIT" "$RELEASE_COMMIT"
+```
 
-   ```bash
-   find .changeset -maxdepth 1 -type f -name '*.md' ! -name 'README.md' | sort
-   ```
+The helper shares the automation's validator: the selected cutoff must be an
+ancestor and only permitted release files may differ, including `bun.lock`.
+Exit-intent commits and PR merges are allowed. For local uncommitted release
+files, omit the candidate argument to compare the worktree instead.
 
-   If this is empty, stop rather than creating a no-op release.
-
-4. Generate stable versions and changelogs:
-
-   ```bash
-   bunx changeset version
-   ```
-
-5. Continue at "Commit And Tag".
-
-## Stable From RC Workflow
-
-1. Confirm the worktree is clean and on the RC branch:
-
-   ```bash
-   git status -sb
-   git branch --show-current
-   ```
-
-   The branch should be `release/X.Y.Z-rc`.
-
-2. Sync the branch and tags:
-
-   ```bash
-   RELEASE_BRANCH="$(git branch --show-current)"
-   git fetch origin "$RELEASE_BRANCH" --tags
-   git pull --ff-only origin "$RELEASE_BRANCH"
-   ```
-
-3. Select the RC cutoff at branch HEAD:
-
-   ```bash
-   RC_CUTOFF_TAG="$(git tag --points-at HEAD --list 'v*-rc.*' --sort=-v:refname | head -n 1)"
-   test -n "$RC_CUTOFF_TAG"
-   RC_CUTOFF_COMMIT="$(git rev-parse "$RC_CUTOFF_TAG^{commit}")"
-   test "$(git rev-parse HEAD)" = "$RC_CUTOFF_COMMIT"
-   ```
-
-   Stop if the branch has commits after the selected RC. Runtime or repository
-   changes after an RC require a new RC; they do not belong in the stable
-   metadata commit.
-
-4. Confirm `.changeset/pre.json` is present, then exit prerelease mode and
-   generate stable versions:
-
-   ```bash
-   test -f .changeset/pre.json
-   bunx changeset pre exit
-   bunx changeset version
-   ```
-
-5. Continue at "Commit And Tag" with `RELEASE_BRANCH`, `RC_CUTOFF_TAG`, and
-   `RC_CUTOFF_COMMIT` available in the shell.
-
-## Commit And Tag
-
-1. Derive release metadata from the versioned files:
-
-   ```bash
-   eval "$(.agents/skills/cut-stable-release/scripts/derive-stable-release-metadata.sh)"
-   printf '%s\n' "$NEW_PACKAGE_VERSION" "$NEW_RELEASE_TAG" "$COMMIT_MESSAGE"
-   ```
-
-   For stable-from-RC, confirm that the stable tag matches the RC line:
-
-   ```bash
-   [[ "$RC_CUTOFF_TAG" == "${NEW_RELEASE_TAG}-rc."* ]]
-   ```
-
-2. Validate the committed release state and build:
-
-   ```bash
-   env RELEASE_TAG="$NEW_RELEASE_TAG" RELEASE_PRERELEASE=false PRERELEASE_TAG=rc \
-     bun scripts/check-release.ts
-   bun install --frozen-lockfile
-   bun run build
-   ```
-
-3. Review the diff before committing:
-
-   ```bash
-   git diff --name-only
-   git diff --stat
-   if [[ -n "${RC_CUTOFF_COMMIT:-}" ]]; then
-     .agents/skills/cut-stable-release/scripts/check-stable-cutoff.sh \
-       "$RC_CUTOFF_COMMIT"
-   fi
-   ```
-
-   Expect only `.changeset/`, `packages/*/package.json`, and
-   `packages/*/CHANGELOG.md` release-file changes. Stop if unrelated files
-   changed.
-
-4. Commit and tag:
-
-   ```bash
-   git add .changeset packages/*/package.json packages/*/CHANGELOG.md
-   git commit -m "$COMMIT_MESSAGE"
-   if [[ -n "${RC_CUTOFF_COMMIT:-}" ]]; then
-     .agents/skills/cut-stable-release/scripts/check-stable-cutoff.sh \
-       "$RC_CUTOFF_COMMIT" HEAD
-   fi
-   git tag "$NEW_RELEASE_TAG"
-   ```
-
-5. Push according to the selected path.
-
-   Direct stable normal mode:
-
-   ```bash
-   git push --atomic origin master "refs/tags/$NEW_RELEASE_TAG"
-   ```
-
-   Stable from RC normal mode:
-
-   ```bash
-   git push --atomic origin "$RELEASE_BRANCH" "refs/tags/$NEW_RELEASE_TAG"
-   ```
-
-   Dry-run mode:
-
-   ```bash
-   git status -sb
-   git log --decorate --oneline -1
-   git show --stat --decorate --no-patch HEAD
-   git tag --list "$NEW_RELEASE_TAG"
-   ```
-
-6. Report the package version, tag, commit SHA, and whether this was direct
-   stable or stable-from-RC. For stable-from-RC, also report the cutoff tag,
-   cutoff commit, release branch, that `master` was intentionally unchanged,
-   whether the release branch plus tag were pushed or left local, and that the
-   normal back-merge into `master` remains a separate follow-up.
-
-## Back-Merge After A Stable RC Release
-
-The stable tag remains on the direct child of the selected RC cutoff. After the
-release branch and tag are pushed, merge the stable release commit back into
-current `master` through the repository's normal review or merge process. A
-normal merge commit is expected because `master` can contain post-cutoff work.
-This back-merge records stable versions and consumed changesets on `master`; it
-does not change the stable tag or add post-cutoff work to the release.
-
-Treat the back-merge as a separate operation that requires its own user
-authorization. Do not perform it during a dry run.
-
-## Notes
-
-- If validation fails, fix the release files before tagging. Do not bypass
-  `scripts/check-release.ts`.
-- For stable-from-RC, stop if the stable candidate is not a direct child of the
-  selected RC or changes files outside the permitted release metadata paths.
-- If runtime source must change, cut another RC before stable finalization.
+At the validated candidate, run `scripts/derive-stable-release-metadata.sh` from
+this skill directory. Record `NEW_PACKAGE_VERSION` and `NEW_RELEASE_TAG`; for
+promotion, require `RC_CUTOFF_TAG` to match `${NEW_RELEASE_TAG}-rc.N`.

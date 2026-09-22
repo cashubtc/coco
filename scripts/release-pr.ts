@@ -54,14 +54,37 @@ function checkPromotionCutoff(target: string, versioned = false): void {
   if (!new RegExp(`^v${target.replaceAll('.', '\\.')}-rc\\.\\d+$`).test(cutoff)) {
     throw new Error(`Invalid RC cutoff tag: ${cutoff}`);
   }
+  checkStableCutoff(cutoff, undefined, versioned);
+}
+
+function checkStableCutoff(cutoff: string, candidate?: string, versioned = true): void {
+  const cutoffCommit = git(['rev-parse', '--verify', `${cutoff}^{commit}`]);
+  const candidateCommit = git(['rev-parse', '--verify', `${candidate || 'HEAD'}^{commit}`]);
+  const ancestry = Bun.spawnSync(
+    ['git', 'merge-base', '--is-ancestor', cutoffCommit, candidateCommit],
+    {
+      cwd: root,
+    },
+  );
+  if (ancestry.exitCode !== 0) {
+    throw new Error(`Selected RC cutoff ${cutoff} must be an ancestor of the stable candidate`);
+  }
+  // An omitted candidate includes staged and unstaged local release files.
+  const revisions = candidate ? [cutoffCommit, candidateCommit] : [cutoffCommit];
+  const changed = git(['diff', '--name-only', ...revisions, '--'])
+    .split('\n')
+    .filter(Boolean);
+  if (changed.length === 0) throw new Error('Stable candidate has no release metadata changes');
   // Before versioning, only exit intent may differ; afterward allow release files.
-  const changed = git(['diff', '--name-only', cutoff, '--']).split('\n').filter(Boolean);
   const allowed = versioned
     ? /^(?:\.changeset\/[^/]+|packages\/[^/]+\/(?:package\.json|CHANGELOG\.md)|bun\.lock)$/
     : /^\.changeset\/pre\.json$/;
   if (changed.some((path) => !allowed.test(path))) {
     throw new Error(`Stable promotion must preserve ${cutoff}; cut another RC for new changes`);
   }
+  console.log(
+    `Verified stable candidate changes only release metadata after cutoff ${cutoffCommit}`,
+  );
 }
 
 function checkVersion(branch: string): void {
@@ -81,9 +104,16 @@ function checkVersion(branch: string): void {
 }
 
 if (import.meta.main) {
+  const command = process.argv[2];
+  if (command === 'cutoff') {
+    const cutoff = process.argv[3];
+    if (!cutoff)
+      throw new Error('Usage: bun scripts/release-pr.ts cutoff <cutoff-ref> [candidate-ref]');
+    checkStableCutoff(cutoff, process.argv[4] || undefined);
+    process.exit(0);
+  }
   const branch = process.env.RELEASE_BRANCH;
   if (!branch) throw new Error('Set RELEASE_BRANCH to master or release/X.Y.Z-rc');
-  const command = process.argv[2];
   if (command === 'status') {
     const enabled = releasePrEnabled(branch, readPreState());
     console.log(`Release PR automation for ${branch}: ${enabled ? 'enabled' : 'inactive'}`);
@@ -100,6 +130,6 @@ if (import.meta.main) {
   } else if (command === 'check') {
     checkVersion(branch);
   } else {
-    throw new Error('Usage: bun scripts/release-pr.ts <status|version|check>');
+    throw new Error('Usage: bun scripts/release-pr.ts <status|version|check|cutoff>');
   }
 }
