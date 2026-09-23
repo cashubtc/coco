@@ -29,6 +29,23 @@ export interface PrepareSendInput {
   forceSwap?: boolean;
   /** Optional non-default send target, for example a P2PK recipient. */
   target?: SendTarget;
+  /**
+   * Optional caller-supplied operation ID.
+   *
+   * Embedding hosts that keep their own durable command records can pass the command ID here so
+   * one command maps to exactly one Send operation. The ID becomes the persisted operation
+   * identity, which makes `prepare()` retry-safe:
+   *
+   * - re-issuing the same ID with the same intent (same mint, amount, unit, method, and method
+   *   data) returns the existing operation instead of creating a second one, including after a
+   *   process restart;
+   * - re-issuing the same ID with a different intent throws `SendOperationIntentConflictError`;
+   * - re-issuing an ID that has already progressed past `prepared` throws
+   *   `SendOperationConflictError`.
+   *
+   * Must be a non-empty string without surrounding whitespace. When omitted, Coco generates the ID.
+   */
+  operationId?: string;
 }
 
 export interface SendRecoveryApi {
@@ -71,6 +88,10 @@ export class SendOpsApi {
    *
    * Use this to inspect the operation, fee impact, and target configuration
    * before producing the outgoing token.
+   *
+   * Pass `input.operationId` to make the call retry-safe against a durable host command ID: a
+   * repeat with the same intent joins the existing operation, a repeat with a different intent
+   * throws `SendOperationIntentConflictError`.
    */
   async prepare(input: PrepareSendInput): Promise<PreparedSendOperation> {
     const parsed = parseUnitAmount(input.amount, { explicitUnit: input.unit });
@@ -178,11 +199,16 @@ export class SendOpsApi {
   private getCreateOptions({
     forceSwap,
     target,
-  }: Pick<PrepareSendInput, 'forceSwap' | 'target'>): CreateSendOperationOptions {
+    operationId,
+  }: Pick<PrepareSendInput, 'forceSwap' | 'target' | 'operationId'>): CreateSendOperationOptions {
+    // The key is omitted entirely when the caller did not supply one so the generated-ID path is
+    // untouched, including for callers that inspect the init options.
+    const identity = operationId === undefined ? {} : { operationId };
     if (!target) {
       return {
         method: 'default',
         methodData: forceSwap ? { forceSwap: true } : {},
+        ...identity,
       };
     }
 
@@ -190,6 +216,7 @@ export class SendOpsApi {
     return {
       method: type,
       methodData: methodData as SendMethodData<typeof type>,
+      ...identity,
     } as CreateSendOperationOptions;
   }
 
