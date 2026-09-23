@@ -2,6 +2,7 @@ import type { Keypair } from '@core/models/Keypair';
 import { DerivationIndexExhaustedError } from '@core/models/Error';
 import type { KeyRingRepository } from '@core/repositories';
 import type { AllocateKeypairInput } from '../../../keypairs/types.ts';
+import { findP2pkKeyPair } from '../../../keypairs/P2pkKeyLookup.ts';
 
 const MAX_DERIVATION_INDEX = 0x7fffffff;
 
@@ -9,7 +10,8 @@ const MAX_DERIVATION_INDEX = 0x7fffffff;
 export interface ScopedKeypairCommands {
   /** Await each allocation before starting another for the same purpose within this scope. */
   allocate(input: AllocateKeypairInput): Promise<Keypair>;
-  importP2pk(keypair: Keypair): Promise<void>;
+  /** Resolves aliases inside this scope and returns the persisted identity and metadata. */
+  importP2pk(keypair: Keypair): Promise<Keypair>;
   deleteP2pk(publicKey: string): Promise<void>;
 }
 
@@ -35,11 +37,15 @@ export class RepositoryKeypairCommands implements ScopedKeypairCommands {
     return keypair;
   }
 
-  importP2pk(keypair: Keypair): Promise<void> {
-    return this.repository.setPersistedKeyPair(keypair);
+  async importP2pk(keypair: Keypair): Promise<Keypair> {
+    const existing = await findP2pkKeyPair(this.repository, keypair.publicKeyHex);
+    if (existing) return existing;
+    await this.repository.setPersistedKeyPair(keypair);
+    return keypair;
   }
 
-  deleteP2pk(publicKey: string): Promise<void> {
-    return this.repository.deletePersistedKeyPair(publicKey, 'p2pk');
+  async deleteP2pk(publicKey: string): Promise<void> {
+    const existing = await findP2pkKeyPair(this.repository, publicKey);
+    if (existing) await this.repository.deletePersistedKeyPair(existing.publicKeyHex, 'p2pk');
   }
 }

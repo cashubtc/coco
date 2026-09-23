@@ -3,6 +3,7 @@ import { schnorr } from '@noble/curves/secp256k1.js';
 import { bytesToHex } from '@noble/curves/utils.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import type { KeypairQueries } from './KeypairQueries.ts';
+import { findP2pkKeyPair } from './P2pkKeyLookup.ts';
 
 /** Signs with existing keys. Never allocates a key or writes Wallet state. */
 export interface P2pkSigner {
@@ -16,7 +17,7 @@ export class KeypairP2pkSigner implements P2pkSigner {
     if (!proof.secret || typeof proof.secret !== 'string') {
       throw new Error('Proof secret is required and must be a string');
     }
-    const keyPair = await this.keys.getPersistedKeyPair(publicKey, 'p2pk');
+    const keyPair = await findP2pkKeyPair(this.keys, publicKey);
     if (!keyPair) {
       throw new Error(`Key pair not found for public key: ${publicKey.substring(0, 8)}...`);
     }

@@ -21,6 +21,11 @@ Method-specific argument objects use `*Input` types and the parameter name `inpu
 runner callbacks are named `work`. These names distinguish actions from their inputs and the work
 that composes them.
 
+P2PK import and deletion resolve legacy public-key aliases inside their owning transaction.
+Import returns the persisted keypair after commit, preserving an existing row's identity and
+derivation metadata. Read-only lookup and signing share the alias algorithm through narrow key
+access; the algorithm cannot open transactions or mutate storage.
+
 Coordinators may invoke narrow independently committed actions, such as
 `Pick<MintService, 'refreshAndCommitIfStale'>`. The method name and contract disclose remote I/O
 and persistence. MintService owns freshness policy, its metadata gateway call, and post-commit
