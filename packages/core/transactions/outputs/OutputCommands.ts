@@ -26,14 +26,14 @@ export interface AllocatedOutputs {
   counter?: Counter;
 }
 
-export interface ScopedOutputCommands {
+export interface OutputCommands {
   assertActiveKeys(mintUrl: string, unit: string, activeKeys: MintKeys): Promise<void>;
   /** The caller must persist the returned output plan in this same transaction. */
   allocate(input: AllocateOutputsInput): Promise<AllocatedOutputs>;
 }
 
 /** Shared deterministic Output Allocation. Only the owning transition may commit its plan. */
-export class RepositoryOutputCommands implements ScopedOutputCommands {
+export class RepositoryOutputCommands implements OutputCommands {
   constructor(
     private readonly counters: CounterRepository,
     private readonly keysets: KeysetRepository,

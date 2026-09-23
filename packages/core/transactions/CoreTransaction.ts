@@ -1,40 +1,35 @@
 import { OutputData, type OutputDataCreator } from '@cashu/cashu-ts';
-import type { Repositories, RepositoryTransactionScope } from '@core/repositories';
-import { RepositoryTransactionConflictError } from '@core/repositories';
+import {
+  RepositoryTransactionConflictError,
+  type Repositories,
+  type RepositoryTransactionScope,
+  type SendOperationRepository,
+} from '@core/repositories';
 import {
   RepositoryMintMetadataCommands,
-  type ScopedMintMetadataCommands,
-} from './scoped/mints/ScopedMintMetadataCommands.ts';
-import {
-  RepositoryProofCommands,
-  type ScopedProofCommands,
-} from './scoped/proofs/ScopedProofCommands.ts';
-import {
-  RepositoryOutputCommands,
-  type ScopedOutputCommands,
-} from './scoped/outputs/ScopedOutputCommands.ts';
-import {
-  RepositorySendCommands,
-  type ScopedSendCommands,
-} from './scoped/send/ScopedSendCommands.ts';
-import {
-  RepositoryKeypairCommands,
-  type ScopedKeypairCommands,
-} from './scoped/keypairs/ScopedKeypairCommands.ts';
-import { TransactionLifetime } from './scoped/TransactionLifetime.ts';
+  type MintMetadataCommands,
+} from './mints/MintMetadataCommands.ts';
+import { RepositoryProofCommands, type ProofCommands } from './proofs/ProofCommands.ts';
+import { RepositoryOutputCommands, type OutputCommands } from './outputs/OutputCommands.ts';
+import { RepositoryKeypairCommands, type KeypairCommands } from './keypairs/KeypairCommands.ts';
+import { TransactionLifetime } from './TransactionLifetime.ts';
 
 /**
  * Scoped commands sharing one adapter transaction attempt. Await mutations sequentially unless
  * their independence is established; lifetime tracking does not serialize conflicting work.
  */
 export interface CoreTransaction {
-  readonly mintMetadata: ScopedMintMetadataCommands;
-  readonly keypairs: ScopedKeypairCommands;
-  readonly proofs: ScopedProofCommands;
-  readonly outputs: ScopedOutputCommands;
-  readonly sends: ScopedSendCommands;
+  readonly mintMetadata: MintMetadataCommands;
+  readonly keypairs: KeypairCommands;
+  readonly proofs: ProofCommands;
+  readonly outputs: OutputCommands;
+  readonly sendOperations: Pick<
+    SendOperationRepository,
+    'getById' | 'getByMintUrl' | 'create' | 'transition' | 'delete'
+  >;
 }
 
+/** Injected into coordinators; each invocation resolves only after its local work commits. */
 export interface CoreTransactionRunner {
   run<T>(work: (transaction: CoreTransaction) => Promise<T>): Promise<T>;
 }
@@ -89,12 +84,7 @@ export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
       keypairs: new RepositoryKeypairCommands(repositories.keyRingRepository),
       proofs,
       outputs,
-      sends: new RepositorySendCommands(
-        repositories.sendOperationRepository,
-        proofs,
-        outputs,
-        mintMetadata,
-      ),
+      sendOperations: repositories.sendOperationRepository,
     };
   }
 }

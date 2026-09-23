@@ -5,718 +5,258 @@ Status: accepted
 
 ## Purpose
 
-This document defines Coco's application-level transaction architecture for crash-safe and
-concurrency-resistant Wallet mutations. It is the authoritative interface and dependency contract
-for code that coordinates repository-backed state.
+Coco coordinates crash-safe Wallet mutations through one transaction runner per Coco Session.
+The outermost local workflow owns the transaction. Functions and commands participating in that
+workflow receive the same short-lived scope and cannot open transactions themselves.
 
-Uniformity means that code requiring atomicity follows one recognizable seam. It does not mean
-that every Service, Query, or remote operation runs in a transaction.
+There are three responsibilities:
 
-The design separates four roles:
+| Role                 | Responsibility                                                       | Example                                      |
+| -------------------- | -------------------------------------------------------------------- | -------------------------------------------- |
+| Coordinator          | Orders preflight, transactions, remote effects, recovery, and events | `SendOperationService`                       |
+| Transaction function | Composes the local changes that form one domain transition           | `prepareSend(transaction, input)`            |
+| Scoped command       | Encapsulates reusable local rules                                    | `transaction.proofs.selectAndReserve(input)` |
 
-1. an Operation Service coordinates the lifecycle of one durable operation;
-2. Queries and local capabilities provide narrow non-mutating dependencies;
-3. an application-scoped `*Transactions` interface owns committed transaction commands; and
-4. transaction-scoped modules perform authoritative local reads and writes within one adapter
-   transaction.
+`CoreTransactionRunner` owns scope construction, commit, rollback, and bounded retries. A
+transaction function does not commit: its caller may compose additional work before returning.
+There is no required domain gateway, mirrored command interface, or per-workflow scope type.
 
-`Coordinator` describes the architectural role of an Operation Service. It is not a required class
-suffix. Established names such as `SendOperationService` and `ReceiveOperationService` remain.
+## Runner Injection and Scope Lifetime
 
-## Naming Convention
-
-Names distinguish transaction ownership from work performed within an existing transaction:
-
-| Role                          | Name                    | Responsibility                                                   |
-| ----------------------------- | ----------------------- | ---------------------------------------------------------------- |
-| Management coordinator        | `KeyRingService`        | Coordinates domain actions without a durable operation lifecycle |
-| Durable workflow coordinator  | `SendOperationService`  | Coordinates a durable saga, its state transitions, and recovery  |
-| Read-only state interface     | `KeypairQueries`        | Reads existing state without creating or changing it             |
-| Transaction gateway           | `SendTransactions`      | Each method opens and commits one transaction through the runner |
-| Commands within a transaction | `ScopedSendCommands`    | Reads and writes within the supplied transaction scope           |
-| Transaction scope             | `CoreTransaction`       | Provides scoped commands for one transaction attempt             |
-| Transaction runner            | `CoreTransactionRunner` | Creates the scope and manages commit, rollback, and retries      |
-
-Reserve `*Transactions` for application-scoped gateways and `Scoped*Commands` for interfaces used
-inside a transaction. Concrete implementations may describe their backing mechanism, such as
-`CoreKeyRingTransactions` and `RepositoryKeypairCommands`. Use these role-specific names instead of
-the ambiguous `Transactional*` prefix.
-
-Command methods express state-changing actions. Method-specific argument objects use `*Input` types
-and the parameter name `input`, such as `allocate(input: AllocateKeypairInput)`. Inputs may include prepared
-synchronous capabilities, such as a purpose-bound deriver; they do not represent another command
-being dispatched. Existing domain values and identifiers retain their specific names, such as
-`importP2pk(keypair)` and `deleteP2pk(publicKey)`; they do not need input wrappers.
-
-Transaction runner callbacks are named `work`. Keep `Scoped*Commands` for mutation interfaces and
-small domain verbs such as `allocate` for their methods. This distinguishes the action, its inputs,
-and the callback that composes actions within one transaction.
-
-Use `<Domain>Queries` for read-only state interfaces and the same name at each consumer. A Query
-interface is already a read-only dependency boundary; an equivalent `*ReadPort` alias adds no role
-or layer. A repository can implement the Query interface directly. Name other local capabilities
-for their behavior, such as `P2pkSigner` and `KeypairDerivation`.
-
-Keep scoped implementations and helpers under `transactions/scoped/**` and application-scoped
-`*Transactions` gateways outside that directory under `transactions/`. These locations make each
-module's role recognizable; review its actual dependencies and behavior against that role.
-
-### Services and Operation Services
-
-`Service` identifies an application-level orchestration role. A `<Domain>Service`
-coordinates domain management actions without owning a durable operation lifecycle.
-A `<Domain>OperationService` coordinates a durable saga, including its persisted
-state transitions, remote effects, and recovery. Both occupy the same architectural
-layer and may be invoked by public APIs or background processors.
-
-Services depend on narrow Queries, local capabilities, remote interfaces where
-needed, and their own domain's transaction gateway. They may also invoke a narrow, explicitly
-committing action owned by another coordinator as an independently committed prerequisite (see
-below). Wallet mutations owned by a coordinator go through its gateway; Services do not receive
-the raw runner or live transaction scopes,
-write through repositories, or compose other Services to construct an atomic
-transition. Events describing committed changes are published after commit.
-
-### Independently Committed Actions
-
-A coordinator may expose a narrow action that completes an independent domain change before its
-caller continues. Its method name must disclose persistence, such as
-`MintService.refreshAndCommitIfStale(mintUrl)`. Its contract must disclose remote I/O, independent
-commit semantics, and post-commit event handling. The caller receives only that action, for example
-`Pick<MintService, 'refreshAndCommitIfStale'>`, not the whole Service. Dependency chains must remain
-acyclic.
-
-The action owns freshness policy, remote observation, its own domain gateway call, and post-commit
-events. It returns after any transaction commits and event publication is attempted. A cached path
-may open no transaction. A committed metadata refresh survives a later Send preparation failure;
-that independence is what permits this composition. Changes that must commit or roll back together
-still compose scoped commands within one owning transition.
-
-Mint metadata application returns the committed snapshot and an applied/ignored disposition from
-inside its transaction. An observation with an older or equal timestamp is ignored; second-level
-timestamp ties keep the first committed snapshot. The refresh action publishes events only for an
-applied observation, so an ignored observation cannot reset batch-polling suppression.
-
-Send reuses the metadata action through the following composition:
-
-```text
-SendOperationService
-  -> MintService.refreshAndCommitIfStale
-       -> MintQueries / MintAdapter.fetchMintMetadata (outside transactions)
-       -> MintMetadataTransactions.applyObservation (one committed transaction)
-       -> publish mint events
-  -> finish Send preflight
-  -> SendTransactions.prepare (a separate committed transaction)
-```
-
-An independently committed action is application orchestration, not a Query, local preflight
-capability, or `*Transactions` gateway. Gateways and scoped commands must never acquire such an
-action, including through callbacks or helpers. Coordinators still cannot receive the runner or a
-live transaction scope. A narrow interface and an explicit name communicate effects; neither alone
-enforces the dependency rules.
-
-Runtime rejection of nested Wallet transactions is not yet uniform: IndexedDB rejects ambient
-Wallet transactions, while the core runner has no universal guard and root Memory/SQLite calls
-can queue behind an outer transaction awaiting them. Consistent rejection across adapters is
-follow-up work; callers must not rely on a runtime exception to enforce this contract today.
-
-Shared algorithms, read-only access, and transactional invariants belong in
-behavior-specific capabilities, `<Domain>Queries`, and `Scoped*Commands`.
-A module does not acquire the `Service` suffix merely because several callers
-reuse it. `KeyRingService` is a management coordinator; `SendOperationService`
-additionally owns a durable saga lifecycle.
-
-This is the target convention. Existing Service names may temporarily describe
-mixed or different responsibilities. Each owning migration must split or rename
-those modules according to their resulting roles. New modules follow this
-convention immediately.
-
-## Decision Summary
-
-> Organize modules around domain invariants, make their effects explicit, and give each atomic
-> state transition exactly one transaction owner. Shared domain modules own reusable rules and
-> algorithms; operation-specific modules compose them into atomic transitions. Narrow interfaces
-> limit authority and do not require separate implementations.
-
-- The composition root owns one application-scoped `CoreTransactionRunner` for a Coco Session.
-- Each method on an application-scoped `*Transactions` interface opens exactly one adapter
-  transaction through that runner and returns only after commit.
-- An application-scoped `*Transactions` implementation is a leaf adapter; its caller completes
-  preflight, and the gateway does not depend on Services or other effectful application modules.
-- An Operation Service receives its own domain's `*Transactions` interface, not the raw runner or
-  repositories.
-- An Operation Service must not use another domain's application-scoped `*Transactions` interface
-  to construct a supposedly atomic transition.
-- Cross-domain writes compose through transaction-scoped modules created from the same short-lived
-  `CoreTransaction` scope.
-- A module that participates inside a transaction cannot possess or obtain through helpers the
-  ability to start another transaction. Never accept an optional transaction argument that opens
-  a new transaction when omitted.
-- Queries and preflight capabilities never silently initialize storage, allocate keys, advance
-  counters, repair records, or invoke a transaction gateway.
-- Transaction-scoped modules never open transactions. They cannot depend on regular Services,
-  application-scoped transaction gateways, remote infrastructure, or the live event bus.
-- Preflight and remote mint I/O happen outside repository transactions. Inputs that must remain
-  stable across retries are fixed before the transaction begins.
-- An informational read may happen outside a transaction, but any read authorizing a mutation is
-  repeated or validated inside the transaction.
-- Live events are published only after commit.
-- Existing workflows migrate incrementally. Identify remaining legacy dependencies in the owning
-  migration and remove them as it proceeds; new transaction-aware work follows this contract.
-
-## Modules, Interfaces, and Lifetimes
-
-The composition root constructs long-lived application modules for one Coco Session:
-
-```text
-Manager / composition root
-  |-- repositories
-  |-- Queries and narrow local capabilities
-  |-- remote interfaces and adapters
-  |-- CoreTransactionRunner
-  |     `-- creates one short-lived CoreTransaction per run()
-  |           |-- transaction.proofs
-  |           |-- transaction.counters
-  |           |-- transaction.keypairs
-  |           |-- transaction.sends
-  |           |-- transaction.receives
-  |           |-- transaction.mintOperations
-  |           `-- transaction.meltOperations
-  |-- KeyRingTransactions
-  |-- SendTransactions
-  |-- ReceiveTransactions
-  |-- KeyRingService
-  |-- SendOperationService
-  `-- ReceiveOperationService
-```
-
-The names in the diagram illustrate the shape; modules are added incrementally as domains migrate.
-This is not a required catalogue of interfaces. For example, counters can remain a private
-dependency of Output Allocation rather than a member of `CoreTransaction`. Add a shared module
-where it encapsulates an invariant; do not reproduce one class per existing Service or repository.
-There is no application-scoped aggregate gateway that an Operation Service can use to reach every
-domain.
-
-The runner creates a `CoreTransaction` and all of its transaction-scoped modules from the exact
-same `RepositoryTransactionScope`. Callers must not retain that scope, the `CoreTransaction`, or a
-transaction-scoped module after `run()` completes.
-
-Each attempt has one internal `TransactionLifetime`, owned by the runner. The runner binds every
-repository before injecting it into scoped modules, and binds every module exposed on
-`CoreTransaction`. These wrappers track asynchronous method calls and share one failure state;
-adding a module to the factory does not require its callers to register or drain work manually.
-The lifetime has no transaction opener or commit/rollback authority.
+The composition root creates one application-scoped runner and injects its interface into
+coordinators. The concrete runner receives the root repositories; coordinators do not.
 
 ```ts
-export interface CoreTransaction {
-  readonly proofs: ScopedProofCommands;
-  readonly keypairs: ScopedKeypairCommands;
-  readonly sends: ScopedSendCommands;
-  readonly receives: ScopedReceiveCommands;
-}
+const transactions = new RepositoryCoreTransactionRunner(repositories, outputDataCreator);
+const sendService = new SendOperationService({ transactions /* other dependencies */ });
+const keyRingService = new KeyRingService(keypairQueries, transactions, derivation, signer);
+```
 
-export interface CoreTransactionRunner {
+Each `run()` invocation opens one adapter transaction per attempt. Sharing the runner does not
+share an open transaction. A successful return means commit completed; a rejection means the
+attempt did not commit. Nested and distributed transactions are unsupported.
+
+```ts
+interface CoreTransactionRunner {
   run<T>(work: (transaction: CoreTransaction) => Promise<T>): Promise<T>;
 }
 ```
 
-The concrete runner and repository adapters are composition-root mechanisms. They are not
-dependencies of an Operation Service.
+`CoreTransaction` exposes domain commands and narrow scoped persistence interfaces. Every capability
+is constructed from the same `RepositoryTransactionScope`. It has no runner, root repository
+container, remote client, or live event bus. Never retain a scope or its capabilities after `run()`.
+Never accept an optional transaction argument that opens a new transaction when omitted.
 
-## Operation Services
+The runner binds repositories and commands to one internal `TransactionLifetime` per attempt.
+The lifetime rejects expired calls, remembers the first failure, and drains started work before
+commit, rollback, or retry. The lifetime has no transaction-opening authority.
 
-An Operation Service is the application coordinator for one durable operation. It owns the order
-of preflight, committed local transitions, remote calls, recovery decisions, and post-commit event
-publication.
+Transaction functions use `trackTransactionWork(transaction, work)` internally to enroll the whole
+function in that same lifetime. This preserves containment after removing command-class wrappers:
+a caught validation failure cannot commit earlier writes, and an accidentally dropped function
+promise cannot commit only its first command. The helper never opens or commits a transaction and
+rejects scopes not bound by the runner. Pass the original scope; narrowing its TypeScript type does
+not require copying it. Pure calculations and private helpers awaited by a tracked function need
+no additional wrapper.
 
-A migrated Operation Service depends only on the narrow interfaces its lifecycle discloses:
+## Composition
 
-```ts
-class SendOperationService {
-  constructor(
-    private readonly operations: SendOperationQueries,
-    private readonly signer: P2pkSigner,
-    private readonly remote: SendRemote,
-    private readonly transactions: SendTransactions,
-    private readonly events: SendEventPublisher,
-  ) {}
-}
-```
-
-These dependencies expose their effects:
-
-- Queries provide informational or persisted-operation reads;
-- local capabilities perform narrow in-process work such as signing;
-- remote interfaces perform mint I/O;
-- the Operation Service's own `*Transactions` interface commits local state; and
-- a publisher emits live events after commit.
-
-Broad regular Services are not substitutes for those interfaces. An independently committed
-action is the explicit exception described above; a pure-looking helper may not conceal it.
-For example, depending on a
-whole `KeyRingService` when only P2PK signing is needed conceals both authority and effects.
-`KeyRingService` remains the user-facing keyring management module; internal consumers should use
-narrow capabilities such as `P2pkSigner` or keypair Queries as they migrate.
-
-An Operation Service does not receive repositories or `CoreTransactionRunner`. It also does not
-receive another domain's application-scoped gateway to combine multiple gateway calls and call the
-sequence atomic. Separate gateway calls are separate adapter transactions.
-
-## Application-Scoped Transaction Gateways
-
-An interface named `*Transactions` is the command seam used by an Operation Service or another
-application coordinator. Every method owns exactly one call to `CoreTransactionRunner.run()`.
-That invocation opens one adapter transaction per attempt; bounded retries roll back and repeat
-sequentially, never nest. A thin gateway earns its place by guaranteeing an atomic committed result.
+A coordinator may compose scoped commands directly. Extract a named transaction function when the
+sequence expresses a meaningful domain invariant or prevents duplication. A function receives the
+shared `CoreTransaction`; a `Pick` may narrow its type when useful, without introducing another
+scope factory or interface hierarchy.
 
 ```ts
-export interface SendTransactions {
-  prepare(input: PrepareSendInput): Promise<PreparedSend>;
-  beginExecution(input: BeginSendInput): Promise<AuthorizedSend>;
-  applyResult(input: ApplySendResultInput): Promise<SendResult>;
-}
+// A standalone transition.
+const prepared = await transactions.run((transaction) => prepareSend(transaction, input));
+
+// A larger local workflow, using the same implementation and adapter transaction.
+const result = await transactions.run(async (transaction) => {
+  const prepared = await prepareSend(transaction, input);
+  const authorized = await beginSendExecution(transaction, executionInput);
+  return { prepared, authorized };
+});
+// Remote execution can now use the committed authorization.
 ```
 
-The method resolves only after its adapter transaction commits. It rejects if the transaction does
-not commit. Callers can therefore publish a corresponding live event after a successful return
-without exposing uncommitted state.
+If the second transition fails, proof reservation, Output Allocation, and the prepared Send all
+roll back. The outer callback owns the additional invariant connecting its transitions. Separate
+`run()` calls are separate commits even when they use the same runner. For atomic composition,
+reuse transaction functions, not service entry points that independently commit.
 
-The implementation is a leaf adapter around its runner. Callers complete preflight before invoking
-it and pass stable, transaction-ready inputs. For example, the Keyring management
-coordinator or a narrow keypair capability loads the Wallet Seed and creates a synchronous,
-purpose-bound deriver before asking the keyring gateway to allocate a keypair. A transaction
-gateway must not depend on regular Services, perform remote mint I/O, publish live events, access
-root repositories directly, or call another application-scoped transaction gateway.
-Pure validation and normalization can remain inside the gateway. Preflight separation concerns
-effects and transaction lifetime, not a requirement to move every computation into another class.
+Commands encapsulate real rules: proof selection and reservation, output derivation with counter
+advancement, and keypair derivation with index advancement. Do not expose raw counters merely to
+let every workflow rebuild allocation rules. The owning transition persists the output plan with
+its allocation in the same transaction. Narrow operation persistence contracts may be implemented
+directly by scoped repositories; a forwarding class adds no guarantee.
 
-Cross-domain writes use modules from one `CoreTransaction`:
+Await dependent commands sequentially. `Promise.all()` is appropriate only when interleaved reads
+and writes cannot violate a shared invariant. Lifetime tracking provides containment, not ordering;
+it does not make concurrent allocations for the same purpose safe within one scope.
 
-```ts
-class CoreSendTransactions implements SendTransactions {
-  constructor(private readonly runner: CoreTransactionRunner) {}
+## Coordinator Effects
 
-  prepare(input: PrepareSendInput): Promise<PreparedSend> {
-    return this.runner.run((transaction) => transaction.sends.prepare(input));
-  }
-}
-```
+A `<Domain>Service` coordinates management actions. A `<Domain>OperationService` additionally owns
+a durable saga lifecycle. Both may receive the runner, Queries, local capabilities, explicit remote
+interfaces, and event publication dependencies.
 
-`transaction.sends` can be constructed with transaction-scoped proof and counter modules from the
-same scope. It can reserve proofs, allocate outputs, and persist the Send Operation as one atomic
-transition. The application gateway never combines separate root transactions.
-
-## Shared Behavior and Transaction Ownership
-
-Share implementations across workflows. Send and Mint can use the same output allocator; Send
-and Melt can use the same proof reservation rules. The runner constructs each shared implementation
-with repositories from the current attempt's scope. Share the algorithm, never a live scope across
-transactions or concurrent callers.
-
-```text
-SendTransactions.prepare -> runner -> scoped Send preparation
-                                      |-- shared proof reservation
-                                      |-- shared output allocation
-                                      `-- persist prepared Send Operation
-
-MintTransactions.prepare -> runner -> scoped Mint preparation
-                                      |-- same output allocation implementation
-                                      `-- persist pending Mint Operation
-```
-
-The owning transition couples allocation to its persisted output plan. A generic counter increment
-cannot provide that guarantee on its own. A standalone key-management action uses
-`KeyRingTransactions`; another owning transition allocates keys through `transaction.keypairs`
-within its existing scope. It never calls the standalone gateway.
-
-Queries, fee calculations, proof selection algorithms, derivation, and unblinding are also shared.
-An informational selection and an authoritative reservation can use the same selection algorithm;
-the latter reads current state and reserves the result within its transaction. A coordinator does
-not need a private copy of each Query or capability. Multiple narrow interfaces may have one
-implementation, and a repository adapter may satisfy a read interface directly.
-
-Reserve `Operation` for durable sagas. Name transaction-scoped interfaces
-`Scoped*Commands`, with implementations such as `RepositoryKeypairCommands`. Callers
-still use small domain methods: `transaction.keypairs.allocate(input)`. Keep all scoped
-implementations and their private scoped helpers under `transactions/scoped/` so their lifetime
-and responsibilities are visible during review. Do not add interfaces or pass-through classes solely
-to reproduce the same layers for every domain.
-
-## Implemented Keypair Baseline
-
-The first slice implements this separation without changing the user-facing KeyRing API:
-
-- `keypairs/KeypairQueries.ts` exposes reads of existing keys. The key-ring repository already
-  satisfies it; no query wrapper is needed.
-- `keypairs/KeypairDerivation.ts` loads the Wallet Seed during preflight and prepares a synchronous,
-  purpose-bound deriver. It cannot allocate or persist a key. The injected seed loader is read-only.
-- `keypairs/P2pkSigner.ts` contains the shared signer. `KeyRingService` and `ProofService` receive
-  the same implementation; ProofService has no key-management dependency.
-- `services/KeyRingService.ts` coordinates user-facing key management and invokes preflight before
-  calling its own gateway. Existing management and signing methods remain available for callers.
-- `transactions/keypairs/KeyRingTransactions.ts` receives only the runner and forwards prepared
-  inputs into one transaction.
-- `transactions/scoped/keypairs/ScopedKeypairCommands.ts` receives only a scoped
-  key-ring repository. It selects the index, checks exhaustion, invokes the synchronous deriver,
-  and saves the key and high-water mark. Standalone and composed allocations use this same
-  implementation; repositories provide persistence primitives without deriving keys or opening
-  allocation transactions.
-
-No keypair dependency exception remains. Other legacy key-management consumers, including mint
-quote handlers, migrate with their owning workflows; a narrow signing interface must never be a
-disguise for `getOrCreateKey()` or other hidden persistence.
-
-## Applying the Baseline to Later Refactors
-
-The following are target responsibilities, not additional implementations in the keypair slice:
-
-| Existing responsibility                             | Target owner                                                             |
-| --------------------------------------------------- | ------------------------------------------------------------------------ |
-| ProofService balance aggregation                    | Shared Wallet balance queries                                            |
-| Proof lookup for display                            | Shared proof queries                                                     |
-| Fee calculation, selection, derivation, unblinding  | Shared computation and explicit preflight inputs                         |
-| Proof selection and reservation authorizing a spend | Scoped proof commands within the owning Send/Melt transition             |
-| Output creation and counter advancement             | Shared scoped Output Allocation, committed with the consuming operation  |
-| Saving issued or recovered proofs                   | Scoped proof commands within the owning result transition                |
-| Remote restore and proof-state checks               | Explicit remote adapters driven by a coordinator                         |
-| Counter overwrite during Restore                    | Scoped high-water-mark advancement that never lowers committed positions |
-| Proof/counter events                                | Public event descriptions published by the coordinator after commit      |
-
-For example, `manager.ops.mint.prepare({ quote, amount })` can keep its public interface while
-MintOperationService receives shared operation queries, preflight, `MintTransactions`, a remote
-interface, and an event publisher. Preparation atomically commits Output Allocation with the
-pending Mint Operation. Pending preparation does not itself reserve paid quote value. Authorization
-checks current claimability and commits the reservation, executing state, and Exact Operation
-Request; application of issuance atomically saves validated proofs and completes local accounting
-and operation state.
-
-Mint method handlers must relinquish repositories, broad Services, and live event publication as
-part of that migration. Protocol adapters return observations or candidate proofs; the owning
-transaction validates and persists them. Canonical Quote Observations precede operation advancement
-as required by ADR-0004. Remote recovery, unblinding, and persistence are separate effects but share
-their existing algorithms. `manager.wallet.balances.total()` needs only shared balance queries.
-
-## Transaction-Scoped Modules
-
-Transaction-scoped modules expose domain operations rather than generic repository mutation. Their
-interfaces should make invalid state transitions difficult to express and should keep the complete
-invariant local to the domain concept that owns it.
-
-```ts
-interface ScopedProofCommands {
-  selectAndReserve(input: SelectAndReserveProofsInput): Promise<ProofReservation>;
-  settleSpend(input: SettleProofSpendInput): Promise<void>;
-  releaseAfterNonEffect(input: ReleaseProofReservationInput): Promise<void>;
-}
-```
-
-Avoid exposing unrestricted primitives to application orchestration:
-
-```ts
-interface UnsafeProofWrites {
-  setProofState(secrets: string[], state: ProofState): Promise<void>;
-  setCounter(keysetId: string, counter: number): Promise<void>;
-}
-```
-
-A transaction-scoped implementation may use repository primitives internally while enforcing
-ownership, unit consistency, expected revisions, legal states, and allocation rules.
-
-When one transition spans several repository-backed concepts, the owning transaction-scoped module
-coordinates peer modules created from the same `CoreTransaction` scope. Repository count does not
-justify a neutral workflow bucket. A Send preparation belongs to the Send module even when it uses
-proof and counter modules; a Mint Swap transition belongs to the Mint Swap module even when it
-creates a child Melt Operation.
-
-Transaction-scoped modules never call `CoreTransactionRunner.run()` or repository
-`withTransaction()`. They never depend on:
-
-- regular Services;
-- application-scoped `*Transactions` gateways;
-- remote infrastructure or network-capable adapters; or
-- the live `EventBus`.
-
-Input/result types, pure domain logic, logging types, scoped repositories, and peer
-transaction-scoped modules are valid dependencies when the owning invariant requires them.
-
-## Transaction Flow
-
-The standard remote-effect shape is:
+Preflight resolves asynchronous dependencies and fixes retry-sensitive inputs before `run()`:
+Wallet Seed loading, IDs, timestamps, random outputs, purpose-bound synchronous derivers, and
+method policy. Informational reads may occur here. Any read authorizing a mutation must be repeated
+or validated inside the transaction. Queries and local computation never silently initialize or
+repair storage, allocate keys, advance counters, or commit.
 
 ```text
 preflight -> authorize transaction -> remote I/O -> apply transaction -> publish
 ```
 
-Preflight is owned by the application coordinator or narrow local capability that supports the use
-case. It resolves dependencies that are unsafe or unnecessary to await inside an adapter
-transaction. It may normalize input, load a Wallet Seed, build a synchronous signer or deriver, or
-prepare stable identifiers and timestamps. Any value that must remain unchanged across a bounded
-transaction retry is fixed here.
-
-The authorization transaction reloads authoritative local state, validates the transition, and
-persists the Exact Operation Request before remote I/O. The remote call happens with no repository
-transaction open. The result transaction reloads the durable operation by identity and validates
-that the observation belongs to its persisted request before applying it.
-
 ```ts
-const authorization = await transactions.beginExecution(input);
+const authorization = await transactions.run((transaction) =>
+  beginSendExecution(transaction, executionInput),
+);
 const remoteResult = await remote.execute(authorization.request);
-const result = await transactions.applyResult({
-  operationId: authorization.operationId,
-  remoteResult,
-});
-events.publish(result);
+const resultInput = prepareResultInput(authorization, remoteResult);
+const result = await transactions.run((transaction) => applySendResult(transaction, resultInput));
+await publishCommittedEvents(result);
 ```
 
-An authorization object is transport input, not continuing authority over local state. The next
-transaction reads the durable record again.
+Callbacks contain local work only. Do not close over remote clients, seed loaders, coordinators,
+timers, event buses, root repositories, or another transaction opener. TypeScript cannot prove this
+restriction; review the callback and its helpers. The authorization object is transport input,
+not continuing authority over local state. Application of a result reloads the durable operation
+and validates that the result belongs to its persisted request.
 
-## Reads, Queries, and Mutation Authority
+Coordinators may reuse narrow independently committed workflows outside transactions. For example,
+`MintService.refreshAndCommitIfStale` owns freshness policy, remote metadata fetch, its transaction,
+and attempted post-commit publication. Send receives that action through a narrow interface. Its
+metadata commit intentionally survives a later Send failure; a cached path opens no transaction.
+Coordinator dependencies remain acyclic. Transaction functions and scoped commands never receive
+these actions.
 
-Queries are application-scoped, read-only interfaces. They should hide meaningful behavior such as
-normalization, aggregation, availability policy, stable ordering, or a cross-repository projection.
-A repository adapter may directly implement a narrow read interface when a pass-through Query
-module would add no depth.
+Mint metadata application returns the committed snapshot and an applied/ignored disposition.
+Older observations and timestamp ties retain the first committed snapshot. Only applied observations
+publish refresh events, preventing ignored observations from resetting batch-polling suppression.
 
-Informational reads support display, diagnostics, and preflight:
+## Persistence, Retry, and Recovery Guarantees
 
-```ts
-const preview = await proofQueries.previewSelection(intent);
-```
+All reads and writes authorizing a local transition use one adapter scope. Independent Coco Sessions
+sharing Wallet storage must not lose committed updates. Adapters either serialize conflicting work
+or return a typed transaction conflict. The runner retries only explicitly transient repository
+conflicts, with a small bounded policy and a yield after rollback. Each attempt gets fresh scoped
+capabilities and repeats the whole callback, never individual allocation steps.
 
-The preview cannot authorize a later mutation because concurrent Coco Sessions may change Wallet
-state. The transaction-scoped operation reads or validates the current proof state again before
-writing:
+SQLite adapters use their strong write transaction mode. IndexedDB is the portability baseline:
+do not await unrelated asynchronous work that lets its transaction become inactive. Adapter-specific
+modes remain inside adapters. Adapter combinations unable to provide one shared transaction cannot
+back a `CoreTransactionRunner`.
 
-```ts
-await sendTransactions.prepare(input);
-```
+A scoped failure immediately rejects further work. Already executing work settles inside its
+original transaction before rollback or retry. Catching a failure or using `Promise.allSettled()`
+cannot turn a failed attempt into a commit. After completion, captured commands, repositories, and
+transaction functions reject further use. Tracking does not cancel arbitrary JavaScript promises
+or make external effects transactional; callers still return or await their work.
 
-The rule is:
+An Output Allocation commits deterministic positions together with the consuming output plan.
+A Keypair Allocation commits a purpose-specific derivation index together with its keypair. A
+rolled-back derivation is not an allocation and may be repeated. Committed positions are never
+reclaimed, even after cancellation or deletion.
 
-> Read outside a transaction for information; read inside a transaction when the result authorizes
-> a mutation.
+Keypair allocation reads the durable last allocated index and highest stored index, chooses their
+maximum plus one, checks exhaustion, derives synchronously, and persists both keypair and high-water
+mark. Imported keys remain compatible. Repositories persist values; they never derive keys or open
+allocation transactions. Counter advancement during Restore must never lower committed positions.
 
-## Concurrency and Retry
+An operation owns its immutable Exact Operation Request. Persist the request and authorization
+before remote submission. Initial execution and Operation Recovery reuse it. Changed request
+material requires a new operation because an earlier submission may have affected the mint.
 
-One runner invocation covers one atomic Wallet persistence boundary. Every transaction-scoped
-module used by it shares the same adapter transaction scope. Nested and distributed transactions
-are unsupported. An adapter combination unable to provide the shared scope must not be constructed
-as a `CoreTransactionRunner`.
+Only positive evidence of non-effect permits releasing owned resources or recording failure.
+Timeouts, transport errors, malformed responses, crashes, and exhausted retries leave an Ambiguous
+Operation Outcome recoverable with its proofs, allocations, and reservations retained. Durable
+revisions or equivalent conditional transitions prevent conflicting advancement; in-memory locks
+are contention aids, not correctness mechanisms. Quote Observations precede Quote-backed Operation
+advancement as specified by ADR-0004.
 
-Within one scope, callers and scoped implementations await mutations sequentially by default.
-Concurrent work, including `Promise.all()` inside commands, is supported only when the implementer
-establishes that the operations are independent: interleaving their reads and writes cannot change
-the intended result or violate a shared invariant. Dependent read-modify-write operations, such as
-allocations for the same keypair purpose, must be awaited in order. Scoped modules do not provide
-per-method queues or mutexes; adapter isolation protects separate transactions, not interleaved
-algorithms within one scope.
+Events are published only after the owning `run()` returns. Scoped commands and transaction functions
+return results rather than emitting live events. A failed transaction publishes nothing. Listener
+failures are logged without turning a committed mutation into a failure or replaying a remote effect.
+Delivery remains best effort: a crash between commit and publication can lose an event. An outbox
+is separate future work.
 
-Transaction lifetime guarantees containment, not ordering. The runner waits for both its callback
-and every started scoped command/repository call before allowing the adapter callback to settle.
-A rejection records the first failure and immediately rejects further scoped calls. Already
-executing calls settle inside the original adapter transaction before rollback; only then may the
-runner retry with a fresh scope. Catching a scoped failure or using
-`Promise.allSettled()` cannot turn that failed attempt into a commit. Returning early from the
-callback also cannot commit before its started commands finish.
-
-After the attempt finishes, the bound commands and repositories reject further calls, including
-through previously captured method references. This prevents a continuation from using an expired
-SQLite scope as an autocommit connection or falling out of an IndexedDB transaction. This guarantee
-applies to scopes constructed by `CoreTransactionRunner`; direct legacy `withTransaction()` callers
-still follow their adapter contract until their owning workflow migrates.
-
-Callers still await their work and keep remote I/O, timers, and unrelated asynchronous work outside
-transactions. Lifetime tracking covers calls through the bound scoped interfaces; it cannot cancel
-arbitrary JavaScript promises or make external effects transactional. Scoped modules receive only
-the runner-bound repositories and return/await work performed by their internal helpers.
-
-Independent Coco Sessions using the same Wallet storage must not silently lose committed updates.
-An adapter may serialize conflicting work or reject one participant with a typed transaction
-conflict. The runner retries only conflicts the adapter explicitly marks transient, with a small
-bounded policy. It yields between attempts, after rollback, so competing writers can finish;
-repositories never sleep or retry individual allocation steps.
-
-Retryable commands must be replay-safe. Stable operation IDs, timestamps, Exact Operation Request
-material, and other retry-sensitive values are fixed before the callback begins. Each attempt
-repeats its authoritative reads in a fresh transaction. Exhausted contention is returned as a typed
-error.
-
-SQLite adapters use their strong write transaction mode. IndexedDB uses one read-write transaction
-and is the portability baseline: work inside the callback must not allow its transaction to become
-inactive before required reads and writes are scheduled. Adapter-specific modes do not leak through
-domain transaction interfaces.
-
-## Allocation Semantics
-
-An Output Allocation commits deterministic counter positions with the output plan that consumes
-them. A Keypair Allocation commits one purpose-specific Wallet derivation index with its derived
-keypair. Derivation performed by a transaction that rolls back is not an allocation and may be
-repeated.
-
-Committed counter positions and derivation indexes are never reclaimed, including after an
-operation aborts or a keypair is deleted. This prevents accidental deterministic reuse.
-
-The Keyring management coordinator or a narrow keypair capability performs asynchronous Wallet
-Seed loading and gives the keyring gateway a synchronous, purpose-bound deriver. The gateway passes
-that deriver into its one transaction. Inside the transaction, the transaction-scoped keypair
-module reads the durable high-water mark, chooses the next index, derives the keypair, and persists
-the keypair and high-water mark atomically.
-
-`ScopedKeypairCommands.allocate()` owns that complete algorithm:
+## Files and Dependencies
 
 ```text
-read getLastAllocatedIndex(purpose) and getHighestStoredDerivationIndex(purpose)
-choose max(lastAllocatedIndex, highestStoredDerivationIndex) + 1
-reject if the non-hardened child-index range is exhausted
-derive(index) synchronously
-write setPersistedKeyPair(keypair)
-write setLastAllocatedIndex(purpose, index)
+operations/send/SendOperationService.ts     # workflow orchestration
+services/KeyRingService.ts                  # key management orchestration
+transactions/
+  CoreTransaction.ts                       # scope and runner
+  TransactionLifetime.ts                   # internal containment mechanism
+  proofs/ProofCommands.ts                  # reusable reservation and settlement
+  outputs/OutputCommands.ts                # allocation including counters
+  keypairs/KeypairCommands.ts               # keypair allocation and persistence
+  mints/MintMetadataCommands.ts             # local metadata application and trust checks
+  send/prepareSend.ts                       # a composed local transition
+  send/beginSendExecution.ts                # initial and recovery authorization
+  send/applySendResult.ts                   # proof settlement and operation advancement
 ```
 
-The highest stored index preserves compatibility with existing or imported indexed keys. Both
-reads and writes use the current repository scope. Repository implementations only read and write
-these values; they never receive a deriver, choose an index, or open an allocation transaction.
-The runner owns retries. Callers await allocations for the same purpose sequentially within one
-scope so each observes preceding writes; the scoped command has no allocation queue. Adapter
-transaction isolation protects concurrent allocations across scopes, including standalone gateway
-calls. Lifetime tracking does not make simultaneous allocations for the same purpose safe within
-one scope.
-Allocation errors must propagate to the owning transaction so all its writes roll back together.
+Group related short transitions when useful. Method-specific arguments use `*Input` types and the
+parameter `input`; runner callbacks are named `work`. `*Commands` identifies a transaction-scoped
+capability. `Repository*Commands` identifies its repository-backed implementation. Reserve
+`Operation` for durable sagas. A query interface is `<Domain>Queries`; a repository can implement
+it directly without a pass-through query class.
 
-## Remote Outcomes and Recovery
+| Module                             | Allowed dependencies                                                                                                | Forbidden authority                                                           |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Coordinator                        | Runner, transaction functions, Queries, local capabilities, remote interfaces, events, narrow independent workflows | Root repository mutation, retaining live scopes                               |
+| Transaction function               | Supplied scope, other local transaction functions, pure helpers, lifetime tracking                                  | Runner, root repositories, coordinators, remote I/O, live events              |
+| Scoped command                     | Scoped repositories, peer commands, pure helpers                                                                    | Transaction openers, root repositories, coordinators, remote I/O, live events |
+| Query / local preflight capability | Read-only state interfaces, pure helpers, explicit local inputs                                                     | Persistence mutation, transaction openers, remote I/O, live events            |
+| Runner / composition root          | Root repositories, adapters, scoped constructors, lifetime mechanism                                                | Workflow orchestration and remote effects inside attempts                     |
 
-An operation owns one immutable Exact Operation Request. Initial submission and Operation Recovery
-reuse that request; replay is not a new logical attempt. If request material must change, the caller
-creates a new operation because the original request's remote effect may remain ambiguous.
+Scoped implementations import repository contracts with `import type`. Follow the authority actually
+supplied through imported helpers and injected implementations; narrow types alone do not establish
+purity. Use code review, scoped types, and behavior tests instead of a custom architecture checker.
 
-Only positive evidence that an Exact Operation Request had no effect may release owned resources or
-mark the operation failed. A timeout, malformed response, transport failure, crash, or exhausted
-retry policy does not prove non-effect. An Ambiguous Operation Outcome retains its proofs, outputs,
-and reservations until Operation Recovery establishes a safe result.
+## Agent Review
 
-In-memory locks may reduce contention but are not correctness mechanisms. Durable operations use
-monotonic revisions or equivalent conditional transitions so concurrent commands cannot both
-advance the same state.
+Before completing a change involving Wallet persistence, operation coordination, or adapters:
 
-## Post-Commit Events
+1. Identify each module's role and trace its dependencies, including helpers and composition-root
+   wiring. Coordinators receive the shared runner; local functions and commands cannot open one.
+2. Identify the owning `run()` for each atomic transition. Check that all participants use its scope,
+   authoritative reads occur inside it, and dependent commands are sequential. Examine any concurrent
+   group for safe interleaving.
+3. Trace effects: asynchronous preflight and remote work outside, synchronous derivation inside,
+   retry-sensitive inputs fixed before the callback, and events after commit. Independent workflow
+   commits must intentionally survive caller failure and complete outside the caller's transaction.
+4. Verify lifetime enrollment for extracted transaction functions, failure rollback, and expired scope
+   rejection. Run relevant behavior tests; typecheck alone does not establish adherence.
+5. Report inspected transaction boundaries, verification, and remaining legacy deviations. Update this
+   design and ADR-0011 together when changing the contract.
 
-Transaction-scoped modules never emit live events. Application transaction gateways return after
-commit, and the Operation Service publishes the corresponding event only after that return. A
-failed transaction publishes no event.
+## Migration and Verification
 
-This preserves Coco's current best-effort delivery guarantee. A process crash between commit and
-publication can lose a live event. Durable at-least-once delivery, ordering, and deduplication are a
-future outbox concern.
+Send transitions, KeyRing mutations, and mint metadata refresh use coordinator-owned transactions.
+Legacy Receive, Mint, Melt, Mint Swap orchestration, Payment Request Receive parent/attempt/child
+atomicity, and MintService add/forced-update/trust/delete paths remain for their owning migrations.
+Those migrations should reuse domain commands and local functions, rather than add domain gateways.
+Runtime rejection of nested Wallet transactions remains nonuniform: IndexedDB rejects ambient
+transactions, while Memory/SQLite root calls may queue behind an outer caller awaiting them. Do not
+rely on a universal runtime guard; distinguishing nesting from legitimate concurrency remains work.
 
-If a listener fails after commit, orchestration logs the event error without treating the committed
-Wallet mutation as failed. Event failure must not cause a caller to replay a successful remote
-effect.
+Behavior tests cover memory and persistent adapters:
 
-## Dependency Rules
+- Standalone and composed functions use the same implementations and one transaction per attempt.
+- Grouped proof, counter, operation, and keypair changes commit together or all roll back.
+- A composed transition's validation failure rolls back earlier successful work, even if caught.
+- Dropped function promises drain fully; finished scopes and captured methods reject later calls.
+- Failed concurrent work drains before rollback/retry and cannot continue in a later attempt.
+- Retried workflows preserve stable inputs and allocate only once in the committed attempt.
+- Authoritative reservation and revision checks choose one concurrent winner.
+- Root writes cannot be clobbered by commit/rollback and uncommitted writes are isolated.
+- Remote I/O and events remain outside transactions; publication follows commit.
+- Ambiguous remote outcomes retain exact recovery material and owned resources.
 
-Agents and human reviewers apply these rules to module dependencies, including authority supplied
-through helpers, callbacks, and composition-root wiring:
-
-| Module                                            | Forbidden dependencies                                                                                                                                                                       |
-| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Transaction-scoped implementation                 | Services/coordinators, remote infrastructure, live event bus, raw runner, root repository containers, concrete storage adapters, application-scoped gateways                                 |
-| Application-scoped `*Transactions` implementation | regular Services, remote infrastructure, live event bus, repositories, application-scoped gateways                                                                                           |
-| Service / Operation Service                       | broad Service/coordinator interfaces (narrow independently committed actions are allowed), repositories, `CoreTransactionRunner`, live scoped commands, another domain's transaction gateway |
-| Query or local preflight capability               | Services/coordinators, repository mutation interfaces, transaction modules, remote infrastructure, live event bus                                                                            |
-
-Scoped implementations import repository contracts with `import type`; runtime repository helpers
-and concrete adapters cannot be used to acquire an opener. Repository adapters and composition-root
-wiring retain full persistence contracts. Queries receive narrow read interfaces, which a repository
-adapter can implement directly; query modules do not import broad mutation contracts.
-
-Follow the authority actually acquired through imported bindings and injected implementations.
-An unrelated type export in a barrel does not grant repository authority to a consumer of a pure
-helper. Runtime dependencies and module initialization still need review for effects. A small
-interface alone does not establish purity.
-
-The team maintains this contract through agent instructions, code review, scoped types, and
-behavior tests. There is no custom architecture guard or dependency allowlist. Typecheck verifies
-TypeScript compatibility; it does not verify these architectural rules.
-
-### Agent Review
-
-Before completing a change or review involving Wallet persistence, operation coordination, or
-storage adapters:
-
-1. Identify each affected module's role using the naming convention. Trace its dependencies through
-   helpers and injected implementations, including composition-root wiring, against the table above.
-2. For each changed atomic transition, identify the owning gateway and runner invocation. Verify all
-   participating commands use the same adapter scope, authoritative reads occur inside it, and scoped
-   repositories and commands cannot open another transaction. Check that dependent operations are
-   awaited sequentially and that each concurrent group preserves its invariants when interleaved.
-3. Trace effects across that boundary: asynchronous preflight and remote I/O occur outside it,
-   derivation inside it is synchronous, retry-sensitive inputs remain stable, and live events follow
-   commit. Queries and preflight capabilities must remain non-mutating. For independently committed
-   actions, verify the call name and interface disclose persistence, the dependency graph is acyclic,
-   the action finishes outside the caller's transaction, and its commit may survive caller failure.
-4. Run the relevant behavior tests from the testing contract below. Add or adjust tests when a
-   changed invariant needs coverage. Resolve new design violations before handoff; identify remaining
-   legacy deviations and their owning migration without treating them as permission for new ones.
-5. Report the transaction boundaries inspected, verification performed, and any unresolved deviations
-   in the handoff or PR description. Update this design and ADR-0011 together when the agreed contract
-   changes.
-
-## Incremental Migration
-
-The architecture is adopted in reviewable vertical slices. New transaction-aware work follows this
-contract immediately; existing workflows move behind it without requiring a repository-wide
-rewrite.
-
-1. Establish the runner, transaction-scoped module factory, keypair allocation, and documented
-   architecture contract with agent review instructions.
-2. Use the implemented Keypair Queries, derivation, signer, and shared scoped commands as the
-   baseline; retain `KeyRingService` as the user-facing management module.
-3. Migrate Send transitions through `SendTransactions`, extracting shared proof and Output
-   Allocation behavior, separating handler effects, and removing its legacy dependencies.
-4. Migrate core Receive transitions through `ReceiveTransactions`, reusing those implementations
-   and removing its legacy dependencies.
-5. Migrate Mint Swap, Mint Operation, Melt Operation, and Payment Request transitions as their
-   cross-domain invariants require.
-
-Payment Request Receive parent, attempt, and child atomicity is intentionally deferred until that
-workflow's migration. Existing operation names remain stable throughout the migration.
-
-## Testing Contract
-
-Transaction runners and scoped modules are tested through their interfaces with memory and
-persistent adapters. Required cases include:
-
-- grouped writes commit atomically;
-- representative failures roll back the whole write set;
-- failures of independent siblings inside and across scoped commands drain executing repository
-  calls before rollback or retry, and reject further scoped calls;
-- caught or unobserved scoped failures cannot commit, early callback completion waits for started
-  commands, and completed scopes reject further commands and repository calls;
-- transaction reads do not observe concurrent uncommitted writes;
-- root writes cannot be clobbered by transaction commit or rollback;
-- independent connections serialize or return a typed conflict; and
-- no live event or remote I/O occurs inside a transaction.
-
-Orchestration tests assert durable results through Queries and use in-memory remote adapters rather
-than mocking individual repositories.
-
-The keypair baseline also tests shared command reuse through a standalone gateway and a composed
-transition, exactly one adapter transaction per successful invocation, sequential allocations within
-one scope, concurrent allocations across transactions, grouped allocation rollback, high-water-mark
-rollback, synchronous reusable derivation, and signing through read-only key access.
-Compile-time assertions ensure neither domain scope nor repository scope exposes a transaction
-opener. Later migrations must exercise the same composition guarantees across proofs, allocation,
-and operation persistence, including adapter concurrency and ambiguous remote outcomes.
-
-## Non-Goals
-
-- Holding repository transactions across remote I/O.
-- Renaming Operation Services to Coordinators.
-- Giving an Operation Service repositories or the raw runner.
-- Combining application-scoped gateways to simulate one transaction.
-- Creating transaction-scoped clones of broad regular Services.
-- Forcing informational reads into transactions.
-- Exposing `CoreTransaction` through public Coco interfaces.
-- Redesigning Payment Request Receive atomicity in the first migration step.
-- Building systematic network fault injection or a durable outbox in this milestone.
+Public APIs, package exports, persisted formats, and protocol behavior do not change with this
+internal composition model. `CoreTransaction` and the runner remain internal implementation details.

@@ -1,10 +1,9 @@
 import { mock } from 'bun:test';
+import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
 import { MintService } from '../../services/MintService.ts';
 import { MintAdapter } from '../../infra/MintAdapter.ts';
 import { MintRequestProvider } from '../../infra/MintRequestProvider.ts';
 import { StoredMintQueries } from '../../mints/MintMetadata.ts';
-import { CoreMintMetadataTransactions } from '../../transactions/mints/MintMetadataTransactions.ts';
-import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
 import type { Repositories } from '../../repositories/index.ts';
 import { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
@@ -20,9 +19,7 @@ export function createMintMetadataRemoteDouble() {
 export function createMintMetadataRefreshDependencies(repositories: Repositories) {
   return {
     queries: new StoredMintQueries(repositories.mintRepository, repositories.keysetRepository),
-    transactions: new CoreMintMetadataTransactions(
-      new RepositoryCoreTransactionRunner(repositories),
-    ),
+    transactions: new RepositoryCoreTransactionRunner(repositories),
   };
 }
 

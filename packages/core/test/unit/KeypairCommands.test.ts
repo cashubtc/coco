@@ -1,10 +1,9 @@
 import { describe, expect, it } from 'bun:test';
+import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
 import { DerivationIndexExhaustedError } from '../../models/Error.ts';
 import type { Keypair, KeypairPurpose } from '../../models/Keypair.ts';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 import type { Repositories, RepositoryTransactionScope } from '../../repositories/index.ts';
-import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
-import { CoreKeyRingTransactions } from '../../transactions/keypairs/KeyRingTransactions.ts';
 import { overrideTransactions } from '../overrideTransactions.ts';
 
 const MAX_DERIVATION_INDEX = 0x7fffffff;
@@ -24,11 +23,11 @@ function allocate(
   purpose: KeypairPurpose,
   derive = (index: number) => derivedKeypair(index, purpose),
 ) {
-  const gateway = new CoreKeyRingTransactions(new RepositoryCoreTransactionRunner(repositories));
-  return gateway.allocate({ purpose, derive });
+  const runner = new RepositoryCoreTransactionRunner(repositories);
+  return runner.run((transaction) => transaction.keypairs.allocate({ purpose, derive }));
 }
 
-describe('ScopedKeypairCommands allocation', () => {
+describe('KeypairCommands allocation', () => {
   it('reads authoritative allocation state before deriving and does not lower its high-water mark', async () => {
     const repositories = new MemoryRepositories();
     await repositories.keyRingRepository.setPersistedKeyPair(derivedKeypair(7, 'p2pk'));
@@ -125,7 +124,7 @@ function scopedRepositoryAuthority(scope: RepositoryTransactionScope): void {
 }
 void scopedRepositoryAuthority;
 
-describe('ScopedKeypairCommands transaction scope', () => {
+describe('KeypairCommands transaction scope', () => {
   it.each([0, 1])('rejects later allocations after allocation %i fails', async (failureIndex) => {
     const repositories = new MemoryRepositories();
     const runner = new RepositoryCoreTransactionRunner(repositories);
@@ -161,10 +160,12 @@ describe('ScopedKeypairCommands transaction scope', () => {
 
     // A fresh transaction can reuse indexes that never committed.
     await expect(
-      new CoreKeyRingTransactions(runner).allocate({
-        purpose: 'p2pk',
-        derive: (index) => derivedKeypair(index, 'p2pk'),
-      }),
+      runner.run((transaction) =>
+        transaction.keypairs.allocate({
+          purpose: 'p2pk',
+          derive: (index) => derivedKeypair(index, 'p2pk'),
+        }),
+      ),
     ).resolves.toMatchObject({ derivationIndex: 0 });
   });
 

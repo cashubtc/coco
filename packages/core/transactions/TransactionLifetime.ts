@@ -1,3 +1,16 @@
+const lifetimes = new WeakMap<object, TransactionLifetime>();
+
+/**
+ * Enroll a composed local transition in its existing scope's lifetime. This never opens a
+ * transaction. Tracking the whole function preserves rollback on caught failures and drains
+ * work even when a caller accidentally drops the returned promise.
+ */
+export function trackTransactionWork<T>(scope: object, work: () => Promise<T>): Promise<T> {
+  const lifetime = lifetimes.get(scope);
+  if (!lifetime) throw new Error('Transaction work requires a runner-bound scope');
+  return lifetime.track(work);
+}
+
 /**
  * Owns asynchronous commands and repository calls for one transaction attempt. Failure revokes
  * further work; calls already executing settle before the adapter may roll back or retry.
@@ -25,7 +38,7 @@ export class TransactionLifetime {
           if (typeof value === 'function') {
             if (!methods.has(property)) {
               methods.set(property, (...args: unknown[]) =>
-                this.invoke(() => Reflect.apply(value, source, args) as Promise<unknown>),
+                this.track(() => Reflect.apply(value, source, args) as Promise<unknown>),
               );
             }
             return methods.get(property);
@@ -38,7 +51,9 @@ export class TransactionLifetime {
       return proxy;
     };
 
-    return bindObject(modules);
+    const scoped = bindObject(modules);
+    lifetimes.set(scoped, this);
+    return scoped;
   }
 
   async run<T>(work: () => Promise<T>): Promise<T> {
@@ -62,7 +77,8 @@ export class TransactionLifetime {
     }
   }
 
-  private invoke<T>(call: () => Promise<T>): Promise<T> {
+  /** Track local work without granting it commit, rollback, or transaction-opening authority. */
+  track<T>(call: () => Promise<T>): Promise<T> {
     let result: Promise<T>;
     try {
       if (this.closed) throw new Error('Wallet transaction scope is closed');

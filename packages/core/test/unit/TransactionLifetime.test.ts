@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'bun:test';
 import type { RepositoryTransactionScope } from '../../repositories/index.ts';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
-import { TransactionLifetime } from '../../transactions/scoped/TransactionLifetime.ts';
-import { RepositoryKeypairCommands } from '../../transactions/scoped/keypairs/ScopedKeypairCommands.ts';
+import { TransactionLifetime } from '../../transactions/TransactionLifetime.ts';
+import { RepositoryKeypairCommands } from '../../transactions/keypairs/KeypairCommands.ts';
 
 function gate() {
   let release!: () => void;

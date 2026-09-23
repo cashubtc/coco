@@ -4,7 +4,7 @@ import {
   type MintMetadata,
   type MintQueries,
 } from '@core/mints/MintMetadata.ts';
-import type { MintMetadataTransactions } from '@core/transactions/mints/MintMetadataTransactions.ts';
+import type { CoreTransactionRunner } from '../transactions/CoreTransaction.ts';
 import {
   KeysetSyncError,
   MintFetchError,
@@ -123,7 +123,7 @@ export type TopLevelNutCapability = 11 | 20;
 /** Query and transaction dependencies of the independently committed metadata refresh action. */
 export interface MintMetadataRefreshDependencies {
   queries: MintQueries;
-  transactions: MintMetadataTransactions;
+  transactions: CoreTransactionRunner;
 }
 
 export class MintService {
@@ -236,7 +236,9 @@ export class MintService {
     if (cached && cached.mint.updatedAt >= Math.floor(Date.now() / 1000) - MINT_REFRESH_TTL_S)
       return cached;
     const observation = await this.mintAdapter.fetchMintMetadata(mintUrl, cached?.keysets ?? []);
-    const result = await this.metadata.transactions.applyObservation(observation);
+    const result = await this.metadata.transactions.run((transaction) =>
+      transaction.mintMetadata.applyObservation(observation),
+    );
     if (result.applied) {
       await this.publishCommittedEvent('mint:metadata-refreshed', { mintUrl });
       await this.publishCommittedEvent('mint:updated', result.metadata);

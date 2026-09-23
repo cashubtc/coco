@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'bun:test';
+import {
+  RepositoryCoreTransactionRunner,
+  type CoreTransaction,
+} from '../../transactions/CoreTransaction.ts';
 import { RepositoryTransactionConflictError } from '../../repositories/RepositoryTransactionError.ts';
 import type { RepositoryTransactionScope } from '../../repositories/index.ts';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
-import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
-import type { CoreTransaction } from '../../transactions/CoreTransaction.ts';
-import { CoreKeyRingTransactions } from '../../transactions/keypairs/KeyRingTransactions.ts';
 import { KeypairDerivation } from '../../keypairs/KeypairDerivation.ts';
 import { overrideTransactions } from '../overrideTransactions.ts';
 
@@ -26,12 +27,16 @@ function scopedAuthority(transaction: CoreTransaction, scope: RepositoryTransact
   transaction.run;
   // @ts-expect-error Shared commands cannot independently start a transaction.
   transaction.keypairs.withTransaction;
+  // @ts-expect-error Scoped operation persistence cannot start a transaction.
+  transaction.sendOperations.withTransaction;
+  // @ts-expect-error Operation writes use conditional transitions, not unconditional updates.
+  transaction.sendOperations.update;
   // @ts-expect-error The scoped repository container deliberately omits withTransaction.
   scope.withTransaction;
 }
 
 describe('RepositoryCoreTransactionRunner', () => {
-  it('reuses keypair commands through a standalone gateway and a composed transition', async () => {
+  it('reuses keypair commands through a standalone transaction and a composed transition', async () => {
     const repositories = new MemoryRepositories();
     let opens = 0;
     const runner = new RepositoryCoreTransactionRunner(
@@ -43,9 +48,8 @@ describe('RepositoryCoreTransactionRunner', () => {
     const derivation = new KeypairDerivation(async () => new Uint8Array(64));
     const p2pk = await derivation.prepare('p2pk');
     const quoteKey = await derivation.prepare('nut20_mint_quote');
-    const gateway = new CoreKeyRingTransactions(runner);
 
-    const first = await gateway.allocate(p2pk);
+    const first = await runner.run((transaction) => transaction.keypairs.allocate(p2pk));
     expect(opens).toBe(1);
     const composed = await runner.run(async (transaction) => {
       const second = await transaction.keypairs.allocate(p2pk);
@@ -74,9 +78,12 @@ describe('RepositoryCoreTransactionRunner', () => {
     expect(
       await repositories.keyRingRepository.getAllPersistedKeyPairs('nut20_mint_quote'),
     ).toEqual([]);
-    const gateway = new CoreKeyRingTransactions(runner);
-    expect((await gateway.allocate(p2pk)).derivationIndex).toBe(0);
-    expect((await gateway.allocate(quoteKey)).derivationIndex).toBe(0);
+    expect(
+      (await runner.run((transaction) => transaction.keypairs.allocate(p2pk))).derivationIndex,
+    ).toBe(0);
+    expect(
+      (await runner.run((transaction) => transaction.keypairs.allocate(quoteKey))).derivationIndex,
+    ).toBe(0);
   });
 
   it('binds inherited getters and frozen repository methods to the owning lifetime', async () => {
@@ -104,7 +111,7 @@ describe('RepositoryCoreTransactionRunner', () => {
       ),
     );
     const input = await new KeypairDerivation(async () => new Uint8Array(64)).prepare('p2pk');
-    const allocated = await new CoreKeyRingTransactions(runner).allocate(input);
+    const allocated = await runner.run((transaction) => transaction.keypairs.allocate(input));
 
     expect(allocated.derivationIndex).toBe(0);
     expect(await repositories.keyRingRepository.getAllPersistedKeyPairs('p2pk')).toEqual([

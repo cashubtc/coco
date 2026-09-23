@@ -1,5 +1,4 @@
 import type { OutputDataCreator } from '@cashu/cashu-ts';
-import { CoreMintMetadataTransactions } from './transactions/mints/MintMetadataTransactions.ts';
 import { StoredMintQueries } from './mints/MintMetadata.ts';
 import { CashuSendRemote } from './infra/handlers/send/CashuSendRemote.ts';
 import type {
@@ -83,8 +82,6 @@ import {
 } from './models/MintQuote.ts';
 import { assessMintQuoteClaimability } from './models/MintQuoteClaimability.ts';
 import { RepositoryCoreTransactionRunner } from './transactions/CoreTransaction.ts';
-import { CoreSendTransactions } from './transactions/send/SendTransactions.ts';
-import { CoreKeyRingTransactions } from './transactions/keypairs/KeyRingTransactions.ts';
 import { KeypairDerivation } from './keypairs/KeypairDerivation.ts';
 import { KeypairP2pkSigner } from './keypairs/P2pkSigner.ts';
 
@@ -930,17 +927,16 @@ export class Manager {
       this.mintAdapter,
       {
         queries: mintQueries,
-        transactions: new CoreMintMetadataTransactions(coreTransactionRunner),
+        transactions: coreTransactionRunner,
       },
       mintLogger,
       this.eventBus,
     );
-    const keyRingTransactions = new CoreKeyRingTransactions(coreTransactionRunner);
     const keypairDerivation = new KeypairDerivation(() => seedService.getSeed());
     const p2pkSigner = new KeypairP2pkSigner(repositories.keyRingRepository);
     const keyRingService = new KeyRingService(
       repositories.keyRingRepository,
-      keyRingTransactions,
+      coreTransactionRunner,
       keypairDerivation,
       p2pkSigner,
       keyRingLogger,
@@ -988,11 +984,10 @@ export class Manager {
       default: new DefaultSendHandler(),
       p2pk: new P2pkSendHandler(),
     });
-    const sendTransactions = new CoreSendTransactions(coreTransactionRunner);
     const sendOperationService = new SendOperationService({
       operationQueries: repositories.sendOperationRepository,
       proofQueries: repositories.proofRepository,
-      transactions: sendTransactions,
+      transactions: coreTransactionRunner,
       mintQueries: repositories.mintRepository,
       mintMetadataRefresh: mintService,
       remote: new CashuSendRemote(

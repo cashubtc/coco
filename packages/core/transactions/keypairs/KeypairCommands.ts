@@ -1,19 +1,19 @@
 import type { Keypair } from '@core/models/Keypair';
 import { DerivationIndexExhaustedError } from '@core/models/Error';
 import type { KeyRingRepository } from '@core/repositories';
-import type { AllocateKeypairInput } from '../../../keypairs/types.ts';
+import type { AllocateKeypairInput } from '../../keypairs/types.ts';
 
 const MAX_DERIVATION_INDEX = 0x7fffffff;
 
 /** Keypair mutations within the owning transaction; these commands never open a transaction. */
-export interface ScopedKeypairCommands {
+export interface KeypairCommands {
   /** Await each allocation before starting another for the same purpose within this scope. */
   allocate(input: AllocateKeypairInput): Promise<Keypair>;
   importP2pk(keypair: Keypair): Promise<void>;
   deleteP2pk(publicKey: string): Promise<void>;
 }
 
-export class RepositoryKeypairCommands implements ScopedKeypairCommands {
+export class RepositoryKeypairCommands implements KeypairCommands {
   constructor(private readonly repository: KeyRingRepository) {}
 
   async allocate(input: AllocateKeypairInput): Promise<Keypair> {

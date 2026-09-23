@@ -2,55 +2,46 @@
 status: accepted
 ---
 
-# Use domain transaction gateways for critical Wallet mutations
+# Compose Wallet transactions in the owning coordinator
 
-Coco uses narrow domain transaction gateways backed by one composition-root-owned runner for
-critical Wallet mutations. Services coordinate domain management actions; Operation Services
-additionally coordinate durable saga lifecycles. Both use domain gateways, while shared scoped
-commands compose reusable domain invariants within one adapter transaction. Each gateway method
-returns only after commit, with the runner owning rollback and bounded retries.
+Coco injects one session-scoped `CoreTransactionRunner` into application coordinators. The outermost
+local workflow calls `run()` and composes domain commands and reusable transaction functions within
+its supplied `CoreTransaction`. Functions such as `prepareSend(transaction, input)` never open or
+commit a transaction; they can serve standalone callers and larger atomic workflows unchanged.
 
-This gives each atomic transition an explicit owner and forbids transactional helpers from opening
-nested transactions. Runtime rejection of nesting is not yet uniform across adapters. Coordinators
-perform asynchronous preflight and remote mint I/O outside the
-transaction and publish live events after commit. Authoritative reads and writes share the
-transaction scope, preserving atomicity across supported adapters, including IndexedDB.
-
-`Scoped*Commands` names interfaces for state-changing actions within an existing transaction.
-Method-specific argument objects use `*Input` types and the parameter name `input`; transaction
-runner callbacks are named `work`. These names distinguish actions from their inputs and the work
-that composes them.
-
-Coordinators may invoke narrow independently committed actions, such as
-`Pick<MintService, 'refreshAndCommitIfStale'>`. The method name and contract disclose remote I/O
-and persistence. MintService owns freshness policy, its metadata gateway call, and post-commit
-events; Send can reuse the action without reproducing that workflow. Its commit intentionally
-survives a later Send failure. Gateways and scoped commands cannot depend on this action or any
-other coordinator, and coordinator dependencies must remain acyclic.
-
-The mint metadata gateway returns whether it applied the observation alongside the committed
-snapshot. Older observations and timestamp ties are ignored, retaining the first commit on ties.
-The refresh action publishes events only for applied observations.
+This revises the original decision to require domain transaction gateways. Mirrored gateway and
+scoped workflow interfaces added forwarding layers and made cross-domain composition unnecessarily
+indirect. The runner now owns commit, rollback, retries, and scope lifetime; the coordinator chooses
+the atomic write set, and reusable commands/functions own its domain invariants. No per-workflow
+scope type or gateway is required. Scoped repository contracts may directly provide narrow local
+persistence capabilities when another wrapper would add no behavior.
 
 ## Considered Options
 
-Broad Service dependencies and transaction-scoped Service clones obscure effects and transaction
-ownership. Composing separate gateway calls cannot provide one atomic transition. Shared scoped
-commands preserve algorithm reuse while keeping transaction creation at the owning gateway.
-Requiring every independent commit to appear directly in every caller duplicates refresh workflows;
-allowing pure-looking Service calls hides persistence. Explicitly committing actions preserve reuse
-while disclosing their effects, without opening transactional code to Service dependencies.
-
-We use agent and human review, scoped types, and behavior tests instead of a custom architecture
-checker because partial static analysis adds maintenance cost without establishing effect safety.
+Mandatory gateways provided an explicit committed-result interface but duplicated every transition
+and prevented coordinators from directly composing local work. Broad transaction-scoped service
+clones and optional transaction parameters obscure lifetime and transaction ownership. Composing
+independent service calls cannot produce one atomic commit. We instead compose local functions
+through a mandatory shared scope and keep service entry points outside transaction callbacks.
 
 ## Consequences
 
-The design adds interfaces and stricter dependency boundaries. Adoption is incremental: Keypair
-Allocation establishes the baseline, and other workflows migrate through their own gateways while
-reusing shared scoped commands. Consistent fail-fast rejection of nested Wallet transactions remains
-follow-up work and must distinguish nesting from legitimate concurrent calls. Existing legacy
-MintService add, forced-update, trust, and delete paths remain outside this metadata-action migration.
+Coordinator callbacks have more authority, so review must check their actual effects and captured
+dependencies. Preflight and remote I/O stay outside transactions; retry-sensitive inputs are fixed
+before callbacks; authoritative checks and mutations share one adapter scope; events follow commit.
+Shared proof reservation, Output Allocation, and Keypair Allocation commands preserve their rules.
 
-[Transaction Design](../../../../TRANSACTION_DESIGN.md) is the authoritative implementation
-contract for naming, dependencies, scope lifetime, concurrency, retries, and review requirements.
+Extracted transaction functions enroll their work in the existing lifetime through the internal
+`trackTransactionWork` helper. It neither opens nor commits transactions. This preserves failure
+containment and expired-scope rejection when functions replace scoped workflow classes.
+
+Independently committed actions such as `MintService.refreshAndCommitIfStale` remain reusable outside
+transactions. Their commits intentionally survive later caller failure. Only applied metadata
+observations publish events; older observations and timestamp ties retain the first committed
+snapshot. Coordinator dependencies remain acyclic.
+
+Send, KeyRing, and mint metadata refresh use this model. Other legacy workflows migrate separately.
+Consistent fail-fast rejection of nested transactions remains follow-up work and must distinguish
+nesting from legitimate concurrent calls. There are no public API or persisted-format changes.
+
+[Transaction Design](../../../../TRANSACTION_DESIGN.md) defines the implementation and review contract.

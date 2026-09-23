@@ -1,5 +1,6 @@
 import type { OutputDataCreator } from '@cashu/cashu-ts';
 import { mock } from 'bun:test';
+import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
 import { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
 import { DefaultSendHandler } from '../../infra/handlers/send/DefaultSendHandler.ts';
@@ -8,8 +9,6 @@ import { SendHandlerProvider } from '../../infra/handlers/send/SendHandlerProvid
 import { SendOperationService } from '../../operations/send/SendOperationService.ts';
 import type { RepositoryTransactionScope } from '../../repositories/index.ts';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
-import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
-import { CoreSendTransactions } from '../../transactions/send/SendTransactions.ts';
 import { testMintInfo, testMintKeypairs, testMintKeysetId } from './MintMetadata.ts';
 import {
   createMintMetadataRemoteDouble,
@@ -56,7 +55,7 @@ export async function createSendEnvironment(units = ['sat']) {
       feePpk: 0,
     });
   }
-  const transactions = new CoreSendTransactions(new RepositoryCoreTransactionRunner(repositories));
+  const transactions = new RepositoryCoreTransactionRunner(repositories);
   const eventBus = new EventBus<CoreEvents>();
   const remote = createSendRemoteDouble();
   const metadataRemote = createMintMetadataRemoteDouble();

@@ -1,9 +1,9 @@
 import type { Proof } from '@cashu/cashu-ts';
-import type { Logger } from '@core/logging';
-import type { Keypair, KeypairPurpose } from '@core/models/Keypair';
-import type { KeyRingTransactions } from '@core/transactions/keypairs/KeyRingTransactions.ts';
 import { schnorr } from '@noble/curves/secp256k1.js';
 import { bytesToHex } from '@noble/curves/utils.js';
+import type { Logger } from '@core/logging';
+import type { Keypair, KeypairPurpose } from '@core/models/Keypair';
+import type { CoreTransactionRunner } from '../transactions/CoreTransaction.ts';
 import type { KeypairQueries } from '../keypairs/KeypairQueries.ts';
 import type { KeypairDerivation } from '../keypairs/KeypairDerivation.ts';
 import type { P2pkSigner } from '../keypairs/P2pkSigner.ts';
@@ -11,7 +11,7 @@ import type { P2pkSigner } from '../keypairs/P2pkSigner.ts';
 export class KeyRingService {
   constructor(
     private readonly keypairQueries: KeypairQueries,
-    private readonly transactions: KeyRingTransactions,
+    private readonly transactions: CoreTransactionRunner,
     private readonly derivation: KeypairDerivation,
     private readonly signer: P2pkSigner,
     private readonly logger?: Logger,
@@ -39,7 +39,9 @@ export class KeyRingService {
     },
   ): Promise<{ publicKeyHex: string } | Keypair> {
     const input = await this.derivation.prepare(purpose);
-    const keyPair = await this.transactions.allocate(input);
+    const keyPair = await this.transactions.run((transaction) =>
+      transaction.keypairs.allocate(input),
+    );
     if (options?.dumpSecretKey) {
       return keyPair;
     }
@@ -52,18 +54,20 @@ export class KeyRingService {
       throw new Error('Secret key must be exactly 32 bytes');
     }
     const publicKeyHex = this.getPublicKeyHex(secretKey);
-    await this.transactions.importP2pkKey({
-      publicKeyHex,
-      secretKey,
-      purpose: 'p2pk',
-    });
+    await this.transactions.run((transaction) =>
+      transaction.keypairs.importP2pk({
+        publicKeyHex,
+        secretKey,
+        purpose: 'p2pk',
+      }),
+    );
     this.logger?.debug('Key pair added', { publicKeyHex });
     return { publicKeyHex, secretKey, purpose: 'p2pk' };
   }
 
   async removeKeyPair(publicKey: string): Promise<void> {
     this.logger?.debug('Removing key pair', { publicKey });
-    await this.transactions.deleteP2pkKey(publicKey);
+    await this.transactions.run((transaction) => transaction.keypairs.deleteP2pk(publicKey));
     this.logger?.debug('Key pair removed', { publicKey });
   }
 
