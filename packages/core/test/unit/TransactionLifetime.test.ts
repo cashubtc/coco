@@ -17,6 +17,17 @@ function importedKey(publicKeyHex: string) {
 }
 
 describe('TransactionLifetime', () => {
+  it('does not expose Object.prototype.valueOf on scoped capabilities', async () => {
+    const lifetime = new TransactionLifetime();
+    const scope = lifetime.bind({ keypairs: { repository: {} } });
+
+    await lifetime.run(async () => {
+      expect(Reflect.get(scope, 'valueOf')).toBeUndefined();
+      expect(Reflect.get(scope.keypairs, 'valueOf')).toBeUndefined();
+      expect(Reflect.get(scope.keypairs.repository, 'valueOf')).toBeUndefined();
+    });
+  });
+
   it('binds frozen commands and inherited repository getters without changing their receiver', async () => {
     const repositories = new MemoryRepositories();
     const lifetime = new TransactionLifetime();
