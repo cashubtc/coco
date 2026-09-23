@@ -20,6 +20,8 @@ export class TransactionLifetime {
       const proxy = new Proxy(Object.create(source) as TObject, {
         get: (_target, property) => {
           const value: unknown = Reflect.get(source, property, source);
+          // Object's valueOf would return the unguarded source and escape this lifetime.
+          if (value === Object.prototype.valueOf) return undefined;
           if (typeof value === 'function') {
             if (!methods.has(property)) {
               methods.set(property, (...args: unknown[]) =>

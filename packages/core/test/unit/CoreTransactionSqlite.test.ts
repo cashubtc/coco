@@ -3,6 +3,8 @@ import { Database } from 'bun:sqlite';
 import { Amount } from '@cashu/cashu-ts';
 import { KeypairDerivation } from '../../keypairs/KeypairDerivation.ts';
 import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
+import type { CoreTransaction } from '../../transactions/CoreTransaction.ts';
+import type { KeyRingRepository } from '../../repositories/index.ts';
 import { SqlStorageRepositories } from '../../../sql-storage/src/repositories.ts';
 import { SqliteDb } from '../../../sqlite-bun/src/db.ts';
 import { CoreSendTransactions } from '../../transactions/send/SendTransactions.ts';
@@ -14,6 +16,66 @@ import type { CoreProof } from '../../types.ts';
 import { preparedSend } from '../fixtures/SendOperation.ts';
 
 describe('CoreTransaction with SQLite', () => {
+  it.each(['commit', 'rollback'] as const)(
+    'prevents valueOf from retaining repository access after %s',
+    async (completion) => {
+      const database = new Database(':memory:');
+      const repositories = new SqlStorageRepositories({ database: new SqliteDb({ database }) });
+      const abort = new Error('abort owning transaction');
+      const existingKey = {
+        publicKeyHex: 'existing-key',
+        secretKey: new Uint8Array(32).fill(1),
+        purpose: 'p2pk' as const,
+      };
+      const lateKey = { ...existingKey, publicKeyHex: 'late-key' };
+      let guarded!: CoreTransaction['keypairs'];
+      let escaped: KeyRingRepository | undefined;
+
+      try {
+        await repositories.init();
+        await repositories.keyRingRepository.setPersistedKeyPair(existingKey);
+        const runner = new RepositoryCoreTransactionRunner(repositories);
+        const transaction = runner.run(async (scope) => {
+          guarded = scope.keypairs;
+          const commandValueOf = Reflect.get(scope.keypairs, 'valueOf');
+          if (typeof commandValueOf === 'function') {
+            const command = await Reflect.apply(commandValueOf, scope.keypairs, []);
+            const repository = Reflect.get(command as object, 'repository');
+            const repositoryValueOf = Reflect.get(repository, 'valueOf');
+            if (typeof repositoryValueOf === 'function') {
+              escaped = await Reflect.apply(repositoryValueOf, repository, []);
+            }
+          }
+          if (completion === 'rollback') throw abort;
+        });
+        if (completion === 'rollback') await expect(transaction).rejects.toBe(abort);
+        else await transaction;
+
+        await expect(guarded.importP2pk(lateKey)).rejects.toThrow(
+          'Wallet transaction scope is closed',
+        );
+        // A returned facade is safe only if its reads and writes are still revoked.
+        const lateRead = escaped
+          ? await escaped.getPersistedKeyPair(existingKey.publicKeyHex, 'p2pk').catch(() => null)
+          : null;
+        if (escaped) await escaped.setPersistedKeyPair(lateKey).catch(() => {});
+
+        expect(
+          await repositories.keyRingRepository.getPersistedKeyPair(lateKey.publicKeyHex, 'p2pk'),
+        ).toBeNull();
+        expect(lateRead).toBeNull();
+        expect(
+          await repositories.keyRingRepository.getPersistedKeyPair(
+            existingKey.publicKeyHex,
+            'p2pk',
+          ),
+        ).toMatchObject(existingKey);
+      } finally {
+        database.close();
+      }
+    },
+  );
+
   it('rolls back legacy send output reconciliation when the pending transition fails', async () => {
     const database = new Database(':memory:');
     const repositories = new SqlStorageRepositories({ database: new SqliteDb({ database }) });
