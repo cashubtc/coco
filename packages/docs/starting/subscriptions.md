@@ -43,6 +43,12 @@ await coco.pauseSubscriptions();
 await coco.resumeSubscriptions();
 ```
 
+Repeated pause calls while paused do nothing. Repeated resume calls intentionally
+reconnect and each emits `subscriptions:resumed` on a live session, even if it was
+already resumed. Await the method for restart completion; the event is emitted
+before restart finishes. Deduplicate foreground notifications in your app if you
+do not want each one to trigger a reconnect.
+
 This is particularly useful for:
 
 - **Mobile apps**: Save battery when the app is backgrounded

@@ -2,14 +2,14 @@
 
 Receive operations turn an encoded Cashu token into proofs stored in the local
 wallet. The operation API makes receiving explicit so apps can review decoded
-token details, recover after crashes, and avoid duplicate receives.
+token details and recover the same persisted operation after crashes.
 
 ## API Surface (`coco.ops.receive`)
 
 The canonical API is exposed through `coco.ops.receive`:
 
 - `prepare({ token })` decodes and validates a token, calculates fees, and
-  creates deterministic receive outputs
+  creates deterministic receive outputs; it does not deduplicate completed tokens
 - `execute(operationOrId)` receives the prepared token and saves the new proofs
 - `get(operationId)` returns a persisted receive operation
 - `listPrepared()` lists receives waiting for user confirmation
@@ -61,6 +61,47 @@ if (userConfirmed) {
   await coco.ops.receive.cancel(prepared.id, 'User cancelled receive');
 }
 ```
+
+## Repeated Tokens and Failed Execution
+
+Keep the operation ID while a receive is in progress and use `get()` or
+`refresh()` to resume it. Calling `prepare({ token })` again creates another
+receive attempt, even if an earlier attempt for those proofs finalized. It can
+allocate new deterministic outputs before execution discovers that the input
+proofs are already spent. Preparation validates the token and plans the receive;
+it is not a guarantee that the mint will accept those proofs.
+
+For a definitively spent token, execution rejects and may already have persisted
+`rolled_back`. This does not credit the balance again. A network failure can
+instead leave `executing` because the remote outcome is ambiguous; preserve that
+operation and use recovery. An app may deduplicate repeated submissions in its UI,
+but that is not a replacement for mint validation or operation recovery.
+
+Do not unconditionally cancel in an execution catch block. Cancellation accepts
+only `init` and `prepared`, and rejects an already rolled-back operation:
+
+```ts
+const prepared = await coco.ops.receive.prepare({ token });
+try {
+  await coco.ops.receive.execute(prepared.id);
+} catch (error) {
+  const current = await coco.ops.receive.get(prepared.id);
+  if (current?.state === 'init' || current?.state === 'prepared') {
+    // This example abandons an attempt that has not started remote execution.
+    await coco.ops.receive.cancel(current.id, 'Receive abandoned after error');
+  } else if (current?.state === 'executing') {
+    // Retain the ID for recovery; the mint may already have accepted the swap.
+    console.log('Receive needs recovery:', current.id);
+  } else {
+    console.log('Receive state:', current?.state);
+  }
+  console.error('Receive failed:', error instanceof Error ? error.message : error);
+}
+```
+
+State can change between `get()` and `cancel()` when another session is active;
+handle a rejected cancellation by reloading again. Never replace an ambiguous
+in-flight receive with a new attempt just because execution threw.
 
 ## Recovery
 

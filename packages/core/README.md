@@ -271,6 +271,13 @@ onchain melt prepare uses `prepare({ quote, feeIndex })`. Public operation
 prepare inputs do not accept sibling `unit`, `method`, or `methodData` fields;
 those details are derived from canonical quote storage.
 
+Mint `execute()` may return `pending` while canonical quote storage has not
+observed payment. `checkPayment()` and `refresh()` can issue proofs immediately,
+even with background processing disabled. Inspect the latest persisted state;
+see [Mint Operations](../docs/pages/mint-operations.md#lifecycle-actions).
+For repeat tokens and execution errors, see
+[Receive Operations](../docs/pages/receive-operations.md#repeated-tokens-and-failed-execution).
+
 ### MintApi
 
 - `addMint(mintUrl: string, options?: { trusted?: boolean }): Promise<{ mint: Mint; keysets: Keyset[] }>`
@@ -313,6 +320,29 @@ those details are derived from canonical quote storage.
 - `execute(transaction: PreparedPaymentRequest): Promise<PaymentRequestExecutionResult>`
 - `incoming.create(input: CreateIncomingPaymentRequestInput): Promise<PaymentRequestReceiveOperation>`
 
+See [Payment Requests](../docs/starting/payment-requests.md) for complete payer
+and receiver flows, transport setup, size limits, and errors:
+
+```ts
+const incoming = await manager.paymentRequests.incoming.create({
+  amount: 10,
+  unit: 'sat',
+  mints: ['https://nofees.testnut.cashu.space'], // Must already be trusted
+  description: 'Coffee',
+  singleUse: true,
+  transport: { type: 'inband' },
+  encoding: 'creqB',
+});
+
+console.log('Request to share:', incoming.encodedRequest);
+const resolved = await manager.paymentRequests.parse(incoming.encodedRequest);
+console.log('Amount:', resolved.amount?.toString(), resolved.unit);
+```
+
+Across HTTP/worker boundaries, exchange encoded requests and operation IDs.
+Public models contain `Amount` instances; JSON round trips do not restore their
+methods. See [Amounts and JSON boundaries](../docs/pages/amounts-json.md).
+
 ### QuoteApi
 
 - `mint.create(...)`, `mint.import(...)`, `mint.get({ mintUrl, quoteId })`
@@ -345,6 +375,11 @@ application flows and operation APIs when a mint or melt should be finalized.
 In non-browser environments, provide a `webSocketFactory` through
 `initializeCoco` or `Manager` construction. App code should not need transport
 internals.
+
+Repeated `pauseSubscriptions()` calls while paused are no-ops. Repeated
+`resumeSubscriptions()` calls intentionally reconnect and each emits
+`subscriptions:resumed` on a live session. Await the method for restart completion.
+See [Watchers and Processors](../docs/pages/watchers-processors.md).
 
 ## Core events
 
