@@ -22,6 +22,7 @@ type Task = {
 
 type MintScheduler = {
   nextAllowedAt: number;
+  timer?: ReturnType<typeof setTimeout>;
   queue: Task[];
   running: boolean;
   hasProofBatchTask: boolean;
@@ -262,6 +263,7 @@ export class PollingTransport implements RealTimeTransport {
   }
 
   closeAll(): void {
+    for (const scheduler of this.schedByMint.values()) this.clearTimer(scheduler);
     this.schedByMint.clear();
     this.listenersByMint.clear();
     this.proofQueueByMint.clear();
@@ -274,6 +276,8 @@ export class PollingTransport implements RealTimeTransport {
 
   closeMint(mintUrl: string): void {
     mintUrl = normalizeMintUrl(mintUrl);
+    const scheduler = this.schedByMint.get(mintUrl);
+    if (scheduler) this.clearTimer(scheduler);
     this.schedByMint.delete(mintUrl);
     this.listenersByMint.delete(mintUrl);
     this.proofQueueByMint.delete(mintUrl);
@@ -286,6 +290,7 @@ export class PollingTransport implements RealTimeTransport {
 
   pause(): void {
     this.paused = true;
+    for (const scheduler of this.schedByMint.values()) this.clearTimer(scheduler);
   }
 
   resume(): void {
@@ -329,13 +334,44 @@ export class PollingTransport implements RealTimeTransport {
     return s;
   }
 
+  private clearTimer(scheduler: MintScheduler): void {
+    if (scheduler.timer === undefined) return;
+    clearTimeout(scheduler.timer);
+    scheduler.timer = undefined;
+  }
+
+  private scheduleNext(mintUrl: string, scheduler: MintScheduler): void {
+    this.clearTimer(scheduler);
+    if (
+      this.paused ||
+      this.schedByMint.get(mintUrl) !== scheduler ||
+      scheduler.running ||
+      scheduler.queue.length === 0
+    ) {
+      return;
+    }
+    const timer = setTimeout(
+      () => {
+        if (this.schedByMint.get(mintUrl) !== scheduler || scheduler.timer !== timer) return;
+        scheduler.timer = undefined;
+        void this.maybeRun(mintUrl);
+      },
+      Math.max(0, scheduler.nextAllowedAt - Date.now()),
+    );
+    scheduler.timer = timer;
+  }
+
   private async maybeRun(mintUrl: string): Promise<void> {
     if (this.paused) return;
-    const s = this.ensureScheduler(mintUrl);
-    if (s.running) return;
-    const now = Date.now();
-    if (now < s.nextAllowedAt) return;
+    const s = this.schedByMint.get(mintUrl);
+    if (!s || s.running) return;
+    this.clearTimer(s);
     if (s.queue.length === 0) return;
+    if (Date.now() < s.nextAllowedAt) {
+      // A timer can wake before the wall-clock deadline; keep the queued work scheduled.
+      this.scheduleNext(mintUrl, s);
+      return;
+    }
 
     s.running = true;
     const task = s.queue.shift()!;
@@ -353,11 +389,7 @@ export class PollingTransport implements RealTimeTransport {
     } finally {
       s.nextAllowedAt = Date.now() + this.getIntervalForMint(mintUrl);
       s.running = false;
-      // Schedule next attempt when allowed
-      const delay = Math.max(0, s.nextAllowedAt - Date.now());
-      setTimeout(() => {
-        void this.maybeRun(mintUrl);
-      }, delay);
+      this.scheduleNext(mintUrl, s);
     }
   }
 

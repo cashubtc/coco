@@ -15,7 +15,10 @@ import {
   runSendOperationRepositoryContract,
   runMeltOperationRepositoryContract,
   runMeltQuoteRepositoryContract,
+  createMintSwapFixtures,
+  runMintSwapPersistenceContract,
 } from '@cashu/coco-adapter-tests';
+import { MintSwapIdentityConflictError } from '@cashu/coco-core/adapter';
 import { IndexedDbRepositories } from '../index.ts';
 
 let dbCounter = 0;
@@ -29,6 +32,16 @@ async function createRepositories() {
     dispose: async () => {
       repositories.db.close();
     },
+  };
+}
+
+async function createMintSwapRepositories() {
+  const dbName = `coco_cashu_mint_swap_contract_${Date.now()}_${dbCounter++}`;
+  const repositories = new IndexedDbRepositories({ name: dbName, mintSwap: true });
+  await repositories.init();
+  return {
+    repositories,
+    dispose: async () => repositories.db.close(),
   };
 }
 
@@ -75,6 +88,43 @@ runKeypairAllocationContract(
   { describe, it, expect },
 );
 
+runMintSwapPersistenceContract(
+  {
+    createRepositories: createMintSwapRepositories,
+    createDisabledRepositories: createRepositories,
+  },
+  { describe, it, expect },
+);
+
+describe('Mint Swap create error classification', () => {
+  it('does not relabel a non-constraint Dexie failure when an identity already exists', async () => {
+    const { repositories, dispose } = await createMintSwapRepositories();
+    const repository = repositories.mintSwap!.operationRepository;
+    const table = repositories.db.table('coco_cashu_mint_swap_operations');
+    const operation = createMintSwapFixtures('idb-create-failure').preparing;
+    const failCreate = () => {
+      throw new Error('forced mint swap create failure');
+    };
+    try {
+      await repository.create(operation);
+      table.hook('creating').subscribe(failCreate);
+
+      let thrown: unknown;
+      try {
+        await repository.create(operation);
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).not.toBeInstanceOf(MintSwapIdentityConflictError);
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message).toBe('forced mint swap create failure');
+    } finally {
+      table.hook('creating').unsubscribe(failCreate);
+      await dispose();
+    }
+  });
+});
+
 runAuthSessionRepositoryContract({ createRepositories }, { describe, it, expect });
 
 runProofRepositoryContract({ createRepositories }, { describe, it, expect });
@@ -92,6 +142,64 @@ runMeltOperationRepositoryContract({ createRepositories }, { describe, it, expec
 runMeltQuoteRepositoryContract({ createRepositories }, { describe, it, expect });
 
 runPaymentRequestReceiveRepositoryContract({ createRepositories }, { describe, it, expect });
+
+describe('IdbMintRepository.findMintByUrl', () => {
+  it('returns the mint when it exists', async () => {
+    const { repositories, dispose } = await createRepositories();
+    try {
+      const mint = { ...createDummyMint(), mintUrl: 'https://found.mint' };
+      await repositories.mintRepository.addOrUpdateMint(mint);
+
+      const retrieved = await repositories.mintRepository.findMintByUrl(mint.mintUrl);
+      expect(retrieved?.mintUrl).toBe(mint.mintUrl);
+    } finally {
+      await dispose();
+    }
+  });
+
+  it('returns null when the mint does not exist', async () => {
+    const { repositories, dispose } = await createRepositories();
+    try {
+      expect(await repositories.mintRepository.findMintByUrl('https://missing.mint')).toBeNull();
+    } finally {
+      await dispose();
+    }
+  });
+
+  it('returns null after the mint is deleted', async () => {
+    const { repositories, dispose } = await createRepositories();
+    try {
+      const mint = { ...createDummyMint(), mintUrl: 'https://deleted.mint' };
+      await repositories.mintRepository.addOrUpdateMint(mint);
+      await repositories.mintRepository.deleteMint(mint.mintUrl);
+
+      expect(await repositories.mintRepository.findMintByUrl(mint.mintUrl)).toBeNull();
+    } finally {
+      await dispose();
+    }
+  });
+
+  it('propagates a genuine storage read failure instead of returning null', async () => {
+    const { repositories, dispose } = await createRepositories();
+    const mintsTable = repositories.db.table('coco_cashu_mints');
+    const failRead = () => {
+      throw new Error('forced storage read failure');
+    };
+    try {
+      const mint = { ...createDummyMint(), mintUrl: 'https://unreadable.mint' };
+      await repositories.mintRepository.addOrUpdateMint(mint);
+
+      mintsTable.hook('reading').subscribe(failRead);
+
+      await expect(repositories.mintRepository.findMintByUrl(mint.mintUrl)).rejects.toThrow(
+        'forced storage read failure',
+      );
+    } finally {
+      mintsTable.hook('reading').unsubscribe(failRead);
+      await dispose();
+    }
+  });
+});
 
 describe('indexeddb Wallet transaction boundaries', () => {
   it('does not report a nested strong scope as committed before its ambient parent', async () => {
@@ -251,6 +359,16 @@ describe('indexeddb quote storage constraints', () => {
           .table('coco_cashu_keypairs')
           .schema.indexes.some((index) => index.name === '[purpose+derivationIndex]'),
       ).toBe(true);
+      expect(
+        repositories.db.tables.some((table) => table.name === 'coco_cashu_mint_swap_operations'),
+      ).toBe(true);
+      const mintSwapIndexes = repositories.db.table('coco_cashu_mint_swap_operations').schema
+        .indexes;
+      expect(mintSwapIndexes.some((index) => index.name === 'sourceOperationId')).toBe(true);
+      expect(mintSwapIndexes.some((index) => index.name === 'destinationOperationId')).toBe(true);
+      expect(
+        repositories.db.tables.some((table) => table.name.includes('operation_event_outbox')),
+      ).toBe(false);
       await expect(allocateKeypairForTest(repositories, 'p2pk')).resolves.toMatchObject({
         derivationIndex: 7,
       });

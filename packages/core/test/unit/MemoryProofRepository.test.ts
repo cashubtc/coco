@@ -23,6 +23,26 @@ describe('MemoryProofRepository', () => {
     repository = new MemoryProofRepository();
   });
 
+  it('copies nested request material on writes and all relevant reads', async () => {
+    const proof = { ...makeProof('nested'), dleq: { e: 'e', s: 's', r: 'r' } };
+    await repository.saveProofs(mintUrl, [proof]);
+    proof.dleq.e = 'changed';
+    const reads = [
+      await repository.getProofBySecret(mintUrl, proof.secret),
+      ...(await repository.getProofsBySecrets(mintUrl, [proof.secret])),
+      ...(await repository.getAvailableProofs(mintUrl)),
+    ];
+    for (const read of reads) {
+      expect(read?.dleq).toEqual({ e: 'e', s: 's', r: 'r' });
+      read!.dleq!.s = 'changed';
+    }
+    expect((await repository.getProofBySecret(mintUrl, proof.secret))?.dleq).toEqual({
+      e: 'e',
+      s: 's',
+      r: 'r',
+    });
+  });
+
   it('gets proofs by batched secrets for one mint without duplicates', async () => {
     await repository.saveProofs(mintUrl, [makeProof('s1'), makeProof('s2')]);
     await repository.saveProofs(otherMintUrl, [makeProof('s1', otherMintUrl)]);
