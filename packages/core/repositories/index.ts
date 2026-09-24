@@ -301,7 +301,7 @@ export interface MintOperationRepository {
   /** Create a new mint operation */
   create(operation: MintOperation): Promise<void>;
 
-  /** Update an existing mint operation */
+  /** Update an existing mint operation, preserving the supplied updatedAt (adapter timestamp precision applies). */
   update(operation: MintOperation): Promise<void>;
 
   /** Get a mint operation by ID */

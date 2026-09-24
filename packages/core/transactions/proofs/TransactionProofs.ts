@@ -25,6 +25,7 @@ export interface SelectAndReserveProofsInput {
 }
 
 export interface TransactionProofs extends ProofQueries {
+  saveCreated(mintUrl: string, proofs: CoreProof[]): Promise<void>;
   selectAndReserve(input: SelectAndReserveProofsInput): Promise<{
     proofs: CoreProof[];
     fee: Amount;
@@ -47,6 +48,32 @@ export class RepositoryTransactionProofs implements TransactionProofs {
     private readonly keysets: KeysetRepository,
     private readonly selectProofs: SelectProofs = selectProofsRGLI,
   ) {}
+
+  async saveCreated(mintUrl: string, proofs: CoreProof[]): Promise<void> {
+    const existing = await this.proofs.getProofsBySecrets(
+      mintUrl,
+      proofs.map((proof) => proof.secret),
+    );
+    for (const stored of existing) {
+      const incoming = proofs.find((proof) => proof.secret === stored.secret)!;
+      if (
+        stored.id !== incoming.id ||
+        !stored.amount.equals(incoming.amount) ||
+        stored.C !== incoming.C ||
+        stored.unit !== incoming.unit ||
+        (stored.createdByOperationId != null &&
+          stored.createdByOperationId !== incoming.createdByOperationId)
+      ) {
+        throw new ProofValidationError('Conflicting proof already exists for minted output');
+      }
+    }
+    // Existing proofs may already be spent or reserved by a later operation. Never reset them.
+    const secrets = new Set(existing.map((proof) => proof.secret));
+    await this.proofs.saveProofs(
+      mintUrl,
+      proofs.filter((proof) => !secrets.has(proof.secret)),
+    );
+  }
 
   async selectAndReserve(input: SelectAndReserveProofsInput) {
     const available = await this.proofs.getAvailableProofs(input.mintUrl, { unit: input.unit });

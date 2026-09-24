@@ -181,6 +181,39 @@ failures are logged without turning a committed mutation into a failure or repla
 Delivery remains best effort: a crash between commit and publication can lose an event. An outbox
 is separate future work.
 
+## Mint Operations
+
+`MintOperationService` receives the shared runner, read-only operation/proof queries, seed loading,
+method handlers, and independent quote/metadata workflows. `prepareMint(tx, input)` accepts a fixed
+caller-supplied operation ID. It validates the canonical quote, trust, NUT-04 policy, quote-key
+ownership, and active keys inside the transaction, then persists the pending operation with its
+Output Allocation. New preparation does not persist an intermediate init row. Legacy init rows
+remain readable and are cleaned up through a scoped transition.
+
+`beginMintExecution` rechecks canonical quote accounting and sibling operations in the same scope
+that records executing. This creates the Mint Quote Reservation; pending operations reserve no
+balance. State checks and updates share the adapter's serialized write transaction, without relying
+on an in-memory operation or quote lock for correctness. Standalone Mint preparation retains the
+shared mint lock for compatibility with same-session legacy output allocators; their cross-session
+counter safety remains part of the owning legacy migrations.
+
+Protocol handlers receive remote dependencies and return candidate proofs. They never allocate
+outputs or save proofs. Recovery records Quote Observations through the coordinator's independent
+quote workflow before advancing from them. `applyMintResult` validates candidates against the exact
+persisted output plan and atomically saves proofs and finalizes the operation. Existing saved proofs
+retain their spend/reservation state. Local finalization does not fabricate remote quote accounting;
+Claimability incorporates finalized local issuance using the existing maximum rule.
+
+Unresolved execution, invalid responses, and incomplete proof recovery retain executing and its
+reservation. Only a definitive non-issuance result permits failure. Recovery and initial execution
+share settlement. Events follow commit, and listener failures do not replay issuance. Repositories
+preserve coordinator-supplied timestamps, subject to existing adapter precision.
+
+A future Mint Swap coordinator can call `prepareMint(tx, destinationInput)` with its predetermined
+child ID and compose additional local transitions before returning. Its remote quote creation and
+metadata/seed preflight still occur outside the transaction. Melt and Mint Swap scopes/transitions
+are separate migrations; this change supplies the Mint side of that composition.
+
 ## Files and Dependencies
 
 ```text
@@ -198,6 +231,9 @@ transactions/
       SendTransitions.ts                     # complete Send lifecycle, including recovery
       SendTransitionTypes.ts                 # named transition inputs and results
       SendValidation.ts                      # pure validation and comparison helpers
+    mint/
+      MintTransitions.ts                     # preparation, issuance, settlement, and recovery
+      MintTransitionTypes.ts                 # named Mint transition inputs and results
 ```
 
 Names describe authority and lifetime:
@@ -285,8 +321,8 @@ Before completing a change involving Wallet persistence, operation coordination,
 
 ## Migration and Verification
 
-Send transitions, KeyRing mutations, and mint metadata refresh use coordinator-owned transactions.
-Legacy Receive, Mint, Melt, Mint Swap orchestration, Payment Request Receive parent/attempt/child
+Send and Mint transitions, KeyRing mutations, and mint metadata refresh use coordinator-owned transactions.
+Legacy Receive, Melt, Mint Swap orchestration, Payment Request Receive parent/attempt/child
 atomicity, and MintService add/forced-update/trust/delete paths remain for their owning migrations.
 Those migrations should reuse domain capabilities and local functions, rather than add domain gateways.
 Runtime rejection of nested Wallet transactions remains nonuniform: IndexedDB rejects ambient

@@ -1165,6 +1165,26 @@ export async function runMintOperationRepositoryContract(
       }
     });
 
+    it('preserves the coordinator timestamp when updating mint operations', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = createDummyMintOperation({ createdAt: 1000, updatedAt: 1000 });
+        await repositories.mintOperationRepository.create(operation);
+        await repositories.withTransaction(async ({ mintOperationRepository }) => {
+          await mintOperationRepository.update({
+            ...operation,
+            state: 'executing',
+            updatedAt: 2000,
+          });
+        });
+        expect((await repositories.mintOperationRepository.getById(operation.id))?.updatedAt).toBe(
+          2000,
+        );
+      } finally {
+        await dispose();
+      }
+    });
+
     it('preserves null quote expiries for pending operations', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {

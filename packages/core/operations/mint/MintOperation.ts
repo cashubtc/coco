@@ -2,13 +2,12 @@
  * State machine for mint operations:
  *
  * init -> pending -> executing -> finalized
- *          ^         |
- *          +---------+-> failed
+ *                    +-> failed
  *
- * - init: Quote-bound local mint intent persisted before prepare has attached output data
- * - pending: Deterministic outputData persisted; quote may now settle remotely
- * - executing: Mint or recovery call in progress
- * - finalized: Quote reached terminal ISSUED state; proofs were saved when recoverable
+ * - init: Legacy quote-bound intent without outputs, cleaned up during recovery
+ * - pending: Output allocation and intent persisted atomically; quote may now settle remotely
+ * - executing: Exact issuance authorized; quote balance reserved until its outcome is known
+ * - finalized: Exact output proofs and local issuance committed atomically
  * - failed: Operation reached a terminal non-issued state (for example, invalid quote data)
  */
 export type MintOperationState = 'init' | 'pending' | 'executing' | 'finalized' | 'failed';

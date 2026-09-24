@@ -21,7 +21,6 @@ import type {
   ExecuteContext,
   FetchRemoteMintQuoteContext,
   PendingContext,
-  PrepareContext,
   RecoverExecutingContext,
 } from '../../operations/mint';
 import { serializeOutputData } from '../../utils';
@@ -85,21 +84,6 @@ describe('MintBolt12Handler', () => {
     ...overrides,
   });
 
-  const buildPrepareContext = (
-    overrides: Partial<PrepareContext<'bolt12'>> = {},
-  ): PrepareContext<'bolt12'> => ({
-    operation,
-    wallet,
-    mintAdapter,
-    proofService,
-    proofRepository,
-    walletService,
-    mintService,
-    eventBus,
-    logger,
-    ...overrides,
-  });
-
   const buildFetchRemoteQuoteContext = (): FetchRemoteMintQuoteContext<'bolt12'> => ({
     quote: mintQuoteFromBolt12Response(mintUrl, quote()),
     mintAdapter,
@@ -131,7 +115,9 @@ describe('MintBolt12Handler', () => {
   const buildExecuteContext = (remoteQuote: MintQuoteBolt12Response): ExecuteContext<'bolt12'> => {
     (mintAdapter.checkMintQuote as Mock<any>).mockImplementation(async () => remoteQuote);
     return {
-      ...buildPrepareContext(),
+      wallet,
+      mintAdapter,
+      logger,
       operation: {
         ...operation,
         state: 'executing',
@@ -153,6 +139,12 @@ describe('MintBolt12Handler', () => {
   ): RecoverExecutingContext<'bolt12'> => ({
     ...buildExecuteContext(remoteQuote),
     localClaimabilityFacts,
+    restoreOutputs: () =>
+      proofService.recoverProofsFromOutputData(mintUrl, outputData, {
+        unit: 'sat',
+        persistRecoveredProofs: false,
+      }),
+    recordQuoteSnapshot: mock(async () => {}),
   });
 
   beforeEach(() => {
@@ -182,7 +174,14 @@ describe('MintBolt12Handler', () => {
 
   it('creates a fixed-amount quote with a fresh keypair', async () => {
     const result = await handler.createQuote({
-      ...buildPrepareContext(),
+      wallet,
+      mintAdapter,
+      logger,
+      proofService,
+      proofRepository,
+      walletService,
+      mintService,
+      eventBus,
       mintUrl,
       createQuoteData: {
         unit: 'sat',
@@ -223,7 +222,14 @@ describe('MintBolt12Handler', () => {
 
     const error = await handler
       .createQuote({
-        ...buildPrepareContext(),
+        wallet,
+        mintAdapter,
+        logger,
+        proofService,
+        proofRepository,
+        walletService,
+        mintService,
+        eventBus,
         mintUrl,
         createQuoteData: {
           unit: 'sat',
@@ -243,7 +249,14 @@ describe('MintBolt12Handler', () => {
 
     await expect(
       handler.createQuote({
-        ...buildPrepareContext(),
+        wallet,
+        mintAdapter,
+        logger,
+        proofService,
+        proofRepository,
+        walletService,
+        mintService,
+        eventBus,
         mintUrl,
         createQuoteData: {
           unit: 'sat',
@@ -260,7 +273,14 @@ describe('MintBolt12Handler', () => {
 
     await expect(
       handler.createQuote({
-        ...buildPrepareContext(),
+        wallet,
+        mintAdapter,
+        logger,
+        proofService,
+        proofRepository,
+        walletService,
+        mintService,
+        eventBus,
         mintUrl,
         createQuoteData: {
           unit: 'sat',
@@ -276,7 +296,14 @@ describe('MintBolt12Handler', () => {
     );
 
     const result = await handler.createQuote({
-      ...buildPrepareContext(),
+      wallet,
+      mintAdapter,
+      logger,
+      proofService,
+      proofRepository,
+      walletService,
+      mintService,
+      eventBus,
       mintUrl,
       createQuoteData: {
         unit: 'sat',
@@ -289,66 +316,6 @@ describe('MintBolt12Handler', () => {
       description: 'pay any amount',
     });
     expect(result.amount).toBeUndefined();
-  });
-
-  it('prepares amountless imported quotes while preserving operation amount', async () => {
-    const amountlessQuote = quote({ amount: undefined });
-
-    const result = await handler.prepare(
-      buildPrepareContext({
-        importedQuote: amountlessQuote,
-        operation: {
-          ...operation,
-        },
-      }),
-    );
-
-    expect(wallet.createMintQuoteBolt12).not.toHaveBeenCalled();
-    expect(result.amount).toEqual(Amount.from(10));
-  });
-
-  it('prepares fixed-amount offers with a different operation amount', async () => {
-    const fixedOfferQuote = quote({ amount: Amount.from(21), amount_paid: Amount.from(63) });
-
-    const result = await handler.prepare(
-      buildPrepareContext({
-        importedQuote: fixedOfferQuote,
-        operation: {
-          ...operation,
-          amount: Amount.from(10),
-        },
-      }),
-    );
-
-    expect(wallet.createMintQuoteBolt12).not.toHaveBeenCalled();
-    expect(result.amount).toEqual(Amount.from(10));
-  });
-
-  it('rejects imported quotes that do not match the bound operation quote id', async () => {
-    await expect(
-      handler.prepare(
-        buildPrepareContext({
-          importedQuote: quote({ quote: 'quote-other' }),
-          operation: {
-            ...operation,
-            quoteId,
-          },
-        }),
-      ),
-    ).rejects.toThrow(`Mint quote quote-other does not match operation quote ${quoteId}`);
-
-    expect(proofService.createOutputsAndIncrementCounters).not.toHaveBeenCalled();
-  });
-
-  it('requires the imported quote pubkey to exist in the keyring', async () => {
-    (keyRingService.getMintQuoteKeyPair as Mock<any>).mockImplementation(async () => null);
-
-    const error = await handler
-      .prepare(buildPrepareContext({ importedQuote: quote() }))
-      .catch((caught) => caught);
-
-    expect(error).toBeInstanceOf(MintQuoteKeyError);
-    expect(error.message).toContain('Missing NUT-20 mint quote key');
   });
 
   it('reports the validated remote snapshot for an amountless quote', async () => {
@@ -422,7 +389,7 @@ describe('MintBolt12Handler', () => {
     expect(call[0]).toEqual(Amount.from(10));
     expect(call[1].quote).toBe(quoteId);
     expect(call[2]).toBe(bytesToHex(secretKey));
-    expect(call[3]).toBeUndefined();
+    expect(call[3]).toEqual({ keysetId: 'keyset-1' });
     expect(call[4].type).toBe('custom');
     expect(call[4].data).toHaveLength(1);
     expect(call[4].data[0].blindedMessage.B_).toBe('B_out_1');
@@ -491,8 +458,8 @@ describe('MintBolt12Handler', () => {
       ),
     );
 
-    expect(result.status).toBe('TERMINAL');
-    if (result.status !== 'TERMINAL') {
+    expect(result.status).toBe('UNRESOLVED');
+    if (result.status !== 'UNRESOLVED') {
       throw new Error('Expected terminal recovery result');
     }
     expect(result.error).toContain(`BOLT12 mint quote ${quoteId} returned pubkey ${changedPubkey}`);
@@ -507,9 +474,9 @@ describe('MintBolt12Handler', () => {
 
     const result = await handler.recoverExecuting(buildRecoverContext(expiredQuote));
 
-    expect(result).toEqual({ status: 'FINALIZED' });
+    expect(result).toMatchObject({ status: 'ISSUED', proofs: expect.any(Array) });
     expect(wallet.mintProofsBolt12).toHaveBeenCalled();
-    expect(proofService.saveProofs).toHaveBeenCalled();
+    expect(proofService.saveProofs).not.toHaveBeenCalled();
   });
 
   it('fails recovery when the mint rejects BOLT12 issuance with quote expired', async () => {
@@ -524,14 +491,14 @@ describe('MintBolt12Handler', () => {
     const result = await handler.recoverExecuting(buildRecoverContext(expiredQuote));
 
     expect(result).toEqual({
-      status: 'TERMINAL',
+      status: 'REJECTED',
       error: `Recovered: BOLT12 quote ${quoteId} expired while executing mint`,
     });
     expect(wallet.mintProofsBolt12).toHaveBeenCalledTimes(1);
     expect(proofService.saveProofs).not.toHaveBeenCalled();
   });
 
-  it('keeps non-protocol expiry errors pending during BOLT12 recovery', async () => {
+  it('leaves non-protocol expiry errors unresolved during BOLT12 recovery', async () => {
     const expiredQuote = quote({
       expiry: Math.floor(Date.now() / 1000) - 1,
       amount_paid: Amount.from(10),
@@ -543,7 +510,7 @@ describe('MintBolt12Handler', () => {
     const result = await handler.recoverExecuting(buildRecoverContext(expiredQuote));
 
     expect(result).toEqual({
-      status: 'PENDING',
+      status: 'UNRESOLVED',
       error: 'Authentication session expired',
     });
     expect(proofService.saveProofs).not.toHaveBeenCalled();
@@ -557,7 +524,21 @@ describe('MintBolt12Handler', () => {
       }),
     );
 
-    expect(result.status).toBe('PENDING');
+    expect(result.status).toBe('UNRESOLVED');
     expect(wallet.mintProofsBolt12).not.toHaveBeenCalled();
   });
+  it.each(['quote', 'request'])(
+    'rejects unrelated recovery %s before observation or issuance',
+    async (field) => {
+      const ctx = buildRecoverContext(quote());
+      (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce({
+        ...quote(),
+        [field]: 'unrelated',
+      });
+      const result = await handler.recoverExecuting(ctx);
+      expect(result.status).toBe('UNRESOLVED');
+      expect(ctx.recordQuoteSnapshot).not.toHaveBeenCalled();
+      expect(wallet.mintProofsBolt12).not.toHaveBeenCalled();
+    },
+  );
 });

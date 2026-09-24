@@ -8,6 +8,7 @@ const MAX_DERIVATION_INDEX = 0x7fffffff;
 /** Keypair mutations within the owning transaction; these commands never open a transaction. */
 export interface TransactionKeypairs {
   /** Await each allocation before starting another for the same purpose within this scope. */
+  getMintQuoteKey(publicKey: string): Promise<Keypair | null>;
   allocate(input: AllocateKeypairInput): Promise<Keypair>;
   importP2pk(keypair: Keypair): Promise<void>;
   deleteP2pk(publicKey: string): Promise<void>;
@@ -15,6 +16,10 @@ export interface TransactionKeypairs {
 
 export class RepositoryTransactionKeypairs implements TransactionKeypairs {
   constructor(private readonly repository: KeyRingRepository) {}
+
+  getMintQuoteKey(publicKey: string): Promise<Keypair | null> {
+    return this.repository.getPersistedKeyPair(publicKey, 'nut20_mint_quote');
+  }
 
   async allocate(input: AllocateKeypairInput): Promise<Keypair> {
     const lastAllocatedIndex = await this.repository.getLastAllocatedIndex(input.purpose);

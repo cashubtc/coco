@@ -1068,19 +1068,20 @@ export class Manager {
     const meltOperationRepository = repositories.meltOperationRepository;
 
     const mintOperationLogger = this.getChildLogger('MintOperationService');
-    const mintOperationService = new MintOperationService(
-      mintHandlerProvider,
-      repositories.mintOperationRepository,
+    const mintOperationService = new MintOperationService({
+      handlerProvider: mintHandlerProvider,
+      mintOperationQueries: repositories.mintOperationRepository,
+      proofQueries: repositories.proofRepository,
+      transactionRunner,
+      loadSeed: () => seedService.getSeed(),
       quoteLifecycle,
-      repositories.proofRepository,
-      proofService,
       mintService,
       walletService,
-      this.mintAdapter,
-      this.eventBus,
-      mintOperationLogger,
+      mintAdapter: this.mintAdapter,
+      eventBus: this.eventBus,
+      logger: mintOperationLogger,
       mintScopedLock,
-    );
+    });
     const mintOperationRepository = repositories.mintOperationRepository;
 
     const historyService = new HistoryService(
