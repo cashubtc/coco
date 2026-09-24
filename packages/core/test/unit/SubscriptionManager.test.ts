@@ -17,6 +17,7 @@ const createMockMintAdapter = (): MintAdapter =>
   }) as unknown as MintAdapter;
 
 class MockTransport implements RealTimeTransport {
+  public paused = false;
   public sentMessages: WsRequest[] = [];
   public rejectSubscribes = false;
   private listeners: Map<string, Map<string, Set<(evt: any) => void>>> = new Map();
@@ -71,9 +72,12 @@ class MockTransport implements RealTimeTransport {
     this.listeners.delete(mintUrl);
   }
 
-  pause(): void {}
+  pause(): void {
+    this.paused = true;
+  }
 
   resume(): void {
+    this.paused = false;
     // Simulate socket reconnection by triggering 'open' events for all mints with listeners
     for (const [mintUrl, eventMap] of this.listeners.entries()) {
       const openListeners = eventMap.get('open');
@@ -104,6 +108,11 @@ describe('SubscriptionManager pause/resume', () => {
   beforeEach(() => {
     mockTransport = new MockTransport();
     subManager = new SubscriptionManager(mockTransport, createMockMintAdapter(), new NullLogger());
+  });
+
+  it('should call pause on all transports when paused', () => {
+    subManager.pause();
+    expect(mockTransport.paused).toBe(true);
   });
 
   it('should allow subscriptions while paused but not send until resume', async () => {
