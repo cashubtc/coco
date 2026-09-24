@@ -58,15 +58,7 @@ transactions. Their commits intentionally survive later caller failure. Only app
 observations publish events; older observations and timestamp ties retain the first committed
 snapshot. Coordinator dependencies remain acyclic.
 
-Send, Mint, KeyRing, and mint metadata refresh use this model. Mint preparation persists its
-caller-chosen operation ID, deterministic output plan, and counter allocation together. Issuance
-checks quote balance against sibling operations in the transaction that reserves it; settlement
-saves exact proofs and finalizes together. Protocol handlers return candidates without persistence.
-Ambiguous outcomes retain executing and its reservation, and finalized local issuance does not
-fabricate remote Quote Observations. This makes the Mint transition reusable by a future Mint Swap
-parent while Melt and Mint Swap orchestration remain separate migrations. Repositories preserve the
-coordinator's retry-stable timestamp, subject to their existing precision. Other legacy workflows
-migrate separately.
+Send, Mint, KeyRing, and mint metadata refresh use this model. Other legacy workflows migrate separately.
 Consistent fail-fast rejection of nested transactions remains follow-up work and must distinguish
 nesting from legitimate concurrent calls. There are no public API or persisted-format changes.
 
