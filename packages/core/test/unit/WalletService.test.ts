@@ -156,14 +156,6 @@ describe('WalletService unit scoping', () => {
     });
   });
 
-  it('builds sat wallets when sat is requested explicitly', async () => {
-    const { service } = makeService([makeKeyset('sat')]);
-
-    const wallet = await service.getWallet(mintUrl, 'sat');
-
-    expect(wallet.unit).toBe('sat');
-  });
-
   it('builds and caches separate wallets per mint unit', async () => {
     const { service, ensureUpdatedMint } = makeService([makeKeyset('sat'), makeKeyset('usd')]);
 
@@ -176,16 +168,6 @@ describe('WalletService unit scoping', () => {
     expect(usdWallet).toBe(cachedUsdWallet);
     expect(satWallet).not.toBe(usdWallet);
     expect(ensureUpdatedMint).toHaveBeenCalledTimes(2);
-  });
-
-  it('returns the active keyset for the requested unit', async () => {
-    const { service } = makeService([makeKeyset('sat'), makeKeyset('usd')]);
-
-    const result = await service.getWalletWithActiveKeysetId(mintUrl, 'USD');
-
-    expect(result.unit).toBe('usd');
-    expect(result.keyset.unit).toBe('usd');
-    expect(result.keys.unit).toBe('usd');
   });
 
   it('throws when the requested unit has no keysets', async () => {

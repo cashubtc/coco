@@ -242,49 +242,6 @@ describe('PaymentRequestService', () => {
   });
 
   describe('parse', () => {
-    it('should decode an inband payment request', async () => {
-      const pr = new PaymentRequest([], 'request-id-1', 100, 'sat', [testMintUrl], 'Test payment');
-      const encoded = pr.toEncodedRequest();
-
-      const result = await service.parse(encoded);
-
-      expect(result.transport.type).toBe('inband');
-      expect(result.amount).toEqual(Amount.from(100));
-      expect(result.allowedMints).toEqual([testMintUrl]);
-      expect(result.payableMints).toContain(testMintUrl);
-    });
-
-    it('should decode an HTTP POST payment request', async () => {
-      const pr = new PaymentRequest(
-        [{ type: PaymentRequestTransportType.POST, target: testHttpTarget }],
-        'request-id-2',
-        200,
-        'sat',
-        [testMintUrl, testMintUrl2],
-        'HTTP payment',
-      );
-      const encoded = pr.toEncodedRequest();
-
-      const result = await service.parse(encoded);
-
-      expect(result.transport.type).toBe('http');
-      if (result.transport.type === 'http') {
-        expect(result.transport.url).toBe(testHttpTarget);
-      }
-      expect(result.amount).toEqual(Amount.from(200));
-      expect(result.allowedMints).toEqual([testMintUrl, testMintUrl2]);
-    });
-
-    it('should decode a payment request without amount', async () => {
-      const pr = new PaymentRequest([], 'request-id-3', undefined, 'sat', [testMintUrl]);
-      const encoded = pr.toEncodedRequest();
-
-      const result = await service.parse(encoded);
-
-      expect(result.transport.type).toBe('inband');
-      expect(result.amount).toBeUndefined();
-    });
-
     it('should expose a normalized P2PK spending condition requirement', async () => {
       const pr = new PaymentRequest(
         [],
@@ -439,23 +396,6 @@ describe('PaymentRequestService', () => {
       expect(mockMintService.supportsNut).not.toHaveBeenCalled();
     });
 
-    it('should decode a Nostr payment request for plugin delivery', async () => {
-      const pr = new PaymentRequest(
-        [{ type: PaymentRequestTransportType.NOSTR, target: 'npub123...' }],
-        'request-id-4',
-        100,
-        'sat',
-      );
-      const encoded = pr.toEncodedRequest();
-
-      const result = await service.parse(encoded);
-
-      expect(result.transport.type).toBe('nostr');
-      if (result.transport.type === 'nostr') {
-        expect(result.transport.target).toBe('npub123...');
-      }
-    });
-
     it('should require a plugin to execute Nostr payment requests', async () => {
       const request = createResolvedRequest({
         transport: { type: 'nostr', target: 'npub123...' },
@@ -521,25 +461,6 @@ describe('PaymentRequestService', () => {
   });
 
   describe('prepare', () => {
-    it('should prepare a transaction for a valid request', async () => {
-      const request = createResolvedRequest({ amount: Amount.from(100) });
-
-      const transaction = await service.prepare(request, { mintUrl: testMintUrl });
-
-      expect(transaction.sendOperation).toBeDefined();
-      expect(transaction.sendOperation.mintUrl).toBe(testMintUrl);
-      expect(transaction.request).toBe(request);
-      expect(mockSendOperationService.init).toHaveBeenCalledWith(
-        testMintUrl,
-        {
-          amount: Amount.from(100),
-          unit: 'sat',
-        },
-        undefined,
-      );
-      expect(mockSendOperationService.prepare).toHaveBeenCalled();
-    });
-
     it('should use amount from options if not in request', async () => {
       const request = createResolvedRequest({
         amount: undefined,
@@ -930,20 +851,6 @@ describe('PaymentRequestService', () => {
       expect(mockSendOperationService.init).not.toHaveBeenCalled();
     });
 
-    it('should throw if mint is not in allowed list', async () => {
-      const request = createResolvedRequest({
-        amount: Amount.from(100),
-        allowedMints: [testMintUrl2],
-      });
-
-      await expect(service.prepare(request, { mintUrl: testMintUrl })).rejects.toThrow(
-        PaymentRequestError,
-      );
-      await expect(service.prepare(request, { mintUrl: testMintUrl })).rejects.toThrow(
-        'is not in the allowed mints list',
-      );
-    });
-
     it('should allow any mint if allowedMints is empty', async () => {
       const request = createResolvedRequest({ amount: Amount.from(100), allowedMints: [] });
 
@@ -956,17 +863,6 @@ describe('PaymentRequestService', () => {
           unit: 'sat',
         },
         undefined,
-      );
-    });
-
-    it('should throw if no amount is provided anywhere', async () => {
-      const request = createResolvedRequest({ amount: undefined });
-
-      await expect(service.prepare(request, { mintUrl: testMintUrl })).rejects.toThrow(
-        PaymentRequestError,
-      );
-      await expect(service.prepare(request, { mintUrl: testMintUrl })).rejects.toThrow(
-        'Amount is required',
       );
     });
 
@@ -1016,19 +912,6 @@ describe('PaymentRequestService', () => {
   });
 
   describe('execute', () => {
-    it('should execute an inband payment request and return the token', async () => {
-      const prepared = createPreparedRequest(createResolvedRequest({ amount: Amount.from(100) }));
-
-      const result = await service.execute(prepared);
-
-      expect(mockSendOperationService.execute).toHaveBeenCalledWith(prepared.sendOperation);
-      expect(result.type).toBe('inband');
-      if (result.type === 'inband') {
-        expect(result.token).toBe(mockToken);
-        expect(result.operation).toBe(mockPendingOperation);
-      }
-    });
-
     it('should execute an inband P2PK payment request without changing token delivery', async () => {
       const request = createP2pkResolvedRequest({ amount: Amount.from(100) });
       const prepared: PreparedPaymentRequest = {

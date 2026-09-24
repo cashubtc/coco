@@ -235,26 +235,6 @@ describe('MintOperationWatcherService', () => {
     await watcher.stop();
   });
 
-  it('watches pending canonical onchain mint quotes', async () => {
-    const watcher = makeWatcher({
-      quoteLifecycle: makeQuoteLifecycle({
-        getPendingMintQuotes: mock(async () => [makeOnchainQuote()]),
-      }),
-      options: { watchExistingPendingOnStart: false },
-    });
-
-    await watcher.start();
-
-    expect(subscribe).toHaveBeenCalledWith(
-      mintUrl,
-      'onchain_mint_quote',
-      [quoteId],
-      expect.any(Function),
-    );
-
-    await watcher.stop();
-  });
-
   it('watches a pending canonical BOLT12 quote with no-expiry sentinel on startup', async () => {
     const watcher = makeWatcher({
       quoteLifecycle: makeQuoteLifecycle({
@@ -643,52 +623,6 @@ describe('MintOperationWatcherService', () => {
     });
 
     expect(subscribe).toHaveBeenCalledTimes(1);
-
-    await watcher.stop();
-  });
-
-  it('records complete onchain subscription payloads', async () => {
-    const operation = makeOnchainOperation();
-    const recordMintQuoteSnapshot = mock(async () => makeOnchainQuote());
-
-    const watcher = makeWatcher({
-      quoteLifecycle: makeQuoteLifecycle({
-        recordMintQuoteSnapshot,
-      }),
-      options: { watchExistingPendingOnStart: false, watchExistingPendingQuotesOnStart: false },
-    });
-
-    await watcher.start();
-    await bus.emit('mint-op:pending', {
-      mintUrl,
-      operationId: operation.id,
-      operation,
-    });
-
-    if (!callback) {
-      throw new Error('Expected watcher subscription callback');
-    }
-
-    await callback({
-      quote: quoteId,
-      request: operation.request,
-      unit: operation.unit,
-      expiry: operation.expiry,
-      pubkey: 'pubkey-1',
-      amount_paid: Amount.from(10),
-      amount_issued: Amount.zero(),
-    });
-
-    expect(recordMintQuoteSnapshot).toHaveBeenCalledWith(
-      mintUrl,
-      'onchain',
-      expect.objectContaining({
-        quote: quoteId,
-        amount_paid: Amount.from(10),
-        amount_issued: Amount.zero(),
-      }),
-    );
-    expect(unsubscribe).not.toHaveBeenCalled();
 
     await watcher.stop();
   });

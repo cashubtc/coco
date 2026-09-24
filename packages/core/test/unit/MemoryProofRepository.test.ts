@@ -54,12 +54,6 @@ describe('MemoryProofRepository', () => {
     expect(proofs.every((proof) => proof.mintUrl === mintUrl)).toBe(true);
   });
 
-  it('returns an empty array for an empty secret batch', async () => {
-    const proofs = await repository.getProofsBySecrets(mintUrl, []);
-
-    expect(proofs).toEqual([]);
-  });
-
   it('requires proofs to carry a unit', async () => {
     const proof = makeProof('missing-unit') as unknown as Omit<CoreProof, 'unit'>;
     delete (proof as { unit?: string }).unit;

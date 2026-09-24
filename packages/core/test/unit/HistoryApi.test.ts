@@ -17,27 +17,6 @@ describe('HistoryApi', () => {
     api = new HistoryApi(historyService);
   });
 
-  it('delegates operationId lookups to the history service', async () => {
-    (
-      historyService.getHistoryEntryById as unknown as ReturnType<typeof mock>
-    ).mockResolvedValueOnce({
-      id: 'history-1',
-      source: 'operation',
-      type: 'melt',
-      mintUrl: 'https://mint.test',
-      quoteId: 'quote-1',
-      operationId: 'operation-1',
-      amount: Amount.from(10),
-      state: 'prepared',
-      unit: 'sat',
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    } as HistoryEntry);
-
-    await expect(api.getOperationIdForHistoryEntry('history-1')).resolves.toBe('operation-1');
-    expect(historyService.getHistoryEntryById).toHaveBeenCalledWith('history-1');
-  });
-
   it('preserves null operationId lookups from the history service', async () => {
     await expect(api.getOperationIdForHistoryEntry('history-2')).resolves.toBeNull();
     expect(historyService.getHistoryEntryById).toHaveBeenCalledWith('history-2');

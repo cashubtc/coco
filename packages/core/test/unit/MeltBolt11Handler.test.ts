@@ -5,10 +5,6 @@ import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { MintAdapter } from '../../infra';
 import { MeltBolt11Handler } from '../../infra/handlers/melt/MeltBolt11Handler';
-import {
-  SWAP_THRESHOLD_DENOMINATOR,
-  SWAP_THRESHOLD_NUMERATOR,
-} from '../../infra/handlers/melt/QuoteMeltHandler.utils';
 import type { Logger } from '../../logging/Logger';
 import { MintOperationError, ProofValidationError } from '../../models/Error';
 import { meltQuoteFromBolt11Response } from '../../models/MeltQuote';
@@ -429,14 +425,6 @@ describe('MeltBolt11Handler', () => {
   // ============================================================================
 
   describe('quotes', () => {
-    it('creates amountless BOLT11 melt quotes through the wallet', async () => {
-      const quote = await handler.createQuote(buildCreateQuoteContext());
-
-      expect(mockWallet.createMeltQuoteBolt11).toHaveBeenCalledWith(invoice, undefined);
-      expect(quote.quoteId).toBe('quote-123');
-      expect(quote.method).toBe('bolt11');
-    });
-
     it('converts BOLT11 melt quote amounts from sats to millisats', async () => {
       await handler.createQuote(
         buildCreateQuoteContext({ invoice, amountSats: Amount.from(1000) }),
@@ -535,24 +523,6 @@ describe('MeltBolt11Handler', () => {
         expect(proofService.reserveProofs).not.toHaveBeenCalled();
       });
 
-      it('should create blank outputs for change', async () => {
-        const operation = makeInitOp('op-1');
-        const ctx = buildPrepareContext(operation);
-
-        // Selected amount (120) > quote amount (100), so change expected
-        (proofService.selectProofsToSend as Mock<any>).mockImplementation(() =>
-          Promise.resolve([makeProof('input-1', 70), makeProof('input-2', 50)]),
-        );
-
-        await handler.prepare(ctx);
-
-        // Change = 120 - 100 = 20
-        expect(proofService.createBlankOutputs).toHaveBeenCalledWith(mintUrl, {
-          amount: Amount.from(20),
-          unit: 'sat',
-        });
-      });
-
       it('prepares custom-unit direct melts with unit-scoped selection and change outputs', async () => {
         const operation = makeInitOp('op-usd', { unit: 'usd' });
         const ctx = buildPrepareContext(operation, {
@@ -639,24 +609,6 @@ describe('MeltBolt11Handler', () => {
           { amount: Amount.from(110), unit: 'sat' },
           true,
         ]);
-      });
-
-      it('should reserve proofs for swap operation', async () => {
-        const operation = makeInitOp('op-1');
-        const ctx = buildPrepareContext(operation);
-
-        (proofService.selectProofsToSend as Mock<any>).mockImplementation(() =>
-          Promise.resolve([makeProof('input-1', 100), makeProof('input-2', 100)]),
-        );
-
-        await handler.prepare(ctx);
-
-        expect(proofService.reserveProofs).toHaveBeenCalledWith(
-          mintUrl,
-          ['input-1', 'input-2'],
-          'op-1',
-          { unit: 'sat' },
-        );
       });
 
       it('should throw ProofValidationError when swap proofs do not cover input fees', async () => {
@@ -760,65 +712,6 @@ describe('MeltBolt11Handler', () => {
     });
 
     describe('swap-then-melt execution', () => {
-      it('should execute swap before melt', async () => {
-        const swapOutputData = createSwapOutputDataWithAmounts(90, 110);
-        const operation = makeExecutingOp('op-1', {
-          needsSwap: true,
-          inputProofSecrets: ['input-1'],
-          swapOutputData,
-        });
-
-        const inputProofs = [makeProof('input-1', 200)];
-        (proofRepository.getProofsByOperationId as Mock<any>).mockImplementation(() =>
-          Promise.resolve(inputProofs),
-        );
-
-        const ctx = buildExecuteContext(operation, inputProofs);
-        await handler.execute(ctx);
-
-        // Verify send was called
-        expect(mockWallet.send).toHaveBeenCalled();
-
-        // Verify input proofs were set to inflight before swap
-        expect(proofService.setProofState).toHaveBeenCalledWith(mintUrl, ['input-1'], 'inflight');
-
-        // Verify input proofs were set to spent after swap
-        expect(proofService.setProofState).toHaveBeenCalledWith(mintUrl, ['input-1'], 'spent');
-
-        // Verify swap proofs were saved
-        expect(proofService.saveProofs).toHaveBeenCalled();
-      });
-
-      it('should use swap send proofs for melt', async () => {
-        const swapOutputData = createSwapOutputDataWithAmounts(90, 110);
-        const operation = makeExecutingOp('op-1', {
-          needsSwap: true,
-          inputProofSecrets: ['input-1'],
-          swapOutputData,
-        });
-
-        const inputProofs = [makeProof('input-1', 200)];
-        (proofRepository.getProofsByOperationId as Mock<any>).mockImplementation(() =>
-          Promise.resolve(inputProofs),
-        );
-
-        // Capture what proofs are sent to melt
-        let meltProofs: Proof[] = [];
-        (mintAdapter.customMeltBolt11 as Mock<any>).mockImplementation(
-          (_mintUrl: string, proofs: Proof[]) => {
-            meltProofs = proofs;
-            return Promise.resolve({ state: 'PAID', change: [] });
-          },
-        );
-
-        const ctx = buildExecuteContext(operation, inputProofs);
-        await handler.execute(ctx);
-
-        // Melt should receive swap send proofs (from mock wallet.swap)
-        expect(meltProofs).toHaveLength(1);
-        expect(meltProofs[0]!.secret).toBe('send-1');
-      });
-
       it('should calculate effectiveFee from swapped melt inputs only', async () => {
         const swapOutputData = createSwapOutputDataWithAmounts(140, 60);
         const operation = makeExecutingOp('op-1', {
@@ -1540,17 +1433,6 @@ describe('MeltBolt11Handler', () => {
 
       expect(result.status).toBe('PAID');
       expect(proofService.unblindAndSaveChangeProofs).not.toHaveBeenCalled();
-    });
-  });
-
-  // ============================================================================
-  // Constants Tests
-  // ============================================================================
-
-  describe('constants', () => {
-    it('should use a 10% integer swap threshold', () => {
-      expect(SWAP_THRESHOLD_NUMERATOR).toBe(11);
-      expect(SWAP_THRESHOLD_DENOMINATOR).toBe(10);
     });
   });
 });

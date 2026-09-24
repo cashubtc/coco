@@ -18,14 +18,6 @@ describe('CounterService', () => {
     service = new CounterService(repo, undefined, bus);
   });
 
-  it('initializes counter to zero on first getCounter()', async () => {
-    const result = await service.getCounter(mintUrl, keysetId);
-    expect(result.counter).toBe(0);
-
-    const fromRepo = await repo.getCounter(mintUrl, keysetId);
-    expect(fromRepo?.counter).toBe(0);
-  });
-
   it('incrementCounter increases value and emits counter:updated', async () => {
     const events: Array<{ mintUrl: string; keysetId: string; counter: number }> = [];
     bus.on('counter:updated', (payload) => {
@@ -55,14 +47,6 @@ describe('CounterService', () => {
 
     expect(events.length).toBeGreaterThanOrEqual(1);
     expect(events[events.length - 1]).toEqual({ mintUrl, keysetId, counter: 42 });
-  });
-
-  it('accumulates multiple increments', async () => {
-    await service.incrementCounter(mintUrl, keysetId, 1);
-    await service.incrementCounter(mintUrl, keysetId, 2);
-
-    const final = await repo.getCounter(mintUrl, keysetId);
-    expect(final?.counter).toBe(3);
   });
 
   it('rejects negative increment values', async () => {

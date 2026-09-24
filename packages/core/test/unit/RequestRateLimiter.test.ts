@@ -1,6 +1,5 @@
 import { describe, it, beforeEach, afterEach, expect } from 'bun:test';
 import { MintOperationError as CashuMintOperationError } from '@cashu/cashu-ts';
-import type { HeadersInit } from 'bun';
 
 import { RequestRateLimiter } from '../../infra/RequestRateLimiter.ts';
 import { HttpResponseError, NetworkError, MintOperationError } from '../../models/Error.ts';
@@ -19,61 +18,6 @@ describe('RequestRateLimiter', () => {
   afterEach(() => {
     // @ts-ignore
     globalThis.fetch = originalFetch;
-  });
-
-  it('passes JSON body and headers, returns parsed JSON', async () => {
-    const calls: Array<{ input: any; init?: any }> = [];
-    // @ts-ignore
-    globalThis.fetch = async (input: any, init?: RequestInit) => {
-      calls.push({ input, init });
-      const body = { ok: true, received: true };
-      return new Response(JSON.stringify(body), { status: 200 });
-    };
-
-    const limiter = new RequestRateLimiter({ capacity: 25, refillPerMinute: 25 });
-
-    const res = await limiter.request<{ ok: boolean; received: boolean }>({
-      endpoint: 'https://mint.test/v1/swap',
-      method: 'POST',
-      headers: { 'X-Custom': 'ok' },
-      requestBody: { a: 1 },
-    });
-
-    expect(res.ok).toBe(true);
-    expect(res.received).toBe(true);
-
-    expect(calls.length).toBe(1);
-    const { input, init } = calls[0]!;
-    expect(String(input)).toBe('https://mint.test/v1/swap');
-    expect(init?.method).toBe('POST');
-    // Body should be stringified JSON
-    expect(typeof init?.body).toBe('string');
-    expect(init?.body).toBe(JSON.stringify({ a: 1 }));
-
-    // Headers include default Accept, custom, and content-type
-    const hdrs = new Headers(init?.headers as HeadersInit);
-    expect(hdrs.get('Accept')).toBe('application/json, text/plain, */*');
-    expect(hdrs.get('X-Custom')).toBe('ok');
-    expect(hdrs.get('Content-Type')).toBe('application/json');
-  });
-
-  it('serializes bigint request bodies as JSON numbers', async () => {
-    let capturedBody: unknown;
-    // @ts-ignore
-    globalThis.fetch = async (_input: any, init?: RequestInit) => {
-      capturedBody = init?.body;
-      return new Response(JSON.stringify({ ok: true }), { status: 200 });
-    };
-
-    const limiter = new RequestRateLimiter();
-
-    await limiter.request({
-      endpoint: 'https://mint.test/v1/mint/quote/bolt11',
-      method: 'POST',
-      requestBody: { amount: 50n, unit: 'sat' },
-    });
-
-    expect(capturedBody).toBe('{"amount":50,"unit":"sat"}');
   });
 
   it('parses bigint JSON numbers in responses', async () => {

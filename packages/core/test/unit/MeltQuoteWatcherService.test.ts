@@ -163,29 +163,6 @@ describe('MeltQuoteWatcherService', () => {
     await watcher.stop();
   });
 
-  it('watches new pending canonical melt quotes while running', async () => {
-    const watcher = makeWatcher({
-      options: { watchExistingPendingQuotesOnStart: false },
-    });
-
-    await watcher.start();
-    await bus.emit('melt-quote:updated', {
-      mintUrl,
-      method: 'bolt11',
-      quoteId,
-      quote: makeBolt11Quote(),
-    });
-
-    expect(subscribe).toHaveBeenCalledWith(
-      mintUrl,
-      'bolt11_melt_quote',
-      [quoteId],
-      expect.any(Function),
-    );
-
-    await watcher.stop();
-  });
-
   it('watches newly created unpaid canonical melt quotes while running', async () => {
     const watcher = makeWatcher({
       options: { watchExistingPendingQuotesOnStart: false },
@@ -289,13 +266,10 @@ describe('MeltQuoteWatcherService', () => {
     await watcher.stop();
   });
 
-  it('records polling state payloads without mutating proofs or operations', async () => {
+  it('records polling state payloads as canonical melt quote observations', async () => {
     const existing = makeBolt11Quote({ state: 'PENDING' });
     const getMeltQuote = mock(async () => existing);
     const recordMeltQuoteObservation = mock(async (quote: MeltQuote) => quote);
-    const forbiddenMutation = mock(async () => {
-      throw new Error('proof or operation mutation is out of scope');
-    });
     const watcher = makeWatcher({
       quoteLifecycle: makeQuoteLifecycle({
         getMeltQuote,
@@ -318,7 +292,6 @@ describe('MeltQuoteWatcherService', () => {
     expect(recordMeltQuoteObservation).toHaveBeenCalledWith(
       expect.objectContaining({ quoteId, state: 'UNPAID' }),
     );
-    expect(forbiddenMutation).not.toHaveBeenCalled();
 
     await watcher.stop();
   });

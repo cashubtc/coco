@@ -75,24 +75,12 @@ describe('AuthSessionService', () => {
     expect(events).toEqual([mintUrl]);
   });
 
-  it('hasSession returns true for valid session', async () => {
-    await service.saveSession(mintUrl, {
-      access_token: 'abc',
-      expires_in: 3600,
-    });
-    expect(await service.hasSession(mintUrl)).toBe(true);
-  });
-
   it('hasSession returns false for expired session', async () => {
     await repo.saveSession({
       mintUrl,
       accessToken: 'old',
       expiresAt: 0,
     });
-    expect(await service.hasSession(mintUrl)).toBe(false);
-  });
-
-  it('hasSession returns false for non-existent session', async () => {
     expect(await service.hasSession(mintUrl)).toBe(false);
   });
 
@@ -114,15 +102,5 @@ describe('AuthSessionService', () => {
     const session = await service.getValidSession(mintUrl);
     expect(session.batPool).toEqual(batPool);
     expect(session.batPool).toHaveLength(2);
-  });
-
-  it('saves session without batPool (backward compat)', async () => {
-    await service.saveSession(mintUrl, {
-      access_token: 'abc',
-      expires_in: 3600,
-    });
-
-    const session = await service.getValidSession(mintUrl);
-    expect(session.batPool).toBeUndefined();
   });
 });

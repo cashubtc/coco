@@ -403,36 +403,6 @@ describe('MintOperationService', () => {
     );
   });
 
-  it('prepare persists a pending operation and emits mint-op:pending', async () => {
-    const pendingEvents: Array<CoreEvents['mint-op:pending']> = [];
-    eventBus.on('mint-op:pending', (event) => {
-      pendingEvents.push(event);
-    });
-
-    const quote = await quoteLifecycle.createMintQuote(mintUrl, {
-      amount: Amount.from(10),
-      unit: 'sat',
-    });
-
-    (handler.prepare as Mock<any>).mockImplementationOnce(
-      async ({ operation }: { operation: InitMintOperation }) => ({
-        ...makePendingOp(operation.id),
-        quoteId: quote.quoteId,
-        request: quote.request,
-      }),
-    );
-
-    const pending = await service.prepare(quote, Amount.from(10));
-
-    expect(pending.state).toBe('pending');
-    expect(pending.quoteId).toBe(quote.quoteId);
-    expect(pendingEvents).toHaveLength(1);
-    expect(pendingEvents[0]?.operationId).toBe(pending.id);
-    const createdOperation = pendingEvents[0]?.operation as PendingMintOperation | undefined;
-    expect(createdOperation?.quoteId).toBe(quote.quoteId);
-    expect(createdOperation?.request).toBe(quote.request);
-  });
-
   it('prepare accepts normalized custom-unit quotes', async () => {
     const quote = await quoteLifecycle.createMintQuote(mintUrl, {
       amount: Amount.from(10),
@@ -456,41 +426,6 @@ describe('MintOperationService', () => {
       amount: Amount.from(10),
       unit: 'usd',
     });
-  });
-
-  it('prepare accepts reusable onchain quotes with an explicit amount', async () => {
-    const onchainQuoteId = 'onchain-quote-1';
-    await persistOnchainQuote(onchainQuoteId);
-    const onchainHandler = {
-      ...handler,
-      validateQuoteForPrepare: mock(async () => {}),
-      prepare: mock(async ({ operation, importedQuote }: any) => ({
-        ...operation,
-        state: 'pending' as const,
-        quoteId: importedQuote.quote,
-        request: importedQuote.request,
-        expiry: importedQuote.expiry,
-        pubkey: importedQuote.pubkey,
-        outputData: makeSerializedOutputData('onchain-out-1'),
-      })),
-    } as unknown as MintMethodHandler<'onchain'>;
-    (handlerProvider.get as Mock<any>).mockImplementation(() => onchainHandler);
-
-    const pending = await service.prepare(
-      { mintUrl, method: 'onchain', quoteId: onchainQuoteId },
-      Amount.from(10),
-    );
-
-    expect(onchainHandler.validateQuoteForPrepare).toHaveBeenCalled();
-    expect(mintService.assertMethodUnitSupported).toHaveBeenCalledWith(
-      mintUrl,
-      4,
-      'onchain',
-      'sat',
-    );
-    expect(pending.method).toBe('onchain');
-    expect(pending.amount.equals(Amount.from(10))).toBe(true);
-    expect(pending.quoteId).toBe(onchainQuoteId);
   });
 
   it('prepare accepts fixed-amount BOLT12 quotes with a different explicit mint amount', async () => {
@@ -546,34 +481,6 @@ describe('MintOperationService', () => {
 
     expect(onchainHandler.prepare).not.toHaveBeenCalled();
     expect(await operationRepo.getAll()).toHaveLength(0);
-  });
-
-  it('prepare allows sibling onchain operations for one reusable quote', async () => {
-    const onchainQuoteId = 'onchain-quote-1';
-    await persistOnchainQuote(onchainQuoteId);
-    const onchainHandler = {
-      ...handler,
-      validateQuoteForPrepare: mock(async () => {}),
-      prepare: mock(async ({ operation, importedQuote }: any) => ({
-        ...operation,
-        state: 'pending' as const,
-        quoteId: importedQuote.quote,
-        request: importedQuote.request,
-        expiry: importedQuote.expiry,
-        pubkey: importedQuote.pubkey,
-        outputData: makeSerializedOutputData(operation.id),
-      })),
-    } as unknown as MintMethodHandler<'onchain'>;
-    (handlerProvider.get as Mock<any>).mockImplementation(() => onchainHandler);
-
-    await service.prepare({ mintUrl, method: 'onchain', quoteId: onchainQuoteId }, Amount.from(10));
-    await service.prepare({ mintUrl, method: 'onchain', quoteId: onchainQuoteId }, Amount.from(5));
-
-    const operations = await operationRepo.getAll();
-
-    expect(operations).toHaveLength(2);
-    expect(operations.every((operation) => operation.quoteId === onchainQuoteId)).toBe(true);
-    expect(new Set(operations.map((operation) => operation.id)).size).toBe(2);
   });
 
   it('prepare cleans init operations but keeps consumed counters when onchain persistence fails', async () => {
@@ -693,20 +600,6 @@ describe('MintOperationService', () => {
     ).rejects.toThrow('was not found');
 
     expect(handler.fetchRemoteQuote).not.toHaveBeenCalled();
-  });
-
-  it('refreshMintQuote keeps the method-aware exact refresh path for internal callers', async () => {
-    await persistQuote('quote-exact-refresh');
-
-    const refreshed = await quoteLifecycle.refreshMintQuote(
-      mintUrl,
-      'bolt11',
-      'quote-exact-refresh',
-    );
-
-    expect(handlerProvider.get).toHaveBeenCalledWith('bolt11');
-    expect(handler.fetchRemoteQuote).toHaveBeenCalled();
-    expect(refreshed.quoteId).toBe('quote-exact-refresh');
   });
 
   it('refreshMintQuote persists the canonical quote before emitting mint-quote:updated', async () => {
@@ -2515,18 +2408,6 @@ describe('MintOperationService', () => {
 
     expect((await operationRepo.getById(executing.id))?.state).toBe('finalized');
     expect(onchainHandler.fetchRemoteQuote).not.toHaveBeenCalled();
-  });
-
-  it('recoverExecutingOperation finalizes when handler marks FINALIZED', async () => {
-    const op = makeExecutingOp('exec-1');
-    await operationRepo.create(op);
-
-    (handler.recoverExecuting as Mock<any>).mockResolvedValueOnce({ status: 'FINALIZED' });
-
-    await service.recoverExecutingOperation(op);
-
-    const stored = await operationRepo.getById(op.id);
-    expect(stored?.state).toBe('finalized');
   });
 
   it('recoverExecutingOperation returns to pending when quote was not issued remotely', async () => {

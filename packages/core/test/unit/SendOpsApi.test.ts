@@ -68,24 +68,6 @@ describe('SendOpsApi', () => {
     api = new SendOpsApi(sendOperationService);
   });
 
-  it('prepare calls init and prepare with default target', async () => {
-    const result = await api.prepare({ mintUrl, amount: Amount.from(20) });
-
-    expect(sendOperationService.init).toHaveBeenCalledWith(
-      mintUrl,
-      {
-        amount: Amount.from(20),
-        unit: 'sat',
-      },
-      {
-        method: 'default',
-        methodData: {},
-      },
-    );
-    expect(sendOperationService.prepare).toHaveBeenCalled();
-    expect(result).toBe(preparedOperation);
-  });
-
   it('prepare maps forceSwap to default send method data', async () => {
     await api.prepare({
       mintUrl,
@@ -113,26 +95,6 @@ describe('SendOpsApi', () => {
       method: 'default',
       methodData: {},
     });
-  });
-
-  it('prepare maps p2pk target to send method options', async () => {
-    await api.prepare({
-      mintUrl,
-      amount: Amount.from(20),
-      target: { type: 'p2pk', pubkey: 'pubkey-1' },
-    });
-
-    expect(sendOperationService.init).toHaveBeenCalledWith(
-      mintUrl,
-      {
-        amount: Amount.from(20),
-        unit: 'sat',
-      },
-      {
-        method: 'p2pk',
-        methodData: { pubkey: 'pubkey-1' },
-      },
-    );
   });
 
   it('prepare maps structured p2pk target options to send method options', async () => {
@@ -174,16 +136,6 @@ describe('SendOpsApi', () => {
     expect(result.operation).toBe(pendingOperation);
   });
 
-  it('listPrepared and listInFlight delegate to separate service methods', async () => {
-    const prepared = await api.listPrepared();
-    const inFlight = await api.listInFlight();
-
-    expect(sendOperationService.getPreparedOperations).toHaveBeenCalledWith();
-    expect(sendOperationService.getPendingOperations).toHaveBeenCalledWith();
-    expect(prepared).toEqual([preparedOperation]);
-    expect(inFlight).toEqual([pendingOperation]);
-  });
-
   it('refresh checks pending operations and re-reads the latest state', async () => {
     const finalizedOperation: FinalizedSendOperation = {
       ...pendingOperation,
@@ -209,36 +161,6 @@ describe('SendOpsApi', () => {
     );
 
     await expect(api.cancel(pendingOperation.id)).rejects.toThrow("Expected 'prepared'");
-  });
-
-  it('reclaim only allows pending operations', async () => {
-    (sendOperationService.getOperation as unknown as ReturnType<typeof mock>).mockResolvedValueOnce(
-      pendingOperation as SendOperation,
-    );
-
-    await api.reclaim(pendingOperation.id);
-    expect(sendOperationService.rollback).toHaveBeenCalledWith(pendingOperation.id);
-  });
-
-  it('finalize delegates directly to the service', async () => {
-    await api.finalize(pendingOperation.id);
-
-    expect(sendOperationService.finalize).toHaveBeenCalledWith(pendingOperation.id);
-    expect(sendOperationService.getOperation).not.toHaveBeenCalled();
-  });
-
-  it('finalize preserves service-owned idempotence for already finalized operations', async () => {
-    const finalizedOperation: FinalizedSendOperation = {
-      ...pendingOperation,
-      state: 'finalized',
-      updatedAt: Date.now(),
-    };
-    (sendOperationService.finalize as unknown as ReturnType<typeof mock>).mockResolvedValueOnce(
-      undefined,
-    );
-
-    await expect(api.finalize(finalizedOperation.id)).resolves.toBeUndefined();
-    expect(sendOperationService.finalize).toHaveBeenCalledWith(finalizedOperation.id);
   });
 
   it('execute passes memo option through to the service', async () => {

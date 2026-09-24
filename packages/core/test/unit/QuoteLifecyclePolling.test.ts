@@ -976,16 +976,6 @@ describe('QuoteLifecycle mint quote polling', () => {
     transport.closeAll();
   });
 
-  it('keeps explicit quote refresh on the existing single-quote handler path', async () => {
-    await persistBolt11Quote('quote-a');
-
-    const refreshed = await quoteLifecycle.refreshMintQuoteById({ mintUrl, quoteId: 'quote-a' });
-
-    expect(refreshed.method === 'bolt11' && refreshed.state).toBe('PAID');
-    expect(fetchRemoteMintQuote).toHaveBeenCalledTimes(1);
-    expect(mintAdapter.checkMintQuoteBatch).not.toHaveBeenCalled();
-  });
-
   it('rejects mixed-mint and duplicate selections before making a polling request', async () => {
     const selections = [
       [

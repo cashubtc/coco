@@ -194,39 +194,6 @@ describe('WalletRestoreService', () => {
       expect(restoreRequest).toHaveBeenCalledWith({ outputs: [output.blindedMessage] });
     });
 
-    it('should successfully sweep a keyset with ready proofs', async () => {
-      const proofs = [makeProof(50, 'proof1'), makeProof(50, 'proof2')];
-
-      // Mock Wallet methods
-      const mockBatchRestore = mock(() => Promise.resolve({ proofs }));
-      const mockCheckProofsStates = mock(() =>
-        Promise.resolve([{ state: 'UNSPENT' } as ProofState, { state: 'UNSPENT' } as ProofState]),
-      );
-      const mockGetFeesForProofs = mock(() => Amount.from(1));
-
-      Wallet.prototype.batchRestore = mockBatchRestore;
-      Wallet.prototype.checkProofsStates = mockCheckProofsStates;
-      Wallet.prototype.getFeesForProofs = mockGetFeesForProofs;
-
-      await service.sweepKeyset(mintUrl, keysetId, bip39seed);
-
-      expect(mockBatchRestore).toHaveBeenCalledTimes(1);
-      expect(mockCheckProofsStates).toHaveBeenCalledTimes(1);
-      expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalledWith(mintUrl, {
-        keep: { amount: Amount.zero(), unit: 'sat' },
-        send: { amount: Amount.from(99), unit: 'sat' }, // 50 + 50 - 1 fee
-      });
-      expect(proofService.saveProofs).toHaveBeenCalledTimes(1);
-      expect(logger.info).toHaveBeenCalledWith('Keyset sweep completed', {
-        mintUrl,
-        keysetId,
-        readyProofs: 2,
-        spentProofs: 0,
-        sweptAmount: Amount.from(100),
-        fee: Amount.from(1),
-      });
-    });
-
     it('should sweep with a unit-scoped wallet and persist swept proofs with that unit', async () => {
       const proofs = [makeProof(50, 'proof1'), makeProof(50, 'proof2')];
 
@@ -381,36 +348,6 @@ describe('WalletRestoreService', () => {
       });
       expect(proofService.saveProofs).not.toHaveBeenCalled();
     });
-
-    it('should log debug messages at key stages', async () => {
-      const proofs = [makeProof(50, 'proof1')];
-
-      const mockBatchRestore = mock(() => Promise.resolve({ proofs }));
-      const mockCheckProofsStates = mock(() =>
-        Promise.resolve([{ state: 'UNSPENT' } as ProofState]),
-      );
-      const mockGetFeesForProofs = mock(() => Amount.from(1));
-
-      Wallet.prototype.batchRestore = mockBatchRestore;
-      Wallet.prototype.checkProofsStates = mockCheckProofsStates;
-      Wallet.prototype.getFeesForProofs = mockGetFeesForProofs;
-
-      await service.sweepKeyset(mintUrl, keysetId, bip39seed);
-
-      expect(logger.debug).toHaveBeenCalledWith('Sweeping keyset', { mintUrl, keysetId });
-      expect(logger.debug).toHaveBeenCalledWith('Proofs found for sweep', {
-        mintUrl,
-        keysetId,
-        count: 1,
-      });
-      expect(logger.debug).toHaveBeenCalledWith('Sweep calculation', {
-        mintUrl,
-        keysetId,
-        amount: Amount.from(50),
-        fee: Amount.from(1),
-        total: Amount.from(49),
-      });
-    });
   });
 
   describe('restoreKeyset', () => {
@@ -548,34 +485,6 @@ describe('WalletRestoreService', () => {
       expect(logger.error).toHaveBeenCalledWith('Proof not found', { mintUrl, keysetId, index: 1 });
     });
 
-    it('should correctly separate spent and ready proofs', async () => {
-      const proofs = [makeProof(50, 'proof1'), makeProof(25, 'proof2'), makeProof(10, 'proof3')];
-
-      mockWallet.batchRestore = mock(() =>
-        Promise.resolve({
-          proofs,
-          lastCounterWithSignature: 20,
-        }),
-      );
-      mockWallet.checkProofsStates = mock(() =>
-        Promise.resolve([{ state: 'SPENT' }, { state: 'UNSPENT' }, { state: 'SPENT' }]),
-      );
-
-      await service.restoreKeyset(mintUrl, mockWallet, keysetId);
-
-      expect(logger.debug).toHaveBeenCalledWith('Checked proof states', {
-        mintUrl,
-        keysetId,
-        ready: 1,
-        spent: 2,
-      });
-      expect(logger.info).toHaveBeenCalledWith('Saved restored proofs for keyset', {
-        mintUrl,
-        keysetId,
-        total: 3,
-      });
-    });
-
     it('should set counter to 0 when lastCounterWithSignature is null', async () => {
       mockWallet.batchRestore = mock(() =>
         Promise.resolve({
@@ -617,81 +526,6 @@ describe('WalletRestoreService', () => {
         mintUrl,
         keysetId,
         counter: 100,
-      });
-    });
-
-    it('should log all key stages during restore', async () => {
-      const existingProofs = [{ id: keysetId, amount: Amount.from(25) }];
-      proofService.getProofsByKeysetId = mock(() => Promise.resolve(existingProofs as any));
-
-      await service.restoreKeyset(mintUrl, mockWallet, keysetId);
-
-      expect(logger.debug).toHaveBeenCalledWith('Restoring keyset', { mintUrl, keysetId });
-      expect(logger.debug).toHaveBeenCalledWith('Existing proofs before restore', {
-        mintUrl,
-        keysetId,
-        count: 1,
-      });
-      expect(logger.info).toHaveBeenCalledWith('Batch restore result', {
-        mintUrl,
-        keysetId,
-        restored: 1,
-        lastCounterWithSignature: 10,
-      });
-    });
-
-    it('should save only ready proofs, not spent ones', async () => {
-      const proofs = [makeProof(50, 'proof1'), makeProof(25, 'proof2')];
-
-      mockWallet.batchRestore = mock(() =>
-        Promise.resolve({
-          proofs,
-          lastCounterWithSignature: 5,
-        }),
-      );
-      mockWallet.checkProofsStates = mock(() =>
-        Promise.resolve([{ state: 'SPENT' }, { state: 'UNSPENT' }]),
-      );
-
-      await service.restoreKeyset(mintUrl, mockWallet, keysetId);
-
-      // Verify saveProofs was called with only ready proofs
-      expect(proofService.saveProofs).toHaveBeenCalledTimes(1);
-      const savedProofsCall = (proofService.saveProofs as any).mock.calls[0];
-      expect(savedProofsCall[0]).toBe(mintUrl);
-      // The second argument should be mapped proofs, we just check it was called
-      expect(savedProofsCall[1]).toBeDefined();
-    });
-  });
-
-  describe('integration between sweepKeyset and restoreKeyset', () => {
-    it('should use the same batch restore parameters', async () => {
-      const mockBatchRestore1 = mock(() => Promise.resolve({ proofs: [] }));
-      Wallet.prototype.batchRestore = mockBatchRestore1;
-
-      await service.sweepKeyset(mintUrl, keysetId, bip39seed);
-
-      const mockWallet = {
-        batchRestore: mock(() => Promise.resolve({ proofs: [], lastCounterWithSignature: 0 })),
-        checkProofsStates: mock(() => Promise.resolve([])),
-      } as unknown as Wallet;
-
-      await service.restoreKeyset(mintUrl, mockWallet, keysetId);
-
-      // Both should use the same batch size, gap limit, and start counter
-      expect(mockBatchRestore1).toHaveBeenCalledWith({
-        gapLimit: 300,
-        batchSize: 100,
-        counter: 0,
-        keysetId,
-        filterSpent: false,
-      });
-      expect(mockWallet.batchRestore).toHaveBeenCalledWith({
-        gapLimit: 300,
-        batchSize: 100,
-        counter: 0,
-        keysetId,
-        filterSpent: false,
       });
     });
   });

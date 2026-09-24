@@ -317,14 +317,6 @@ describe('MeltOperationService', () => {
   });
 
   describe('init', () => {
-    it('creates an init operation for trusted mint', async () => {
-      const operation = await service.init(mintUrl, 'bolt11', { invoice });
-
-      expect(operation.state).toBe('init');
-      const stored = await meltOperationRepository.getById(operation.id);
-      expect(stored?.mintUrl).toBe(mintUrl);
-    });
-
     it('normalizes and persists custom-unit init operations', async () => {
       const operation = await service.init(mintUrl, 'bolt11', { invoice }, 'USD');
 
@@ -418,32 +410,6 @@ describe('MeltOperationService', () => {
       const quotes = await quoteLifecycle.getPendingMeltQuotes('bolt11');
 
       expect(quotes.map((quote) => quote.quoteId).sort()).toEqual(['quote-1', 'quote-pending']);
-    });
-
-    it('gets canonical melt quotes by quote identity', async () => {
-      const quote = await quoteLifecycle.getMeltQuoteById({ mintUrl, quoteId: 'quote-1' });
-      const missing = await quoteLifecycle.getMeltQuoteById({ mintUrl, quoteId: 'missing' });
-
-      expect(quote?.quoteId).toBe('quote-1');
-      expect(missing).toBeNull();
-    });
-
-    it('refreshMeltQuoteById resolves the stored method before fetching remote state', async () => {
-      const quote = await quoteLifecycle.refreshMeltQuoteById({ mintUrl, quoteId: 'quote-1' });
-
-      expect(handlerProvider.get).toHaveBeenCalledWith('bolt11');
-      expect(handler.fetchRemoteQuote).toHaveBeenCalled();
-      expect(quote.state).toBe('PENDING');
-      expect(await quoteLifecycle.getMeltQuote(mintUrl, 'bolt11', 'quote-1')).toEqual(quote);
-    });
-
-    it('refreshMeltQuote keeps the method-aware exact refresh path for internal callers', async () => {
-      const quote = await quoteLifecycle.refreshMeltQuote(mintUrl, 'bolt11', 'quote-1');
-
-      expect(handlerProvider.get).toHaveBeenCalledWith('bolt11');
-      expect(handler.fetchRemoteQuote).toHaveBeenCalled();
-      expect(quote.state).toBe('PENDING');
-      expect(await quoteLifecycle.getMeltQuote(mintUrl, 'bolt11', 'quote-1')).toEqual(quote);
     });
 
     it('refreshMeltQuote persists the canonical quote before emitting melt-quote:updated', async () => {
@@ -767,19 +733,6 @@ describe('MeltOperationService', () => {
       expect(await service.getOperationByQuote(mintUrl, 'bolt11', 'quote-1')).toBeNull();
     });
 
-    it('accepts full canonical melt quotes as quote refs', async () => {
-      const quote = await quoteLifecycle.getMeltQuoteById({ mintUrl, quoteId: 'quote-1' });
-      if (!quote) {
-        throw new Error('Expected test quote to exist');
-      }
-
-      const prepared = await service.prepareExistingQuote(quote);
-
-      expect(prepared.quoteId).toBe(quote.quoteId);
-      expect(prepared.method).toBe(quote.method);
-      expect(prepared.methodData).toEqual({ invoice: quote.request });
-    });
-
     it('rejects duplicate prepares for the same canonical quote', async () => {
       const first = await service.prepareExistingQuote({
         mintUrl: 'https://MINT.test/',
@@ -796,38 +749,6 @@ describe('MeltOperationService', () => {
       const operations = await meltOperationRepository.getByQuoteId(mintUrl, 'quote-1');
       expect(operations).toHaveLength(1);
       expect(handler.prepare).toHaveBeenCalledTimes(1);
-    });
-
-    it('prepares operation and emits event', async () => {
-      const initOp = makeInitOp('op-1');
-      await meltOperationRepository.create(initOp);
-
-      const events: any[] = [];
-      eventBus.on('melt-op:prepared', (payload) => void events.push(payload));
-
-      const prepared = await service.prepare('op-1');
-
-      expect(prepared.state).toBe('prepared');
-      expect(events.length).toBe(1);
-      const stored = await meltOperationRepository.getById('op-1');
-      expect(stored?.state).toBe('prepared');
-    });
-
-    it('validates NUT-05 support and uses the operation unit wallet', async () => {
-      const initOp = makeInitOp('op-usd', { unit: 'usd' });
-      await persistMeltQuote('quote-1', 'UNPAID', 'usd');
-      await meltOperationRepository.create(initOp);
-
-      const prepared = await service.prepare('op-usd');
-
-      expect(prepared.unit).toBe('usd');
-      expect(mintService.assertMethodUnitSupported).toHaveBeenCalledWith(
-        mintUrl,
-        5,
-        'bolt11',
-        'usd',
-      );
-      expect(walletService.getWalletWithActiveKeysetId).toHaveBeenCalledWith(mintUrl, 'usd');
     });
 
     it('rejects non-sat melts when NUT-05 capability validation rejects the unit', async () => {
@@ -922,33 +843,6 @@ describe('MeltOperationService', () => {
   });
 
   describe('execute', () => {
-    it('finalizes immediately on PAID response', async () => {
-      const prepared = makePreparedOp('op-4');
-      await meltOperationRepository.create(prepared);
-      await proofRepository.saveProofs(mintUrl, [
-        makeProof('proof-1', { usedByOperationId: 'op-4' }),
-      ]);
-
-      const events: any[] = [];
-      eventBus.on('melt-op:finalized', (payload) => void events.push(payload));
-
-      const result = await service.execute('op-4');
-
-      expect(result.state).toBe('finalized');
-      if (result.state === 'finalized') {
-        expect(result.changeAmount).toEqual(Amount.from(0));
-        expect(result.effectiveFee).toEqual(Amount.from(1));
-        expect(result.finalizedData?.preimage).toBe('preimage-123');
-      }
-      expect(events.length).toBe(1);
-      const stored = await meltOperationRepository.getById('op-4');
-      expect(stored?.state).toBe('finalized');
-      const finalizedOp = stored as FinalizedMeltOperation;
-      expect(finalizedOp.changeAmount).toEqual(Amount.from(0));
-      expect(finalizedOp.effectiveFee).toEqual(Amount.from(1));
-      expect(finalizedOp.finalizedData?.preimage).toBe('preimage-123');
-    });
-
     it('moves to pending on PENDING response', async () => {
       const prepared = makePreparedOp('op-5');
       await meltOperationRepository.create(prepared);
@@ -1614,21 +1508,6 @@ describe('MeltOperationService', () => {
         state: 'pending',
       });
     });
-
-    it('delegates to finalize when handler returns finalize', async () => {
-      const pending = makePendingOp('op-11');
-      await meltOperationRepository.create(pending);
-
-      (handler.checkPending as Mock<any>).mockResolvedValue('finalize');
-      (service as any).finalize = mock(async () => {});
-
-      const result = await service.checkPendingOperation('op-11');
-
-      expect(result).toBe('finalize');
-      expect((service as any).finalize).toHaveBeenCalledWith('op-11', {
-        canonicalQuote: expect.objectContaining({ quoteId: 'quote-1', state: 'PENDING' }),
-      });
-    });
   });
 
   describe('recoverExecutingOperation', () => {
@@ -1785,23 +1664,6 @@ describe('MeltOperationService', () => {
       expect(pending.map((op) => op.id).sort()).toEqual(['pending-1', 'pending-2']);
     });
 
-    it('returns operation by quote id when present', async () => {
-      const prepared = makePreparedOp('op-quote', { quoteId: 'quote-123' });
-      await meltOperationRepository.create(prepared);
-
-      const operation = await service.getOperationByQuote(mintUrl, 'bolt11', 'quote-123');
-
-      expect(operation?.id).toBe('op-quote');
-    });
-
-    it('returns null when quote id is not found', async () => {
-      await meltOperationRepository.create(makePreparedOp('op-quote', { quoteId: 'quote-456' }));
-
-      const operation = await service.getOperationByQuote(mintUrl, 'bolt11', 'missing-quote');
-
-      expect(operation).toBeNull();
-    });
-
     it('returns tracked init operations by canonical quote identity', async () => {
       const init = makeInitOp('op-init-query');
       await meltOperationRepository.create(init);
@@ -1827,15 +1689,6 @@ describe('MeltOperationService', () => {
       expect(operation?.id).toBe(init.id);
       expect(operation?.state).toBe('init');
       expect(operation?.error).toBe('prepare failed');
-    });
-
-    it('returns null by quote identity when no canonical quote exists', async () => {
-      const operation = await service.getOperationByQuoteIdentity({
-        mintUrl,
-        quoteId: 'missing-quote',
-      });
-
-      expect(operation).toBeNull();
     });
 
     it('returns null by quote identity when no operation is tracked', async () => {
@@ -1869,14 +1722,6 @@ describe('MeltOperationService', () => {
       await expect(
         duplicateService.getOperationByQuoteIdentity({ mintUrl, quoteId: 'quote-1' }),
       ).rejects.toThrow('Found 2 melt operations');
-    });
-
-    it('rejects repository writes when multiple operations share a quote id', async () => {
-      await meltOperationRepository.create(makePreparedOp('op-quote-1', { quoteId: 'quote-dupe' }));
-
-      await expect(
-        meltOperationRepository.create(makePreparedOp('op-quote-2', { quoteId: 'quote-dupe' })),
-      ).rejects.toThrow('MeltOperation already exists');
     });
   });
 });

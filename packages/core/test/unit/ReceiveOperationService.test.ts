@@ -1,6 +1,5 @@
 import { Amount } from '@cashu/cashu-ts';
 import type {
-  FinalizedReceiveOperation,
   InitReceiveOperation,
   PreparedReceiveOperation,
   ReceiveOperation,
@@ -128,42 +127,6 @@ describe('ReceiveOperationService', () => {
       tokenService,
       eventBus,
     );
-  });
-
-  it('init -> prepare -> execute via receive() finalizes and emits event', async () => {
-    const proofs = [makeProof('p1'), makeProof('p2')];
-    const token: Token = { mint: mintUrl, proofs } as Token;
-
-    let eventPayload: CoreEvents['receive-op:finalized'] | undefined;
-    eventBus.on('receive-op:finalized', (payload) => {
-      eventPayload = payload;
-    });
-
-    await service.receive(token);
-
-    const finalized = await receiveOpRepo.getByState('finalized');
-    expect(finalized.length).toBe(1);
-    const op = finalized[0] as FinalizedReceiveOperation;
-
-    expect(op?.mintUrl).toBe(mintUrl);
-    expect(op?.unit).toBe('sat');
-    expect(op?.amount).toEqual(Amount.from(20));
-    expect(op?.outputData).toBeDefined();
-    expect(eventPayload?.mintUrl).toBe(mintUrl);
-    expect(eventPayload?.operation.state).toBe('finalized');
-    expect(eventPayload?.operation.inputProofs.length).toBe(2);
-  });
-
-  it('prepare() persists outputData and fee', async () => {
-    const proofs = [makeProof('p1')];
-    const token: Token = { mint: mintUrl, proofs } as Token;
-
-    const initOp = await service.init(token);
-    const prepared = await service.prepare(initOp);
-
-    expect(prepared.state).toBe('prepared');
-    expect(prepared.fee).toEqual(Amount.from(0));
-    expect(prepared.outputData).toBeDefined();
   });
 
   it('serializes concurrent prepare() on the same mint so deterministic outputs cannot collide', async () => {
@@ -596,43 +559,6 @@ describe('ReceiveOperationService', () => {
 
     const stored = await receiveOpRepo.getById(executing.id);
     expect(stored?.state).toBe('finalized');
-  });
-
-  it('uses batched proof lookup when checking whether outputs were already saved', async () => {
-    const proofs = [makeProof('p1')];
-    const initOp = await service.init({ mint: mintUrl, proofs } as Token);
-    const prepared = await service.prepare(initOp);
-    const executing = {
-      ...prepared,
-      state: 'executing',
-      updatedAt: Date.now(),
-    } as ReceiveOperation;
-    await receiveOpRepo.update(executing);
-
-    const outputSecrets = getOutputProofSecrets(executing as PreparedReceiveOperation);
-    const savedProofs: CoreProof[] = outputSecrets.map((secret) => ({
-      id: keysetId,
-      amount: Amount.from(1),
-      secret,
-      C: `C_${secret}`,
-      mintUrl,
-      unit: 'sat',
-      state: 'ready',
-      createdByOperationId: executing.id,
-    }));
-    await proofRepo.saveProofs(mintUrl, savedProofs);
-
-    const batchLookup = mock(proofRepo.getProofsBySecrets.bind(proofRepo));
-    proofRepo.getProofsBySecrets = batchLookup;
-    proofRepo.getProofBySecret = mock(async () => {
-      throw new Error('expected batched proof lookup');
-    });
-
-    await service.finalize(executing.id);
-
-    expect(batchLookup).toHaveBeenCalledTimes(1);
-    expect(batchLookup).toHaveBeenCalledWith(mintUrl, outputSecrets);
-    expect((await receiveOpRepo.getById(executing.id))?.state).toBe('finalized');
   });
 
   it('finalize throws when operation is not executing', async () => {

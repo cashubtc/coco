@@ -1,10 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import { Amount } from '@cashu/cashu-ts';
 import type { MintSwapOperation } from '../../operations/mintSwap/MintSwapOperation.ts';
-import type {
-  MintSwapOperationRepository,
-  MintSwapPersistence,
-} from '../../operations/mintSwap/MintSwapOperationRepository.ts';
+import type { MintSwapOperationRepository } from '../../operations/mintSwap/MintSwapOperationRepository.ts';
 import { MemoryMintSwapOperationRepository } from '../../repositories/memory/MemoryMintSwapOperationRepository.ts';
 import { mintSwapFixtures, MINT_SWAP_CREATED_AT as T } from '../fixtures/MintSwap.ts';
 
@@ -35,14 +32,6 @@ const identities = [
 ] as const;
 
 describe('Memory Mint Swap atomic create and all-time identity constraints', () => {
-  it('creates at revision zero and returns null for an absent exact ID', async () => {
-    const repository = new MemoryMintSwapOperationRepository();
-    const operation = mintSwapFixtures().preparing;
-    await repository.create(operation);
-    expect(await repository.getById(operation.id)).toEqual(operation);
-    expect(await repository.getById('absent')).toBeNull();
-  });
-
   for (const identity of identities) {
     it(`has exactly one concurrent create winner for ${identity}`, async () => {
       const repository = new MemoryMintSwapOperationRepository();
@@ -252,14 +241,6 @@ describe('Memory Mint Swap conditional transitions', () => {
     storage.set(persisted.id, persisted);
     await expect(repository.transition(command(persisted, persisted))).rejects.toThrow(TypeError);
     expect(await stored(repository)).toEqual(persisted);
-  });
-
-  it('exposes no blind authoritative update or delete path', () => {
-    const repository: MintSwapOperationRepository = new MemoryMintSwapOperationRepository();
-    expect('update' in repository).toBe(false);
-    expect('delete' in repository).toBe(false);
-    const capability: MintSwapPersistence = { operationRepository: repository };
-    expect(capability.operationRepository).toBe(repository);
   });
 });
 

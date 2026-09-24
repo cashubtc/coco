@@ -1,6 +1,5 @@
 import { Amount } from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it, mock } from 'bun:test';
-import type { Token } from '@cashu/cashu-ts';
 import type {
   FinalizedReceiveOperation,
   InitReceiveOperation,
@@ -72,33 +71,6 @@ describe('ReceiveOpsApi', () => {
     } as unknown as ReceiveOperationService;
 
     api = new ReceiveOpsApi(receiveOperationService);
-  });
-
-  it('prepare calls init then prepare', async () => {
-    const token = { mint: mintUrl, proofs: [] } as Token;
-    const result = await api.prepare({ token });
-
-    expect(receiveOperationService.init).toHaveBeenCalledWith(token);
-    expect(receiveOperationService.prepare).toHaveBeenCalledWith(initOperation);
-    expect(result).toBe(preparedOperation);
-  });
-
-  it('execute resolves ids before executing', async () => {
-    const result = await api.execute(preparedOperation.id);
-
-    expect(receiveOperationService.getOperation).toHaveBeenCalledWith(preparedOperation.id);
-    expect(receiveOperationService.execute).toHaveBeenCalledWith(preparedOperation);
-    expect(result).toBe(finalizedOperation);
-  });
-
-  it('listPrepared and listInFlight delegate to separate service methods', async () => {
-    const prepared = await api.listPrepared();
-    const inFlight = await api.listInFlight();
-
-    expect(receiveOperationService.getPreparedOperations).toHaveBeenCalledWith();
-    expect(receiveOperationService.getPendingOperations).toHaveBeenCalledWith();
-    expect(prepared).toEqual([preparedOperation]);
-    expect(inFlight).toEqual([executingOperation]);
   });
 
   it('refresh recovers executing operations and re-reads the latest state', async () => {

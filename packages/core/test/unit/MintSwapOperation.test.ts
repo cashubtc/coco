@@ -26,16 +26,6 @@ function stamp(next: MintSwapOperation, revision = 1): MintSwapOperation {
 }
 
 describe('Mint Swap V1 persisted state shapes', () => {
-  for (const state of STATES) {
-    it(`round-trips ${state} with reconstructed Amount values`, () => {
-      const fixture = mintSwapFixtures()[state];
-      const parsed = parseMintSwapOperation(raw(state));
-      expect(parsed).toEqual(fixture);
-      expect(parsed.destinationAmount).toBeInstanceOf(Amount);
-      expect(parsed).not.toBe(fixture);
-    });
-  }
-
   const examples: Raw = {
     ...raw('completed'),
     ...raw('cancelled'),

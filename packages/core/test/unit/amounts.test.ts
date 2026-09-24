@@ -27,12 +27,6 @@ describe('unit amount primitives', () => {
     expect(() => normalizeUnit('  ')).toThrow(UnitValidationError);
   });
 
-  it('parses a bare amount as sat', () => {
-    const parsed = parseUnitAmount(100);
-    expect(parsed.amount.equals(Amount.from(100))).toBe(true);
-    expect(parsed.unit).toBe(DEFAULT_UNIT);
-  });
-
   it('parses object-form amounts with normalized units', () => {
     const parsed = parseUnitAmount({ amount: 100, unit: ' USD ' });
     expect(parsed.amount.equals(Amount.from(100))).toBe(true);

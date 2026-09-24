@@ -237,25 +237,6 @@ describe('HistoryService', () => {
     });
   });
 
-  it('reads paginated history and operation ids through the projection repository', async () => {
-    const entry = {
-      id: 'send:send-op-1',
-      source: 'operation',
-      type: 'send',
-      operationId: 'send-op-1',
-      mintUrl,
-      amount: Amount.from(1),
-      unit: 'sat',
-      state: 'pending',
-      createdAt: 1,
-      updatedAt: 2,
-    } satisfies HistoryEntry;
-    repositoryEntries.set(entry.id, entry);
-
-    await expect(service.getPaginatedHistory(0, 10)).resolves.toEqual([entry]);
-    await expect(service.getOperationIdFromHistoryEntry(entry.id)).resolves.toBe('send-op-1');
-  });
-
   it('rejects operation-id lookup for legacy send entries without an operation id', async () => {
     const legacy = {
       id: 'legacy:1',

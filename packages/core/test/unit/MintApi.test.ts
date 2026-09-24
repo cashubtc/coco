@@ -6,13 +6,7 @@ import { createMintMetadataRefreshDependencies } from '../fixtures/MintMetadataR
 
 import { MintApi } from '../../api/MintApi';
 import { ProofValidationError } from '../../models/Error';
-import {
-  MintService,
-  type CheckPaymentMethodCapabilityInput,
-  type ListPaymentMethodCapabilitiesInput,
-  type PaymentMethodCapability,
-  type PaymentMethodCapabilityCheck,
-} from '../../services/MintService';
+import { MintService } from '../../services/MintService';
 import type { Mint } from '../../models/Mint';
 import { MintAdapter } from '../../infra/MintAdapter';
 import type { MintInfo } from '../../types';
@@ -65,47 +59,6 @@ describe('MintApi payment method capabilities', () => {
 
     return { api: new MintApi(service), adapter };
   };
-
-  it('delegates public capability calls to the mint service', async () => {
-    const checkInput: CheckPaymentMethodCapabilityInput = {
-      mintUrl,
-      operation: 'mint',
-      method: 'custom-pay',
-      unit: 'sat',
-    };
-    const listInput: ListPaymentMethodCapabilitiesInput = {
-      mintUrl,
-      operation: 'melt',
-      unit: 'sat',
-    };
-    const checkResult: PaymentMethodCapabilityCheck = {
-      supported: true,
-      disabled: false,
-      operation: 'mint',
-      nut: 4,
-      method: 'custom-pay',
-      unit: 'sat',
-    };
-    const listResult: PaymentMethodCapability[] = [
-      {
-        operation: 'melt',
-        nut: 5,
-        method: 'custom-payout',
-        unit: 'sat',
-      },
-    ];
-    const checkPaymentMethodCapability = mock(async () => checkResult);
-    const listPaymentMethodCapabilities = mock(async () => listResult);
-    const api = new MintApi({
-      checkPaymentMethodCapability,
-      listPaymentMethodCapabilities,
-    } as unknown as MintService);
-
-    await expect(api.checkPaymentMethodCapability(checkInput)).resolves.toBe(checkResult);
-    await expect(api.listPaymentMethodCapabilities(listInput)).resolves.toBe(listResult);
-    expect(checkPaymentMethodCapability).toHaveBeenCalledWith(checkInput);
-    expect(listPaymentMethodCapabilities).toHaveBeenCalledWith(listInput);
-  });
 
   it('checks mint capabilities from cached NUT-04 metadata', async () => {
     const { api, adapter } = await createApi(

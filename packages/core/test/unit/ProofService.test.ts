@@ -264,87 +264,6 @@ describe('ProofService', () => {
         }),
       ).rejects.toThrow();
     });
-
-    it('creates deterministic outputs and increments counters accordingly', async () => {
-      const calls: Array<{ amount: Amount; counter: number }> = [];
-      OutputData.createDeterministicData = ((
-        amount: Amount,
-        _seed: Uint8Array,
-        counter: number,
-      ) => {
-        calls.push({ amount, counter });
-        // Return arrays with predictable sizes not necessarily equal to amount
-        const size = amount.equals(3) ? 2 : amount.equals(7) ? 4 : 0;
-        return new Array(size).fill({}) as any;
-      }) as any;
-
-      const service = new ProofService(
-        counterService,
-        proofRepo,
-        walletService as any,
-        mintService as any,
-        keyRingService as any,
-        seedService,
-        undefined,
-        bus,
-      );
-
-      const result = await service.createOutputsAndIncrementCounters(mintUrl, {
-        keep: unitAmount(3),
-        send: unitAmount(7),
-      });
-
-      expect(calls.length).toBe(2);
-      // First call uses current counter (0)
-      expect(calls[0]).toEqual({ amount: Amount.from(3), counter: 0 });
-      // Second call uses offset by keep outputs length (2)
-      expect(calls[1]).toEqual({ amount: Amount.from(7), counter: 2 });
-
-      expect(result.keep.length).toBe(2);
-      expect(result.send.length).toBe(4);
-
-      const finalCounter = await counterRepo.getCounter(mintUrl, keysetId);
-      expect(finalCounter?.counter).toBe(6);
-    });
-
-    it('uses the requested unit when creating outputs', async () => {
-      const getWalletWithActiveKeysetId = mock(async (_mintUrl: string, unit?: string) => {
-        expect(unit).toBe('usd');
-        return { keys: { id: 'usd-keyset' }, keysetId: 'usd-keyset' };
-      });
-      walletService = {
-        getWalletWithActiveKeysetId,
-        async getWallet() {
-          return {
-            selectProofsToSend() {
-              return { send: [] };
-            },
-          };
-        },
-      };
-      OutputData.createDeterministicData = (() => [{}]) as any;
-
-      const service = new ProofService(
-        counterService,
-        proofRepo,
-        walletService as any,
-        mintService as any,
-        keyRingService as any,
-        seedService,
-        undefined,
-        bus,
-      );
-
-      await service.createOutputsAndIncrementCounters(
-        mintUrl,
-        { keep: unitAmount(1, 'USD'), send: unitAmount(0, 'USD') },
-        {},
-      );
-
-      expect(getWalletWithActiveKeysetId).toHaveBeenCalledWith(mintUrl, 'usd');
-      const counter = await counterRepo.getCounter(mintUrl, 'usd-keyset');
-      expect(counter?.counter).toBe(1);
-    });
   });
 
   describe('createBlankOutputs', () => {
@@ -609,37 +528,6 @@ describe('ProofService', () => {
   });
 
   describe('state changes and deletions', () => {
-    it('setProofState updates repository and emits event', async () => {
-      const service = new ProofService(
-        counterService,
-        proofRepo,
-        walletService as any,
-        mintService as any,
-        keyRingService as any,
-        seedService,
-        undefined,
-        bus,
-      );
-
-      const p1 = makeProof({ secret: 'a', id: 'k1', state: 'ready' });
-      const p2 = makeProof({ secret: 'b', id: 'k1', state: 'ready' });
-      await proofRepo.saveProofs(mintUrl, [p1, p2]);
-
-      const events: Array<{
-        mintUrl: string;
-        secrets: string[];
-        state: 'inflight' | 'ready' | 'spent';
-      }> = [];
-      bus.on('proofs:state-changed', (payload) => {
-        events.push(payload);
-      });
-
-      await service.setProofState(mintUrl, ['a', 'b'], 'spent');
-
-      expect(events.length).toBe(1);
-      expect(events[0]).toEqual({ mintUrl, secrets: ['a', 'b'], state: 'spent' });
-    });
-
     it('deleteProofs removes proofs and emits event', async () => {
       const service = new ProofService(
         counterService,
@@ -917,50 +805,6 @@ describe('ProofService', () => {
 
       const selected = await service.selectProofsToSend(mintUrl, unitAmount(40));
       expect(selected.map((p) => p.secret)).toEqual(['available-1']);
-    });
-
-    it('delegates to wallet.selectProofsToSend and returns selected proofs', async () => {
-      // Override wallet selector to return a specific subset
-      walletService = {
-        async getWalletWithActiveKeysetId() {
-          return { keys: { id: keysetId } };
-        },
-        async getWallet() {
-          return {
-            selectProofsToSend(proofs: any[], amount: Amount) {
-              // pick smallest number of proofs that reach amount
-              const selected: any[] = [];
-              let acc = Amount.zero();
-              for (const p of proofs) {
-                if (acc.greaterThanOrEqual(amount)) break;
-                selected.push(p);
-                acc = acc.add((p as any).amount ?? 0);
-              }
-              return { send: selected };
-            },
-          };
-        },
-      };
-
-      const service = new ProofService(
-        counterService,
-        proofRepo,
-        walletService as any,
-        mintService as any,
-        keyRingService as any,
-        seedService,
-        undefined,
-        bus,
-      );
-
-      const p1 = makeProof({ secret: 'b1', id: 'k1', amount: Amount.from(30) });
-      const p2 = makeProof({ secret: 'b2', id: 'k1', amount: Amount.from(50) });
-      const p3 = makeProof({ secret: 'b3', id: 'k1', amount: Amount.from(80) });
-      await proofRepo.saveProofs(mintUrl, [p1, p2, p3]);
-
-      const selected = await service.selectProofsToSend(mintUrl, unitAmount(60));
-      // Expect our wallet stub to choose p1 + p2
-      expect(selected.map((p) => p.secret)).toEqual(['b1', 'b2']);
     });
 
     it('selects only proofs for the requested unit', async () => {

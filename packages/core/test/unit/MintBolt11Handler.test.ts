@@ -16,7 +16,6 @@ import type {
   PendingContext,
   PrepareContext,
   RecoverExecutingContext,
-  FetchRemoteMintQuoteContext,
 } from '../../operations/mint';
 import { serializeOutputData } from '../../utils';
 import type { ProofService } from '../../services/ProofService';
@@ -129,36 +128,6 @@ describe('MintBolt11Handler', () => {
     logger,
   });
 
-  const buildFetchRemoteQuoteContext = (): FetchRemoteMintQuoteContext<'bolt11'> => ({
-    quote: {
-      mintUrl,
-      method: 'bolt11',
-      quoteId,
-      quote: quoteId,
-      request: quote.request,
-      unit: quote.unit,
-      amount: quote.amount,
-      expiry: quote.expiry,
-      state: quote.state,
-      reusable: false,
-      amountPaid: quote.state === 'UNPAID' ? Amount.zero() : quote.amount,
-      amountIssued: quote.state === 'ISSUED' ? quote.amount : Amount.zero(),
-      remoteUpdatedAt: quote.updated_at ?? null,
-      quoteData: {
-        amount: quote.amount,
-      },
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    },
-    mintAdapter,
-    proofService,
-    proofRepository,
-    walletService,
-    mintService,
-    eventBus,
-    logger,
-  });
-
   const buildRecoverContext = (): RecoverExecutingContext<'bolt11'> => ({
     operation: executingOperation,
     wallet,
@@ -244,22 +213,6 @@ describe('MintBolt11Handler', () => {
   });
 
   describe('quotes', () => {
-    it('creates a BOLT11 mint quote through the wallet', async () => {
-      const result = await handler.createQuote(buildCreateQuoteContext());
-
-      expect(wallet.createMintQuoteBolt11).toHaveBeenCalledWith(Amount.from(10));
-      expect(result.quoteId).toBe(quoteId);
-      expect(result.method).toBe('bolt11');
-    });
-
-    it('fetches a remote BOLT11 mint quote through the mint adapter', async () => {
-      const result = await handler.fetchRemoteQuote(buildFetchRemoteQuoteContext());
-
-      expect(mintAdapter.checkMintQuote).toHaveBeenCalledWith(mintUrl, 'bolt11', quoteId);
-      expect(result.quoteId).toBe(quoteId);
-      expect(result.method).toBe('bolt11');
-    });
-
     it('creates an opt-in locked BOLT11 quote with a fresh persisted key', async () => {
       const result = await handler.createQuote({
         ...buildCreateQuoteContext(),

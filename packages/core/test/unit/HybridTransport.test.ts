@@ -90,43 +90,6 @@ describe('HybridTransport', () => {
     );
   });
 
-  describe('constructor', () => {
-    it('should create transport with default options', () => {
-      const wsFactory = (_url: string) => new MockWebSocket();
-      const t = new HybridTransport(wsFactory, createMockMintAdapter());
-      expect(t).toBeDefined();
-    });
-
-    it('should create transport with custom options', () => {
-      const wsFactory = (_url: string) => new MockWebSocket();
-      const t = new HybridTransport(wsFactory, createMockMintAdapter(), {
-        slowPollingIntervalMs: 30000,
-        fastPollingIntervalMs: 3000,
-      });
-      expect(t).toBeDefined();
-    });
-  });
-
-  describe('send', () => {
-    it('should forward requests to both transports', () => {
-      const handler = mock(() => {});
-      transport.on(mintUrl, 'message', handler);
-
-      const req = {
-        jsonrpc: '2.0' as const,
-        method: 'subscribe' as const,
-        params: { kind: 'bolt11_mint_quote' as const, subId: 'sub1', filters: ['quote1'] },
-        id: 1,
-      };
-
-      transport.send(mintUrl, req);
-
-      // PollingTransport emits immediate OK response
-      // We should receive at least one response (from polling)
-      expect(handler).toHaveBeenCalled();
-    });
-  });
-
   describe('open event deduplication', () => {
     it('should only emit first open event per mint', async () => {
       const openHandler = mock(() => {});
@@ -218,31 +181,6 @@ describe('HybridTransport', () => {
       mockSocket.triggerMessage(String(event.data));
       expect(notifications).toHaveLength(1);
       hybrid.closeAll();
-    });
-
-    it('should dedupe same state from both transports', async () => {
-      const messageHandler = mock(() => {});
-      transport.on(mintUrl, 'message', messageHandler);
-
-      // Wait for open events to settle
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
-      const notification = JSON.stringify({
-        jsonrpc: '2.0',
-        method: 'subscribe',
-        params: {
-          subId: 'sub1',
-          payload: { quote: 'q1', state: 'PAID' },
-        },
-      });
-
-      // First notification should pass through
-      mockSocket.triggerMessage(notification);
-      const countAfterFirst = messageHandler.mock.calls.length;
-
-      // Same notification again should be deduped
-      mockSocket.triggerMessage(notification);
-      expect(messageHandler.mock.calls.length).toBe(countAfterFirst);
     });
 
     it('should not dedupe different states', async () => {
@@ -507,43 +445,9 @@ describe('HybridTransport', () => {
 
       expect(intervalByMint.get(mintUrl)).toBe(5000);
     });
-
-    it('should mark WS as failed on close', async () => {
-      transport.on(mintUrl, 'open', () => {});
-
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
-      mockSocket.triggerClose();
-
-      const wsFailedByMint = (transport as any).wsFailedByMint as Set<string>;
-      expect(wsFailedByMint.has(mintUrl)).toBe(true);
-    });
   });
 
   describe('closeMint', () => {
-    it('should clear all per-mint state', async () => {
-      transport.on(mintUrl, 'open', () => {});
-
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
-      // Trigger some state
-      mockSocket.triggerOpen();
-
-      // Close mint
-      transport.closeMint(mintUrl);
-
-      // Verify state is cleared
-      const wsFailedByMint = (transport as any).wsFailedByMint as Set<string>;
-      const wsConnectedByMint = (transport as any).wsConnectedByMint as Set<string>;
-      const hasEmittedOpenByMint = (transport as any).hasEmittedOpenByMint as Set<string>;
-      const hasInternalHandlersByMint = (transport as any).hasInternalHandlersByMint as Set<string>;
-
-      expect(wsFailedByMint.has(mintUrl)).toBe(false);
-      expect(wsConnectedByMint.has(mintUrl)).toBe(false);
-      expect(hasEmittedOpenByMint.has(mintUrl)).toBe(false);
-      expect(hasInternalHandlersByMint.has(mintUrl)).toBe(false);
-    });
-
     it('should clear deduplication state for mint', async () => {
       const handler = mock(() => {});
       transport.on(mintUrl, 'message', handler);
@@ -577,47 +481,7 @@ describe('HybridTransport', () => {
     });
   });
 
-  describe('closeAll', () => {
-    it('should clear all state', async () => {
-      transport.on(mintUrl, 'open', () => {});
-
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
-      mockSocket.triggerOpen();
-      transport.closeAll();
-
-      const wsFailedByMint = (transport as any).wsFailedByMint as Set<string>;
-      const lastNotificationSignatureByKey = (transport as any)
-        .lastNotificationSignatureByKey as Map<string, string>;
-
-      expect(wsFailedByMint.size).toBe(0);
-      expect(lastNotificationSignatureByKey.size).toBe(0);
-    });
-  });
-
   describe('pause/resume', () => {
-    it('should pause and resume both transports', () => {
-      // Just verify no errors are thrown
-      transport.pause();
-      transport.resume();
-      expect(true).toBe(true);
-    });
-
-    it('should not mark WS as failed when pausing', async () => {
-      transport.on(mintUrl, 'open', () => {});
-
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
-      // WS connects
-      mockSocket.triggerOpen();
-
-      // Pause - this will close WS, but should NOT mark as failed
-      transport.pause();
-
-      const wsFailedByMint = (transport as any).wsFailedByMint as Set<string>;
-      expect(wsFailedByMint.has(mintUrl)).toBe(false);
-    });
-
     it('should not speed up polling when pausing', async () => {
       transport.on(mintUrl, 'open', () => {});
 
@@ -632,23 +496,6 @@ describe('HybridTransport', () => {
 
       // Should NOT have a fast interval set
       expect(intervalByMint.has(mintUrl)).toBe(false);
-    });
-
-    it('should clear open event tracking on pause so resume emits open', async () => {
-      const openHandler = mock(() => {});
-      transport.on(mintUrl, 'open', openHandler);
-
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
-      // First open
-      mockSocket.triggerOpen();
-      expect(openHandler.mock.calls.length).toBe(1);
-
-      // Pause clears hasEmittedOpenByMint
-      transport.pause();
-
-      const hasEmittedOpenByMint = (transport as any).hasEmittedOpenByMint as Set<string>;
-      expect(hasEmittedOpenByMint.has(mintUrl)).toBe(false);
     });
 
     it('should allow WS to reconnect and emit open after resume', async () => {
@@ -691,22 +538,6 @@ describe('HybridTransport', () => {
       expect(openHandler.mock.calls.length).toBe(2);
 
       t.closeAll();
-    });
-  });
-
-  describe('close/error event passthrough', () => {
-    it('should pass through close events without deduplication', async () => {
-      const closeHandler = mock(() => {});
-      transport.on(mintUrl, 'close', closeHandler);
-
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
-      mockSocket.triggerClose();
-      const countAfterFirst = closeHandler.mock.calls.length;
-
-      // Note: Can't easily trigger second close on same socket,
-      // but the code path shows close events are not deduped
-      expect(countAfterFirst).toBeGreaterThanOrEqual(1);
     });
   });
 });

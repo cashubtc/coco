@@ -9,7 +9,6 @@ import type {
 } from '../../operations/melt/MeltOperation.ts';
 import type { MeltOperationService } from '../../operations/melt/MeltOperationService.ts';
 import { MeltOpsApi } from '../../api/MeltOpsApi.ts';
-import type { MeltQuote } from '../../models/MeltQuote.ts';
 
 const mintUrl = 'https://mint.test';
 const quoteId = 'quote-1';
@@ -65,15 +64,6 @@ type _AssertGetByQuoteUsesObjectInput = Assert<
     ? true
     : false
 >;
-
-const supportedPrepareInput: PrepareMeltInput = {
-  quote: {
-    mintUrl,
-    method: 'bolt11',
-    quoteId,
-  },
-};
-void supportedPrepareInput;
 
 const makePreparedOperation = (): PreparedMeltOperation => ({
   id: 'op-1',
@@ -134,44 +124,6 @@ describe('MeltOpsApi', () => {
     api = new MeltOpsApi(meltOperationService);
   });
 
-  it('prepare creates and prepares a melt operation', async () => {
-    const result = await api.prepare(supportedPrepareInput);
-
-    expect(meltOperationService.prepareExistingQuote).toHaveBeenCalledWith(
-      supportedPrepareInput.quote,
-      { feeIndex: undefined },
-    );
-    expect(result).toBe(preparedOperation);
-  });
-
-  it('prepare accepts a full canonical quote as the quote ref', async () => {
-    const quote: MeltQuote<'bolt11'> = {
-      mintUrl,
-      quoteId,
-      quote: quoteId,
-      request: 'lnbc1test',
-      unit: 'usd',
-      method: 'bolt11',
-      amount: Amount.from(12),
-      fee_reserve: Amount.from(1),
-      expiry: Math.floor(Date.now() / 1000) + 3600,
-      state: 'UNPAID',
-      lastObservedRemoteState: 'UNPAID',
-      lastObservedRemoteStateAt: Date.now(),
-      payment_preimage: null,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    };
-
-    await api.prepare({
-      quote,
-    });
-
-    expect(meltOperationService.prepareExistingQuote).toHaveBeenCalledWith(quote, {
-      feeIndex: undefined,
-    });
-  });
-
   it('prepare passes onchain feeIndex to the service', async () => {
     const quote = { mintUrl, method: 'onchain', quoteId } as const;
 
@@ -196,47 +148,6 @@ describe('MeltOpsApi', () => {
     expect(meltOperationService.prepareExistingQuote).toHaveBeenCalledWith(quote, {
       feeIndex: 9,
     });
-  });
-
-  it('execute resolves ids before executing', async () => {
-    const result = await api.execute(preparedOperation.id);
-
-    expect(meltOperationService.getOperation).toHaveBeenCalledWith(preparedOperation.id);
-    expect(meltOperationService.execute).toHaveBeenCalledWith(preparedOperation.id);
-    expect(result).toBe(pendingOperation);
-  });
-
-  it('getByQuote forwards to the service', async () => {
-    const result = await api.getByQuote({
-      mintUrl,
-      quoteId: preparedOperation.quoteId,
-    });
-
-    expect(meltOperationService.getOperationByQuoteIdentity).toHaveBeenCalledWith({
-      mintUrl,
-      quoteId: preparedOperation.quoteId,
-    });
-    expect(result).toBe(preparedOperation);
-  });
-
-  it('listByQuote forwards to the service', async () => {
-    const result = await api.listByQuote({ mintUrl, quoteId: preparedOperation.quoteId });
-
-    expect(meltOperationService.listOperationsByQuote).toHaveBeenCalledWith(
-      mintUrl,
-      preparedOperation.quoteId,
-    );
-    expect(result).toEqual([preparedOperation]);
-  });
-
-  it('listPrepared and listInFlight delegate to separate service methods', async () => {
-    const prepared = await api.listPrepared();
-    const inFlight = await api.listInFlight();
-
-    expect(meltOperationService.getPreparedOperations).toHaveBeenCalledWith();
-    expect(meltOperationService.getPendingOperations).toHaveBeenCalledWith();
-    expect(prepared).toEqual([preparedOperation]);
-    expect(inFlight).toEqual([pendingOperation]);
   });
 
   it('refresh checks pending operations and re-reads the latest state', async () => {

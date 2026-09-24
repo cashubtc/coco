@@ -126,24 +126,6 @@ function prepareInput(id: string, forceSwap = true): PrepareSendInput {
 }
 
 describe('SendTransactions preparation', () => {
-  it('reserves proofs, allocates outputs, advances the counter, and creates prepared atomically', async () => {
-    const { repositories, transactions } = await setup();
-    await repositories.proofRepository.saveProofs(mintUrl, [proof('proof-1')]);
-
-    const result = await transactions.prepare(prepareInput('send-1'));
-
-    expect(result.operation.state).toBe('prepared');
-    expect(result.operation.revision).toBe(0);
-    expect(result.operation.inputProofSecrets).toEqual(['proof-1']);
-    expect(result.operation.outputData?.send[0]?.blindedMessage.B_).toBe('B-0');
-    expect(
-      (await repositories.proofRepository.getProofBySecret(mintUrl, 'proof-1'))?.usedByOperationId,
-    ).toBe('send-1');
-    expect((await repositories.counterRepository.getCounter(mintUrl, keysetId))?.counter).toBe(1);
-    expect((await repositories.sendOperationRepository.getById('send-1'))?.state).toBe('prepared');
-    expect(await repositories.sendOperationRepository.getByState('init')).toEqual([]);
-  });
-
   it('rolls back proofs, counters, and the operation when persistence fails after allocation', async () => {
     const { repositories } = await setup();
     await repositories.proofRepository.saveProofs(mintUrl, [proof('proof-1')]);

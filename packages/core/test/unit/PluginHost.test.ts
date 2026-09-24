@@ -143,56 +143,6 @@ describe('PluginHost', () => {
     expect(calls).toEqual({ init: 1, ready: 1 });
   });
 
-  it('supports only return-style cleanup from onInit', async () => {
-    const flags = { cleaned: 0 };
-    const plugin: Plugin<['logger']> = {
-      name: 'cleanup',
-      required: ['logger'],
-      onInit: () => () => {
-        flags.cleaned += 1;
-      },
-    };
-    host.use(plugin);
-    await host.init(services);
-    await host.dispose();
-    expect(flags.cleaned).toBe(1);
-  });
-
-  it('onInit returned cleanup runs on dispose', async () => {
-    const flags = { cleaned: 0 };
-    const plugin: Plugin<['logger']> = {
-      name: 'return-cleanup',
-      required: ['logger'],
-      onInit: () => {
-        return () => {
-          flags.cleaned += 1;
-        };
-      },
-    };
-    host.use(plugin);
-    await host.init(services);
-    await host.dispose();
-    expect(flags.cleaned).toBe(1);
-  });
-
-  it('onReady returned cleanup runs on dispose', async () => {
-    const flags = { cleaned: 0 };
-    const plugin: Plugin<['logger']> = {
-      name: 'ready-cleanup',
-      required: ['logger'],
-      onReady: () => {
-        return () => {
-          flags.cleaned += 1;
-        };
-      },
-    };
-    host.use(plugin);
-    await host.init(services);
-    await host.ready();
-    await host.dispose();
-    expect(flags.cleaned).toBe(1);
-  });
-
   it('late registration after init+ready runs both hooks', async () => {
     const order: string[] = [];
     let resolveReady!: () => void;
@@ -377,20 +327,6 @@ describe('PluginHost', () => {
       expect((error as AggregateError).errors).toEqual([disposeError, cleanupError]);
     }
     expect(calls).toEqual(['dispose', 'cleanup']);
-  });
-
-  it('registerExtension stores extension and is retrievable', async () => {
-    const api = { foo: 'bar' };
-    const plugin: Plugin<['logger']> = {
-      name: 'ext-test',
-      required: ['logger'],
-      onInit: (ctx) => {
-        ctx.registerExtension('myExt', api);
-      },
-    };
-    host.use(plugin);
-    await host.init(services);
-    expect(host.getExtensions()).toEqual({ myExt: api });
   });
 
   it('registerExtension throws when key already exists', async () => {

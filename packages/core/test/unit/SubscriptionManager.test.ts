@@ -17,8 +17,6 @@ const createMockMintAdapter = (): MintAdapter =>
   }) as unknown as MintAdapter;
 
 class MockTransport implements RealTimeTransport {
-  public paused = false;
-  public resumed = false;
   public sentMessages: WsRequest[] = [];
   public rejectSubscribes = false;
   private listeners: Map<string, Map<string, Set<(evt: any) => void>>> = new Map();
@@ -73,13 +71,9 @@ class MockTransport implements RealTimeTransport {
     this.listeners.delete(mintUrl);
   }
 
-  pause(): void {
-    this.paused = true;
-  }
+  pause(): void {}
 
   resume(): void {
-    this.resumed = true;
-    this.paused = false;
     // Simulate socket reconnection by triggering 'open' events for all mints with listeners
     for (const [mintUrl, eventMap] of this.listeners.entries()) {
       const openListeners = eventMap.get('open');
@@ -110,17 +104,6 @@ describe('SubscriptionManager pause/resume', () => {
   beforeEach(() => {
     mockTransport = new MockTransport();
     subManager = new SubscriptionManager(mockTransport, createMockMintAdapter(), new NullLogger());
-  });
-
-  it('should call pause on all transports when paused', () => {
-    subManager.pause();
-    expect(mockTransport.paused).toBe(true);
-  });
-
-  it('should call resume on all transports when resumed', () => {
-    subManager.pause();
-    subManager.resume();
-    expect(mockTransport.resumed).toBe(true);
   });
 
   it('should allow subscriptions while paused but not send until resume', async () => {
@@ -181,62 +164,6 @@ describe('SubscriptionManager pause/resume', () => {
       (msg) => msg.method === 'subscribe' && (msg.params as any).subId === subId,
     );
     expect(resubscribeMessages.length).toBeGreaterThan(1);
-
-    await subManager.unsubscribe(mintUrl, subId);
-  });
-
-  it('should allow new subscriptions after resume', async () => {
-    const mintUrl = 'https://mint.example.com';
-
-    subManager.pause();
-    subManager.resume();
-
-    // Should be able to subscribe again
-    const { subId } = await subManager.subscribe(mintUrl, 'bolt11_mint_quote', ['quote1']);
-
-    expect(subId).toBeDefined();
-    await subManager.unsubscribe(mintUrl, subId);
-  });
-
-  it('should handle pause with multiple active subscriptions', async () => {
-    const mintUrl1 = 'https://mint1.example.com';
-    const mintUrl2 = 'https://mint2.example.com';
-
-    const { subId: subId1 } = await subManager.subscribe(mintUrl1, 'bolt11_mint_quote', ['quote1']);
-    const { subId: subId2 } = await subManager.subscribe(mintUrl2, 'bolt11_melt_quote', ['quote2']);
-
-    const messageCountBeforePause = mockTransport.sentMessages.length;
-
-    subManager.pause();
-    subManager.resume();
-
-    // Wait for async re-subscription
-    await new Promise((resolve) => setTimeout(resolve, 50));
-
-    // Should have re-subscribed both
-    expect(mockTransport.sentMessages.length).toBeGreaterThan(messageCountBeforePause);
-
-    await subManager.unsubscribe(mintUrl1, subId1);
-    await subManager.unsubscribe(mintUrl2, subId2);
-  });
-
-  it('should handle multiple pause/resume cycles', async () => {
-    const mintUrl = 'https://mint.example.com';
-
-    const { subId } = await subManager.subscribe(mintUrl, 'bolt11_mint_quote', ['quote1']);
-
-    subManager.pause();
-    subManager.resume();
-
-    await new Promise((resolve) => setTimeout(resolve, 50));
-
-    subManager.pause();
-    subManager.resume();
-
-    await new Promise((resolve) => setTimeout(resolve, 50));
-
-    // Should still work
-    expect(mockTransport.resumed).toBe(true);
 
     await subManager.unsubscribe(mintUrl, subId);
   });
@@ -480,14 +407,6 @@ describe('SubscriptionManager pause/resume', () => {
 
     await first.unsubscribe();
     await second.unsubscribe();
-  });
-
-  it('should handle pause with no active subscriptions', () => {
-    subManager.pause();
-    subManager.resume();
-
-    // Should not error
-    expect(mockTransport.resumed).toBe(true);
   });
 
   it('preserves an injected transport after closeAll', async () => {

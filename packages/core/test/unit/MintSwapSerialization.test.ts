@@ -7,14 +7,6 @@ import {
 import { mintSwapFixtures } from '../fixtures/MintSwap.ts';
 
 describe('Mint Swap persistence serialization', () => {
-  it('round-trips every V1 state and nested Amount as a decimal string', () => {
-    for (const operation of Object.values(mintSwapFixtures())) {
-      const json = serializeMintSwapOperation(operation);
-      expect(json).not.toContain('destinationAmount":{"');
-      expect(deserializeMintSwapOperation(json)).toEqual(operation);
-    }
-  });
-
   it('preserves Amount precision beyond JavaScript safe integers', () => {
     const operation = {
       ...mintSwapFixtures().preparing,

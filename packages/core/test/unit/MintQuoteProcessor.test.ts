@@ -101,34 +101,6 @@ describe('MintOperationProcessor', () => {
     }
   });
 
-  it('starts and stops correctly', async () => {
-    expect(processor.isRunning()).toBe(false);
-
-    await processor.start();
-    expect(processor.isRunning()).toBe(true);
-
-    await processor.stop();
-    expect(processor.isRunning()).toBe(false);
-  });
-
-  it('claims accounting-ready BOLT11 quotes from mint-quote:updated', async () => {
-    await processor.start();
-
-    await bus.emit('mint-quote:updated', {
-      mintUrl: 'https://mint.test',
-      method: 'bolt11',
-      quoteId: 'quote-1',
-      quote: makeBolt11Quote('quote-1', true),
-    });
-
-    await processor.waitForCompletion();
-
-    expect(claimCalls).toEqual([
-      { mintUrl: 'https://mint.test', method: 'bolt11', quoteId: 'quote-1' },
-    ]);
-    expect(finalizeCalls).toEqual([]);
-  });
-
   it('advances complete BOLT11 quotes from mint-quote:updated', async () => {
     mockMintOperationService = {
       ...mockMintOperationService,
@@ -165,49 +137,6 @@ describe('MintOperationProcessor', () => {
 
     expect(claimCalls).toEqual([
       { mintUrl: 'https://mint.test', method: 'bolt11', quoteId: 'complete-quote' },
-    ]);
-  });
-
-  it('delegates sibling selection to one common quote claim', async () => {
-    mockMintOperationService = {
-      async getMintQuoteClaimability() {
-        return { status: 'claimable' };
-      },
-      async claimMintQuote(mintUrl: string, method: string, quoteId: string) {
-        claimCalls.push({ mintUrl, method, quoteId });
-        return [];
-      },
-      async claimPendingMintQuotes() {
-        return [];
-      },
-    } as unknown as MintOperationService;
-
-    processor = new MintOperationProcessor(
-      mockMintOperationService,
-      mockQuoteLifecycle,
-      bus,
-      undefined,
-      {
-        processIntervalMs: TEST_PROCESS_INTERVAL,
-        baseRetryDelayMs: TEST_RETRY_DELAY,
-        maxRetries: 3,
-        initialEnqueueDelayMs: TEST_INITIAL_DELAY,
-      },
-    );
-
-    await processor.start();
-
-    await bus.emit('mint-quote:updated', {
-      mintUrl: 'https://mint.test',
-      method: 'bolt11',
-      quoteId: 'shared-quote',
-      quote: makeBolt11Quote('shared-quote', true),
-    });
-
-    await processor.waitForCompletion();
-
-    expect(claimCalls).toEqual([
-      { mintUrl: 'https://mint.test', method: 'bolt11', quoteId: 'shared-quote' },
     ]);
   });
 

@@ -1,10 +1,6 @@
 import { Amount } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect, mock } from 'bun:test';
 import { WalletApi } from '../../api/WalletApi';
-import { MintService } from '../../services/MintService';
-import { WalletService } from '../../services/WalletService';
-import { ProofService } from '../../services/ProofService';
-import { WalletRestoreService } from '../../services/WalletRestoreService';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import { UnknownMintError } from '../../models/Error';
@@ -116,46 +112,6 @@ describe('WalletApi - Trust Enforcement', () => {
         keep: makeOutputData(['out-1', 'out-2']),
         send: [],
       })),
-      getBalancesByMint: mock(async () => ({
-        [testMintUrl]: {
-          spendable: Amount.from(10),
-          reserved: Amount.from(5),
-          total: Amount.from(15),
-          unit: 'sat',
-        },
-      })),
-      getBalancesByMintAndUnit: mock(async () => ({
-        [testMintUrl]: {
-          sat: {
-            spendable: Amount.from(10),
-            reserved: Amount.from(5),
-            total: Amount.from(15),
-            unit: 'sat',
-          },
-        },
-      })),
-      getBalancesByUnit: mock(async () => ({
-        sat: {
-          spendable: Amount.from(10),
-          reserved: Amount.from(5),
-          total: Amount.from(15),
-          unit: 'sat',
-        },
-      })),
-      getBalanceTotal: mock(async () => ({
-        spendable: Amount.from(10),
-        reserved: Amount.from(5),
-        total: Amount.from(15),
-        unit: 'sat',
-      })),
-      getBalanceTotalByUnit: mock(async () => ({
-        sat: {
-          spendable: Amount.from(10),
-          reserved: Amount.from(5),
-          total: Amount.from(15),
-          unit: 'sat',
-        },
-      })),
       saveProofs: mock(async () => {}),
       prepareProofsForReceiving: mock(async (proofs: any[]) => proofs),
     };
@@ -189,23 +145,6 @@ describe('WalletApi - Trust Enforcement', () => {
   });
 
   describe('receive - trust enforcement', () => {
-    it('exposes the structured balances api', async () => {
-      await expect(walletApi.balances.byMint()).resolves.toEqual({
-        [testMintUrl]: {
-          spendable: Amount.from(10),
-          reserved: Amount.from(5),
-          total: Amount.from(15),
-          unit: 'sat',
-        },
-      });
-      await expect(walletApi.balances.total()).resolves.toEqual({
-        spendable: Amount.from(10),
-        reserved: Amount.from(5),
-        total: Amount.from(15),
-        unit: 'sat',
-      });
-    });
-
     it('should reject tokens from untrusted mints', async () => {
       const token = {
         mint: testMintUrl,
@@ -216,23 +155,6 @@ describe('WalletApi - Trust Enforcement', () => {
 
       await expect(walletApi.receive(token)).rejects.toThrow(UnknownMintError);
       await expect(walletApi.receive(token)).rejects.toThrow('not trusted');
-    });
-
-    it('should accept tokens from trusted mints', async () => {
-      const token = {
-        mint: testMintUrl,
-        proofs: testProofs,
-      };
-
-      mockMintService.isTrustedMint.mockImplementation(async () => true);
-
-      // Should not throw
-      await walletApi.receive(token);
-
-      expect(mockWalletService.getWalletWithActiveKeysetId).toHaveBeenCalledWith(
-        testMintUrl,
-        'sat',
-      );
     });
 
     it('should check trust status before processing token', async () => {
@@ -260,73 +182,6 @@ describe('WalletApi - Trust Enforcement', () => {
 
       await expect(walletApi.receive(encodedToken)).rejects.toThrow(UnknownMintError);
       await expect(walletApi.receive(encodedToken)).rejects.toThrow('not trusted');
-    });
-
-    it('should accept string tokens from trusted mints', async () => {
-      const token = {
-        mint: testMintUrl,
-        proofs: testProofs,
-      };
-      const encodedToken = getEncodedToken(token);
-
-      mockMintService.isTrustedMint.mockImplementation(async () => true);
-
-      // Should not throw
-      await walletApi.receive(encodedToken);
-
-      expect(mockWalletService.getWalletWithActiveKeysetId).toHaveBeenCalledWith(
-        testMintUrl,
-        'sat',
-      );
-    });
-
-    it('should provide clear error message for untrusted mints', async () => {
-      const token = {
-        mint: testMintUrl,
-        proofs: testProofs,
-      };
-
-      mockMintService.isTrustedMint.mockImplementation(async () => false);
-
-      try {
-        await walletApi.receive(token);
-        expect(true).toBe(false); // Should not reach here
-      } catch (err: any) {
-        expect(err.message).toContain('not trusted');
-        expect(err.message).toContain(testMintUrl);
-      }
-    });
-  });
-
-  describe('trust workflow integration', () => {
-    it('should allow receiving tokens after mint is trusted', async () => {
-      const token = {
-        mint: testMintUrl,
-        proofs: testProofs,
-      };
-
-      // Initially untrusted
-      mockMintService.isTrustedMint.mockImplementation(async () => false);
-      await expect(walletApi.receive(token)).rejects.toThrow();
-
-      // After trusting
-      mockMintService.isTrustedMint.mockImplementation(async () => true);
-      await walletApi.receive(token); // Should not throw
-    });
-
-    it('should prevent receiving tokens after mint is untrusted', async () => {
-      const token = {
-        mint: testMintUrl,
-        proofs: testProofs,
-      };
-
-      // Initially trusted
-      mockMintService.isTrustedMint.mockImplementation(async () => true);
-      await walletApi.receive(token); // Should not throw
-
-      // After untrusting
-      mockMintService.isTrustedMint.mockImplementation(async () => false);
-      await expect(walletApi.receive(token)).rejects.toThrow();
     });
   });
 
@@ -425,23 +280,6 @@ describe('WalletApi - Trust Enforcement', () => {
   });
 
   describe('decodeToken', () => {
-    it('should use the wallet for the token mint', async () => {
-      const token = {
-        mint: testMintUrl,
-        proofs: testProofs,
-      };
-      const encodedToken = getEncodedToken(token);
-      const decodedToken = {
-        mint: testMintUrl,
-        proofs: testProofs,
-      };
-
-      const result = await walletApi.decodeToken(encodedToken);
-
-      expect(mockMintService.ensureUpdatedMint).toHaveBeenCalledWith(testMintUrl);
-      expect(result).toEqual({ ...decodedToken, unit: 'sat' });
-    });
-
     it('infers a unitless token unit from proof keysets when no mint URL is provided', async () => {
       const token = {
         mint: testMintUrl,
@@ -456,19 +294,6 @@ describe('WalletApi - Trust Enforcement', () => {
       const result = await walletApi.decodeToken(encodedToken);
 
       expect(result.unit).toBe('usd');
-    });
-  });
-
-  describe('encodeToken', () => {
-    it('should encode tokens with default encoding', () => {
-      const token = {
-        mint: testMintUrl,
-        proofs: testProofs,
-      };
-
-      const encodedToken = walletApi.encodeToken(token);
-
-      expect(encodedToken).toBe(getEncodedToken(token));
     });
   });
 

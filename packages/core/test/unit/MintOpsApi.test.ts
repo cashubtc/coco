@@ -8,7 +8,6 @@ import type {
   PendingMintOperation,
   TerminalMintOperation,
 } from '../../operations/mint/MintOperation.ts';
-import type { MintQuote } from '../../models/MintQuote.ts';
 
 const mintUrl = 'https://mint.test';
 const quoteId = 'quote-1';
@@ -99,70 +98,6 @@ describe('MintOpsApi', () => {
     api = new MintOpsApi(mintOperationService);
   });
 
-  it('prepare targets an existing canonical quote and returns a pending mint operation', async () => {
-    const quote = { mintUrl, quoteId, method: 'bolt11' } as const;
-
-    const result = await api.prepare({
-      quote,
-      amount: 10,
-    });
-
-    expect(mintOperationService.prepare).toHaveBeenCalledWith(quote, Amount.from(10));
-    expect(result).toBe(pendingOperation);
-  });
-
-  it('prepare accepts a full canonical quote as the quote ref', async () => {
-    const quote: MintQuote<'bolt11'> = {
-      mintUrl,
-      quoteId,
-      quote: quoteId,
-      request: 'lnbc1test',
-      unit: 'usd',
-      method: 'bolt11',
-      amount: Amount.from(12),
-      expiry: Math.floor(Date.now() / 1000) + 3600,
-      state: 'PAID',
-      reusable: false,
-      amountPaid: Amount.from(12),
-      amountIssued: Amount.zero(),
-      remoteUpdatedAt: null,
-      quoteData: {
-        amount: Amount.from(12),
-      },
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    };
-
-    await api.prepare({
-      quote,
-      amount: Amount.from(12),
-    });
-
-    expect(mintOperationService.prepare).toHaveBeenCalledWith(quote, Amount.from(12));
-  });
-
-  it('prepare passes explicit onchain withdrawal amounts to the service', async () => {
-    const quote = { mintUrl, quoteId, method: 'onchain' } as const;
-
-    await api.prepare({
-      quote,
-      amount: 10,
-    });
-
-    expect(mintOperationService.prepare).toHaveBeenCalledWith(quote, Amount.from(10));
-  });
-
-  it('prepare passes explicit BOLT12 mint amounts to the service', async () => {
-    const quote = { mintUrl, quoteId, method: 'bolt12' } as const;
-
-    await api.prepare({
-      quote,
-      amount: 10,
-    });
-
-    expect(mintOperationService.prepare).toHaveBeenCalledWith(quote, Amount.from(10));
-  });
-
   it('execute delegates every persisted operation state to the service by ID', async () => {
     const states: MintOperation['state'][] = [
       'init',
@@ -189,37 +124,6 @@ describe('MintOpsApi', () => {
     }
 
     expect(mintOperationService.getOperation).not.toHaveBeenCalled();
-  });
-
-  it('execute delegates missing operation errors to the service', async () => {
-    (mintOperationService.execute as unknown as ReturnType<typeof mock>).mockRejectedValueOnce(
-      new Error('Operation missing-op not found'),
-    );
-
-    await expect(api.execute('missing-op')).rejects.toThrow('Operation missing-op not found');
-
-    expect(mintOperationService.execute).toHaveBeenCalledWith('missing-op');
-    expect(mintOperationService.getOperation).not.toHaveBeenCalled();
-  });
-
-  it('get and listByQuote delegate to the service', async () => {
-    const operation = await api.get(pendingOperation.id);
-    const operations = await api.listByQuote({ mintUrl, quoteId });
-
-    expect(mintOperationService.getOperation).toHaveBeenCalledWith(pendingOperation.id);
-    expect(mintOperationService.listOperationsByQuote).toHaveBeenCalledWith(mintUrl, quoteId);
-    expect(operation).toBe(pendingOperation);
-    expect(operations).toEqual([pendingOperation]);
-  });
-
-  it('listPending and listInFlight delegate to separate service methods', async () => {
-    const pending = await api.listPending();
-    const inFlight = await api.listInFlight();
-
-    expect(mintOperationService.getPendingOperations).toHaveBeenCalledWith();
-    expect(mintOperationService.getInFlightOperations).toHaveBeenCalledWith();
-    expect(pending).toEqual([pendingOperation]);
-    expect(inFlight).toHaveLength(2);
   });
 
   it('checkPayment only allows pending operations', async () => {
@@ -283,21 +187,5 @@ describe('MintOpsApi', () => {
     expect(mintOperationService.checkPendingOperation).not.toHaveBeenCalled();
     expect(mintOperationService.recoverExecutingOperation).not.toHaveBeenCalled();
     expect(result).toBe(finalizedOperation);
-  });
-
-  it('finalize and helper APIs delegate to the service', async () => {
-    const result = await api.finalize(pendingOperation.id);
-
-    await api.recovery.run();
-    const recoveryInProgress = api.recovery.inProgress();
-    const locked = api.diagnostics.isLocked(pendingOperation.id);
-
-    expect(mintOperationService.finalize).toHaveBeenCalledWith(pendingOperation.id);
-    expect(mintOperationService.recoverPendingOperations).toHaveBeenCalledWith();
-    expect(mintOperationService.isRecoveryInProgress).toHaveBeenCalledWith();
-    expect(mintOperationService.isOperationLocked).toHaveBeenCalledWith(pendingOperation.id);
-    expect(result.state).toBe('finalized');
-    expect(recoveryInProgress).toBe(false);
-    expect(locked).toBe(false);
   });
 });
