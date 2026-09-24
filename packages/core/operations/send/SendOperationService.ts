@@ -15,13 +15,15 @@ import {
   cancelPreparedSend,
   executeExactSend,
   failSendExecution,
-} from '../../transactions/transitions/send/SendExecutionTransitions.ts';
-import {
   claimSendRecovery,
   cleanupLegacySendInit,
   cleanupOrphanedSendReservations,
   recoverLegacyExactSend,
-} from '../../transactions/transitions/send/SendRecoveryTransitions.ts';
+  beginSendReclaim,
+  completePendingSend,
+  completeSendReclaim,
+  prepareSend,
+} from '../../transactions/transitions/send/SendTransitions.ts';
 import type {
   ApplySendResult,
   CancelPreparedSendResult,
@@ -32,12 +34,6 @@ import type {
   PrepareSendResult,
   SwapTransportRequest,
 } from '../../transactions/transitions/send/SendTransitionTypes.ts';
-import {
-  beginSendReclaim,
-  completePendingSend,
-  completeSendReclaim,
-  prepareSend,
-} from '../../transactions/transitions/send/SendTransitions.ts';
 import type { CoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
 import {
   createSendOperation,

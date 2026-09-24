@@ -195,9 +195,7 @@ transactions/
   mints/TransactionMintMetadata.ts            # metadata application and trust checks
   transitions/
     send/
-      SendTransitions.ts                     # preparation, completion, reclaim
-      SendExecutionTransitions.ts            # execution authorization, results, cancellation
-      SendRecoveryTransitions.ts             # recovery claims and legacy cleanup
+      SendTransitions.ts                     # complete Send lifecycle, including recovery
       SendTransitionTypes.ts                 # named transition inputs and results
       SendValidation.ts                      # pure validation and comparison helpers
 ```
@@ -212,7 +210,7 @@ Names describe authority and lifetime:
 | `CoreTransactionRunner`                        | Opens and completes transactions; injected as `transactionRunner`.                                    |
 | `Transaction<Domain>`                          | Shared scoped capability with local reads and mutations, such as `TransactionProofs`.                 |
 | `RepositoryTransaction<Domain>`                | Its repository-backed implementation, colocated with the interface.                                   |
-| `<Domain>[Phase]Transitions.ts`                | Related named functions that compose local mutations within a supplied `tx`.                          |
+| `<Domain>Transitions.ts`                       | Related named functions that compose local mutations within a supplied `tx`.                          |
 | `<Action>Input` / `<Action>Result`             | Arguments and results named after the transition, such as `PrepareSendInput` and `PrepareSendResult`. |
 | `<Domain>Queries`                              | Read-only queries outside a transaction; a repository may implement the interface directly.           |
 | `<Domain>Remote` / `<Provider><Domain>Remote`  | Remote I/O boundary and its provider implementation.                                                  |
@@ -223,11 +221,17 @@ Keep `CoreTransaction`, `CoreTransactionRunner`, and `RepositoryCoreTransactionR
 and implementation together too. Use `Transaction<Domain>` rather than `*Commands`, because these
 capabilities include reads as well as mutations.
 
-Workflow transitions live under `transactions/transitions/<domain>/`. Group functions by phase;
-do not require one file per function. Transition names are domain verbs such as
-`prepareSend(tx, input)`. Capability methods use short verbs such as `tx.proofs.selectAndReserve(input)`. Prefer
-private helpers when only one module needs them. Name shared helper and type files for their domain
-instead of generic `types.ts`, `inputs.ts`, or `helpers.ts` files.
+Workflow transitions live under `transactions/transitions/<domain>/`. Start with one
+`<Domain>Transitions.ts` module for the complete lifecycle. In Send, order functions by preparation,
+execution, completion, cancellation and reclaim, then recovery. Recovery reuses the same lifecycle
+transitions, so its entry point does not determine a separate module boundary. Extract a smaller
+`*Transitions.ts` module only when a cohesive responsibility warrants it; splitting by phase or by
+individual function is optional.
+
+Transition names are domain verbs such as `prepareSend(tx, input)`. Capability methods use short
+verbs such as `tx.proofs.selectAndReserve(input)`. Prefer private helpers when only one module needs
+them. Name shared helper and type files for their domain instead of generic `types.ts`, `inputs.ts`,
+or `helpers.ts` files.
 
 Transition input objects use the parameter `input`; the callback accepted by the runner is named `work`.
 Do not duplicate the `Result` suffix when the action already ends with it: `applySendResult` uses

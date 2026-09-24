@@ -31,10 +31,12 @@ it as `transactionRunner` and name its callback scope `tx`. Shared scoped capabi
 `Transaction<Domain>` and `RepositoryTransaction<Domain>`, with interface and implementation in the
 same file. These capabilities include reads, so `Commands` does not describe their role accurately.
 
-Reusable workflow functions live in `transactions/transitions/<domain>/`, grouped into
-`<Domain>[Phase]Transitions.ts`. Send uses `SendTransitions`, `SendExecutionTransitions`, and
-`SendRecoveryTransitions`, with shared types in `SendTransitionTypes.ts` and pure helpers in
-`SendValidation.ts`. Capabilities never depend on workflow transitions.
+Reusable workflow functions live in `transactions/transitions/<domain>/`. Start with one
+`<Domain>Transitions.ts` module containing the complete lifecycle. Send keeps preparation, execution,
+completion, cancellation, reclaim, and recovery together in `SendTransitions.ts`, with shared types
+in `SendTransitionTypes.ts` and pure helpers in `SendValidation.ts`. Recovery reuses the same
+transitions. Smaller transition modules are optional and need a cohesive responsibility to justify
+the split. Capabilities never depend on workflow transitions.
 
 Inputs and results use action names with `Input` and `Result` suffixes, without repeating a suffix
 already present in the action name. Result flags describe local changes (`changed`), not commit.

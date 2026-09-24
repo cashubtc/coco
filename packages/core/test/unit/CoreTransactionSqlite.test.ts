@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { Amount } from '@cashu/cashu-ts';
-import { applySendResult } from '../../transactions/transitions/send/SendExecutionTransitions.ts';
 import {
+  applySendResult,
   claimSendRecovery,
   recoverLegacyExactSend,
-} from '../../transactions/transitions/send/SendRecoveryTransitions.ts';
-import { completePendingSend } from '../../transactions/transitions/send/SendTransitions.ts';
+  completePendingSend,
+} from '../../transactions/transitions/send/SendTransitions.ts';
 import {
   RepositoryCoreTransactionRunner,
   type CoreTransaction,
