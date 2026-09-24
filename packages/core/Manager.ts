@@ -913,7 +913,7 @@ export class Manager {
     const historyLogger = this.getChildLogger('HistoryService');
     const tokenLogger = this.getChildLogger('TokenService');
     const seedService = new SeedService(seedGetter);
-    const coreTransactionRunner = new RepositoryCoreTransactionRunner(
+    const transactionRunner = new RepositoryCoreTransactionRunner(
       repositories,
       this.outputDataCreator,
     );
@@ -927,7 +927,7 @@ export class Manager {
       this.mintAdapter,
       {
         queries: mintQueries,
-        transactions: coreTransactionRunner,
+        transactionRunner,
       },
       mintLogger,
       this.eventBus,
@@ -936,7 +936,7 @@ export class Manager {
     const p2pkSigner = new KeypairP2pkSigner(repositories.keyRingRepository);
     const keyRingService = new KeyRingService(
       repositories.keyRingRepository,
-      coreTransactionRunner,
+      transactionRunner,
       keypairDerivation,
       p2pkSigner,
       keyRingLogger,
@@ -987,7 +987,7 @@ export class Manager {
     const sendOperationService = new SendOperationService({
       operationQueries: repositories.sendOperationRepository,
       proofQueries: repositories.proofRepository,
-      transactions: coreTransactionRunner,
+      transactionRunner,
       mintQueries: repositories.mintRepository,
       mintMetadataRefresh: mintService,
       remote: new CashuSendRemote(

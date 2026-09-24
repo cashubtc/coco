@@ -21,22 +21,22 @@ function importedKey(publicKeyHex: string) {
   return { publicKeyHex, secretKey: new Uint8Array(32), purpose: 'p2pk' as const };
 }
 
-// Compile-time contract: neither the shared commands nor repository scope grants an opener.
-function scopedAuthority(transaction: CoreTransaction, scope: RepositoryTransactionScope) {
+// Compile-time contract: neither the shared capabilities nor repository scope grants an opener.
+function scopedAuthority(tx: CoreTransaction, scope: RepositoryTransactionScope) {
   // @ts-expect-error No raw transaction runner on domain scope.
-  transaction.run;
-  // @ts-expect-error Shared commands cannot independently start a transaction.
-  transaction.keypairs.withTransaction;
+  tx.run;
+  // @ts-expect-error Shared capabilities cannot independently start a transaction.
+  tx.keypairs.withTransaction;
   // @ts-expect-error Scoped operation persistence cannot start a transaction.
-  transaction.sendOperations.withTransaction;
+  tx.sendOperations.withTransaction;
   // @ts-expect-error Operation writes use conditional transitions, not unconditional updates.
-  transaction.sendOperations.update;
+  tx.sendOperations.update;
   // @ts-expect-error The scoped repository container deliberately omits withTransaction.
   scope.withTransaction;
 }
 
 describe('RepositoryCoreTransactionRunner', () => {
-  it('reuses keypair commands through a standalone transaction and a composed transition', async () => {
+  it('reuses keypair capabilities through a standalone transaction and a composed transition', async () => {
     const repositories = new MemoryRepositories();
     let opens = 0;
     const runner = new RepositoryCoreTransactionRunner(
@@ -49,11 +49,11 @@ describe('RepositoryCoreTransactionRunner', () => {
     const p2pk = await derivation.prepare('p2pk');
     const quoteKey = await derivation.prepare('nut20_mint_quote');
 
-    const first = await runner.run((transaction) => transaction.keypairs.allocate(p2pk));
+    const first = await runner.run((tx) => tx.keypairs.allocate(p2pk));
     expect(opens).toBe(1);
-    const composed = await runner.run(async (transaction) => {
-      const second = await transaction.keypairs.allocate(p2pk);
-      const third = await transaction.keypairs.allocate(quoteKey);
+    const composed = await runner.run(async (tx) => {
+      const second = await tx.keypairs.allocate(p2pk);
+      const third = await tx.keypairs.allocate(quoteKey);
       return [second, third];
     });
     expect(opens).toBe(2);
@@ -68,9 +68,9 @@ describe('RepositoryCoreTransactionRunner', () => {
     const p2pk = await derivation.prepare('p2pk');
     const quoteKey = await derivation.prepare('nut20_mint_quote');
     await expect(
-      runner.run(async (transaction) => {
-        await transaction.keypairs.allocate(p2pk);
-        await transaction.keypairs.allocate(quoteKey);
+      runner.run(async (tx) => {
+        await tx.keypairs.allocate(p2pk);
+        await tx.keypairs.allocate(quoteKey);
         throw new Error('owning transition failed');
       }),
     ).rejects.toThrow('owning transition failed');
@@ -78,12 +78,8 @@ describe('RepositoryCoreTransactionRunner', () => {
     expect(
       await repositories.keyRingRepository.getAllPersistedKeyPairs('nut20_mint_quote'),
     ).toEqual([]);
-    expect(
-      (await runner.run((transaction) => transaction.keypairs.allocate(p2pk))).derivationIndex,
-    ).toBe(0);
-    expect(
-      (await runner.run((transaction) => transaction.keypairs.allocate(quoteKey))).derivationIndex,
-    ).toBe(0);
+    expect((await runner.run((tx) => tx.keypairs.allocate(p2pk))).derivationIndex).toBe(0);
+    expect((await runner.run((tx) => tx.keypairs.allocate(quoteKey))).derivationIndex).toBe(0);
   });
 
   it('binds inherited getters and frozen repository methods to the owning lifetime', async () => {
@@ -111,7 +107,7 @@ describe('RepositoryCoreTransactionRunner', () => {
       ),
     );
     const input = await new KeypairDerivation(async () => new Uint8Array(64)).prepare('p2pk');
-    const allocated = await runner.run((transaction) => transaction.keypairs.allocate(input));
+    const allocated = await runner.run((tx) => tx.keypairs.allocate(input));
 
     expect(allocated.derivationIndex).toBe(0);
     expect(await repositories.keyRingRepository.getAllPersistedKeyPairs('p2pk')).toEqual([
@@ -137,8 +133,8 @@ describe('RepositoryCoreTransactionRunner', () => {
     );
     const runner = new RepositoryCoreTransactionRunner(conflictingRepositories);
 
-    const allocated = await runner.run((transaction) =>
-      transaction.keypairs.allocate({
+    const allocated = await runner.run((tx) =>
+      tx.keypairs.allocate({
         purpose: 'p2pk',
         derive: (derivationIndex) => ({
           publicKeyHex: `key-${derivationIndex}`,
@@ -208,7 +204,7 @@ describe('RepositoryCoreTransactionRunner', () => {
   });
 
   it.each(['rollback', 'retry'] as const)(
-    'drains executing commands before %s when an independent sibling fails',
+    'drains executing capabilities before %s when an independent sibling fails',
     async (outcome) => {
       const repositories = new MemoryRepositories();
       await repositories.keyRingRepository.setPersistedKeyPair(importedKey('existing'));
@@ -247,10 +243,10 @@ describe('RepositoryCoreTransactionRunner', () => {
       });
       const runner = new RepositoryCoreTransactionRunner(controlled);
       const result = runner
-        .run((scope) =>
+        .run((tx) =>
           Promise.all([
-            scope.keypairs.importP2pk(importedKey('slow')),
-            scope.keypairs.deleteP2pk('existing'),
+            tx.keypairs.importP2pk(importedKey('slow')),
+            tx.keypairs.deleteP2pk('existing'),
           ]),
         )
         .then(
@@ -278,7 +274,7 @@ describe('RepositoryCoreTransactionRunner', () => {
     },
   );
 
-  it('drains started commands before committing when the callback returns early', async () => {
+  it('drains started capabilities before committing when the callback returns early', async () => {
     const repositories = new MemoryRepositories();
     const runner = new RepositoryCoreTransactionRunner(repositories);
     const input = await new KeypairDerivation(async () => new Uint8Array(64)).prepare(
@@ -286,12 +282,9 @@ describe('RepositoryCoreTransactionRunner', () => {
     );
     const pending: Promise<unknown>[] = [];
 
-    await runner.run(async (scope) => {
-      // The runner owns commands already started, even if the caller omits its aggregate await.
-      pending.push(
-        scope.keypairs.allocate(input),
-        scope.keypairs.importP2pk(importedKey('independent')),
-      );
+    await runner.run(async (tx) => {
+      // The runner owns capabilities already started, even if the caller omits its aggregate await.
+      pending.push(tx.keypairs.allocate(input), tx.keypairs.importP2pk(importedKey('independent')));
     });
 
     expect(await repositories.keyRingRepository.getAllPersistedKeyPairs('p2pk')).toHaveLength(1);
@@ -306,16 +299,16 @@ describe('RepositoryCoreTransactionRunner', () => {
   });
 
   it.each(['catch', 'allSettled', 'unobserved'] as const)(
-    'rolls back a command failure even when it is handled with %s',
+    'rolls back a capability failure even when it is handled with %s',
     async (handling) => {
       const repositories = new MemoryRepositories();
       const runner = new RepositoryCoreTransactionRunner(repositories);
       const failure = new Error('derivation failed');
 
       await expect(
-        runner.run(async (scope) => {
-          await scope.keypairs.importP2pk(importedKey('first'));
-          const allocation = scope.keypairs.allocate({
+        runner.run(async (tx) => {
+          await tx.keypairs.importP2pk(importedKey('first'));
+          const allocation = tx.keypairs.allocate({
             purpose: 'p2pk',
             derive() {
               throw failure;
@@ -332,14 +325,14 @@ describe('RepositoryCoreTransactionRunner', () => {
     },
   );
 
-  it.each(['commit', 'rollback'] as const)('revokes commands after %s', async (outcome) => {
+  it.each(['commit', 'rollback'] as const)('revokes capabilities after %s', async (outcome) => {
     const repositories = new MemoryRepositories();
     let capturedTransaction!: CoreTransaction;
     let importKey!: CoreTransaction['keypairs']['importP2pk'];
     const runner = new RepositoryCoreTransactionRunner(repositories);
-    const result = runner.run(async (scope) => {
-      capturedTransaction = scope;
-      importKey = scope.keypairs.importP2pk;
+    const result = runner.run(async (tx) => {
+      capturedTransaction = tx;
+      importKey = tx.keypairs.importP2pk;
       if (outcome === 'rollback') throw new Error('abort');
     });
     if (outcome === 'rollback') await expect(result).rejects.toThrow('abort');
@@ -358,8 +351,8 @@ describe('RepositoryCoreTransactionRunner', () => {
     const repositories = new MemoryRepositories();
     const runner = new RepositoryCoreTransactionRunner(repositories);
     const result = await runner
-      .run(async (scope) => {
-        await scope.keypairs.importP2pk(importedKey('first'));
+      .run(async (tx) => {
+        await tx.keypairs.importP2pk(importedKey('first'));
         throw undefined;
       })
       .then(

@@ -11,7 +11,7 @@ import type { P2pkSigner } from '../keypairs/P2pkSigner.ts';
 export class KeyRingService {
   constructor(
     private readonly keypairQueries: KeypairQueries,
-    private readonly transactions: CoreTransactionRunner,
+    private readonly transactionRunner: CoreTransactionRunner,
     private readonly derivation: KeypairDerivation,
     private readonly signer: P2pkSigner,
     private readonly logger?: Logger,
@@ -39,9 +39,7 @@ export class KeyRingService {
     },
   ): Promise<{ publicKeyHex: string } | Keypair> {
     const input = await this.derivation.prepare(purpose);
-    const keyPair = await this.transactions.run((transaction) =>
-      transaction.keypairs.allocate(input),
-    );
+    const keyPair = await this.transactionRunner.run((tx) => tx.keypairs.allocate(input));
     if (options?.dumpSecretKey) {
       return keyPair;
     }
@@ -54,8 +52,8 @@ export class KeyRingService {
       throw new Error('Secret key must be exactly 32 bytes');
     }
     const publicKeyHex = this.getPublicKeyHex(secretKey);
-    await this.transactions.run((transaction) =>
-      transaction.keypairs.importP2pk({
+    await this.transactionRunner.run((tx) =>
+      tx.keypairs.importP2pk({
         publicKeyHex,
         secretKey,
         purpose: 'p2pk',
@@ -67,7 +65,7 @@ export class KeyRingService {
 
   async removeKeyPair(publicKey: string): Promise<void> {
     this.logger?.debug('Removing key pair', { publicKey });
-    await this.transactions.run((transaction) => transaction.keypairs.deleteP2pk(publicKey));
+    await this.transactionRunner.run((tx) => tx.keypairs.deleteP2pk(publicKey));
     this.logger?.debug('Key pair removed', { publicKey });
   }
 

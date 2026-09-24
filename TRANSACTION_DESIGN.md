@@ -6,20 +6,20 @@ Status: accepted
 ## Purpose
 
 Coco coordinates crash-safe Wallet mutations through one transaction runner per Coco Session.
-The outermost local workflow owns the transaction. Functions and commands participating in that
+The outermost local workflow owns the transaction. Functions and capabilities participating in that
 workflow receive the same short-lived scope and cannot open transactions themselves.
 
 There are three responsibilities:
 
-| Role                 | Responsibility                                                       | Example                                      |
-| -------------------- | -------------------------------------------------------------------- | -------------------------------------------- |
-| Coordinator          | Orders preflight, transactions, remote effects, recovery, and events | `SendOperationService`                       |
-| Transaction function | Composes the local changes that form one domain transition           | `prepareSend(transaction, input)`            |
-| Scoped command       | Encapsulates reusable local rules                                    | `transaction.proofs.selectAndReserve(input)` |
+| Role                 | Responsibility                                                       | Example                             |
+| -------------------- | -------------------------------------------------------------------- | ----------------------------------- |
+| Coordinator          | Orders preflight, transactions, remote effects, recovery, and events | `SendOperationService`              |
+| Transaction function | Composes the local changes that form one domain transition           | `prepareSend(tx, input)`            |
+| Scoped capability    | Encapsulates reusable local rules                                    | `tx.proofs.selectAndReserve(input)` |
 
 `CoreTransactionRunner` owns scope construction, commit, rollback, and bounded retries. A
 transaction function does not commit: its caller may compose additional work before returning.
-There is no required domain gateway, mirrored command interface, or per-workflow scope type.
+There is no required domain gateway, mirrored workflow interface, or per-workflow scope type.
 
 ## Runner Injection and Scope Lifetime
 
@@ -27,9 +27,9 @@ The composition root creates one application-scoped runner and injects its inter
 coordinators. The concrete runner receives the root repositories; coordinators do not.
 
 ```ts
-const transactions = new RepositoryCoreTransactionRunner(repositories, outputDataCreator);
-const sendService = new SendOperationService({ transactions /* other dependencies */ });
-const keyRingService = new KeyRingService(keypairQueries, transactions, derivation, signer);
+const transactionRunner = new RepositoryCoreTransactionRunner(repositories, outputDataCreator);
+const sendService = new SendOperationService({ transactionRunner /* other dependencies */ });
+const keyRingService = new KeyRingService(keypairQueries, transactionRunner, derivation, signer);
 ```
 
 Each `run()` invocation opens one adapter transaction per attempt. Sharing the runner does not
@@ -38,42 +38,42 @@ attempt did not commit. Nested and distributed transactions are unsupported.
 
 ```ts
 interface CoreTransactionRunner {
-  run<T>(work: (transaction: CoreTransaction) => Promise<T>): Promise<T>;
+  run<T>(work: (tx: CoreTransaction) => Promise<T>): Promise<T>;
 }
 ```
 
-`CoreTransaction` exposes domain commands and narrow scoped persistence interfaces. Every capability
+`CoreTransaction` exposes domain capabilities and narrow scoped persistence interfaces. Every capability
 is constructed from the same `RepositoryTransactionScope`. It has no runner, root repository
 container, remote client, or live event bus. Never retain a scope or its capabilities after `run()`.
 Never accept an optional transaction argument that opens a new transaction when omitted.
 
-The runner binds repositories and commands to one internal `TransactionLifetime` per attempt.
+The runner binds repositories and capabilities to one internal `TransactionLifetime` per attempt.
 The lifetime rejects expired calls, remembers the first failure, and drains started work before
 commit, rollback, or retry. The lifetime has no transaction-opening authority.
 
-Transaction functions use `trackTransactionWork(transaction, work)` internally to enroll the whole
-function in that same lifetime. This preserves containment after removing command-class wrappers:
+Transaction functions use `trackTransactionWork(tx, work)` internally to enroll the whole
+function in that same lifetime. This preserves containment after removing workflow-class wrappers:
 a caught validation failure cannot commit earlier writes, and an accidentally dropped function
-promise cannot commit only its first command. The helper never opens or commits a transaction and
+promise cannot commit only its first mutation. The helper never opens or commits a transaction and
 rejects scopes not bound by the runner. Pass the original scope; narrowing its TypeScript type does
 not require copying it. Pure calculations and private helpers awaited by a tracked function need
 no additional wrapper.
 
 ## Composition
 
-A coordinator may compose scoped commands directly. Extract a named transaction function when the
+A coordinator may compose scoped capabilities directly. Extract a named transaction function when the
 sequence expresses a meaningful domain invariant or prevents duplication. A function receives the
 shared `CoreTransaction`; a `Pick` may narrow its type when useful, without introducing another
 scope factory or interface hierarchy.
 
 ```ts
 // A standalone transition.
-const prepared = await transactions.run((transaction) => prepareSend(transaction, input));
+const prepared = await transactionRunner.run((tx) => prepareSend(tx, input));
 
 // A larger local workflow, using the same implementation and adapter transaction.
-const result = await transactions.run(async (transaction) => {
-  const prepared = await prepareSend(transaction, input);
-  const authorized = await beginSendExecution(transaction, executionInput);
+const result = await transactionRunner.run(async (tx) => {
+  const prepared = await prepareSend(tx, input);
+  const authorized = await beginSendExecution(tx, executionInput);
   return { prepared, authorized };
 });
 // Remote execution can now use the committed authorization.
@@ -84,13 +84,13 @@ roll back. The outer callback owns the additional invariant connecting its trans
 `run()` calls are separate commits even when they use the same runner. For atomic composition,
 reuse transaction functions, not service entry points that independently commit.
 
-Commands encapsulate real rules: proof selection and reservation, output derivation with counter
+Capabilities encapsulate real rules: proof selection and reservation, output derivation with counter
 advancement, and keypair derivation with index advancement. Do not expose raw counters merely to
 let every workflow rebuild allocation rules. The owning transition persists the output plan with
 its allocation in the same transaction. Narrow operation persistence contracts may be implemented
 directly by scoped repositories; a forwarding class adds no guarantee.
 
-Await dependent commands sequentially. `Promise.all()` is appropriate only when interleaved reads
+Await dependent capability calls sequentially. `Promise.all()` is appropriate only when interleaved reads
 and writes cannot violate a shared invariant. Lifetime tracking provides containment, not ordering;
 it does not make concurrent allocations for the same purpose safe within one scope.
 
@@ -111,12 +111,10 @@ preflight -> authorize transaction -> remote I/O -> apply transaction -> publish
 ```
 
 ```ts
-const authorization = await transactions.run((transaction) =>
-  beginSendExecution(transaction, executionInput),
-);
+const authorization = await transactionRunner.run((tx) => beginSendExecution(tx, executionInput));
 const remoteResult = await remote.execute(authorization.request);
 const resultInput = prepareResultInput(authorization, remoteResult);
-const result = await transactions.run((transaction) => applySendResult(transaction, resultInput));
+const result = await transactionRunner.run((tx) => applySendResult(tx, resultInput));
 await publishCommittedEvents(result);
 ```
 
@@ -130,7 +128,7 @@ Coordinators may reuse narrow independently committed workflows outside transact
 `MintService.refreshAndCommitIfStale` owns freshness policy, remote metadata fetch, its transaction,
 and attempted post-commit publication. Send receives that action through a narrow interface. Its
 metadata commit intentionally survives a later Send failure; a cached path opens no transaction.
-Coordinator dependencies remain acyclic. Transaction functions and scoped commands never receive
+Coordinator dependencies remain acyclic. Transaction functions and scoped capabilities never receive
 these actions.
 
 Mint metadata application returns the committed snapshot and an applied/ignored disposition.
@@ -152,7 +150,7 @@ back a `CoreTransactionRunner`.
 
 A scoped failure immediately rejects further work. Already executing work settles inside its
 original transaction before rollback or retry. Catching a failure or using `Promise.allSettled()`
-cannot turn a failed attempt into a commit. After completion, captured commands, repositories, and
+cannot turn a failed attempt into a commit. After completion, captured capabilities, repositories, and
 transaction functions reject further use. Tracking does not cancel arbitrary JavaScript promises
 or make external effects transactional; callers still return or await their work.
 
@@ -177,7 +175,7 @@ revisions or equivalent conditional transitions prevent conflicting advancement;
 are contention aids, not correctness mechanisms. Quote Observations precede Quote-backed Operation
 advancement as specified by ADR-0004.
 
-Events are published only after the owning `run()` returns. Scoped commands and transaction functions
+Events are published only after the owning `run()` returns. Scoped capabilitys and transaction functions
 return results rather than emitting live events. A failed transaction publishes nothing. Listener
 failures are logged without turning a committed mutation into a failure or replaying a remote effect.
 Delivery remains best effort: a crash between commit and publication can lose an event. An outbox
@@ -186,31 +184,77 @@ is separate future work.
 ## Files and Dependencies
 
 ```text
-operations/send/SendOperationService.ts     # workflow orchestration
-services/KeyRingService.ts                  # key management orchestration
+operations/send/SendOperationService.ts       # workflow orchestration
+services/KeyRingService.ts                    # key management orchestration
 transactions/
-  CoreTransaction.ts                       # scope and runner
-  TransactionLifetime.ts                   # internal containment mechanism
-  proofs/ProofCommands.ts                  # reusable reservation and settlement
-  outputs/OutputCommands.ts                # allocation including counters
-  keypairs/KeypairCommands.ts               # keypair allocation and persistence
-  mints/MintMetadataCommands.ts             # local metadata application and trust checks
-  send/prepareSend.ts                       # a composed local transition
-  send/beginSendExecution.ts                # initial and recovery authorization
-  send/applySendResult.ts                   # proof settlement and operation advancement
+  CoreTransaction.ts                         # scope, runner interface, implementation
+  TransactionLifetime.ts                     # internal containment mechanism
+  proofs/TransactionProofs.ts                 # shared proof rules and scoped persistence
+  outputs/TransactionOutputs.ts               # output allocation including counters
+  keypairs/TransactionKeypairs.ts             # keypair allocation and scoped persistence
+  mints/TransactionMintMetadata.ts            # metadata application and trust checks
+  transitions/
+    send/
+      SendTransitions.ts                     # preparation, completion, reclaim
+      SendExecutionTransitions.ts            # execution authorization, results, cancellation
+      SendRecoveryTransitions.ts             # recovery claims and legacy cleanup
+      SendTransitionTypes.ts                 # named transition inputs and results
+      SendValidation.ts                      # pure validation and comparison helpers
 ```
 
-Group related short transitions when useful. Method-specific arguments use `*Input` types and the
-parameter `input`; runner callbacks are named `work`. `*Commands` identifies a transaction-scoped
-capability. `Repository*Commands` identifies its repository-backed implementation. Reserve
-`Operation` for durable sagas. A query interface is `<Domain>Queries`; a repository can implement
-it directly without a pass-through query class.
+Names describe authority and lifetime:
+
+| Name                                           | Role                                                                                                  |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `<Domain>Service` / `<Domain>OperationService` | Orchestrates preflight, local transactions, remote effects, and events.                               |
+| `<Domain>Operation`                            | Durable saga state that survives individual transactions.                                             |
+| `CoreTransaction`                              | Live scope for one transaction attempt, passed as `tx`.                                               |
+| `CoreTransactionRunner`                        | Opens and completes transactions; injected as `transactionRunner`.                                    |
+| `Transaction<Domain>`                          | Shared scoped capability with local reads and mutations, such as `TransactionProofs`.                 |
+| `RepositoryTransaction<Domain>`                | Its repository-backed implementation, colocated with the interface.                                   |
+| `<Domain>[Phase]Transitions.ts`                | Related named functions that compose local mutations within a supplied `tx`.                          |
+| `<Action>Input` / `<Action>Result`             | Arguments and results named after the transition, such as `PrepareSendInput` and `PrepareSendResult`. |
+| `<Domain>Queries`                              | Read-only queries outside a transaction; a repository may implement the interface directly.           |
+| `<Domain>Remote` / `<Provider><Domain>Remote`  | Remote I/O boundary and its provider implementation.                                                  |
+| `<Domain>Validation.ts`                        | Pure validation helpers with no persistence or remote effects.                                        |
+
+Keep `CoreTransaction`, `CoreTransactionRunner`, and `RepositoryCoreTransactionRunner` together in
+`CoreTransaction.ts`: they describe and implement the same boundary. Keep each capability interface
+and implementation together too. Use `Transaction<Domain>` rather than `*Commands`, because these
+capabilities include reads as well as mutations.
+
+Workflow transitions live under `transactions/transitions/<domain>/`. Group functions by phase;
+do not require one file per function. Transition names are domain verbs such as
+`prepareSend(tx, input)`. Capability methods use short verbs such as `tx.proofs.selectAndReserve(input)`. Prefer
+private helpers when only one module needs them. Name shared helper and type files for their domain
+instead of generic `types.ts`, `inputs.ts`, or `helpers.ts` files.
+
+Transition input objects use the parameter `input`; the callback accepted by the runner is named `work`.
+Do not duplicate the `Result` suffix when the action already ends with it: `applySendResult` uses
+`ApplySendResultInput` and `ApplySendResult`. A transition's `changed` flag reports whether it changed
+local state; it never claims that the outer transaction has committed. Publish only after `run()`
+returns. Tests use the corresponding module or workflow name.
+
+Inline input objects are normal. Hoist only asynchronous preflight, timestamps, randomness, and other
+retry-sensitive material before `run()`. A named input remains useful when shared or built by
+preflight; it is not required at every call site.
+
+```ts
+const updatedAt = Date.now();
+const result = await transactionRunner.run((tx) =>
+  applySendResult(tx, { operationId, updatedAt, keepProofs, sendProofs, token }),
+);
+if (result.changed) await publish(result);
+```
+
+Shared capabilities must never import workflow transitions. Transitions may compose capabilities
+and other local transitions, but cannot import a runner or acquire transaction-opening authority.
 
 | Module                             | Allowed dependencies                                                                                                | Forbidden authority                                                           |
 | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
 | Coordinator                        | Runner, transaction functions, Queries, local capabilities, remote interfaces, events, narrow independent workflows | Root repository mutation, retaining live scopes                               |
 | Transaction function               | Supplied scope, other local transaction functions, pure helpers, lifetime tracking                                  | Runner, root repositories, coordinators, remote I/O, live events              |
-| Scoped command                     | Scoped repositories, peer commands, pure helpers                                                                    | Transaction openers, root repositories, coordinators, remote I/O, live events |
+| Scoped capability                  | Scoped repositories, peer capabilities, pure helpers                                                                | Transaction openers, root repositories, coordinators, remote I/O, live events |
 | Query / local preflight capability | Read-only state interfaces, pure helpers, explicit local inputs                                                     | Persistence mutation, transaction openers, remote I/O, live events            |
 | Runner / composition root          | Root repositories, adapters, scoped constructors, lifetime mechanism                                                | Workflow orchestration and remote effects inside attempts                     |
 
@@ -223,9 +267,9 @@ purity. Use code review, scoped types, and behavior tests instead of a custom ar
 Before completing a change involving Wallet persistence, operation coordination, or adapters:
 
 1. Identify each module's role and trace its dependencies, including helpers and composition-root
-   wiring. Coordinators receive the shared runner; local functions and commands cannot open one.
+   wiring. Coordinators receive the shared runner; local functions and capabilities cannot open one.
 2. Identify the owning `run()` for each atomic transition. Check that all participants use its scope,
-   authoritative reads occur inside it, and dependent commands are sequential. Examine any concurrent
+   authoritative reads occur inside it, and dependent capability calls are sequential. Examine any concurrent
    group for safe interleaving.
 3. Trace effects: asynchronous preflight and remote work outside, synchronous derivation inside,
    retry-sensitive inputs fixed before the callback, and events after commit. Independent workflow
@@ -240,7 +284,7 @@ Before completing a change involving Wallet persistence, operation coordination,
 Send transitions, KeyRing mutations, and mint metadata refresh use coordinator-owned transactions.
 Legacy Receive, Mint, Melt, Mint Swap orchestration, Payment Request Receive parent/attempt/child
 atomicity, and MintService add/forced-update/trust/delete paths remain for their owning migrations.
-Those migrations should reuse domain commands and local functions, rather than add domain gateways.
+Those migrations should reuse domain capabilities and local functions, rather than add domain gateways.
 Runtime rejection of nested Wallet transactions remains nonuniform: IndexedDB rejects ambient
 transactions, while Memory/SQLite root calls may queue behind an outer caller awaiting them. Do not
 rely on a universal runtime guard; distinguishing nesting from legitimate concurrency remains work.

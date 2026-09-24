@@ -19,7 +19,7 @@ export function createMintMetadataRemoteDouble() {
 export function createMintMetadataRefreshDependencies(repositories: Repositories) {
   return {
     queries: new StoredMintQueries(repositories.mintRepository, repositories.keysetRepository),
-    transactions: new RepositoryCoreTransactionRunner(repositories),
+    transactionRunner: new RepositoryCoreTransactionRunner(repositories),
   };
 }
 

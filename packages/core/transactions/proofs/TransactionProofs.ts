@@ -24,7 +24,7 @@ export interface SelectAndReserveProofsInput {
   forceSwap: boolean;
 }
 
-export interface ProofCommands extends ProofQueries {
+export interface TransactionProofs extends ProofQueries {
   selectAndReserve(input: SelectAndReserveProofsInput): Promise<{
     proofs: CoreProof[];
     fee: Amount;
@@ -41,7 +41,7 @@ export interface ProofCommands extends ProofQueries {
 }
 
 /** Reusable reservation and settlement rules within the owning operation's adapter scope. */
-export class RepositoryProofCommands implements ProofCommands {
+export class RepositoryTransactionProofs implements TransactionProofs {
   constructor(
     private readonly proofs: ProofRepository,
     private readonly keysets: KeysetRepository,

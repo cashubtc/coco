@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import type { RepositoryTransactionScope } from '../../repositories/index.ts';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 import { TransactionLifetime } from '../../transactions/TransactionLifetime.ts';
-import { RepositoryKeypairCommands } from '../../transactions/keypairs/KeypairCommands.ts';
+import { RepositoryTransactionKeypairs } from '../../transactions/keypairs/TransactionKeypairs.ts';
 
 function gate() {
   let release!: () => void;
@@ -28,7 +28,7 @@ describe('TransactionLifetime', () => {
     });
   });
 
-  it('binds frozen commands and inherited repository getters without changing their receiver', async () => {
+  it('binds frozen capabilities and inherited repository getters without changing their receiver', async () => {
     const repositories = new MemoryRepositories();
     const lifetime = new TransactionLifetime();
     await repositories.withTransaction((scope) => {
@@ -46,17 +46,17 @@ describe('TransactionLifetime', () => {
       }
       const bound = lifetime.bind(new GetterScope());
       expect(bound.keyRingRepository).toBe(bound.keyRingRepository);
-      const commands = lifetime.bind(
-        Object.freeze({ keypairs: new RepositoryKeypairCommands(bound.keyRingRepository) }),
+      const capabilities = lifetime.bind(
+        Object.freeze({ keypairs: new RepositoryTransactionKeypairs(bound.keyRingRepository) }),
       );
-      return lifetime.run(() => commands.keypairs.importP2pk(importedKey('frozen')));
+      return lifetime.run(() => capabilities.keypairs.importP2pk(importedKey('frozen')));
     });
     expect(await repositories.keyRingRepository.getAllPersistedKeyPairs('p2pk')).toEqual([
       importedKey('frozen'),
     ]);
   });
 
-  it('drains repository calls inside a failed command and rejects further calls before rollback', async () => {
+  it('drains repository calls inside a failed capability and rejects further calls before rollback', async () => {
     const repositories = new MemoryRepositories();
     const blocked = gate();
     const failed = gate();
@@ -78,8 +78,8 @@ describe('TransactionLifetime', () => {
         };
         const lifetime = new TransactionLifetime();
         bound = lifetime.bind(scope);
-        // Tracking only the command promise would miss the write still running after rejection.
-        const commands = lifetime.bind({
+        // Tracking only the capability promise would miss the write still running after rejection.
+        const capabilities = lifetime.bind({
           keypairs: {
             async importP2pk() {
               await Promise.all([
@@ -89,7 +89,7 @@ describe('TransactionLifetime', () => {
             },
           },
         });
-        return lifetime.run(() => commands.keypairs.importP2pk());
+        return lifetime.run(() => capabilities.keypairs.importP2pk());
       })
       .then(
         () => ({ ok: true as const }),

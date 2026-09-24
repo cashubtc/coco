@@ -12,7 +12,7 @@ export function trackTransactionWork<T>(scope: object, work: () => Promise<T>): 
 }
 
 /**
- * Owns asynchronous commands and repository calls for one transaction attempt. Failure revokes
+ * Tracks asynchronous capability and repository calls for one transaction attempt. Failure revokes
  * further work; calls already executing settle before the adapter may roll back or retry.
  * This helper has no authority to open, commit, or roll back a transaction.
  */
@@ -66,7 +66,7 @@ export class TransactionLifetime {
       }
 
       // A callback may finish before its siblings (Promise.all failure, Promise.race, or an
-      // omitted await). Draining may discover further calls made by an executing command.
+      // omitted await). Draining may discover further calls made by an executing capability method.
       while (this.pending.size > 0) {
         await Promise.all([...this.pending]);
       }
@@ -97,7 +97,7 @@ export class TransactionLifetime {
       },
     );
     // Observe every rejection even when the caller drops its promise. The first failure is
-    // rethrown by run(), so catching a command failure cannot commit a partial transaction.
+    // rethrown by run(), so catching a capability failure cannot commit a partial transaction.
     const settled = observed.then(
       () => {
         this.pending.delete(settled);

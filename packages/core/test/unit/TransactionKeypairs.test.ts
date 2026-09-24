@@ -24,10 +24,10 @@ function allocate(
   derive = (index: number) => derivedKeypair(index, purpose),
 ) {
   const runner = new RepositoryCoreTransactionRunner(repositories);
-  return runner.run((transaction) => transaction.keypairs.allocate({ purpose, derive }));
+  return runner.run((tx) => tx.keypairs.allocate({ purpose, derive }));
 }
 
-describe('KeypairCommands allocation', () => {
+describe('TransactionKeypairs allocation', () => {
   it('reads authoritative allocation state before deriving and does not lower its high-water mark', async () => {
     const repositories = new MemoryRepositories();
     await repositories.keyRingRepository.setPersistedKeyPair(derivedKeypair(7, 'p2pk'));
@@ -119,12 +119,12 @@ describe('KeypairCommands allocation', () => {
 });
 
 function scopedRepositoryAuthority(scope: RepositoryTransactionScope): void {
-  // @ts-expect-error Derivation belongs to scoped commands, never to a repository.
+  // @ts-expect-error Derivation belongs to scoped capabilities, never to a repository.
   void scope.keyRingRepository.deriveAndPersistKeyPair;
 }
 void scopedRepositoryAuthority;
 
-describe('KeypairCommands transaction scope', () => {
+describe('TransactionKeypairs transaction scope', () => {
   it.each([0, 1])('rejects later allocations after allocation %i fails', async (failureIndex) => {
     const repositories = new MemoryRepositories();
     const runner = new RepositoryCoreTransactionRunner(repositories);
@@ -133,9 +133,9 @@ describe('KeypairCommands transaction scope', () => {
     const allocations: Promise<Keypair>[] = [];
 
     await expect(
-      runner.run(async (scope) => {
+      runner.run(async (tx) => {
         for (let position = 0; position < 3; position++) {
-          const allocation = scope.keypairs.allocate({
+          const allocation = tx.keypairs.allocate({
             purpose: 'p2pk',
             derive(index) {
               derivedIndexes.push(index);
@@ -160,8 +160,8 @@ describe('KeypairCommands transaction scope', () => {
 
     // A fresh transaction can reuse indexes that never committed.
     await expect(
-      runner.run((transaction) =>
-        transaction.keypairs.allocate({
+      runner.run((tx) =>
+        tx.keypairs.allocate({
           purpose: 'p2pk',
           derive: (index) => derivedKeypair(index, 'p2pk'),
         }),
@@ -171,11 +171,11 @@ describe('KeypairCommands transaction scope', () => {
 
   it('allocates distinct indexes when composed callers await allocations sequentially', async () => {
     const repositories = new MemoryRepositories();
-    const keys = await new RepositoryCoreTransactionRunner(repositories).run(async (scope) => {
+    const keys = await new RepositoryCoreTransactionRunner(repositories).run(async (tx) => {
       const allocated: Keypair[] = [];
       for (let position = 0; position < 5; position++) {
         allocated.push(
-          await scope.keypairs.allocate({
+          await tx.keypairs.allocate({
             purpose: 'p2pk',
             derive: (index) => derivedKeypair(index, 'p2pk'),
           }),
@@ -207,8 +207,8 @@ describe('KeypairCommands transaction scope', () => {
     const repositories = new MemoryRepositories();
 
     await expect(
-      new RepositoryCoreTransactionRunner(repositories).run(async (scope) => {
-        await scope.keypairs.allocate({
+      new RepositoryCoreTransactionRunner(repositories).run(async (tx) => {
+        await tx.keypairs.allocate({
           purpose: 'p2pk',
           derive: (index) => derivedKeypair(index, 'p2pk'),
         });

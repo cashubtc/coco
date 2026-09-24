@@ -68,9 +68,9 @@ describe.each(['memory', 'sqlite'] as const)(
     it('preserves current trust when applying metadata fetched before a trust change', async () => {
       await repositories.mintRepository.addNewMint({ ...original, trusted: false });
       await repositories.keysetRepository.addKeyset(keyset);
-      const transactions = new RepositoryCoreTransactionRunner(repositories);
-      const result = await transactions.run((transaction) =>
-        transaction.mintMetadata.applyObservation(observation),
+      const transactionRunner = new RepositoryCoreTransactionRunner(repositories);
+      const result = await transactionRunner.run((tx) =>
+        tx.mintMetadata.applyObservation(observation),
       );
       expect(result.applied).toBe(true);
       expect(result.metadata.mint.trusted).toBe(false);
@@ -81,9 +81,9 @@ describe.each(['memory', 'sqlite'] as const)(
     it('ignores observations older than the committed mint snapshot', async () => {
       await repositories.mintRepository.addNewMint({ ...original, updatedAt: 30 });
       await repositories.keysetRepository.addKeyset(keyset);
-      const transactions = new RepositoryCoreTransactionRunner(repositories);
-      const result = await transactions.run((transaction) =>
-        transaction.mintMetadata.applyObservation(observation),
+      const transactionRunner = new RepositoryCoreTransactionRunner(repositories);
+      const result = await transactionRunner.run((tx) =>
+        tx.mintMetadata.applyObservation(observation),
       );
       expect(result.applied).toBe(false);
       expect(result.metadata.mint.updatedAt).toBe(30);
@@ -95,12 +95,12 @@ describe.each(['memory', 'sqlite'] as const)(
     it('keeps the first committed snapshot when observations have equal timestamps', async () => {
       await repositories.mintRepository.addNewMint(original);
       await repositories.keysetRepository.addKeyset(keyset);
-      const transactions = new RepositoryCoreTransactionRunner(repositories);
-      const committed = await transactions.run((transaction) =>
-        transaction.mintMetadata.applyObservation(observation),
+      const transactionRunner = new RepositoryCoreTransactionRunner(repositories);
+      const committed = await transactionRunner.run((tx) =>
+        tx.mintMetadata.applyObservation(observation),
       );
-      const result = await transactions.run((transaction) =>
-        transaction.mintMetadata.applyObservation({
+      const result = await transactionRunner.run((tx) =>
+        tx.mintMetadata.applyObservation({
           ...observation,
           mintInfo: testMintInfo,
           keysets: [keyset],
@@ -128,9 +128,9 @@ describe.each(['memory', 'sqlite'] as const)(
           return fn(scope);
         }),
       );
-      const transactions = new RepositoryCoreTransactionRunner(controlled);
+      const transactionRunner = new RepositoryCoreTransactionRunner(controlled);
       await expect(
-        transactions.run((transaction) => transaction.mintMetadata.applyObservation(observation)),
+        transactionRunner.run((tx) => tx.mintMetadata.applyObservation(observation)),
       ).rejects.toThrow('metadata write failed');
       expect((await repositories.mintRepository.getMintByUrl(mintUrl)).updatedAt).toBe(10);
       expect((await repositories.keysetRepository.getKeysetById(mintUrl, keyset.id))?.active).toBe(

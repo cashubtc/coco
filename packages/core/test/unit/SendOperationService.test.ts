@@ -36,7 +36,7 @@ describe('SendOperationService', () => {
   let logger: Environment['logger'];
   let service: Environment['service'];
   let loadSeed: Environment['loadSeed'];
-  let sendTransactions: Environment['transactions'];
+  let transactionRunner: Environment['transactionRunner'];
 
   const makeProof = (secret: string, amount: number, unit = 'sat'): CoreProof =>
     ({
@@ -96,7 +96,7 @@ describe('SendOperationService', () => {
       logger,
       loadSeed,
       service,
-      transactions: sendTransactions,
+      transactionRunner,
     } = environment);
     sendOpRepo = repositories.sendOperationRepository;
     proofRepo = repositories.proofRepository;
@@ -194,7 +194,7 @@ describe('SendOperationService', () => {
   it('does not publish a prepared event until the transaction runner resolves', async () => {
     await proofRepo.saveProofs(mintUrl, [makeProof('event-boundary-proof', 10)]);
     const operation = await service.init(mintUrl, unitAmount(10));
-    const realRun = sendTransactions.run.bind(sendTransactions);
+    const realRun = transactionRunner.run.bind(transactionRunner);
     let releaseRunner!: () => void;
     let markCommitted!: () => void;
     const holdRunner = new Promise<void>((resolve) => {
@@ -203,7 +203,7 @@ describe('SendOperationService', () => {
     const committed = new Promise<void>((resolve) => {
       markCommitted = resolve;
     });
-    sendTransactions.run = async (work) => {
+    transactionRunner.run = async (work) => {
       const result = await realRun(work);
       markCommitted();
       await holdRunner;

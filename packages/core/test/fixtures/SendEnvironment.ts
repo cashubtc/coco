@@ -55,7 +55,7 @@ export async function createSendEnvironment(units = ['sat']) {
       feePpk: 0,
     });
   }
-  const transactions = new RepositoryCoreTransactionRunner(repositories);
+  const transactionRunner = new RepositoryCoreTransactionRunner(repositories);
   const eventBus = new EventBus<CoreEvents>();
   const remote = createSendRemoteDouble();
   const metadataRemote = createMintMetadataRemoteDouble();
@@ -76,7 +76,7 @@ export async function createSendEnvironment(units = ['sat']) {
     new SendOperationService({
       operationQueries: repositories.sendOperationRepository,
       proofQueries: repositories.proofRepository,
-      transactions,
+      transactionRunner,
       mintQueries: repositories.mintRepository,
       mintMetadataRefresh: createMintServiceForMetadata(
         repositories,
@@ -96,7 +96,7 @@ export async function createSendEnvironment(units = ['sat']) {
 
   return {
     repositories,
-    transactions,
+    transactionRunner,
     eventBus,
     remote,
     metadataRemote,

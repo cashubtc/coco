@@ -1,19 +1,19 @@
 import { Amount, sumProofs, type Proof, type Token } from '@cashu/cashu-ts';
-import { assertOutputProofs } from '@core/proofs/OutputProofs.ts';
 import { normalizeUnit } from '@core/amounts.ts';
-import { SendOperationConflictError, ProofValidationError } from '@core/models/Error.ts';
+import { ProofValidationError, SendOperationConflictError } from '@core/models/Error.ts';
 import type {
   ExecutingSendOperation,
   PendingSendOperation,
   PreparedSendOperation,
   SendOperation,
 } from '@core/operations/send/SendOperation.ts';
+import { assertOutputProofs } from '@core/proofs/OutputProofs.ts';
 import type { CoreProof } from '@core/types.ts';
 import type {
+  ApplySendResultInput,
   ExecuteExactSendInput,
   ExecuteExactSendResult,
-  ApplySwapResultInput,
-} from './types.ts';
+} from './SendTransitionTypes.ts';
 
 /** Completion can resume after an old finalizer released spent inputs before crashing. */
 export function canCompleteWithInput(proof: CoreProof, operationId: string): boolean {
@@ -39,7 +39,7 @@ export function getIdempotentExactResult(
   return {
     operation: current as ExecuteExactSendResult['operation'],
     token: current.token,
-    committed: false,
+    changed: false,
   };
 }
 
@@ -77,7 +77,7 @@ export function normalizeMemo(memo: string | undefined): string | undefined {
 
 export function assertSwapResult(
   operation: ExecutingSendOperation | PendingSendOperation,
-  input: ApplySwapResultInput,
+  input: ApplySendResultInput,
 ): void {
   assertOutputProofs({
     ...operation,

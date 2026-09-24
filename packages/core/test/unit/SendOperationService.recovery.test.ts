@@ -2,7 +2,7 @@ import { Amount, type ProofState as CashuProofState } from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it, mock } from 'bun:test';
 import { createSendEnvironment } from '../fixtures/SendEnvironment.ts';
 import { preparedSend, pendingSend } from '../fixtures/SendOperation.ts';
-import type { SwapTransportRequest } from '../../transactions/send/types.ts';
+import type { SwapTransportRequest } from '../../transactions/transitions/send/SendTransitionTypes.ts';
 import { testMintKeysetId } from '../fixtures/MintMetadata.ts';
 import { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
@@ -64,14 +64,14 @@ describe('SendOperationService executing recovery', () => {
   let remote: Environment['remote'];
   let logger: Environment['logger'];
   let eventBus: Environment['eventBus'];
-  let transactions: Environment['transactions'];
+  let transactionRunner: Environment['transactionRunner'];
 
   const buildService = (serviceEvents = eventBus) =>
     environment.buildService({ eventBus: serviceEvents });
 
   beforeEach(async () => {
     environment = await createSendEnvironment();
-    ({ repositories, service, remote, logger, eventBus, transactions } = environment);
+    ({ repositories, service, remote, logger, eventBus, transactionRunner } = environment);
   });
 
   async function persistExecuting(operation: ExecutingSendOperation): Promise<void> {

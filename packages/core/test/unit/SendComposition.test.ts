@@ -12,9 +12,9 @@ import {
   RepositoryCoreTransactionRunner,
   type CoreTransaction,
 } from '../../transactions/CoreTransaction.ts';
-import { beginSendExecution } from '../../transactions/send/beginSendExecution.ts';
-import { prepareSend } from '../../transactions/send/prepareSend.ts';
-import type { PrepareSendInput } from '../../transactions/send/types.ts';
+import { beginSendExecution } from '../../transactions/transitions/send/SendExecutionTransitions.ts';
+import { prepareSend } from '../../transactions/transitions/send/SendTransitions.ts';
+import type { PrepareSendInput } from '../../transactions/transitions/send/SendTransitionTypes.ts';
 import { overrideTransactions } from '../overrideTransactions.ts';
 import { testMintInfo, testMintKeypairs, testMintKeysetId } from '../fixtures/MintMetadata.ts';
 
@@ -106,10 +106,10 @@ describe.each(['memory', 'sqlite'] as const)('Send transaction composition (%s)'
     const sendInput = input();
     const executionInput = { operationId: sendInput.operation.id, updatedAt: 3000 };
 
-    const result = await runner.run(async (transaction) => {
-      const key = await transaction.keypairs.allocate(keyInput);
-      const prepared = await prepareSend(transaction, sendInput);
-      const begun = await beginSendExecution(transaction, executionInput);
+    const result = await runner.run(async (tx) => {
+      const key = await tx.keypairs.allocate(keyInput);
+      const prepared = await prepareSend(tx, sendInput);
+      const begun = await beginSendExecution(tx, executionInput);
       return { key, prepared, begun };
     });
 
@@ -133,10 +133,10 @@ describe.each(['memory', 'sqlite'] as const)('Send transaction composition (%s)'
     const keyInput = await new KeypairDerivation(async () => new Uint8Array(64)).prepare('p2pk');
     const sendInput = input();
     await expect(
-      runner.run(async (transaction) => {
-        await transaction.keypairs.allocate(keyInput);
-        await prepareSend(transaction, sendInput);
-        await beginSendExecution(transaction, { operationId: 'missing', updatedAt: 3000 });
+      runner.run(async (tx) => {
+        await tx.keypairs.allocate(keyInput);
+        await prepareSend(tx, sendInput);
+        await beginSendExecution(tx, { operationId: 'missing', updatedAt: 3000 });
       }),
     ).rejects.toThrow('Send operation not found');
 
@@ -148,11 +148,11 @@ describe.each(['memory', 'sqlite'] as const)('Send transaction composition (%s)'
     const sendInput = input();
     let rejectedFurtherWork = false;
     await expect(
-      runner.run(async (transaction) => {
-        await prepareSend(transaction, sendInput);
+      runner.run(async (tx) => {
+        await prepareSend(tx, sendInput);
         // The duplicate is rejected by the function itself, after a successful repository read.
-        await prepareSend(transaction, sendInput).catch(() => {});
-        await transaction.sendOperations.getById(sendInput.operation.id).catch(() => {
+        await prepareSend(tx, sendInput).catch(() => {});
+        await tx.sendOperations.getById(sendInput.operation.id).catch(() => {
           rejectedFurtherWork = true;
         });
       }),
@@ -164,8 +164,8 @@ describe.each(['memory', 'sqlite'] as const)('Send transaction composition (%s)'
 
   it('drains a dropped transaction function through its final operation write before committing', async () => {
     const sendInput = input();
-    await runner.run(async (transaction) => {
-      void prepareSend(transaction, sendInput);
+    await runner.run(async (tx) => {
+      void prepareSend(tx, sendInput);
     });
 
     expect(opens).toBe(1);
@@ -181,10 +181,10 @@ describe.each(['memory', 'sqlite'] as const)('Send transaction composition (%s)'
       let captured!: CoreTransaction;
       let readOperation!: CoreTransaction['sendOperations']['getById'];
       const sendInput = input();
-      const work = runner.run(async (transaction) => {
-        captured = transaction;
-        readOperation = transaction.sendOperations.getById;
-        await prepareSend(transaction, sendInput);
+      const work = runner.run(async (tx) => {
+        captured = tx;
+        readOperation = tx.sendOperations.getById;
+        await prepareSend(tx, sendInput);
         if (completion === 'rollback') throw new Error('abort composition');
       });
       if (completion === 'rollback') await expect(work).rejects.toThrow('abort composition');
@@ -214,11 +214,11 @@ describe.each(['memory', 'sqlite'] as const)('Send transaction composition (%s)'
       ),
     );
 
-    await retrying.run(async (transaction) => {
-      scopes.push(transaction);
-      const key = await transaction.keypairs.allocate(keyInput);
-      const prepared = await prepareSend(transaction, sendInput);
-      const begun = await beginSendExecution(transaction, executionInput);
+    await retrying.run(async (tx) => {
+      scopes.push(tx);
+      const key = await tx.keypairs.allocate(keyInput);
+      const prepared = await prepareSend(tx, sendInput);
+      const begun = await beginSendExecution(tx, executionInput);
       allocations.push({ key, outputData: prepared.operation.outputData, request: begun.request });
     });
 

@@ -29,10 +29,10 @@ describe('KeyRingService', () => {
   let service: KeyRingService;
 
   function createService(transactionRepositories: Repositories, seed: SeedService): KeyRingService {
-    const transactions = new RepositoryCoreTransactionRunner(transactionRepositories);
+    const transactionRunner = new RepositoryCoreTransactionRunner(transactionRepositories);
     return new KeyRingService(
       transactionRepositories.keyRingRepository,
-      transactions,
+      transactionRunner,
       new KeypairDerivation(() => seed.getSeed()),
       new KeypairP2pkSigner(transactionRepositories.keyRingRepository),
     );

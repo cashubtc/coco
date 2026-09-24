@@ -3,13 +3,13 @@ import { UnknownMintError } from '@core/models/Error.ts';
 import type { MintMetadataApplyResult, MintMetadataObservation } from '@core/mints/MintMetadata.ts';
 import type { MintRepository, KeysetRepository } from '@core/repositories';
 
-export interface MintMetadataCommands {
+export interface TransactionMintMetadata {
   assertTrusted(mintUrl: string): Promise<void>;
   applyObservation(observation: MintMetadataObservation): Promise<MintMetadataApplyResult>;
 }
 
 /** Cache persistence shared by owning transactions; remote metadata cannot change mint trust. */
-export class RepositoryMintMetadataCommands implements MintMetadataCommands {
+export class RepositoryTransactionMintMetadata implements TransactionMintMetadata {
   constructor(
     private readonly mints: MintRepository,
     private readonly keysets: KeysetRepository,

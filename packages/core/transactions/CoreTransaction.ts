@@ -6,23 +6,29 @@ import {
   type SendOperationRepository,
 } from '@core/repositories';
 import {
-  RepositoryMintMetadataCommands,
-  type MintMetadataCommands,
-} from './mints/MintMetadataCommands.ts';
-import { RepositoryProofCommands, type ProofCommands } from './proofs/ProofCommands.ts';
-import { RepositoryOutputCommands, type OutputCommands } from './outputs/OutputCommands.ts';
-import { RepositoryKeypairCommands, type KeypairCommands } from './keypairs/KeypairCommands.ts';
+  RepositoryTransactionMintMetadata,
+  type TransactionMintMetadata,
+} from './mints/TransactionMintMetadata.ts';
+import { RepositoryTransactionProofs, type TransactionProofs } from './proofs/TransactionProofs.ts';
+import {
+  RepositoryTransactionOutputs,
+  type TransactionOutputs,
+} from './outputs/TransactionOutputs.ts';
+import {
+  RepositoryTransactionKeypairs,
+  type TransactionKeypairs,
+} from './keypairs/TransactionKeypairs.ts';
 import { TransactionLifetime } from './TransactionLifetime.ts';
 
 /**
- * Scoped commands sharing one adapter transaction attempt. Await mutations sequentially unless
+ * Scoped capabilities sharing one adapter transaction attempt. Await mutations sequentially unless
  * their independence is established; lifetime tracking does not serialize conflicting work.
  */
 export interface CoreTransaction {
-  readonly mintMetadata: MintMetadataCommands;
-  readonly keypairs: KeypairCommands;
-  readonly proofs: ProofCommands;
-  readonly outputs: OutputCommands;
+  readonly mintMetadata: TransactionMintMetadata;
+  readonly keypairs: TransactionKeypairs;
+  readonly proofs: TransactionProofs;
+  readonly outputs: TransactionOutputs;
   readonly sendOperations: Pick<
     SendOperationRepository,
     'getById' | 'getByMintUrl' | 'create' | 'transition' | 'delete'
@@ -31,7 +37,7 @@ export interface CoreTransaction {
 
 /** Injected into coordinators; each invocation resolves only after its local work commits. */
 export interface CoreTransactionRunner {
-  run<T>(work: (transaction: CoreTransaction) => Promise<T>): Promise<T>;
+  run<T>(work: (tx: CoreTransaction) => Promise<T>): Promise<T>;
 }
 
 const MAX_TRANSACTION_ATTEMPTS = 3;
@@ -43,7 +49,7 @@ export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
     private readonly outputDataCreator: OutputDataCreator = OutputData,
   ) {}
 
-  async run<T>(work: (transaction: CoreTransaction) => Promise<T>): Promise<T> {
+  async run<T>(work: (tx: CoreTransaction) => Promise<T>): Promise<T> {
     for (let attempt = 1; ; attempt++) {
       try {
         return await this.repositories.withTransaction((repositories) => {
@@ -66,22 +72,22 @@ export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
   }
 
   private createTransaction(repositories: RepositoryTransactionScope): CoreTransaction {
-    const mintMetadata = new RepositoryMintMetadataCommands(
+    const mintMetadata = new RepositoryTransactionMintMetadata(
       repositories.mintRepository,
       repositories.keysetRepository,
     );
-    const proofs = new RepositoryProofCommands(
+    const proofs = new RepositoryTransactionProofs(
       repositories.proofRepository,
       repositories.keysetRepository,
     );
-    const outputs = new RepositoryOutputCommands(
+    const outputs = new RepositoryTransactionOutputs(
       repositories.counterRepository,
       repositories.keysetRepository,
       this.outputDataCreator,
     );
     return {
       mintMetadata,
-      keypairs: new RepositoryKeypairCommands(repositories.keyRingRepository),
+      keypairs: new RepositoryTransactionKeypairs(repositories.keyRingRepository),
       proofs,
       outputs,
       sendOperations: repositories.sendOperationRepository,
