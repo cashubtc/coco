@@ -9,17 +9,44 @@ import type { MintService } from '@core/services/MintService.ts';
 import type { ProofQueries } from '@core/proofs/ProofQueries.ts';
 import { createKeyChain } from '@core/proofs/KeysetSelection.ts';
 import type { MintMetadata } from '@core/mints/MintMetadata.ts';
+import {
+  applySendResult,
+  beginSendExecution,
+  cancelPreparedSend,
+  executeExactSend,
+  failSendExecution,
+  claimSendRecovery,
+  cleanupLegacySendInit,
+  cleanupOrphanedSendReservations,
+  recoverLegacyExactSend,
+  beginSendReclaim,
+  completePendingSend,
+  completeSendReclaim,
+  prepareSend,
+} from '../../transactions/transitions/send/SendTransitions.ts';
+
 import type {
-  SendOperation,
-  InitSendOperation,
-  PreparedSendOperation,
-  ExecutingSendOperation,
-  PendingSendOperation,
-} from './SendOperation';
+  ApplySendResult,
+  CancelPreparedSendResult,
+  ExecuteExactSendResult,
+  CompletePendingSendInput,
+  CompletePendingSendResult,
+  CompleteSendReclaimResult,
+  FailSendExecutionResult,
+  PrepareSendResult,
+  SwapTransportRequest,
+} from '../../transactions/transitions/send/SendTransitionTypes.ts';
+
+import type { CoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
 import {
   createSendOperation,
   isLegacyTokenlessP2pkSend,
   getSendProofSecrets,
+  type SendOperation,
+  type InitSendOperation,
+  type PreparedSendOperation,
+  type ExecutingSendOperation,
+  type PendingSendOperation,
   type CreateSendOperationOptions,
 } from './SendOperation';
 import type { SendMethod, SendMethodData } from './SendMethodHandler';
@@ -44,17 +71,6 @@ import {
 import { MintScopedLock } from '../MintScopedLock';
 import { OperationIdLock } from '../OperationIdLock';
 import { normalizeUnitAmount, type UnitAmount } from '../../amounts.ts';
-import type { SendTransactions } from '../../transactions/send/SendTransactions.ts';
-import type { PreparedSendResult } from '../../transactions/send/types.ts';
-import type {
-  AppliedSwapResult,
-  CompletedReclaim,
-  CancelledPreparedSend,
-  CompletedPendingSend,
-  CompletePendingSendInput,
-  FailedSwapExecution,
-  SwapTransportRequest,
-} from '../../transactions/send/types.ts';
 import type { SendOperationQueries } from './SendOperationQueries.ts';
 import type { SendRemote, SendRemoteSession } from './SendRemote.ts';
 
@@ -65,13 +81,13 @@ const DEFINITIVE_SWAP_MINT_ERROR_CODES = new Set([
 ]);
 
 type SwapExecutionOutcome =
-  | { status: 'PENDING'; result: AppliedSwapResult }
-  | { status: 'FAILED'; result: FailedSwapExecution; error: MintOperationError };
+  | { status: 'PENDING'; result: ApplySendResult }
+  | { status: 'FAILED'; result: FailSendExecutionResult; error: MintOperationError };
 
 export interface SendOperationServiceDependencies {
   operationQueries: SendOperationQueries;
   proofQueries: ProofQueries;
-  transactions: SendTransactions;
+  transactionRunner: CoreTransactionRunner;
   mintQueries: { isTrustedMint(mintUrl: string): Promise<boolean> };
   mintMetadataRefresh: Pick<MintService, 'refreshAndCommitIfStale'>;
   remote: SendRemote;
@@ -100,7 +116,7 @@ export interface ExecuteSendOptions {
 export class SendOperationService {
   private readonly operationQueries: SendOperationQueries;
   private readonly proofQueries: ProofQueries;
-  private readonly transactions: SendTransactions;
+  private readonly transactionRunner: CoreTransactionRunner;
   private readonly mintQueries: SendOperationServiceDependencies['mintQueries'];
   private readonly mintMetadataRefresh: Pick<MintService, 'refreshAndCommitIfStale'>;
   private readonly remote: SendRemote;
@@ -120,7 +136,7 @@ export class SendOperationService {
   constructor(dependencies: SendOperationServiceDependencies) {
     this.operationQueries = dependencies.operationQueries;
     this.proofQueries = dependencies.proofQueries;
-    this.transactions = dependencies.transactions;
+    this.transactionRunner = dependencies.transactionRunner;
     this.mintQueries = dependencies.mintQueries;
     this.mintMetadataRefresh = dependencies.mintMetadataRefresh;
     this.remote = dependencies.remote;
@@ -200,7 +216,7 @@ export class SendOperationService {
    */
   async prepare(operation: InitSendOperation): Promise<PreparedSendOperation> {
     const releaseLock = await this.acquireOperationLock(operation.id);
-    let result: PreparedSendResult;
+    let result: PrepareSendResult;
     try {
       const releaseMintLock = await this.mintScopedLock.acquire(operation.mintUrl);
       try {
@@ -217,12 +233,15 @@ export class SendOperationService {
           mintInfo: metadata.mint.mintInfo,
           outputDataCreator: this.outputDataCreator,
         });
-        result = await this.transactions.prepare({
-          operation: { ...operation, updatedAt: Date.now() },
-          activeKeys: keys,
-          seed,
-          ...plan,
-        });
+        const updatedAt = Date.now();
+        result = await this.transactionRunner.run((tx) =>
+          tx.perform(prepareSend, {
+            operation: { ...operation, updatedAt },
+            activeKeys: keys,
+            seed,
+            ...plan,
+          }),
+        );
       } finally {
         releaseMintLock();
       }
@@ -310,11 +329,15 @@ export class SendOperationService {
       await this.mintMetadataRefresh.refreshAndCommitIfStale(operation.mintUrl),
       operation.unit,
     );
-    const begun = await this.transactions.beginExecution({
-      operationId: operation.id,
-      updatedAt: Date.now(),
-      memo: options?.memo ? this.normalizeMemo(options.memo) : undefined,
-    });
+    const updatedAt = Date.now();
+    const memo = options?.memo ? this.normalizeMemo(options.memo) : undefined;
+    const begun = await this.transactionRunner.run((tx) =>
+      tx.perform(beginSendExecution, {
+        operationId: operation.id,
+        updatedAt,
+        memo,
+      }),
+    );
     return this.submitPersistedSwap(begun.operation, begun.request, remote, 'initial');
   }
 
@@ -332,12 +355,15 @@ export class SendOperationService {
       if (submission === 'replay' || !this.isDefinitiveSwapFailure(error)) {
         throw error;
       }
-      const failed = await this.transactions.failExecution({
-        operationId: operation.id,
-        expectedRevision: operation.revision ?? 0,
-        updatedAt: Date.now(),
-        error: error.message,
-      });
+      const updatedAt = Date.now();
+      const failed = await this.transactionRunner.run((tx) =>
+        tx.perform(failSendExecution, {
+          operationId: operation.id,
+          expectedRevision: operation.revision ?? 0,
+          updatedAt,
+          error: error.message,
+        }),
+      );
       return { status: 'FAILED', result: failed, error };
     }
     const keepProofs = mapProofToCoreProof(request.mintUrl, 'ready', result.keep, {
@@ -355,13 +381,16 @@ export class SendOperationService {
       ...(operation.executionMemo ? { memo: operation.executionMemo } : {}),
     };
 
-    const applied = await this.transactions.applyResult({
-      operationId: operation.id,
-      updatedAt: Date.now(),
-      keepProofs,
-      sendProofs,
-      token,
-    });
+    const appliedAt = Date.now();
+    const applied = await this.transactionRunner.run((tx) =>
+      tx.perform(applySendResult, {
+        operationId: operation.id,
+        updatedAt: appliedAt,
+        keepProofs,
+        sendProofs,
+        token,
+      }),
+    );
     return { status: 'PENDING', result: applied };
   }
 
@@ -370,18 +399,21 @@ export class SendOperationService {
     memo?: string,
   ): Promise<{ operation: PendingSendOperation; token: Token }> {
     const releaseLock = await this.acquireOperationLock(operationId);
-    let result: Awaited<ReturnType<SendTransactions['executeExact']>>;
+    let result: ExecuteExactSendResult;
     try {
-      result = await this.transactions.executeExact({
-        operationId,
-        updatedAt: Date.now(),
-        memo,
-      });
+      const updatedAt = Date.now();
+      result = await this.transactionRunner.run((tx) =>
+        tx.perform(executeExactSend, {
+          operationId,
+          updatedAt,
+          memo,
+        }),
+      );
     } finally {
       releaseLock();
     }
 
-    if (result.committed) {
+    if (result.changed) {
       // Publish pending before proof events can trigger watcher finalization.
       await this.publishCommittedEvent('send:pending', {
         mintUrl: result.operation.mintUrl,
@@ -399,7 +431,7 @@ export class SendOperationService {
     this.logger?.info('Exact-match Send operation executed', {
       operationId,
       proofCount: result.token.proofs.length,
-      committed: result.committed,
+      changed: result.changed,
     });
     return result;
   }
@@ -429,7 +461,7 @@ export class SendOperationService {
 
   private async completePersistedSend(operationId: string): Promise<void> {
     let releaseLock: (() => void) | undefined;
-    let result: CompletedPendingSend | undefined;
+    let result: CompletePendingSendResult | undefined;
     try {
       try {
         releaseLock = await this.acquireOperationLock(operationId);
@@ -485,7 +517,9 @@ export class SendOperationService {
         if (!observation) {
           throw new ProofValidationError(`Cannot finalize unspent Send operation ${operationId}`);
         }
-        result = await this.transactions.completePending(observation);
+        result = await this.transactionRunner.run((tx) =>
+          tx.perform(completePendingSend, observation),
+        );
       } else {
         const sendSecrets = getSendProofSecrets(operation);
         const localProofs = await this.proofQueries.getProofsBySecrets(
@@ -507,11 +541,14 @@ export class SendOperationService {
           }
           observedSpentSecrets = sendSecrets;
         }
-        result = await this.transactions.completePending({
-          operationId,
-          updatedAt: Date.now(),
-          spentProofSecrets: observedSpentSecrets,
-        });
+        const updatedAt = Date.now();
+        result = await this.transactionRunner.run((tx) =>
+          tx.perform(completePendingSend, {
+            operationId,
+            updatedAt,
+            spentProofSecrets: observedSpentSecrets,
+          }),
+        );
       }
     } finally {
       releaseLock?.();
@@ -536,28 +573,36 @@ export class SendOperationService {
 
   private async rollbackPersistedSend(operationId: string, reason: string): Promise<void> {
     const releaseLock = await this.acquireOperationLock(operationId);
-    let cancelled: CancelledPreparedSend | undefined;
-    let reclaimed: CompletedReclaim | undefined;
+    let cancelled: CancelPreparedSendResult | undefined;
+    let reclaimed: CompleteSendReclaimResult | undefined;
     try {
       const operation = await this.operationQueries.getById(operationId);
       if (!operation) {
         throw new Error(`Operation ${operationId} not found`);
       }
       if (operation.state === 'prepared') {
-        cancelled = await this.transactions.cancelPrepared({
-          operationId,
-          updatedAt: Date.now(),
-          reason,
-        });
+        const updatedAt = Date.now();
+        cancelled = await this.transactionRunner.run((tx) =>
+          tx.perform(cancelPreparedSend, {
+            operationId,
+            updatedAt,
+            reason,
+          }),
+        );
       } else if (operation.state === 'pending' && operation.method === 'default') {
         const metadata = await this.mintMetadataRefresh.refreshAndCommitIfStale(operation.mintUrl);
         const remote = this.remote.open(metadata, operation.unit);
-        const begun = await this.transactions.beginReclaim({
-          operationId,
-          updatedAt: Date.now(),
-          activeKeys: this.activeKeys(metadata, operation.unit),
-          seed: await this.loadSeed(),
-        });
+        const updatedAt = Date.now();
+        const activeKeys = this.activeKeys(metadata, operation.unit);
+        const seed = await this.loadSeed();
+        const begun = await this.transactionRunner.run((tx) =>
+          tx.perform(beginSendReclaim, {
+            operationId,
+            updatedAt,
+            activeKeys,
+            seed,
+          }),
+        );
         if (begun.counter) await this.publishCommittedEvent('counter:updated', begun.counter);
         if (begun.skippedForFees) {
           this.logger?.warn('Cannot reclaim send proofs because fees consume the amount', {
@@ -567,12 +612,18 @@ export class SendOperationService {
         const proofs = begun.operation.reclaimData
           ? await remote.reclaim(begun.inputProofs, begun.operation.reclaimData.outputData)
           : [];
-        reclaimed = await this.transactions.completeReclaim({
-          operationId,
-          updatedAt: Date.now(),
-          reason,
-          proofs: mapProofToCoreProof(operation.mintUrl, 'ready', proofs, { unit: operation.unit }),
+        const reclaimedAt = Date.now();
+        const reclaimedProofs = mapProofToCoreProof(operation.mintUrl, 'ready', proofs, {
+          unit: operation.unit,
         });
+        reclaimed = await this.transactionRunner.run((tx) =>
+          tx.perform(completeSendReclaim, {
+            operationId,
+            updatedAt: reclaimedAt,
+            reason,
+            proofs: reclaimedProofs,
+          }),
+        );
       } else {
         throw new Error(`Cannot rollback operation in state ${operation.state}`);
       }
@@ -706,7 +757,9 @@ export class SendOperationService {
    * Releases any orphaned proof reservations and deletes the operation.
    */
   private async recoverInitOperation(op: InitSendOperation): Promise<void> {
-    const result = await this.transactions.cleanupLegacyInit(op.id);
+    const result = await this.transactionRunner.run((tx) =>
+      tx.perform(cleanupLegacySendInit, op.id),
+    );
     if (result.releasedProofSecrets.length > 0) {
       await this.publishCommittedEvent('proofs:released', {
         mintUrl: result.mintUrl,
@@ -729,10 +782,13 @@ export class SendOperationService {
       return;
     }
     if (!latest.needsSwap) {
-      const recovered = await this.transactions.recoverLegacyExact({
-        operationId: latest.id,
-        updatedAt: Date.now(),
-      });
+      const updatedAt = Date.now();
+      const recovered = await this.transactionRunner.run((tx) =>
+        tx.perform(recoverLegacyExactSend, {
+          operationId: latest.id,
+          updatedAt,
+        }),
+      );
       if (recovered.readyProofSecrets.length > 0) {
         await this.publishCommittedEvent('proofs:state-changed', {
           mintUrl: recovered.operation.mintUrl,
@@ -777,11 +833,14 @@ export class SendOperationService {
     const allSpent = inputStates.every((state) => state.state === 'SPENT');
 
     if (allUnspent) {
-      const claimed = await this.transactions.claimRecovery({
-        operationId: latest.id,
-        expectedRevision: latest.revision ?? 0,
-        updatedAt: Date.now(),
-      });
+      const claimedAt = Date.now();
+      const claimed = await this.transactionRunner.run((tx) =>
+        tx.perform(claimSendRecovery, {
+          operationId: latest.id,
+          expectedRevision: latest.revision ?? 0,
+          updatedAt: claimedAt,
+        }),
+      );
       const outcome = await this.submitPersistedSwap(
         claimed.operation,
         claimed.request,
@@ -807,11 +866,14 @@ export class SendOperationService {
       return;
     }
 
-    const claimed = await this.transactions.claimRecovery({
-      operationId: latest.id,
-      expectedRevision: latest.revision ?? 0,
-      updatedAt: Date.now(),
-    });
+    const claimedAt = Date.now();
+    const claimed = await this.transactionRunner.run((tx) =>
+      tx.perform(claimSendRecovery, {
+        operationId: latest.id,
+        expectedRevision: latest.revision ?? 0,
+        updatedAt: claimedAt,
+      }),
+    );
     const recoveryOperation = claimed.operation;
 
     const outputSecrets = getSecretsFromSerializedOutputData(recoveryOperation.outputData!);
@@ -857,13 +919,16 @@ export class SendOperationService {
       unit: recoveryOperation.unit,
       ...(recoveryOperation.executionMemo ? { memo: recoveryOperation.executionMemo } : {}),
     };
-    const applied = await this.transactions.applyResult({
-      operationId: recoveryOperation.id,
-      updatedAt: Date.now(),
-      keepProofs,
-      sendProofs,
-      token,
-    });
+    const appliedAt = Date.now();
+    const applied = await this.transactionRunner.run((tx) =>
+      tx.perform(applySendResult, {
+        operationId: recoveryOperation.id,
+        updatedAt: appliedAt,
+        keepProofs,
+        sendProofs,
+        token,
+      }),
+    );
     await this.publishAppliedSwap(applied);
     this.logger?.info('Restored executing Send outputs from its persisted request', {
       operationId: recoveryOperation.id,
@@ -912,7 +977,9 @@ export class SendOperationService {
       return;
     }
 
-    const result = await this.transactions.completePending(completion);
+    const result = await this.transactionRunner.run((tx) =>
+      tx.perform(completePendingSend, completion),
+    );
     await this.publishCompletedSend(result);
     this.logger?.info('Send operation finalized during recovery', { operationId: latest.id });
   }
@@ -931,7 +998,9 @@ export class SendOperationService {
       ? await this.observeLegacyTokenlessP2pk(operation)
       : { operationId, updatedAt: Date.now(), spentProofSecrets: [secret] };
     if (!completion) return true;
-    const result = await this.transactions.completePending(completion);
+    const result = await this.transactionRunner.run((tx) =>
+      tx.perform(completePendingSend, completion),
+    );
     await this.publishCompletedSend(result);
     return true;
   }
@@ -999,7 +1068,9 @@ export class SendOperationService {
    * Releases proofs reserved by known terminal Sends; unidentified owners remain reserved.
    */
   private async cleanupOrphanedReservations(): Promise<number> {
-    const result = await this.transactions.cleanupOrphanedReservations();
+    const result = await this.transactionRunner.run((tx) =>
+      tx.perform(cleanupOrphanedSendReservations),
+    );
     for (const group of result.released) {
       await this.publishCommittedEvent('proofs:released', group);
     }
@@ -1009,7 +1080,7 @@ export class SendOperationService {
     return result.count;
   }
 
-  private async publishPrepared(result: PreparedSendResult): Promise<void> {
+  private async publishPrepared(result: PrepareSendResult): Promise<void> {
     if (result.counter) {
       await this.publishCommittedEvent('counter:updated', result.counter);
     }
@@ -1039,8 +1110,8 @@ export class SendOperationService {
       await this.publishCommittedEvent('proofs:saved', { mintUrl, keysetId, proofs });
   }
 
-  private async publishAppliedSwap(result: AppliedSwapResult): Promise<void> {
-    if (!result.committed) return;
+  private async publishAppliedSwap(result: ApplySendResult): Promise<void> {
+    if (!result.changed) return;
 
     // Saved inflight proofs can immediately trigger watcher finalization.
     await this.publishCommittedEvent('send:pending', {
@@ -1064,8 +1135,8 @@ export class SendOperationService {
     });
   }
 
-  private async publishFailedSwap(result: FailedSwapExecution): Promise<void> {
-    if (!result.committed) return;
+  private async publishFailedSwap(result: FailSendExecutionResult): Promise<void> {
+    if (!result.changed) return;
 
     await this.publishCommittedEvent('proofs:released', {
       mintUrl: result.operation.mintUrl,
@@ -1078,8 +1149,8 @@ export class SendOperationService {
     });
   }
 
-  private async publishCancelledSend(result: CancelledPreparedSend): Promise<void> {
-    if (!result.committed) return;
+  private async publishCancelledSend(result: CancelPreparedSendResult): Promise<void> {
+    if (!result.changed) return;
     await this.publishCommittedEvent('proofs:released', {
       mintUrl: result.operation.mintUrl,
       secrets: result.releasedInputSecrets,
@@ -1092,8 +1163,8 @@ export class SendOperationService {
     this.logger?.info('Prepared Send operation cancelled', { operationId: result.operation.id });
   }
 
-  private async publishCompletedSend(result: CompletedPendingSend): Promise<void> {
-    if (!result.committed) return;
+  private async publishCompletedSend(result: CompletePendingSendResult): Promise<void> {
+    if (!result.changed) return;
     if (result.spentProofSecrets.length > 0) {
       await this.publishCommittedEvent('proofs:state-changed', {
         mintUrl: result.operation.mintUrl,

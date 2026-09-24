@@ -5,8 +5,8 @@ import type {
   InitSendOperation,
   PendingSendOperation,
   PreparedSendOperation,
-  RollingBackSendOperation,
   RolledBackSendOperation,
+  RollingBackSendOperation,
 } from '@core/operations/send/SendOperation.ts';
 import type { CoreProof } from '@core/types.ts';
 import type { SerializedOutputData } from '@core/utils.ts';
@@ -22,7 +22,7 @@ export interface PrepareSendInput {
   fixedSendOutputs?: readonly OutputDataLike[];
 }
 
-export interface PreparedSendResult {
+export interface PrepareSendResult {
   operation: PreparedSendOperation;
   reservation: {
     mintUrl: string;
@@ -43,11 +43,11 @@ export interface ExecuteExactSendInput {
 export interface ExecuteExactSendResult {
   operation: PendingSendOperation & { token: Token };
   token: Token;
-  /** False when an equivalent pending result had already committed. */
-  committed: boolean;
+  /** True when this call changed local state; the outer transaction still owns commit. */
+  changed: boolean;
 }
 
-export interface BeginSwapExecutionInput {
+export interface BeginSendExecutionInput {
   operationId: string;
   updatedAt: number;
   /** Normalized before entering the retried transaction. */
@@ -60,12 +60,14 @@ export interface ClaimSendRecoveryInput {
   updatedAt: number;
 }
 
+export type ClaimSendRecoveryResult = BeginSendExecutionResult;
+
 export interface RecoverLegacyExactSendInput {
   operationId: string;
   updatedAt: number;
 }
 
-export interface RecoveredLegacyExactSend extends CancelledPreparedSend {
+export interface RecoverLegacyExactSendResult extends CancelPreparedSendResult {
   readyProofSecrets: string[];
 }
 
@@ -77,12 +79,12 @@ export interface SwapTransportRequest {
   outputData: SerializedOutputData;
 }
 
-export interface BegunSwapExecution {
+export interface BeginSendExecutionResult {
   operation: ExecutingSendOperation;
   request: SwapTransportRequest;
 }
 
-export interface ApplySwapResultInput {
+export interface ApplySendResultInput {
   operationId: string;
   updatedAt: number;
   keepProofs: CoreProof[];
@@ -90,28 +92,28 @@ export interface ApplySwapResultInput {
   token: Token;
 }
 
-export interface AppliedSwapResult {
+export interface ApplySendResult {
   operation: PendingSendOperation;
   savedProofs: CoreProof[];
-  /** Existing legacy send outputs moved from ready to inflight in this commit. */
+  /** Existing legacy send outputs moved from ready to inflight by this call. */
   inflightProofSecrets: string[];
   spentInputSecrets: string[];
-  /** False when an equivalent result had already committed. */
-  committed: boolean;
+  /** True when this call changed local state; the outer transaction still owns commit. */
+  changed: boolean;
 }
 
-export interface FailSwapExecutionInput {
+export interface FailSendExecutionInput {
   operationId: string;
   expectedRevision: number;
   updatedAt: number;
   error: string;
 }
 
-export interface FailedSwapExecution {
+export interface FailSendExecutionResult {
   operation: RolledBackSendOperation;
   releasedInputSecrets: string[];
-  /** False when the same terminal failure had already committed. */
-  committed: boolean;
+  /** False when the same terminal failure was already persisted. */
+  changed: boolean;
 }
 
 export interface CancelPreparedSendInput {
@@ -120,11 +122,11 @@ export interface CancelPreparedSendInput {
   reason: string;
 }
 
-export interface CancelledPreparedSend {
+export interface CancelPreparedSendResult {
   operation: RolledBackSendOperation;
   releasedInputSecrets: string[];
-  /** False when the same cancellation had already committed. */
-  committed: boolean;
+  /** False when the same cancellation was already persisted. */
+  changed: boolean;
 }
 
 export interface CompletePendingSendInput {
@@ -141,15 +143,15 @@ export interface CompletePendingSendInput {
   };
 }
 
-export interface CompletedPendingSend {
+export interface CompletePendingSendResult {
   operation: PendingSendOperation | FinalizedSendOperation;
   spentProofSecrets: string[];
   releasedInputSecrets: string[];
   /** True only when this call performed a proof or operation state change. */
-  committed: boolean;
+  changed: boolean;
 }
 
-export interface CleanupLegacyInitResult {
+export interface CleanupLegacySendInitResult {
   operationId: string;
   mintUrl: string;
   releasedProofSecrets: string[];
@@ -160,28 +162,28 @@ export interface CleanupOrphanedSendReservationsResult {
   count: number;
 }
 
-export interface BeginReclaimInput {
+export interface BeginSendReclaimInput {
   operationId: string;
   updatedAt: number;
   activeKeys: MintKeys;
   seed: Uint8Array;
 }
 
-export interface BegunReclaim {
+export interface BeginSendReclaimResult {
   operation: RollingBackSendOperation;
   inputProofs: CoreProof[];
-  counter?: PreparedSendResult['counter'];
+  counter?: PrepareSendResult['counter'];
   skippedForFees: boolean;
 }
 
-export interface CompleteReclaimInput {
+export interface CompleteSendReclaimInput {
   operationId: string;
   updatedAt: number;
   reason: string;
   proofs: CoreProof[];
 }
 
-export interface CompletedReclaim {
+export interface CompleteSendReclaimResult {
   operation: RolledBackSendOperation;
   savedProofs: CoreProof[];
   spentProofSecrets: string[];

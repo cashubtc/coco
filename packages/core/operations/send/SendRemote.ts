@@ -1,7 +1,7 @@
 import type { Proof, ProofState } from '@cashu/cashu-ts';
 import type { MintMetadata } from '@core/mints/MintMetadata.ts';
 import type { ProofStateInput, SerializedOutputData } from '@core/utils.ts';
-import type { SwapTransportRequest } from '@core/transactions/send/types.ts';
+import type { SwapTransportRequest } from '../../transactions/transitions/send/SendTransitionTypes.ts';
 
 /** A mint-and-unit-scoped protocol client. It has no Wallet persistence authority. */
 export interface SendRemoteSession {

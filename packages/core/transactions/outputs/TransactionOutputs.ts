@@ -21,19 +21,19 @@ export interface AllocateOutputsInput {
   fixedSendOutputs?: readonly OutputDataLike[];
 }
 
-export interface AllocatedOutputs {
+export interface AllocateOutputsResult {
   outputData: SerializedOutputData;
   counter?: Counter;
 }
 
-export interface ScopedOutputCommands {
+export interface TransactionOutputs {
   assertActiveKeys(mintUrl: string, unit: string, activeKeys: MintKeys): Promise<void>;
   /** The caller must persist the returned output plan in this same transaction. */
-  allocate(input: AllocateOutputsInput): Promise<AllocatedOutputs>;
+  allocate(input: AllocateOutputsInput): Promise<AllocateOutputsResult>;
 }
 
-/** Shared deterministic Output Allocation. Only the owning transition may commit its plan. */
-export class RepositoryOutputCommands implements ScopedOutputCommands {
+/** Shared deterministic Output Allocation. The owning transition persists its plan in the same scope. */
+export class RepositoryTransactionOutputs implements TransactionOutputs {
   constructor(
     private readonly counters: CounterRepository,
     private readonly keysets: KeysetRepository,
@@ -54,7 +54,7 @@ export class RepositoryOutputCommands implements ScopedOutputCommands {
     }
   }
 
-  async allocate(input: AllocateOutputsInput): Promise<AllocatedOutputs> {
+  async allocate(input: AllocateOutputsInput): Promise<AllocateOutputsResult> {
     await this.assertActiveKeys(input.mintUrl, input.unit, input.activeKeys);
     const current =
       (await this.counters.getCounter(input.mintUrl, input.activeKeys.id))?.counter ?? 0;

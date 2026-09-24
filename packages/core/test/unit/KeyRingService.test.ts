@@ -1,19 +1,17 @@
-import { Amount } from '@cashu/cashu-ts';
+import { Amount, type Proof } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect } from 'bun:test';
+import { bytesToHex } from '@noble/curves/utils.js';
+import { schnorr, secp256k1 } from '@noble/curves/secp256k1.js';
+import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
 import { KeyRingService } from '../../services/KeyRingService.ts';
 import { SeedService } from '../../services/SeedService.ts';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 import { DerivationIndexExhaustedError } from '../../models/Error.ts';
-import { bytesToHex } from '@noble/curves/utils.js';
-import { schnorr, secp256k1 } from '@noble/curves/secp256k1.js';
-import type { Proof } from '@cashu/cashu-ts';
 import type {
   KeyRingRepository,
   Repositories,
   RepositoryTransactionScope,
 } from '../../repositories';
-import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
-import { CoreKeyRingTransactions } from '../../transactions/keypairs/KeyRingTransactions.ts';
 import { KeypairDerivation } from '../../keypairs/KeypairDerivation.ts';
 import { KeypairP2pkSigner } from '../../keypairs/P2pkSigner.ts';
 import { overrideTransactions } from '../overrideTransactions.ts';
@@ -31,12 +29,10 @@ describe('KeyRingService', () => {
   let service: KeyRingService;
 
   function createService(transactionRepositories: Repositories, seed: SeedService): KeyRingService {
-    const transactions = new CoreKeyRingTransactions(
-      new RepositoryCoreTransactionRunner(transactionRepositories),
-    );
+    const transactionRunner = new RepositoryCoreTransactionRunner(transactionRepositories);
     return new KeyRingService(
       transactionRepositories.keyRingRepository,
-      transactions,
+      transactionRunner,
       new KeypairDerivation(() => seed.getSeed()),
       new KeypairP2pkSigner(transactionRepositories.keyRingRepository),
     );
