@@ -12,10 +12,12 @@ import {
   RepositoryCoreTransactionRunner,
   type CoreTransaction,
 } from '../../transactions/CoreTransaction.ts';
+import { defineTransition } from '../../transactions/Transition.ts';
 import {
   beginSendExecution,
   prepareSend,
 } from '../../transactions/transitions/send/SendTransitions.ts';
+
 import type { PrepareSendInput } from '../../transactions/transitions/send/SendTransitionTypes.ts';
 import { overrideTransactions } from '../overrideTransactions.ts';
 import { testMintInfo, testMintKeypairs, testMintKeysetId } from '../fixtures/MintMetadata.ts';
@@ -110,8 +112,8 @@ describe.each(['memory', 'sqlite'] as const)('Send transaction composition (%s)'
 
     const result = await runner.run(async (tx) => {
       const key = await tx.keypairs.allocate(keyInput);
-      const prepared = await prepareSend(tx, sendInput);
-      const begun = await beginSendExecution(tx, executionInput);
+      const prepared = await tx.perform(prepareSend, sendInput);
+      const begun = await tx.perform(beginSendExecution, executionInput);
       return { key, prepared, begun };
     });
 
@@ -131,14 +133,14 @@ describe.each(['memory', 'sqlite'] as const)('Send transaction composition (%s)'
     ).toBe('composed-send');
   });
 
-  it('rolls back all domains when a later transaction function rejects', async () => {
+  it('rolls back all domains when a later transition rejects', async () => {
     const keyInput = await new KeypairDerivation(async () => new Uint8Array(64)).prepare('p2pk');
     const sendInput = input();
     await expect(
       runner.run(async (tx) => {
         await tx.keypairs.allocate(keyInput);
-        await prepareSend(tx, sendInput);
-        await beginSendExecution(tx, { operationId: 'missing', updatedAt: 3000 });
+        await tx.perform(prepareSend, sendInput);
+        await tx.perform(beginSendExecution, { operationId: 'missing', updatedAt: 3000 });
       }),
     ).rejects.toThrow('Send operation not found');
 
@@ -146,14 +148,86 @@ describe.each(['memory', 'sqlite'] as const)('Send transaction composition (%s)'
     await expectRolledBack();
   });
 
-  it('cannot commit earlier work by catching a transaction function validation failure', async () => {
+  it('performs nested transitions with the same bound scope and one commit', async () => {
+    let bodyScope!: CoreTransaction;
+    const workflow = defineTransition(async (tx, sendInput: PrepareSendInput) => {
+      bodyScope = tx;
+      const prepared = await tx.perform(prepareSend, sendInput);
+      const begun = await tx.perform(beginSendExecution, {
+        operationId: prepared.operation.id,
+        updatedAt: 3000,
+      });
+      return { prepared, begun };
+    });
+
+    const sendInput = input();
+    const result = await runner.run(async (tx) => {
+      const result = await tx.perform(workflow, sendInput);
+      expect(bodyScope).toBe(tx);
+      return result;
+    });
+
+    expect(opens).toBe(1);
+    expect(result.begun.request.outputData).toEqual(result.prepared.operation.outputData!);
+    expect(
+      await repositories.sendOperationRepository.getById(sendInput.operation.id),
+    ).toMatchObject({
+      state: 'executing',
+      revision: 1,
+    });
+    expect((await repositories.counterRepository.getCounter(mintUrl, keysetId))?.counter).toBe(2);
+  });
+
+  it('rolls back completed nested writes when a performed transition throws and is caught', async () => {
+    const failure = new Error('failed after nested writes');
+    const sendInput = input();
+    const workflow = defineTransition<void, void>(async (tx) => {
+      await tx.perform(prepareSend, sendInput);
+      await tx.keypairs.importP2pk({
+        publicKeyHex: 'composed-key',
+        secretKey: new Uint8Array(32),
+        purpose: 'p2pk',
+      });
+      throw failure;
+    });
+
+    await expect(
+      runner.run(async (tx) => {
+        await tx.perform(workflow).catch(() => {});
+      }),
+    ).rejects.toBe(failure);
+
+    expect(opens).toBe(1);
+    await expectRolledBack();
+  });
+
+  it('keeps capability failures tracked even when the transition body catches them', async () => {
+    const failure = new Error('derivation failed');
+    const sendInput = input();
+    const workflow = defineTransition<void, void>(async (tx) => {
+      await tx.perform(prepareSend, sendInput);
+      await tx.keypairs
+        .allocate({
+          purpose: 'p2pk',
+          derive: () => {
+            throw failure;
+          },
+        })
+        .catch(() => {});
+    });
+
+    await expect(runner.run((tx) => tx.perform(workflow))).rejects.toBe(failure);
+    await expectRolledBack();
+  });
+
+  it('cannot commit earlier work by catching a transition validation failure', async () => {
     const sendInput = input();
     let rejectedFurtherWork = false;
     await expect(
       runner.run(async (tx) => {
-        await prepareSend(tx, sendInput);
-        // The duplicate is rejected by the function itself, after a successful repository read.
-        await prepareSend(tx, sendInput).catch(() => {});
+        await tx.perform(prepareSend, sendInput);
+        // The duplicate is rejected by the transition body itself, after a successful repository read.
+        await tx.perform(prepareSend, sendInput).catch(() => {});
         await tx.sendOperations.getById(sendInput.operation.id).catch(() => {
           rejectedFurtherWork = true;
         });
@@ -164,10 +238,10 @@ describe.each(['memory', 'sqlite'] as const)('Send transaction composition (%s)'
     await expectRolledBack();
   });
 
-  it('drains a dropped transaction function through its final operation write before committing', async () => {
+  it('drains a dropped perform promise through its final operation write before committing', async () => {
     const sendInput = input();
     await runner.run(async (tx) => {
-      void prepareSend(tx, sendInput);
+      void tx.perform(prepareSend, sendInput);
     });
 
     expect(opens).toBe(1);
@@ -178,23 +252,31 @@ describe.each(['memory', 'sqlite'] as const)('Send transaction composition (%s)'
   });
 
   it.each(['commit', 'rollback'] as const)(
-    'rejects reuse of a transaction function after %s',
+    'rejects reuse of a scope and captured perform method after %s',
     async (completion) => {
       let captured!: CoreTransaction;
+      let perform!: CoreTransaction['perform'];
       let readOperation!: CoreTransaction['sendOperations']['getById'];
       const sendInput = input();
       const work = runner.run(async (tx) => {
         captured = tx;
+        perform = tx.perform;
         readOperation = tx.sendOperations.getById;
-        await prepareSend(tx, sendInput);
+        await tx.perform(prepareSend, sendInput);
         if (completion === 'rollback') throw new Error('abort composition');
       });
       if (completion === 'rollback') await expect(work).rejects.toThrow('abort composition');
       else await work;
 
-      await expect(prepareSend(captured, input('late-send'))).rejects.toThrow('scope is closed');
+      await expect(captured.perform(prepareSend, input('late-send'))).rejects.toThrow(
+        'scope is closed',
+      );
+      await expect(perform(prepareSend, input('late-captured-send'))).rejects.toThrow(
+        'scope is closed',
+      );
       await expect(readOperation(sendInput.operation.id)).rejects.toThrow('scope is closed');
       expect(await repositories.sendOperationRepository.getById('late-send')).toBeNull();
+      expect(await repositories.sendOperationRepository.getById('late-captured-send')).toBeNull();
       expect(opens).toBe(1);
     },
   );
@@ -219,8 +301,8 @@ describe.each(['memory', 'sqlite'] as const)('Send transaction composition (%s)'
     await retrying.run(async (tx) => {
       scopes.push(tx);
       const key = await tx.keypairs.allocate(keyInput);
-      const prepared = await prepareSend(tx, sendInput);
-      const begun = await beginSendExecution(tx, executionInput);
+      const prepared = await tx.perform(prepareSend, sendInput);
+      const begun = await tx.perform(beginSendExecution, executionInput);
       allocations.push({ key, outputData: prepared.operation.outputData, request: begun.request });
     });
 
@@ -236,7 +318,7 @@ describe.each(['memory', 'sqlite'] as const)('Send transaction composition (%s)'
       state: 'executing',
       revision: 1,
     });
-    await expect(prepareSend(scopes[0]!, input('expired-retry'))).rejects.toThrow(
+    await expect(scopes[0]!.perform(prepareSend, input('expired-retry'))).rejects.toThrow(
       'scope is closed',
     );
   });

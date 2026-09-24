@@ -1,16 +1,3 @@
-const lifetimes = new WeakMap<object, TransactionLifetime>();
-
-/**
- * Enroll a composed local transition in its existing scope's lifetime. This never opens a
- * transaction. Tracking the whole function preserves rollback on caught failures and drains
- * work even when a caller accidentally drops the returned promise.
- */
-export function trackTransactionWork<T>(scope: object, work: () => Promise<T>): Promise<T> {
-  const lifetime = lifetimes.get(scope);
-  if (!lifetime) throw new Error('Transaction work requires a runner-bound scope');
-  return lifetime.track(work);
-}
-
 /**
  * Tracks asynchronous capability and repository calls for one transaction attempt. Failure revokes
  * further work; calls already executing settle before the adapter may roll back or retry.
@@ -51,9 +38,7 @@ export class TransactionLifetime {
       return proxy;
     };
 
-    const scoped = bindObject(modules);
-    lifetimes.set(scoped, this);
-    return scoped;
+    return bindObject(modules);
   }
 
   async run<T>(work: () => Promise<T>): Promise<T> {

@@ -24,9 +24,11 @@ import {
   completeSendReclaim,
   prepareSend,
 } from '../../transactions/transitions/send/SendTransitions.ts';
+
 import type {
   ApplySendResult,
   CancelPreparedSendResult,
+  ExecuteExactSendResult,
   CompletePendingSendInput,
   CompletePendingSendResult,
   CompleteSendReclaimResult,
@@ -34,6 +36,7 @@ import type {
   PrepareSendResult,
   SwapTransportRequest,
 } from '../../transactions/transitions/send/SendTransitionTypes.ts';
+
 import type { CoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
 import {
   createSendOperation,
@@ -232,7 +235,7 @@ export class SendOperationService {
         });
         const updatedAt = Date.now();
         result = await this.transactionRunner.run((tx) =>
-          prepareSend(tx, {
+          tx.perform(prepareSend, {
             operation: { ...operation, updatedAt },
             activeKeys: keys,
             seed,
@@ -329,7 +332,7 @@ export class SendOperationService {
     const updatedAt = Date.now();
     const memo = options?.memo ? this.normalizeMemo(options.memo) : undefined;
     const begun = await this.transactionRunner.run((tx) =>
-      beginSendExecution(tx, {
+      tx.perform(beginSendExecution, {
         operationId: operation.id,
         updatedAt,
         memo,
@@ -354,7 +357,7 @@ export class SendOperationService {
       }
       const updatedAt = Date.now();
       const failed = await this.transactionRunner.run((tx) =>
-        failSendExecution(tx, {
+        tx.perform(failSendExecution, {
           operationId: operation.id,
           expectedRevision: operation.revision ?? 0,
           updatedAt,
@@ -380,7 +383,7 @@ export class SendOperationService {
 
     const appliedAt = Date.now();
     const applied = await this.transactionRunner.run((tx) =>
-      applySendResult(tx, {
+      tx.perform(applySendResult, {
         operationId: operation.id,
         updatedAt: appliedAt,
         keepProofs,
@@ -396,11 +399,11 @@ export class SendOperationService {
     memo?: string,
   ): Promise<{ operation: PendingSendOperation; token: Token }> {
     const releaseLock = await this.acquireOperationLock(operationId);
-    let result: Awaited<ReturnType<typeof executeExactSend>>;
+    let result: ExecuteExactSendResult;
     try {
       const updatedAt = Date.now();
       result = await this.transactionRunner.run((tx) =>
-        executeExactSend(tx, {
+        tx.perform(executeExactSend, {
           operationId,
           updatedAt,
           memo,
@@ -514,7 +517,9 @@ export class SendOperationService {
         if (!observation) {
           throw new ProofValidationError(`Cannot finalize unspent Send operation ${operationId}`);
         }
-        result = await this.transactionRunner.run((tx) => completePendingSend(tx, observation));
+        result = await this.transactionRunner.run((tx) =>
+          tx.perform(completePendingSend, observation),
+        );
       } else {
         const sendSecrets = getSendProofSecrets(operation);
         const localProofs = await this.proofQueries.getProofsBySecrets(
@@ -538,7 +543,7 @@ export class SendOperationService {
         }
         const updatedAt = Date.now();
         result = await this.transactionRunner.run((tx) =>
-          completePendingSend(tx, {
+          tx.perform(completePendingSend, {
             operationId,
             updatedAt,
             spentProofSecrets: observedSpentSecrets,
@@ -578,7 +583,7 @@ export class SendOperationService {
       if (operation.state === 'prepared') {
         const updatedAt = Date.now();
         cancelled = await this.transactionRunner.run((tx) =>
-          cancelPreparedSend(tx, {
+          tx.perform(cancelPreparedSend, {
             operationId,
             updatedAt,
             reason,
@@ -591,7 +596,7 @@ export class SendOperationService {
         const activeKeys = this.activeKeys(metadata, operation.unit);
         const seed = await this.loadSeed();
         const begun = await this.transactionRunner.run((tx) =>
-          beginSendReclaim(tx, {
+          tx.perform(beginSendReclaim, {
             operationId,
             updatedAt,
             activeKeys,
@@ -612,7 +617,7 @@ export class SendOperationService {
           unit: operation.unit,
         });
         reclaimed = await this.transactionRunner.run((tx) =>
-          completeSendReclaim(tx, {
+          tx.perform(completeSendReclaim, {
             operationId,
             updatedAt: reclaimedAt,
             reason,
@@ -752,7 +757,9 @@ export class SendOperationService {
    * Releases any orphaned proof reservations and deletes the operation.
    */
   private async recoverInitOperation(op: InitSendOperation): Promise<void> {
-    const result = await this.transactionRunner.run((tx) => cleanupLegacySendInit(tx, op.id));
+    const result = await this.transactionRunner.run((tx) =>
+      tx.perform(cleanupLegacySendInit, op.id),
+    );
     if (result.releasedProofSecrets.length > 0) {
       await this.publishCommittedEvent('proofs:released', {
         mintUrl: result.mintUrl,
@@ -777,7 +784,7 @@ export class SendOperationService {
     if (!latest.needsSwap) {
       const updatedAt = Date.now();
       const recovered = await this.transactionRunner.run((tx) =>
-        recoverLegacyExactSend(tx, {
+        tx.perform(recoverLegacyExactSend, {
           operationId: latest.id,
           updatedAt,
         }),
@@ -828,7 +835,7 @@ export class SendOperationService {
     if (allUnspent) {
       const claimedAt = Date.now();
       const claimed = await this.transactionRunner.run((tx) =>
-        claimSendRecovery(tx, {
+        tx.perform(claimSendRecovery, {
           operationId: latest.id,
           expectedRevision: latest.revision ?? 0,
           updatedAt: claimedAt,
@@ -861,7 +868,7 @@ export class SendOperationService {
 
     const claimedAt = Date.now();
     const claimed = await this.transactionRunner.run((tx) =>
-      claimSendRecovery(tx, {
+      tx.perform(claimSendRecovery, {
         operationId: latest.id,
         expectedRevision: latest.revision ?? 0,
         updatedAt: claimedAt,
@@ -914,7 +921,7 @@ export class SendOperationService {
     };
     const appliedAt = Date.now();
     const applied = await this.transactionRunner.run((tx) =>
-      applySendResult(tx, {
+      tx.perform(applySendResult, {
         operationId: recoveryOperation.id,
         updatedAt: appliedAt,
         keepProofs,
@@ -970,7 +977,9 @@ export class SendOperationService {
       return;
     }
 
-    const result = await this.transactionRunner.run((tx) => completePendingSend(tx, completion));
+    const result = await this.transactionRunner.run((tx) =>
+      tx.perform(completePendingSend, completion),
+    );
     await this.publishCompletedSend(result);
     this.logger?.info('Send operation finalized during recovery', { operationId: latest.id });
   }
@@ -989,7 +998,9 @@ export class SendOperationService {
       ? await this.observeLegacyTokenlessP2pk(operation)
       : { operationId, updatedAt: Date.now(), spentProofSecrets: [secret] };
     if (!completion) return true;
-    const result = await this.transactionRunner.run((tx) => completePendingSend(tx, completion));
+    const result = await this.transactionRunner.run((tx) =>
+      tx.perform(completePendingSend, completion),
+    );
     await this.publishCompletedSend(result);
     return true;
   }
@@ -1057,7 +1068,9 @@ export class SendOperationService {
    * Releases proofs reserved by known terminal Sends; unidentified owners remain reserved.
    */
   private async cleanupOrphanedReservations(): Promise<number> {
-    const result = await this.transactionRunner.run((tx) => cleanupOrphanedSendReservations(tx));
+    const result = await this.transactionRunner.run((tx) =>
+      tx.perform(cleanupOrphanedSendReservations),
+    );
     for (const group of result.released) {
       await this.publishCommittedEvent('proofs:released', group);
     }

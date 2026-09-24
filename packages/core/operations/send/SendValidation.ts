@@ -13,7 +13,7 @@ import type {
   ApplySendResultInput,
   ExecuteExactSendInput,
   ExecuteExactSendResult,
-} from './SendTransitionTypes.ts';
+} from '../../transactions/transitions/send/SendTransitionTypes.ts';
 
 /** Completion can resume after an old finalizer released spent inputs before crashing. */
 export function canCompleteWithInput(proof: CoreProof, operationId: string): boolean {

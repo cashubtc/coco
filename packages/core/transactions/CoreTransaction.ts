@@ -19,12 +19,15 @@ import {
   type TransactionKeypairs,
 } from './keypairs/TransactionKeypairs.ts';
 import { TransactionLifetime } from './TransactionLifetime.ts';
+import { getTransitionBody, type Transition } from './Transition.ts';
 
 /**
  * Scoped capabilities sharing one adapter transaction attempt. Await mutations sequentially unless
  * their independence is established; lifetime tracking does not serialize conflicting work.
  */
 export interface CoreTransaction {
+  perform<O>(transition: Transition<void, O>): Promise<O>;
+  perform<I, O>(transition: Transition<I, O>, input: I): Promise<O>;
   readonly mintMetadata: TransactionMintMetadata;
   readonly keypairs: TransactionKeypairs;
   readonly proofs: TransactionProofs;
@@ -55,7 +58,7 @@ export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
         return await this.repositories.withTransaction((repositories) => {
           const lifetime = new TransactionLifetime();
           return lifetime.run(() =>
-            work(lifetime.bind(this.createTransaction(lifetime.bind(repositories)))),
+            work(this.createTransaction(lifetime.bind(repositories), lifetime)),
           );
         });
       } catch (error) {
@@ -71,7 +74,10 @@ export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
     }
   }
 
-  private createTransaction(repositories: RepositoryTransactionScope): CoreTransaction {
+  private createTransaction(
+    repositories: RepositoryTransactionScope,
+    lifetime: TransactionLifetime,
+  ): CoreTransaction {
     const mintMetadata = new RepositoryTransactionMintMetadata(
       repositories.mintRepository,
       repositories.keysetRepository,
@@ -85,12 +91,16 @@ export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
       repositories.keysetRepository,
       this.outputDataCreator,
     );
-    return {
+    const scoped: CoreTransaction = lifetime.bind({
+      // The proxy binds methods to the raw object; bodies must receive the bound scope instead.
+      perform: <I, O>(transition: Transition<I, O>, input?: I): Promise<O> =>
+        getTransitionBody(transition)(scoped, input as I),
       mintMetadata,
       keypairs: new RepositoryTransactionKeypairs(repositories.keyRingRepository),
       proofs,
       outputs,
       sendOperations: repositories.sendOperationRepository,
-    };
+    });
+    return scoped;
   }
 }

@@ -14,6 +14,7 @@ import {
   completeSendReclaim,
   prepareSend,
 } from '../../transactions/transitions/send/SendTransitions.ts';
+
 import type {
   CompletePendingSendInput,
   ExecuteExactSendInput,
@@ -143,7 +144,9 @@ describe('Send transitions preparation', () => {
     const { repositories, transactionRunner } = await setup();
     await repositories.proofRepository.saveProofs(mintUrl, [proof('proof-1')]);
 
-    const result = await transactionRunner.run((tx) => prepareSend(tx, prepareInput('send-1')));
+    const result = await transactionRunner.run((tx) =>
+      tx.perform(prepareSend, prepareInput('send-1')),
+    );
 
     expect(result.operation.state).toBe('prepared');
     expect(result.operation.revision).toBe(0);
@@ -182,7 +185,7 @@ describe('Send transitions preparation', () => {
     const { transactionRunner } = await setup(failing);
 
     await expect(
-      transactionRunner.run((tx) => prepareSend(tx, prepareInput('send-failure'))),
+      transactionRunner.run((tx) => tx.perform(prepareSend, prepareInput('send-failure'))),
     ).rejects.toThrow('operation persistence failed');
 
     expect(await repositories.proofRepository.getProofBySecret(mintUrl, 'proof-1')).toEqual(
@@ -197,8 +200,8 @@ describe('Send transitions preparation', () => {
     await repositories.proofRepository.saveProofs(mintUrl, [proof('shared-proof')]);
 
     const results = await Promise.allSettled([
-      transactionRunner.run((tx) => prepareSend(tx, prepareInput('send-a', false))),
-      transactionRunner.run((tx) => prepareSend(tx, prepareInput('send-b', false))),
+      transactionRunner.run((tx) => tx.perform(prepareSend, prepareInput('send-a', false))),
+      transactionRunner.run((tx) => tx.perform(prepareSend, prepareInput('send-b', false))),
     ]);
 
     expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
@@ -225,7 +228,7 @@ describe('Send transitions preparation', () => {
       await repositories.sendOperationRepository.create(existing);
 
       await expect(
-        transactionRunner.run((tx) => prepareSend(tx, prepareInput(existing.id))),
+        transactionRunner.run((tx) => tx.perform(prepareSend, prepareInput(existing.id))),
       ).rejects.toThrow('Send operation id legacy-send already exists');
 
       expect(await repositories.proofRepository.getProofBySecret(mintUrl, input.secret)).toEqual(
@@ -244,8 +247,8 @@ describe('Send transitions preparation', () => {
     await repositories.proofRepository.saveProofs(mintUrl, [proof('proof-a'), proof('proof-b')]);
 
     const results = await Promise.all([
-      transactionRunner.run((tx) => prepareSend(tx, prepareInput('send-a'))),
-      transactionRunner.run((tx) => prepareSend(tx, prepareInput('send-b'))),
+      transactionRunner.run((tx) => tx.perform(prepareSend, prepareInput('send-a'))),
+      transactionRunner.run((tx) => tx.perform(prepareSend, prepareInput('send-b'))),
     ]);
     const positions = results.map(
       (result) => result.operation.outputData!.send[0]!.blindedMessage.B_,
@@ -279,7 +282,7 @@ describe('Send transitions preparation', () => {
     ]);
 
     const result = await transactionRunner.run((tx) =>
-      prepareSend(tx, prepareInput('fee-aware-send')),
+      tx.perform(prepareSend, prepareInput('fee-aware-send')),
     );
 
     expect(result.operation.inputProofSecrets).toEqual(['free-proof']);
@@ -300,7 +303,7 @@ describe('Send transitions preparation', () => {
     ]);
 
     const result = await transactionRunner.run((tx) =>
-      prepareSend(tx, prepareInput('exact-subset-send', false)),
+      tx.perform(prepareSend, prepareInput('exact-subset-send', false)),
     );
 
     expect(new Set(result.operation.inputProofSecrets)).toEqual(new Set(['proof-7', 'proof-3']));
@@ -315,7 +318,7 @@ describe('Send transitions preparation', () => {
 
     await expect(
       transactionRunner.run((tx) =>
-        prepareSend(tx, {
+        tx.perform(prepareSend, {
           ...prepareInput('stale-keyset-send'),
           activeKeys: { ...keys, keys: { 1: 'stale-key' } },
         }),
@@ -337,7 +340,9 @@ describe('Send transitions exact-match execution', () => {
   ): Promise<Awaited<ReturnType<typeof setup>>> {
     const environment = await setup(repositories);
     await environment.repositories.proofRepository.saveProofs(mintUrl, [proof('exact-proof')]);
-    await environment.transactionRunner.run((tx) => prepareSend(tx, prepareInput(id, false)));
+    await environment.transactionRunner.run((tx) =>
+      tx.perform(prepareSend, prepareInput(id, false)),
+    );
     return environment;
   }
 
@@ -356,7 +361,7 @@ describe('Send transitions exact-match execution', () => {
     const { repositories, transactionRunner } = await prepareExact('exact-send');
 
     const result = await transactionRunner.run((tx) =>
-      executeExactSend(tx, executeInput('exact-send', { memo: '  exact memo  ' })),
+      tx.perform(executeExactSend, executeInput('exact-send', { memo: '  exact memo  ' })),
     );
 
     expect(result.changed).toBe(true);
@@ -381,7 +386,7 @@ describe('Send transitions exact-match execution', () => {
     await repositories.sendOperationRepository.update({ ...prepared, revision: 5 });
 
     const result = await transactionRunner.run((tx) =>
-      executeExactSend(tx, executeInput(prepared.id)),
+      tx.perform(executeExactSend, executeInput(prepared.id)),
     );
 
     expect(result.operation.revision).toBe(6);
@@ -393,7 +398,7 @@ describe('Send transitions exact-match execution', () => {
 
     await expect(
       environment.transactionRunner.run((tx) =>
-        executeExactSend(tx, executeInput('rejected-exact-send')),
+        tx.perform(executeExactSend, executeInput('rejected-exact-send')),
       ),
     ).rejects.toThrow('state or revision conflict');
 
@@ -410,8 +415,8 @@ describe('Send transitions exact-match execution', () => {
     const request = executeInput('concurrent-exact-send', { memo: 'same memo' });
 
     const results = await Promise.all([
-      transactionRunner.run((tx) => executeExactSend(tx, request)),
-      transactionRunner.run((tx) => executeExactSend(tx, request)),
+      transactionRunner.run((tx) => tx.perform(executeExactSend, request)),
+      transactionRunner.run((tx) => tx.perform(executeExactSend, request)),
     ]);
 
     expect(results.filter((result) => result.changed)).toHaveLength(1);
@@ -430,7 +435,9 @@ describe('Send transitions exact-match execution', () => {
     await repositories.proofRepository.releaseProofs(mintUrl, ['exact-proof']);
 
     await expect(
-      transactionRunner.run((tx) => executeExactSend(tx, executeInput('unowned-exact-send'))),
+      transactionRunner.run((tx) =>
+        tx.perform(executeExactSend, executeInput('unowned-exact-send')),
+      ),
     ).rejects.toThrow('not ready and operation-owned');
 
     expect((await repositories.sendOperationRepository.getById('unowned-exact-send'))?.state).toBe(
@@ -468,7 +475,7 @@ describe('Send transitions legacy exact recovery', () => {
 
     await expect(
       transactionRunner.run((tx) =>
-        recoverLegacyExactSend(tx, { operationId: legacy.id, updatedAt: 300 }),
+        tx.perform(recoverLegacyExactSend, { operationId: legacy.id, updatedAt: 300 }),
       ),
     ).rejects.toThrow('conflicted');
 
@@ -485,7 +492,7 @@ describe('Send transitions legacy exact recovery', () => {
     const legacy = await persistLegacy(repositories);
     const recover = () =>
       transactionRunner.run((tx) =>
-        recoverLegacyExactSend(tx, { operationId: legacy.id, updatedAt: 300 }),
+        tx.perform(recoverLegacyExactSend, { operationId: legacy.id, updatedAt: 300 }),
       );
 
     const results = await Promise.allSettled([recover(), recover()]);
@@ -518,7 +525,7 @@ describe('Send transitions legacy exact recovery', () => {
 
       await expect(
         transactionRunner.run((tx) =>
-          recoverLegacyExactSend(tx, { operationId: legacy.id, updatedAt: 300 }),
+          tx.perform(recoverLegacyExactSend, { operationId: legacy.id, updatedAt: 300 }),
         ),
       ).rejects.toThrow();
 
@@ -556,7 +563,7 @@ describe('Send transitions swap execution', () => {
       const { repositories, transactionRunner } = await setup();
       await repositories.proofRepository.saveProofs(mintUrl, [proof('legacy-input', 20)]);
       const prepared = (
-        await transactionRunner.run((tx) => prepareSend(tx, prepareInput('legacy-outputs')))
+        await transactionRunner.run((tx) => tx.perform(prepareSend, prepareInput('legacy-outputs')))
       ).operation;
       const executing: ExecutingSendOperation = { ...prepared, state: 'executing', revision: 0 };
       await repositories.sendOperationRepository.update(executing);
@@ -575,7 +582,7 @@ describe('Send transitions swap execution', () => {
         token: { mint: mintUrl, unit: 'sat', proofs: [send] },
       };
 
-      const result = await transactionRunner.run((tx) => applySendResult(tx, input));
+      const result = await transactionRunner.run((tx) => tx.perform(applySendResult, input));
 
       expect(result.operation.state).toBe('pending');
       expect(result.inflightProofSecrets).toEqual(state === 'ready' ? [send.secret] : []);
@@ -588,7 +595,7 @@ describe('Send transitions swap execution', () => {
       expect(await repositories.proofRepository.getProofBySecret(mintUrl, keep.secret)).toEqual(
         reservedChange,
       );
-      const replay = await transactionRunner.run((tx) => applySendResult(tx, input));
+      const replay = await transactionRunner.run((tx) => tx.perform(applySendResult, input));
       expect(replay.changed).toBe(false);
       expect(replay.inflightProofSecrets).toEqual([]);
     },
@@ -612,7 +619,7 @@ describe('Send transitions swap execution', () => {
 
     await expect(
       transactionRunner.run((tx) =>
-        applySendResult(tx, {
+        tx.perform(applySendResult, {
           operationId: executing.id,
           updatedAt: 300,
           keepProofs: [],
@@ -635,7 +642,9 @@ describe('Send transitions swap execution', () => {
     const { repositories, transactionRunner } = await setup();
     await repositories.proofRepository.saveProofs(mintUrl, [proof('legacy-swap-input', 20)]);
     const prepared = (
-      await transactionRunner.run((tx) => prepareSend(tx, prepareInput('legacy-partial-result')))
+      await transactionRunner.run((tx) =>
+        tx.perform(prepareSend, prepareInput('legacy-partial-result')),
+      )
     ).operation;
     const executing: ExecutingSendOperation = { ...prepared, state: 'executing', revision: 0 };
     await repositories.sendOperationRepository.update(executing);
@@ -647,14 +656,14 @@ describe('Send transitions swap execution', () => {
     await repositories.proofRepository.setProofState(mintUrl, executing.inputProofSecrets, 'spent');
 
     const claimed = await transactionRunner.run((tx) =>
-      claimSendRecovery(tx, {
+      tx.perform(claimSendRecovery, {
         operationId: executing.id,
         expectedRevision: 0,
         updatedAt: 300,
       }),
     );
     const result = await transactionRunner.run((tx) =>
-      applySendResult(tx, {
+      tx.perform(applySendResult, {
         operationId: executing.id,
         updatedAt: 400,
         keepProofs: [keep],
@@ -676,11 +685,11 @@ describe('Send transitions swap execution', () => {
     const { repositories, transactionRunner } = await setup();
     await repositories.proofRepository.saveProofs(mintUrl, [proof('proof-1')]);
     const prepared = (
-      await transactionRunner.run((tx) => prepareSend(tx, prepareInput('send-begin')))
+      await transactionRunner.run((tx) => tx.perform(prepareSend, prepareInput('send-begin')))
     ).operation;
 
     const begun = await transactionRunner.run((tx) =>
-      beginSendExecution(tx, {
+      tx.perform(beginSendExecution, {
         operationId: prepared.id,
         updatedAt: 300,
         memo: 'durable memo',
@@ -702,10 +711,10 @@ describe('Send transitions swap execution', () => {
     const { repositories, transactionRunner } = await setup();
     await repositories.proofRepository.saveProofs(mintUrl, [proof('request-input')]);
     const prepared = await transactionRunner.run((tx) =>
-      prepareSend(tx, prepareInput('request-immutability')),
+      tx.perform(prepareSend, prepareInput('request-immutability')),
     );
     const begun = await transactionRunner.run((tx) =>
-      beginSendExecution(tx, {
+      tx.perform(beginSendExecution, {
         operationId: prepared.operation.id,
         updatedAt: 300,
       }),
@@ -718,7 +727,7 @@ describe('Send transitions swap execution', () => {
     queried.inputProofSecrets.push('changed');
     queried.outputData!.send[0]!.secret = 'changed';
     const replay = await transactionRunner.run((tx) =>
-      claimSendRecovery(tx, {
+      tx.perform(claimSendRecovery, {
         operationId: prepared.operation.id,
         expectedRevision: queried.revision!,
         updatedAt: 400,
@@ -732,10 +741,12 @@ describe('Send transitions swap execution', () => {
     const { repositories, transactionRunner } = await setup();
     await repositories.proofRepository.saveProofs(mintUrl, [proof('proof-1')]);
     const prepared = (
-      await transactionRunner.run((tx) => prepareSend(tx, prepareInput('send-response-crash')))
+      await transactionRunner.run((tx) =>
+        tx.perform(prepareSend, prepareInput('send-response-crash')),
+      )
     ).operation;
     const begun = await transactionRunner.run((tx) =>
-      beginSendExecution(tx, {
+      tx.perform(beginSendExecution, {
         operationId: prepared.id,
         updatedAt: 300,
       }),
@@ -758,11 +769,13 @@ describe('Send transitions swap execution', () => {
     const { repositories, transactionRunner } = await setup();
     await repositories.proofRepository.saveProofs(mintUrl, [proof('proof-1')]);
     const prepared = (
-      await transactionRunner.run((tx) => prepareSend(tx, prepareInput('send-concurrent-begin')))
+      await transactionRunner.run((tx) =>
+        tx.perform(prepareSend, prepareInput('send-concurrent-begin')),
+      )
     ).operation;
     const begin = () =>
       transactionRunner.run((tx) =>
-        beginSendExecution(tx, {
+        tx.perform(beginSendExecution, {
           operationId: prepared.id,
           updatedAt: 300,
         }),
@@ -779,17 +792,19 @@ describe('Send transitions swap execution', () => {
     const { repositories, transactionRunner } = await setup();
     await repositories.proofRepository.saveProofs(mintUrl, [proof('proof-1')]);
     const prepared = (
-      await transactionRunner.run((tx) => prepareSend(tx, prepareInput('send-recovery-claim')))
+      await transactionRunner.run((tx) =>
+        tx.perform(prepareSend, prepareInput('send-recovery-claim')),
+      )
     ).operation;
     const begun = await transactionRunner.run((tx) =>
-      beginSendExecution(tx, {
+      tx.perform(beginSendExecution, {
         operationId: prepared.id,
         updatedAt: 300,
       }),
     );
     const claim = () =>
       transactionRunner.run((tx) =>
-        claimSendRecovery(tx, {
+        tx.perform(claimSendRecovery, {
           operationId: begun.operation.id,
           expectedRevision: begun.operation.revision ?? 0,
           updatedAt: 400,
@@ -807,10 +822,10 @@ describe('Send transitions swap execution', () => {
     const { repositories, transactionRunner } = await setup();
     await repositories.proofRepository.saveProofs(mintUrl, [proof('proof-1')]);
     const prepared = (
-      await transactionRunner.run((tx) => prepareSend(tx, prepareInput('send-apply')))
+      await transactionRunner.run((tx) => tx.perform(prepareSend, prepareInput('send-apply')))
     ).operation;
     const begun = await transactionRunner.run((tx) =>
-      beginSendExecution(tx, {
+      tx.perform(beginSendExecution, {
         operationId: prepared.id,
         updatedAt: 300,
         memo: 'memo',
@@ -826,7 +841,7 @@ describe('Send transitions swap execution', () => {
     };
 
     const applied = await transactionRunner.run((tx) =>
-      applySendResult(tx, {
+      tx.perform(applySendResult, {
         operationId: begun.operation.id,
         updatedAt: 400,
         keepProofs: [],
@@ -847,7 +862,7 @@ describe('Send transitions swap execution', () => {
     );
 
     const duplicate = await transactionRunner.run((tx) =>
-      applySendResult(tx, {
+      tx.perform(applySendResult, {
         operationId: begun.operation.id,
         updatedAt: 500,
         keepProofs: [],
@@ -863,10 +878,12 @@ describe('Send transitions swap execution', () => {
     const { repositories, transactionRunner } = await setup();
     await repositories.proofRepository.saveProofs(mintUrl, [proof('proof-1')]);
     const prepared = (
-      await transactionRunner.run((tx) => prepareSend(tx, prepareInput('send-invalid-allocation')))
+      await transactionRunner.run((tx) =>
+        tx.perform(prepareSend, prepareInput('send-invalid-allocation')),
+      )
     ).operation;
     const begun = await transactionRunner.run((tx) =>
-      beginSendExecution(tx, { operationId: prepared.id, updatedAt: 300 }),
+      tx.perform(beginSendExecution, { operationId: prepared.id, updatedAt: 300 }),
     );
     const sendSecret = getSecretsFromSerializedOutputData(begun.request.outputData).sendSecrets[0]!;
     const allocated = swapProof(begun.operation, sendSecret, 'inflight');
@@ -879,7 +896,7 @@ describe('Send transitions swap execution', () => {
     for (const invalid of invalidProofs) {
       await expect(
         transactionRunner.run((tx) =>
-          applySendResult(tx, {
+          tx.perform(applySendResult, {
             operationId: begun.operation.id,
             updatedAt: 400,
             keepProofs: [],
@@ -891,7 +908,7 @@ describe('Send transitions swap execution', () => {
     }
     await expect(
       transactionRunner.run((tx) =>
-        applySendResult(tx, {
+        tx.perform(applySendResult, {
           operationId: begun.operation.id,
           updatedAt: 400,
           keepProofs: [{ ...allocated, state: 'ready' }],
@@ -909,10 +926,12 @@ describe('Send transitions swap execution', () => {
     const { repositories, transactionRunner } = await setup();
     await repositories.proofRepository.saveProofs(mintUrl, [proof('proof-1')]);
     const prepared = (
-      await transactionRunner.run((tx) => prepareSend(tx, prepareInput('send-apply-rollback')))
+      await transactionRunner.run((tx) =>
+        tx.perform(prepareSend, prepareInput('send-apply-rollback')),
+      )
     ).operation;
     const begun = await transactionRunner.run((tx) =>
-      beginSendExecution(tx, {
+      tx.perform(beginSendExecution, {
         operationId: prepared.id,
         updatedAt: 300,
       }),
@@ -923,7 +942,7 @@ describe('Send transitions swap execution', () => {
 
     await expect(
       transactionRunner.run((tx) =>
-        applySendResult(tx, {
+        tx.perform(applySendResult, {
           operationId: begun.operation.id,
           updatedAt: 400,
           keepProofs: [],
@@ -945,13 +964,15 @@ describe('Send transitions swap execution', () => {
     const { repositories, transactionRunner } = await setup();
     await repositories.proofRepository.saveProofs(mintUrl, [proof('proof-1')]);
     const prepared = (
-      await transactionRunner.run((tx) => prepareSend(tx, prepareInput('send-stale-failure')))
+      await transactionRunner.run((tx) =>
+        tx.perform(prepareSend, prepareInput('send-stale-failure')),
+      )
     ).operation;
     const begun = await transactionRunner.run((tx) =>
-      beginSendExecution(tx, { operationId: prepared.id, updatedAt: 300 }),
+      tx.perform(beginSendExecution, { operationId: prepared.id, updatedAt: 300 }),
     );
     await transactionRunner.run((tx) =>
-      claimSendRecovery(tx, {
+      tx.perform(claimSendRecovery, {
         operationId: prepared.id,
         expectedRevision: begun.operation.revision!,
         updatedAt: 400,
@@ -960,7 +981,7 @@ describe('Send transitions swap execution', () => {
 
     await expect(
       transactionRunner.run((tx) =>
-        failSendExecution(tx, {
+        tx.perform(failSendExecution, {
           operationId: prepared.id,
           expectedRevision: begun.operation.revision!,
           updatedAt: 500,
@@ -981,18 +1002,18 @@ describe('Send transitions swap execution', () => {
     const { repositories, transactionRunner } = await setup();
     await repositories.proofRepository.saveProofs(mintUrl, [proof('proof-1')]);
     const prepared = (
-      await transactionRunner.run((tx) => prepareSend(tx, prepareInput('send-fail')))
+      await transactionRunner.run((tx) => tx.perform(prepareSend, prepareInput('send-fail')))
     ).operation;
     const allocatedCounter = await repositories.counterRepository.getCounter(mintUrl, keysetId);
     const begun = await transactionRunner.run((tx) =>
-      beginSendExecution(tx, {
+      tx.perform(beginSendExecution, {
         operationId: prepared.id,
         updatedAt: 300,
       }),
     );
 
     const failed = await transactionRunner.run((tx) =>
-      failSendExecution(tx, {
+      tx.perform(failSendExecution, {
         operationId: begun.operation.id,
         expectedRevision: begun.operation.revision!,
         updatedAt: 400,
@@ -1059,7 +1080,7 @@ describe('Send transitions cancellation and completion', () => {
     });
     await repositories.proofRepository.reserveProofs(mintUrl, [meltInput.secret], 'prepared-melt');
 
-    const result = await transactionRunner.run((tx) => cleanupOrphanedSendReservations(tx));
+    const result = await transactionRunner.run((tx) => tx.perform(cleanupOrphanedSendReservations));
 
     expect(result.count).toBe(1);
     expect(result.released).toEqual([
@@ -1092,7 +1113,7 @@ describe('Send transitions cancellation and completion', () => {
     const prepared = await createPrepared(repositories, 'cancel-send');
 
     const cancelled = await transactionRunner.run((tx) =>
-      cancelPreparedSend(tx, {
+      tx.perform(cancelPreparedSend, {
         operationId: prepared.id,
         updatedAt: 300,
         reason: 'Cancelled by user',
@@ -1114,7 +1135,7 @@ describe('Send transitions cancellation and completion', () => {
 
     await expect(
       transactionRunner.run((tx) =>
-        cancelPreparedSend(tx, {
+        tx.perform(cancelPreparedSend, {
           operationId: prepared.id,
           updatedAt: 300,
           reason: 'Cancelled by user',
@@ -1136,19 +1157,19 @@ describe('Send transitions cancellation and completion', () => {
     const { transactionRunner } = await setup(repositories);
     await repositories.proofRepository.saveProofs(mintUrl, [proof('race-input')]);
     const prepared = (
-      await transactionRunner.run((tx) => prepareSend(tx, prepareInput('race-send')))
+      await transactionRunner.run((tx) => tx.perform(prepareSend, prepareInput('race-send')))
     ).operation;
 
     const results = await Promise.allSettled([
       transactionRunner.run((tx) =>
-        cancelPreparedSend(tx, {
+        tx.perform(cancelPreparedSend, {
           operationId: prepared.id,
           updatedAt: 300,
           reason: 'Cancelled by user',
         }),
       ),
       transactionRunner.run((tx) =>
-        beginSendExecution(tx, {
+        tx.perform(beginSendExecution, {
           operationId: prepared.id,
           updatedAt: 300,
         }),
@@ -1169,14 +1190,14 @@ describe('Send transitions cancellation and completion', () => {
     const { transactionRunner } = await setup(repositories);
     const prepared = await createPrepared(repositories, 'complete-send');
     const pending = await transactionRunner.run((tx) =>
-      executeExactSend(tx, {
+      tx.perform(executeExactSend, {
         operationId: prepared.id,
         updatedAt: 300,
       }),
     );
 
     const completed = await transactionRunner.run((tx) =>
-      completePendingSend(tx, {
+      tx.perform(completePendingSend, {
         operationId: pending.operation.id,
         updatedAt: 400,
         spentProofSecrets: pending.operation.inputProofSecrets,
@@ -1193,7 +1214,7 @@ describe('Send transitions cancellation and completion', () => {
     expect(input?.usedByOperationId).toBeUndefined();
 
     const duplicate = await transactionRunner.run((tx) =>
-      completePendingSend(tx, {
+      tx.perform(completePendingSend, {
         operationId: pending.operation.id,
         updatedAt: 500,
         spentProofSecrets: pending.operation.inputProofSecrets,
@@ -1223,7 +1244,7 @@ describe('Send transitions cancellation and completion', () => {
 
     await expect(
       transactionRunner.run((tx) =>
-        completePendingSend(tx, {
+        tx.perform(completePendingSend, {
           operationId: pending.id,
           updatedAt: 400,
           spentProofSecrets: [input.secret],
@@ -1283,7 +1304,7 @@ describe.each(['exact', 'swap'] as const)(
       await repositories.proofRepository.releaseProofs(mintUrl, operation.inputProofSecrets);
 
       const result = await transactionRunner.run((tx) =>
-        completePendingSend(tx, {
+        tx.perform(completePendingSend, {
           operationId: operation.id,
           updatedAt: 400,
         }),
@@ -1296,7 +1317,7 @@ describe.each(['exact', 'swap'] as const)(
       expect(
         (
           await transactionRunner.run((tx) =>
-            completePendingSend(tx, { operationId: operation.id, updatedAt: 500 }),
+            tx.perform(completePendingSend, { operationId: operation.id, updatedAt: 500 }),
           )
         ).changed,
       ).toBe(false);
@@ -1312,7 +1333,7 @@ describe.each(['exact', 'swap'] as const)(
       await repositories.proofRepository.releaseProofs(mintUrl, [inputs[0]!.secret]);
 
       const result = await transactionRunner.run((tx) =>
-        completePendingSend(tx, {
+        tx.perform(completePendingSend, {
           operationId: operation.id,
           updatedAt: 400,
         }),
@@ -1334,7 +1355,7 @@ describe.each(['exact', 'swap'] as const)(
         await repositories.proofRepository.releaseProofs(mintUrl, operation.inputProofSecrets);
       }
       const first = await transactionRunner.run((tx) =>
-        completePendingSend(tx, {
+        tx.perform(completePendingSend, {
           operationId: operation.id,
           updatedAt: 400,
           spentProofSecrets: [sendProofs[0]!.secret],
@@ -1352,7 +1373,7 @@ describe.each(['exact', 'swap'] as const)(
         await repositories.proofRepository.releaseProofs(mintUrl, [inputs[0]!.secret]);
       }
       const last = await transactionRunner.run((tx) =>
-        completePendingSend(tx, {
+        tx.perform(completePendingSend, {
           operationId: operation.id,
           updatedAt: 500,
           spentProofSecrets: [sendProofs[1]!.secret],
@@ -1405,7 +1426,7 @@ describe.each(['exact', 'swap'] as const)(
 
         await expect(
           transactionRunner.run((tx) =>
-            completePendingSend(tx, {
+            tx.perform(completePendingSend, {
               operationId: operation.id,
               updatedAt: 400,
               spentProofSecrets: sendProofs.map((proof) => proof.secret),
@@ -1437,7 +1458,7 @@ describe.each(['exact', 'swap'] as const)(
 
         await expect(
           transactionRunner.run((tx) =>
-            completePendingSend(tx, {
+            tx.perform(completePendingSend, {
               operationId: operation.id,
               updatedAt: 400,
               spentProofSecrets: sendProofs.map((proof) => proof.secret),
@@ -1468,7 +1489,7 @@ describe.each(['exact', 'swap'] as const)(
 
       await expect(
         transactionRunner.run((tx) =>
-          completePendingSend(tx, { operationId: operation.id, updatedAt: 400 }),
+          tx.perform(completePendingSend, { operationId: operation.id, updatedAt: 400 }),
         ),
       ).rejects.toThrow('pending-state or revision conflict');
 
@@ -1492,10 +1513,10 @@ describe('Send transitions reclaim', () => {
     const environment = await setup(repositories);
     await repositories.proofRepository.saveProofs(mintUrl, [proof('reclaim-input')]);
     const prepared = await environment.transactionRunner.run((tx) =>
-      prepareSend(tx, prepareInput('reclaim-send', false)),
+      tx.perform(prepareSend, prepareInput('reclaim-send', false)),
     );
     const result = await environment.transactionRunner.run((tx) =>
-      executeExactSend(tx, {
+      tx.perform(executeExactSend, {
         operationId: prepared.operation.id,
         updatedAt: 300,
       }),
@@ -1517,7 +1538,7 @@ describe('Send transitions reclaim', () => {
   it('commits reclaim allocation with rolling_back and atomically applies its proofs and releases inputs', async () => {
     const { repositories, transactionRunner, operation } = await pending();
     const begun = await transactionRunner.run((tx) =>
-      beginSendReclaim(tx, {
+      tx.perform(beginSendReclaim, {
         operationId: operation.id,
         updatedAt: 400,
         activeKeys: keys,
@@ -1534,7 +1555,7 @@ describe('Send transitions reclaim', () => {
 
     const proofs = reclaimProofs(begun.operation.reclaimData!.outputData);
     const completed = await transactionRunner.run((tx) =>
-      completeSendReclaim(tx, {
+      tx.perform(completeSendReclaim, {
         operationId: operation.id,
         updatedAt: 500,
         reason: 'reclaimed',
@@ -1563,7 +1584,7 @@ describe('Send transitions reclaim', () => {
     );
     await expect(
       rejecting.run((tx) =>
-        beginSendReclaim(tx, {
+        tx.perform(beginSendReclaim, {
           operationId: operation.id,
           updatedAt: 400,
           activeKeys: keys,
@@ -1580,7 +1601,7 @@ describe('Send transitions reclaim', () => {
   it('preserves allocation and every input when applying a reclaim result loses its transition', async () => {
     const { repositories, transactionRunner, operation } = await pending();
     const begun = await transactionRunner.run((tx) =>
-      beginSendReclaim(tx, {
+      tx.perform(beginSendReclaim, {
         operationId: operation.id,
         updatedAt: 400,
         activeKeys: keys,
@@ -1599,7 +1620,7 @@ describe('Send transitions reclaim', () => {
     );
     await expect(
       rejecting.run((tx) =>
-        completeSendReclaim(tx, {
+        tx.perform(completeSendReclaim, {
           operationId: operation.id,
           updatedAt: 500,
           reason: 'reclaimed',
@@ -1620,7 +1641,7 @@ describe('Send transitions reclaim', () => {
   it('rejects returned proofs that differ from the committed reclaim plan', async () => {
     const { repositories, transactionRunner, operation } = await pending();
     await transactionRunner.run((tx) =>
-      beginSendReclaim(tx, {
+      tx.perform(beginSendReclaim, {
         operationId: operation.id,
         updatedAt: 400,
         activeKeys: keys,
@@ -1629,7 +1650,7 @@ describe('Send transitions reclaim', () => {
     );
     await expect(
       transactionRunner.run((tx) =>
-        completeSendReclaim(tx, {
+        tx.perform(completeSendReclaim, {
           operationId: operation.id,
           updatedAt: 500,
           reason: 'reclaimed',
@@ -1679,14 +1700,16 @@ describe('Send transitions legacy tokenless P2PK completion', () => {
       const { repositories, transactionRunner, operation, input, completion } = await pending();
       if (ownership === 'released')
         await repositories.proofRepository.releaseProofs(mintUrl, [input.secret]);
-      const result = await transactionRunner.run((tx) => completePendingSend(tx, completion));
+      const result = await transactionRunner.run((tx) =>
+        tx.perform(completePendingSend, completion),
+      );
       expect(result.operation).toMatchObject({ state: 'finalized', revision: 1 });
       expect(result.operation.token).toBeUndefined();
       expect(result.spentProofSecrets).toEqual([]);
       expect(result.releasedInputSecrets).toEqual(ownership === 'reserved' ? [input.secret] : []);
       expect(await repositories.proofRepository.getProofBySecret(mintUrl, 'send')).toBeNull();
       expect(
-        (await transactionRunner.run((tx) => completePendingSend(tx, completion))).changed,
+        (await transactionRunner.run((tx) => tx.perform(completePendingSend, completion))).changed,
       ).toBe(false);
       expect((await repositories.sendOperationRepository.getById(operation.id))?.state).toBe(
         'finalized',
@@ -1759,7 +1782,7 @@ describe('Send transitions legacy tokenless P2PK completion', () => {
       }
       const before = await repositories.sendOperationRepository.getById(operation.id);
       await expect(
-        transactionRunner.run((tx) => completePendingSend(tx, completion)),
+        transactionRunner.run((tx) => tx.perform(completePendingSend, completion)),
       ).rejects.toThrow();
       expect(await repositories.sendOperationRepository.getById(operation.id)).toEqual(before);
       expect(
@@ -1806,7 +1829,7 @@ describe('Send transitions legacy tokenless P2PK completion', () => {
     await repositories.proofRepository.saveProofs(mintUrl, [storedInput, storedSend]);
     const before = await repositories.sendOperationRepository.getById(operation.id);
     await expect(
-      transactionRunner.run((tx) => completePendingSend(tx, completion)),
+      transactionRunner.run((tx) => tx.perform(completePendingSend, completion)),
     ).rejects.toThrow();
     expect(await repositories.sendOperationRepository.getById(operation.id)).toEqual(before);
     expect(

@@ -7,6 +7,7 @@ import {
   recoverLegacyExactSend,
   completePendingSend,
 } from '../../transactions/transitions/send/SendTransitions.ts';
+
 import {
   RepositoryCoreTransactionRunner,
   type CoreTransaction,
@@ -132,9 +133,9 @@ describe('CoreTransaction with SQLite', () => {
         sendProofs: [send],
         token: { mint: mintUrl, unit: 'sat', proofs: [send] },
       };
-      await expect(transactionRunner.run((tx) => applySendResult(tx, result))).rejects.toThrow(
-        'pending transition failed',
-      );
+      await expect(
+        transactionRunner.run((tx) => tx.perform(applySendResult, result)),
+      ).rejects.toThrow('pending transition failed');
       expect(await repositories.sendOperationRepository.getById(executing.id)).toEqual(
         beforeOperation,
       );
@@ -143,7 +144,7 @@ describe('CoreTransaction with SQLite', () => {
       ).toEqual(beforeProofs);
 
       database.exec('DROP TRIGGER reject_pending');
-      await transactionRunner.run((tx) => applySendResult(tx, result));
+      await transactionRunner.run((tx) => tx.perform(applySendResult, result));
       expect((await repositories.sendOperationRepository.getById(executing.id))?.state).toBe(
         'pending',
       );
@@ -254,7 +255,7 @@ describe('CoreTransaction with SQLite', () => {
               BEGIN SELECT RAISE(ABORT, 'completion failed'); END;
             `);
             await expect(
-              transactionRunner.run((tx) => completePendingSend(tx, completion)),
+              transactionRunner.run((tx) => tx.perform(completePendingSend, completion)),
             ).rejects.toThrow('completion failed');
             expect((await repositories.sendOperationRepository.getById(operation.id))?.state).toBe(
               'pending',
@@ -264,7 +265,9 @@ describe('CoreTransaction with SQLite', () => {
             ).toMatchObject(input);
             return;
           }
-          const result = await transactionRunner.run((tx) => completePendingSend(tx, completion));
+          const result = await transactionRunner.run((tx) =>
+            tx.perform(completePendingSend, completion),
+          );
           expect(result.releasedInputSecrets).toEqual(tokenless ? [input.secret] : []);
           if (tokenless) {
             expect(result.operation.token).toBeUndefined();
@@ -285,14 +288,14 @@ describe('CoreTransaction with SQLite', () => {
             send.secret,
           );
           await transactionRunner.run((tx) =>
-            claimSendRecovery(tx, {
+            tx.perform(claimSendRecovery, {
               operationId: operation.id,
               expectedRevision: 0,
               updatedAt: 2000,
             }),
           );
           const result = await transactionRunner.run((tx) =>
-            applySendResult(tx, {
+            tx.perform(applySendResult, {
               operationId: operation.id,
               updatedAt: 3000,
               keepProofs: [],
@@ -317,7 +320,7 @@ describe('CoreTransaction with SQLite', () => {
           `);
           await expect(
             transactionRunner.run((tx) =>
-              recoverLegacyExactSend(tx, { operationId: operation.id, updatedAt: 2000 }),
+              tx.perform(recoverLegacyExactSend, { operationId: operation.id, updatedAt: 2000 }),
             ),
           ).rejects.toThrow('recovery failed');
           expect((await repositories.sendOperationRepository.getById(operation.id))?.state).toBe(
@@ -328,7 +331,7 @@ describe('CoreTransaction with SQLite', () => {
           ).toMatchObject(input);
         } else {
           await transactionRunner.run((tx) =>
-            recoverLegacyExactSend(tx, { operationId: operation.id, updatedAt: 2000 }),
+            tx.perform(recoverLegacyExactSend, { operationId: operation.id, updatedAt: 2000 }),
           );
           expect((await repositories.sendOperationRepository.getById(operation.id))?.state).toBe(
             'rolled_back',
