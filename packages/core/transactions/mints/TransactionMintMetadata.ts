@@ -1,9 +1,11 @@
-import { isBlsKeyset } from '@cashu/cashu-ts';
-import { UnknownMintError } from '@core/models/Error.ts';
+import { Amount, isBlsKeyset } from '@cashu/cashu-ts';
+import { normalizeUnit } from '@core/amounts.ts';
+import { ProofValidationError, UnknownMintError } from '@core/models/Error.ts';
 import type { MintMetadataApplyResult, MintMetadataObservation } from '@core/mints/MintMetadata.ts';
 import type { MintRepository, KeysetRepository } from '@core/repositories';
 
 export interface TransactionMintMetadata {
+  assertCanMint(mintUrl: string, method: string, unit: string, amount: Amount): Promise<void>;
   assertTrusted(mintUrl: string): Promise<void>;
   applyObservation(observation: MintMetadataObservation): Promise<MintMetadataApplyResult>;
 }
@@ -14,6 +16,28 @@ export class RepositoryTransactionMintMetadata implements TransactionMintMetadat
     private readonly mints: MintRepository,
     private readonly keysets: KeysetRepository,
   ) {}
+
+  async assertCanMint(
+    mintUrl: string,
+    method: string,
+    unit: string,
+    amount: Amount,
+  ): Promise<void> {
+    await this.assertTrusted(mintUrl);
+    const mint = await this.mints.findMintByUrl(mintUrl);
+    const settings = mint?.mintInfo.nuts['4'];
+    const capability = settings?.methods?.find(
+      (entry) => entry.method === method && normalizeUnit(entry.unit) === normalizeUnit(unit),
+    );
+    if (settings?.disabled || !capability)
+      throw new ProofValidationError(`NUT-04 method ${method} does not support unit ${unit}`);
+    if (
+      method !== 'onchain' &&
+      ((capability.min_amount != null && amount.lessThan(Amount.from(capability.min_amount))) ||
+        (capability.max_amount != null && amount.greaterThan(Amount.from(capability.max_amount))))
+    )
+      throw new ProofValidationError(`Mint amount is outside NUT-04 limits for ${method} ${unit}`);
+  }
 
   async assertTrusted(mintUrl: string): Promise<void> {
     if (!(await this.mints.isTrustedMint(mintUrl)))

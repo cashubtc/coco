@@ -58,7 +58,7 @@ transactions. Their commits intentionally survive later caller failure. Only app
 observations publish events; older observations and timestamp ties retain the first committed
 snapshot. Coordinator dependencies remain acyclic.
 
-Send, KeyRing, and mint metadata refresh use this model. Other legacy workflows migrate separately.
+Send, Mint, KeyRing, and mint metadata refresh use this model. Other legacy workflows migrate separately.
 Consistent fail-fast rejection of nested transactions remains follow-up work and must distinguish
 nesting from legitimate concurrent calls. There are no public API or persisted-format changes.
 

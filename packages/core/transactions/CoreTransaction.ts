@@ -4,6 +4,8 @@ import {
   type Repositories,
   type RepositoryTransactionScope,
   type SendOperationRepository,
+  type MintOperationRepository,
+  type MintQuoteRepository,
 } from '@core/repositories';
 import {
   RepositoryTransactionMintMetadata,
@@ -25,6 +27,11 @@ import { TransactionLifetime } from './TransactionLifetime.ts';
  * their independence is established; lifetime tracking does not serialize conflicting work.
  */
 export interface CoreTransaction {
+  readonly mintOperations: Pick<
+    MintOperationRepository,
+    'getById' | 'getByQuoteId' | 'create' | 'update' | 'delete'
+  >;
+  readonly mintQuotes: Pick<MintQuoteRepository, 'getMintQuote'>;
   readonly mintMetadata: TransactionMintMetadata;
   readonly keypairs: TransactionKeypairs;
   readonly proofs: TransactionProofs;
@@ -86,6 +93,8 @@ export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
       this.outputDataCreator,
     );
     return {
+      mintOperations: repositories.mintOperationRepository,
+      mintQuotes: repositories.mintQuoteRepository,
       mintMetadata,
       keypairs: new RepositoryTransactionKeypairs(repositories.keyRingRepository),
       proofs,

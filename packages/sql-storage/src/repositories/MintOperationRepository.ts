@@ -1,7 +1,6 @@
 import type { MintOperationRepository } from '@cashu/coco-core/adapter';
 import { deserializeAmount, serializeAmount, stringifyJson } from '@cashu/coco-core/adapter';
 import type { SqlDatabase, SqlValue } from '../index.ts';
-import { getUnixTimeSeconds } from '../utils.ts';
 
 type MintOperation = NonNullable<Awaited<ReturnType<MintOperationRepository['getById']>>>;
 type MintOperationState = Parameters<MintOperationRepository['getByState']>[0];
@@ -175,7 +174,7 @@ export class SqliteMintOperationRepository implements MintOperationRepository {
       throw new Error(`MintOperation with id ${operation.id} not found`);
     }
 
-    const updatedAtSeconds = getUnixTimeSeconds();
+    const updatedAtSeconds = Math.floor(operation.updatedAt / 1000);
 
     if (operation.state === 'init') {
       await this.db.run(
