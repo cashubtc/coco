@@ -87,3 +87,7 @@ Transaction contract options:
   watchers; allocation logic remains in core's scoped command.
 - `runAuthSessionRepositoryContract()` verifies the NUT-21/22 auth session
   persistence contract.
+
+- `runKeysetRepositoryContract()` verifies immutable key storage, empty-key backfilling,
+  concurrent conflicting writes, and transaction rollback. Supply `createSharedRepositories`
+  to exercise independent roots sharing one physical store.

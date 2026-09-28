@@ -2,10 +2,10 @@ import { reconcileKeysetKeypairs } from '@cashu/coco-core/adapter';
 import type { KeysetRepository, Keyset } from '@cashu/coco-core/adapter';
 import type { IdbDb, KeysetRow } from '../lib/db.ts';
 
-export class IdbKeysetRepository implements KeysetRepository {
-  private readonly db: IdbDb;
+export class ScopedIdbKeysetRepository implements KeysetRepository {
+  private readonly db: Pick<IdbDb, 'table'>;
 
-  constructor(db: IdbDb) {
+  constructor(db: Pick<IdbDb, 'table'>) {
     this.db = db;
   }
 
@@ -97,5 +97,18 @@ export class IdbKeysetRepository implements KeysetRepository {
 
   async deleteKeyset(mintUrl: string, keysetId: string): Promise<void> {
     await (this.db as any).table('coco_cashu_keysets').delete([mintUrl, keysetId]);
+  }
+}
+
+/** Root writes own a transaction; scoped repositories reuse their caller's transaction. */
+export class IdbKeysetRepository extends ScopedIdbKeysetRepository {
+  constructor(private readonly database: IdbDb) {
+    super(database);
+  }
+
+  override addKeyset(keyset: Omit<Keyset, 'updatedAt'>): Promise<void> {
+    return this.database.runTransaction('rw', ['coco_cashu_keysets'], (transaction) =>
+      new ScopedIdbKeysetRepository(transaction).addKeyset(keyset),
+    );
   }
 }

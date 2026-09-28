@@ -51,7 +51,8 @@ export interface KeysetRepository {
   /**
    * Stores a keyset and its keys. A keyset id commits to its keys (NUT-02), so keys already
    * stored for this id are kept and incoming keys only backfill a keyset recorded without them.
-   * Rejects a write that would replace stored keys with different ones.
+   * Atomically rejects a write that would replace stored keys with different ones, including
+   * concurrent root writes. Inside a transaction, uses the supplied scope.
    */
   addKeyset(keyset: Omit<Keyset, 'updatedAt'>): Promise<void>;
   deleteKeyset(mintUrl: string, keysetId: string): Promise<void>;
