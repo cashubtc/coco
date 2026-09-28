@@ -26,14 +26,15 @@ export interface AllocateOutputsResult {
   counter?: Counter;
 }
 
-export interface TransactionOutputs {
+/** Output allocation within an existing transaction; never opens or commits a transaction. */
+export interface ScopedOutputs {
   assertActiveKeys(mintUrl: string, unit: string, activeKeys: MintKeys): Promise<void>;
   /** The caller must persist the returned output plan in this same transaction. */
   allocate(input: AllocateOutputsInput): Promise<AllocateOutputsResult>;
 }
 
 /** Shared deterministic Output Allocation. The owning transition persists its plan in the same scope. */
-export class RepositoryTransactionOutputs implements TransactionOutputs {
+export class RepositoryScopedOutputs implements ScopedOutputs {
   constructor(
     private readonly counters: CounterRepository,
     private readonly keysets: KeysetRepository,

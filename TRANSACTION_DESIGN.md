@@ -209,21 +209,20 @@ is separate future work.
 ## Files and Dependencies
 
 ```text
-operations/send/SendOperationService.ts       # workflow orchestration
-operations/send/SendValidation.ts             # pure validation and comparison helpers
+operations/send/
+  SendOperationService.ts                     # workflow orchestration
+  SendTransitions.ts                         # complete Send lifecycle, including recovery
+  SendTransitionTypes.ts                     # named transition inputs and results
+  SendValidation.ts                          # pure validation and comparison helpers
 services/KeyRingService.ts                    # key management orchestration
 transactions/
   CoreTransaction.ts                         # scope, runner interface, implementation
   TransactionLifetime.ts                     # internal containment mechanism
   Transition.ts                              # opaque brand, definition, runner-only body access
-  proofs/TransactionProofs.ts                 # shared proof rules and scoped persistence
-  outputs/TransactionOutputs.ts               # output allocation including counters
-  keypairs/TransactionKeypairs.ts             # keypair allocation and scoped persistence
-  mints/TransactionMintMetadata.ts            # metadata application and trust checks
-  transitions/
-    send/
-      SendTransitions.ts                     # complete Send lifecycle, including recovery
-      SendTransitionTypes.ts                 # named transition inputs and results
+  proofs/ScopedProofs.ts                      # shared proof rules and scoped persistence
+  outputs/ScopedOutputs.ts                    # output allocation including counters
+  keypairs/ScopedKeypairs.ts                  # keypair allocation and scoped persistence
+  mints/ScopedMintMetadata.ts                 # metadata application and trust checks
 ```
 
 Names describe authority and lifetime:
@@ -235,8 +234,8 @@ Names describe authority and lifetime:
 | `CoreTransaction`                              | Live scope for one transaction attempt, passed as `tx`.                                               |
 | `Transition<I, O>`                             | Opaque local work, defined with `defineTransition` and executed through `tx.perform`.                 |
 | `CoreTransactionRunner`                        | Opens and completes transactions; injected as `transactionRunner`.                                    |
-| `Transaction<Domain>`                          | Shared scoped capability with local reads and mutations, such as `TransactionProofs`.                 |
-| `RepositoryTransaction<Domain>`                | Its repository-backed implementation, colocated with the interface.                                   |
+| `Scoped<Domain>`                               | Local reads and mutations bound to an existing transaction, such as `ScopedProofs`.                   |
+| `RepositoryScoped<Domain>`                     | Its repository-backed implementation, colocated with the interface.                                   |
 | `<Domain>Transitions.ts`                       | Branded transition values whose bodies compose local mutations within a supplied `tx`.                |
 | `<Action>Input` / `<Action>Result`             | Arguments and results named after the transition, such as `PrepareSendInput` and `PrepareSendResult`. |
 | `<Domain>Queries`                              | Read-only queries outside a transaction; a repository may implement the interface directly.           |
@@ -245,17 +244,23 @@ Names describe authority and lifetime:
 
 Keep `CoreTransaction`, `CoreTransactionRunner`, and `RepositoryCoreTransactionRunner` together in
 `CoreTransaction.ts`: they describe and implement the same boundary. Keep each capability interface
-and implementation together too. Use `Transaction<Domain>` rather than `*Commands`, because these
-capabilities include reads as well as mutations.
+and implementation together too. Reserve transaction terminology for the runner, live scope, and
+lifetime machinery. Use `Scoped<Domain>` and `RepositoryScoped<Domain>` for reusable capabilities
+bound to an existing transaction. Their methods include reads and mutations but never open or commit
+a transaction. `Transition` names the domain change performed within that scope; one transaction may
+compose several transitions.
 
-Workflow transitions live under `transactions/transitions/<domain>/`. Start with one
-`<Domain>Transitions.ts` module for the complete lifecycle. In Send, order functions by preparation,
-execution, completion, cancellation and reclaim, then recovery. Recovery reuses the same lifecycle
+Workflow transitions live alongside their operation code under `operations/<domain>/`, with their
+named input and result types in `<Domain>TransitionTypes.ts`. This keeps domain behavior with its
+lifecycle while `transactions/` contains the shared transaction machinery and scoped implementations.
+Start with one `<Domain>Transitions.ts` module for the complete lifecycle. In Send, order functions by
+preparation, execution, completion, cancellation and reclaim, then recovery. Recovery reuses the same lifecycle
 transitions, so its entry point does not determine a separate module boundary. Extract a smaller
 `*Transitions.ts` module only when a cohesive responsibility warrants it; splitting by phase or by
-individual transition is optional. Every runtime export of every module under this directory must
-be a branded `Transition`; an export guard test enforces this. Type-only exports are allowed. Keep
-exported pure helpers outside this directory, such as `operations/send/SendValidation.ts`.
+individual transition is optional. Every runtime export from `*Transitions.ts` and
+`*TransitionTypes.ts` modules under `operations/` must be a branded `Transition`; an export guard test
+enforces this. Type-only exports are allowed. Exported pure helpers live in separate modules alongside
+the transitions, such as `operations/send/SendValidation.ts`.
 
 Transition values use domain verbs such as `prepareSend`, called through `tx.perform(prepareSend, input)`. Capability methods use short
 verbs such as `tx.proofs.selectAndReserve(input)`. Prefer private helpers when only one module needs

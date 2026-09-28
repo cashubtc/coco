@@ -6,18 +6,12 @@ import {
   type SendOperationRepository,
 } from '@core/repositories';
 import {
-  RepositoryTransactionMintMetadata,
-  type TransactionMintMetadata,
-} from './mints/TransactionMintMetadata.ts';
-import { RepositoryTransactionProofs, type TransactionProofs } from './proofs/TransactionProofs.ts';
-import {
-  RepositoryTransactionOutputs,
-  type TransactionOutputs,
-} from './outputs/TransactionOutputs.ts';
-import {
-  RepositoryTransactionKeypairs,
-  type TransactionKeypairs,
-} from './keypairs/TransactionKeypairs.ts';
+  RepositoryScopedMintMetadata,
+  type ScopedMintMetadata,
+} from './mints/ScopedMintMetadata.ts';
+import { RepositoryScopedProofs, type ScopedProofs } from './proofs/ScopedProofs.ts';
+import { RepositoryScopedOutputs, type ScopedOutputs } from './outputs/ScopedOutputs.ts';
+import { RepositoryScopedKeypairs, type ScopedKeypairs } from './keypairs/ScopedKeypairs.ts';
 import { TransactionLifetime } from './TransactionLifetime.ts';
 import { getTransitionBody, type Transition } from './Transition.ts';
 
@@ -28,10 +22,10 @@ import { getTransitionBody, type Transition } from './Transition.ts';
 export interface CoreTransaction {
   perform<O>(transition: Transition<void, O>): Promise<O>;
   perform<I, O>(transition: Transition<I, O>, input: I): Promise<O>;
-  readonly mintMetadata: TransactionMintMetadata;
-  readonly keypairs: TransactionKeypairs;
-  readonly proofs: TransactionProofs;
-  readonly outputs: TransactionOutputs;
+  readonly mintMetadata: ScopedMintMetadata;
+  readonly keypairs: ScopedKeypairs;
+  readonly proofs: ScopedProofs;
+  readonly outputs: ScopedOutputs;
   readonly sendOperations: Pick<
     SendOperationRepository,
     'getById' | 'getByMintUrl' | 'create' | 'transition' | 'delete'
@@ -78,15 +72,15 @@ export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
     repositories: RepositoryTransactionScope,
     lifetime: TransactionLifetime,
   ): CoreTransaction {
-    const mintMetadata = new RepositoryTransactionMintMetadata(
+    const mintMetadata = new RepositoryScopedMintMetadata(
       repositories.mintRepository,
       repositories.keysetRepository,
     );
-    const proofs = new RepositoryTransactionProofs(
+    const proofs = new RepositoryScopedProofs(
       repositories.proofRepository,
       repositories.keysetRepository,
     );
-    const outputs = new RepositoryTransactionOutputs(
+    const outputs = new RepositoryScopedOutputs(
       repositories.counterRepository,
       repositories.keysetRepository,
       this.outputDataCreator,
@@ -96,7 +90,7 @@ export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
       perform: <I, O>(transition: Transition<I, O>, input?: I): Promise<O> =>
         getTransitionBody(transition)(scoped, input as I),
       mintMetadata,
-      keypairs: new RepositoryTransactionKeypairs(repositories.keyRingRepository),
+      keypairs: new RepositoryScopedKeypairs(repositories.keyRingRepository),
       proofs,
       outputs,
       sendOperations: repositories.sendOperationRepository,

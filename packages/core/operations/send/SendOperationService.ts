@@ -23,7 +23,7 @@ import {
   completePendingSend,
   completeSendReclaim,
   prepareSend,
-} from '../../transactions/transitions/send/SendTransitions.ts';
+} from './SendTransitions.ts';
 
 import type {
   ApplySendResult,
@@ -35,7 +35,7 @@ import type {
   FailSendExecutionResult,
   PrepareSendResult,
   SwapTransportRequest,
-} from '../../transactions/transitions/send/SendTransitionTypes.ts';
+} from './SendTransitionTypes.ts';
 
 import type { CoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
 import {

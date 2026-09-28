@@ -6,7 +6,7 @@ import {
   claimSendRecovery,
   recoverLegacyExactSend,
   completePendingSend,
-} from '../../transactions/transitions/send/SendTransitions.ts';
+} from '../../operations/send/SendTransitions.ts';
 
 import {
   RepositoryCoreTransactionRunner,

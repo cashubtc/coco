@@ -1,4 +1,6 @@
 import type { Amount, MintKeys, OutputDataLike, Proof, Token } from '@cashu/cashu-ts';
+import type { CoreProof } from '@core/types.ts';
+import type { SerializedOutputData } from '@core/utils.ts';
 import type {
   ExecutingSendOperation,
   FinalizedSendOperation,
@@ -7,9 +9,7 @@ import type {
   PreparedSendOperation,
   RolledBackSendOperation,
   RollingBackSendOperation,
-} from '@core/operations/send/SendOperation.ts';
-import type { CoreProof } from '@core/types.ts';
-import type { SerializedOutputData } from '@core/utils.ts';
+} from './SendOperation.ts';
 
 export interface PrepareSendInput {
   operation: InitSendOperation;

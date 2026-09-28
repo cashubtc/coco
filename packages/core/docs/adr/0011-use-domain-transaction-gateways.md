@@ -27,14 +27,18 @@ through a mandatory shared scope and keep service entry points outside transacti
 ## Naming and Organization
 
 `CoreTransaction.ts` contains the live scope, runner interface, and repository-backed runner. Inject
-it as `transactionRunner` and name its callback scope `tx`. Shared scoped capabilities use
-`Transaction<Domain>` and `RepositoryTransaction<Domain>`, with interface and implementation in the
-same file. These capabilities include reads, so `Commands` does not describe their role accurately.
+it as `transactionRunner` and name its callback scope `tx`. Reserve transaction terminology for the
+runner, live scope, and lifetime machinery. Shared capabilities use `Scoped<Domain>` and
+`RepositoryScoped<Domain>`, with interface and implementation in the same file. `Scoped` describes
+their binding to an existing transaction: their methods include reads and mutations but never open
+or commit a transaction. A transition expresses a domain change within that scope, and several
+transitions may share one transaction.
 
-Branded workflow transitions live in `transactions/transitions/<domain>/`. Start with one
+Branded workflow transitions live alongside their operation code in `operations/<domain>/`.
+`transactions/` contains the shared transaction machinery and scoped implementations. Start with one
 `<Domain>Transitions.ts` module containing the complete lifecycle. Send keeps preparation, execution,
-completion, cancellation, reclaim, and recovery together in `SendTransitions.ts`, with shared types
-in `SendTransitionTypes.ts` and pure helpers in `operations/send/SendValidation.ts`. Recovery reuses the same
+completion, cancellation, reclaim, and recovery together in `operations/send/SendTransitions.ts`,
+with `SendTransitionTypes.ts` and `SendValidation.ts` alongside it. Recovery reuses the same
 transitions. Smaller transition modules are optional and need a cohesive responsibility to justify
 the split. Capabilities never depend on workflow transitions.
 
@@ -61,10 +65,11 @@ be a `Transition`. Private helper errors must propagate to the enclosing transit
 attempt. Expected outcomes use results such as `changed`, because a transition rejection fails the
 whole attempt even if its caller catches it. Bodies receive the full `CoreTransaction`.
 
-Every runtime export under `transactions/transitions/` must be a `Transition`, enforced by an export
-guard test. Exported pure helpers live outside that directory. No-input transitions use `void` and
+Every runtime export from `*Transitions.ts` and `*TransitionTypes.ts` under `operations/` must be a
+`Transition`, enforced by an export guard test. Exported pure helpers live in separate modules
+alongside the transitions. No-input transitions use `void` and
 `tx.perform(transition)`; id-only transitions may accept a bare string. The brand and internal body
-accessor live in `Transition.ts`, outside the workflow directory, and stay out of package entry points.
+accessor remain in `transactions/Transition.ts` and stay out of package entry points.
 
 Independently committed actions such as `MintService.refreshAndCommitIfStale` remain reusable outside
 transactions. Their commits intentionally survive later caller failure. Only applied metadata

@@ -19,8 +19,13 @@ describe('Transition', () => {
   });
 
   it('exports only transitions from every workflow transition module', async () => {
-    const directory = fileURLToPath(new URL('../../transactions/transitions/', import.meta.url));
-    const files = [...new Glob('**/*.ts').scanSync({ cwd: directory, absolute: true })].sort();
+    const directory = fileURLToPath(new URL('../../operations/', import.meta.url));
+    const files = [
+      ...new Glob('**/*{Transitions,TransitionTypes}.ts').scanSync({
+        cwd: directory,
+        absolute: true,
+      }),
+    ].sort();
     let transitions = 0;
 
     expect(files.length).toBeGreaterThan(0);

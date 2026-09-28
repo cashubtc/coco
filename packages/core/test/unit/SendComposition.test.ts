@@ -13,12 +13,9 @@ import {
   type CoreTransaction,
 } from '../../transactions/CoreTransaction.ts';
 import { defineTransition } from '../../transactions/Transition.ts';
-import {
-  beginSendExecution,
-  prepareSend,
-} from '../../transactions/transitions/send/SendTransitions.ts';
+import { beginSendExecution, prepareSend } from '../../operations/send/SendTransitions.ts';
 
-import type { PrepareSendInput } from '../../transactions/transitions/send/SendTransitionTypes.ts';
+import type { PrepareSendInput } from '../../operations/send/SendTransitionTypes.ts';
 import { overrideTransactions } from '../overrideTransactions.ts';
 import { testMintInfo, testMintKeypairs, testMintKeysetId } from '../fixtures/MintMetadata.ts';
 

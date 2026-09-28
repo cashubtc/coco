@@ -1,6 +1,10 @@
 import { Amount, sumProofs, type Token } from '@cashu/cashu-ts';
 import { normalizeUnit } from '@core/amounts.ts';
 import { ProofValidationError, SendOperationConflictError } from '@core/models/Error.ts';
+import { assertOutputProofs } from '@core/proofs/OutputProofs.ts';
+import type { CoreProof } from '@core/types.ts';
+import type { CoreTransaction } from '../../transactions/CoreTransaction.ts';
+import { defineTransition } from '../../transactions/Transition.ts';
 import {
   getKeepProofSecrets,
   getSendProofSecrets,
@@ -12,11 +16,7 @@ import {
   type ExecutingSendOperation,
   type PendingSendOperation,
   isTerminalOperation,
-} from '@core/operations/send/SendOperation.ts';
-import { assertOutputProofs } from '@core/proofs/OutputProofs.ts';
-import type { CoreProof } from '@core/types.ts';
-import type { CoreTransaction } from '../../CoreTransaction.ts';
-import { defineTransition } from '../../Transition.ts';
+} from './SendOperation.ts';
 import type {
   BeginSendReclaimInput,
   BeginSendReclaimResult,
@@ -52,7 +52,7 @@ import {
   normalizeMemo,
   sameCoreProofSet,
   sameToken,
-} from '@core/operations/send/SendValidation.ts';
+} from './SendValidation.ts';
 
 /** Reserve inputs and persist their output allocation and prepared Send together. */
 export const prepareSend = defineTransition<PrepareSendInput, PrepareSendResult>(

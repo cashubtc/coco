@@ -27,7 +27,7 @@ function allocate(
   return runner.run((tx) => tx.keypairs.allocate({ purpose, derive }));
 }
 
-describe('TransactionKeypairs allocation', () => {
+describe('ScopedKeypairs allocation', () => {
   it('reads authoritative allocation state before deriving and does not lower its high-water mark', async () => {
     const repositories = new MemoryRepositories();
     await repositories.keyRingRepository.setPersistedKeyPair(derivedKeypair(7, 'p2pk'));
@@ -124,7 +124,7 @@ function scopedRepositoryAuthority(scope: RepositoryTransactionScope): void {
 }
 void scopedRepositoryAuthority;
 
-describe('TransactionKeypairs transaction scope', () => {
+describe('ScopedKeypairs transaction scope', () => {
   it.each([0, 1])('rejects later allocations after allocation %i fails', async (failureIndex) => {
     const repositories = new MemoryRepositories();
     const runner = new RepositoryCoreTransactionRunner(repositories);

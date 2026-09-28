@@ -24,7 +24,8 @@ export interface SelectAndReserveProofsInput {
   forceSwap: boolean;
 }
 
-export interface TransactionProofs extends ProofQueries {
+/** Proof reads and mutations within an existing transaction; never opens or commits one. */
+export interface ScopedProofs extends ProofQueries {
   selectAndReserve(input: SelectAndReserveProofsInput): Promise<{
     proofs: CoreProof[];
     fee: Amount;
@@ -41,7 +42,7 @@ export interface TransactionProofs extends ProofQueries {
 }
 
 /** Reusable reservation and settlement rules within the owning operation's adapter scope. */
-export class RepositoryTransactionProofs implements TransactionProofs {
+export class RepositoryScopedProofs implements ScopedProofs {
   constructor(
     private readonly proofs: ProofRepository,
     private readonly keysets: KeysetRepository,

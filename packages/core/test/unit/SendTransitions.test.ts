@@ -13,13 +13,13 @@ import {
   completePendingSend,
   completeSendReclaim,
   prepareSend,
-} from '../../transactions/transitions/send/SendTransitions.ts';
+} from '../../operations/send/SendTransitions.ts';
 
 import type {
   CompletePendingSendInput,
   ExecuteExactSendInput,
   PrepareSendInput,
-} from '../../transactions/transitions/send/SendTransitionTypes.ts';
+} from '../../operations/send/SendTransitionTypes.ts';
 import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
 import { preparedSend, pendingSend } from '../fixtures/SendOperation.ts';
 import { testMintInfo } from '../fixtures/MintMetadata.ts';
