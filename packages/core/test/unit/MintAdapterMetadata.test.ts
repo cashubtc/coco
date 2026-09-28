@@ -5,7 +5,12 @@ import { KeysetSyncError, MintFetchError } from '../../models/Error.ts';
 import { testMintInfo, testMintKeypairs, testMintKeysetId } from '../fixtures/MintMetadata.ts';
 
 const mintUrl = 'https://mint.test';
-const keyset = { id: testMintKeysetId(), unit: 'sat', active: true, input_fee_ppk: 2 };
+const keyset = {
+  id: testMintKeysetId('sat', { input_fee_ppk: 2 }),
+  unit: 'sat',
+  active: true,
+  input_fee_ppk: 2,
+};
 function environment() {
   const adapter = Object.assign(new MintAdapter(new MintRequestProvider()), {
     fetchMintInfo: mock(async () => testMintInfo),
@@ -25,7 +30,7 @@ describe('MintAdapter.fetchMintMetadata', () => {
     expect(result.keysets[0]?.feePpk).toBe(2);
     expect(adapter.fetchKeysForId).not.toHaveBeenCalled();
     await adapter.fetchMintMetadata(mintUrl, []);
-    expect(adapter.fetchKeysForId).toHaveBeenCalledWith(mintUrl, keyset.id);
+    expect(adapter.fetchKeysForId).toHaveBeenCalledWith(mintUrl, keyset);
   });
 
   it('excludes unsupported BLS keysets before fetching keys', async () => {

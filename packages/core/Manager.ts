@@ -353,7 +353,10 @@ export class Manager {
       refillPerMinute: 20,
       logger: this.getChildLogger('RequestRateLimiter'),
     });
-    this.mintAdapter = new MintAdapter(this.mintRequestProvider);
+    this.mintAdapter = new MintAdapter(
+      this.mintRequestProvider,
+      this.getChildLogger('MintAdapter'),
+    );
 
     this.originalWatcherConfig = watchers;
     this.originalProcessorConfig = processors;
