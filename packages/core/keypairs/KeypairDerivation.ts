@@ -1,4 +1,4 @@
-import { schnorr, secp256k1 } from '@noble/curves/secp256k1.js';
+import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { bytesToHex } from '@noble/curves/utils.js';
 import { HDKey } from '@scure/bip32';
 import type { KeypairPurpose } from '../models/Keypair.ts';
@@ -23,10 +23,7 @@ export class KeypairDerivation {
           `m/129373'/${derivationPurpose}'/0'/0'/${derivationIndex}`,
         );
         if (!secretKey) throw new Error('Failed to derive secret key');
-        const publicKeyHex =
-          purpose === 'nut20_mint_quote'
-            ? bytesToHex(secp256k1.getPublicKey(secretKey, true))
-            : '02' + bytesToHex(schnorr.getPublicKey(secretKey));
+        const publicKeyHex = bytesToHex(secp256k1.getPublicKey(secretKey, true));
         return { publicKeyHex, secretKey };
       },
     };
