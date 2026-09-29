@@ -41,8 +41,8 @@ import {
   failMint,
   cleanupMintInit,
   deferMintRecovery,
-} from '../../transactions/transitions/mint/MintTransitions.ts';
-import type { PrepareMintResult } from '../../transactions/transitions/mint/MintTransitionTypes.ts';
+} from './MintTransitions.ts';
+import type { PrepareMintResult } from './MintTransitionTypes.ts';
 import { createKeyChain } from '../../proofs/KeysetSelection.ts';
 import { restoreOutputProofs } from '../../infra/ProofRestore.ts';
 
@@ -138,7 +138,7 @@ export class MintOperationService {
       const operationId = generateSubId();
       const now = Date.now();
       result = await this.dependencies.transactionRunner.run((tx) =>
-        prepareMint(tx, {
+        tx.perform(prepareMint, {
           operationId,
           mintUrl: quote.mintUrl,
           method: quote.method,
@@ -237,7 +237,7 @@ export class MintOperationService {
 
       const now = Date.now();
       const authorization = await this.dependencies.transactionRunner.run((tx) =>
-        beginMintExecution(tx, { operationId, now }),
+        tx.perform(beginMintExecution, { operationId, now }),
       );
       if (!authorization.changed || authorization.operation.state !== 'executing')
         return authorization.operation;
@@ -790,7 +790,7 @@ export class MintOperationService {
   private async recoverInitOperation(op: InitMintOperation): Promise<void> {
     const releaseLock = await this.acquireOperationLock(op.id);
     try {
-      await this.dependencies.transactionRunner.run((tx) => cleanupMintInit(tx, op.id));
+      await this.dependencies.transactionRunner.run((tx) => tx.perform(cleanupMintInit, op.id));
     } finally {
       releaseLock();
     }
@@ -833,7 +833,7 @@ export class MintOperationService {
   ): Promise<FinalizedMintOperation> {
     const now = Date.now();
     const result = await this.dependencies.transactionRunner.run((tx) =>
-      applyMintResult(tx, { operation: op, proofs, now }),
+      tx.perform(applyMintResult, { operation: op, proofs, now }),
     );
     if (result.changed) {
       for (const keysetId of new Set(result.proofs.map((proof) => proof.id))) {
@@ -855,7 +855,7 @@ export class MintOperationService {
   private async failOperation(op: ExecutingMintOperation, error: string): Promise<void> {
     const now = Date.now();
     const result = await this.dependencies.transactionRunner.run((tx) =>
-      failMint(tx, {
+      tx.perform(failMint, {
         operationId: op.id,
         expectedState: 'executing',
         failure: { reason: error, observedAt: now },
@@ -873,7 +873,7 @@ export class MintOperationService {
   private async deferRecovery(op: ExecutingMintOperation, error?: string): Promise<void> {
     const now = Date.now();
     await this.dependencies.transactionRunner.run((tx) =>
-      deferMintRecovery(tx, { operation: op, error, now }),
+      tx.perform(deferMintRecovery, { operation: op, error, now }),
     );
   }
 
@@ -974,7 +974,12 @@ export class MintOperationService {
 
     const now = Date.now();
     const result = await this.dependencies.transactionRunner.run((tx) =>
-      failMint(tx, { operationId: op.id, expectedState: 'pending', failure: terminalFailure, now }),
+      tx.perform(failMint, {
+        operationId: op.id,
+        expectedState: 'pending',
+        failure: terminalFailure,
+        now,
+      }),
     );
     if (result.changed && result.operation.state === 'failed')
       await this.publishCommittedEvent('mint-op:failed', {

@@ -8,34 +8,31 @@ import {
   type MintQuoteRepository,
 } from '@core/repositories';
 import {
-  RepositoryTransactionMintMetadata,
-  type TransactionMintMetadata,
-} from './mints/TransactionMintMetadata.ts';
-import { RepositoryTransactionProofs, type TransactionProofs } from './proofs/TransactionProofs.ts';
-import {
-  RepositoryTransactionOutputs,
-  type TransactionOutputs,
-} from './outputs/TransactionOutputs.ts';
-import {
-  RepositoryTransactionKeypairs,
-  type TransactionKeypairs,
-} from './keypairs/TransactionKeypairs.ts';
+  RepositoryScopedMintMetadata,
+  type ScopedMintMetadata,
+} from './mints/ScopedMintMetadata.ts';
+import { RepositoryScopedProofs, type ScopedProofs } from './proofs/ScopedProofs.ts';
+import { RepositoryScopedOutputs, type ScopedOutputs } from './outputs/ScopedOutputs.ts';
+import { RepositoryScopedKeypairs, type ScopedKeypairs } from './keypairs/ScopedKeypairs.ts';
 import { TransactionLifetime } from './TransactionLifetime.ts';
+import { getTransitionBody, type Transition } from './Transition.ts';
 
 /**
  * Scoped capabilities sharing one adapter transaction attempt. Await mutations sequentially unless
  * their independence is established; lifetime tracking does not serialize conflicting work.
  */
 export interface CoreTransaction {
+  perform<O>(transition: Transition<void, O>): Promise<O>;
+  perform<I, O>(transition: Transition<I, O>, input: I): Promise<O>;
+  readonly mintMetadata: ScopedMintMetadata;
+  readonly keypairs: ScopedKeypairs;
+  readonly proofs: ScopedProofs;
+  readonly outputs: ScopedOutputs;
   readonly mintOperations: Pick<
     MintOperationRepository,
     'getById' | 'getByQuoteId' | 'create' | 'update' | 'delete'
   >;
   readonly mintQuotes: Pick<MintQuoteRepository, 'getMintQuote'>;
-  readonly mintMetadata: TransactionMintMetadata;
-  readonly keypairs: TransactionKeypairs;
-  readonly proofs: TransactionProofs;
-  readonly outputs: TransactionOutputs;
   readonly sendOperations: Pick<
     SendOperationRepository,
     'getById' | 'getByMintUrl' | 'create' | 'transition' | 'delete'
@@ -62,7 +59,7 @@ export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
         return await this.repositories.withTransaction((repositories) => {
           const lifetime = new TransactionLifetime();
           return lifetime.run(() =>
-            work(lifetime.bind(this.createTransaction(lifetime.bind(repositories)))),
+            work(this.createTransaction(lifetime.bind(repositories), lifetime)),
           );
         });
       } catch (error) {
@@ -78,28 +75,35 @@ export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
     }
   }
 
-  private createTransaction(repositories: RepositoryTransactionScope): CoreTransaction {
-    const mintMetadata = new RepositoryTransactionMintMetadata(
+  private createTransaction(
+    repositories: RepositoryTransactionScope,
+    lifetime: TransactionLifetime,
+  ): CoreTransaction {
+    const mintMetadata = new RepositoryScopedMintMetadata(
       repositories.mintRepository,
       repositories.keysetRepository,
     );
-    const proofs = new RepositoryTransactionProofs(
+    const proofs = new RepositoryScopedProofs(
       repositories.proofRepository,
       repositories.keysetRepository,
     );
-    const outputs = new RepositoryTransactionOutputs(
+    const outputs = new RepositoryScopedOutputs(
       repositories.counterRepository,
       repositories.keysetRepository,
       this.outputDataCreator,
     );
-    return {
+    const scoped: CoreTransaction = lifetime.bind({
+      // The proxy binds methods to the raw object; bodies must receive the bound scope instead.
+      perform: <I, O>(transition: Transition<I, O>, input?: I): Promise<O> =>
+        getTransitionBody(transition)(scoped, input as I),
       mintOperations: repositories.mintOperationRepository,
       mintQuotes: repositories.mintQuoteRepository,
       mintMetadata,
-      keypairs: new RepositoryTransactionKeypairs(repositories.keyRingRepository),
+      keypairs: new RepositoryScopedKeypairs(repositories.keyRingRepository),
       proofs,
       outputs,
       sendOperations: repositories.sendOperationRepository,
-    };
+    });
+    return scoped;
   }
 }

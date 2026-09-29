@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import type { RepositoryTransactionScope } from '../../repositories/index.ts';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 import { TransactionLifetime } from '../../transactions/TransactionLifetime.ts';
-import { RepositoryTransactionKeypairs } from '../../transactions/keypairs/TransactionKeypairs.ts';
+import { RepositoryScopedKeypairs } from '../../transactions/keypairs/ScopedKeypairs.ts';
 
 function gate() {
   let release!: () => void;
@@ -47,7 +47,7 @@ describe('TransactionLifetime', () => {
       const bound = lifetime.bind(new GetterScope());
       expect(bound.keyRingRepository).toBe(bound.keyRingRepository);
       const capabilities = lifetime.bind(
-        Object.freeze({ keypairs: new RepositoryTransactionKeypairs(bound.keyRingRepository) }),
+        Object.freeze({ keypairs: new RepositoryScopedKeypairs(bound.keyRingRepository) }),
       );
       return lifetime.run(() => capabilities.keypairs.importP2pk(importedKey('frozen')));
     });

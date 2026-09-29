@@ -5,16 +5,16 @@ import type { AllocateKeypairInput } from '../../keypairs/types.ts';
 
 const MAX_DERIVATION_INDEX = 0x7fffffff;
 
-/** Keypair mutations within the owning transaction; these commands never open a transaction. */
-export interface TransactionKeypairs {
-  /** Await each allocation before starting another for the same purpose within this scope. */
+/** Keypair reads and mutations within an existing transaction; never opens or commits one. */
+export interface ScopedKeypairs {
   getMintQuoteKey(publicKey: string): Promise<Keypair | null>;
+  /** Await each allocation before starting another for the same purpose within this scope. */
   allocate(input: AllocateKeypairInput): Promise<Keypair>;
   importP2pk(keypair: Keypair): Promise<void>;
   deleteP2pk(publicKey: string): Promise<void>;
 }
 
-export class RepositoryTransactionKeypairs implements TransactionKeypairs {
+export class RepositoryScopedKeypairs implements ScopedKeypairs {
   constructor(private readonly repository: KeyRingRepository) {}
 
   getMintQuoteKey(publicKey: string): Promise<Keypair | null> {

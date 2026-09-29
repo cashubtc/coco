@@ -2,7 +2,7 @@ import { Amount, type ProofState as CashuProofState } from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it, mock } from 'bun:test';
 import { createSendEnvironment } from '../fixtures/SendEnvironment.ts';
 import { preparedSend, pendingSend } from '../fixtures/SendOperation.ts';
-import type { SwapTransportRequest } from '../../transactions/transitions/send/SendTransitionTypes.ts';
+import type { SwapTransportRequest } from '../../operations/send/SendTransitionTypes.ts';
 import { testMintKeysetId } from '../fixtures/MintMetadata.ts';
 import { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';

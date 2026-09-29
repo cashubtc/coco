@@ -20,6 +20,14 @@ export const testMintKeypairs = {
   '8': '03774ae7f858a9411e5ef4246b70c65aac5649980be5c17891bbec17895da008cb',
 };
 
-export function testMintKeysetId(unit = 'sat') {
-  return deriveKeysetId(testMintKeypairs, { unit });
+export function testMintKeysetId(
+  unit = 'sat',
+  commitments: { input_fee_ppk?: number; expiry?: number } = {},
+) {
+  return deriveKeysetId(testMintKeypairs, { unit, ...commitments });
+}
+
+/** Legacy `00`-prefixed keyset id, derived from the keys alone (NUT-02 v1). */
+export function testLegacyMintKeysetId() {
+  return deriveKeysetId(testMintKeypairs, { versionByte: 0 });
 }

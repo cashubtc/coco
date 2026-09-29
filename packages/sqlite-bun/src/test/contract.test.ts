@@ -9,6 +9,7 @@ import {
   runKeypairAllocationContract,
   allocateKeypairForTest,
   runAuthSessionRepositoryContract,
+  runKeysetRepositoryContract,
   runProofRepositoryContract,
   runMintOperationRepositoryContract,
   runMintQuoteRepositoryContract,
@@ -282,6 +283,7 @@ describe('synchronous SQLite contention', () => {
 runAuthSessionRepositoryContract({ createRepositories }, { describe, it, expect });
 
 runProofRepositoryContract({ createRepositories }, { describe, it, expect });
+runKeysetRepositoryContract({ createRepositories }, { describe, it, expect });
 
 runMintOperationRepositoryContract({ createRepositories }, { describe, it, expect });
 

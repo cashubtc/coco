@@ -21,8 +21,9 @@ import {
   applyMintResult,
   failMint,
   deferMintRecovery,
-} from '../../transactions/transitions/mint/MintTransitions.ts';
-import type { PrepareMintInput } from '../../transactions/transitions/mint/MintTransitionTypes.ts';
+} from '../../operations/mint/MintTransitions.ts';
+import type { PrepareMintInput } from '../../operations/mint/MintTransitionTypes.ts';
+import { defineTransition } from '../../transactions/Transition.ts';
 import { deserializeOutputData } from '../../utils.ts';
 import { overrideTransactions } from '../overrideTransactions.ts';
 import { testMintInfo, testMintKeypairs, testMintKeysetId } from '../fixtures/MintMetadata.ts';
@@ -145,8 +146,10 @@ describe.each(['memory', 'sqlite'] as const)('Mint transitions (%s)', (adapter) 
   afterEach(() => database?.close());
 
   async function executing(method: PrepareMintInput['method'] = 'bolt11', id = 'mint-1') {
-    await runner.run((tx) => prepareMint(tx, input(id, method)));
-    const result = await runner.run((tx) => beginMintExecution(tx, { operationId: id, now: 2000 }));
+    await runner.run((tx) => tx.perform(prepareMint, input(id, method)));
+    const result = await runner.run((tx) =>
+      tx.perform(beginMintExecution, { operationId: id, now: 2000 }),
+    );
     if (result.operation.state !== 'executing') throw new Error('Expected executing operation');
     return result.operation;
   }
@@ -161,7 +164,7 @@ describe.each(['memory', 'sqlite'] as const)('Mint transitions (%s)', (adapter) 
         method,
       );
       const result = await runner.run((tx) =>
-        applyMintResult(tx, { operation, proofs: proofs(operation), now: 3000 }),
+        tx.perform(applyMintResult, { operation, proofs: proofs(operation), now: 3000 }),
       );
       expect(result.operation.state).toBe('finalized');
       expect((await repositories.mintOperationRepository.getById(operation.id))?.updatedAt).toBe(
@@ -195,14 +198,14 @@ describe.each(['memory', 'sqlite'] as const)('Mint transitions (%s)', (adapter) 
     ))!;
     await repositories.mintQuoteRepository.upsertMintQuote({ ...quote, mintUrl: otherMint });
     const keyInput = await new KeypairDerivation(async () => new Uint8Array(64)).prepare('p2pk');
-    const work = async (tx: CoreTransaction) => {
+    const work = defineTransition<void, void>(async (tx) => {
       await tx.keypairs.allocate(keyInput);
-      await prepareMint(tx, input('destination'));
-      await prepareMint(tx, { ...input('other'), mintUrl: otherMint });
-    };
+      await tx.perform(prepareMint, input('destination'));
+      await tx.perform(prepareMint, { ...input('other'), mintUrl: otherMint });
+    });
     await expect(
       runner.run(async (tx) => {
-        await work(tx);
+        await tx.perform(work);
         throw new Error('parent failed');
       }),
     ).rejects.toThrow('parent failed');
@@ -211,7 +214,7 @@ describe.each(['memory', 'sqlite'] as const)('Mint transitions (%s)', (adapter) 
     expect(await repositories.counterRepository.getCounter(mintUrl, keysetId)).toBeNull();
     expect(await repositories.counterRepository.getCounter(otherMint, keysetId)).toBeNull();
     expect(await repositories.keyRingRepository.getAllPersistedKeyPairs('p2pk')).toEqual([]);
-    await runner.run(work);
+    await runner.run((tx) => tx.perform(work));
     expect((await repositories.mintOperationRepository.getById('destination'))?.state).toBe(
       'pending',
     );
@@ -229,7 +232,9 @@ describe.each(['memory', 'sqlite'] as const)('Mint transitions (%s)', (adapter) 
         }),
       ),
     );
-    await expect(failing.run((tx) => prepareMint(tx, input()))).rejects.toThrow('write failed');
+    await expect(failing.run((tx) => tx.perform(prepareMint, input()))).rejects.toThrow(
+      'write failed',
+    );
     expect(await repositories.counterRepository.getCounter(mintUrl, keysetId)).toBeNull();
     expect(await repositories.mintOperationRepository.getById('mint-1')).toBeNull();
   });
@@ -238,7 +243,7 @@ describe.each(['memory', 'sqlite'] as const)('Mint transitions (%s)', (adapter) 
     const operation = await executing('bolt12');
     await expect(
       runner.run(async (tx) => {
-        await applyMintResult(tx, { operation, proofs: proofs(operation), now: 3000 });
+        await tx.perform(applyMintResult, { operation, proofs: proofs(operation), now: 3000 });
         throw new Error('parent failed');
       }),
     ).rejects.toThrow('parent failed');
@@ -248,10 +253,13 @@ describe.each(['memory', 'sqlite'] as const)('Mint transitions (%s)', (adapter) 
     expect((await repositories.mintOperationRepository.getById(operation.id))?.state).toBe(
       'executing',
     );
-    await runner.run((tx) => prepareMint(tx, input('sibling', 'bolt12')));
+    await runner.run((tx) => tx.perform(prepareMint, input('sibling', 'bolt12')));
     expect(
-      (await runner.run((tx) => beginMintExecution(tx, { operationId: 'sibling', now: 3000 })))
-        .operation.state,
+      (
+        await runner.run((tx) =>
+          tx.perform(beginMintExecution, { operationId: 'sibling', now: 3000 }),
+        )
+      ).operation.state,
     ).toBe('pending');
   });
 
@@ -259,7 +267,7 @@ describe.each(['memory', 'sqlite'] as const)('Mint transitions (%s)', (adapter) 
     const operation = await executing();
     await expect(
       runner.run((tx) =>
-        applyMintResult(tx, {
+        tx.perform(applyMintResult, {
           operation,
           proofs: [{ ...proofs(operation)[0]!, secret: 'unrelated' }],
           now: 3000,
@@ -268,7 +276,7 @@ describe.each(['memory', 'sqlite'] as const)('Mint transitions (%s)', (adapter) 
     ).rejects.toThrow('allocated outputs');
     await expect(
       runner.run((tx) =>
-        applyMintResult(tx, {
+        tx.perform(applyMintResult, {
           operation: { ...operation, quoteId: 'other' },
           proofs: proofs(operation),
           now: 3000,
@@ -285,7 +293,9 @@ describe.each(['memory', 'sqlite'] as const)('Mint transitions (%s)', (adapter) 
     await expect(
       runner.run(async (tx) => {
         await tx.keypairs.allocate(keyInput);
-        await prepareMint(tx, { ...input(), amount: Amount.from(7) }).catch(() => undefined);
+        await tx
+          .perform(prepareMint, { ...input(), amount: Amount.from(7) })
+          .catch(() => undefined);
       }),
     ).rejects.toThrow('does not match requested amount');
     expect(await repositories.keyRingRepository.getAllPersistedKeyPairs('p2pk')).toEqual([]);
@@ -293,12 +303,17 @@ describe.each(['memory', 'sqlite'] as const)('Mint transitions (%s)', (adapter) 
 
   it('drains a dropped transition promise and rejects a captured scope after commit', async () => {
     let captured!: CoreTransaction;
+    let perform!: CoreTransaction['perform'];
     await runner.run(async (tx) => {
       captured = tx;
-      void prepareMint(tx, input());
+      perform = tx.perform;
+      void tx.perform(prepareMint, input());
     });
     expect((await repositories.mintOperationRepository.getById('mint-1'))?.state).toBe('pending');
-    await expect(prepareMint(captured, input('late'))).rejects.toThrow();
+    await expect(captured.perform(prepareMint, input('late'))).rejects.toThrow();
+    await expect(perform(prepareMint, input('late-captured'))).rejects.toThrow();
+    expect(await repositories.mintOperationRepository.getById('late')).toBeNull();
+    expect(await repositories.mintOperationRepository.getById('late-captured')).toBeNull();
   });
 
   it('retries the entire allocation with unchanged operation identity and outputs', async () => {
@@ -314,19 +329,19 @@ describe.each(['memory', 'sqlite'] as const)('Mint transitions (%s)', (adapter) 
         }),
       ),
     );
-    await retrying.run((tx) => prepareMint(tx, input()));
+    await retrying.run((tx) => tx.perform(prepareMint, input()));
     expect(attempts).toBe(2);
     expect(outputs[0]).toEqual(outputs[1]);
     expect((await repositories.counterRepository.getCounter(mintUrl, keysetId))?.counter).toBe(1);
   });
 
   it('chooses one winner across runners sharing reusable quote balance', async () => {
-    await runner.run((tx) => prepareMint(tx, input('first', 'onchain')));
-    await runner.run((tx) => prepareMint(tx, input('second', 'onchain')));
+    await runner.run((tx) => tx.perform(prepareMint, input('first', 'onchain')));
+    await runner.run((tx) => tx.perform(prepareMint, input('second', 'onchain')));
     const otherRunner = new RepositoryCoreTransactionRunner(repositories);
     const results = await Promise.all([
-      runner.run((tx) => beginMintExecution(tx, { operationId: 'first', now: 2000 })),
-      otherRunner.run((tx) => beginMintExecution(tx, { operationId: 'second', now: 2000 })),
+      runner.run((tx) => tx.perform(beginMintExecution, { operationId: 'first', now: 2000 })),
+      otherRunner.run((tx) => tx.perform(beginMintExecution, { operationId: 'second', now: 2000 })),
     ]);
     expect(results.map((result) => result.operation.state).sort()).toEqual([
       'executing',
@@ -336,32 +351,36 @@ describe.each(['memory', 'sqlite'] as const)('Mint transitions (%s)', (adapter) 
 
   it('revalidates trust and quote-key ownership inside preparation', async () => {
     await repositories.mintRepository.setMintTrusted(mintUrl, false);
-    await expect(runner.run((tx) => prepareMint(tx, input()))).rejects.toThrow('not trusted');
+    await expect(runner.run((tx) => tx.perform(prepareMint, input()))).rejects.toThrow(
+      'not trusted',
+    );
     await repositories.mintRepository.setMintTrusted(mintUrl, true);
     await repositories.keyRingRepository.deletePersistedKeyPair(
       quoteKey.publicKeyHex,
       'nut20_mint_quote',
     );
-    await expect(runner.run((tx) => prepareMint(tx, input('locked', 'bolt12')))).rejects.toThrow(
-      'Missing NUT-20',
-    );
+    await expect(
+      runner.run((tx) => tx.perform(prepareMint, input('locked', 'bolt12'))),
+    ).rejects.toThrow('Missing NUT-20');
     expect(await repositories.counterRepository.getCounter(mintUrl, keysetId)).toBeNull();
   });
 
   it('keeps ambiguous recovery reserved and prevents late recovery from replacing finalization', async () => {
     const operation = await executing('bolt12');
-    await runner.run((tx) => deferMintRecovery(tx, { operation, error: 'timeout', now: 3000 }));
+    await runner.run((tx) =>
+      tx.perform(deferMintRecovery, { operation, error: 'timeout', now: 3000 }),
+    );
     expect((await repositories.mintOperationRepository.getById(operation.id))?.state).toBe(
       'executing',
     );
     await runner.run((tx) =>
-      applyMintResult(tx, { operation, proofs: proofs(operation), now: 4000 }),
+      tx.perform(applyMintResult, { operation, proofs: proofs(operation), now: 4000 }),
     );
     await runner.run((tx) =>
-      deferMintRecovery(tx, { operation, error: 'late timeout', now: 5000 }),
+      tx.perform(deferMintRecovery, { operation, error: 'late timeout', now: 5000 }),
     );
     const failed = await runner.run((tx) =>
-      failMint(tx, {
+      tx.perform(failMint, {
         operationId: operation.id,
         expectedState: 'executing',
         failure: { reason: 'late failure', observedAt: 5000 },
@@ -374,14 +393,16 @@ describe.each(['memory', 'sqlite'] as const)('Mint transitions (%s)', (adapter) 
     );
   });
   it('reuses a prepared child ID without allocating again and rejects a different intent', async () => {
-    const prepared = await runner.run((tx) => prepareMint(tx, input('child')));
-    const repeated = await runner.run((tx) => prepareMint(tx, { ...input('child'), now: 2000 }));
+    const prepared = await runner.run((tx) => tx.perform(prepareMint, input('child')));
+    const repeated = await runner.run((tx) =>
+      tx.perform(prepareMint, { ...input('child'), now: 2000 }),
+    );
     expect(repeated.changed).toBe(false);
     expect(repeated.operation.outputData).toEqual(prepared.operation.outputData);
     expect((await repositories.counterRepository.getCounter(mintUrl, keysetId))?.counter).toBe(1);
-    await expect(runner.run((tx) => prepareMint(tx, input('child', 'bolt12')))).rejects.toThrow(
-      'different intent',
-    );
+    await expect(
+      runner.run((tx) => tx.perform(prepareMint, input('child', 'bolt12'))),
+    ).rejects.toThrow('different intent');
   });
 
   it('preserves already-spent output proofs when settling a legacy executing operation', async () => {
@@ -395,7 +416,7 @@ describe.each(['memory', 'sqlite'] as const)('Mint transitions (%s)', (adapter) 
       usedByOperationId: 'later-send',
     }));
     await repositories.proofRepository.saveProofs(mintUrl, saved);
-    await runner.run((tx) => applyMintResult(tx, { operation, proofs: [], now: 3000 }));
+    await runner.run((tx) => tx.perform(applyMintResult, { operation, proofs: [], now: 3000 }));
     expect(
       await repositories.proofRepository.getProofsByOperationId(mintUrl, operation.id),
     ).toEqual(saved);
@@ -406,7 +427,7 @@ describe.each(['memory', 'sqlite'] as const)('Mint transitions (%s)', (adapter) 
     const candidate = proofs(operation)[0]!;
     await expect(
       runner.run((tx) =>
-        applyMintResult(tx, { operation, proofs: [candidate, candidate], now: 3000 }),
+        tx.perform(applyMintResult, { operation, proofs: [candidate, candidate], now: 3000 }),
       ),
     ).rejects.toThrow('duplicate');
     expect((await repositories.mintOperationRepository.getById(operation.id))?.state).toBe(

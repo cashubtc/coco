@@ -16,8 +16,8 @@ import {
 import { assertOutputProofs } from '@core/proofs/OutputProofs.ts';
 import { mapProofToCoreProof, normalizeMintUrl } from '@core/utils.ts';
 import type { CoreProof } from '@core/types.ts';
-import type { CoreTransaction } from '../../CoreTransaction.ts';
-import { trackTransactionWork } from '../../TransactionLifetime.ts';
+import type { CoreTransaction } from '../../transactions/CoreTransaction.ts';
+import { defineTransition } from '../../transactions/Transition.ts';
 import type {
   ApplyMintResultInput,
   ApplyMintResult,
@@ -31,11 +31,8 @@ import type {
 } from './MintTransitionTypes.ts';
 
 /** Persist the complete output plan and its counter allocation in the caller's transaction. */
-export function prepareMint(
-  tx: CoreTransaction,
-  input: PrepareMintInput,
-): Promise<PrepareMintResult> {
-  return trackTransactionWork(tx, async () => {
+export const prepareMint = defineTransition<PrepareMintInput, PrepareMintResult>(
+  async (tx, input) => {
     const mintUrl = normalizeMintUrl(input.mintUrl);
     const unit = normalizeUnit(input.unit);
     await tx.mintMetadata.assertCanMint(mintUrl, input.method, unit, input.amount);
@@ -111,64 +108,59 @@ export function prepareMint(
     if (existing) await tx.mintOperations.update(operation);
     else await tx.mintOperations.create(operation);
     return { operation, counter: allocation.counter, changed: true };
-  });
-}
+  },
+);
 
 /** Claimable balance and the executing reservation are read/written under the same adapter lock. */
-export function beginMintExecution(
-  tx: CoreTransaction,
-  input: BeginMintExecutionInput,
-): Promise<BeginMintExecutionResult> {
-  return trackTransactionWork(tx, async () => {
-    const operation = await requireOperation(tx, input.operationId);
-    if (operation.state !== 'pending') return { operation, changed: false };
-    await tx.mintMetadata.assertTrusted(operation.mintUrl);
-    const quote = await tx.mintQuotes.getMintQuote(
-      operation.mintUrl,
-      operation.method,
-      operation.quoteId,
-    );
-    if (!quote) throw new Error(`Mint quote ${operation.quoteId} was not found`);
-    const siblings = await tx.mintOperations.getByQuoteId(
-      operation.mintUrl,
-      operation.method,
-      operation.quoteId,
-    );
-    const finalizedAmount = siblings.reduce(
-      (sum, op) => (op.state === 'finalized' ? sum.add(op.amount) : sum),
-      Amount.zero(),
-    );
-    const reservedAmount = siblings.reduce(
-      (sum, op) => (op.state === 'executing' ? sum.add(op.amount) : sum),
-      Amount.zero(),
-    );
-    const assessment = assessMintQuoteClaimability(quote, {
-      finalizedAmount,
-      reservedAmount,
-      requestedAmount: operation.amount,
-    });
-    if (assessment.status === 'invalid')
-      throw new Error(`Mint quote ${operation.quoteId} has invalid claimability accounting`);
-    if ((quote.method === 'bolt11' && !reservedAmount.isZero()) || assessment.status === 'waiting')
-      return { operation, changed: false };
-    assertMintOutputPlan(operation);
-    const executing: ExecutingMintOperation = {
-      ...operation,
-      state: 'executing',
-      updatedAt: input.now,
-      error: undefined,
-    };
-    await tx.mintOperations.update(executing);
-    return { operation: executing, changed: true };
+export const beginMintExecution = defineTransition<
+  BeginMintExecutionInput,
+  BeginMintExecutionResult
+>(async (tx, input) => {
+  const operation = await requireOperation(tx, input.operationId);
+  if (operation.state !== 'pending') return { operation, changed: false };
+  await tx.mintMetadata.assertTrusted(operation.mintUrl);
+  const quote = await tx.mintQuotes.getMintQuote(
+    operation.mintUrl,
+    operation.method,
+    operation.quoteId,
+  );
+  if (!quote) throw new Error(`Mint quote ${operation.quoteId} was not found`);
+  const siblings = await tx.mintOperations.getByQuoteId(
+    operation.mintUrl,
+    operation.method,
+    operation.quoteId,
+  );
+  const finalizedAmount = siblings.reduce(
+    (sum, op) => (op.state === 'finalized' ? sum.add(op.amount) : sum),
+    Amount.zero(),
+  );
+  const reservedAmount = siblings.reduce(
+    (sum, op) => (op.state === 'executing' ? sum.add(op.amount) : sum),
+    Amount.zero(),
+  );
+  const assessment = assessMintQuoteClaimability(quote, {
+    finalizedAmount,
+    reservedAmount,
+    requestedAmount: operation.amount,
   });
-}
+  if (assessment.status === 'invalid')
+    throw new Error(`Mint quote ${operation.quoteId} has invalid claimability accounting`);
+  if ((quote.method === 'bolt11' && !reservedAmount.isZero()) || assessment.status === 'waiting')
+    return { operation, changed: false };
+  assertMintOutputPlan(operation);
+  const executing: ExecutingMintOperation = {
+    ...operation,
+    state: 'executing',
+    updatedAt: input.now,
+    error: undefined,
+  };
+  await tx.mintOperations.update(executing);
+  return { operation: executing, changed: true };
+});
 
 /** Exact output proofs and finalized issuance commit together. Remote accounting is not fabricated. */
-export function applyMintResult(
-  tx: CoreTransaction,
-  input: ApplyMintResultInput,
-): Promise<ApplyMintResult> {
-  return trackTransactionWork(tx, async () => {
+export const applyMintResult = defineTransition<ApplyMintResultInput, ApplyMintResult>(
+  async (tx, input) => {
     const current = await requireOperation(tx, input.operation.id);
     if (current.state === 'init' || !sameRequest(current, input.operation))
       throw new Error('Mint result does not match persisted request');
@@ -212,47 +204,43 @@ export function applyMintResult(
     };
     await tx.mintOperations.update(operation);
     return { operation, proofs: candidates, changed: true };
-  });
-}
+  },
+);
 
 /** Call only with positive non-issuance evidence; transport/validation failures remain recoverable. */
-export function failMint(tx: CoreTransaction, input: FailMintInput): Promise<FailMintResult> {
-  return trackTransactionWork(tx, async () => {
-    const current = await requireOperation(tx, input.operationId);
-    if (isTerminalOperation(current)) return { operation: current, changed: false };
-    if (current.state !== input.expectedState)
-      throw new Error(`Cannot fail operation ${current.id} in state ${current.state}`);
-    const operation: FailedMintOperation = {
-      ...current,
-      state: 'failed',
-      updatedAt: input.now,
-      error: input.failure.reason,
-      terminalFailure: input.failure,
-    };
-    await tx.mintOperations.update(operation);
-    return { operation, changed: true };
-  });
-}
+export const failMint = defineTransition<FailMintInput, FailMintResult>(async (tx, input) => {
+  const current = await requireOperation(tx, input.operationId);
+  if (isTerminalOperation(current)) return { operation: current, changed: false };
+  if (current.state !== input.expectedState)
+    throw new Error(`Cannot fail operation ${current.id} in state ${current.state}`);
+  const operation: FailedMintOperation = {
+    ...current,
+    state: 'failed',
+    updatedAt: input.now,
+    error: input.failure.reason,
+    terminalFailure: input.failure,
+  };
+  await tx.mintOperations.update(operation);
+  return { operation, changed: true };
+});
 
 /** Clean up pre-migration init rows, which never authorized submission. */
-export function cleanupMintInit(tx: CoreTransaction, operationId: string) {
-  return trackTransactionWork(tx, async () => {
-    const current = await tx.mintOperations.getById(operationId);
-    if (current?.state !== 'init') return;
-    await tx.mintOperations.delete(operationId);
-  });
-}
+export const cleanupMintInit = defineTransition<string, void>(async (tx, operationId) => {
+  const current = await tx.mintOperations.getById(operationId);
+  if (current?.state !== 'init') return;
+  await tx.mintOperations.delete(operationId);
+});
 
 /** Preserve the executing reservation and exact request after inconclusive recovery. */
-export function deferMintRecovery(tx: CoreTransaction, input: DeferMintRecoveryInput) {
-  return trackTransactionWork(tx, async () => {
+export const deferMintRecovery = defineTransition<DeferMintRecoveryInput, void>(
+  async (tx, input) => {
     const current = await requireOperation(tx, input.operation.id);
     if (current.state !== 'executing') return;
     if (!sameRequest(current, input.operation))
       throw new Error('Mint recovery does not match persisted request');
     await tx.mintOperations.update({ ...current, updatedAt: input.now, error: input.error });
-  });
-}
+  },
+);
 
 async function requireOperation(tx: CoreTransaction, id: string): Promise<MintOperation> {
   const operation = await tx.mintOperations.getById(id);

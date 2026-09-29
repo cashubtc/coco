@@ -4,14 +4,15 @@ import { ProofValidationError, UnknownMintError } from '@core/models/Error.ts';
 import type { MintMetadataApplyResult, MintMetadataObservation } from '@core/mints/MintMetadata.ts';
 import type { MintRepository, KeysetRepository } from '@core/repositories';
 
-export interface TransactionMintMetadata {
+/** Mint metadata reads and mutations within an existing transaction; never opens or commits one. */
+export interface ScopedMintMetadata {
   assertCanMint(mintUrl: string, method: string, unit: string, amount: Amount): Promise<void>;
   assertTrusted(mintUrl: string): Promise<void>;
   applyObservation(observation: MintMetadataObservation): Promise<MintMetadataApplyResult>;
 }
 
 /** Cache persistence shared by owning transactions; remote metadata cannot change mint trust. */
-export class RepositoryTransactionMintMetadata implements TransactionMintMetadata {
+export class RepositoryScopedMintMetadata implements ScopedMintMetadata {
   constructor(
     private readonly mints: MintRepository,
     private readonly keysets: KeysetRepository,

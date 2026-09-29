@@ -20,6 +20,7 @@ import {
   type KeypairPurpose,
   type Keypair,
   DerivationIndexExhaustedError,
+  KeysetKeysConflictError,
   QuoteIdentityConflictError,
   RepositoryTransactionConflictError,
 } from '@cashu/coco-core/adapter';
@@ -252,6 +253,75 @@ export function runKeypairAllocationContract(
         }
       });
     }
+  });
+}
+
+export async function runKeysetRepositoryContract(
+  options: ContractOptions,
+  runner: ContractRunner,
+): Promise<void> {
+  const { describe, it, expect } = runner;
+
+  describe('keyset repository contract', () => {
+    it('keeps stored keys when a keyset is written again', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const keyset = createDummyKeyset();
+        const keys = { '1': '02aa', '2': '02bb' };
+        await repositories.keysetRepository.addKeyset({ ...keyset, keypairs: keys });
+
+        // A keyset id commits to its keys (NUT-02), so re-writing the same keys is a no-op
+        // that still refreshes the metadata around them.
+        await repositories.keysetRepository.addKeyset({
+          ...keyset,
+          keypairs: { '2': '02bb', '1': '02aa' },
+          active: false,
+          feePpk: 4,
+        });
+
+        const stored = await repositories.keysetRepository.getKeysetById(keyset.mintUrl, keyset.id);
+        expect(stored?.keypairs['1']).toBe('02aa');
+        expect(stored?.keypairs['2']).toBe('02bb');
+        expect(stored?.active).toBe(false);
+        expect(stored?.feePpk).toBe(4);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('rejects a write that would replace stored keys with different keys', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const keyset = createDummyKeyset();
+        await repositories.keysetRepository.addKeyset({ ...keyset, keypairs: { '1': '02aa' } });
+
+        await expectThrowsNamed(
+          () => repositories.keysetRepository.addKeyset({ ...keyset, keypairs: { '1': '02ff' } }),
+          KeysetKeysConflictError.name,
+          expect,
+        );
+
+        const stored = await repositories.keysetRepository.getKeysetById(keyset.mintUrl, keyset.id);
+        expect(stored?.keypairs['1']).toBe('02aa');
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('backfills keys onto a keyset recorded without them', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const keyset = createDummyKeyset();
+        const { keypairs: _ignored, updatedAt: _updatedAt, ...metadata } = keyset;
+        await repositories.keysetRepository.updateKeyset(metadata);
+        await repositories.keysetRepository.addKeyset({ ...keyset, keypairs: { '1': '02aa' } });
+
+        const stored = await repositories.keysetRepository.getKeysetById(keyset.mintUrl, keyset.id);
+        expect(stored?.keypairs['1']).toBe('02aa');
+      } finally {
+        await dispose();
+      }
+    });
   });
 }
 
