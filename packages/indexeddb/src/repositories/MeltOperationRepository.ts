@@ -7,7 +7,6 @@ import {
   stringifyJson,
 } from '@cashu/coco-core/adapter';
 import type { IdbDb, MeltOperationRow } from '../lib/db.ts';
-import { getUnixTimeSeconds } from '../lib/db.ts';
 import { assertFieldPresent } from '../utils.ts';
 
 type MeltOperation = NonNullable<Awaited<ReturnType<MeltOperationRepository['getById']>>>;
@@ -216,9 +215,7 @@ export class IdbMeltOperationRepository implements MeltOperationRepository {
         }
       }
 
-      const row = operationToRow(operation);
-      row.updatedAt = getUnixTimeSeconds();
-      await table.put(row);
+      await table.put(operationToRow(operation));
     });
   }
 

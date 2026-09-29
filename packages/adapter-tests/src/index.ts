@@ -2292,6 +2292,22 @@ export async function runMeltOperationRepositoryContract(
   const { describe, it, expect } = runner;
 
   describe('MeltOperationRepository contract', () => {
+    it('preserves the coordinator timestamp when updating melt operations', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = createDummyMeltOperation({ createdAt: 1000, updatedAt: 1000 });
+        await repositories.meltOperationRepository.create(operation);
+        await repositories.withTransaction(async ({ meltOperationRepository }) => {
+          await meltOperationRepository.update({ ...operation, updatedAt: 2000 });
+        });
+        expect((await repositories.meltOperationRepository.getById(operation.id))?.updatedAt).toBe(
+          2000,
+        );
+      } finally {
+        await dispose();
+      }
+    });
+
     it('round-trips custom-unit init melt operations', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {
