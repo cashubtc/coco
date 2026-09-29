@@ -4,8 +4,6 @@ import { assertSameUnit } from '@core/amounts';
 import type {
   CreateMintQuoteContext,
   ExecuteContext,
-  MintMethodMeta,
-  PrepareContext,
   MintMethodHandler,
   MintExecutionResult,
   PendingMintOperation,
@@ -15,7 +13,7 @@ import type {
   PendingMintObservationResult,
   FetchRemoteMintQuoteContext,
 } from '@core/operations/mint';
-import { deserializeOutputData, mapProofToCoreProof, serializeOutputData } from '@core/utils';
+import { deserializeOutputData } from '@core/utils';
 import {
   MintOperationError,
   MintQuoteKeyError,
@@ -64,59 +62,6 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
     return mintQuoteObservationFromBolt11Response(ctx.quote.mintUrl, remoteQuote);
   }
 
-  async prepare(
-    ctx: PrepareContext<'bolt11'>,
-  ): Promise<PendingMintOperation<'bolt11'> & MintMethodMeta<'bolt11'>> {
-    const quote = ctx.importedQuote;
-    if (!quote) {
-      throw new Error(`Mint quote ${ctx.operation.quoteId ?? '(missing)'} was not provided`);
-    }
-
-    if (!quote.amount || quote.amount.isZero()) {
-      throw new MintQuoteValidationError(`Mint quote ${quote.quote} has invalid amount`);
-    }
-
-    if (ctx.operation.quoteId !== quote.quote) {
-      throw new MintQuoteValidationError(
-        `Mint quote ${quote.quote} does not match operation quote ${ctx.operation.quoteId}`,
-      );
-    }
-
-    if (!quote.amount.equals(ctx.operation.amount)) {
-      throw new MintQuoteValidationError(
-        `Mint quote ${quote.quote} amount ${quote.amount} does not match requested amount ${ctx.operation.amount}`,
-      );
-    }
-
-    assertSameUnit(quote.unit, ctx.operation.unit, `Mint quote ${quote.quote}`);
-    await this.requireQuoteKey(quote.pubkey);
-
-    const outputData = await ctx.proofService.createOutputsAndIncrementCounters(
-      ctx.operation.mintUrl,
-      {
-        keep: { amount: quote.amount, unit: ctx.operation.unit },
-        send: { amount: Amount.zero(), unit: ctx.operation.unit },
-      },
-      {},
-    );
-
-    if (outputData.keep.length === 0) {
-      throw new Error('Failed to create deterministic outputs for mint operation');
-    }
-
-    return {
-      ...ctx.operation,
-      quoteId: quote.quote,
-      amount: quote.amount,
-      unit: ctx.operation.unit,
-      request: quote.request,
-      expiry: quote.expiry,
-      pubkey: quote.pubkey,
-      outputData: serializeOutputData({ keep: outputData.keep, send: [] }),
-      state: 'pending',
-    };
-  }
-
   async execute(ctx: ExecuteContext<'bolt11'>): Promise<MintExecutionResult> {
     const outputData = deserializeOutputData(ctx.operation.outputData);
     const signingOptions = await this.getMintQuoteSigningOptions(ctx.operation.pubkey);
@@ -125,7 +70,7 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
       const proofs = await ctx.wallet.mintProofsBolt11(
         ctx.operation.amount,
         ctx.operation.quoteId,
-        signingOptions,
+        { ...signingOptions, keysetId: outputData.keep[0]!.blindedMessage.id },
         {
           type: 'custom',
           data: outputData.keep,
@@ -161,7 +106,7 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
         error: error instanceof Error ? error.message : String(error),
       });
       return {
-        status: 'PENDING',
+        status: 'UNRESOLVED',
         error: error instanceof Error ? error.message : String(error),
       };
     }
@@ -171,12 +116,22 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
       remoteQuote.pubkey !== ctx.operation.pubkey
     ) {
       return {
-        status: 'PENDING',
+        status: 'UNRESOLVED',
         error: 'Recovered BOLT11 mint operation has mismatched NUT-20 quote ownership',
       };
     }
 
+    try {
+      this.assertQuoteMatchesOperation(remoteQuote, ctx.operation);
+    } catch (error) {
+      return {
+        status: 'UNRESOLVED',
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
     const quote = mintQuoteObservationFromBolt11Response(mintUrl, remoteQuote);
+    await ctx.recordQuoteSnapshot(remoteQuote);
+
     const assessment = assessMintQuoteClaimability(quote, {
       ...ctx.localClaimabilityFacts,
       requestedAmount: ctx.operation.amount,
@@ -184,14 +139,14 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
 
     if (assessment.status === 'invalid') {
       return {
-        status: 'TERMINAL',
+        status: 'UNRESOLVED',
         error: `Recovered: quote ${quoteId} has invalid claimability accounting`,
       };
     }
 
     if (assessment.status === 'waiting') {
       return {
-        status: 'PENDING',
+        status: 'UNRESOLVED',
         error: `Recovered: quote ${quoteId} is not yet claimable`,
       };
     }
@@ -203,40 +158,32 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
         const proofs = await ctx.wallet.mintProofsBolt11(
           ctx.operation.amount,
           ctx.operation.quoteId,
-          signingOptions,
+          { ...signingOptions, keysetId: outputData.keep[0]!.blindedMessage.id },
           {
             type: 'custom',
             data: outputData.keep,
           },
         );
 
-        await ctx.proofService.saveProofs(
-          ctx.operation.mintUrl,
-          mapProofToCoreProof(ctx.operation.mintUrl, 'ready', proofs, {
-            unit: ctx.operation.unit,
-            createdByOperationId: ctx.operation.id,
-          }),
-        );
-
-        return { status: 'FINALIZED' };
+        return { status: 'ISSUED', proofs };
       } catch (err) {
         if (err instanceof MintOperationError) {
           if (err.code === 20002) {
             // Quote already issued; fall through to proof recovery
           } else if (err.code === 20007) {
             return {
-              status: 'TERMINAL',
+              status: 'REJECTED',
               error: `Recovered: quote ${quoteId} expired while executing mint`,
             };
           } else {
             return {
-              status: 'PENDING',
+              status: 'UNRESOLVED',
               error: err.message,
             };
           }
         } else {
           return {
-            status: 'PENDING',
+            status: 'UNRESOLVED',
             error: err instanceof Error ? err.message : String(err),
           };
         }
@@ -244,24 +191,17 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
     }
 
     try {
-      const recovered = await ctx.proofService.recoverProofsFromOutputData(
-        ctx.operation.mintUrl,
-        ctx.operation.outputData,
-        {
-          unit: ctx.operation.unit,
-          createdByOperationId: ctx.operation.id,
-        },
-      );
+      const recovered = await ctx.restoreOutputs();
       if (recovered.length === 0) {
         return {
-          status: 'PENDING',
+          status: 'UNRESOLVED',
           error: `Recovered: quote ${quoteId} issued remotely but proofs were not recoverable`,
         };
       }
-      return { status: 'FINALIZED' };
+      return { status: 'ISSUED', proofs: recovered };
     } catch (error) {
       return {
-        status: 'PENDING',
+        status: 'UNRESOLVED',
         error: error instanceof Error ? error.message : String(error),
       };
     }
@@ -276,7 +216,7 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
     const quote = await ctx.mintAdapter.checkMintQuote(mintUrl, 'bolt11', quoteId);
     const observedAt = Date.now();
     try {
-      this.assertPendingQuoteMatchesOperation(quote, ctx.operation);
+      this.assertQuoteMatchesOperation(quote, ctx.operation);
     } catch (error) {
       return {
         observedAt,
@@ -299,9 +239,12 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
     await this.requireQuoteKey(quote.pubkey);
   }
 
-  private assertPendingQuoteMatchesOperation(
+  private assertQuoteMatchesOperation(
     quote: MintQuoteBolt11Response,
-    operation: PendingMintOperation<'bolt11'>,
+    operation: Pick<
+      PendingMintOperation<'bolt11'>,
+      'quoteId' | 'request' | 'unit' | 'amount' | 'pubkey'
+    >,
   ): void {
     if (quote.quote !== operation.quoteId || quote.request !== operation.request) {
       throw new MintQuoteValidationError(

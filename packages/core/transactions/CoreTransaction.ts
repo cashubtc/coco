@@ -4,6 +4,8 @@ import {
   type Repositories,
   type RepositoryTransactionScope,
   type SendOperationRepository,
+  type MintOperationRepository,
+  type MintQuoteRepository,
 } from '@core/repositories';
 import {
   RepositoryScopedMintMetadata,
@@ -26,6 +28,11 @@ export interface CoreTransaction {
   readonly keypairs: ScopedKeypairs;
   readonly proofs: ScopedProofs;
   readonly outputs: ScopedOutputs;
+  readonly mintOperations: Pick<
+    MintOperationRepository,
+    'getById' | 'getByQuoteId' | 'create' | 'update' | 'delete'
+  >;
+  readonly mintQuotes: Pick<MintQuoteRepository, 'getMintQuote'>;
   readonly sendOperations: Pick<
     SendOperationRepository,
     'getById' | 'getByMintUrl' | 'create' | 'transition' | 'delete'
@@ -89,6 +96,8 @@ export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
       // The proxy binds methods to the raw object; bodies must receive the bound scope instead.
       perform: <I, O>(transition: Transition<I, O>, input?: I): Promise<O> =>
         getTransitionBody(transition)(scoped, input as I),
+      mintOperations: repositories.mintOperationRepository,
+      mintQuotes: repositories.mintQuoteRepository,
       mintMetadata,
       keypairs: new RepositoryScopedKeypairs(repositories.keyRingRepository),
       proofs,

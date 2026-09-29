@@ -5,8 +5,9 @@ import type { AllocateKeypairInput } from '../../keypairs/types.ts';
 
 const MAX_DERIVATION_INDEX = 0x7fffffff;
 
-/** Keypair mutations within an existing transaction; never opens or commits a transaction. */
+/** Keypair reads and mutations within an existing transaction; never opens or commits one. */
 export interface ScopedKeypairs {
+  getMintQuoteKey(publicKey: string): Promise<Keypair | null>;
   /** Await each allocation before starting another for the same purpose within this scope. */
   allocate(input: AllocateKeypairInput): Promise<Keypair>;
   importP2pk(keypair: Keypair): Promise<void>;
@@ -15,6 +16,10 @@ export interface ScopedKeypairs {
 
 export class RepositoryScopedKeypairs implements ScopedKeypairs {
   constructor(private readonly repository: KeyRingRepository) {}
+
+  getMintQuoteKey(publicKey: string): Promise<Keypair | null> {
+    return this.repository.getPersistedKeyPair(publicKey, 'nut20_mint_quote');
+  }
 
   async allocate(input: AllocateKeypairInput): Promise<Keypair> {
     const lastAllocatedIndex = await this.repository.getLastAllocatedIndex(input.purpose);

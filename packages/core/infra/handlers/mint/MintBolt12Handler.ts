@@ -1,7 +1,7 @@
-import { Amount, type MintQuoteBolt12Response, type Wallet } from '@cashu/cashu-ts';
+import type { Amount, MintQuoteBolt12Response, Wallet } from '@cashu/cashu-ts';
 import { assertSameUnit, normalizeUnitAmount } from '@core/amounts';
 import type { KeyRingService } from '@core/services';
-import { deserializeOutputData, mapProofToCoreProof, serializeOutputData } from '@core/utils';
+import { deserializeOutputData } from '@core/utils';
 import { bytesToHex } from '@noble/curves/utils.js';
 import {
   MintOperationError,
@@ -20,8 +20,6 @@ import type {
   MintMethodHandler,
   PendingContext,
   PendingMintObservationResult,
-  PendingMintOperation,
-  PrepareContext,
   RecoverExecutingContext,
   RecoverExecutingResult,
 } from '../../../operations/mint';
@@ -72,45 +70,6 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
     await this.requireQuoteKey(quote.quoteData.pubkey);
   }
 
-  async prepare(ctx: PrepareContext<'bolt12'>): Promise<PendingMintOperation<'bolt12'>> {
-    const quote = ctx.importedQuote;
-    if (!quote) {
-      throw new Error(`Mint quote ${ctx.operation.quoteId ?? '(missing)'} was not provided`);
-    }
-
-    if (ctx.operation.quoteId !== quote.quote) {
-      throw new MintQuoteValidationError(
-        `Mint quote ${quote.quote} does not match operation quote ${ctx.operation.quoteId}`,
-      );
-    }
-
-    assertSameUnit(quote.unit, ctx.operation.unit, `BOLT12 mint quote ${quote.quote}`);
-    await this.requireQuoteKey(quote.pubkey);
-
-    const outputData = await ctx.proofService.createOutputsAndIncrementCounters(
-      ctx.operation.mintUrl,
-      {
-        keep: { amount: ctx.operation.amount, unit: ctx.operation.unit },
-        send: { amount: Amount.zero(), unit: ctx.operation.unit },
-      },
-      {},
-    );
-
-    if (outputData.keep.length === 0) {
-      throw new Error('Failed to create deterministic outputs for BOLT12 mint operation');
-    }
-
-    return {
-      ...ctx.operation,
-      quoteId: quote.quote,
-      request: quote.request,
-      expiry: quote.expiry,
-      pubkey: quote.pubkey,
-      outputData: serializeOutputData({ keep: outputData.keep, send: [] }),
-      state: 'pending',
-    };
-  }
-
   async execute(ctx: ExecuteContext<'bolt12'>): Promise<MintExecutionResult> {
     const quoteKey = await this.keyRingService.getMintQuoteKeyPair(ctx.operation.pubkey ?? '');
     if (!quoteKey) {
@@ -125,7 +84,8 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
       'bolt12',
       ctx.operation.quoteId,
     );
-    this.assertQuoteMatchesRequest(remoteQuote, ctx.operation.pubkey ?? '', ctx.operation.unit);
+    const validationError = getReusableMintQuoteValidationError(remoteQuote, ctx.operation);
+    if (validationError) throw validationError;
     const assessment = assessMintQuoteClaimability(
       mintQuoteObservationFromBolt12Response(ctx.operation.mintUrl, remoteQuote),
       { requestedAmount: ctx.operation.amount },
@@ -141,7 +101,7 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
         ctx.operation.amount,
         remoteQuote,
         bytesToHex(quoteKey.secretKey),
-        undefined,
+        { keysetId: outputData.keep[0]!.blindedMessage.id },
         { type: 'custom', data: outputData.keep },
       );
 
@@ -164,7 +124,7 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
     const expectedPubkey = operation.pubkey;
     if (!expectedPubkey) {
       return {
-        status: 'TERMINAL',
+        status: 'UNRESOLVED',
         error: `Recovered: BOLT12 mint operation ${operation.id} is missing NUT-20 quote pubkey`,
       };
     }
@@ -184,19 +144,15 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
         error: error instanceof Error ? error.message : String(error),
       });
       return {
-        status: 'PENDING',
+        status: 'UNRESOLVED',
         error: error instanceof Error ? error.message : String(error),
       };
     }
 
-    const validationError = this.getQuoteValidationError(
-      remoteQuote,
-      expectedPubkey,
-      operation.unit,
-    );
+    const validationError = getReusableMintQuoteValidationError(remoteQuote, operation);
     if (validationError) {
       return {
-        status: 'TERMINAL',
+        status: 'UNRESOLVED',
         error: validationError.message,
       };
     }
@@ -204,10 +160,12 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
     const quoteKey = await this.keyRingService.getMintQuoteKeyPair(expectedPubkey);
     if (!quoteKey) {
       return {
-        status: 'TERMINAL',
+        status: 'UNRESOLVED',
         error: `Missing NUT-20 mint quote key for pubkey ${expectedPubkey}`,
       };
     }
+
+    await ctx.recordQuoteSnapshot(remoteQuote);
 
     const assessment = assessMintQuoteClaimability(
       mintQuoteObservationFromBolt12Response(operation.mintUrl, remoteQuote),
@@ -215,13 +173,13 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
     );
     if (assessment.status === 'invalid') {
       return {
-        status: 'TERMINAL',
+        status: 'UNRESOLVED',
         error: `Recovered: BOLT12 quote ${operation.quoteId} has invalid claimability accounting`,
       };
     }
     if (assessment.status !== 'claimable') {
       return {
-        status: 'PENDING',
+        status: 'UNRESOLVED',
         error: `Recovered: BOLT12 quote ${operation.quoteId} has ${assessment.remoteAvailable} remotely available, requested ${operation.amount}`,
       };
     }
@@ -232,24 +190,16 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
         operation.amount,
         remoteQuote,
         bytesToHex(quoteKey.secretKey),
-        undefined,
+        { keysetId: outputData.keep[0]!.blindedMessage.id },
         { type: 'custom', data: outputData.keep },
       );
 
-      await ctx.proofService.saveProofs(
-        operation.mintUrl,
-        mapProofToCoreProof(operation.mintUrl, 'ready', proofs, {
-          unit: operation.unit,
-          createdByOperationId: operation.id,
-        }),
-      );
-
-      return { status: 'FINALIZED' };
+      return { status: 'ISSUED', proofs };
     } catch (error) {
       if (this.isAlreadyIssuedError(error)) {
         return (
           (await this.recoverSignedOutputs(ctx)) ?? {
-            status: 'PENDING',
+            status: 'UNRESOLVED',
             error: `Recovered: BOLT12 quote ${operation.quoteId} was already issued but proofs were not recoverable`,
           }
         );
@@ -257,13 +207,13 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
 
       if (error instanceof MintOperationError && error.code === 20007) {
         return {
-          status: 'TERMINAL',
+          status: 'REJECTED',
           error: `Recovered: BOLT12 quote ${operation.quoteId} expired while executing mint`,
         };
       }
 
       return {
-        status: 'PENDING',
+        status: 'UNRESOLVED',
         error: error instanceof Error ? error.message : String(error),
       };
     }
@@ -371,16 +321,9 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
     ctx: RecoverExecutingContext<'bolt12'>,
   ): Promise<RecoverExecutingResult | null> {
     try {
-      const recovered = await ctx.proofService.recoverProofsFromOutputData(
-        ctx.operation.mintUrl,
-        ctx.operation.outputData,
-        {
-          unit: ctx.operation.unit,
-          createdByOperationId: ctx.operation.id,
-        },
-      );
+      const recovered = await ctx.restoreOutputs();
 
-      return recovered.length > 0 ? { status: 'FINALIZED' } : null;
+      return recovered.length > 0 ? { status: 'ISSUED', proofs: recovered } : null;
     } catch (error) {
       ctx.logger?.warn('Failed to recover BOLT12 mint outputs from output data', {
         mintUrl: ctx.operation.mintUrl,
@@ -389,22 +332,9 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
         error: error instanceof Error ? error.message : String(error),
       });
       return {
-        status: 'PENDING',
+        status: 'UNRESOLVED',
         error: error instanceof Error ? error.message : String(error),
       };
-    }
-  }
-
-  private getQuoteValidationError(
-    quote: MintQuoteBolt12Response,
-    expectedPubkey: string,
-    expectedUnit: string,
-  ): Error | null {
-    try {
-      this.assertQuoteMatchesRequest(quote, expectedPubkey, expectedUnit);
-      return null;
-    } catch (error) {
-      return error instanceof Error ? error : new Error(String(error));
     }
   }
 
