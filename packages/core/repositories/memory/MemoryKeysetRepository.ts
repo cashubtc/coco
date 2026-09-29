@@ -1,4 +1,4 @@
-import type { Keyset } from '../../models/Keyset';
+import { reconcileKeysetKeypairs, type Keyset } from '../../models/Keyset';
 import type { KeysetRepository } from '..';
 import { cloneMemoryValue, COPY_MEMORY_REPOSITORY_STATE } from './MemoryRepositoryTransaction.ts';
 
@@ -49,6 +49,12 @@ export class MemoryKeysetRepository implements KeysetRepository {
     const mintMap = this.getMintMap(keyset.mintUrl);
     mintMap.set(keyset.id, {
       ...keyset,
+      keypairs: reconcileKeysetKeypairs(
+        keyset.mintUrl,
+        keyset.id,
+        mintMap.get(keyset.id)?.keypairs,
+        keyset.keypairs,
+      ),
       updatedAt: Math.floor(Date.now() / 1000),
     });
   }
