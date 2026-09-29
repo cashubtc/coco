@@ -107,6 +107,18 @@ Please open an issue before spending time on:
 
 This helps us agree on direction before implementation.
 
+## Security fixes
+
+When a task involves a vulnerability or an uncoordinated security fix, do not
+describe the exploit in depth in anything public: PR titles or bodies, commit
+messages, review comments, or code comments. Keep the public summary high-level
+(state that a security issue was fixed) and leave out reproduction steps, proofs
+of concept, root-cause specifics, and attack paths.
+
+Until a fix has been released and disclosure has been coordinated, send the
+detailed write-up to the security contact listed under
+[Reporting a Vulnerability](SECURITY.md#reporting-a-vulnerability) in `SECURITY.md`.
+
 ## AI-assisted contributions
 
 We encourage AI use and AI-assisted contributions, especially to improve code

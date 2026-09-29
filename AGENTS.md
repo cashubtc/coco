@@ -7,8 +7,8 @@ and linked documents for details that change with the codebase.
 
 - Use the affected package's `package.json`, root scripts, and tool config for current commands and
   settings. If prose disagrees with executable config, follow the config and flag or fix the prose.
-- Use `CONTRIBUTING.md` for setup, development workflow, testing, pull requests, changesets, and
-  release expectations.
+- Use `CONTRIBUTING.md` for setup, development workflow, security fixes, testing, pull requests,
+  changesets, and release expectations.
 - Follow nearby source and tests for package-local conventions; avoid creating a second convention
   when an established pattern exists.
 
@@ -53,18 +53,6 @@ establish adherence. When changing the contract, update the design and ADR in th
 - CLI, daemon, and host lifecycle: `packages/cocod`; domain changes here read both the Cocod Host
   and Coco Cashu contexts through `docs/agents/domain.md`.
 - Public documentation and examples: `packages/docs`.
-
-## Security fixes
-
-When a task involves a vulnerability or an uncoordinated security fix, do not
-describe the exploit in depth in anything public: PR titles or bodies, commit
-messages, review comments, or code comments. Keep the public summary high-level
-(state that a security issue was fixed) and leave out reproduction steps, proofs
-of concept, root-cause specifics, and attack paths.
-
-Until a fix has been released and disclosure has been coordinated, send the
-detailed write-up to the security contact listed under "Reporting a Vulnerability"
-in `SECURITY.md`.
 
 ## Workflow
 
