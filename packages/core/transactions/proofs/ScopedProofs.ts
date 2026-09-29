@@ -1,4 +1,4 @@
-import { selectProofsRGLI, type Amount, type SelectProofs } from '@cashu/cashu-ts';
+import { selectProofsRGLI, sumProofs, type Amount, type SelectProofs } from '@cashu/cashu-ts';
 import { normalizeUnit } from '@core/amounts.ts';
 import { ProofValidationError } from '@core/models/Error.ts';
 import { createKeyChain } from '@core/proofs/KeysetSelection.ts';
@@ -24,12 +24,26 @@ export interface SelectAndReserveProofsInput {
   forceSwap: boolean;
 }
 
+export interface SelectAndReserveForMeltInput {
+  mintUrl: string;
+  unit: string;
+  operationId: string;
+  /** Canonical quote amount plus the selected fee reserve. */
+  amount: Amount;
+}
+
 /** Proof reads and mutations within an existing transaction; never opens or commits one. */
 export interface ScopedProofs extends ProofQueries {
   saveCreated(mintUrl: string, proofs: CoreProof[]): Promise<void>;
   selectAndReserve(input: SelectAndReserveProofsInput): Promise<{
     proofs: CoreProof[];
     fee: Amount;
+    needsSwap: boolean;
+  }>;
+  selectAndReserveForMelt(input: SelectAndReserveForMeltInput): Promise<{
+    proofs: CoreProof[];
+    inputAmount: Amount;
+    inputFee: Amount;
     needsSwap: boolean;
   }>;
   getFee(mintUrl: string, unit: string, proofs: readonly CoreProof[]): Promise<Amount>;
@@ -92,6 +106,31 @@ export class RepositoryScopedProofs implements ScopedProofs {
     }
     await this.proofs.reserveProofs(input.mintUrl, secrets, input.operationId);
     return { ...selected, proofs: selected.proofs as CoreProof[] };
+  }
+
+  async selectAndReserveForMelt(input: SelectAndReserveForMeltInput) {
+    const available = await this.proofs.getAvailableProofs(input.mintUrl, { unit: input.unit });
+    const keysets = await this.keysets.getKeysetsByMintUrl(input.mintUrl);
+    const selected = selectProofInputs(
+      input,
+      available,
+      createKeyChain(input.mintUrl, input.unit, keysets),
+      this.selectProofs,
+      true,
+    );
+    const proofs = selected.proofs as CoreProof[];
+    const secrets = proofs.map((proof) => proof.secret);
+    if (new Set(secrets).size !== secrets.length) {
+      throw new ProofValidationError('Melt proof selection contains duplicate inputs');
+    }
+    await this.proofs.reserveProofs(input.mintUrl, secrets, input.operationId);
+    const inputAmount = sumProofs(proofs);
+    return {
+      proofs,
+      inputAmount,
+      inputFee: selected.fee,
+      needsSwap: inputAmount.greaterThanOrEqual(input.amount.scaledBy(11, 10)),
+    };
   }
 
   async getFee(mintUrl: string, unit: string, proofs: readonly CoreProof[]): Promise<Amount> {

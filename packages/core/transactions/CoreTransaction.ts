@@ -6,6 +6,8 @@ import {
   type SendOperationRepository,
   type MintOperationRepository,
   type MintQuoteRepository,
+  type MeltOperationRepository,
+  type MeltQuoteRepository,
 } from '@core/repositories';
 import {
   RepositoryScopedMintMetadata,
@@ -33,6 +35,11 @@ export interface CoreTransaction {
     'getById' | 'getByQuoteId' | 'create' | 'update' | 'delete'
   >;
   readonly mintQuotes: Pick<MintQuoteRepository, 'getMintQuote'>;
+  readonly meltOperations: Pick<
+    MeltOperationRepository,
+    'getById' | 'getByQuoteId' | 'create' | 'update' | 'delete'
+  >;
+  readonly meltQuotes: Pick<MeltQuoteRepository, 'getMeltQuote' | 'getMeltQuoteById'>;
   readonly sendOperations: Pick<
     SendOperationRepository,
     'getById' | 'getByMintUrl' | 'create' | 'transition' | 'delete'
@@ -98,6 +105,8 @@ export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
         getTransitionBody(transition)(scoped, input as I),
       mintOperations: repositories.mintOperationRepository,
       mintQuotes: repositories.mintQuoteRepository,
+      meltOperations: repositories.meltOperationRepository,
+      meltQuotes: repositories.meltQuoteRepository,
       mintMetadata,
       keypairs: new RepositoryScopedKeypairs(repositories.keyRingRepository),
       proofs,

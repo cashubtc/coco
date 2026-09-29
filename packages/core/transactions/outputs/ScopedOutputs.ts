@@ -26,11 +26,22 @@ export interface AllocateOutputsResult {
   counter?: Counter;
 }
 
+export interface AllocateBlankOutputsInput {
+  mintUrl: string;
+  unit: string;
+  activeKeys: MintKeys;
+  seed: Uint8Array;
+  /** Maximum change value the blank outputs must be able to represent. */
+  amount: Amount;
+}
+
 /** Output allocation within an existing transaction; never opens or commits a transaction. */
 export interface ScopedOutputs {
   assertActiveKeys(mintUrl: string, unit: string, activeKeys: MintKeys): Promise<void>;
   /** The caller must persist the returned output plan in this same transaction. */
   allocate(input: AllocateOutputsInput): Promise<AllocateOutputsResult>;
+  /** The caller must persist the returned NUT-08 plan in this same transaction. */
+  allocateBlank(input: AllocateBlankOutputsInput): Promise<AllocateOutputsResult>;
 }
 
 /** Shared deterministic Output Allocation. The owning transition persists its plan in the same scope. */
@@ -89,5 +100,33 @@ export class RepositoryScopedOutputs implements ScopedOutputs {
         : undefined;
     if (counter) await this.counters.setCounter(counter.mintUrl, counter.keysetId, counter.counter);
     return { outputData: serializeOutputData({ keep, send }), counter };
+  }
+
+  async allocateBlank(input: AllocateBlankOutputsInput): Promise<AllocateOutputsResult> {
+    await this.assertActiveKeys(input.mintUrl, input.unit, input.activeKeys);
+    const value = input.amount.toBigInt();
+    const positions = value === 0n ? 0 : Math.max((value - 1n).toString(2).length, 1);
+    if (positions === 0) {
+      return { outputData: serializeOutputData({ keep: [], send: [] }) };
+    }
+    const current =
+      (await this.counters.getCounter(input.mintUrl, input.activeKeys.id))?.counter ?? 0;
+    const keep = Array.from({ length: positions }, (_, index) =>
+      this.creator.createSingleDeterministicData(
+        0,
+        input.seed,
+        current + index,
+        input.activeKeys.id,
+      ),
+    );
+    const next = current + positions;
+    if (!Number.isSafeInteger(next)) throw new ProofValidationError('Output counter exhausted');
+    const counter = {
+      mintUrl: input.mintUrl,
+      keysetId: input.activeKeys.id,
+      counter: next,
+    };
+    await this.counters.setCounter(counter.mintUrl, counter.keysetId, counter.counter);
+    return { outputData: serializeOutputData({ keep, send: [] }), counter };
   }
 }

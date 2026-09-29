@@ -7,6 +7,7 @@ import type { MintRepository, KeysetRepository } from '@core/repositories';
 /** Mint metadata reads and mutations within an existing transaction; never opens or commits one. */
 export interface ScopedMintMetadata {
   assertCanMint(mintUrl: string, method: string, unit: string, amount: Amount): Promise<void>;
+  assertCanMelt(mintUrl: string, method: string, unit: string): Promise<void>;
   assertTrusted(mintUrl: string): Promise<void>;
   applyObservation(observation: MintMetadataObservation): Promise<MintMetadataApplyResult>;
 }
@@ -38,6 +39,17 @@ export class RepositoryScopedMintMetadata implements ScopedMintMetadata {
         (capability.max_amount != null && amount.greaterThan(Amount.from(capability.max_amount))))
     )
       throw new ProofValidationError(`Mint amount is outside NUT-04 limits for ${method} ${unit}`);
+  }
+
+  async assertCanMelt(mintUrl: string, method: string, unit: string): Promise<void> {
+    await this.assertTrusted(mintUrl);
+    const mint = await this.mints.findMintByUrl(mintUrl);
+    const settings = mint?.mintInfo.nuts['5'];
+    const capability = settings?.methods?.find(
+      (entry) => entry.method === method && normalizeUnit(entry.unit) === normalizeUnit(unit),
+    );
+    if (settings?.disabled || !capability)
+      throw new ProofValidationError(`NUT-05 method ${method} does not support unit ${unit}`);
   }
 
   async assertTrusted(mintUrl: string): Promise<void> {
