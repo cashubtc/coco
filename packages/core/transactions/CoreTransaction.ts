@@ -5,10 +5,7 @@ import {
   type RepositoryTransactionScope,
   type SendOperationRepository,
 } from '@core/repositories';
-import {
-  RepositoryScopedMintMetadata,
-  type ScopedMintMetadata,
-} from './mints/ScopedMintMetadata.ts';
+import { RepositoryScopedMints, type ScopedMints } from './mints/ScopedMints.ts';
 import { RepositoryScopedProofs, type ScopedProofs } from './proofs/ScopedProofs.ts';
 import { RepositoryScopedOutputs, type ScopedOutputs } from './outputs/ScopedOutputs.ts';
 import { RepositoryScopedKeypairs, type ScopedKeypairs } from './keypairs/ScopedKeypairs.ts';
@@ -22,7 +19,7 @@ import { getTransitionBody, type Transition } from './Transition.ts';
 export interface CoreTransaction {
   perform<O>(transition: Transition<void, O>): Promise<O>;
   perform<I, O>(transition: Transition<I, O>, input: I): Promise<O>;
-  readonly mintMetadata: ScopedMintMetadata;
+  readonly mints: ScopedMints;
   readonly keypairs: ScopedKeypairs;
   readonly proofs: ScopedProofs;
   readonly outputs: ScopedOutputs;
@@ -72,7 +69,7 @@ export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
     repositories: RepositoryTransactionScope,
     lifetime: TransactionLifetime,
   ): CoreTransaction {
-    const mintMetadata = new RepositoryScopedMintMetadata(
+    const mints = new RepositoryScopedMints(
       repositories.mintRepository,
       repositories.keysetRepository,
     );
@@ -89,7 +86,7 @@ export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
       // The proxy binds methods to the raw object; bodies must receive the bound scope instead.
       perform: <I, O>(transition: Transition<I, O>, input?: I): Promise<O> =>
         getTransitionBody(transition)(scoped, input as I),
-      mintMetadata,
+      mints,
       keypairs: new RepositoryScopedKeypairs(repositories.keyRingRepository),
       proofs,
       outputs,

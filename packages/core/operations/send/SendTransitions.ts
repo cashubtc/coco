@@ -66,7 +66,7 @@ export const prepareSend = defineTransition<PrepareSendInput, PrepareSendResult>
       );
     }
 
-    await tx.mintMetadata.assertTrusted(operation.mintUrl);
+    await tx.mints.assertTrusted(operation.mintUrl);
     const selected = await tx.proofs.selectAndReserve({
       mintUrl: operation.mintUrl,
       unit: operation.unit,

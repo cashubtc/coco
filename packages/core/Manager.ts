@@ -925,8 +925,6 @@ export class Manager {
       repositories.keysetRepository,
     );
     const mintService = new MintService(
-      repositories.mintRepository,
-      repositories.keysetRepository,
       this.mintAdapter,
       {
         queries: mintQueries,

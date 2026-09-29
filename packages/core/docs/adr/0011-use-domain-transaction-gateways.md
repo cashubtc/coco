@@ -73,10 +73,17 @@ accessor remain in `transactions/Transition.ts` and stay out of package entry po
 
 Independently committed actions such as `MintService.refreshAndCommitIfStale` remain reusable outside
 transactions. Their commits intentionally survive later caller failure. Only applied metadata
-observations publish events; older observations and timestamp ties retain the first committed
-snapshot. Coordinator dependencies remain acyclic.
+observations publish events. Stale refresh and add retain the first committed snapshot for older
+observations and timestamp ties; forced refresh applies equal timestamps but ignores older ones.
+Coordinator dependencies remain acyclic.
 
-Send, KeyRing, and mint metadata refresh use this model. Other legacy workflows migrate separately.
+Send, KeyRing, and MintService mutations use this model. MintService coordinates remote fetching
+outside `run()` and composes `tx.mints` capabilities inside it, without root repositories or a domain
+gateway. `ScopedMints` reads current trust in the same scope as metadata writes and retains Send's
+trust check. Add commits metadata, keysets, and explicit trust together; deletion removes mint and
+keysets together. Trust/untrust intentionally commit before an optional independent stale refresh.
+Mutation events follow commit and listener failures cannot reject committed work. Other legacy
+workflows migrate separately.
 Consistent fail-fast rejection of nested transactions remains follow-up work and must distinguish
 nesting from legitimate concurrent calls. There are no public API or persisted-format changes.
 

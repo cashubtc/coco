@@ -2,7 +2,7 @@ import { Amount } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect, mock } from 'bun:test';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 import { MintRequestProvider } from '../../infra/MintRequestProvider.ts';
-import { createMintMetadataRefreshDependencies } from '../fixtures/MintMetadataRefresh.ts';
+import { createMintServiceDependencies } from '../fixtures/MintMetadataRefresh.ts';
 import { MintService } from '../../services/MintService';
 import { ProofValidationError } from '../../models/Error';
 import type { MemoryMintRepository } from '../../repositories/memory/MemoryMintRepository';
@@ -70,10 +70,8 @@ describe('MintService', () => {
     });
 
     service = new MintService(
-      mintRepo,
-      keysetRepo,
       mockAdapter,
-      createMintMetadataRefreshDependencies(repositories),
+      createMintServiceDependencies(repositories),
       undefined,
       eventBus,
     );

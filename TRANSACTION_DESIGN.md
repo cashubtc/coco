@@ -157,8 +157,22 @@ Coordinator dependencies remain acyclic. Transitions and scoped capabilities nev
 these actions.
 
 Mint metadata application returns the committed snapshot and an applied/ignored disposition.
-Older observations and timestamp ties retain the first committed snapshot. Only applied observations
-publish refresh events, preventing ignored observations from resetting batch-polling suppression.
+Stale refresh and add retain the first committed snapshot on older observations or timestamp ties.
+Forced refresh accepts equal timestamps so repeated explicit refreshes within one second apply
+fetched changes, but still ignores older observations. Only applied observations publish refresh
+events, preventing ignored observations from resetting batch-polling suppression.
+
+`MintService` owns add, forced refresh, trust changes, and deletion through the shared
+`transactionRunner`. Remote metadata fetching and read-only preflight happen before `run()`;
+`tx.mints` reads authoritative mint state and writes metadata, keysets, and explicit trust choices
+inside the same adapter scope. Metadata observations preserve current trust. Add commits an explicit
+trust choice with metadata and keysets; trust/untrust deliberately commit their choice before any
+independent stale refresh. Delete removes the mint and its keysets together. Mutation events follow
+commit, and listener failures are logged without rejecting committed work.
+
+`ScopedMints` also supplies Send's scoped trust check. Its capabilities never open a transaction and
+can compose with other local work in one caller-owned scope. `MintService` has no root repository
+or domain gateway dependency.
 
 ## Persistence, Retry, and Recovery Guarantees
 
@@ -222,7 +236,7 @@ transactions/
   proofs/ScopedProofs.ts                      # shared proof rules and scoped persistence
   outputs/ScopedOutputs.ts                    # output allocation including counters
   keypairs/ScopedKeypairs.ts                  # keypair allocation and scoped persistence
-  mints/ScopedMintMetadata.ts                 # metadata application and trust checks
+  mints/ScopedMints.ts                        # mint management and trust checks
 ```
 
 Names describe authority and lifetime:
@@ -321,9 +335,9 @@ Before completing a change involving Wallet persistence, operation coordination,
 
 ## Migration and Verification
 
-Send transitions, KeyRing mutations, and mint metadata refresh use coordinator-owned transactions.
+Send transitions, KeyRing mutations, and MintService mutations use coordinator-owned transactions.
 Legacy Receive, Mint, Melt, Mint Swap orchestration, Payment Request Receive parent/attempt/child
-atomicity, and MintService add/forced-update/trust/delete paths remain for their owning migrations.
+atomicity remain for their owning migrations.
 Those migrations should reuse domain capabilities and branded transitions, rather than add domain gateways.
 Runtime rejection of nested Wallet transactions remains nonuniform: IndexedDB rejects ambient
 transactions, while Memory/SQLite root calls may queue behind an outer caller awaiting them. Do not
