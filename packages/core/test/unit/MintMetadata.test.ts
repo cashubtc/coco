@@ -144,6 +144,54 @@ describe.each(['memory', 'sqlite'] as const)(
       });
     }
 
+    it('rejects refreshed keys that conflict with populated stored keys without publishing events', async () => {
+      await repositories.mintRepository.addNewMint(original);
+      await repositories.keysetRepository.addKeyset({
+        ...keyset,
+        keypairs: { ...testMintKeypairs, '1': testMintKeypairs['2'] },
+      });
+      const stored = await repositories.keysetRepository.getKeysetById(mintUrl, keyset.id);
+      const requests: string[] = [];
+      const provider = new MintRequestProvider();
+      provider.getRequestFn =
+        () =>
+        async <T>({ endpoint }: { endpoint: string }): Promise<T> => {
+          requests.push(endpoint);
+          if (endpoint.endsWith('/v1/info')) return observation.mintInfo as T;
+          if (endpoint.endsWith('/v1/keysets')) {
+            return { keysets: [{ id: keyset.id, unit: 'sat', active: false }] } as T;
+          }
+          if (endpoint.endsWith(`/v1/keys/${keyset.id}`)) {
+            return { keysets: [{ id: keyset.id, unit: 'sat', keys: testMintKeypairs }] } as T;
+          }
+          throw new Error(`Unexpected endpoint: ${endpoint}`);
+        };
+      const mintAdapter = new MintAdapter(provider);
+      const events = new EventBus<CoreEvents>();
+      const published: string[] = [];
+      events.on('mint:metadata-refreshed', () => {
+        published.push('mint:metadata-refreshed');
+      });
+      events.on('mint:updated', () => {
+        published.push('mint:updated');
+      });
+      const service = createMintServiceForMetadata(
+        repositories,
+        { fetchMintMetadata: mintAdapter.fetchMintMetadata.bind(mintAdapter) },
+        events,
+      );
+
+      await expect(service.refreshAndCommitIfStale(mintUrl)).rejects.toMatchObject({
+        name: 'KeysetKeysConflictError',
+        mintUrl,
+        keysetId: keyset.id,
+      });
+      expect(requests).toContain(`${mintUrl}/v1/keys/${keyset.id}`);
+      expect(await repositories.keysetRepository.getKeysetById(mintUrl, keyset.id)).toEqual(stored);
+      expect(await repositories.mintRepository.getMintByUrl(mintUrl)).toEqual(original);
+      expect(published).toEqual([]);
+    });
+
     it('returns missing or stale stored metadata without opening a transaction or refreshing it', async () => {
       const queries = new StoredMintQueries(
         repositories.mintRepository,
