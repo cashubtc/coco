@@ -38,6 +38,7 @@ export class StoredMintQueries implements MintQueries {
       getAllMints(): Promise<Mint[]>;
       getAllTrustedMints(): Promise<Mint[]>;
       isTrustedMint(mintUrl: string): Promise<boolean>;
+      findMintByUrl(mintUrl: string): Promise<Mint | null>;
     },
     private readonly keysets: { getKeysetsByMintUrl(mintUrl: string): Promise<Keyset[]> },
   ) {}
@@ -56,7 +57,7 @@ export class StoredMintQueries implements MintQueries {
 
   async getMetadata(mintUrl: string): Promise<MintMetadata | null> {
     mintUrl = normalizeMintUrl(mintUrl);
-    const mint = (await this.mints.getAllMints()).find((item) => item.mintUrl === mintUrl);
+    const mint = await this.mints.findMintByUrl(mintUrl);
     if (!mint) return null;
     const keysets = await this.keysets.getKeysetsByMintUrl(mintUrl);
     return { mint, keysets: keysets.filter((keyset) => !isBlsKeyset(keyset.id)) };

@@ -9,7 +9,7 @@ import type {
   PendingMintOperation,
 } from '@core/operations/mint';
 import type { SubscriptionKind } from '@core/infra/SubscriptionProtocol.ts';
-import { mintQuoteToMethodSnapshot, type MintQuote } from '../../models/MintQuote.ts';
+import type { MintQuote } from '../../models/MintQuote.ts';
 import { assessMintQuoteClaimability } from '../../models/MintQuoteClaimability.ts';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
 
@@ -51,22 +51,13 @@ export interface MintOperationWatcherOptions {
 type WatchableMintQuote<M extends MintMethod = MintMethod> = Pick<
   MintQuote<M>,
   'mintUrl' | 'method' | 'quoteId'
-> & {
-  snapshot?: MintMethodQuoteSnapshot<M>;
-};
-
-interface WatchMintQuoteInterest {
-  canonical?: boolean;
-  operationIdsByKey?: Map<QuoteKey, string[]>;
-}
+>;
 
 interface QuoteWatchRecord {
   mintUrl: string;
   method: MintMethod;
   quoteId: string;
   subscriptionKind: SubscriptionKind;
-  canonical: boolean;
-  operationIds: Set<string>;
   stop?: UnsubscribeHandler;
 }
 
@@ -81,12 +72,8 @@ export class MintOperationWatcherService {
 
   private running = false;
   private watchRecordByKey = new Map<QuoteKey, QuoteWatchRecord>();
-  private keyByOperationId = new Map<string, QuoteKey>();
   private offQuoteUpdated?: () => void;
   private offPending?: () => void;
-  private offExecuting?: () => void;
-  private offFinalized?: () => void;
-  private offFailed?: () => void;
   private offUntrusted?: () => void;
 
   constructor(
@@ -146,46 +133,11 @@ export class MintOperationWatcherService {
       }
 
       try {
-        await this.watchMintQuotes([{ ...quote, snapshot: mintQuoteToMethodSnapshot(quote) }], {
-          canonical: true,
-        });
+        await this.watchMintQuotes([quote]);
       } catch (err) {
         this.logger?.error('Failed to start watching canonical mint quote', {
           mintUrl: quote.mintUrl,
           quoteId: quote.quoteId,
-          err,
-        });
-      }
-    });
-
-    this.offExecuting = this.bus.on('mint-op:executing', async ({ operationId }) => {
-      try {
-        await this.stopWatchingOperation(operationId);
-      } catch (err) {
-        this.logger?.error('Failed to stop watching executing mint operation', {
-          operationId,
-          err,
-        });
-      }
-    });
-
-    this.offFinalized = this.bus.on('mint-op:finalized', async ({ operationId }) => {
-      try {
-        await this.stopWatchingOperation(operationId);
-      } catch (err) {
-        this.logger?.error('Failed to stop watching finalized mint operation', {
-          operationId,
-          err,
-        });
-      }
-    });
-
-    this.offFailed = this.bus.on('mint-op:failed', async ({ operationId }) => {
-      try {
-        await this.stopWatchingOperation(operationId);
-      } catch (err) {
-        this.logger?.error('Failed to stop watching failed mint operation', {
-          operationId,
           err,
         });
       }
@@ -242,15 +194,7 @@ export class MintOperationWatcherService {
     if (this.options.watchExistingPendingQuotesOnStart) {
       try {
         const quotes = await this.quoteLifecycle.getPendingMintQuotes();
-        await this.watchMintQuotes(
-          quotes.map((quote) => ({
-            mintUrl: quote.mintUrl,
-            method: quote.method,
-            quoteId: quote.quoteId,
-            snapshot: mintQuoteToMethodSnapshot(quote),
-          })),
-          { canonical: true },
-        );
+        await this.watchMintQuotes(quotes);
       } catch (err) {
         this.logger?.error('Failed to load pending mint quotes to watch', { err });
       }
@@ -281,36 +225,6 @@ export class MintOperationWatcherService {
       }
     }
 
-    if (this.offExecuting) {
-      try {
-        this.offExecuting();
-      } catch {
-        // ignore
-      } finally {
-        this.offExecuting = undefined;
-      }
-    }
-
-    if (this.offFinalized) {
-      try {
-        this.offFinalized();
-      } catch {
-        // ignore
-      } finally {
-        this.offFinalized = undefined;
-      }
-    }
-
-    if (this.offFailed) {
-      try {
-        this.offFailed();
-      } catch {
-        // ignore
-      } finally {
-        this.offFailed = undefined;
-      }
-    }
-
     if (this.offUntrusted) {
       try {
         this.offUntrusted();
@@ -333,7 +247,6 @@ export class MintOperationWatcherService {
     if (operations.length === 0) return;
 
     const uniqueByQuote = new Map<QuoteKey, WatchableMintQuote>();
-    const operationIdsByKey = new Map<QuoteKey, string[]>();
     for (const operation of operations) {
       if (!operation.quoteId || !this.getPolicy(operation.method)) {
         continue;
@@ -344,21 +257,12 @@ export class MintOperationWatcherService {
         method: operation.method,
         quoteId: operation.quoteId,
       });
-      const operationIds = operationIdsByKey.get(key) ?? [];
-      operationIds.push(operation.id);
-      operationIdsByKey.set(key, operationIds);
     }
 
-    await this.watchMintQuotes(Array.from(uniqueByQuote.values()), {
-      canonical: true,
-      operationIdsByKey,
-    });
+    await this.watchMintQuotes(Array.from(uniqueByQuote.values()));
   }
 
-  private async watchMintQuotes(
-    quotes: WatchableMintQuote[],
-    interest: WatchMintQuoteInterest,
-  ): Promise<void> {
+  private async watchMintQuotes(quotes: WatchableMintQuote[]): Promise<void> {
     if (!this.running) return;
     if (quotes.length === 0) return;
 
@@ -368,11 +272,7 @@ export class MintOperationWatcherService {
       if (!policy) continue;
 
       const key = toKey(quote.mintUrl, quote.method, quote.quoteId);
-      const existing = this.watchRecordByKey.get(key);
-      if (existing?.stop) {
-        this.addInterest(existing, key, interest);
-        continue;
-      }
+      if (this.watchRecordByKey.get(key)?.stop) continue;
 
       const groupKey = `${quote.mintUrl}::${policy.subscriptionKind}`;
       let group = byGroup.get(groupKey);
@@ -406,9 +306,7 @@ export class MintOperationWatcherService {
         const quoteIds = batch.map((quote) => quote.quoteId);
         const records: QuoteWatchRecord[] = [];
         for (const quote of batch) {
-          const record = this.ensureWatchRecord(quote);
-          this.addInterest(record, toKey(quote.mintUrl, quote.method, quote.quoteId), interest);
-          records.push(record);
+          records.push(this.ensureWatchRecord(quote));
         }
 
         let unsubscribe: UnsubscribeHandler | undefined;
@@ -426,7 +324,7 @@ export class MintOperationWatcherService {
           unsubscribe = subscription.unsubscribe;
         } catch (err) {
           for (const record of records) {
-            this.removeWatchRecord(toKey(record.mintUrl, record.method, record.quoteId));
+            this.watchRecordByKey.delete(toKey(record.mintUrl, record.method, record.quoteId));
           }
           throw err;
         }
@@ -477,29 +375,11 @@ export class MintOperationWatcherService {
         method: quote.method,
         quoteId: quote.quoteId,
         subscriptionKind: policy.subscriptionKind,
-        canonical: false,
-        operationIds: new Set<string>(),
       };
       this.watchRecordByKey.set(key, record);
     }
 
     return record;
-  }
-
-  private addInterest(
-    record: QuoteWatchRecord,
-    key: QuoteKey,
-    interest: WatchMintQuoteInterest,
-  ): void {
-    if (interest.canonical) {
-      record.canonical = true;
-    }
-
-    const operationIds = interest.operationIdsByKey?.get(key) ?? [];
-    for (const operationId of operationIds) {
-      record.operationIds.add(operationId);
-      this.keyByOperationId.set(operationId, key);
-    }
   }
 
   private async handleSubscriptionPayload(
@@ -566,42 +446,8 @@ export class MintOperationWatcherService {
     } catch (err) {
       this.logger?.warn('Unsubscribe watcher failed', { key, err });
     } finally {
-      this.removeWatchRecord(key);
+      this.watchRecordByKey.delete(key);
     }
-  }
-
-  private async stopWatchingOperation(operationId: string): Promise<void> {
-    const key = this.keyByOperationId.get(operationId);
-    if (!key) return;
-    const record = this.watchRecordByKey.get(key);
-    this.keyByOperationId.delete(operationId);
-    if (!record) return;
-
-    record.operationIds.delete(operationId);
-    if (this.shouldStopWatchingWithoutInterest(record)) {
-      await this.stopWatching(key);
-    }
-  }
-
-  private shouldStopWatchingWithoutInterest(record: QuoteWatchRecord): boolean {
-    if (record.canonical || record.operationIds.size > 0) {
-      return false;
-    }
-
-    return true;
-  }
-
-  private removeWatchRecord(key: QuoteKey): void {
-    const record = this.watchRecordByKey.get(key);
-    if (!record) return;
-
-    for (const operationId of record.operationIds) {
-      if (this.keyByOperationId.get(operationId) === key) {
-        this.keyByOperationId.delete(operationId);
-      }
-    }
-
-    this.watchRecordByKey.delete(key);
   }
 
   async stopWatchingMint(mintUrl: string): Promise<void> {

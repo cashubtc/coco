@@ -1,3 +1,4 @@
+import { reconcileKeysetKeypairs } from '@cashu/coco-core/adapter';
 import type { KeysetRepository, Keyset } from '@cashu/coco-core/adapter';
 import type { IdbDb, KeysetRow } from '../lib/db.ts';
 
@@ -72,11 +73,21 @@ export class IdbKeysetRepository implements KeysetRepository {
 
   async addKeyset(keyset: Omit<Keyset, 'updatedAt'>): Promise<void> {
     const now = Math.floor(Date.now() / 1000);
+    const existing = (await (this.db as any)
+      .table('coco_cashu_keysets')
+      .get([keyset.mintUrl, keyset.id])) as KeysetRow | undefined;
     const row: KeysetRow = {
       mintUrl: keyset.mintUrl,
       id: keyset.id,
       unit: keyset.unit,
-      keypairs: JSON.stringify(keyset.keypairs ?? {}),
+      keypairs: JSON.stringify(
+        reconcileKeysetKeypairs(
+          keyset.mintUrl,
+          keyset.id,
+          existing?.keypairs ? JSON.parse(existing.keypairs) : undefined,
+          keyset.keypairs ?? {},
+        ),
+      ),
       active: keyset.active ? 1 : 0,
       feePpk: keyset.feePpk,
       updatedAt: now,

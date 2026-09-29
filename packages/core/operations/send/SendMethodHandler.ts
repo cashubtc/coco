@@ -1,19 +1,14 @@
-import type { Wallet, Proof, Token, P2PKOptions, P2PKTag, SigFlag } from '@cashu/cashu-ts';
-import type { ProofRepository } from '../../repositories';
-import type { ProofService } from '../../services/ProofService';
-import type { WalletService } from '../../services/WalletService';
-import type { MintService } from '../../services/MintService';
-import type { EventBus } from '../../events/EventBus';
-import type { CoreEvents } from '../../events/types';
-import type { Logger } from '../../logging/Logger';
 import type {
-  ExecutingSendOperation,
-  InitSendOperation,
-  PendingSendOperation,
-  PreparedSendOperation,
-  PreparedOrLaterOperation,
-  RolledBackSendOperation,
-} from './SendOperation';
+  MintKeys,
+  OutputDataCreator,
+  OutputDataLike,
+  P2PKOptions,
+  P2PKTag,
+  SigFlag,
+} from '@cashu/cashu-ts';
+import { ProofValidationError } from '../../models/Error.ts';
+import type { InitSendOperation } from './SendOperation';
+import type { MintInfo } from '@core/types.ts';
 
 /**
  * Structured P2PK send options accepted by Coco.
@@ -69,7 +64,6 @@ export interface DefaultSendMethodData {
 
 /**
  * Registry of supported send methods and their payload shapes.
- * Extend via declaration merging if you need to add methods externally.
  *
  * Future methods may include:
  * - htlc: { hash: string; timeout: number } - HTLC locked tokens
@@ -83,97 +77,63 @@ export type SendMethod = keyof SendMethodDefinitions;
 
 export type SendMethodData<M extends SendMethod = SendMethod> = SendMethodDefinitions[M];
 
-// ---------------------------------------------------------------------------
-// Contexts / Results
-// ---------------------------------------------------------------------------
-
-export interface BaseHandlerDeps {
-  proofRepository: ProofRepository;
-  proofService: ProofService;
-  walletService: WalletService;
-  mintService: MintService;
-  eventBus: EventBus<CoreEvents>;
-  logger?: Logger;
-}
-
-export interface BasePrepareContext extends BaseHandlerDeps {
-  operation: InitSendOperation;
-  wallet: Wallet;
-}
-
-export interface PreparedContext extends BaseHandlerDeps {
-  operation: PreparedSendOperation;
-  wallet: Wallet;
-}
-
-export interface ExecuteContext extends BaseHandlerDeps {
-  operation: ExecutingSendOperation;
-  wallet: Wallet;
-  reservedProofs: Proof[];
-}
-
-export interface PendingContext extends BaseHandlerDeps {
-  operation: PendingSendOperation;
-  wallet: Wallet;
-}
-
-export interface FinalizeContext extends BaseHandlerDeps {
-  operation: PendingSendOperation;
-}
-
-export interface RollbackContext extends BaseHandlerDeps {
-  operation: PreparedOrLaterOperation;
-  wallet: Wallet;
-}
-
-export interface RecoverExecutingContext extends BaseHandlerDeps {
-  operation: ExecutingSendOperation;
-  wallet: Wallet;
-}
-
-/**
- * Result of a normal execution. A pending result must carry the token so the
- * caller can hand it to the recipient.
- */
-export type ExecutionResult =
-  | {
-      status: 'PENDING';
-      pending: PendingSendOperation;
-      token: Token;
+export function resolveP2pkOptions(methodData: SendMethodData<'p2pk'>): P2PKOptions {
+  if ('options' in methodData && methodData.options) {
+    if ((methodData.options as { hashlock?: unknown }).hashlock !== undefined) {
+      throw new ProofValidationError('P2PK send does not support hashlock/HTLC options');
     }
-  | {
-      status: 'FAILED';
-      failed: RolledBackSendOperation;
-    };
-
-/**
- * Result of recovering an executing operation. Recovery may legitimately reach a
- * pending state without being able to reconstruct the token, so it is optional.
- */
-export type RecoveryResult =
-  | {
-      status: 'PENDING';
-      pending: PendingSendOperation;
-      token?: Token;
+    if ('kind' in methodData.options) {
+      if (methodData.options.kind !== 'P2PK') {
+        throw new ProofValidationError('P2PK send does not support hashlock/HTLC options');
+      }
+      return methodData.options;
     }
-  | {
-      status: 'FAILED';
-      failed: RolledBackSendOperation;
-    };
 
-export type PendingCheckResult = 'finalize' | 'stay_pending' | 'rollback';
+    const pubkeys = Array.isArray(methodData.options.pubkey)
+      ? methodData.options.pubkey
+      : [methodData.options.pubkey];
+    const [data, ...additionalPubkeys] = pubkeys;
+    if (!data) {
+      throw new ProofValidationError('P2PK send requires at least one lock pubkey');
+    }
+    const { pubkey: _pubkey, hashlock: _hashlock, ...conditions } = methodData.options;
+    return {
+      kind: 'P2PK',
+      data,
+      ...conditions,
+      ...(additionalPubkeys.length > 0 ? { pubkeys: additionalPubkeys } : {}),
+    };
+  }
+
+  if ('pubkey' in methodData && methodData.pubkey) {
+    return { kind: 'P2PK', data: methodData.pubkey };
+  }
+
+  throw new ProofValidationError('P2PK send requires P2PK options or a pubkey in methodData');
+}
+
+/** Method-specific preparation policy consumed by the authoritative Send transaction. */
+export interface SendPreparationPlan {
+  /** Skip exact-match selection and allocate swap outputs. */
+  forceSwap: boolean;
+  /**
+   * Fixed, randomized outputs created during preflight. When omitted, the transaction allocates
+   * deterministic send outputs and advances their counter positions.
+   */
+  fixedSendOutputs?: readonly OutputDataLike[];
+}
+
+/** Local method policy only; the coordinator owns commits and all remote effects. */
+export interface PrepareContext<M extends SendMethod = SendMethod> {
+  operation: InitSendOperation & { method: M; methodData: SendMethodData<M> };
+  activeKeys: MintKeys;
+  mintInfo: MintInfo;
+  outputDataCreator: OutputDataCreator;
+}
 
 export interface SendMethodHandler<M extends SendMethod = SendMethod> {
-  prepare(ctx: BasePrepareContext): Promise<PreparedSendOperation>;
-  execute(ctx: ExecuteContext): Promise<ExecutionResult>;
-  finalize?(ctx: FinalizeContext): Promise<void>;
-  rollback?(ctx: RollbackContext): Promise<void>;
-  checkPending?(ctx: PendingContext): Promise<PendingCheckResult>;
-  /**
-   * Recover an executing operation that failed mid-execution.
-   * Handlers must implement this method to handle recovery logic.
-   */
-  recoverExecuting(ctx: RecoverExecutingContext): Promise<RecoveryResult>;
+  readonly canReclaim: boolean;
+  prepare(ctx: PrepareContext<M>): SendPreparationPlan;
 }
 
-export type SendMethodHandlerRegistry = Record<SendMethod, SendMethodHandler<any>>;
+export type SendMethodHandlerRegistry = { [M in SendMethod]: SendMethodHandler<M> };

@@ -7,8 +7,8 @@ and linked documents for details that change with the codebase.
 
 - Use the affected package's `package.json`, root scripts, and tool config for current commands and
   settings. If prose disagrees with executable config, follow the config and flag or fix the prose.
-- Use `CONTRIBUTING.md` for setup, development workflow, testing, pull requests, changesets, and
-  release expectations.
+- Use `CONTRIBUTING.md` for setup, development workflow, security fixes, testing, pull requests,
+  changesets, and release expectations.
 - Follow nearby source and tests for package-local conventions; avoid creating a second convention
   when an established pattern exists.
 

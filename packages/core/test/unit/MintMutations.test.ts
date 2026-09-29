@@ -4,11 +4,15 @@ import { SqlStorageRepositories } from '../../../sql-storage/src/repositories.ts
 import { SqliteDb } from '../../../sqlite-bun/src/db.ts';
 import { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
-import { UnknownMintError } from '../../models/Error.ts';
+import { UnknownMintError, KeysetVerificationError } from '../../models/Error.ts';
+import { MintAdapter } from '../../infra/MintAdapter.ts';
+import { MintRequestProvider } from '../../infra/MintRequestProvider.ts';
+import { RepositoryTransactionConflictError } from '../../repositories/index.ts';
+import { defineTransition } from '../../transactions/Transition.ts';
+import type { ScopedMints } from '../../transactions/mints/ScopedMints.ts';
 import type { Repositories, RepositoryTransactionScope } from '../../repositories/index.ts';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
-import { CoreMintTransactions } from '../../transactions/mints/MintTransactions.ts';
 import {
   createMintMetadataRemoteDouble,
   createMintServiceForMetadata,
@@ -40,7 +44,7 @@ describe.each(['memory', 'sqlite'] as const)('Mint mutations (%s)', (adapter) =>
   let events: EventBus<CoreEvents>;
   let remote: ReturnType<typeof createMintMetadataRemoteDouble>;
   let service: ReturnType<typeof createMintServiceForMetadata>;
-  let transactions: CoreMintTransactions;
+  let transactionRunner: RepositoryCoreTransactionRunner;
   let transactionOpen: boolean;
   let transactionCount: number;
   let now: number;
@@ -77,7 +81,7 @@ describe.each(['memory', 'sqlite'] as const)('Mint mutations (%s)', (adapter) =>
       return observation();
     });
     service = createMintServiceForMetadata(controlled, remote, events);
-    transactions = new CoreMintTransactions(new RepositoryCoreTransactionRunner(controlled));
+    transactionRunner = new RepositoryCoreTransactionRunner(controlled);
   });
 
   afterEach(() => database?.close());
@@ -148,9 +152,9 @@ describe.each(['memory', 'sqlite'] as const)('Mint mutations (%s)', (adapter) =>
   it('does not recreate a concurrently deleted mint from cached metadata', async () => {
     await seed();
     await service.deleteMint(mintUrl);
-    await expect(transactions.add({ mintUrl, trusted: true })).rejects.toBeInstanceOf(
-      UnknownMintError,
-    );
+    await expect(
+      transactionRunner.run((tx) => tx.mints.add({ mintUrl, trusted: true })),
+    ).rejects.toBeInstanceOf(UnknownMintError);
     expect(await service.getAllMints()).toEqual([]);
   });
 
@@ -195,10 +199,8 @@ describe.each(['memory', 'sqlite'] as const)('Mint mutations (%s)', (adapter) =>
         action === 'add' ? service.addMintByUrl(mintUrl) : service.updateMintData(mintUrl);
       await started.promise;
       try {
-        const otherSession = new CoreMintTransactions(
-          new RepositoryCoreTransactionRunner(repositories),
-        );
-        await otherSession.setTrusted({ mintUrl, trusted: false });
+        const otherSession = new RepositoryCoreTransactionRunner(repositories);
+        await otherSession.run((tx) => tx.mints.setTrusted({ mintUrl, trusted: false }));
       } finally {
         resume.resolve();
       }
@@ -210,7 +212,9 @@ describe.each(['memory', 'sqlite'] as const)('Mint mutations (%s)', (adapter) =>
   it('applies explicit add trust even when a newer observation wins during its fetch', async () => {
     await seed(false, 0);
     remote.fetchMintMetadata.mockImplementation(async () => {
-      await transactions.applyObservation({ ...observation(), observedAt: now + 1 });
+      await transactionRunner.run((tx) =>
+        tx.mints.applyObservation({ ...observation(), observedAt: now + 1 }),
+      );
       return observation();
     });
     const published = recordEvents();
@@ -222,7 +226,9 @@ describe.each(['memory', 'sqlite'] as const)('Mint mutations (%s)', (adapter) =>
 
   it('reports creation from committed state when another add wins during the fetch', async () => {
     remote.fetchMintMetadata.mockImplementation(async () => {
-      await transactions.add({ mintUrl, observation: observation(), trusted: true });
+      await transactionRunner.run((tx) =>
+        tx.mints.add({ mintUrl, observation: observation(), trusted: true }),
+      );
       return observation();
     });
     const published = recordEvents();
@@ -307,18 +313,95 @@ describe.each(['memory', 'sqlite'] as const)('Mint mutations (%s)', (adapter) =>
     expect(published).toEqual([]);
   });
 
-  it('composes mint commands inside one caller-owned transaction and rolls them back together', async () => {
+  it('composes mint capabilities inside one caller-owned transaction and rolls them back together', async () => {
     const runner = new RepositoryCoreTransactionRunner(repositories);
     await expect(
-      runner.run(async (scope) => {
-        await scope.mints.add({ mintUrl, observation: observation(), trusted: true });
-        await scope.mints.setTrusted({ mintUrl, trusted: false });
+      runner.run(async (tx) => {
+        await tx.mints.add({ mintUrl, observation: observation(), trusted: true });
+        await tx.mints.setTrusted({ mintUrl, trusted: false });
         throw new Error('composed transition failed');
       }),
     ).rejects.toThrow('composed transition failed');
     expect(await service.getAllMints()).toEqual([]);
     expect(await repositories.keysetRepository.getKeysetsByMintUrl(mintUrl)).toEqual([]);
   });
+
+  it('rolls back composed mint work when a nested transition failure is caught', async () => {
+    const failingWorkflow = defineTransition(async (tx) => {
+      await tx.mints.add({ mintUrl, observation: observation(), trusted: true });
+      await tx.mints.assertTrusted(mintUrl);
+      await tx.mints.setTrusted({ mintUrl, trusted: false });
+      await tx.mints.assertTrusted(mintUrl);
+    });
+    await expect(
+      transactionRunner.run(async (tx) => {
+        await tx.perform(failingWorkflow).catch(() => {});
+      }),
+    ).rejects.toBeInstanceOf(UnknownMintError);
+    expect(transactionCount).toBe(1);
+    expect(await service.getAllMints()).toEqual([]);
+    expect(await repositories.keysetRepository.getKeysetsByMintUrl(mintUrl)).toEqual([]);
+  });
+
+  it('drains dropped mint work before commit and rejects captured capabilities afterward', async () => {
+    let add!: ScopedMints['add'];
+    let assertTrusted!: ScopedMints['assertTrusted'];
+    await transactionRunner.run(async (tx) => {
+      add = tx.mints.add;
+      assertTrusted = tx.mints.assertTrusted;
+      void add({ mintUrl, observation: observation(), trusted: true });
+    });
+    expect(await service.isTrustedMint(mintUrl)).toBe(true);
+    expect(await repositories.keysetRepository.getKeysetsByMintUrl(mintUrl)).toHaveLength(1);
+    await expect(add({ mintUrl, trusted: false })).rejects.toThrow('scope is closed');
+    await expect(assertTrusted(mintUrl)).rejects.toThrow('scope is closed');
+    expect(await service.isTrustedMint(mintUrl)).toBe(true);
+  });
+
+  it('retries local add with its original trust choice and observation, publishing only once', async () => {
+    const options = { trusted: true };
+    failWrite = (scope) => {
+      if (transactionCount !== 1) return;
+      scope.mintRepository.setMintTrusted = async () => {
+        options.trusted = false;
+        throw new RepositoryTransactionConflictError('retry mint add');
+      };
+    };
+    const published = recordEvents();
+    const result = await service.addMintByUrl(mintUrl, options);
+    expect(result.mint.trusted).toBe(true);
+    expect(result.mint.updatedAt).toBe(now);
+    expect(transactionCount).toBe(2);
+    expect(remote.fetchMintMetadata).toHaveBeenCalledTimes(1);
+    expect(published).toEqual(['mint:metadata-refreshed', 'mint:added']);
+    expect(await repositories.keysetRepository.getKeysetsByMintUrl(mintUrl)).toHaveLength(1);
+  });
+
+  it.each(['add', 'force'] as const)(
+    'keeps verified keysets when %s metadata fetching rejects one keyset',
+    async (action) => {
+      const rejectedKeyset = { id: testMintKeysetId('usd'), unit: 'usd', active: true };
+      const adapter = Object.assign(new MintAdapter(new MintRequestProvider()), {
+        fetchMintInfo: mock(async () => testMintInfo),
+        fetchKeysets: mock(async () => ({ keysets: [keyset, rejectedKeyset] })),
+        fetchKeysForId: mock<MintAdapter['fetchKeysForId']>(async (_url, entry) => {
+          if (entry.id === rejectedKeyset.id) {
+            throw new KeysetVerificationError(mintUrl, entry.id, 'verification failed');
+          }
+          return testMintKeypairs;
+        }),
+      });
+      const verifiedService = createMintServiceForMetadata(repositories, adapter, events);
+      const result =
+        action === 'add'
+          ? await verifiedService.addMintByUrl(mintUrl)
+          : await verifiedService.updateMintData(mintUrl);
+      expect(result.keysets.map((entry) => entry.id)).toEqual([keyset.id]);
+      expect(
+        await repositories.keysetRepository.getKeysetById(mintUrl, rejectedKeyset.id),
+      ).toBeNull();
+    },
+  );
 
   it('rolls back keyset deletion if deleting the mint fails', async () => {
     await seed();

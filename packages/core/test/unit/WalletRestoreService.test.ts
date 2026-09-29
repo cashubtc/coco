@@ -7,7 +7,7 @@ import {
   type Proof,
   type ProofState,
 } from '@cashu/cashu-ts';
-import { describe, it, beforeEach, expect, mock } from 'bun:test';
+import { describe, it, beforeEach, afterEach, expect, mock } from 'bun:test';
 import { WalletRestoreService } from '../../services/WalletRestoreService';
 import type { ProofService } from '../../services/ProofService';
 import type { CounterService } from '../../services/CounterService';
@@ -17,6 +17,17 @@ import type { Logger } from '../../logging/Logger';
 import { makeOutputDataCreator } from '../fixtures/OutputDataCreator.ts';
 
 describe('WalletRestoreService', () => {
+  const originalWalletMethods = {
+    loadMint: Wallet.prototype.loadMint,
+    batchRestore: Wallet.prototype.batchRestore,
+    checkProofsStates: Wallet.prototype.checkProofsStates,
+    getFeesForProofs: Wallet.prototype.getFeesForProofs,
+  };
+
+  afterEach(() => {
+    Object.assign(Wallet.prototype, originalWalletMethods);
+  });
+
   const mintUrl = 'https://mint.test';
   const keysetId = 'keyset-1';
   const bip39seed = new Uint8Array(64).fill(7);

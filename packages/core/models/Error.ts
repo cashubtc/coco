@@ -32,6 +32,14 @@ export class KeysetSyncError extends Error {
   }
 }
 
+/** The mint served keys that are not the keys its advertised keyset id commits to. */
+export class KeysetVerificationError extends KeysetSyncError {
+  constructor(mintUrl: string, keysetId: string, message: string, cause?: unknown) {
+    super(mintUrl, keysetId, message, cause);
+    this.name = 'KeysetVerificationError';
+  }
+}
+
 export class ProofValidationError extends Error {
   constructor(message: string) {
     super(message);
@@ -125,6 +133,16 @@ export class OperationInProgressError extends Error {
   }
 }
 
+export class SendOperationConflictError extends Error {
+  readonly operationId: string;
+
+  constructor(operationId: string, message?: string) {
+    super(message ?? `Send operation ${operationId} changed concurrently`);
+    this.name = 'SendOperationConflictError';
+    this.operationId = operationId;
+  }
+}
+
 export class AuthSessionError extends Error {
   readonly mintUrl: string;
   constructor(mintUrl: string, message?: string, cause?: unknown) {
@@ -139,6 +157,21 @@ export class AuthSessionExpiredError extends AuthSessionError {
   constructor(mintUrl: string) {
     super(mintUrl, `Auth session expired for mint ${mintUrl}`);
     this.name = `AuthSessionExpiredError`;
+  }
+}
+
+export class KeysetKeysConflictError extends Error {
+  readonly mintUrl: string;
+  readonly keysetId: string;
+
+  constructor(mintUrl: string, keysetId: string) {
+    super(
+      `Keyset ${keysetId} for mint ${mintUrl} is already stored with different keys; ` +
+        `a keyset id commits to its keys and they cannot change`,
+    );
+    this.name = 'KeysetKeysConflictError';
+    this.mintUrl = mintUrl;
+    this.keysetId = keysetId;
   }
 }
 

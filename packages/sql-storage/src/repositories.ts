@@ -17,6 +17,7 @@ import type {
   ReceiveOperationRepository,
   PaymentRequestReceiveAttemptRepository,
   PaymentRequestReceiveOperationRepository,
+  MintSwapPersistence,
 } from '@cashu/coco-core/adapter';
 import { RepositoryTransactionConflictError } from '@cashu/coco-core/adapter';
 import type { SqlDatabase } from './index.ts';
@@ -39,9 +40,11 @@ import {
   SqlitePaymentRequestReceiveAttemptRepository,
   SqlitePaymentRequestReceiveOperationRepository,
 } from './repositories/PaymentRequestReceiveRepository.ts';
+import { SqliteMintSwapOperationRepository } from './repositories/MintSwapOperationRepository.ts';
 
 export interface SqlStorageRepositoriesOptions {
   database: SqlDatabase;
+  mintSwap?: boolean;
 }
 
 class RepositoryTransactionCallbackFailure extends Error {
@@ -81,7 +84,10 @@ function isSqliteTransactionConflict(error: unknown): boolean {
   );
 }
 
-function createRepositoryScope(database: SqlDatabase): RepositoryTransactionScope {
+function createRepositoryScope(
+  database: SqlDatabase,
+  mintSwapEnabled: boolean,
+): RepositoryTransactionScope {
   return {
     mintRepository: new SqliteMintRepository(database),
     keyRingRepository: new SqliteKeyRingRepository(database),
@@ -103,6 +109,9 @@ function createRepositoryScope(database: SqlDatabase): RepositoryTransactionScop
     paymentRequestReceiveAttemptRepository: new SqlitePaymentRequestReceiveAttemptRepository(
       database,
     ),
+    ...(mintSwapEnabled
+      ? { mintSwap: { operationRepository: new SqliteMintSwapOperationRepository(database) } }
+      : {}),
   };
 }
 
@@ -123,11 +132,14 @@ export class SqlStorageRepositories implements Repositories {
   readonly receiveOperationRepository: ReceiveOperationRepository;
   readonly paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
   readonly paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
+  readonly mintSwap?: MintSwapPersistence;
   readonly database: SqlDatabase;
+  private readonly mintSwapEnabled: boolean;
 
   constructor(options: SqlStorageRepositoriesOptions) {
     this.database = options.database;
-    const repositories = createRepositoryScope(this.database);
+    this.mintSwapEnabled = options.mintSwap ?? false;
+    const repositories = createRepositoryScope(this.database, this.mintSwapEnabled);
     this.mintRepository = repositories.mintRepository;
     this.keyRingRepository = new SqliteKeyRingRepository(this.database);
     this.counterRepository = repositories.counterRepository;
@@ -146,6 +158,7 @@ export class SqlStorageRepositories implements Repositories {
       repositories.paymentRequestReceiveOperationRepository;
     this.paymentRequestReceiveAttemptRepository =
       repositories.paymentRequestReceiveAttemptRepository;
+    this.mintSwap = repositories.mintSwap;
   }
 
   async init(): Promise<void> {
@@ -157,7 +170,7 @@ export class SqlStorageRepositories implements Repositories {
       return await this.database.transaction(
         async (txDatabase) => {
           try {
-            return await fn(createRepositoryScope(txDatabase));
+            return await fn(createRepositoryScope(txDatabase, this.mintSwapEnabled));
           } catch (error) {
             if (error instanceof RepositoryTransactionConflictError) throw error;
             if (hasSqliteTransactionConflictCode(error)) {
@@ -196,4 +209,5 @@ export {
   SqliteReceiveOperationRepository,
   SqlitePaymentRequestReceiveOperationRepository,
   SqlitePaymentRequestReceiveAttemptRepository,
+  SqliteMintSwapOperationRepository,
 };

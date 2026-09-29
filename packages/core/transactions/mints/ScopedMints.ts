@@ -26,7 +26,9 @@ export interface SetMintTrustedInput {
   trusted: boolean;
 }
 
-export interface ScopedMintCommands {
+/** Mint management within an existing transaction; never opens or commits one. */
+export interface ScopedMints {
+  assertTrusted(mintUrl: string): Promise<void>;
   applyObservation(observation: MintMetadataObservation): Promise<MintMetadataApplyResult>;
   updateMetadata(observation: MintMetadataObservation): Promise<MintMetadataApplyResult>;
   add(input: AddMintInput): Promise<AddMintResult>;
@@ -35,23 +37,32 @@ export interface ScopedMintCommands {
 }
 
 /** Mint management within one scope; remote observations cannot authorize trust changes. */
-export class RepositoryMintCommands implements ScopedMintCommands {
+export class RepositoryScopedMints implements ScopedMints {
   constructor(
     private readonly mints: MintRepository,
     private readonly keysets: KeysetRepository,
   ) {}
 
+  async assertTrusted(mintUrl: string): Promise<void> {
+    if (!(await this.mints.isTrustedMint(mintUrl)))
+      throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
+  }
+
   async applyObservation(observation: MintMetadataObservation): Promise<MintMetadataApplyResult> {
-    return this.applyMetadata(observation, await this.findMint(observation.mintUrl));
+    return this.applyMetadata(observation, await this.mints.findMintByUrl(observation.mintUrl));
   }
 
   async updateMetadata(observation: MintMetadataObservation): Promise<MintMetadataApplyResult> {
     // Explicit refreshes must take effect even within the same second as the previous refresh.
-    return this.applyMetadata(observation, await this.findMint(observation.mintUrl), true);
+    return this.applyMetadata(
+      observation,
+      await this.mints.findMintByUrl(observation.mintUrl),
+      true,
+    );
   }
 
   async add(input: AddMintInput): Promise<AddMintResult> {
-    const current = await this.findMint(input.mintUrl);
+    const current = await this.mints.findMintByUrl(input.mintUrl);
     const previousTrust = current?.trusted;
     if (input.observation && input.observation.mintUrl !== input.mintUrl) {
       throw new Error('Mint observation URL does not match the mint being added');
@@ -72,7 +83,7 @@ export class RepositoryMintCommands implements ScopedMintCommands {
   }
 
   async setTrusted(input: SetMintTrustedInput): Promise<void> {
-    const current = await this.findMint(input.mintUrl);
+    const current = await this.mints.findMintByUrl(input.mintUrl);
     // Preserve the repository contract: changing trust of an unknown mint is a no-op.
     if (current && current.trusted !== input.trusted) {
       await this.mints.setMintTrusted(input.mintUrl, input.trusted);
@@ -80,15 +91,11 @@ export class RepositoryMintCommands implements ScopedMintCommands {
   }
 
   async delete(mintUrl: string): Promise<void> {
-    if (!(await this.findMint(mintUrl))) return;
+    if (!(await this.mints.findMintByUrl(mintUrl))) return;
     for (const keyset of await this.keysets.getKeysetsByMintUrl(mintUrl)) {
       await this.keysets.deleteKeyset(mintUrl, keyset.id);
     }
     await this.mints.deleteMint(mintUrl);
-  }
-
-  private async findMint(mintUrl: string): Promise<Mint | undefined> {
-    return (await this.mints.getAllMints()).find((mint) => mint.mintUrl === mintUrl);
   }
 
   private async snapshot(mint: Mint): Promise<MintMetadata> {
@@ -98,7 +105,7 @@ export class RepositoryMintCommands implements ScopedMintCommands {
 
   private async applyMetadata(
     observation: MintMetadataObservation,
-    current: Mint | undefined,
+    current: Mint | null,
     replaceEqualTimestamp = false,
   ): Promise<MintMetadataApplyResult> {
     if (

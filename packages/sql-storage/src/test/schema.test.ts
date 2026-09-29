@@ -53,6 +53,10 @@ const EXPECTED_MIGRATION_IDS = [
   '036_quote_identity_unique_indexes',
   '037_mint_quote_accounting',
   '038_keypair_derivation_allocations',
+  '039_send_operation_revision',
+  '040_send_execution_memo',
+  '041_send_reclaim_data',
+  '042_mint_swap_operations',
 ] as const;
 
 async function allocateP2pkKey(db: SqlDatabase) {
@@ -207,6 +211,88 @@ describe('shared SQL schema migrations', () => {
     expect(busyTimeout?.timeout).toBe(5000);
   });
 
+  itWithDatabase('backfills legacy Send operation revisions to zero', async (db) => {
+    await ensureSchemaUpTo(db, '039_send_operation_revision');
+    await db.run(
+      `INSERT INTO coco_cashu_send_operations
+        (id, mintUrl, amount, unit, state, createdAt, updatedAt, method, methodDataJson)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ['legacy-send', 'https://mint.test', '10', 'sat', 'init', 1, 1, 'default', '{}'],
+    );
+
+    await ensureSchemaUpTo(db);
+
+    expect(
+      await db.get<{ revision: number }>(
+        'SELECT revision FROM coco_cashu_send_operations WHERE id = ?',
+        ['legacy-send'],
+      ),
+    ).toEqual({ revision: 0 });
+  });
+
+  itWithDatabase('keeps legacy Send execution memos empty', async (db) => {
+    await ensureSchemaUpTo(db, '040_send_execution_memo');
+    await db.run(
+      `INSERT INTO coco_cashu_send_operations
+        (id, mintUrl, amount, unit, state, createdAt, updatedAt, method, methodDataJson)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ['legacy-send-memo', 'https://mint.test', '10', 'sat', 'init', 1, 1, 'default', '{}'],
+    );
+
+    await ensureSchemaUpTo(db);
+
+    expect(
+      await db.get<{ executionMemo: string | null }>(
+        'SELECT executionMemo FROM coco_cashu_send_operations WHERE id = ?',
+        ['legacy-send-memo'],
+      ),
+    ).toEqual({ executionMemo: null });
+  });
+
+  itWithDatabase(
+    'preserves pre-refactor Send recovery material when adding reclaim data',
+    async (db) => {
+      await ensureSchemaUpTo(db, '041_send_reclaim_data');
+      await db.run(
+        `INSERT INTO coco_cashu_send_operations
+      (id, mintUrl, amount, unit, state, createdAt, updatedAt, method, methodDataJson, needsSwap, fee, inputAmount, inputProofSecretsJson, outputDataJson, executionMemo, revision)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          'legacy-executing',
+          'https://mint.test',
+          '10',
+          'sat',
+          'executing',
+          1,
+          1,
+          'default',
+          '{}',
+          1,
+          '0',
+          '10',
+          '["original-input"]',
+          '{"keep":[],"send":[]}',
+          'saved memo',
+          7,
+        ],
+      );
+      await ensureSchemaUpTo(db);
+      expect(
+        await db.get(
+          'SELECT state, inputProofSecretsJson, outputDataJson, executionMemo, revision, reclaimDataJson FROM coco_cashu_send_operations WHERE id = ?',
+          ['legacy-executing'],
+        ),
+      ).toEqual({
+        state: 'executing',
+        inputProofSecretsJson: '["original-input"]',
+        outputDataJson: '{"keep":[],"send":[]}',
+        executionMemo: 'saved memo',
+        revision: 7,
+        reclaimDataJson: null,
+      });
+    },
+  );
+
   itWithDatabase('backfills per-purpose keypair derivation allocations', async (db) => {
     await ensureSchemaUpTo(db, '038_keypair_derivation_allocations');
 
@@ -242,6 +328,52 @@ describe('shared SQL schema migrations', () => {
     await expect(allocateP2pkKey(db)).resolves.toMatchObject({ derivationIndex: 7 });
     expect(await repository.getLastAllocatedIndex('nut20_mint_quote')).toBe(3);
     expect(await repository.getHighestStoredDerivationIndex('nut20_mint_quote')).toBe(3);
+  });
+
+  itWithDatabase('installs only the Mint Swap parent schema and required indexes', async (db) => {
+    await ensureSchemaUpTo(db, '042_mint_swap_operations');
+    expect(
+      await db.get(`SELECT name FROM sqlite_master WHERE name = 'coco_cashu_mint_swap_operations'`),
+    ).toBeUndefined();
+
+    await ensureSchemaUpTo(db);
+
+    expect(await getColumnNames(db, 'coco_cashu_mint_swap_operations')).toEqual([
+      'id',
+      'state',
+      'revision',
+      'nextAttemptAt',
+      'createdAt',
+      'updatedAt',
+      'sourceQuoteMintUrl',
+      'sourceQuoteMethod',
+      'sourceQuoteId',
+      'destinationQuoteMintUrl',
+      'destinationQuoteMethod',
+      'destinationQuoteId',
+      'sourceOperationId',
+      'destinationOperationId',
+      'recordJson',
+    ]);
+    expect(await getIndexNames(db, 'coco_cashu_mint_swap_operations')).toEqual(
+      expect.arrayContaining([
+        'ux_coco_cashu_mint_swap_source_quote',
+        'ux_coco_cashu_mint_swap_destination_quote',
+        'ux_coco_cashu_mint_swap_source_child',
+        'ux_coco_cashu_mint_swap_destination_child',
+        'idx_coco_cashu_mint_swap_state_revision',
+        'idx_coco_cashu_mint_swap_state_due',
+      ]),
+    );
+    expect(
+      await db.get(`SELECT name FROM sqlite_master WHERE name LIKE '%operation_event_outbox%'`),
+    ).toBeUndefined();
+    expect(await getColumnNames(db, 'coco_cashu_melt_operations')).not.toEqual(
+      expect.arrayContaining(['parentSwapOperationId', 'parentExecutionPhase']),
+    );
+    expect(await getColumnNames(db, 'coco_cashu_mint_operations')).not.toContain(
+      'parentSwapOperationId',
+    );
   });
 
   itWithDatabase('normalizes pre-purpose keypairs before allocation backfill', async (db) => {

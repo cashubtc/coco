@@ -43,6 +43,7 @@ export {
   SqliteReceiveOperationRepository,
   SqlitePaymentRequestReceiveOperationRepository,
   SqlitePaymentRequestReceiveAttemptRepository,
+  SqliteMintSwapOperationRepository,
 } from './repositories.ts';
 export type { SqlStorageRepositoriesOptions } from './repositories.ts';
 export { ensureSchema, ensureSchemaUpTo, MIGRATIONS } from './schema.ts';

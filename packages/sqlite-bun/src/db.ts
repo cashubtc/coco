@@ -1,3 +1,4 @@
+import { statSync } from 'node:fs';
 import type { Database, Statement } from 'bun:sqlite';
 import type {
   SqlDatabase,
@@ -5,6 +6,27 @@ import type {
   SqlRunResult,
   SqlTransactionOptions,
 } from '@cashu/coco-sql-storage';
+
+// Scheduling hints local to this JavaScript thread. SQLite still owns write exclusion.
+const activeTransactions = new Map<string | Database, number>();
+
+function getDatabaseIdentity(database: Database): string | Database {
+  const databases = database.prepare('PRAGMA database_list').all() as {
+    name: string;
+    file: string;
+  }[];
+  const filename = databases.find((entry) => entry.name === 'main')?.file;
+  // Separate in-memory databases must never share a contention hint.
+  if (!filename) return database;
+  try {
+    // Device/inode identity also matches relative paths, symlinks and file aliases.
+    const { dev, ino } = statSync(filename, { bigint: true });
+    return `${dev}:${ino}`;
+  } catch {
+    // SQLite's resolved filename remains useful if the open file can no longer be stat'ed.
+    return filename;
+  }
+}
 
 type SqliteRunResult = SqlRunResult & {
   readonly lastID: number;
@@ -21,6 +43,7 @@ export interface SqliteDbOptions {
 interface SqliteDbRootState {
   /** The underlying bun:sqlite Database instance */
   readonly db: Database;
+  readonly databaseIdentity: string | Database;
   /** Promise chain used to serialize concurrent transactions */
   transactionQueue: Promise<void>;
   /** Unique identifier for the currently active transaction scope (null if no transaction) */
@@ -54,6 +77,7 @@ export class SqliteDb implements SqlDatabase {
       // Creating a root instance - initialize the shared state
       this.root = {
         db: optionsOrRoot.database,
+        databaseIdentity: getDatabaseIdentity(optionsOrRoot.database),
         transactionQueue: Promise.resolve(),
         currentScope: null,
         scopeDepth: 0,
@@ -234,6 +258,8 @@ export class SqliteDb implements SqlDatabase {
       resolver = resolve;
     });
     root.pendingTransactionCount++;
+    let previousBusyTimeout: number | undefined;
+    let registeredTransaction = false;
 
     try {
       // SERIALIZATION: Wait for the previous transaction to complete
@@ -249,6 +275,17 @@ export class SqliteDb implements SqlDatabase {
       // Mark this scope as active and issue BEGIN
       root.currentScope = scopeToken;
       root.scopeDepth = 1;
+      const localTransactions = activeTransactions.get(root.databaseIdentity) ?? 0;
+      if (localTransactions > 0) {
+        // Native waiting cannot let another transaction on this thread commit. Other workers
+        // and processes can make progress during a native wait, so preserve it otherwise.
+        previousBusyTimeout = (root.db.prepare('PRAGMA busy_timeout').get() as { timeout: number })
+          .timeout;
+        root.db.exec('PRAGMA busy_timeout = 0');
+      }
+      // Register before awaiting BEGIN so another local connection sees this attempt.
+      activeTransactions.set(root.databaseIdentity, localTransactions + 1);
+      registeredTransaction = true;
       await scopedDb.exec(options?.mode === 'immediate' ? 'BEGIN IMMEDIATE' : 'BEGIN');
 
       try {
@@ -267,6 +304,19 @@ export class SqliteDb implements SqlDatabase {
         throw error;
       }
     } finally {
+      if (previousBusyTimeout !== undefined) {
+        try {
+          // Restore before releasing the queue, including when BEGIN IMMEDIATE failed.
+          root.db.exec(`PRAGMA busy_timeout = ${previousBusyTimeout}`);
+        } catch {
+          // A closed connection can reject cleanup; preserve the original transaction outcome.
+        }
+      }
+      if (registeredTransaction) {
+        const remaining = (activeTransactions.get(root.databaseIdentity) ?? 1) - 1;
+        if (remaining > 0) activeTransactions.set(root.databaseIdentity, remaining);
+        else activeTransactions.delete(root.databaseIdentity);
+      }
       // CLEANUP: Always clear the current scope and release the queue
       // This allows the next queued transaction to proceed
       root.scopeDepth = 0;

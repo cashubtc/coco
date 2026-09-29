@@ -47,7 +47,10 @@ function rowToOperation(row: SendOperationRow): SendOperation {
     unit: normalizeUnit(row.unit ?? 'sat'),
     createdAt: row.createdAt * 1000, // Convert seconds to milliseconds
     updatedAt: row.updatedAt * 1000,
+    revision: row.revision ?? 0,
     error: row.error ?? undefined,
+    executionMemo: row.executionMemo ?? undefined,
+    reclaimData: row.reclaimDataJson ? JSON.parse(row.reclaimDataJson) : undefined,
     method: row.method as SendMethod,
     methodData: parseMethodData(row),
   };
@@ -116,7 +119,10 @@ function operationToRow(op: SendOperation): SendOperationRow {
       state: op.state,
       createdAt: createdAtSeconds,
       updatedAt: updatedAtSeconds,
+      revision: op.revision ?? 0,
       error: op.error ?? null,
+      executionMemo: op.executionMemo ?? null,
+      reclaimDataJson: op.reclaimData ? stringifyJson(op.reclaimData) : null,
       method: op.method,
       methodDataJson: stringifyJson(op.methodData),
       needsSwap: null,
@@ -137,7 +143,10 @@ function operationToRow(op: SendOperation): SendOperationRow {
     state: op.state,
     createdAt: createdAtSeconds,
     updatedAt: updatedAtSeconds,
+    revision: op.revision ?? 0,
     error: op.error ?? null,
+    executionMemo: op.executionMemo ?? null,
+    reclaimDataJson: op.reclaimData ? stringifyJson(op.reclaimData) : null,
     method: op.method,
     methodDataJson: stringifyJson(op.methodData),
     needsSwap: op.needsSwap ? 1 : 0,
@@ -178,6 +187,30 @@ export class IdbSendOperationRepository implements SendOperationRepository {
       const row = operationToRow(operation);
       row.updatedAt = getUnixTimeSeconds();
       await table.put(row);
+    });
+  }
+
+  async transition(input: {
+    operationId: string;
+    expectedState: SendOperationState;
+    expectedRevision: number;
+    next: SendOperation;
+  }): Promise<boolean> {
+    return this.db.runTransaction('rw', [this.storeName], async (tx) => {
+      const table = tx.table(this.storeName);
+      const existing = (await table.get(input.operationId)) as SendOperationRow | undefined;
+      if (
+        !existing ||
+        existing.state !== input.expectedState ||
+        (existing.revision ?? 0) !== input.expectedRevision
+      ) {
+        return false;
+      }
+      if (input.next.id !== input.operationId) {
+        throw new Error('Send operation transition cannot change the operation id');
+      }
+      await table.put(operationToRow({ ...input.next, revision: input.expectedRevision + 1 }));
+      return true;
     });
   }
 

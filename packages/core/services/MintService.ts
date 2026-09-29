@@ -5,7 +5,7 @@ import {
   type MintMetadataObservation,
   type MintQueries,
 } from '@core/mints/MintMetadata.ts';
-import type { MintTransactions } from '@core/transactions/mints/MintTransactions.ts';
+import type { CoreTransactionRunner } from '@core/transactions/CoreTransaction.ts';
 import { ProofValidationError } from '../models/Error';
 import type { Mint } from '../models/Mint';
 import type { Keyset } from '../models/Keyset';
@@ -113,7 +113,7 @@ export type TopLevelNutCapability = 11 | 20;
 /** Read-only state and committed mutation dependencies for mint management. */
 export interface MintServiceDependencies {
   queries: MintQueries;
-  transactions: MintTransactions;
+  transactionRunner: CoreTransactionRunner;
 }
 
 export class MintService {
@@ -146,12 +146,11 @@ export class MintService {
     options?: { trusted?: boolean },
   ): Promise<{ mint: Mint; keysets: Keyset[] }> {
     mintUrl = normalizeMintUrl(mintUrl);
+    const trusted = options?.trusted;
     const observation = await this.fetchObservationIfStale(mintUrl);
-    const result = await this.dependencies.transactions.add({
-      mintUrl,
-      observation,
-      trusted: options?.trusted,
-    });
+    const result = await this.dependencies.transactionRunner.run((tx) =>
+      tx.mints.add({ mintUrl, observation, trusted }),
+    );
     if (result.applied) {
       await this.publishCommittedEvent('mint:metadata-refreshed', { mintUrl });
     }
@@ -175,7 +174,9 @@ export class MintService {
     mintUrl = normalizeMintUrl(mintUrl);
     const cached = await this.dependencies.queries.getMetadata(mintUrl);
     const observation = await this.mintAdapter.fetchMintMetadata(mintUrl, cached?.keysets ?? []);
-    const result = await this.dependencies.transactions.updateMetadata(observation);
+    const result = await this.dependencies.transactionRunner.run((tx) =>
+      tx.mints.updateMetadata(observation),
+    );
     if (result.applied) {
       await this.publishCommittedEvent('mint:metadata-refreshed', { mintUrl });
     }
@@ -209,7 +210,9 @@ export class MintService {
     if (cached && cached.mint.updatedAt >= Math.floor(Date.now() / 1000) - MINT_REFRESH_TTL_S)
       return cached;
     const observation = await this.mintAdapter.fetchMintMetadata(mintUrl, cached?.keysets ?? []);
-    const result = await this.dependencies.transactions.applyObservation(observation);
+    const result = await this.dependencies.transactionRunner.run((tx) =>
+      tx.mints.applyObservation(observation),
+    );
     if (result.applied) {
       await this.publishCommittedEvent('mint:metadata-refreshed', { mintUrl });
       await this.publishCommittedEvent('mint:updated', result.metadata);
@@ -238,7 +241,8 @@ export class MintService {
   }
 
   async deleteMint(mintUrl: string): Promise<void> {
-    await this.dependencies.transactions.delete(normalizeMintUrl(mintUrl));
+    mintUrl = normalizeMintUrl(mintUrl);
+    await this.dependencies.transactionRunner.run((tx) => tx.mints.delete(mintUrl));
   }
 
   async getMintInfo(mintUrl: string): Promise<MintInfo> {
@@ -498,7 +502,9 @@ export class MintService {
 
   private async setTrust(mintUrl: string, trusted: boolean): Promise<void> {
     mintUrl = normalizeMintUrl(mintUrl);
-    await this.dependencies.transactions.setTrusted({ mintUrl, trusted });
+    await this.dependencies.transactionRunner.run((tx) =>
+      tx.mints.setTrusted({ mintUrl, trusted }),
+    );
     await this.publishCommittedEvent(trusted ? 'mint:trusted' : 'mint:untrusted', { mintUrl });
     // Preserve the existing independent trust commit before a possible metadata refresh.
     await this.publishCommittedEvent('mint:updated', await this.ensureUpdatedMint(mintUrl));

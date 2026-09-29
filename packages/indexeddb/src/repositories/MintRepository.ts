@@ -14,10 +14,16 @@ export class IdbMintRepository implements MintRepository {
   }
 
   async getMintByUrl(mintUrl: string): Promise<Mint> {
+    const mint = await this.findMintByUrl(mintUrl);
+    if (!mint) throw new Error(`Mint not found: ${mintUrl}`);
+    return mint;
+  }
+
+  async findMintByUrl(mintUrl: string): Promise<Mint | null> {
     const row = (await (this.db as any).table('coco_cashu_mints').get(mintUrl)) as
       | MintRow
       | undefined;
-    if (!row) throw new Error(`Mint not found: ${mintUrl}`);
+    if (!row) return null;
     return {
       mintUrl: row.mintUrl,
       name: row.name,

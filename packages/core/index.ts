@@ -135,4 +135,12 @@ export type {
   MintSwapFailure,
   MintSwapAttention,
 } from './operations/mintSwap/MintSwapOperation.ts';
+export {
+  isMintSwapAutomaticState,
+  isMintSwapTerminalState,
+} from './operations/mintSwap/MintSwapOperation.ts';
 export { parseMintSwapOperation } from './operations/mintSwap/parseMintSwapOperation.ts';
+export {
+  MintSwapIdentityConflictError,
+  type MintSwapIdentityKind,
+} from './operations/mintSwap/MintSwapIdentityConflictError.ts';

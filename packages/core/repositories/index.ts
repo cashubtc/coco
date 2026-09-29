@@ -22,6 +22,7 @@ import type { Mint } from '../models/Mint';
 import type { SendOperation, SendOperationState } from '../operations/send/SendOperation';
 import type { CoreProof, ProofState } from '../types';
 import type { MintMethodRemoteState } from '../operations/mint/MintMethodHandler';
+import type { MintSwapPersistence } from '../operations/mintSwap/MintSwapOperationRepository.ts';
 
 export interface ProofUnitFilter {
   unit?: string;
@@ -30,7 +31,10 @@ export interface ProofUnitFilter {
 
 export interface MintRepository {
   isTrustedMint(mintUrl: string): Promise<boolean>;
+  /** Look up a single mint by URL, throwing if it doesn't exist. */
   getMintByUrl(mintUrl: string): Promise<Mint>;
+  /** Look up a single mint by URL, returning `null` instead of throwing when it doesn't exist. */
+  findMintByUrl(mintUrl: string): Promise<Mint | null>;
   getAllMints(): Promise<Mint[]>;
   getAllTrustedMints(): Promise<Mint[]>;
   addNewMint(mint: Mint): Promise<void>;
@@ -44,6 +48,11 @@ export interface KeysetRepository {
   getKeysetsByMintUrl(mintUrl: string): Promise<Keyset[]>;
   getKeysetById(mintUrl: string, id: string): Promise<Keyset | null>;
   updateKeyset(keyset: Omit<Keyset, 'keypairs' | 'updatedAt'>): Promise<void>;
+  /**
+   * Stores a keyset and its keys. A keyset id commits to its keys (NUT-02), so keys already
+   * stored for this id are kept and incoming keys only backfill a keyset recorded without them.
+   * Rejects a write that would replace stored keys with different ones.
+   */
   addKeyset(keyset: Omit<Keyset, 'updatedAt'>): Promise<void>;
   deleteKeyset(mintUrl: string, keysetId: string): Promise<void>;
 }
@@ -231,6 +240,17 @@ export interface SendOperationRepository {
   /** Update an existing send operation */
   update(operation: SendOperation): Promise<void>;
 
+  /**
+   * Conditionally replace an operation when its state and revision still match.
+   * Implementations persist `next` with `expectedRevision + 1` and return false on contention.
+   */
+  transition(input: {
+    operationId: string;
+    expectedState: SendOperationState;
+    expectedRevision: number;
+    next: SendOperation;
+  }): Promise<boolean>;
+
   /** Get a send operation by ID */
   getById(id: string): Promise<SendOperation | null>;
 
@@ -379,6 +399,8 @@ interface RepositoriesBase {
   receiveOperationRepository: ReceiveOperationRepository;
   paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
   paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
+  /** Dormant feature capability, exposed only by adapters configured for Mint Swap persistence. */
+  mintSwap?: MintSwapPersistence;
 }
 
 export interface Repositories extends RepositoriesBase {
