@@ -1,5 +1,5 @@
 /**
- * Owns asynchronous commands and repository calls for one transaction attempt. Failure revokes
+ * Tracks asynchronous capability and repository calls for one transaction attempt. Failure revokes
  * further work; calls already executing settle before the adapter may roll back or retry.
  * This helper has no authority to open, commit, or roll back a transaction.
  */
@@ -25,7 +25,7 @@ export class TransactionLifetime {
           if (typeof value === 'function') {
             if (!methods.has(property)) {
               methods.set(property, (...args: unknown[]) =>
-                this.invoke(() => Reflect.apply(value, source, args) as Promise<unknown>),
+                this.track(() => Reflect.apply(value, source, args) as Promise<unknown>),
               );
             }
             return methods.get(property);
@@ -51,7 +51,7 @@ export class TransactionLifetime {
       }
 
       // A callback may finish before its siblings (Promise.all failure, Promise.race, or an
-      // omitted await). Draining may discover further calls made by an executing command.
+      // omitted await). Draining may discover further calls made by an executing capability method.
       while (this.pending.size > 0) {
         await Promise.all([...this.pending]);
       }
@@ -62,7 +62,8 @@ export class TransactionLifetime {
     }
   }
 
-  private invoke<T>(call: () => Promise<T>): Promise<T> {
+  /** Track local work without granting it commit, rollback, or transaction-opening authority. */
+  track<T>(call: () => Promise<T>): Promise<T> {
     let result: Promise<T>;
     try {
       if (this.closed) throw new Error('Wallet transaction scope is closed');
@@ -81,7 +82,7 @@ export class TransactionLifetime {
       },
     );
     // Observe every rejection even when the caller drops its promise. The first failure is
-    // rethrown by run(), so catching a command failure cannot commit a partial transaction.
+    // rethrown by run(), so catching a capability failure cannot commit a partial transaction.
     const settled = observed.then(
       () => {
         this.pending.delete(settled);

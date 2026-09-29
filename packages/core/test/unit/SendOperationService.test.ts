@@ -36,7 +36,7 @@ describe('SendOperationService', () => {
   let logger: Environment['logger'];
   let service: Environment['service'];
   let loadSeed: Environment['loadSeed'];
-  let sendTransactions: Environment['transactions'];
+  let transactionRunner: Environment['transactionRunner'];
 
   const makeProof = (secret: string, amount: number, unit = 'sat'): CoreProof =>
     ({
@@ -96,7 +96,7 @@ describe('SendOperationService', () => {
       logger,
       loadSeed,
       service,
-      transactions: sendTransactions,
+      transactionRunner,
     } = environment);
     sendOpRepo = repositories.sendOperationRepository;
     proofRepo = repositories.proofRepository;
@@ -191,22 +191,22 @@ describe('SendOperationService', () => {
     expect(lockedDuringEvent).toBe(false);
   });
 
-  it('does not publish a prepared event until the transaction gateway resolves', async () => {
+  it('does not publish a prepared event until the transaction runner resolves', async () => {
     await proofRepo.saveProofs(mintUrl, [makeProof('event-boundary-proof', 10)]);
     const operation = await service.init(mintUrl, unitAmount(10));
-    const realPrepare = sendTransactions.prepare.bind(sendTransactions);
-    let releaseGateway!: () => void;
+    const realRun = transactionRunner.run.bind(transactionRunner);
+    let releaseRunner!: () => void;
     let markCommitted!: () => void;
-    const holdGateway = new Promise<void>((resolve) => {
-      releaseGateway = resolve;
+    const holdRunner = new Promise<void>((resolve) => {
+      releaseRunner = resolve;
     });
     const committed = new Promise<void>((resolve) => {
       markCommitted = resolve;
     });
-    sendTransactions.prepare = async (input) => {
-      const result = await realPrepare(input);
+    transactionRunner.run = async (work) => {
+      const result = await realRun(work);
       markCommitted();
-      await holdGateway;
+      await holdRunner;
       return result;
     };
     let eventCount = 0;
@@ -217,7 +217,7 @@ describe('SendOperationService', () => {
     const preparation = service.prepare(operation);
     await committed;
     expect(eventCount).toBe(0);
-    releaseGateway();
+    releaseRunner();
     await preparation;
     expect(eventCount).toBe(1);
   });
@@ -556,7 +556,7 @@ describe('SendOperationService', () => {
     expect(persisted?.state).toBe('finalized');
   });
 
-  it('keeps finalization persistence inside the Send transaction gateway', async () => {
+  it('keeps finalization persistence inside the Send transaction runner', async () => {
     const pendingOp = {
       ...pendingSend('send-op-custom-finalize', [makeProof('proof-1', 100)]),
       revision: undefined,
@@ -748,7 +748,7 @@ describe('SendOperationService', () => {
     });
   });
 
-  it('preserves empty pending default-token reclaim through its transaction gateway', async () => {
+  it('preserves empty pending default-token reclaim through its transaction runner', async () => {
     const pendingOp = pendingSend('send-op-legacy-reclaim', [makeProof('proof-1', 100)]);
     await sendOpRepo.create(pendingOp);
 

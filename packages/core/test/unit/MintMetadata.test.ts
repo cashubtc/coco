@@ -1,12 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
 import { SqlStorageRepositories } from '../../../sql-storage/src/repositories.ts';
 import { SqliteDb } from '../../../sqlite-bun/src/db.ts';
 import { StoredMintQueries } from '../../mints/MintMetadata.ts';
 import type { Repositories } from '../../repositories/index.ts';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
-import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
-import { CoreMintMetadataTransactions } from '../../transactions/mints/MintMetadataTransactions.ts';
 import { overrideTransactions } from '../overrideTransactions.ts';
 import { testMintInfo, testMintKeypairs, testMintKeysetId } from '../fixtures/MintMetadata.ts';
 
@@ -69,10 +68,10 @@ describe.each(['memory', 'sqlite'] as const)(
     it('preserves current trust when applying metadata fetched before a trust change', async () => {
       await repositories.mintRepository.addNewMint({ ...original, trusted: false });
       await repositories.keysetRepository.addKeyset(keyset);
-      const transactions = new CoreMintMetadataTransactions(
-        new RepositoryCoreTransactionRunner(repositories),
+      const transactionRunner = new RepositoryCoreTransactionRunner(repositories);
+      const result = await transactionRunner.run((tx) =>
+        tx.mintMetadata.applyObservation(observation),
       );
-      const result = await transactions.applyObservation(observation);
       expect(result.applied).toBe(true);
       expect(result.metadata.mint.trusted).toBe(false);
       expect(result.metadata.mint.mintInfo.name).toBe('Refreshed');
@@ -82,10 +81,10 @@ describe.each(['memory', 'sqlite'] as const)(
     it('ignores observations older than the committed mint snapshot', async () => {
       await repositories.mintRepository.addNewMint({ ...original, updatedAt: 30 });
       await repositories.keysetRepository.addKeyset(keyset);
-      const transactions = new CoreMintMetadataTransactions(
-        new RepositoryCoreTransactionRunner(repositories),
+      const transactionRunner = new RepositoryCoreTransactionRunner(repositories);
+      const result = await transactionRunner.run((tx) =>
+        tx.mintMetadata.applyObservation(observation),
       );
-      const result = await transactions.applyObservation(observation);
       expect(result.applied).toBe(false);
       expect(result.metadata.mint.updatedAt).toBe(30);
       expect(result.metadata.mint.mintInfo).toEqual(testMintInfo);
@@ -96,15 +95,17 @@ describe.each(['memory', 'sqlite'] as const)(
     it('keeps the first committed snapshot when observations have equal timestamps', async () => {
       await repositories.mintRepository.addNewMint(original);
       await repositories.keysetRepository.addKeyset(keyset);
-      const transactions = new CoreMintMetadataTransactions(
-        new RepositoryCoreTransactionRunner(repositories),
+      const transactionRunner = new RepositoryCoreTransactionRunner(repositories);
+      const committed = await transactionRunner.run((tx) =>
+        tx.mintMetadata.applyObservation(observation),
       );
-      const committed = await transactions.applyObservation(observation);
-      const result = await transactions.applyObservation({
-        ...observation,
-        mintInfo: testMintInfo,
-        keysets: [keyset],
-      });
+      const result = await transactionRunner.run((tx) =>
+        tx.mintMetadata.applyObservation({
+          ...observation,
+          mintInfo: testMintInfo,
+          keysets: [keyset],
+        }),
+      );
       expect(committed.applied).toBe(true);
       expect(result.applied).toBe(false);
       expect(result.metadata).toEqual(committed.metadata);
@@ -127,12 +128,10 @@ describe.each(['memory', 'sqlite'] as const)(
           return fn(scope);
         }),
       );
-      const transactions = new CoreMintMetadataTransactions(
-        new RepositoryCoreTransactionRunner(controlled),
-      );
-      await expect(transactions.applyObservation(observation)).rejects.toThrow(
-        'metadata write failed',
-      );
+      const transactionRunner = new RepositoryCoreTransactionRunner(controlled);
+      await expect(
+        transactionRunner.run((tx) => tx.mintMetadata.applyObservation(observation)),
+      ).rejects.toThrow('metadata write failed');
       expect((await repositories.mintRepository.getMintByUrl(mintUrl)).updatedAt).toBe(10);
       expect((await repositories.keysetRepository.getKeysetById(mintUrl, keyset.id))?.active).toBe(
         true,

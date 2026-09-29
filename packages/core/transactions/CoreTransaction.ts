@@ -1,42 +1,40 @@
 import { OutputData, type OutputDataCreator } from '@cashu/cashu-ts';
-import type { Repositories, RepositoryTransactionScope } from '@core/repositories';
-import { RepositoryTransactionConflictError } from '@core/repositories';
 import {
-  RepositoryMintMetadataCommands,
-  type ScopedMintMetadataCommands,
-} from './scoped/mints/ScopedMintMetadataCommands.ts';
+  RepositoryTransactionConflictError,
+  type Repositories,
+  type RepositoryTransactionScope,
+  type SendOperationRepository,
+} from '@core/repositories';
 import {
-  RepositoryProofCommands,
-  type ScopedProofCommands,
-} from './scoped/proofs/ScopedProofCommands.ts';
-import {
-  RepositoryOutputCommands,
-  type ScopedOutputCommands,
-} from './scoped/outputs/ScopedOutputCommands.ts';
-import {
-  RepositorySendCommands,
-  type ScopedSendCommands,
-} from './scoped/send/ScopedSendCommands.ts';
-import {
-  RepositoryKeypairCommands,
-  type ScopedKeypairCommands,
-} from './scoped/keypairs/ScopedKeypairCommands.ts';
-import { TransactionLifetime } from './scoped/TransactionLifetime.ts';
+  RepositoryScopedMintMetadata,
+  type ScopedMintMetadata,
+} from './mints/ScopedMintMetadata.ts';
+import { RepositoryScopedProofs, type ScopedProofs } from './proofs/ScopedProofs.ts';
+import { RepositoryScopedOutputs, type ScopedOutputs } from './outputs/ScopedOutputs.ts';
+import { RepositoryScopedKeypairs, type ScopedKeypairs } from './keypairs/ScopedKeypairs.ts';
+import { TransactionLifetime } from './TransactionLifetime.ts';
+import { getTransitionBody, type Transition } from './Transition.ts';
 
 /**
- * Scoped commands sharing one adapter transaction attempt. Await mutations sequentially unless
+ * Scoped capabilities sharing one adapter transaction attempt. Await mutations sequentially unless
  * their independence is established; lifetime tracking does not serialize conflicting work.
  */
 export interface CoreTransaction {
-  readonly mintMetadata: ScopedMintMetadataCommands;
-  readonly keypairs: ScopedKeypairCommands;
-  readonly proofs: ScopedProofCommands;
-  readonly outputs: ScopedOutputCommands;
-  readonly sends: ScopedSendCommands;
+  perform<O>(transition: Transition<void, O>): Promise<O>;
+  perform<I, O>(transition: Transition<I, O>, input: I): Promise<O>;
+  readonly mintMetadata: ScopedMintMetadata;
+  readonly keypairs: ScopedKeypairs;
+  readonly proofs: ScopedProofs;
+  readonly outputs: ScopedOutputs;
+  readonly sendOperations: Pick<
+    SendOperationRepository,
+    'getById' | 'getByMintUrl' | 'create' | 'transition' | 'delete'
+  >;
 }
 
+/** Injected into coordinators; each invocation resolves only after its local work commits. */
 export interface CoreTransactionRunner {
-  run<T>(work: (transaction: CoreTransaction) => Promise<T>): Promise<T>;
+  run<T>(work: (tx: CoreTransaction) => Promise<T>): Promise<T>;
 }
 
 const MAX_TRANSACTION_ATTEMPTS = 3;
@@ -48,13 +46,13 @@ export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
     private readonly outputDataCreator: OutputDataCreator = OutputData,
   ) {}
 
-  async run<T>(work: (transaction: CoreTransaction) => Promise<T>): Promise<T> {
+  async run<T>(work: (tx: CoreTransaction) => Promise<T>): Promise<T> {
     for (let attempt = 1; ; attempt++) {
       try {
         return await this.repositories.withTransaction((repositories) => {
           const lifetime = new TransactionLifetime();
           return lifetime.run(() =>
-            work(lifetime.bind(this.createTransaction(lifetime.bind(repositories)))),
+            work(this.createTransaction(lifetime.bind(repositories), lifetime)),
           );
         });
       } catch (error) {
@@ -70,31 +68,33 @@ export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
     }
   }
 
-  private createTransaction(repositories: RepositoryTransactionScope): CoreTransaction {
-    const mintMetadata = new RepositoryMintMetadataCommands(
+  private createTransaction(
+    repositories: RepositoryTransactionScope,
+    lifetime: TransactionLifetime,
+  ): CoreTransaction {
+    const mintMetadata = new RepositoryScopedMintMetadata(
       repositories.mintRepository,
       repositories.keysetRepository,
     );
-    const proofs = new RepositoryProofCommands(
+    const proofs = new RepositoryScopedProofs(
       repositories.proofRepository,
       repositories.keysetRepository,
     );
-    const outputs = new RepositoryOutputCommands(
+    const outputs = new RepositoryScopedOutputs(
       repositories.counterRepository,
       repositories.keysetRepository,
       this.outputDataCreator,
     );
-    return {
+    const scoped: CoreTransaction = lifetime.bind({
+      // The proxy binds methods to the raw object; bodies must receive the bound scope instead.
+      perform: <I, O>(transition: Transition<I, O>, input?: I): Promise<O> =>
+        getTransitionBody(transition)(scoped, input as I),
       mintMetadata,
-      keypairs: new RepositoryKeypairCommands(repositories.keyRingRepository),
+      keypairs: new RepositoryScopedKeypairs(repositories.keyRingRepository),
       proofs,
       outputs,
-      sends: new RepositorySendCommands(
-        repositories.sendOperationRepository,
-        proofs,
-        outputs,
-        mintMetadata,
-      ),
-    };
+      sendOperations: repositories.sendOperationRepository,
+    });
+    return scoped;
   }
 }
