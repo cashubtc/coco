@@ -1,6 +1,10 @@
 import { Amount, sumProofs, type Token } from '@cashu/cashu-ts';
 import { normalizeUnit } from '@core/amounts.ts';
-import { ProofValidationError, SendOperationConflictError } from '@core/models/Error.ts';
+import {
+  ProofValidationError,
+  SendOperationConflictError,
+  SendOperationIntentConflictError,
+} from '@core/models/Error.ts';
 import { assertOutputProofs } from '@core/proofs/OutputProofs.ts';
 import type { CoreProof } from '@core/types.ts';
 import type { CoreTransaction } from '../../transactions/CoreTransaction.ts';
@@ -26,6 +30,7 @@ import type {
   CompleteSendReclaimResult,
   PrepareSendInput,
   PrepareSendResult,
+  PrepareSendCounter,
   ApplySendResult,
   ApplySendResultInput,
   BeginSendExecutionInput,
@@ -52,6 +57,7 @@ import {
   normalizeMemo,
   sameCoreProofSet,
   sameToken,
+  isSameSendIntent,
 } from './SendValidation.ts';
 
 /** Reserve inputs and persist their output allocation and prepared Send together. */
@@ -60,10 +66,31 @@ export const prepareSend = defineTransition<PrepareSendInput, PrepareSendResult>
     const operation = input.operation;
     const existing = await tx.sendOperations.getById(operation.id);
     if (existing) {
-      throw new SendOperationConflictError(
-        operation.id,
-        `Send operation id ${operation.id} already exists`,
-      );
+      // The caller-supplied marker is passed in explicitly, so a repeat can join an existing
+      // prepared operation; a generated ID keeps the fail-fast conflict.
+      if (input.joinable !== true) {
+        throw new SendOperationConflictError(
+          operation.id,
+          `Send operation id ${operation.id} already exists`,
+        );
+      }
+
+      if (existing.state !== 'prepared') {
+        throw new SendOperationConflictError(
+          operation.id,
+          `Send operation ${operation.id} already exists in state '${existing.state}'`,
+        );
+      }
+
+      if (!isSameSendIntent(existing, operation)) {
+        throw new SendOperationIntentConflictError(operation.id);
+      }
+
+      return {
+        operation: existing,
+        outcome: 'joined',
+        reservation: null,
+      };
     }
 
     await tx.mintMetadata.assertTrusted(operation.mintUrl);
@@ -78,7 +105,7 @@ export const prepareSend = defineTransition<PrepareSendInput, PrepareSendResult>
     const inputProofSecrets = selected.proofs.map((proof) => proof.secret);
 
     let outputData: PreparedSendOperation['outputData'];
-    let counterUpdate: PrepareSendResult['counter'];
+    let counterUpdate: PrepareSendCounter | undefined;
     if (selected.needsSwap) {
       const allocation = await tx.outputs.allocate({
         mintUrl: operation.mintUrl,
@@ -110,6 +137,7 @@ export const prepareSend = defineTransition<PrepareSendInput, PrepareSendResult>
 
     return {
       operation: prepared,
+      outcome: 'created',
       reservation: {
         mintUrl: operation.mintUrl,
         operationId: operation.id,

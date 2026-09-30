@@ -56,7 +56,6 @@ import type { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
 import {
-  generateSubId,
   getProofStateInputsFromSerializedOutputs,
   getSecretsFromSerializedOutputData,
   mapProofToCoreProof,
@@ -159,6 +158,26 @@ export class SendOperationService {
   }
 
   /**
+   * Acquire the local prepare lock for an idempotent caller-supplied ID.
+   *
+   * A concurrent prepare for the same ID holds the lock; a re-issue of the same durable command
+   * waits for it to release instead of failing, then runs the transaction, whose authoritative
+   * read joins the committed operation or reports an intent/state conflict.
+   */
+  private async acquireJoinableLock(operationId: string): Promise<() => void> {
+    for (;;) {
+      try {
+        return await this.acquireOperationLock(operationId);
+      } catch (error) {
+        if (!(error instanceof OperationInProgressError)) {
+          throw error;
+        }
+        await this.operationIdLock.waitForUnlock(operationId);
+      }
+    }
+  }
+
+  /**
    * Check if an operation is currently locked.
    */
   isOperationLocked(operationId: string): boolean {
@@ -213,10 +232,17 @@ export class SendOperationService {
    * Prepare the operation by reserving proofs and creating outputs.
    * After this step, the operation can be executed or rolled back.
    *
-   * Throws if the operation is already in progress.
+   * A caller-supplied ID is idempotent: preparing the same ID again joins the existing prepared
+   * operation instead of reserving proofs twice. Generated-ID duplicates still fail fast.
    */
   async prepare(operation: InitSendOperation): Promise<PreparedSendOperation> {
-    const releaseLock = await this.acquireOperationLock(operation.id);
+    // Only caller-supplied IDs are namespaced `send:` and are therefore idempotent. A concurrent
+    // prepare for the same ID holds the in-memory lock, so wait for it and let the transaction's
+    // authoritative read decide join vs conflict. Generated IDs keep failing fast.
+    const joinable = operation.id.startsWith('send:');
+    const releaseLock = joinable
+      ? await this.acquireJoinableLock(operation.id)
+      : await this.acquireOperationLock(operation.id);
     let result: PrepareSendResult;
     try {
       const releaseMintLock = await this.mintScopedLock.acquire(operation.mintUrl);
@@ -240,6 +266,7 @@ export class SendOperationService {
             operation: { ...operation, updatedAt },
             activeKeys: keys,
             seed,
+            joinable,
             ...plan,
           }),
         );
@@ -249,7 +276,9 @@ export class SendOperationService {
     } finally {
       releaseLock();
     }
-    await this.publishPrepared(result);
+    if (result.outcome === 'created') {
+      await this.publishPrepared(result);
+    }
     return result.operation;
   }
 
@@ -1081,7 +1110,9 @@ export class SendOperationService {
     return result.count;
   }
 
-  private async publishPrepared(result: PrepareSendResult): Promise<void> {
+  private async publishPrepared(
+    result: Extract<PrepareSendResult, { outcome: 'created' }>,
+  ): Promise<void> {
     if (result.counter) {
       await this.publishCommittedEvent('counter:updated', result.counter);
     }
