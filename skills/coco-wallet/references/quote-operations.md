@@ -42,10 +42,10 @@ with `ops.mint.listByQuote({ mintUrl, quoteId })` and track their operation even
 available for later payments after an individual operation finalizes.
 
 If the app must choose each claim amount, set
-`processors.mintOperationProcessor.autoClaimMintQuotes: false` in the session config before
-starting that flow. This disables automatic claim creation; keep the watchers and processor
-running to observe quotes and advance operations the app prepares. After the user selects an
-amount in the quote's unit:
+`processors.mintOperationProcessor.autoClaimMintQuotes: false` in the session config. This setting
+applies to all mint methods in that Coco Session, including BOLT11. Watchers still observe payments,
+but quote updates no longer automatically create claims or advance existing pending Mint Operations.
+After the user selects an amount in the quote's unit:
 
 ```ts
 const quote = await coco.quotes.mint.refresh({ mintUrl, quoteId });
@@ -56,8 +56,11 @@ const result = await coco.ops.mint.execute(pendingMint.id);
 `claimAmount` is a positive `AmountLike` in the stored quote's unit. Coco evaluates claimability
 when executing; a stale UI calculation cannot authorize issuance. An operation can remain pending
 while insufficient unreserved value is available. Resume that operation rather than preparing a
-replacement for every quote update. Choose one claim policy for the flow so automatic claims and
-app-controlled partial claims do not compete for the same value.
+replacement for every quote update. With auto-claim disabled, call `ops.mint.checkPayment(id)` or
+`ops.mint.refresh(id)` after later payments or quote updates to reconcile and advance the original
+pending operation. Apply this explicit reconciliation to other pending Mint Operations in the
+session too. Choose one session-wide claim policy so automatic claims and app-controlled partial
+claims do not compete for the same value.
 
 ## Melt review and settlement
 
