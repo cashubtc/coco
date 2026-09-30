@@ -1,7 +1,7 @@
 # P2PK locked ecash
 
 Read with [Send ecash](ecash-send.md) when creating a locked token, or
-[Receive ecash](ecash-receive.md) when claiming one. The normal operation lifecycle still applies.
+[Receive ecash](ecash-receive.md) when claiming one. Apply the P2PK send restriction below.
 
 ## Keys and mint support
 
@@ -34,6 +34,11 @@ also supports multiple keys, required signatures, locktime, refund keys, and sig
 Read the [KeyRing guide](https://cashubtc.github.io/coco/pages/keyring) before assembling those
 conditions. A refund path changes who can claim the token after its locktime; display that policy
 as part of payment review.
+
+Cancel a P2PK send with `ops.send.cancel(id)` while it is `prepared`. Once it is `pending`,
+`ops.send.reclaim(id)` is unsupported because Coco cannot reclaim the recipient-locked token.
+Do not offer a reclaim action for a pending P2PK send; retain its operation ID and token for
+delivery and settlement tracking. A configured refund path does not enable Coco's reclaim API.
 
 ## Receive a locked token
 
