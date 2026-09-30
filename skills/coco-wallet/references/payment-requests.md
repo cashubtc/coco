@@ -9,6 +9,11 @@ Parse the request and choose from `payableMints`, which applies trust, balance, 
 and supported spending-condition checks. Show any `spendingCondition` diagnostic when there is
 no eligible mint. A request's `allowedMints` alone is not a list of payable choices.
 
+For an amountless request, the parsed `payableMints` list contains candidates before the payment
+amount is known. After the user chooses an amount, recheck spendable balance at the selected mint
+in the request's unit. Preparation remains authoritative for fees and concurrent balance changes.
+Allow mint reselection when preparation reports insufficient funds.
+
 ```ts
 const request = await coco.paymentRequests.parse(encodedRequest);
 if (!request.payableMints.includes(mintUrl)) throw new Error('Choose a payable mint');
