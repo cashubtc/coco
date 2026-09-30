@@ -330,7 +330,7 @@ export class MeltOperationService {
         operation.method,
         operation.quoteId,
       );
-      if (persistedQuote?.state === 'PAID' && Array.isArray(persistedQuote.change)) {
+      if (persistedQuote?.state === 'PAID') {
         await this.applyPaid(operation, persistedQuote);
         return 'finalize';
       }

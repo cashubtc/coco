@@ -207,6 +207,42 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
     );
   });
 
+  it('finalizes a paid Melt when the canonical quote omits change', async () => {
+    await saveReadyProof(10);
+    await runner.run((tx) => tx.perform(prepareMelt, input()));
+    const authorization = await runner.run((tx) =>
+      tx.perform(beginMeltExecution, { operationId: 'melt-1', now: 2_000 }),
+    );
+    await repositories.meltQuoteRepository.upsertMeltQuote(
+      meltQuoteFromBolt11Response(
+        mintUrl,
+        {
+          quote: 'quote-1',
+          request: 'lnbc1test',
+          amount: Amount.from(8),
+          unit: 'sat',
+          fee_reserve: Amount.from(2),
+          expiry: 100,
+          state: 'PAID',
+          payment_preimage: 'preimage',
+        },
+        { now: 3_000 },
+      ),
+    );
+
+    const finalized = await runner.run((tx) =>
+      tx.perform(applyMeltPaidResult, {
+        operation: authorization.operation as ExecutingMeltOperation,
+        changeProofs: [],
+        finalizedData: { preimage: 'preimage' },
+        now: 3_000,
+      }),
+    );
+
+    expect(finalized.operation.state).toBe('finalized');
+    expect(finalized.changeProofs).toHaveLength(0);
+  });
+
   it('commits the pre-swap checkpoint before restoring send proofs and clearing ownership', async () => {
     await saveReadyProof(16);
     const prepared = await runner.run((tx) => tx.perform(prepareMelt, input()));
@@ -229,6 +265,17 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
       'spent',
     );
     expect(applied.sendProofs.every((proof) => proof.state === 'inflight')).toBe(true);
+
+    const replayed = await runner.run((tx) =>
+      tx.perform(applyMeltSwapResult, {
+        operation: executing,
+        keepProofs: candidates.keep,
+        sendProofs: candidates.send,
+        now: 3_500,
+      }),
+    );
+    expect(replayed.changed).toBe(false);
+    expect(replayed.sendProofs).toHaveLength(applied.sendProofs.length);
 
     await saveQuote('UNPAID', 4_000);
     const released = await runner.run((tx) =>
@@ -256,6 +303,96 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
       const stored = await repositories.proofRepository.getProofBySecret(mintUrl, proof.secret);
       expect(stored?.state).toBe('ready');
       expect(stored?.usedByOperationId).toBeUndefined();
+    }
+  });
+
+  it('includes the future Melt input fee in pre-swap send outputs', async () => {
+    await repositories.keysetRepository.updateKeyset({
+      mintUrl,
+      id: keysetId,
+      unit: 'sat',
+      active: true,
+      feePpk: 100,
+    });
+    await saveReadyProof(16);
+
+    const prepared = await runner.run((tx) => tx.perform(prepareMelt, input()));
+    const outputs = deserializeOutputData(prepared.operation.swapOutputData!);
+    const keepAmount = Amount.sum(outputs.keep.map((output) => output.blindedMessage.amount));
+    const sendAmount = Amount.sum(outputs.send.map((output) => output.blindedMessage.amount));
+
+    expect(prepared.operation.swap_fee.equals(Amount.from(1))).toBe(true);
+    expect(sendAmount.equals(Amount.from(11))).toBe(true);
+    expect(keepAmount.equals(Amount.from(4))).toBe(true);
+    expect(
+      sendAmount.add(keepAmount).add(prepared.operation.swap_fee).equals(Amount.from(16)),
+    ).toBe(true);
+  });
+
+  it('persists a pre-swap result after its source inputs were observed spent', async () => {
+    await saveReadyProof(16);
+    const prepared = await runner.run((tx) => tx.perform(prepareMelt, input()));
+    const authorization = await runner.run((tx) =>
+      tx.perform(beginMeltExecution, { operationId: 'melt-1', now: 2_000 }),
+    );
+    const executing = authorization.operation as ExecutingMeltOperation;
+    const candidates = swapProofs(executing);
+
+    await repositories.proofRepository.setProofState(mintUrl, ['input-16'], 'spent');
+    const applied = await runner.run((tx) =>
+      tx.perform(applyMeltSwapResult, {
+        operation: executing,
+        keepProofs: candidates.keep,
+        sendProofs: candidates.send,
+        now: 3_000,
+      }),
+    );
+
+    expect(applied.changed).toBe(true);
+    expect(applied.sendProofs.every((proof) => proof.state === 'inflight')).toBe(true);
+    for (const proof of [...candidates.keep, ...candidates.send]) {
+      expect(
+        await repositories.proofRepository.getProofBySecret(mintUrl, proof.secret),
+      ).not.toBeNull();
+    }
+  });
+
+  it('finalizes a paid pre-swap Melt when its inputs are partially observed spent', async () => {
+    await saveReadyProof(16);
+    await runner.run((tx) => tx.perform(prepareMelt, input()));
+    const authorization = await runner.run((tx) =>
+      tx.perform(beginMeltExecution, { operationId: 'melt-1', now: 2_000 }),
+    );
+    const executing = authorization.operation as ExecutingMeltOperation;
+    const candidates = swapProofs(executing);
+    const applied = await runner.run((tx) =>
+      tx.perform(applyMeltSwapResult, {
+        operation: executing,
+        keepProofs: candidates.keep,
+        sendProofs: candidates.send,
+        now: 3_000,
+      }),
+    );
+    expect(applied.sendProofs.length).toBeGreaterThan(1);
+    const alreadySpent = applied.sendProofs[0]!;
+    await repositories.proofRepository.setProofState(mintUrl, [alreadySpent.secret], 'spent');
+    await saveQuote('PAID', 4_000);
+
+    const finalized = await runner.run((tx) =>
+      tx.perform(applyMeltPaidResult, {
+        operation: applied.operation,
+        changeProofs: [],
+        finalizedData: { preimage: 'preimage' },
+        now: 4_000,
+      }),
+    );
+
+    expect(finalized.operation.state).toBe('finalized');
+    expect(finalized.spentInputSecrets).not.toContain(alreadySpent.secret);
+    for (const proof of applied.sendProofs) {
+      expect(
+        (await repositories.proofRepository.getProofBySecret(mintUrl, proof.secret))?.state,
+      ).toBe('spent');
     }
   });
 

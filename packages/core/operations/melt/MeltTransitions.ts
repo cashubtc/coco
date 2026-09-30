@@ -107,6 +107,7 @@ export const prepareMelt = defineTransition<PrepareMeltInput, PrepareMeltResult>
         seed: input.seed,
         keepAmount,
         sendAmount: required,
+        includeSendFees: true,
       });
       swapOutputData = swapAllocation.outputData;
       finalCounter = swapAllocation.counter ?? finalCounter;
@@ -223,8 +224,18 @@ export const applyMeltSwapResult = defineTransition<ApplyMeltSwapResultInput, Ap
       proofs: sendProofs,
     });
 
-    const original = await tx.proofs.getProofsBySecrets(current.mintUrl, current.inputProofSecrets);
-    if (original.every((proof) => proof.state === 'spent')) {
+    const storedOutputs = await tx.proofs.getProofsBySecrets(
+      current.mintUrl,
+      [...keepProofs, ...sendProofs].map((proof) => proof.secret),
+    );
+    if (storedOutputs.length > 0) {
+      await tx.proofs.getOwned({
+        mintUrl: current.mintUrl,
+        unit: current.unit,
+        operationId: current.id,
+        secrets: current.inputProofSecrets,
+        state: 'spent',
+      });
       const stored = await requireStoredProofs(tx, current, [...keepProofs, ...sendProofs]);
       return {
         operation: current,
@@ -241,7 +252,7 @@ export const applyMeltSwapResult = defineTransition<ApplyMeltSwapResultInput, Ap
       unit: current.unit,
       operationId: current.id,
       secrets: current.inputProofSecrets,
-      state: 'inflight',
+      state: ['inflight', 'spent'],
       outputs: [...keepProofs, ...sendProofs],
     });
     const operation: ExecutingMeltOperation = { ...current, updatedAt: input.now };
@@ -299,10 +310,11 @@ export const applyMeltPaidResult = defineTransition<ApplyMeltPaidResultInput, Ap
       throw new Error('Melt paid result does not match persisted request');
     }
     const quote = await requireQuote(tx, current);
-    if (quote.state !== 'PAID' || !Array.isArray(quote.change)) {
+    if (quote.state !== 'PAID') {
       throw new Error(`Cannot finalize melt operation from quote state ${quote.state}`);
     }
-    if (quote.change.length !== input.changeProofs.length) {
+    const canonicalChange = quote.change ?? [];
+    if (canonicalChange.length !== input.changeProofs.length) {
       throw new ProofValidationError('Melt change proofs do not match canonical settlement');
     }
     assertFinalizedData(quote, input.finalizedData);
@@ -313,15 +325,13 @@ export const applyMeltPaidResult = defineTransition<ApplyMeltPaidResultInput, Ap
     assertChangeProofs(current, changeProofs);
     const meltInputs = await requireMeltInputs(tx, current, ['inflight', 'spent']);
     await tx.proofs.saveCreated(current.mintUrl, changeProofs);
-    if (meltInputs.some((proof) => proof.state === 'inflight')) {
-      if (meltInputs.some((proof) => proof.state !== 'inflight')) {
-        throw new ProofValidationError('Melt inputs are only partially settled');
-      }
+    const inflightInputs = meltInputs.filter((proof) => proof.state === 'inflight');
+    if (inflightInputs.length > 0) {
       await tx.proofs.recordSpent({
         mintUrl: current.mintUrl,
         unit: current.unit,
         operationId: current.id,
-        secrets: meltInputs.map((proof) => proof.secret),
+        secrets: inflightInputs.map((proof) => proof.secret),
       });
     }
     const changeAmount = sumProofs(changeProofs);
@@ -339,9 +349,7 @@ export const applyMeltPaidResult = defineTransition<ApplyMeltPaidResultInput, Ap
     return {
       operation,
       changeProofs,
-      spentInputSecrets: meltInputs
-        .filter((proof) => proof.state === 'inflight')
-        .map((proof) => proof.secret),
+      spentInputSecrets: inflightInputs.map((proof) => proof.secret),
       changed: true,
     };
   },

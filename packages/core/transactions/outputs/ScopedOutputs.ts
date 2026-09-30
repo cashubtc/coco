@@ -1,6 +1,7 @@
 import {
+  Amount,
   OutputData,
-  type Amount,
+  splitAmount,
   type MintKeys,
   type OutputDataCreator,
   type OutputDataLike,
@@ -18,6 +19,8 @@ export interface AllocateOutputsInput {
   seed: Uint8Array;
   keepAmount: Amount;
   sendAmount: Amount;
+  /** Increase deterministic send outputs to cover the fee charged when they are spent. */
+  includeSendFees?: boolean;
   fixedSendOutputs?: readonly OutputDataLike[];
 }
 
@@ -68,22 +71,36 @@ export class RepositoryScopedOutputs implements ScopedOutputs {
 
   async allocate(input: AllocateOutputsInput): Promise<AllocateOutputsResult> {
     await this.assertActiveKeys(input.mintUrl, input.unit, input.activeKeys);
+    if (input.includeSendFees && input.fixedSendOutputs) {
+      throw new ProofValidationError(
+        'Fee-inclusive allocation requires deterministic send outputs',
+      );
+    }
+    let keepAmount = input.keepAmount;
+    let sendAmount = input.sendAmount;
+    if (input.includeSendFees && !sendAmount.isZero()) {
+      const keyset = await this.keysets.getKeysetById(input.mintUrl, input.activeKeys.id);
+      if (!keyset) {
+        throw new ProofValidationError(`Active keyset ${input.activeKeys.id} is missing`);
+      }
+      sendAmount = includeProofFees(sendAmount, input.activeKeys, keyset.feePpk);
+      const sendFee = sendAmount.subtract(input.sendAmount);
+      if (keepAmount.lessThan(sendFee)) {
+        throw new ProofValidationError('Keep amount is not sufficient to cover send output fees');
+      }
+      keepAmount = keepAmount.subtract(sendFee);
+    }
     const current =
       (await this.counters.getCounter(input.mintUrl, input.activeKeys.id))?.counter ?? 0;
-    const keep = input.keepAmount.isZero()
+    const keep = keepAmount.isZero()
       ? []
-      : this.creator.createDeterministicData(
-          input.keepAmount,
-          input.seed,
-          current,
-          input.activeKeys,
-        );
+      : this.creator.createDeterministicData(keepAmount, input.seed, current, input.activeKeys);
     const send = input.fixedSendOutputs
       ? [...input.fixedSendOutputs]
-      : input.sendAmount.isZero()
+      : sendAmount.isZero()
         ? []
         : this.creator.createDeterministicData(
-            input.sendAmount,
+            sendAmount,
             input.seed,
             current + keep.length,
             input.activeKeys,
@@ -129,4 +146,23 @@ export class RepositoryScopedOutputs implements ScopedOutputs {
     await this.counters.setCounter(counter.mintUrl, counter.keysetId, counter.counter);
     return { outputData: serializeOutputData({ keep, send: [] }), counter };
   }
+}
+
+function includeProofFees(amount: Amount, activeKeys: MintKeys, feePpk: number): Amount {
+  if (!Number.isSafeInteger(feePpk) || feePpk < 0) {
+    throw new ProofValidationError(`Invalid input fee for keyset ${activeKeys.id}`);
+  }
+  const denominations = splitAmount(amount, activeKeys.keys);
+  let fee = feeForProofCount(denominations.length, feePpk);
+  let feeDenominations = splitAmount(fee, activeKeys.keys);
+  while (true) {
+    const nextFee = feeForProofCount(denominations.length + feeDenominations.length, feePpk);
+    if (!nextFee.greaterThan(fee)) return amount.add(fee);
+    fee = nextFee;
+    feeDenominations = splitAmount(fee, activeKeys.keys);
+  }
+}
+
+function feeForProofCount(count: number, feePpk: number): Amount {
+  return Amount.from((BigInt(count) * BigInt(feePpk) + 999n) / 1000n);
 }

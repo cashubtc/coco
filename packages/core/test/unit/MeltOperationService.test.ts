@@ -263,4 +263,18 @@ describe('MeltOperationService coordinator', () => {
       { throwOnError: true },
     );
   });
+
+  it('finalizes from a persisted PAID quote that omits change', async () => {
+    current = pending();
+    dependencies.quoteLifecycle.getMeltQuote = mock(async () => ({
+      ...quote('PAID'),
+      change: undefined,
+    }));
+
+    const decision = await new MeltOperationService(dependencies).checkPendingOperation('op-1');
+
+    expect(decision).toBe('finalize');
+    expect(performed).toContain(applyMeltPaidResult);
+    expect(dependencies.quoteLifecycle.refreshMeltQuoteById).toHaveBeenCalledTimes(0);
+  });
 });
