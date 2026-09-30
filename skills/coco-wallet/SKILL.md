@@ -46,6 +46,9 @@ Surface storage failures; clearing the database or falling back to memory loses 
 For real funds, integrate the app's protected seed storage and recovery flow. Keep seeds,
 recovery material, and bearer tokens out of logs and analytics.
 
+Built-in adapters, including IndexedDB, store proofs and other wallet secrets unencrypted at rest.
+Use them as provided unless the app's requirements call for additional storage protection.
+
 After unlock, call `initializeCoco({ repo, seedGetter })`. It initializes the adapter and starts
 the default background watchers, processors, and startup Operation Recovery. Keep those defaults
 unless the feature requires another policy.
