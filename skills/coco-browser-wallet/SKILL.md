@@ -28,17 +28,17 @@ and the Coco Session out of server rendering and server request handlers.
 import { initializeCoco } from '@cashu/coco-core';
 import { IndexedDbRepositories } from '@cashu/coco-indexeddb';
 
-export async function openBrowserWallet(
-  databaseName: string,
-  seedGetter: () => Promise<Uint8Array>,
-) {
-  const repo = new IndexedDbRepositories({ name: databaseName });
-  return initializeCoco({ repo, seedGetter });
-}
+const repo = new IndexedDbRepositories({ name: walletDatabaseName });
+const coco = await initializeCoco({ repo, seedGetter });
 ```
 
 The database name selects this Wallet's IndexedDB database. Browser WebSocket support is detected
 by Coco automatically.
+
+The application owns the database lifecycle. `coco.dispose()` stops session resources without
+closing IndexedDB, including when called by the React provider. Retain `repo` alongside the
+session, then call `repo.db.close()` after session disposal when the application no longer needs
+that connection.
 
 **Done when:** browser entry points use the selected adapter, and server rendering can run without
 accessing browser storage or creating a Coco Session.
