@@ -216,6 +216,9 @@ describe('MeltBolt11Handler', () => {
 
     // Mock ProofService
     proofService = {
+      calculateSendAmountWithFees: mock<ProofService['calculateSendAmountWithFees']>(
+        async (_mintUrl, intent) => intent.amount,
+      ),
       selectProofsToSend: mock(() =>
         Promise.resolve([makeProof('input-1', 60), makeProof('input-2', 50)]),
       ),
@@ -613,6 +616,75 @@ describe('MeltBolt11Handler', () => {
     });
 
     describe('swap-then-melt (excess proofs)', () => {
+      it.each([4, 8])(
+        'funds both input fees for a small payment with a %i-sat swap input',
+        async (inputAmount) => {
+          const ctx = buildPrepareContext(makeInitOp('small-payment'), {
+            amount: Amount.from(2),
+            fee_reserve: Amount.zero(),
+          });
+          proofService.calculateSendAmountWithFees = mock(async () => Amount.from(3));
+          proofService.selectProofsToSend = mock<ProofService['selectProofsToSend']>(
+            async (_mintUrl, intent) =>
+              intent.amount.equals(2)
+                ? [makeProof('two', 2), makeProof('one', 1)]
+                : [makeProof('swap-input', inputAmount)],
+          );
+
+          const prepared = await handler.prepare(ctx);
+
+          expect(prepared.inputAmount).toEqual(Amount.from(inputAmount));
+          expect(prepared.inputProofSecrets).toEqual(['swap-input']);
+          expect(prepared.swap_fee).toEqual(Amount.from(1));
+          expect(proofService.calculateSendAmountWithFees).toHaveBeenCalledWith(mintUrl, {
+            amount: Amount.from(2),
+            unit: 'sat',
+          });
+          expect(proofService.selectProofsToSend).toHaveBeenLastCalledWith(
+            mintUrl,
+            { amount: Amount.from(3), unit: 'sat' },
+            true,
+          );
+          expect(proofService.reserveProofs).toHaveBeenCalledWith(
+            mintUrl,
+            ['swap-input'],
+            'small-payment',
+            { unit: 'sat' },
+          );
+          expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalledWith(
+            mintUrl,
+            {
+              keep: { amount: Amount.from(inputAmount - 4), unit: 'sat' },
+              send: { amount: Amount.from(3), unit: 'sat' },
+            },
+            { includeFees: false },
+          );
+          expect(proofService.createBlankOutputs).toHaveBeenCalledWith(mintUrl, {
+            amount: Amount.from(1),
+            unit: 'sat',
+          });
+        },
+      );
+
+      it('rejects insufficient funds for both input fees before reserving proofs or allocating outputs', async () => {
+        const ctx = buildPrepareContext(makeInitOp('insufficient-fees'), {
+          amount: Amount.from(2),
+          fee_reserve: Amount.zero(),
+        });
+        proofService.calculateSendAmountWithFees = mock(async () => Amount.from(3));
+        proofService.selectProofsToSend = mock(async () => [
+          makeProof('two', 2),
+          makeProof('one', 1),
+        ]);
+
+        await expect(handler.prepare(ctx)).rejects.toThrow(
+          'Melt amount is not sufficient after fees',
+        );
+        expect(proofService.reserveProofs).not.toHaveBeenCalled();
+        expect(proofService.createBlankOutputs).not.toHaveBeenCalled();
+        expect(proofService.createOutputsAndIncrementCounters).not.toHaveBeenCalled();
+      });
+
       it('should prepare swap when selected amount exceeds threshold', async () => {
         const operation = makeInitOp('op-1');
         const ctx = buildPrepareContext(operation);
