@@ -49,6 +49,10 @@ respective flows. Each hook owns one local operation binding:
   conflicting buttons while loading and catch rejected action promises in event handlers.
 - For a resume screen, pass the persisted operation or ID as the initial hook argument. That
   argument is initial-only; remount with a new key to switch operations.
+  For a resumed send, check `currentOperation?.state === 'pending'` and that
+  `currentOperation.token` exists before encoding it with `coco.wallet.encodeToken()` for delivery.
+  `executeResult` is local hook state and is not restored after reload. The persisted token is the
+  canonical copy for P2PK sends.
 - `reset()` clears the local binding. Cancel an eligible prepared operation through its action
   before resetting when the user intends to abandon it; resetting alone leaves durable work.
 
