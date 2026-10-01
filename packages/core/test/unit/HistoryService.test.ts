@@ -237,7 +237,7 @@ describe('HistoryService', () => {
     });
   });
 
-  it('reads paginated history and operation ids through the projection repository', async () => {
+  it('reads paginated history and individual entries through the projection repository', async () => {
     const entry = {
       id: 'send:send-op-1',
       source: 'operation',
@@ -253,10 +253,10 @@ describe('HistoryService', () => {
     repositoryEntries.set(entry.id, entry);
 
     await expect(service.getPaginatedHistory(0, 10)).resolves.toEqual([entry]);
-    await expect(service.getOperationIdFromHistoryEntry(entry.id)).resolves.toBe('send-op-1');
+    await expect(service.getHistoryEntryById(entry.id)).resolves.toEqual(entry);
   });
 
-  it('rejects operation-id lookup for legacy send entries without an operation id', async () => {
+  it('returns legacy send entries without an operation id', async () => {
     const legacy = {
       id: 'legacy:1',
       source: 'legacy',
@@ -271,9 +271,7 @@ describe('HistoryService', () => {
     } satisfies LegacyHistoryEntry;
     repositoryEntries.set(legacy.id, legacy);
 
-    await expect(service.getOperationIdFromHistoryEntry(legacy.id)).rejects.toThrow(
-      'not backed by an operation',
-    );
+    await expect(service.getHistoryEntryById(legacy.id)).resolves.toEqual(legacy);
   });
 
   function makePreparedSendOperation(id: string): PreparedSendOperation {
