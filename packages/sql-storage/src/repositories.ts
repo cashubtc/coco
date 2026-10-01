@@ -133,7 +133,7 @@ export class SqlStorageRepositories implements Repositories {
   readonly paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
   readonly paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
   readonly mintSwap?: MintSwapPersistence;
-  readonly database: SqlDatabase;
+  private readonly database: SqlDatabase;
   private readonly mintSwapEnabled: boolean;
 
   constructor(options: SqlStorageRepositoriesOptions) {
