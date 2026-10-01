@@ -1,9 +1,13 @@
-import { Amount } from '@cashu/cashu-ts';
+import { Amount, type SerializedBlindedSignature } from '@cashu/cashu-ts';
 import { Database } from 'bun:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { SqlStorageRepositories } from '../../../sql-storage/src/repositories.ts';
 import { SqliteDb } from '../../../sqlite-bun/src/db.ts';
-import { meltQuoteFromBolt11Response } from '../../models/MeltQuote.ts';
+import {
+  meltQuoteFromBolt11Response,
+  meltQuoteFromBolt12Response,
+  meltQuoteFromOnchainResponse,
+} from '../../models/MeltQuote.ts';
 import type { ExecutingMeltOperation } from '../../operations/melt/MeltOperation.ts';
 import { prepareMint } from '../../operations/mint/MintTransitions.ts';
 import {
@@ -59,6 +63,20 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
                 min_amount: 1,
                 max_amount: 1000,
               },
+              {
+                method: 'bolt12',
+                method_name: 'bolt12',
+                unit: 'sat',
+                min_amount: 1,
+                max_amount: 1000,
+              },
+              {
+                method: 'onchain',
+                method_name: 'onchain',
+                unit: 'sat',
+                min_amount: 1,
+                max_amount: 1000,
+              },
             ],
           },
           '5': {
@@ -67,6 +85,20 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
               {
                 method: 'bolt11',
                 method_name: 'bolt11',
+                unit: 'sat',
+                min_amount: 1,
+                max_amount: 1000,
+              },
+              {
+                method: 'bolt12',
+                method_name: 'bolt12',
+                unit: 'sat',
+                min_amount: 1,
+                max_amount: 1000,
+              },
+              {
+                method: 'onchain',
+                method_name: 'onchain',
                 unit: 'sat',
                 min_amount: 1,
                 max_amount: 1000,
@@ -119,7 +151,7 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
   async function saveQuote(
     state: 'UNPAID' | 'PENDING' | 'PAID',
     observedAt: number,
-    change: [] = [],
+    change: SerializedBlindedSignature[] = [],
   ) {
     await repositories.meltQuoteRepository.upsertMeltQuote(
       meltQuoteFromBolt11Response(
@@ -207,7 +239,102 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
     );
   });
 
-  it('finalizes a paid Melt when the canonical quote omits change', async () => {
+  it.each([
+    [10, false],
+    [11, true],
+    [12, true],
+  ] as const)(
+    'uses the 110 percent pre-swap boundary for selected input %i',
+    async (selectedAmount, needsSwap) => {
+      await saveReadyProof(selectedAmount);
+
+      const prepared = await runner.run((tx) => tx.perform(prepareMelt, input()));
+
+      expect(prepared.operation.needsSwap).toBe(needsSwap);
+    },
+  );
+
+  it('rejects a quote unit mismatch before reserving proofs', async () => {
+    await repositories.meltQuoteRepository.upsertMeltQuote(
+      meltQuoteFromBolt11Response(mintUrl, {
+        quote: 'quote-usd',
+        request: 'lnbc1usd',
+        amount: Amount.from(8),
+        unit: 'usd',
+        fee_reserve: Amount.from(2),
+        expiry: 100,
+        state: 'UNPAID',
+        payment_preimage: null,
+        change: [],
+      }),
+    );
+    await saveReadyProof(10, 'unit-mismatch-input');
+
+    await expect(
+      runner.run((tx) =>
+        tx.perform(prepareMelt, {
+          ...input('unit-mismatch'),
+          methodData: { invoice: 'lnbc1usd' },
+          quoteId: 'quote-usd',
+        }),
+      ),
+    ).rejects.toThrow('Unit mismatch: expected sat, received usd');
+
+    expect(await repositories.meltOperationRepository.getById('unit-mismatch')).toBeNull();
+    expect(
+      (await repositories.proofRepository.getProofBySecret(mintUrl, 'unit-mismatch-input'))
+        ?.usedByOperationId,
+    ).toBeUndefined();
+  });
+
+  it('rejects an expired quote before reserving proofs', async () => {
+    await repositories.meltQuoteRepository.upsertMeltQuote(
+      meltQuoteFromBolt11Response(mintUrl, {
+        quote: 'quote-expired',
+        request: 'lnbc1expired',
+        amount: Amount.from(8),
+        unit: 'sat',
+        fee_reserve: Amount.from(2),
+        expiry: 1,
+        state: 'UNPAID',
+        payment_preimage: null,
+        change: [],
+      }),
+    );
+    await saveReadyProof(10, 'expired-input');
+
+    await expect(
+      runner.run((tx) =>
+        tx.perform(prepareMelt, {
+          ...input('expired'),
+          methodData: { invoice: 'lnbc1expired' },
+          quoteId: 'quote-expired',
+        }),
+      ),
+    ).rejects.toThrow('Cannot prepare expired melt quote');
+
+    expect(await repositories.meltOperationRepository.getById('expired')).toBeNull();
+    expect(
+      (await repositories.proofRepository.getProofBySecret(mintUrl, 'expired-input'))
+        ?.usedByOperationId,
+    ).toBeUndefined();
+  });
+
+  it('does not reserve inputs that cannot cover the quote and fee reserve', async () => {
+    await saveReadyProof(9, 'insufficient-input');
+
+    await expect(
+      runner.run((tx) => tx.perform(prepareMelt, input('insufficient'))),
+    ).rejects.toThrow('Not enough proofs to send');
+
+    expect(await repositories.meltOperationRepository.getById('insufficient')).toBeNull();
+    expect(
+      (await repositories.proofRepository.getProofBySecret(mintUrl, 'insufficient-input'))
+        ?.usedByOperationId,
+    ).toBeUndefined();
+  });
+
+  it('rejects paid settlement when the canonical quote still omits change', async () => {
     await saveReadyProof(10);
     await runner.run((tx) => tx.perform(prepareMelt, input()));
     const authorization = await runner.run((tx) =>
@@ -230,17 +357,222 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
       ),
     );
 
+    await expect(
+      runner.run((tx) =>
+        tx.perform(applyMeltPaidResult, {
+          operation: authorization.operation as ExecutingMeltOperation,
+          changeProofs: [],
+          finalizedData: { preimage: 'preimage' },
+          now: 3_000,
+        }),
+      ),
+    ).rejects.toThrow('canonical settlement change is incomplete');
+
+    expect((await repositories.meltOperationRepository.getById('melt-1'))?.state).toBe('executing');
+    expect((await repositories.proofRepository.getProofBySecret(mintUrl, 'input-10'))?.state).toBe(
+      'inflight',
+    );
+  });
+
+  it('saves canonical change and finalizes the input spend in one transition', async () => {
+    await saveReadyProof(10);
+    const prepared = await runner.run((tx) => tx.perform(prepareMelt, input('melt-change')));
+    const authorization = await runner.run((tx) =>
+      tx.perform(beginMeltExecution, { operationId: 'melt-change', now: 2_000 }),
+    );
+    const output = deserializeOutputData(prepared.operation.changeOutputData).keep[0]!;
+    const secret = new TextDecoder().decode(output.secret);
+    await saveQuote('PAID', 3_000, [
+      {
+        id: output.blindedMessage.id,
+        amount: Amount.from(1),
+        C_: testMintKeypairs['1'],
+      },
+    ]);
+
     const finalized = await runner.run((tx) =>
       tx.perform(applyMeltPaidResult, {
         operation: authorization.operation as ExecutingMeltOperation,
-        changeProofs: [],
+        changeProofs: [
+          {
+            id: output.blindedMessage.id,
+            amount: Amount.from(1),
+            secret,
+            C: testMintKeypairs['1'],
+          },
+        ],
         finalizedData: { preimage: 'preimage' },
         now: 3_000,
       }),
     );
 
+    expect(finalized.operation.changeAmount?.equals(Amount.from(1))).toBe(true);
+    expect(finalized.operation.effectiveFee?.equals(Amount.from(1))).toBe(true);
+    expect((await repositories.proofRepository.getProofBySecret(mintUrl, secret))?.state).toBe(
+      'ready',
+    );
+    expect((await repositories.proofRepository.getProofBySecret(mintUrl, 'input-10'))?.state).toBe(
+      'spent',
+    );
+  });
+
+  it('prepares and finalizes BOLT12 settlement with its canonical offer and preimage', async () => {
+    await repositories.meltQuoteRepository.upsertMeltQuote(
+      meltQuoteFromBolt12Response(mintUrl, {
+        quote: 'quote-bolt12',
+        request: 'lno1offer',
+        amount: Amount.from(8),
+        unit: 'sat',
+        fee_reserve: Amount.from(2),
+        expiry: 100,
+        state: 'UNPAID',
+        payment_preimage: null,
+        change: [],
+      }),
+    );
+    await saveReadyProof(10, 'bolt12-input');
+    const prepared = await runner.run((tx) =>
+      tx.perform(prepareMelt, {
+        ...input('melt-bolt12'),
+        method: 'bolt12',
+        methodData: { offer: 'lno1offer' },
+        quoteId: 'quote-bolt12',
+      }),
+    );
+    const authorized = await runner.run((tx) =>
+      tx.perform(beginMeltExecution, { operationId: prepared.operation.id, now: 2_000 }),
+    );
+    await repositories.meltQuoteRepository.upsertMeltQuote(
+      meltQuoteFromBolt12Response(mintUrl, {
+        quote: 'quote-bolt12',
+        request: 'lno1offer',
+        amount: Amount.from(8),
+        unit: 'sat',
+        fee_reserve: Amount.from(2),
+        expiry: 100,
+        state: 'PAID',
+        payment_preimage: 'bolt12-preimage',
+        change: [],
+      }),
+    );
+
+    const finalized = await runner.run((tx) =>
+      tx.perform(applyMeltPaidResult, {
+        operation: authorized.operation as ExecutingMeltOperation,
+        changeProofs: [],
+        finalizedData: { preimage: 'bolt12-preimage' },
+        now: 3_000,
+      }),
+    );
+
     expect(finalized.operation.state).toBe('finalized');
-    expect(finalized.changeProofs).toHaveLength(0);
+    expect(finalized.operation.finalizedData).toEqual({ preimage: 'bolt12-preimage' });
+  });
+
+  it('uses the selected on-chain fee reserve and validates its settlement outpoint', async () => {
+    const feeOptions = [
+      { fee_index: 1, fee_reserve: Amount.from(1), estimated_blocks: 12 },
+      { fee_index: 7, fee_reserve: Amount.from(2), estimated_blocks: 3 },
+    ];
+    await repositories.meltQuoteRepository.upsertMeltQuote(
+      meltQuoteFromOnchainResponse(mintUrl, {
+        quote: 'quote-onchain',
+        request: 'bc1ptest',
+        amount: Amount.from(8),
+        unit: 'sat',
+        fee_options: feeOptions,
+        selected_fee_index: null,
+        expiry: 100,
+        state: 'UNPAID',
+        outpoint: null,
+        change: [],
+      }),
+    );
+    await saveReadyProof(10, 'onchain-input');
+    const prepared = await runner.run((tx) =>
+      tx.perform(prepareMelt, {
+        ...input('melt-onchain'),
+        method: 'onchain',
+        methodData: { address: 'bc1ptest', amountSats: Amount.from(8), feeIndex: 7 },
+        quoteId: 'quote-onchain',
+      }),
+    );
+    expect(prepared.operation.fee_reserve.equals(Amount.from(2))).toBe(true);
+    const authorized = await runner.run((tx) =>
+      tx.perform(beginMeltExecution, { operationId: prepared.operation.id, now: 2_000 }),
+    );
+    await repositories.meltQuoteRepository.upsertMeltQuote(
+      meltQuoteFromOnchainResponse(mintUrl, {
+        quote: 'quote-onchain',
+        request: 'bc1ptest',
+        amount: Amount.from(8),
+        unit: 'sat',
+        fee_options: feeOptions,
+        selected_fee_index: 7,
+        expiry: 100,
+        state: 'PAID',
+        outpoint: 'txid:7',
+        change: [],
+      }),
+    );
+
+    const finalized = await runner.run((tx) =>
+      tx.perform(applyMeltPaidResult, {
+        operation: authorized.operation as ExecutingMeltOperation,
+        changeProofs: [],
+        finalizedData: { outpoint: 'txid:7' },
+        now: 3_000,
+      }),
+    );
+
+    expect(finalized.operation.state).toBe('finalized');
+    expect(finalized.operation.finalizedData).toEqual({ outpoint: 'txid:7' });
+  });
+
+  it('rejects missing or unavailable on-chain fee indexes before reserving proofs', async () => {
+    for (const feeIndex of [undefined, 99] as const) {
+      await repositories.meltQuoteRepository.upsertMeltQuote(
+        meltQuoteFromOnchainResponse(mintUrl, {
+          quote: 'quote-onchain-invalid-fee',
+          request: 'bc1ptest',
+          amount: Amount.from(8),
+          unit: 'sat',
+          fee_options: [
+            { fee_index: 1, fee_reserve: Amount.from(1), estimated_blocks: 12 },
+            { fee_index: 7, fee_reserve: Amount.from(2), estimated_blocks: 3 },
+          ],
+          selected_fee_index: null,
+          expiry: 100,
+          state: 'UNPAID',
+          outpoint: null,
+          change: [],
+        }),
+      );
+      await saveReadyProof(10, `onchain-invalid-fee-${String(feeIndex)}`);
+
+      await expect(
+        runner.run((tx) =>
+          tx.perform(prepareMelt, {
+            ...input(`melt-onchain-invalid-fee-${String(feeIndex)}`),
+            method: 'onchain',
+            methodData: {
+              address: 'bc1ptest',
+              amountSats: Amount.from(8),
+              ...(feeIndex === undefined ? {} : { feeIndex }),
+            },
+            quoteId: 'quote-onchain-invalid-fee',
+          }),
+        ),
+      ).rejects.toThrow(
+        feeIndex === undefined ? 'requires an explicit feeIndex' : 'does not include',
+      );
+
+      expect(
+        await repositories.meltOperationRepository.getById(
+          `melt-onchain-invalid-fee-${String(feeIndex)}`,
+        ),
+      ).toBeNull();
+    }
   });
 
   it('commits the pre-swap checkpoint before restoring send proofs and clearing ownership', async () => {

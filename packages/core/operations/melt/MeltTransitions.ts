@@ -313,8 +313,12 @@ export const applyMeltPaidResult = defineTransition<ApplyMeltPaidResultInput, Ap
     if (quote.state !== 'PAID') {
       throw new Error(`Cannot finalize melt operation from quote state ${quote.state}`);
     }
-    const canonicalChange = quote.change ?? [];
-    if (canonicalChange.length !== input.changeProofs.length) {
+    if (!Array.isArray(quote.change)) {
+      throw new ProofValidationError(
+        'Cannot finalize melt operation: canonical settlement change is incomplete',
+      );
+    }
+    if (quote.change.length !== input.changeProofs.length) {
       throw new ProofValidationError('Melt change proofs do not match canonical settlement');
     }
     assertFinalizedData(quote, input.finalizedData);

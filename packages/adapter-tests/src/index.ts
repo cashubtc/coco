@@ -322,6 +322,58 @@ export async function runKeysetRepositoryContract(
         await dispose();
       }
     });
+
+    it('does not let concurrent writers replace the winning keyset keys', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const keyset = createDummyKeyset();
+        const results = await Promise.all([
+          settle(
+            repositories.keysetRepository.addKeyset({
+              ...keyset,
+              keypairs: { '1': '02aa' },
+            }),
+          ),
+          settle(
+            repositories.keysetRepository.addKeyset({
+              ...keyset,
+              keypairs: { '1': '02ff' },
+            }),
+          ),
+        ]);
+
+        expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+        const rejected = results.find((result) => result.status === 'rejected');
+        expect(
+          rejected?.status === 'rejected' && rejected.reason instanceof Error
+            ? rejected.reason.name
+            : undefined,
+        ).toBe(KeysetKeysConflictError.name);
+        const stored = await repositories.keysetRepository.getKeysetById(keyset.mintUrl, keyset.id);
+        expect(stored?.keypairs['1'] === '02aa' || stored?.keypairs['1'] === '02ff').toBe(true);
+      } finally {
+        await dispose();
+      }
+    });
+
+    if (options.createSharedRepositories) {
+      it('reconciles keyset keys across independent roots sharing one store', async () => {
+        const { first, second, dispose } = await options.createSharedRepositories!();
+        try {
+          const keyset = createDummyKeyset();
+          const results = await Promise.all([
+            settle(first.keysetRepository.addKeyset({ ...keyset, keypairs: { '1': '02aa' } })),
+            settle(second.keysetRepository.addKeyset({ ...keyset, keypairs: { '1': '02ff' } })),
+          ]);
+
+          expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+          const stored = await first.keysetRepository.getKeysetById(keyset.mintUrl, keyset.id);
+          expect(stored?.keypairs['1'] === '02aa' || stored?.keypairs['1'] === '02ff').toBe(true);
+        } finally {
+          await dispose();
+        }
+      });
+    }
   });
 }
 

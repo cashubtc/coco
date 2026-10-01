@@ -97,30 +97,42 @@ export abstract class BaseQuoteMeltHandler<M extends MeltMethod> implements Melt
     );
     return {
       status: response.state,
-      change: response.change,
+      // A direct Melt response is an authoritative settlement snapshot. Preserve the distinction
+      // between an incomplete cached PAID observation and a full PAID response with no change.
+      change: response.state === 'PAID' ? (response.change ?? []) : response.change,
       finalizedData: this.buildFinalizedData(response),
     };
   }
 
   private toCanonicalQuote(mintUrl: string, quote: MeltMethodQuoteSnapshot<M>): MeltQuote<M> {
+    let canonical: MeltQuote<M>;
     switch (this.method) {
       case 'bolt11':
-        return meltQuoteFromBolt11Response(
+        canonical = meltQuoteFromBolt11Response(
           mintUrl,
           quote as MeltQuoteBolt11Response,
         ) as MeltQuote<M>;
+        break;
       case 'bolt12':
-        return meltQuoteFromBolt12Response(
+        canonical = meltQuoteFromBolt12Response(
           mintUrl,
           quote as MeltQuoteBolt12Response,
         ) as MeltQuote<M>;
+        break;
       case 'onchain':
-        return meltQuoteFromOnchainResponse(
+        canonical = meltQuoteFromOnchainResponse(
           mintUrl,
           quote as MeltMethodQuoteSnapshot<'onchain'>,
         ) as MeltQuote<M>;
+        break;
       default:
         throw new Error(`Unsupported melt method ${String(this.method)}`);
     }
+
+    // create/fetch return complete remote quote snapshots. State-only observations bypass handlers
+    // and may keep `change` undefined until QuoteLifecycle performs this full refresh.
+    return canonical.state === 'PAID' && !Array.isArray(canonical.change)
+      ? ({ ...canonical, change: [] } as MeltQuote<M>)
+      : canonical;
   }
 }

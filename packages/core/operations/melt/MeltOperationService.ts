@@ -271,13 +271,14 @@ export class MeltOperationService {
       if (current.state !== 'pending' && current.state !== 'executing') {
         throw new Error(`Cannot finalize operation in state ${current.state}`);
       }
-      const quote =
-        options.canonicalQuote ??
-        (await this.dependencies.quoteLifecycle.refreshMeltQuote(
+      let quote = options.canonicalQuote;
+      if (!quote || (quote.state === 'PAID' && !Array.isArray(quote.change))) {
+        quote = await this.dependencies.quoteLifecycle.refreshMeltQuote(
           current.mintUrl,
           current.method,
           current.quoteId,
-        ));
+        );
+      }
       if (quote.state !== 'PAID') {
         throw new Error(`Cannot finalize operation from quote state ${quote.state}`);
       }
@@ -330,7 +331,7 @@ export class MeltOperationService {
         operation.method,
         operation.quoteId,
       );
-      if (persistedQuote?.state === 'PAID') {
+      if (persistedQuote?.state === 'PAID' && Array.isArray(persistedQuote.change)) {
         await this.applyPaid(operation, persistedQuote);
         return 'finalize';
       }
@@ -452,7 +453,15 @@ export class MeltOperationService {
 
   async getOperationByQuoteIdentity(identity: QuoteIdentity): Promise<MeltOperation | null> {
     const quote = await this.dependencies.quoteLifecycle.getMeltQuoteById(identity);
-    return quote ? this.getOperationByQuote(quote.mintUrl, quote.method, quote.quoteId) : null;
+    if (!quote) return null;
+    const operations = await this.dependencies.meltOperationQueries.getByQuoteId(
+      normalizeMintUrl(quote.mintUrl),
+      quote.quoteId,
+    );
+    if (operations.length > 1) {
+      throw new Error(`Found ${operations.length} melt operations for quote ${quote.quoteId}`);
+    }
+    return operations[0] ?? null;
   }
 
   async listOperationsByQuote(mintUrl: string, quoteId: string): Promise<MeltOperation[]> {
@@ -540,11 +549,20 @@ export class MeltOperationService {
     operation: ExecutingMeltOperation | PendingMeltOperation,
     quote: MeltQuote,
   ): Promise<FinalizedMeltOperation> {
-    const proofs = await this.unblindChange(operation, quote.change ?? []);
+    if (!Array.isArray(quote.change)) {
+      throw new Error(
+        `Cannot finalize Melt quote ${quote.quoteId}: settlement change is incomplete`,
+      );
+    }
+    const proofs = await this.unblindChange(operation, quote.change);
     const finalizedData =
       quote.method === 'onchain'
-        ? ({ outpoint: quote.outpoint } as MeltMethodFinalizedData)
-        : ({ preimage: quote.payment_preimage ?? undefined } as MeltMethodFinalizedData);
+        ? quote.outpoint === undefined
+          ? undefined
+          : ({ outpoint: quote.outpoint } as MeltMethodFinalizedData)
+        : quote.payment_preimage == null
+          ? undefined
+          : ({ preimage: quote.payment_preimage } as MeltMethodFinalizedData);
     const now = Date.now();
     const result = await this.dependencies.transactionRunner.run((tx) =>
       tx.perform(applyMeltPaidResult, {
@@ -614,12 +632,15 @@ export class MeltOperationService {
 
   private async recoverPreSwap(operation: ExecutingMeltOperation, quote: MeltQuote): Promise<void> {
     if (!operation.swapOutputData) throw new Error('Melt pre-swap plan is missing');
-    const { sendSecrets } = getSecretsFromSerializedOutputData(operation.swapOutputData);
+    const { keepSecrets, sendSecrets } = getSecretsFromSerializedOutputData(
+      operation.swapOutputData,
+    );
+    const outputSecrets = [...keepSecrets, ...sendSecrets];
     const stored = await this.dependencies.proofQueries.getProofsBySecrets(
       operation.mintUrl,
-      sendSecrets,
+      outputSecrets,
     );
-    if (stored.length === sendSecrets.length) {
+    if (stored.length === outputSecrets.length) {
       await this.applyRecoveryObservation(operation, quote);
       return;
     }
@@ -632,18 +653,23 @@ export class MeltOperationService {
       operation.mintUrl,
       operation.unit,
     );
-    const states = await wallet.checkProofsStates(originals);
-    if (states.length === originals.length && states.every((state) => state.state === 'UNSPENT')) {
-      if (quote.state !== 'UNPAID') {
-        throw new Error('Melt quote advanced although pre-swap inputs are unspent');
+    if (originals.length === operation.inputProofSecrets.length) {
+      const states = await wallet.checkProofsStates(originals);
+      if (
+        states.length === originals.length &&
+        states.every((state) => state.state === 'UNSPENT')
+      ) {
+        if (quote.state !== 'UNPAID') {
+          throw new Error('Melt quote advanced although pre-swap inputs are unspent');
+        }
+        await this.releaseAfterNonPayment(
+          operation,
+          quote,
+          'Pre-swap inputs are confirmed unspent',
+          true,
+        );
+        return;
       }
-      await this.releaseAfterNonPayment(
-        operation,
-        quote,
-        'Pre-swap inputs are confirmed unspent',
-        true,
-      );
-      return;
     }
     const metadata = await this.dependencies.mintService.refreshAndCommitIfStale(operation.mintUrl);
     const restored = await restoreOutputProofs(
@@ -653,11 +679,11 @@ export class MeltOperationService {
       operation.swapOutputData,
     );
     const outputData = deserializeOutputData(operation.swapOutputData);
-    const keepSecrets = new Set(
+    const keepSecretSet = new Set(
       outputData.keep.map((output) => new TextDecoder().decode(output.secret)),
     );
     const sendSecretSet = new Set(sendSecrets);
-    const keep = restored.filter((proof) => keepSecrets.has(proof.secret));
+    const keep = restored.filter((proof) => keepSecretSet.has(proof.secret));
     const send = restored.filter((proof) => sendSecretSet.has(proof.secret));
     if (keep.length + send.length !== outputData.keep.length + outputData.send.length) {
       throw new Error('Pre-swap outcome remains ambiguous; restored output set is incomplete');

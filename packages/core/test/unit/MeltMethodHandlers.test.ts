@@ -75,6 +75,129 @@ describe('remote-only Melt handlers', () => {
     expect(fetched.state).toBe('PENDING');
   });
 
+  it('creates amountless BOLT11 quotes without inventing an amount', async () => {
+    const wallet = {
+      createMeltQuoteBolt11: mock(async () => ({
+        quote: quoteId,
+        request: 'invoice',
+        amount: Amount.from(10),
+        fee_reserve: Amount.from(2),
+        unit: 'sat',
+        expiry: 9999999999,
+        state: 'UNPAID' as const,
+        payment_preimage: null,
+      })),
+    } as unknown as Wallet;
+
+    await new MeltBolt11Handler().createQuote({
+      mintUrl,
+      methodData: { invoice: 'invoice' },
+      unit: 'sat',
+      wallet,
+      mintAdapter: {} as MintAdapter,
+    });
+
+    expect(wallet.createMeltQuoteBolt11).toHaveBeenCalledWith('invoice', undefined);
+  });
+
+  it('creates and fetches canonical BOLT12 quotes with millisat conversion', async () => {
+    const wallet = {
+      createMeltQuoteBolt12: mock(async () => ({
+        quote: 'quote-bolt12',
+        request: 'lno1offer',
+        amount: Amount.from(10),
+        fee_reserve: Amount.from(2),
+        unit: 'sat',
+        expiry: 9999999999,
+        state: 'UNPAID' as const,
+        payment_preimage: null,
+      })),
+    } as unknown as Wallet;
+    const mintAdapter = {
+      checkMeltQuoteBolt12: mock(async () => ({
+        quote: 'quote-bolt12',
+        request: 'lno1offer',
+        amount: Amount.from(10),
+        fee_reserve: Amount.from(2),
+        unit: 'sat',
+        expiry: 9999999999,
+        state: 'PAID' as const,
+        payment_preimage: 'bolt12-preimage',
+      })),
+    } as unknown as MintAdapter;
+    const handler = new MeltBolt12Handler();
+
+    const created = await handler.createQuote({
+      mintUrl,
+      methodData: { offer: 'lno1offer', amountSats: Amount.from(10) },
+      unit: 'sat',
+      wallet,
+      mintAdapter,
+    });
+    const fetched = await handler.fetchRemoteQuote({ quote: created, mintAdapter });
+
+    expect(wallet.createMeltQuoteBolt12).toHaveBeenCalledWith('lno1offer', Amount.from(10000));
+    expect(mintAdapter.checkMeltQuoteBolt12).toHaveBeenCalledWith(mintUrl, 'quote-bolt12');
+    expect(fetched).toMatchObject({
+      method: 'bolt12',
+      state: 'PAID',
+      payment_preimage: 'bolt12-preimage',
+      change: [],
+    });
+  });
+
+  it('creates and fetches canonical on-chain quotes with fee options', async () => {
+    const feeOptions = [
+      { fee_index: 1, fee_reserve: Amount.from(2), estimated_blocks: 6 },
+      { fee_index: 7, fee_reserve: Amount.from(3), estimated_blocks: 2 },
+    ];
+    const wallet = {
+      createMeltQuoteOnchain: mock(async () => ({
+        quote: 'quote-onchain',
+        request: 'bc1qtest',
+        amount: Amount.from(10),
+        unit: 'sat',
+        fee_options: feeOptions,
+        selected_fee_index: null,
+        expiry: 9999999999,
+        state: 'UNPAID' as const,
+        outpoint: null,
+      })),
+    } as unknown as Wallet;
+    const mintAdapter = {
+      checkMeltQuoteOnchain: mock(async () => ({
+        quote: 'quote-onchain',
+        request: 'bc1qtest',
+        amount: Amount.from(10),
+        unit: 'sat',
+        fee_options: feeOptions,
+        selected_fee_index: 7,
+        expiry: 9999999999,
+        state: 'PAID' as const,
+        outpoint: 'txid:7',
+      })),
+    } as unknown as MintAdapter;
+    const handler = new MeltOnchainHandler();
+
+    const created = await handler.createQuote({
+      mintUrl,
+      methodData: { address: 'bc1qtest', amountSats: Amount.from(10) },
+      unit: 'sat',
+      wallet,
+      mintAdapter,
+    });
+    const fetched = await handler.fetchRemoteQuote({ quote: created, mintAdapter });
+
+    expect(wallet.createMeltQuoteOnchain).toHaveBeenCalledWith('bc1qtest', Amount.from(10));
+    expect(mintAdapter.checkMeltQuoteOnchain).toHaveBeenCalledWith(mintUrl, 'quote-onchain');
+    expect(fetched).toMatchObject({
+      method: 'onchain',
+      state: 'PAID',
+      outpoint: 'txid:7',
+      change: [],
+    });
+  });
+
   it('returns BOLT11 candidate settlement facts without mutating local storage', async () => {
     const mintAdapter = {
       customMeltBolt11: mock(async () => ({
@@ -90,6 +213,27 @@ describe('remote-only Melt handlers', () => {
       mintAdapter,
     });
     expect(mintAdapter.customMeltBolt11).toHaveBeenCalledWith(mintUrl, [proof], [], quoteId);
+    expect(result).toEqual({
+      status: 'PAID',
+      change: [],
+      finalizedData: { preimage: 'preimage' },
+    });
+  });
+
+  it('normalizes an authoritative PAID response without change to an explicit empty settlement', async () => {
+    const mintAdapter = {
+      customMeltBolt11: mock(async () => ({
+        state: 'PAID' as const,
+        payment_preimage: 'preimage',
+      })),
+    } as unknown as MintAdapter;
+
+    const result = await new MeltBolt11Handler().melt({
+      operation: executing('bolt11') as any,
+      inputProofs: [proof],
+      mintAdapter,
+    });
+
     expect(result).toEqual({
       status: 'PAID',
       change: [],
@@ -155,5 +299,27 @@ describe('remote-only Melt handlers', () => {
     expect(bolt12.finalizedData).toEqual({ preimage: 'p12' });
     expect(onchain.finalizedData).toEqual({ outpoint: 'txid:0' });
     expect(mintAdapter.customMeltOnchain).toHaveBeenCalledWith(mintUrl, [proof], [], quoteId, 7);
+  });
+
+  it('allows an authoritative synchronous on-chain PAID settlement without an outpoint', async () => {
+    const mintAdapter = {
+      customMeltOnchain: mock(async () => ({
+        state: 'PAID' as const,
+        change: [],
+        outpoint: null,
+      })),
+    } as unknown as MintAdapter;
+
+    const result = await new MeltOnchainHandler().melt({
+      operation: executing('onchain') as any,
+      inputProofs: [proof],
+      mintAdapter,
+    });
+
+    expect(result).toEqual({
+      status: 'PAID',
+      change: [],
+      finalizedData: undefined,
+    });
   });
 });

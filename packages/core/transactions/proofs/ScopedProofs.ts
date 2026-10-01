@@ -7,6 +7,9 @@ import { selectProofInputs, calculateProofFee } from '@core/proofs/ProofSelectio
 import type { KeysetRepository, ProofRepository } from '@core/repositories';
 import type { CoreProof } from '@core/types.ts';
 
+const MELT_SWAP_THRESHOLD_NUMERATOR = 11;
+const MELT_SWAP_THRESHOLD_DENOMINATOR = 10;
+
 export interface OwnedProofsInput {
   mintUrl: string;
   unit: string;
@@ -129,7 +132,9 @@ export class RepositoryScopedProofs implements ScopedProofs {
       proofs,
       inputAmount,
       inputFee: selected.fee,
-      needsSwap: inputAmount.greaterThanOrEqual(input.amount.scaledBy(11, 10)),
+      needsSwap: inputAmount.greaterThanOrEqual(
+        input.amount.scaledBy(MELT_SWAP_THRESHOLD_NUMERATOR, MELT_SWAP_THRESHOLD_DENOMINATOR),
+      ),
     };
   }
 
