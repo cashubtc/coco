@@ -326,11 +326,16 @@ export abstract class BaseQuoteMeltHandler<M extends MeltMethod> implements Melt
 
     ctx.logger?.debug('Preparing swap-then-melt', { operationId, totalAmount });
 
-    // Re-select proofs including the swap fee
+    // Fund the future melt input fee before selecting proofs for the swap.
+    const sendAmount = await ctx.proofService.calculateSendAmountWithFees(mintUrl, {
+      amount: totalAmount,
+      unit: ctx.operation.unit,
+    });
+    // Fee-aware selection also covers the swap input fee.
     const selectedProofs = await ctx.proofService.selectProofsToSend(
       mintUrl,
       {
-        amount: totalAmount,
+        amount: sendAmount,
         unit: ctx.operation.unit,
       },
       true,
@@ -339,7 +344,6 @@ export abstract class BaseQuoteMeltHandler<M extends MeltMethod> implements Melt
     const inputSecrets = selectedProofs.map((p) => p.secret);
 
     const swapFee = ctx.wallet.getFeesForProofs(selectedProofs);
-    const sendAmount = totalAmount;
     const requiredAmount = sendAmount.add(swapFee);
     if (selectedAmount.lessThan(requiredAmount)) {
       throw new ProofValidationError('Melt amount is not sufficient after fees');
@@ -360,16 +364,13 @@ export abstract class BaseQuoteMeltHandler<M extends MeltMethod> implements Melt
 
     const blankOutputs = await this.createChangeOutputs(amount, sendAmount, ctx);
 
-    // FIXME: This relies on the 10% swap threshold buffer to cover the future melt input fee.
-    // Pathological fee/output combinations can still make the fee-inflated send side exceed
-    // the amount validated above.
     const swapOutputData = await ctx.proofService.createOutputsAndIncrementCounters(
       mintUrl,
       {
         keep: { amount: keepAmount, unit: ctx.operation.unit },
         send: { amount: sendAmount, unit: ctx.operation.unit },
       },
-      { includeFees: true },
+      { includeFees: false },
     );
 
     ctx.logger?.info('Swap-then-melt prepared', {
