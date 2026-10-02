@@ -305,14 +305,14 @@ export const quotesRoutes = [
           input.method === 'bolt11'
             ? {
                 invoice: input.invoice,
-                ...(input.amount !== undefined ? { amountSats: input.amount } : {}),
+                ...(input.amountSats !== undefined ? { amountSats: input.amountSats } : {}),
               }
             : input.method === 'bolt12'
               ? {
                   offer: input.offer,
-                  ...(input.amount !== undefined ? { amountSats: input.amount } : {}),
+                  ...(input.amountSats !== undefined ? { amountSats: input.amountSats } : {}),
                 }
-              : { address: input.address, amountSats: input.amount };
+              : { address: input.address, amountSats: input.amountSats };
         const quote = await session.manager.quotes.melt.create({
           mintUrl,
           method: input.method,

@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 
 import { V1HttpError } from '../../src/v1/contract.js';
 import {
+  createMeltQuoteRequestSchema,
   createMintQuoteRequestSchema,
   createSendOperationRequestSchema,
   historyPageSchema,
@@ -109,6 +110,26 @@ test('keeps unsupported Quote methods outside generic Zod failures', () => {
       code: 'unsupported_behavior',
       details: { type: 'mint', method: 'custom' },
     });
+  }
+});
+
+test('validates sat-denominated Melt payment amounts independently of the funding unit', () => {
+  for (const target of [
+    { method: 'bolt11', invoice: 'lnbc1test' },
+    { method: 'bolt12', offer: 'lno1test' },
+    { method: 'onchain', address: 'bc1qtest' },
+  ] as const) {
+    const input = { mintUrl: 'https://mint.example.com', ...target, unit: 'msat' };
+    const exact = { ...input, amountSats: '9007199254740993' };
+    expect(createMeltQuoteRequestSchema.parse(exact)).toEqual(exact);
+    for (const amountSats of ['0', '-1', '1.5', '01', 1]) {
+      expect(() => createMeltQuoteRequestSchema.parse({ ...input, amountSats })).toThrow();
+    }
+    if (input.method === 'onchain') {
+      expect(() => createMeltQuoteRequestSchema.parse(input)).toThrow();
+    } else {
+      expect(createMeltQuoteRequestSchema.parse(input)).toEqual(input);
+    }
   }
 });
 

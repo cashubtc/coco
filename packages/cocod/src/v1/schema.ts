@@ -426,6 +426,13 @@ export const pendingMintQuotesSchema = namedSchema(
   pageDocumentSchema(mintQuoteDocumentSchema),
 );
 
+const meltPaymentAmountSatsSchema = positiveDecimalAmountSchema.describe(
+  'Payment amount in satoshis, independent of the ecash funding unit.',
+);
+const meltFundingUnitSchema = nonEmptyStringSchema.describe(
+  'Ecash unit used to fund the payment and denominate the returned Quote amounts; defaults to sat.',
+);
+
 export const createMeltQuoteRequestSchema = quoteMethodSchema(
   'CreateMeltQuoteRequest',
   'melt',
@@ -434,22 +441,22 @@ export const createMeltQuoteRequestSchema = quoteMethodSchema(
       mintUrl: z.string().optional(),
       method: z.literal('bolt11'),
       invoice: z.string(),
-      amount: positiveDecimalAmountSchema.optional(),
-      unit: nonEmptyStringSchema.optional(),
+      amountSats: meltPaymentAmountSatsSchema.optional(),
+      unit: meltFundingUnitSchema.optional(),
     }),
     z.strictObject({
       mintUrl: z.string(),
       method: z.literal('bolt12'),
       offer: z.string(),
-      amount: positiveDecimalAmountSchema.optional(),
-      unit: nonEmptyStringSchema.optional(),
+      amountSats: meltPaymentAmountSatsSchema.optional(),
+      unit: meltFundingUnitSchema.optional(),
     }),
     z.strictObject({
       mintUrl: z.string(),
       method: z.literal('onchain'),
       address: z.string(),
-      amount: positiveDecimalAmountSchema,
-      unit: nonEmptyStringSchema.optional(),
+      amountSats: meltPaymentAmountSatsSchema,
+      unit: meltFundingUnitSchema.optional(),
     }),
   ]),
 );

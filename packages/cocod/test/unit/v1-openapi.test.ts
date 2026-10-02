@@ -151,6 +151,21 @@ test('keeps OpenAPI schemas, statuses, capabilities, and parameters aligned with
   }
 });
 
+test('documents separate Melt payment and funding denominations', () => {
+  const document = generateV1OpenApiDocument(createV1RouteMetadata(), '0.0.17');
+  const request = document.components.schemas.CreateMeltQuoteRequest as {
+    oneOf: Array<{ properties: Record<string, { description?: string }>; required: string[] }>;
+  };
+
+  expect(request.oneOf).toHaveLength(3);
+  for (const variant of request.oneOf) {
+    expect(variant.properties.amount).toBeUndefined();
+    expect(variant.properties.amountSats?.description).toContain('satoshis');
+    expect(variant.properties.unit?.description).toContain('Ecash unit');
+  }
+  expect(request.oneOf[2]!.required).toContain('amountSats');
+});
+
 test('does not advertise unsupported, legacy, or Location-based interface concepts', () => {
   const document = generateV1OpenApiDocument(createV1RouteMetadata(), '0.0.17');
   const serialized = JSON.stringify(document);

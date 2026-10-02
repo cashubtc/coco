@@ -209,9 +209,15 @@ Mint Quote creation bodies use one of these method-specific shapes:
 
 Melt Quote creation bodies use one of these shapes:
 
-- `bolt11`: `{ mintUrl?, method, invoice, amount?, unit? }`
-- `bolt12`: `{ mintUrl, method, offer, amount?, unit? }`
-- `onchain`: `{ mintUrl, method, address, amount, unit? }`
+- `bolt11`: `{ mintUrl?, method, invoice, amountSats?, unit? }`
+- `bolt12`: `{ mintUrl, method, offer, amountSats?, unit? }`
+- `onchain`: `{ mintUrl, method, address, amountSats, unit? }`
+
+`amountSats` is a positive decimal integer string specifying the payment amount in satoshis.
+`unit` selects the ecash unit used to fund the payment, defaults to `sat`, and denominates the
+returned Quote's `amount` and fee fields. For example, `{ amountSats: "1", unit: "msat" }`
+requests a one-satoshi payment funded with msat ecash. Melt creation rejects the ambiguous
+`amount` request field, including when it is supplied alongside `amountSats`.
 
 When BOLT11 Quote creation omits `mintUrl`, cocod uses the Wallet's configured default Mint. Clients
 use the normalized `mintUrl` returned by the Quote document for later Quote and Operation requests.

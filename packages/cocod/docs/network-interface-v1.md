@@ -342,6 +342,11 @@ Fields that compare several amounts, such as requested amount, input amount, fee
 and effective fee, MUST declare their unit unambiguously. A record whose amount fields all share
 one unit MAY declare `unit` once and use decimal strings for each amount field.
 
+Melt Quote creation uses `amountSats` for the sat-denominated payment amount. Its optional `unit`
+selects the ecash funding unit (default `sat`), which also denominates the returned Quote's amount
+and fee fields. The payment amount's denomination does not change with the funding unit. Melt
+creation MUST reject an ambiguous `amount` request field.
+
 ### Pagination
 
 Paginated collection resources use `offset` and `limit`. A paginated response has this shape:

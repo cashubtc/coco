@@ -758,14 +758,24 @@ describe('v1 HTTP route interface', () => {
         '/v1/quotes/mint',
         { mintUrl: 'https://mint.example.com', method: 'bolt12', amount: '0', unit: 'sat' },
       ],
-      ['/v1/quotes/melt', { method: 'bolt11', invoice: 'lnbc1test', amount: '0' }],
+      ['/v1/quotes/melt', { method: 'bolt11', invoice: 'lnbc1test', amountSats: '0' }],
       [
         '/v1/quotes/melt',
-        { mintUrl: 'https://mint.example.com', method: 'bolt12', offer: 'lno1test', amount: '0' },
+        {
+          mintUrl: 'https://mint.example.com',
+          method: 'bolt12',
+          offer: 'lno1test',
+          amountSats: '0',
+        },
       ],
       [
         '/v1/quotes/melt',
-        { mintUrl: 'https://mint.example.com', method: 'onchain', address: 'bc1test', amount: '0' },
+        {
+          mintUrl: 'https://mint.example.com',
+          method: 'onchain',
+          address: 'bc1test',
+          amountSats: '0',
+        },
       ],
       [
         '/v1/operations/mint',
@@ -1836,7 +1846,7 @@ describe('v1 HTTP route interface', () => {
       authorizedJsonRequest('/v1/quotes/melt', credential.plaintext, {
         method: 'bolt11',
         invoice: 'lnbc250n1pay',
-        amount: '25',
+        amountSats: '25',
         unit: 'sat',
       }),
     );
@@ -1864,6 +1874,70 @@ describe('v1 HTTP route interface', () => {
       unit: 'sat',
     });
   });
+
+  for (const methodFields of [
+    { method: 'bolt11', invoice: 'lnbc1test' },
+    { method: 'bolt12', offer: 'lno1test' },
+    { method: 'onchain', address: 'bc1qtest' },
+  ] as const) {
+    test(`keeps ${methodFields.method} Melt payment amounts in sats with msat funding`, async () => {
+      const credential = await createCredential();
+      const quote = meltQuoteFixture({
+        method: methodFields.method,
+        unit: 'msat',
+        amount: toAmount(1_000),
+        fee_options: [{ fee_index: 0, fee_reserve: toAmount(0), estimated_blocks: 1 }],
+      });
+      const create = mock(async () => quote);
+      const routes = createWalletTestRoutes(
+        { quotes: { melt: { create } } },
+        credential.credentials,
+      );
+
+      const response = await routes['/v1/quotes/melt']!.POST!(
+        authorizedJsonRequest('/v1/quotes/melt', credential.plaintext, {
+          mintUrl: 'https://mint.example.com',
+          ...methodFields,
+          amountSats: '1',
+          unit: 'msat',
+        }),
+      );
+
+      expect(response.status).toBe(201);
+      expect(await response.json()).toMatchObject({ unit: 'msat', amount: '1000' });
+      const { method, ...paymentTarget } = methodFields;
+      expect(create).toHaveBeenCalledWith({
+        mintUrl: 'https://mint.example.com',
+        method,
+        methodData: { ...paymentTarget, amountSats: '1' },
+        unit: 'msat',
+      });
+    });
+
+    test(`rejects ambiguous ${methodFields.method} Melt amounts before calling Coco`, async () => {
+      const credential = await createCredential();
+      const create = mock(async () => meltQuoteFixture());
+      const routes = createWalletTestRoutes(
+        { quotes: { melt: { create } } },
+        credential.credentials,
+      );
+
+      for (const amounts of [{ amount: '1000' }, { amount: '1000', amountSats: '1' }]) {
+        const response = await routes['/v1/quotes/melt']!.POST!(
+          authorizedJsonRequest('/v1/quotes/melt', credential.plaintext, {
+            mintUrl: 'https://mint.example.com',
+            ...methodFields,
+            ...amounts,
+            unit: 'msat',
+          }),
+        );
+
+        expect(response.status).toBe(400);
+        expect(await response.json()).toMatchObject({ error: { code: 'invalid_request' } });
+      }
+      expect(create).not.toHaveBeenCalled();
+    });
+  }
 
   test('looks up a Melt Quote by its normalized Coco identity', async () => {
     const credential = await createCredential();
@@ -2081,7 +2155,7 @@ describe('v1 HTTP route interface', () => {
         mintUrl: 'https://mint.example.com',
         method: 'bolt12',
         offer: 'lno1offer',
-        amount: '75',
+        amountSats: '75',
         unit: 'sat',
       }),
     );
@@ -2090,7 +2164,7 @@ describe('v1 HTTP route interface', () => {
         mintUrl: 'https://mint.example.com',
         method: 'onchain',
         address: 'bc1qaddress',
-        amount: '75',
+        amountSats: '75',
         unit: 'sat',
       }),
     );
