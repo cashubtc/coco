@@ -198,53 +198,56 @@ describe.each(['memory', 'sqlite'] as const)(
       expect(published).toEqual([]);
     });
 
-    for (const refresh of ['new', 'existing'] as const) {
-      it(`keeps an expiring V2 keyset usable when rebuilding a Wallet from stored metadata (${refresh})`, async () => {
-        const finalExpiry = 2059210353;
-        const id = testMintKeysetId('sat', { expiry: finalExpiry });
-        if (refresh === 'existing') {
-          await repositories.mintRepository.addNewMint({ ...original });
-          await repositories.keysetRepository.addKeyset({ ...keyset, id });
-        }
-        const provider = new MintRequestProvider();
-        provider.getRequestFn =
-          () =>
-          async <T>({ endpoint }: { endpoint: string }): Promise<T> => {
-            if (endpoint.endsWith('/v1/info')) return testMintInfo as T;
-            if (endpoint.endsWith('/v1/keysets')) {
-              return {
-                keysets: [{ id, unit: 'sat', active: true, final_expiry: finalExpiry }],
-              } as T;
-            }
-            if (endpoint.endsWith(`/v1/keys/${id}`)) {
-              return { keysets: [{ id, unit: 'sat', keys: testMintKeypairs }] } as T;
-            }
-            throw new Error(`Unexpected endpoint: ${endpoint}`);
-          };
-        const adapter = new MintAdapter(provider);
-        const service = new MintService(
-          repositories.mintRepository,
-          repositories.keysetRepository,
-          adapter,
-          createMintMetadataRefreshDependencies(repositories),
-        );
-        await service.updateMintData(mintUrl);
+    for (const refresh of ['stale', 'forced'] as const) {
+      for (const stored of [false, true]) {
+        it(`keeps an expiring V2 keyset usable when rebuilding a Wallet from stored metadata (${refresh} refresh, stored: ${stored})`, async () => {
+          const finalExpiry = 2059210353;
+          const id = testMintKeysetId('sat', { expiry: finalExpiry });
+          if (stored) {
+            await repositories.mintRepository.addNewMint({ ...original });
+            await repositories.keysetRepository.addKeyset({ ...keyset, id });
+          }
+          const provider = new MintRequestProvider();
+          provider.getRequestFn =
+            () =>
+            async <T>({ endpoint }: { endpoint: string }): Promise<T> => {
+              if (endpoint.endsWith('/v1/info')) return testMintInfo as T;
+              if (endpoint.endsWith('/v1/keysets')) {
+                return {
+                  keysets: [{ id, unit: 'sat', active: true, final_expiry: finalExpiry }],
+                } as T;
+              }
+              if (endpoint.endsWith(`/v1/keys/${id}`)) {
+                return { keysets: [{ id, unit: 'sat', keys: testMintKeypairs }] } as T;
+              }
+              throw new Error(`Unexpected endpoint: ${endpoint}`);
+            };
+          const adapter = new MintAdapter(provider);
+          const service = new MintService(
+            repositories.mintRepository,
+            repositories.keysetRepository,
+            adapter,
+            createMintMetadataRefreshDependencies(repositories),
+          );
+          if (refresh === 'stale') await service.refreshAndCommitIfStale(mintUrl);
+          else await service.updateMintData(mintUrl);
 
-        // A new service must be able to use committed keys without fetching them again.
-        provider.getRequestFn = () => async () => {
-          throw new Error('Unexpected request while rebuilding from stored metadata');
-        };
-        const storedService = createMintServiceForMetadata(repositories);
-        const wallets = new WalletService(
-          storedService,
-          new SeedService(async () => new Uint8Array(64).fill(1)),
-          provider,
-        );
-        const result = await wallets.getWalletWithActiveKeysetId(mintUrl, 'sat');
-        expect(result.keysetId).toBe(id);
-        expect(result.keyset.final_expiry).toBe(finalExpiry);
-        expect(result.keys.keys).toEqual(testMintKeypairs);
-      });
+          // A new service must be able to use committed keys without fetching them again.
+          provider.getRequestFn = () => async () => {
+            throw new Error('Unexpected request while rebuilding from stored metadata');
+          };
+          const storedService = createMintServiceForMetadata(repositories);
+          const wallets = new WalletService(
+            storedService,
+            new SeedService(async () => new Uint8Array(64).fill(1)),
+            provider,
+          );
+          const result = await wallets.getWalletWithActiveKeysetId(mintUrl, 'sat');
+          expect(result.keysetId).toBe(id);
+          expect(result.keyset.final_expiry).toBe(finalExpiry);
+          expect(result.keys.keys).toEqual(testMintKeypairs);
+        });
+      }
     }
 
     it('returns missing or stale stored metadata without opening a transaction or refreshing it', async () => {
