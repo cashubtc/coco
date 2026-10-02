@@ -264,6 +264,49 @@ export async function runKeysetRepositoryContract(
 
   describe('keyset repository contract', () => {
     for (const empty of [false, true]) {
+      for (const shared of [false, true]) {
+        if (shared && !options.createSharedRepositories) continue;
+        it(`preserves keys across concurrent metadata and key writes (empty: ${empty}, shared: ${shared})`, async () => {
+          const { first, second, dispose } = shared
+            ? await options.createSharedRepositories!()
+            : await options.createRepositories().then(({ repositories, dispose }) => ({
+                first: repositories,
+                second: repositories,
+                dispose,
+              }));
+          try {
+            const keyset = { ...createDummyKeyset(), keypairs: { '1': '02aa' }, active: false };
+            if (empty) await first.keysetRepository.updateKeyset(keyset);
+            const writes = [
+              () => first.keysetRepository.updateKeyset(keyset),
+              () => second.keysetRepository.addKeyset(keyset),
+            ];
+            const results = await Promise.allSettled(writes.map((write) => write()));
+            expect(results.some((result) => result.status === 'fulfilled')).toBe(true);
+            for (const [index, result] of results.entries()) {
+              if (result.status === 'rejected') {
+                // Independent SQL writers may reject contention; retry only after both settle.
+                expect(shared).toBe(true);
+                expect(result.reason?.name).toBe(RepositoryTransactionConflictError.name);
+                await writes[index]!();
+              }
+            }
+            const stored = await first.keysetRepository.getKeysetById(keyset.mintUrl, keyset.id);
+            expect(stored?.keypairs['1']).toBe(keyset.keypairs['1']);
+            expect(stored?.active).toBe(false);
+            await expectThrowsNamed(
+              () => second.keysetRepository.addKeyset({ ...keyset, keypairs: { '1': '02ff' } }),
+              KeysetKeysConflictError.name,
+              expect,
+            );
+          } finally {
+            await dispose();
+          }
+        });
+      }
+    }
+
+    for (const empty of [false, true]) {
       for (const transactional of [false, true]) {
         for (const shared of [false, true]) {
           if (shared && !options.createSharedRepositories) continue;

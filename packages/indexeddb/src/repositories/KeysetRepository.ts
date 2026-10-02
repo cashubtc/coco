@@ -45,30 +45,8 @@ export class ScopedIdbKeysetRepository implements KeysetRepository {
     } satisfies Keyset;
   }
 
-  async updateKeyset(keyset: Omit<Keyset, 'keypairs' | 'updatedAt'>): Promise<void> {
-    const existing = (await (this.db as any)
-      .table('coco_cashu_keysets')
-      .get([keyset.mintUrl, keyset.id])) as KeysetRow | undefined;
-    const now = Math.floor(Date.now() / 1000);
-    if (!existing) {
-      await (this.db as any).table('coco_cashu_keysets').put({
-        mintUrl: keyset.mintUrl,
-        id: keyset.id,
-        unit: keyset.unit,
-        keypairs: JSON.stringify({}),
-        active: keyset.active ? 1 : 0,
-        feePpk: keyset.feePpk,
-        updatedAt: now,
-      } satisfies KeysetRow);
-      return;
-    }
-    await (this.db as any).table('coco_cashu_keysets').put({
-      ...existing,
-      unit: keyset.unit,
-      active: keyset.active ? 1 : 0,
-      feePpk: keyset.feePpk,
-      updatedAt: now,
-    } as KeysetRow);
+  updateKeyset(keyset: Omit<Keyset, 'keypairs' | 'updatedAt'>): Promise<void> {
+    return this.addKeyset({ ...keyset, keypairs: {} });
   }
 
   async addKeyset(keyset: Omit<Keyset, 'updatedAt'>): Promise<void> {

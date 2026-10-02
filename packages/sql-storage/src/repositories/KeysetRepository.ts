@@ -65,31 +65,8 @@ export class ScopedSqliteKeysetRepository implements KeysetRepository {
     } satisfies Keyset;
   }
 
-  async updateKeyset(keyset: Omit<Keyset, 'keypairs' | 'updatedAt'>): Promise<void> {
-    const now = getUnixTimeSeconds();
-    const existing = await this.db.get<{ keypairs: string }>(
-      'SELECT keypairs FROM coco_cashu_keysets WHERE mintUrl = ? AND id = ? LIMIT 1',
-      [keyset.mintUrl, keyset.id],
-    );
-    if (!existing) {
-      await this.db.run(
-        'INSERT INTO coco_cashu_keysets (mintUrl, id, unit, keypairs, active, feePpk, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        [
-          keyset.mintUrl,
-          keyset.id,
-          keyset.unit,
-          JSON.stringify({}),
-          keyset.active ? 1 : 0,
-          keyset.feePpk,
-          now,
-        ],
-      );
-      return;
-    }
-    await this.db.run(
-      'UPDATE coco_cashu_keysets SET unit = ?, active = ?, feePpk = ?, updatedAt = ? WHERE mintUrl = ? AND id = ?',
-      [keyset.unit, keyset.active ? 1 : 0, keyset.feePpk, now, keyset.mintUrl, keyset.id],
-    );
+  updateKeyset(keyset: Omit<Keyset, 'keypairs' | 'updatedAt'>): Promise<void> {
+    return this.addKeyset({ ...keyset, keypairs: {} });
   }
 
   async addKeyset(keyset: Omit<Keyset, 'updatedAt'>): Promise<void> {
