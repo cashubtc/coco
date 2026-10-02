@@ -246,7 +246,7 @@ export class MeltOperationService {
           logger: this.dependencies.logger,
         });
         const quote = await this.recordRemoteResult(executing, remote);
-        return this.applyObservedQuote(executing, quote);
+        return await this.applyObservedQuote(executing, quote);
       } catch (error) {
         await this.defer(executing.id, error);
         throw error;

@@ -1,14 +1,27 @@
-import { Amount, type SerializedBlindedSignature } from '@cashu/cashu-ts';
+import {
+  Amount,
+  createBlindSignature,
+  createNewMintKeys,
+  pointFromHex,
+  serializeMintKeys,
+  type MintKeys,
+  type SerializedBlindedSignature,
+} from '@cashu/cashu-ts';
 import { Database } from 'bun:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { SqlStorageRepositories } from '../../../sql-storage/src/repositories.ts';
 import { SqliteDb } from '../../../sqlite-bun/src/db.ts';
+import { EventBus } from '../../events/EventBus.ts';
+import type { CoreEvents } from '../../events/types.ts';
+import { MeltHandlerProvider } from '../../infra/handlers/melt/MeltHandlerProvider.ts';
 import {
   meltQuoteFromBolt11Response,
   meltQuoteFromBolt12Response,
   meltQuoteFromOnchainResponse,
 } from '../../models/MeltQuote.ts';
 import type { ExecutingMeltOperation } from '../../operations/melt/MeltOperation.ts';
+import { MeltOperationService } from '../../operations/melt/MeltOperationService.ts';
+import type { MeltMethodHandler } from '../../operations/melt/MeltMethodHandler.ts';
 import { prepareMint } from '../../operations/mint/MintTransitions.ts';
 import {
   applyMeltPaidResult,
@@ -23,6 +36,7 @@ import {
 import type { PrepareMeltInput } from '../../operations/melt/MeltTransitionTypes.ts';
 import type { Repositories } from '../../repositories/index.ts';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
+import { MeltSettlementProcessor } from '../../services/watchers/MeltSettlementProcessor.ts';
 import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
 import { deserializeOutputData } from '../../utils.ts';
 import { testMintInfo, testMintKeypairs, testMintKeysetId } from '../fixtures/MintMetadata.ts';
@@ -152,6 +166,7 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
     state: 'UNPAID' | 'PENDING' | 'PAID',
     observedAt: number,
     change: SerializedBlindedSignature[] = [],
+    amounts: { amount?: number; feeReserve?: number } = {},
   ) {
     await repositories.meltQuoteRepository.upsertMeltQuote(
       meltQuoteFromBolt11Response(
@@ -159,9 +174,9 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
         {
           quote: 'quote-1',
           request: 'lnbc1test',
-          amount: Amount.from(8),
+          amount: Amount.from(amounts.amount ?? 8),
           unit: 'sat',
-          fee_reserve: Amount.from(2),
+          fee_reserve: Amount.from(amounts.feeReserve ?? 2),
           expiry: 100,
           state,
           payment_preimage: state === 'PAID' ? 'preimage' : null,
@@ -661,6 +676,77 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
     ).toBe(true);
   });
 
+  it.each([
+    [4, 0],
+    [8, 4],
+  ] as const)(
+    'funds both pre-swap and future Melt input fees from a %i-sat proof',
+    async (inputAmount, expectedKeep) => {
+      await repositories.keysetRepository.updateKeyset({
+        mintUrl,
+        id: keysetId,
+        unit: 'sat',
+        active: true,
+        feePpk: 500,
+      });
+      await saveQuote('UNPAID', 1_000, [], { amount: 2, feeReserve: 0 });
+      await saveReadyProof(inputAmount);
+
+      const prepared = await runner.run((tx) => tx.perform(prepareMelt, input()));
+      const outputs = deserializeOutputData(prepared.operation.swapOutputData!);
+      const keepAmount = Amount.sum(outputs.keep.map((output) => output.blindedMessage.amount));
+      const sendAmount = Amount.sum(outputs.send.map((output) => output.blindedMessage.amount));
+
+      expect(prepared.operation.needsSwap).toBe(true);
+      expect(prepared.operation.swap_fee.equals(Amount.from(1))).toBe(true);
+      expect(sendAmount.equals(Amount.from(3))).toBe(true);
+      expect(keepAmount.equals(Amount.from(expectedKeep))).toBe(true);
+      expect(sendAmount.add(keepAmount).add(prepared.operation.swap_fee).equals(inputAmount)).toBe(
+        true,
+      );
+    },
+  );
+
+  it('rejects a pre-swap that cannot fund both input fees before reserving or allocating', async () => {
+    await repositories.keysetRepository.updateKeyset({
+      mintUrl,
+      id: keysetId,
+      unit: 'sat',
+      active: true,
+      feePpk: 500,
+    });
+    await saveQuote('UNPAID', 1_000, [], { amount: 2, feeReserve: 0 });
+    await saveReadyProof(3);
+
+    await expect(
+      runner.run((tx) => tx.perform(prepareMelt, input('insufficient-both-fees'))),
+    ).rejects.toThrow('Melt amount is not sufficient after fees');
+
+    expect(
+      (await repositories.proofRepository.getProofBySecret(mintUrl, 'input-3'))?.usedByOperationId,
+    ).toBeUndefined();
+    expect(await repositories.counterRepository.getCounter(mintUrl, keysetId)).toBeNull();
+    expect(await repositories.meltOperationRepository.getById('insufficient-both-fees')).toBeNull();
+  });
+
+  it('finds the smallest stable future Melt fee when denomination counts are non-monotonic', async () => {
+    await repositories.keysetRepository.updateKeyset({
+      mintUrl,
+      id: keysetId,
+      unit: 'sat',
+      active: true,
+      feePpk: 1001,
+    });
+    await saveReadyProof(16);
+
+    const prepared = await runner.run((tx) => tx.perform(prepareMelt, input()));
+    const outputs = deserializeOutputData(prepared.operation.swapOutputData!);
+    const sendAmount = Amount.sum(outputs.send.map((output) => output.blindedMessage.amount));
+
+    expect(sendAmount.equals(Amount.from(14))).toBe(true);
+    expect(prepared.operation.swap_fee.equals(Amount.from(2))).toBe(true);
+  });
+
   it('persists a pre-swap result after its source inputs were observed spent', async () => {
     await saveReadyProof(16);
     const prepared = await runner.run((tx) => tx.perform(prepareMelt, input()));
@@ -726,6 +812,382 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
         (await repositories.proofRepository.getProofBySecret(mintUrl, proof.secret))?.state,
       ).toBe('spent');
     }
+  });
+
+  it('accepts a spent proof while recording PENDING and later saves canonical change', async () => {
+    await saveReadyProof(10);
+    const prepared = await runner.run((tx) =>
+      tx.perform(prepareMelt, input('spent-before-pending')),
+    );
+    const authorization = await runner.run((tx) =>
+      tx.perform(beginMeltExecution, { operationId: 'spent-before-pending', now: 2_000 }),
+    );
+    await repositories.proofRepository.setProofState(mintUrl, ['input-10'], 'spent');
+    await saveQuote('PENDING', 3_000);
+
+    const pending = await runner.run((tx) =>
+      tx.perform(applyMeltPending, {
+        operation: authorization.operation as ExecutingMeltOperation,
+        now: 3_000,
+      }),
+    );
+
+    expect(pending.operation.state).toBe('pending');
+    const spentInput = await repositories.proofRepository.getProofBySecret(mintUrl, 'input-10');
+    expect(spentInput?.state).toBe('spent');
+    expect(spentInput?.usedByOperationId).toBe('spent-before-pending');
+    const output = deserializeOutputData(prepared.operation.changeOutputData).keep[0]!;
+    const secret = new TextDecoder().decode(output.secret);
+    await saveQuote('PAID', 4_000, [
+      {
+        id: output.blindedMessage.id,
+        amount: Amount.from(1),
+        C_: testMintKeypairs['1'],
+      },
+    ]);
+    const finalized = await runner.run((tx) =>
+      tx.perform(applyMeltPaidResult, {
+        operation: pending.operation as any,
+        changeProofs: [
+          {
+            id: output.blindedMessage.id,
+            amount: Amount.from(1),
+            secret,
+            C: testMintKeypairs['1'],
+          },
+        ],
+        finalizedData: { preimage: 'preimage' },
+        now: 4_000,
+      }),
+    );
+
+    expect(finalized.operation.state).toBe('finalized');
+    expect((await repositories.proofRepository.getProofBySecret(mintUrl, secret))?.state).toBe(
+      'ready',
+    );
+  });
+
+  it('automatically settles when PAID overtakes a PENDING response before its transition', async () => {
+    const generated = createNewMintKeys(4, new Uint8Array(32).fill(7));
+    const activeKeys: MintKeys = {
+      id: generated.keysetId,
+      unit: 'sat',
+      keys: serializeMintKeys(generated.pubKeys),
+    };
+    await repositories.keysetRepository.addKeyset({
+      mintUrl,
+      id: activeKeys.id,
+      unit: 'sat',
+      keypairs: activeKeys.keys,
+      active: true,
+      feePpk: 0,
+    });
+    await repositories.proofRepository.saveProofs(mintUrl, [
+      {
+        id: activeKeys.id,
+        amount: Amount.from(10),
+        secret: 'pending-paid-race-input',
+        C: activeKeys.keys['1']!,
+        mintUrl,
+        unit: 'sat',
+        state: 'ready',
+      },
+    ]);
+    const prepared = await runner.run((tx) =>
+      tx.perform(prepareMelt, {
+        ...input('pending-paid-race'),
+        activeKeys,
+        seed: new Uint8Array(32).fill(9),
+      }),
+    );
+    const changeOutput = deserializeOutputData(prepared.operation.changeOutputData).keep[0]!;
+    const changeAmount = Amount.from(1);
+    const changeSignature = createBlindSignature(
+      pointFromHex(changeOutput.blindedMessage.B_),
+      generated.privKeys[changeAmount.toString()]!,
+      activeKeys.id,
+    );
+    const canonicalChange: SerializedBlindedSignature = {
+      id: activeKeys.id,
+      amount: changeAmount,
+      C_: changeSignature.C_.toHex(true),
+    };
+    const bus = new EventBus<CoreEvents>();
+    const registeredOperations: string[] = [];
+    const handler: MeltMethodHandler<'bolt11'> = {
+      createQuote: async () => {
+        throw new Error('not used');
+      },
+      fetchRemoteQuote: async () => {
+        throw new Error('not used');
+      },
+      swap: async () => {
+        throw new Error('not used');
+      },
+      melt: async () => ({ status: 'PENDING', change: [] }),
+    };
+    const getMeltQuoteById = async (identity: { mintUrl: string; quoteId: string }) => {
+      const quote = await repositories.meltQuoteRepository.getMeltQuoteById(identity);
+      if (!quote) throw new Error(`Melt quote ${identity.quoteId} was not found`);
+      return quote;
+    };
+    const storedMint = await repositories.mintRepository.getMintByUrl(mintUrl);
+    const storedKeyset = {
+      mintUrl,
+      id: activeKeys.id,
+      unit: 'sat',
+      keypairs: activeKeys.keys,
+      active: true,
+      feePpk: 0,
+      updatedAt: 1,
+    };
+    const service = new MeltOperationService({
+      handlerProvider: new MeltHandlerProvider({ bolt11: handler }),
+      meltOperationQueries: repositories.meltOperationRepository,
+      proofQueries: repositories.proofRepository,
+      transactionRunner: runner,
+      loadSeed: async () => new Uint8Array(32),
+      quoteLifecycle: {
+        requireMeltQuoteRefForPrepare: getMeltQuoteById,
+        getMeltQuote: (url, method, quoteId) =>
+          repositories.meltQuoteRepository.getMeltQuote(url, method, quoteId),
+        getMeltQuoteById: (identity) => repositories.meltQuoteRepository.getMeltQuoteById(identity),
+        refreshMeltQuote: async (url, method, quoteId) => {
+          const quote = await repositories.meltQuoteRepository.getMeltQuote(url, method, quoteId);
+          if (!quote) throw new Error(`Melt quote ${quoteId} was not found`);
+          return quote;
+        },
+        refreshMeltQuoteById: getMeltQuoteById,
+        recordMeltQuoteObservation: async (observation) => {
+          await repositories.meltQuoteRepository.upsertMeltQuote(observation);
+          await saveQuote('PAID', 4_000, [canonicalChange]);
+          return observation;
+        },
+      },
+      mintService: {
+        refreshAndCommitIfStale: async () => ({
+          mint: storedMint,
+          keysets: [storedKeyset],
+        }),
+      },
+      walletService: {
+        getWalletWithActiveKeysetId: async () => ({
+          wallet: {} as any,
+          keysetId: activeKeys.id,
+          keyset: {
+            id: activeKeys.id,
+            unit: 'sat',
+            active: true,
+            input_fee_ppk: 0,
+            keys: activeKeys.keys,
+          },
+          keys: activeKeys,
+          unit: 'sat',
+        }),
+      },
+      mintAdapter: {} as any,
+      eventBus: bus,
+    });
+    const processor = new MeltSettlementProcessor(service, bus, undefined, {
+      interestRegistrar: {
+        registerOperationInterest: async ({ operationId }) => {
+          registeredOperations.push(operationId);
+        },
+        removeOperationInterest: async () => {},
+      },
+    });
+
+    await processor.start();
+    try {
+      const result = await service.execute('pending-paid-race');
+      expect(result.state).toBe('pending');
+      expect(registeredOperations).toContain('pending-paid-race');
+
+      let stored = await repositories.meltOperationRepository.getById('pending-paid-race');
+      for (let attempt = 0; attempt < 10 && stored?.state !== 'finalized'; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        stored = await repositories.meltOperationRepository.getById('pending-paid-race');
+      }
+
+      expect(stored?.state).toBe('finalized');
+      if (stored?.state !== 'finalized') throw new Error('Melt did not finalize');
+      expect(stored.changeAmount?.equals(changeAmount)).toBe(true);
+      const changeSecret = new TextDecoder().decode(changeOutput.secret);
+      const persistedChange = await repositories.proofRepository.getProofBySecret(
+        mintUrl,
+        changeSecret,
+      );
+      expect(persistedChange?.state).toBe('ready');
+      expect(persistedChange?.amount.equals(changeAmount)).toBe(true);
+      expect(
+        (await repositories.proofRepository.getProofBySecret(mintUrl, 'pending-paid-race-input'))
+          ?.state,
+      ).toBe('spent');
+    } finally {
+      await processor.stop();
+    }
+  });
+
+  it('finalizes legacy pre-swap send proofs without reservation ownership', async () => {
+    await saveReadyProof(16);
+    await runner.run((tx) => tx.perform(prepareMelt, input('legacy-paid')));
+    const authorization = await runner.run((tx) =>
+      tx.perform(beginMeltExecution, { operationId: 'legacy-paid', now: 2_000 }),
+    );
+    const executing = authorization.operation as ExecutingMeltOperation;
+    const candidates = swapProofs(executing);
+    const applied = await runner.run((tx) =>
+      tx.perform(applyMeltSwapResult, {
+        operation: executing,
+        keepProofs: candidates.keep,
+        sendProofs: candidates.send,
+        now: 3_000,
+      }),
+    );
+    await repositories.proofRepository.releaseProofs(
+      mintUrl,
+      applied.sendProofs.map((proof) => proof.secret),
+    );
+    await saveQuote('PAID', 4_000);
+
+    const finalized = await runner.run((tx) =>
+      tx.perform(applyMeltPaidResult, {
+        operation: applied.operation,
+        changeProofs: [],
+        finalizedData: { preimage: 'preimage' },
+        now: 4_000,
+      }),
+    );
+
+    expect(finalized.operation.state).toBe('finalized');
+    for (const proof of applied.sendProofs) {
+      const stored = await repositories.proofRepository.getProofBySecret(mintUrl, proof.secret);
+      expect(stored?.state).toBe('spent');
+      expect(stored?.usedByOperationId).toBeUndefined();
+    }
+  });
+
+  it('releases legacy pre-swap send proofs after canonical non-payment', async () => {
+    await saveReadyProof(16);
+    await runner.run((tx) => tx.perform(prepareMelt, input('legacy-unpaid')));
+    const authorization = await runner.run((tx) =>
+      tx.perform(beginMeltExecution, { operationId: 'legacy-unpaid', now: 2_000 }),
+    );
+    const executing = authorization.operation as ExecutingMeltOperation;
+    const candidates = swapProofs(executing);
+    const applied = await runner.run((tx) =>
+      tx.perform(applyMeltSwapResult, {
+        operation: executing,
+        keepProofs: candidates.keep,
+        sendProofs: candidates.send,
+        now: 3_000,
+      }),
+    );
+    await repositories.proofRepository.releaseProofs(
+      mintUrl,
+      applied.sendProofs.map((proof) => proof.secret),
+    );
+    await saveQuote('UNPAID', 4_000);
+
+    const released = await runner.run((tx) =>
+      tx.perform(releaseMeltAfterNonPayment, {
+        operationId: 'legacy-unpaid',
+        evidence: {
+          kind: 'quote-observation-unpaid',
+          mintUrl,
+          method: 'bolt11',
+          quoteId: 'quote-1',
+          observedAt: 4_000,
+        },
+        reason: 'not paid',
+        now: 4_000,
+      }),
+    );
+
+    expect(released.operation.state).toBe('rolled_back');
+    for (const proof of applied.sendProofs) {
+      const stored = await repositories.proofRepository.getProofBySecret(mintUrl, proof.secret);
+      expect(stored?.state).toBe('ready');
+      expect(stored?.usedByOperationId).toBeUndefined();
+    }
+  });
+
+  it('rejects legacy pre-swap proofs reserved by another operation', async () => {
+    await saveReadyProof(16);
+    await runner.run((tx) => tx.perform(prepareMelt, input('legacy-conflict')));
+    const authorization = await runner.run((tx) =>
+      tx.perform(beginMeltExecution, { operationId: 'legacy-conflict', now: 2_000 }),
+    );
+    const executing = authorization.operation as ExecutingMeltOperation;
+    const candidates = swapProofs(executing);
+    const applied = await runner.run((tx) =>
+      tx.perform(applyMeltSwapResult, {
+        operation: executing,
+        keepProofs: candidates.keep,
+        sendProofs: candidates.send,
+        now: 3_000,
+      }),
+    );
+    const conflicted = applied.sendProofs[0]!;
+    await repositories.proofRepository.deleteProofs(mintUrl, [conflicted.secret]);
+    await repositories.proofRepository.saveProofs(mintUrl, [
+      { ...conflicted, usedByOperationId: 'another-operation' },
+    ]);
+    await saveQuote('PAID', 4_000);
+
+    await expect(
+      runner.run((tx) =>
+        tx.perform(applyMeltPaidResult, {
+          operation: applied.operation,
+          changeProofs: [],
+          finalizedData: { preimage: 'preimage' },
+          now: 4_000,
+        }),
+      ),
+    ).rejects.toThrow("does not match the operation's persisted Melt send plan");
+    expect((await repositories.meltOperationRepository.getById('legacy-conflict'))?.state).toBe(
+      'executing',
+    );
+  });
+
+  it('rejects a keep proof substituted for a legacy pre-swap send output', async () => {
+    await saveReadyProof(16);
+    await runner.run((tx) => tx.perform(prepareMelt, input('legacy-keep')));
+    const authorization = await runner.run((tx) =>
+      tx.perform(beginMeltExecution, { operationId: 'legacy-keep', now: 2_000 }),
+    );
+    const executing = authorization.operation as ExecutingMeltOperation;
+    const candidates = swapProofs(executing);
+    const applied = await runner.run((tx) =>
+      tx.perform(applyMeltSwapResult, {
+        operation: executing,
+        keepProofs: candidates.keep,
+        sendProofs: candidates.send,
+        now: 3_000,
+      }),
+    );
+    const keep = applied.savedProofs.find((proof) => proof.state === 'ready')!;
+    const send = applied.sendProofs.find((proof) => !proof.amount.equals(keep.amount))!;
+    await repositories.proofRepository.deleteProofs(mintUrl, [send.secret]);
+    await repositories.proofRepository.saveProofs(mintUrl, [
+      {
+        ...keep,
+        secret: send.secret,
+        state: 'inflight',
+      },
+    ]);
+    await saveQuote('PAID', 4_000);
+
+    await expect(
+      runner.run((tx) =>
+        tx.perform(applyMeltPaidResult, {
+          operation: applied.operation,
+          changeProofs: [],
+          finalizedData: { preimage: 'preimage' },
+          now: 4_000,
+        }),
+      ),
+    ).rejects.toThrow("does not match the operation's persisted Melt send plan");
   });
 
   it('rolls reservation, counters, and operation back when preparation persistence fails', async () => {

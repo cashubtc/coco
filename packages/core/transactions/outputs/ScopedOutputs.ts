@@ -41,6 +41,13 @@ export interface AllocateBlankOutputsInput {
 /** Output allocation within an existing transaction; never opens or commits a transaction. */
 export interface ScopedOutputs {
   assertActiveKeys(mintUrl: string, unit: string, activeKeys: MintKeys): Promise<void>;
+  /** Calculate the proof amount whose spendable value covers `amount` after input fees. */
+  includeInputFees(input: {
+    mintUrl: string;
+    unit: string;
+    activeKeys: MintKeys;
+    amount: Amount;
+  }): Promise<Amount>;
   /** The caller must persist the returned output plan in this same transaction. */
   allocate(input: AllocateOutputsInput): Promise<AllocateOutputsResult>;
   /** The caller must persist the returned NUT-08 plan in this same transaction. */
@@ -69,6 +76,20 @@ export class RepositoryScopedOutputs implements ScopedOutputs {
     }
   }
 
+  async includeInputFees(input: {
+    mintUrl: string;
+    unit: string;
+    activeKeys: MintKeys;
+    amount: Amount;
+  }): Promise<Amount> {
+    await this.assertActiveKeys(input.mintUrl, input.unit, input.activeKeys);
+    const keyset = await this.keysets.getKeysetById(input.mintUrl, input.activeKeys.id);
+    if (!keyset) {
+      throw new ProofValidationError(`Active keyset ${input.activeKeys.id} is missing`);
+    }
+    return includeProofFees(input.amount, input.activeKeys, keyset.feePpk);
+  }
+
   async allocate(input: AllocateOutputsInput): Promise<AllocateOutputsResult> {
     await this.assertActiveKeys(input.mintUrl, input.unit, input.activeKeys);
     if (input.includeSendFees && input.fixedSendOutputs) {
@@ -79,11 +100,12 @@ export class RepositoryScopedOutputs implements ScopedOutputs {
     let keepAmount = input.keepAmount;
     let sendAmount = input.sendAmount;
     if (input.includeSendFees && !sendAmount.isZero()) {
-      const keyset = await this.keysets.getKeysetById(input.mintUrl, input.activeKeys.id);
-      if (!keyset) {
-        throw new ProofValidationError(`Active keyset ${input.activeKeys.id} is missing`);
-      }
-      sendAmount = includeProofFees(sendAmount, input.activeKeys, keyset.feePpk);
+      sendAmount = await this.includeInputFees({
+        mintUrl: input.mintUrl,
+        unit: input.unit,
+        activeKeys: input.activeKeys,
+        amount: sendAmount,
+      });
       const sendFee = sendAmount.subtract(input.sendAmount);
       if (keepAmount.lessThan(sendFee)) {
         throw new ProofValidationError('Keep amount is not sufficient to cover send output fees');
@@ -158,7 +180,9 @@ function includeProofFees(amount: Amount, activeKeys: MintKeys, feePpk: number):
   while (true) {
     const nextFee = feeForProofCount(denominations.length + feeDenominations.length, feePpk);
     if (!nextFee.greaterThan(fee)) return amount.add(fee);
-    fee = nextFee;
+    // The number of denominations is not monotonic as the fee increases. Advancing one unit at a
+    // time finds the smallest stable fee instead of skipping a valid lower fixed point.
+    fee = fee.add(1);
     feeDenominations = splitAmount(fee, activeKeys.keys);
   }
 }

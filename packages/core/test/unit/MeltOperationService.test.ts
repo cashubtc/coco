@@ -9,6 +9,8 @@ import {
   type Proof,
 } from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it, mock } from 'bun:test';
+import { EventBus } from '../../events/EventBus.ts';
+import type { CoreEvents } from '../../events/types.ts';
 import { MeltHandlerProvider } from '../../infra/handlers/melt/MeltHandlerProvider.ts';
 import type { MeltMethodHandler } from '../../operations/melt/MeltMethodHandler.ts';
 import type {
@@ -18,6 +20,7 @@ import type {
   PreparedMeltOperation,
 } from '../../operations/melt/MeltOperation.ts';
 import { MeltOperationService } from '../../operations/melt/MeltOperationService.ts';
+import { MeltSettlementProcessor } from '../../services/watchers/MeltSettlementProcessor.ts';
 import {
   applyMeltPaidResult,
   applyMeltPending,
@@ -189,6 +192,82 @@ describe('MeltOperationService coordinator', () => {
     );
   });
 
+  it('registers a coordinator PENDING result and auto-finalizes after a later PAID update', async () => {
+    const bus = new EventBus<CoreEvents>();
+    const registerOperationInterest = mock(async () => {});
+    const removeOperationInterest = mock(async () => {});
+    const proofStates: string[] = [];
+    const savedProofSecrets: string[] = [];
+    const savedChange = {
+      ...inputProof,
+      amount: Amount.from(1),
+      secret: 'change',
+      mintUrl,
+      unit: 'sat',
+      state: 'ready' as const,
+      createdByOperationId: 'op-1',
+    };
+    let observedState: 'PENDING' | 'PAID' = 'PENDING';
+    dependencies.eventBus = bus;
+    dependencies.quoteLifecycle.getMeltQuote = mock(async () => quote(observedState));
+    dependencies.quoteLifecycle.refreshMeltQuoteById = mock(async () => quote(observedState));
+    const runTransition = dependencies.transactionRunner.run;
+    dependencies.transactionRunner.run = mock((work: any) =>
+      runTransition((tx: any) =>
+        work({
+          ...tx,
+          perform: async (transition: unknown, input: unknown) => {
+            const result = await tx.perform(transition, input);
+            return transition === applyMeltPaidResult
+              ? { ...result, changeProofs: [savedChange] }
+              : result;
+          },
+        }),
+      ),
+    );
+    bus.on('proofs:state-changed', async ({ state }) => {
+      proofStates.push(state);
+    });
+    bus.on('proofs:saved', async ({ proofs }) => {
+      savedProofSecrets.push(...proofs.map((proof) => proof.secret));
+    });
+    const service = new MeltOperationService(dependencies);
+    const processor = new MeltSettlementProcessor(service, bus, undefined, {
+      interestRegistrar: { registerOperationInterest, removeOperationInterest },
+    });
+
+    await processor.start();
+    try {
+      const result = await service.execute('op-1');
+
+      expect(result.state).toBe('pending');
+      expect(registerOperationInterest).toHaveBeenCalledWith({
+        operationId: 'op-1',
+        mintUrl,
+        method: 'bolt11',
+        quoteId,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(current.state).toBe('pending');
+
+      observedState = 'PAID';
+      await bus.emit('melt-quote:updated', {
+        mintUrl,
+        method: 'bolt11',
+        quoteId,
+        quote: quote('PAID'),
+      });
+
+      expect(current.state).toBe('finalized');
+      expect(performed).toContain(applyMeltPaidResult);
+      expect(proofStates).toContain('spent');
+      expect(savedProofSecrets).toContain('change');
+      expect(removeOperationInterest).toHaveBeenCalledWith('op-1');
+    } finally {
+      await processor.stop();
+    }
+  });
+
   it('retains resources after an ambiguous remote error', async () => {
     (handler.melt as any).mockRejectedValueOnce(new Error('connection lost'));
     await expect(new MeltOperationService(dependencies).execute('op-1')).rejects.toThrow(
@@ -196,6 +275,32 @@ describe('MeltOperationService coordinator', () => {
     );
     expect(performed).toEqual([beginMeltExecution, deferMeltRecovery]);
     expect(performed).not.toContain(releaseMeltAfterNonPayment);
+  });
+
+  it('defers an asynchronous settlement failure before releasing the operation lock', async () => {
+    const runTransition = dependencies.transactionRunner.run;
+    dependencies.transactionRunner.run = mock((work: any) =>
+      runTransition((tx: any) =>
+        work({
+          ...tx,
+          perform: async (transition: unknown, input: unknown) => {
+            if (transition === applyMeltPending) {
+              performed.push(transition);
+              transitionInputs.push(input);
+              await Promise.resolve();
+              throw new Error('pending persistence failed');
+            }
+            return tx.perform(transition, input);
+          },
+        }),
+      ),
+    );
+    const service = new MeltOperationService(dependencies);
+
+    await expect(service.execute('op-1')).rejects.toThrow('pending persistence failed');
+
+    expect(performed).toEqual([beginMeltExecution, applyMeltPending, deferMeltRecovery]);
+    expect(service.isOperationLocked('op-1')).toBe(false);
   });
 
   it('commits the pre-swap result before submitting the Melt request', async () => {

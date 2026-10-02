@@ -77,17 +77,27 @@ export const prepareMelt = defineTransition<PrepareMeltInput, PrepareMeltResult>
 
     const feeReserve = getFeeReserve(quote, input);
     const required = quote.amount.add(feeReserve);
+    const swapAmount = await tx.outputs.includeInputFees({
+      mintUrl,
+      unit,
+      activeKeys: input.activeKeys,
+      amount: required,
+    });
     const reservation = await tx.proofs.selectAndReserveForMelt({
       mintUrl,
       unit,
       operationId: input.operationId,
       amount: required,
+      swapAmount,
     });
-    if (reservation.inputAmount.lessThan(required)) {
+    const requiredInputAmount = reservation.needsSwap
+      ? swapAmount.add(reservation.inputFee)
+      : required;
+    if (reservation.inputAmount.lessThan(requiredInputAmount)) {
       throw new ProofValidationError('Melt amount is not sufficient after fees');
     }
 
-    const meltInputAmount = reservation.needsSwap ? required : reservation.inputAmount;
+    const meltInputAmount = reservation.needsSwap ? swapAmount : reservation.inputAmount;
     const changeAllocation = await tx.outputs.allocateBlank({
       mintUrl,
       unit,
@@ -99,15 +109,14 @@ export const prepareMelt = defineTransition<PrepareMeltInput, PrepareMeltResult>
     let finalCounter = changeAllocation.counter;
     const swapFee = reservation.needsSwap ? reservation.inputFee : Amount.zero();
     if (reservation.needsSwap) {
-      const keepAmount = reservation.inputAmount.subtract(required).subtract(swapFee);
+      const keepAmount = reservation.inputAmount.subtract(swapAmount).subtract(swapFee);
       const swapAllocation = await tx.outputs.allocate({
         mintUrl,
         unit,
         activeKeys: input.activeKeys,
         seed: input.seed,
         keepAmount,
-        sendAmount: required,
-        includeSendFees: true,
+        sendAmount: swapAmount,
       });
       swapOutputData = swapAllocation.outputData;
       finalCounter = swapAllocation.counter ?? finalCounter;
@@ -267,7 +276,7 @@ export const applyMeltSwapResult = defineTransition<ApplyMeltSwapResultInput, Ap
   },
 );
 
-/** Record canonical PENDING while retaining every operation-owned proof as inflight. */
+/** Record local PENDING while accepting a canonical PENDING or newer PAID quote. */
 export const applyMeltPending = defineTransition<ApplyMeltPendingInput, ApplyMeltPendingResult>(
   async (tx, input) => {
     const current = await requireOperation(tx, input.operation.id);
@@ -276,10 +285,10 @@ export const applyMeltPending = defineTransition<ApplyMeltPendingInput, ApplyMel
       throw new Error('Melt pending result does not match persisted request');
     }
     const quote = await requireQuote(tx, current);
-    if (quote.state !== 'PENDING') {
+    if (quote.state !== 'PENDING' && quote.state !== 'PAID') {
       throw new Error(`Cannot mark melt operation pending from quote state ${quote.state}`);
     }
-    await requireMeltInputs(tx, current, 'inflight');
+    await requireMeltInputs(tx, current, ['inflight', 'spent']);
     const operation: PendingMeltOperation = {
       ...current,
       state: 'pending',
@@ -331,12 +340,22 @@ export const applyMeltPaidResult = defineTransition<ApplyMeltPaidResultInput, Ap
     await tx.proofs.saveCreated(current.mintUrl, changeProofs);
     const inflightInputs = meltInputs.filter((proof) => proof.state === 'inflight');
     if (inflightInputs.length > 0) {
-      await tx.proofs.recordSpent({
-        mintUrl: current.mintUrl,
-        unit: current.unit,
-        operationId: current.id,
-        secrets: inflightInputs.map((proof) => proof.secret),
-      });
+      if (current.needsSwap) {
+        const meltSend = meltSendProofInput(current);
+        const inflightSecrets = new Set(inflightInputs.map((proof) => proof.secret));
+        await tx.proofs.recordMeltSendSpent({
+          ...meltSend,
+          secrets: [...inflightSecrets],
+          outputs: meltSend.outputs.filter((output) => inflightSecrets.has(output.secret)),
+        });
+      } else {
+        await tx.proofs.recordSpent({
+          mintUrl: current.mintUrl,
+          unit: current.unit,
+          operationId: current.id,
+          secrets: inflightInputs.map((proof) => proof.secret),
+        });
+      }
     }
     const changeAmount = sumProofs(changeProofs);
     const meltInputAmount = Amount.sum(meltInputs.map((proof) => proof.amount));
@@ -402,12 +421,7 @@ export const releaseMeltAfterNonPayment = defineTransition<
     const sendSecrets = getSecretsFromSerializedOutputData(current.swapOutputData).sendSecrets;
     const storedSend = await tx.proofs.getProofsBySecrets(current.mintUrl, sendSecrets);
     if (storedSend.length === sendSecrets.length) {
-      await tx.proofs.releaseUnsubmitted({
-        mintUrl: current.mintUrl,
-        unit: current.unit,
-        operationId: current.id,
-        secrets: sendSecrets,
-      });
+      await tx.proofs.releaseMeltSendUnsubmitted(meltSendProofInput(current));
       await tx.proofs.releaseOwned(current.mintUrl, current.id, current.inputProofSecrets);
       restoredSecrets = sendSecrets;
       releasedSecrets = [...sendSecrets, ...current.inputProofSecrets];
@@ -651,16 +665,32 @@ async function requireMeltInputs(
   operation: PreparedOrLaterOperation,
   state: CoreProof['state'] | readonly CoreProof['state'][],
 ): Promise<CoreProof[]> {
-  const secrets = operation.needsSwap
-    ? getSecretsFromSerializedOutputData(operation.swapOutputData!).sendSecrets
-    : operation.inputProofSecrets;
+  if (operation.needsSwap) {
+    return tx.proofs.getMeltSendProofs({ ...meltSendProofInput(operation), state });
+  }
   return tx.proofs.getOwned({
     mintUrl: operation.mintUrl,
     unit: operation.unit,
     operationId: operation.id,
-    secrets,
+    secrets: operation.inputProofSecrets,
     state,
   });
+}
+
+function meltSendProofInput(operation: PreparedOrLaterOperation) {
+  if (!operation.swapOutputData) throw new Error('Melt pre-swap output plan is missing');
+  const outputs = deserializeOutputData(operation.swapOutputData).send.map((output) => ({
+    secret: new TextDecoder().decode(output.secret),
+    id: output.blindedMessage.id,
+    amount: output.blindedMessage.amount,
+  }));
+  return {
+    mintUrl: operation.mintUrl,
+    unit: operation.unit,
+    operationId: operation.id,
+    secrets: outputs.map((output) => output.secret),
+    outputs,
+  };
 }
 
 function assertChangeProofs(operation: PreparedOrLaterOperation, proofs: CoreProof[]): void {
