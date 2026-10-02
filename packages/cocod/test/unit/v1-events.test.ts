@@ -178,7 +178,7 @@ test('authenticates the event stream and removes every Coco listener on disconne
   await reader.cancel();
 });
 
-test('disconnects a slow consumer rather than silently losing invalidations', async () => {
+test('buffers event bursts until the consumer catches up without disconnecting', async () => {
   const credential = await createCredential();
   const manager = new FakeManager();
   const routes = createRoutes(manager, credential.credentials);
@@ -191,20 +191,31 @@ test('disconnects a slow consumer rather than silently losing invalidations', as
   );
   const reader = response.body!.getReader();
 
-  await readSseBlock(reader); // connected comment
-  await manager.emit('mint:trusted', { mintUrl: 'https://first.example.com' });
-  await manager.emit('mint:trusted', { mintUrl: 'https://dropped.example.com' });
+  try {
+    await readSseBlock(reader); // connected comment
+    const mintUrls = Array.from({ length: 100 }, (_, index) => `https://mint-${index}.example.com`);
+    for (const mintUrl of mintUrls) {
+      await manager.emit('mint:trusted', { mintUrl });
+    }
 
-  expect(await readSseEvent(reader)).toMatchObject({
-    type: 'mint.updated',
-    data: { mintUrl: 'https://first.example.com' },
-  });
+    expect(manager.listenerCount()).toBeGreaterThan(0);
+    for (const mintUrl of mintUrls) {
+      expect(await readSseEvent(reader)).toMatchObject({
+        type: 'mint.updated',
+        data: { mintUrl },
+      });
+    }
 
-  expect(await reader.read()).toMatchObject({ done: true });
+    await manager.emit('mint:trusted', { mintUrl: 'https://after-burst.example.com' });
+    expect(await readSseEvent(reader)).toMatchObject({
+      type: 'mint.updated',
+      data: { mintUrl: 'https://after-burst.example.com' },
+    });
+  } finally {
+    abort.abort();
+    await reader.cancel();
+  }
   expect(manager.listenerCount()).toBe(0);
-
-  abort.abort();
-  await reader.cancel();
 });
 
 test('closes an open event stream after its credential is rotated', async () => {

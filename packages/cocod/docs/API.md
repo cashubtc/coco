@@ -396,9 +396,9 @@ publishes; they do not promise complete transition coverage, event IDs, or repla
 
 ### Stream reconnection and client errors
 
-An event stream ends when its Coco Session stops or is replaced, its credential is revoked, or its
-bounded queue overflows. Reconnect and refetch canonical resources after a disconnect; v1 has no
-replay cursor. Session and credential revalidation run every five seconds.
+An event stream ends when its Coco Session stops or is replaced, or its credential is revoked.
+Event bursts are buffered while the client catches up. Reconnect and refetch canonical resources
+after a disconnect; v1 has no replay cursor. Session and credential revalidation run every five seconds.
 
 Quote and Operation commands report unknown or untrusted Mints as `409 mint_unavailable` and
 invalid typed Wallet inputs as `400 invalid_request`. Diagnostics omit raw remote error text.

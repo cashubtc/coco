@@ -38,17 +38,14 @@ function createResourceInvalidationStream(
       let keepAlive: ReturnType<typeof setInterval> | undefined;
       let authorizationCheckInFlight = false;
 
-      const enqueueChunk = (chunk: string): boolean => {
-        if (closed || controller.desiredSize === null || controller.desiredSize <= 0) return false;
+      const enqueueChunk = (chunk: string): void => {
+        if (closed) return;
         controller.enqueue(encoder.encode(chunk));
-        return true;
       };
 
       const enqueue = (document: ResourceInvalidationEventDocument): void => {
         if (closed) return;
-        if (!isCurrentSession() || controller.desiredSize === null || controller.desiredSize <= 0) {
-          // A disconnected consumer will refetch canonical resources. Keeping the connection
-          // alive after silently dropping an invalidation could leave it permanently stale.
+        if (!isCurrentSession()) {
           cleanup(true);
           return;
         }
