@@ -201,11 +201,19 @@ describe.each(['memory', 'sqlite'] as const)(
     for (const refresh of ['stale', 'forced'] as const) {
       for (const stored of [false, true]) {
         it(`keeps an expiring V2 keyset usable when rebuilding a Wallet from stored metadata (${refresh} refresh, stored: ${stored})`, async () => {
+          // NUT-02 V2 vector 1, also covered by CDK's test_v2_deserialization_and_id_generation.
           const finalExpiry = 2059210353;
-          const id = testMintKeysetId('sat', { expiry: finalExpiry });
+          const feePpk = 100;
+          const id = '015ba18a8adcd02e715a58358eb618da4a4b3791151a4bee5e968bb88406ccf76a';
+          const keypairs = {
+            '1': '03a40f20667ed53513075dc51e715ff2046cad64eb68960632269ba7f0210e38bc',
+            '2': '03fd4ce5a16b65576145949e6f99f445f8249fee17c606b688b504a849cdc452de',
+            '4': '02648eccfa4c026960966276fa5a4cae46ce0fd432211a4f449bf84f13aa5f8303',
+            '8': '02fdfd6796bfeac490cbee12f778f867f0a2c68f6508d17c649759ea0dc3547528',
+          };
           if (stored) {
             await repositories.mintRepository.addNewMint({ ...original });
-            await repositories.keysetRepository.addKeyset({ ...keyset, id });
+            await repositories.keysetRepository.addKeyset({ ...keyset, id, keypairs, feePpk });
           }
           const provider = new MintRequestProvider();
           provider.getRequestFn =
@@ -214,11 +222,19 @@ describe.each(['memory', 'sqlite'] as const)(
               if (endpoint.endsWith('/v1/info')) return testMintInfo as T;
               if (endpoint.endsWith('/v1/keysets')) {
                 return {
-                  keysets: [{ id, unit: 'sat', active: true, final_expiry: finalExpiry }],
+                  keysets: [
+                    {
+                      id,
+                      unit: 'sat',
+                      active: true,
+                      input_fee_ppk: feePpk,
+                      final_expiry: finalExpiry,
+                    },
+                  ],
                 } as T;
               }
               if (endpoint.endsWith(`/v1/keys/${id}`)) {
-                return { keysets: [{ id, unit: 'sat', keys: testMintKeypairs }] } as T;
+                return { keysets: [{ id, unit: 'sat', keys: keypairs }] } as T;
               }
               throw new Error(`Unexpected endpoint: ${endpoint}`);
             };
@@ -245,7 +261,8 @@ describe.each(['memory', 'sqlite'] as const)(
           const result = await wallets.getWalletWithActiveKeysetId(mintUrl, 'sat');
           expect(result.keysetId).toBe(id);
           expect(result.keyset.final_expiry).toBe(finalExpiry);
-          expect(result.keys.keys).toEqual(testMintKeypairs);
+          expect(result.keyset.input_fee_ppk).toBe(feePpk);
+          expect(result.keys.keys).toEqual(keypairs);
         });
       }
     }
