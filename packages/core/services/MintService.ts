@@ -621,6 +621,7 @@ export class MintService {
             unit: ks.unit,
             active: ks.active,
             feePpk: ks.input_fee_ppk || 0,
+            finalExpiry: ks.final_expiry ?? undefined,
           };
           return this.keysetRepo.updateKeyset(keysetModel);
         } else {
@@ -633,6 +634,7 @@ export class MintService {
               keypairs: keysRes,
               active: ks.active,
               feePpk: ks.input_fee_ppk || 0,
+              finalExpiry: ks.final_expiry ?? undefined,
             });
           } catch (err) {
             // Refusing one keyset's keys must not cost the Wallet the keysets that did verify.

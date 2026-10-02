@@ -21,9 +21,10 @@ export class ScopedSqliteKeysetRepository implements KeysetRepository {
       keypairs: string;
       active: number;
       feePpk: number;
+      finalExpiry: number | null;
       updatedAt: number;
     }>(
-      'SELECT mintUrl, id, unit, keypairs, active, feePpk, updatedAt FROM coco_cashu_keysets WHERE mintUrl = ?',
+      'SELECT mintUrl, id, unit, keypairs, active, feePpk, finalExpiry, updatedAt FROM coco_cashu_keysets WHERE mintUrl = ?',
       [mintUrl],
     );
     return rows.map(
@@ -35,6 +36,7 @@ export class ScopedSqliteKeysetRepository implements KeysetRepository {
           keypairs: JSON.parse(r.keypairs),
           active: !!r.active,
           feePpk: r.feePpk,
+          finalExpiry: r.finalExpiry ?? undefined,
           updatedAt: r.updatedAt,
         }) satisfies Keyset,
     );
@@ -48,9 +50,10 @@ export class ScopedSqliteKeysetRepository implements KeysetRepository {
       keypairs: string;
       active: number;
       feePpk: number;
+      finalExpiry: number | null;
       updatedAt: number;
     }>(
-      'SELECT mintUrl, id, unit, keypairs, active, feePpk, updatedAt FROM coco_cashu_keysets WHERE mintUrl = ? AND id = ? LIMIT 1',
+      'SELECT mintUrl, id, unit, keypairs, active, feePpk, finalExpiry, updatedAt FROM coco_cashu_keysets WHERE mintUrl = ? AND id = ? LIMIT 1',
       [mintUrl, id],
     );
     if (!row) return null;
@@ -61,6 +64,7 @@ export class ScopedSqliteKeysetRepository implements KeysetRepository {
       keypairs: JSON.parse(row.keypairs),
       active: !!row.active,
       feePpk: row.feePpk,
+      finalExpiry: row.finalExpiry ?? undefined,
       updatedAt: row.updatedAt,
     } satisfies Keyset;
   }
@@ -76,13 +80,14 @@ export class ScopedSqliteKeysetRepository implements KeysetRepository {
       [keyset.mintUrl, keyset.id],
     );
     await this.db.run(
-      `INSERT INTO coco_cashu_keysets (mintUrl, id, unit, keypairs, active, feePpk, updatedAt)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO coco_cashu_keysets (mintUrl, id, unit, keypairs, active, feePpk, finalExpiry, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(mintUrl, id) DO UPDATE SET
          unit=excluded.unit,
          keypairs=excluded.keypairs,
          active=excluded.active,
          feePpk=excluded.feePpk,
+         finalExpiry=excluded.finalExpiry,
          updatedAt=excluded.updatedAt`,
       [
         keyset.mintUrl,
@@ -98,6 +103,7 @@ export class ScopedSqliteKeysetRepository implements KeysetRepository {
         ),
         keyset.active ? 1 : 0,
         keyset.feePpk,
+        keyset.finalExpiry ?? null,
         now,
       ],
     );

@@ -57,6 +57,7 @@ const EXPECTED_MIGRATION_IDS = [
   '040_send_execution_memo',
   '041_send_reclaim_data',
   '042_mint_swap_operations',
+  '043_keyset_final_expiry',
 ] as const;
 
 async function allocateP2pkKey(db: SqlDatabase) {
@@ -197,6 +198,41 @@ function itWithDatabase(name: string, fn: (db: SqlDatabase) => Promise<void>): v
 }
 
 describe('shared SQL schema migrations', () => {
+  itWithDatabase(
+    'adds optional keyset expiry without losing existing keys or metadata',
+    async (db) => {
+      await ensureSchemaUpTo(db, '043_keyset_final_expiry');
+      const mintUrl = 'https://mint.test';
+      const keys = { '1': '02aa' };
+      await db.run(
+        `INSERT INTO coco_cashu_keysets (mintUrl, id, unit, keypairs, active, feePpk, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [mintUrl, 'existing-keyset', 'sat', JSON.stringify(keys), 1, 2, 123],
+      );
+
+      await ensureSchemaUpTo(db);
+      await ensureSchemaUpTo(db);
+
+      const repositories = new SqlStorageRepositories({ database: db });
+      const stored = await repositories.keysetRepository.getKeysetById(mintUrl, 'existing-keyset');
+      expect(stored).toEqual({
+        mintUrl,
+        id: 'existing-keyset',
+        unit: 'sat',
+        keypairs: keys,
+        active: true,
+        feePpk: 2,
+        finalExpiry: undefined,
+        updatedAt: 123,
+      });
+      await repositories.keysetRepository.updateKeyset({ ...stored!, finalExpiry: 2059210353 });
+      expect(
+        (await repositories.keysetRepository.getKeysetById(mintUrl, 'existing-keyset'))
+          ?.finalExpiry,
+      ).toBe(2059210353);
+    },
+  );
+
   itWithDatabase('preserves the migration list and applies all migration ids', async (db) => {
     expect(MIGRATIONS.map((migration) => migration.id)).toEqual(EXPECTED_MIGRATION_IDS);
 
