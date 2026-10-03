@@ -4,6 +4,58 @@ import { format } from '../format';
 const evaluator = () =>
   new Evaluator({ answer: 42 }, async (name) => ({ default: name, answer: 42 }));
 describe('persistent browser evaluator', () => {
+  test('callbacks keep the execution globals from their originating run', async () => {
+    const first: string[] = [];
+    const second: string[] = [];
+    const session = evaluator();
+    await session.execute('const later = () => console.log("old callback");', undefined, {
+      console: { log: (value: string) => first.push(value) },
+    });
+    await session.execute('await Promise.resolve(); later(); console.log("new run");', undefined, {
+      console: { log: (value: string) => second.push(value) },
+    });
+    expect(first).toEqual(['old callback']);
+    expect(second).toEqual(['new run']);
+  });
+  test('function-only constructs cannot access the snippet execution wrapper', async () => {
+    for (const source of [
+      'new.target;',
+      '(() => new.target)();',
+      'arguments;',
+      'typeof arguments;',
+      '(() => arguments)();',
+      '({ arguments });',
+      '({ [new.target]() {} });',
+      '({ [arguments]() {} });',
+      'class Box { [new.target]() {} }',
+      'return 42;',
+    ]) {
+      const session = evaluator();
+      await session.execute('let retained = 0;');
+      let prepared = false;
+      await expect(
+        session.execute(`retained++; ${source}`, () => {
+          prepared = true;
+        }),
+      ).rejects.toBeInstanceOf(SyntaxError);
+      expect(prepared).toBe(false);
+      expect(await session.execute('retained')).toBe(0);
+    }
+  });
+  test('real functions retain arguments, returns, and new.target without rejecting property names', async () => {
+    const session = evaluator();
+    expect(
+      await session.execute(`
+      function inspect(value) { return [arguments[0], (() => arguments.length)(), new.target]; }
+      function Constructed() { this.target = new.target; }
+      const object = { arguments: 7, inspect(value) { return arguments[0]; } };
+      const { arguments: property } = object;
+      class Box { value = new.target; static { this.target = new.target; } }
+      [inspect(42), new Constructed().target === Constructed, object.arguments,
+       property, object.inspect(8), (() => { return 9; })(), new Box().value, Box.target];
+    `),
+    ).toEqual([[42, 1, undefined], true, 7, 7, 8, 9, undefined, undefined]);
+  });
   test('function names survive rewriting while earlier closures follow replacement bindings', async () => {
     const session = evaluator();
     expect(

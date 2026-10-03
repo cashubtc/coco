@@ -9,25 +9,26 @@ export class PlaygroundRuntime {
   private nextId = 0;
   private generation = 0;
   constructor(
-    private readonly output: (output: Output) => void,
+    private readonly output: (output: Output, id?: number) => void,
     private readonly failed: () => void = () => {},
   ) {}
   async start(): Promise<void> {
     if (this.worker) throw new Error('Playground is already started.');
     const worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
     this.worker = worker;
+    this.nextId = 0;
     return new Promise<void>((resolve, reject) => {
       this.pending = { resolve: () => resolve(), reject };
       worker.onmessage = ({ data }: MessageEvent<Response>) => {
         if (this.worker !== worker) return;
-        if (data.type === 'output') this.output(data.output);
+        if (data.type === 'output') this.output(data.output, data.id);
         else if (data.type === 'ready') this.finish(true);
         else if (data.type === 'fatal') {
           this.failed();
           this.finish(false, data.error);
           this.dispose();
         } else if (data.type === 'done' && this.pending?.id === data.id) {
-          if (data.error) this.output({ level: 'error', text: data.error });
+          if (data.error) this.output({ level: 'error', text: data.error }, data.id);
           // Runtime failures can leave bindings initialized; keep their type history.
           this.finish(data.prepared);
         }

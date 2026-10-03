@@ -1,4 +1,5 @@
 import ts from 'typescript';
+import { validateSnippet } from './validate';
 
 export type Declaration = { name: string; kind: 'let' | 'const' | 'var' };
 type StaticImport = { specifier: string; names: string[] };
@@ -137,6 +138,7 @@ export function compile(source: string): {
     ts.ScriptKind.JS,
   );
   const declarations: Declaration[] = [];
+  validateSnippet(file);
   // Validate before rewriting declarations: rewriting can otherwise hide missing
   // const initializers, invalid strict-mode names, and block/var collisions.
   const body = ts.createPrinter().printFile(

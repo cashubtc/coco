@@ -90,7 +90,7 @@ let runNumber = 0;
 let session = 1;
 let epoch = 0;
 let ready = false;
-const entries: { output: Output; run: number; session: number; time: string }[] = [];
+const entries: { output: Output; run: number | 'background'; session: number; time: string }[] = [];
 function render() {
   const visible = entries.filter(
     (entry) => (entry.output.level === 'event') === (tab === 'events'),
@@ -114,7 +114,7 @@ function render() {
     const label = document.createElement('span');
     label.textContent = entry.output.level;
     const context = document.createElement('span');
-    context.textContent = `S${entry.session} · Run ${entry.run}`;
+    context.textContent = `S${entry.session} · ${entry.run === 'background' ? 'Background' : `Run ${entry.run}`}`;
     const time = document.createElement('time');
     time.textContent = entry.time;
     meta.append(label, context, time);
@@ -132,14 +132,14 @@ function render() {
   outputPane.scrollTop = outputPane.scrollHeight;
 }
 let renderPending = false;
-function add(output: Output) {
+function add(output: Output, run: number | 'background' = runNumber) {
   entries.push({
     output,
-    run: runNumber,
+    run,
     session,
     time: new Date().toLocaleTimeString([], { hour12: false }),
   });
-  // Both count and total text are bounded; asynchronous timer logs share the worker budget.
+  // Bound retained output across all runs and background activity.
   while (
     entries.length > 500 ||
     entries.reduce((total, entry) => total + entry.output.text.length, 0) > 500000
@@ -156,11 +156,14 @@ function add(output: Output) {
 function status(text: string) {
   element('status').textContent = `Session ${session} · ${text}`;
 }
-const runtime = new PlaygroundRuntime(add, () => {
-  ready = false;
-  runButton.disabled = true;
-  status('Reset needed');
-});
+const runtime = new PlaygroundRuntime(
+  (output, id) => add(output, id ?? 'background'),
+  () => {
+    ready = false;
+    runButton.disabled = true;
+    status('Reset needed');
+  },
+);
 async function initialize(reset: boolean) {
   const current = ++epoch;
   ready = false;

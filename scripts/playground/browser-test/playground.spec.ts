@@ -119,6 +119,60 @@ test('editor globals match worker APIs', async ({ page }) => {
   await edit(page, 'const workerScope: WorkerGlobalScope = self; crypto.randomUUID(); fetch("/");');
   await expect.poll(() => diagnostics(page)).toBe('');
 });
+test('function-only top-level syntax fails before wallet changes', async ({ page }) => {
+  for (const source of ['new.target', 'arguments', '(() => arguments)()', 'return 42']) {
+    await run(page, `await coco.keyring.generateKeyPair(); ${source};`);
+    await expect(page.locator('.entry[data-level="error"]').last()).toContainText('SyntaxError');
+    await run(page, '(await coco.keyring.getAllKeyPairs()).length');
+    await expect(result(page)).toHaveText('0');
+  }
+  await run(page, 'function valid(value) { return arguments[0]; } valid(42)');
+  await expect(result(page)).toHaveText('42');
+});
+test('old callbacks retain attribution without exhausting later runs or hiding results', async ({
+  page,
+}) => {
+  await run(
+    page,
+    `
+    let floodEnabled = false;
+    const timer = setInterval(() => {
+      if (!floodEnabled) return;
+      for (let i = 0; i < 20; i++) console.log('OLD TIMER ' + 'x'.repeat(7990));
+      floodEnabled = false;
+    }, 5);
+    addEventListener('playground-test', () => console.log('OLD EVENT'));
+  `,
+  );
+  await run(
+    page,
+    `
+    dispatchEvent(new Event('playground-test'));
+    floodEnabled = true;
+    while (floodEnabled) await new Promise(resolve => setTimeout(resolve, 10));
+    clearInterval(timer);
+    console.log('NEW RUN');
+    42;
+  `,
+  );
+  await expect(result(page)).toHaveText('42');
+  await expect(page.locator('.entry').filter({ hasText: 'OLD TIMER' }).first()).toContainText(
+    'Run 1',
+  );
+  await expect(page.locator('.entry').filter({ hasText: 'OLD EVENT' }).first()).toContainText(
+    'Run 1',
+  );
+  await expect(page.locator('.entry').filter({ hasText: 'NEW RUN' }).first()).toContainText(
+    'Run 2',
+  );
+  await expect(page.locator('.entry[data-level="result"]').last()).toContainText('Run 2');
+  await run(page, `for (let i = 0; i < 30; i++) console.log('x'.repeat(8000)); 43;`);
+  await expect(result(page)).toHaveText('43');
+  await page.getByRole('button', { name: /^Reset state/ }).click();
+  await expect(page.getByRole('status')).toHaveText('Session 2 · Ready');
+  await run(page, '44');
+  await expect(page.locator('.entry[data-level="result"]').last()).toContainText('S2 · Run 1');
+});
 test('invalid imports and resource declarations preserve state and editor history', async ({
   page,
 }) => {
@@ -196,10 +250,13 @@ test('Monaco has syntax colors, typed API completion, prior binding completion a
   page,
 }) => {
   await edit(page, 'const highlighted: number = 42;');
-  const colors = await page
-    .locator('.view-line span[class^="mtk"]')
-    .evaluateAll((nodes) => new Set(nodes.map((node) => getComputedStyle(node).color)).size);
-  expect(colors).toBeGreaterThan(1);
+  await expect
+    .poll(() =>
+      page
+        .locator('.view-line span[class^="mtk"]')
+        .evaluateAll((nodes) => new Set(nodes.map((node) => getComputedStyle(node).color)).size),
+    )
+    .toBeGreaterThan(1);
   await edit(page, 'coco.wallet.');
   await page.keyboard.press('Control+Space');
   await expect(page.locator('.suggest-widget')).toBeVisible();

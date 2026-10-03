@@ -37,9 +37,7 @@ export function format(value: unknown): string {
       for (let index = 0; index < Math.min(item.length, 40); index++) {
         const descriptor = Object.getOwnPropertyDescriptor(item, index);
         values.push(
-          !descriptor || 'value' in descriptor
-            ? visit(descriptor?.value, depth + 1)
-            : '[Getter]',
+          !descriptor || 'value' in descriptor ? visit(descriptor?.value, depth + 1) : '[Getter]',
         );
       }
       if (item.length > 40) values.push('…');

@@ -57,6 +57,9 @@ Static modules and their requested exports are checked before session bindings
 change or the snippet body runs. Empty imports (`import {} from 'module'`) still
 load the module; `import type` declarations are erased.
 Write snippets without `export` declarations.
+Top-level `return`, `new.target`, and `arguments` are rejected rather than exposing
+the evaluator's internal function wrapper. Ordinary functions retain their own
+`arguments` and `new.target`; arrows inherit these from an enclosing ordinary function.
 Resource declarations (`using` and `await using`) are not supported and are
 rejected before execution, including inside nested scopes. Use explicit cleanup
 with `try` / `finally` instead.
@@ -88,8 +91,14 @@ Refreshing or closing the page also discards the session. No wallet state or
 snippet history is saved to disk or browser storage. Returning to the page through
 the browser's back/forward cache starts a fresh session. Exceptions in timers and
 unhandled promise rejections appear in Console without discarding the session.
-Only one snippet executes at a time. Output is bounded to 64,000 characters per execution, and the UI
-retains at most 500 entries and 500,000 characters.
+Only one snippet executes at a time. Console logs have a 64,000-character budget
+per run. Functions and callbacks retain the console from the run that created
+them, so a timer from an earlier run cannot exhaust a later run's budget. Output
+labels retain that originating run number. Final results are separately bounded
+to 12,000 characters and remain visible after the log budget is exhausted.
+Core logs, public events, and uncaught background errors have a separate
+64,000-character budget per session and are labeled Background; reset restores
+that budget. The UI retains at most 500 entries and 500,000 characters overall.
 
 Background Watchers and processors start disabled. Explicit APIs can contact
 mints directly from the browser; the mint must allow the playground origin via

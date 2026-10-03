@@ -3,12 +3,12 @@ import { compile, type Declaration } from './compile';
 type Cell = { kind: Declaration['kind']; initialized: boolean; value: unknown };
 export class Evaluator {
   private readonly cells = new Map<string, Cell>();
-  private readonly scope: object;
   constructor(
-    globals: Record<string, unknown>,
+    private readonly globals: Record<string, unknown>,
     private readonly importModule: (name: string) => Promise<unknown>,
-  ) {
-    this.scope = new Proxy(Object.create(null), {
+  ) {}
+  private createScope(globals: Record<string, unknown>): object {
+    return new Proxy(Object.create(null), {
       has: (_, name) =>
         typeof name === 'string' && (this.cells.has(name) || Object.hasOwn(globals, name)),
       get: (_, name) => {
@@ -30,7 +30,11 @@ export class Evaluator {
       },
     });
   }
-  async execute(source: string, prepared: () => void = () => {}): Promise<unknown> {
+  async execute(
+    source: string,
+    prepared: () => void = () => {},
+    executionGlobals: Record<string, unknown> = {},
+  ): Promise<unknown> {
     const { code, declarations, internal, imports } = compile(source);
     // Parse the executable body before adding any bindings, including syntax checks
     // that TypeScript's transpile-only API does not perform.
@@ -78,7 +82,8 @@ export class Evaluator {
       cell.value = value;
       return value;
     };
-    return execute(this.scope, {
+    // Each closure retains its run's console while cells stay shared across runs.
+    return execute(this.createScope({ ...this.globals, ...executionGlobals }), {
       importModule: this.importModule,
       modules,
       initialize,

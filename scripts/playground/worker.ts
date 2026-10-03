@@ -4,42 +4,16 @@ import * as adapter from '@cashu/coco-core/adapter';
 import * as plugin from '@cashu/coco-core/plugin';
 import { assert as chaiAssert } from 'chai';
 import { Evaluator } from './evaluator';
-import { errorText, format } from './format';
+import { errorText } from './format';
+import { createOutputChannel } from './output';
 import type { Output, Request, Response } from './protocol';
 import { eventNames } from 'virtual:playground-types';
 
 const worker = self as unknown as DedicatedWorkerGlobalScope;
 const send = (message: Response) => worker.postMessage(message);
-let activeId: number | undefined;
-let budget = 64000;
-const output = (level: Output['level'], ...values: unknown[]) => {
-  if (budget <= 0) return;
-  const text = values.map(format).join(' ');
-  const trimmed = text.slice(0, budget);
-  budget -= trimmed.length + 1;
-  send({ type: 'output', id: activeId, output: { level, text: trimmed } });
-  if (budget <= 0)
-    send({
-      type: 'output',
-      id: activeId,
-      output: {
-        level: 'warn',
-        text: 'Output limit reached. Run again or reset to resume logging.',
-      },
-    });
-};
-const capturedConsole = {
-  log: (...values: unknown[]) => output('log', ...values),
-  info: (...values: unknown[]) => output('info', ...values),
-  warn: (...values: unknown[]) => output('warn', ...values),
-  error: (...values: unknown[]) => output('error', ...values),
-  debug: (...values: unknown[]) => output('log', ...values),
-  dir: (value: unknown) => output('log', value),
-  table: (value: unknown) => output('log', value),
-  assert: (condition: unknown, ...values: unknown[]) => {
-    if (!condition) output('error', 'Assertion failed:', ...values);
-  },
-};
+const emit = (output: Output, id?: number) => send({ type: 'output', id, output });
+const background = createOutputChannel(emit);
+const capturedConsole = background.console;
 // Match the convenient strict-assert spellings used by playground examples.
 const assert = Object.assign(
   (condition: unknown, message?: string) => chaiAssert.isOk(condition, message),
@@ -94,7 +68,7 @@ async function start() {
   // Subscribe through the public Manager API; persistence stays owned by core.
   for (const name of eventNames)
     coco.on(name, (payload) => {
-      output('event', name, payload);
+      background.write('event', name, payload);
     });
   let busy = false;
   worker.onmessage = async ({ data }: MessageEvent<Request>) => {
@@ -103,31 +77,33 @@ async function start() {
       return;
     }
     busy = true;
-    activeId = data.id;
-    budget = 64000;
+    const channel = createOutputChannel(emit, data.id);
     let prepared = false;
     try {
-      const result = await evaluator.execute(data.source, () => {
-        prepared = true;
-      });
-      output('result', result);
+      const result = await evaluator.execute(
+        data.source,
+        () => {
+          prepared = true;
+        },
+        { console: channel.console },
+      );
+      channel.result(result);
       send({ type: 'done', id: data.id, prepared });
     } catch (error) {
       send({ type: 'done', id: data.id, prepared, error: errorText(error) });
     } finally {
       busy = false;
-      activeId = undefined;
     }
   };
   worker.addEventListener('unhandledrejection', (event) => {
     event.preventDefault();
-    output('error', errorText(event.reason));
+    background.write('error', errorText(event.reason));
   });
   worker.addEventListener('error', (event) => {
     // A timer/listener exception belongs to the snippet, not to worker startup.
     // Keep the session usable just as for an unhandled promise rejection.
     event.preventDefault();
-    output('error', errorText(event.error ?? event.message));
+    background.write('error', errorText(event.error ?? event.message));
   });
   send({ type: 'ready' });
 }
