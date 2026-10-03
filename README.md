@@ -77,9 +77,14 @@ bun install
 bun run build
 bun run typecheck
 bun run docs:dev
+bun run playground
 ```
 
 See `packages/core/README.md` for API details and package-level usage.
+The [browser playground](scripts/playground/README.md) runs JavaScript/TypeScript
+in a browser worker against core workspace source, with Monaco highlighting and
+autocomplete. It keeps an in-memory Coco Session between snippets; Reset state
+starts fresh. No execution backend or core build is needed.
 
 ## Contributing
 

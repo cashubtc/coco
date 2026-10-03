@@ -20,7 +20,7 @@ want to solve and the approach you have in mind.
 
 ## Developing coco
 
-- Requirements: Bun (CI currently runs Bun 1.2.18)
+- Requirements: Bun
 - Install dependencies from the repo root:
 
   ```bash
@@ -57,7 +57,15 @@ bun run build
 bun run typecheck
 bun run docs:dev
 bun run docs:build
+bun run playground
 ```
+
+Use the [browser playground](scripts/playground/README.md) for quick public API
+experiments against core workspace source. Ctrl/⌘-Enter executes the Monaco editor
+buffer; Reset state (Shift-Ctrl/⌘-Enter) clears the in-memory Coco Session and
+variables. Execution runs entirely in a browser worker. Check playground changes
+with `bun run playground:test`, `bun run playground:typecheck`, and
+`bun run playground:test:browser` (install Chromium with `bunx playwright install chromium` first).
 
 Useful package-level commands:
 
