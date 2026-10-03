@@ -170,6 +170,68 @@ describe('PaymentRequestReceiveService', () => {
     expect(decoded.amount).toEqual(Amount.from(5));
   });
 
+  it('rejects oversized creqB requests before persistence and permits an explicit creqA retry', async () => {
+    const input = {
+      amount: Amount.from(100),
+      mints: [mintUrl],
+      requestId: 'oversized-request',
+      description: '東京🧪'.repeat(200),
+    };
+    let thrown: unknown;
+    try {
+      await service.create(input);
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(PaymentRequestError);
+    expect((thrown as Error).message).toContain('Failed to encode payment request as creqB');
+    expect((thrown as Error).message).toContain('shorten the description');
+    const cause = (thrown as { cause?: unknown }).cause;
+    expect(cause).toBeInstanceOf(TypeError);
+    expect((cause as Error).message).toContain('exceeds limit 1023');
+    expect(await service.list()).toEqual([]);
+
+    const operation = await service.create({ ...input, encoding: 'creqA' });
+    expect(operation.encodedRequest).toStartWith('creqA');
+    expect(PaymentRequest.fromEncodedRequest(operation.encodedRequest).description).toBe(
+      input.description,
+    );
+    expect(await service.list()).toHaveLength(1);
+  });
+
+  it('preserves Unicode descriptions in creqB requests within the encoded size limit', async () => {
+    const description = 'Café 🥐 東京';
+    const operation = await service.create({ amount: 100, description });
+
+    expect(operation.encodedRequest).toStartWith('CREQB');
+    expect(PaymentRequest.fromEncodedRequest(operation.encodedRequest).description).toBe(
+      description,
+    );
+  });
+
+  it('contextualizes malformed payload JSON without creating an attempt or changing the request', async () => {
+    const operation = await service.create({ amount: 100, requestId: 'request-id' });
+    for (const claim of [
+      () => service.ingestPayload('{'),
+      () => service.claimPayload(operation.id, '{'),
+    ]) {
+      let thrown: unknown;
+      try {
+        await claim();
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeInstanceOf(PaymentRequestError);
+      expect((thrown as Error).message).toBe('Failed to parse payment request payload JSON');
+      expect((thrown as { cause?: unknown }).cause).toBeInstanceOf(Error);
+    }
+    expect(await service.get(operation.id)).toEqual(operation);
+    expect(await attemptRepository.getByRequestOperationId(operation.id)).toEqual([]);
+    expect(receiveOperationService.init).not.toHaveBeenCalled();
+  });
+
   it('rejects duplicate active request ids', async () => {
     await service.create({
       amount: Amount.from(100),
