@@ -11,16 +11,21 @@ import type {
   RollingBackSendOperation,
 } from './SendOperation.ts';
 
-export interface PrepareSendInput {
+export type PrepareSendInput = {
   operation: InitSendOperation;
-  /** Active keys and seed loaded before entering the transaction. */
-  activeKeys: MintKeys;
-  seed: Uint8Array;
-  /** Method policy resolved before entering the transaction. */
-  forceSwap: boolean;
-  /** Randomized outputs fixed during preflight and reused across transaction retries. */
-  fixedSendOutputs?: readonly OutputDataLike[];
-}
+} & (
+  | { offline: true }
+  | {
+      offline?: false;
+      /** Active keys and seed loaded before entering the transaction. */
+      activeKeys: MintKeys;
+      seed: Uint8Array;
+      /** Method policy resolved before entering the transaction. */
+      forceSwap: boolean;
+      /** Randomized outputs fixed during preflight and reused across transaction retries. */
+      fixedSendOutputs?: readonly OutputDataLike[];
+    }
+);
 
 export interface PrepareSendResult {
   operation: PreparedSendOperation;

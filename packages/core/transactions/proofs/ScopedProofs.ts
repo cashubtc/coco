@@ -22,6 +22,7 @@ export interface SelectAndReserveProofsInput {
   operationId: string;
   amount: Amount;
   forceSwap: boolean;
+  offline?: boolean;
 }
 
 /** Proof reads and mutations within an existing transaction; never opens or commits one. */
