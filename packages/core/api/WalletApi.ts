@@ -13,6 +13,7 @@ import type {
 } from '@core/services';
 import type { ReceiveOperationService } from '../operations/receive/ReceiveOperationService';
 import type { Logger } from '../logging/Logger.ts';
+import type { BalanceQueries } from '../proofs/BalanceQueries.ts';
 import { WalletBalancesApi } from './WalletBalancesApi.ts';
 import { DEFAULT_UNIT, normalizeUnit, normalizeUnitList } from '../amounts.ts';
 
@@ -50,6 +51,7 @@ export class WalletApi {
     receiveOperationService: ReceiveOperationService,
     tokenService: TokenService,
     logger?: Logger,
+    balanceQueries?: BalanceQueries,
   ) {
     this.mintService = mintService;
     this.walletService = walletService;
@@ -58,7 +60,7 @@ export class WalletApi {
     this.receiveOperationService = receiveOperationService;
     this.tokenService = tokenService;
     this.logger = logger;
-    this.balances = new WalletBalancesApi(proofService);
+    this.balances = new WalletBalancesApi(balanceQueries ?? proofService);
   }
 
   /**
