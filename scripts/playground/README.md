@@ -53,7 +53,13 @@ declarations within the same snippet remain errors.
 Runtime failures retain mutations made before the failure, as a REPL does.
 Invalid JavaScript declarations are rejected before any code executes. Static
 imports are available throughout the snippet, including above the import line.
+Static modules and their requested exports are checked before session bindings
+change or the snippet body runs. Empty imports (`import {} from 'module'`) still
+load the module; `import type` declarations are erased.
 Write snippets without `export` declarations.
+Resource declarations (`using` and `await using`) are not supported and are
+rejected before execution, including inside nested scopes. Use explicit cleanup
+with `try` / `finally` instead.
 
 Static and dynamic imports support `@cashu/coco-core`,
 `@cashu/coco-core/adapter`, and `@cashu/coco-core/plugin`. They use the same bundled

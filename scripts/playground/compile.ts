@@ -1,6 +1,7 @@
 import ts from 'typescript';
 
 export type Declaration = { name: string; kind: 'let' | 'const' | 'var' };
+type StaticImport = { specifier: string; names: string[] };
 const reserved = '__cocoPlayground';
 
 /** Erase types, route imports, then move session declarations into persistent cells.
@@ -10,10 +11,14 @@ export function compile(source: string): {
   code: string;
   declarations: Declaration[];
   internal: string;
+  imports: StaticImport[];
 } {
   const parsed = ts.createSourceFile('snippet.ts', source, ts.ScriptTarget.Latest, true);
+  const imports: StaticImport[] = [];
   const identifiers = new Set<string>();
   const collectIdentifiers = (node: ts.Node) => {
+    if (ts.isVariableDeclarationList(node) && node.flags & ts.NodeFlags.Using)
+      throw new SyntaxError('Resource declarations (using and await using) are not supported.');
     if (ts.isIdentifier(node)) identifiers.add(node.text);
     ts.forEachChild(node, collectIdentifiers);
   };
@@ -43,14 +48,6 @@ export function compile(source: string): {
       before: [
         (context) => {
           const f = context.factory;
-          const load = (specifier: ts.Expression) =>
-            f.createAwaitExpression(
-              f.createCallExpression(
-                f.createPropertyAccessExpression(f.createIdentifier(internal), 'importModule'),
-                undefined,
-                [specifier],
-              ),
-            );
           const declaration = (name: ts.BindingName, value: ts.Expression) =>
             f.createVariableStatement(
               undefined,
@@ -63,14 +60,26 @@ export function compile(source: string): {
             if (ts.isImportDeclaration(node)) {
               const clause = node.importClause;
               if (clause?.isTypeOnly) return undefined;
-              if (!clause) return f.createExpressionStatement(load(node.moduleSpecifier));
+              if (!ts.isStringLiteral(node.moduleSpecifier))
+                throw new SyntaxError('Static imports require a string module specifier.');
+              const names = clause?.name ? ['default'] : [];
+              if (clause?.namedBindings && ts.isNamedImports(clause.namedBindings))
+                for (const item of clause.namedBindings.elements)
+                  if (!item.isTypeOnly) names.push((item.propertyName ?? item.name).text);
+              const index = imports.push({ specifier: node.moduleSpecifier.text, names }) - 1;
+              // Modules are loaded and exports validated before session bindings change.
+              const loaded = f.createElementAccessExpression(
+                f.createPropertyAccessExpression(f.createIdentifier(internal), 'modules'),
+                index,
+              );
+              if (!clause) return f.createExpressionStatement(f.createVoidExpression(loaded));
               const bindings: ts.BindingElement[] = [];
               if (clause.name)
                 bindings.push(f.createBindingElement(undefined, 'default', clause.name));
               const named = clause.namedBindings;
               if (named && ts.isNamespaceImport(named)) {
                 return [
-                  declaration(named.name, load(node.moduleSpecifier)),
+                  declaration(named.name, loaded),
                   ...(clause.name
                     ? [
                         declaration(
@@ -87,7 +96,7 @@ export function compile(source: string): {
                     bindings.push(f.createBindingElement(undefined, item.propertyName, item.name));
                 }
               return bindings.length
-                ? declaration(f.createObjectBindingPattern(bindings), load(node.moduleSpecifier))
+                ? declaration(f.createObjectBindingPattern(bindings), loaded)
                 : undefined;
             }
             if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
@@ -177,6 +186,33 @@ export function compile(source: string): {
           undefined,
           args,
         );
+      const namedValue = (name: ts.BindingName, value: ts.Expression): ts.Expression => {
+        let expression = value;
+        while (ts.isParenthesizedExpression(expression)) expression = expression.expression;
+        if (
+          !ts.isIdentifier(name) ||
+          !(
+            ts.isArrowFunction(expression) ||
+            ((ts.isFunctionExpression(expression) || ts.isClassExpression(expression)) &&
+              !expression.name)
+          )
+        )
+          return value;
+        // Let JavaScript infer the name without adding a private function-name
+        // binding: recursive references must still see later session replacements.
+        // A computed key also handles a binding literally named __proto__.
+        return f.createElementAccessExpression(
+          f.createParenthesizedExpression(
+            f.createObjectLiteralExpression([
+              f.createPropertyAssignment(
+                f.createComputedPropertyName(f.createStringLiteral(name.text)),
+                value,
+              ),
+            ]),
+          ),
+          f.createStringLiteral(name.text),
+        );
+      };
       const target = (name: ts.BindingName): ts.Expression => {
         // A var declaration in a catch body is hoisted, but its initializer
         // assigns the catch parameter when the names coincide.
@@ -189,7 +225,11 @@ export function compile(source: string): {
         const elementTarget = (element: ts.BindingElement) => {
           const value = target(element.name);
           return element.initializer
-            ? f.createBinaryExpression(value, ts.SyntaxKind.EqualsToken, element.initializer)
+            ? f.createBinaryExpression(
+                value,
+                ts.SyntaxKind.EqualsToken,
+                namedValue(element.name, element.initializer),
+              )
             : value;
         };
         if (ts.isArrayBindingPattern(name))
@@ -222,7 +262,9 @@ export function compile(source: string): {
               f.createBinaryExpression(
                 target(declaration.name),
                 ts.SyntaxKind.EqualsToken,
-                declaration.initializer ?? f.createVoidZero(),
+                declaration.initializer
+                  ? namedValue(declaration.name, declaration.initializer)
+                  : f.createVoidZero(),
               ),
             ),
           ];
@@ -246,14 +288,17 @@ export function compile(source: string): {
               f.createExpressionStatement(
                 helper('initialize', [
                   f.createStringLiteral(node.name.text),
-                  f.createFunctionExpression(
-                    node.modifiers?.filter(ts.isModifier),
-                    node.asteriskToken,
-                    undefined,
-                    undefined,
-                    node.parameters,
-                    undefined,
-                    node.body!,
+                  namedValue(
+                    node.name,
+                    f.createFunctionExpression(
+                      node.modifiers?.filter(ts.isModifier),
+                      node.asteriskToken,
+                      undefined,
+                      undefined,
+                      node.parameters,
+                      undefined,
+                      node.body!,
+                    ),
                   ),
                 ]),
               ),
@@ -336,5 +381,5 @@ export function compile(source: string): {
   ]);
   const code = ts.createPrinter().printFile(transformed.transformed[0]!);
   transformed.dispose();
-  return { code, declarations, internal };
+  return { code, declarations, internal, imports };
 }

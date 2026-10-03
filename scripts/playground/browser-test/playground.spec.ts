@@ -119,6 +119,46 @@ test('editor globals match worker APIs', async ({ page }) => {
   await edit(page, 'const workerScope: WorkerGlobalScope = self; crypto.randomUUID(); fetch("/");');
   await expect.poll(() => diagnostics(page)).toBe('');
 });
+test('invalid imports and resource declarations preserve state and editor history', async ({
+  page,
+}) => {
+  await run(page, 'let retained = 7;');
+  for (const source of [
+    `import { Missing as retained } from '@cashu/coco-core'; await coco.keyring.generateKeyPair();`,
+    `import retained from '@cashu/coco-core'; await coco.keyring.generateKeyPair();`,
+    `import {} from 'unsupported-package'; await coco.keyring.generateKeyPair();`,
+    `await coco.keyring.generateKeyPair(); using resource = null;`,
+    `await coco.keyring.generateKeyPair(); await using resource = null;`,
+  ]) {
+    await page.getByRole('button', { name: 'Clear', exact: true }).click();
+    await run(page, source);
+    await expect(page.locator('.entry[data-level="error"]')).toHaveCount(1);
+    await run(page, '[retained, (await coco.keyring.getAllKeyPairs()).length]');
+    await expect(result(page)).toHaveText('[\n  7,\n  0\n]');
+    await edit(page, 'const check: number = retained;');
+    await expect.poll(() => diagnostics(page)).toBe('');
+  }
+  await run(page, `import {} from '@cashu/coco-core'; retained;`);
+  await expect(result(page)).toHaveText('7');
+});
+test('function names and replacement references match native JavaScript', async ({ page }) => {
+  await run(
+    page,
+    `
+    function named() { return named; }
+    const original = named;
+    const arrow = () => 1;
+    const { callback = function() {} } = {};
+    const Box = class { static observed = this.name; };
+    [named.name, arrow.name, callback.name, Box.name, Box.observed];
+  `,
+  );
+  await expect(result(page)).toHaveText(
+    '[\n  "named",\n  "arrow",\n  "callback",\n  "Box",\n  "Box"\n]',
+  );
+  await run(page, 'function named() { return 42; } [original.name, original() === named, named()]');
+  await expect(result(page)).toHaveText('[\n  "named",\n  true,\n  42\n]');
+});
 test('restoring a disposed page creates a fresh usable session', async ({ page }) => {
   await run(page, 'const prior = 42;');
   const loaded = page.waitForEvent('load');

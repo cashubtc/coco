@@ -4,6 +4,118 @@ import { format } from '../format';
 const evaluator = () =>
   new Evaluator({ answer: 42 }, async (name) => ({ default: name, answer: 42 }));
 describe('persistent browser evaluator', () => {
+  test('function names survive rewriting while earlier closures follow replacement bindings', async () => {
+    const session = evaluator();
+    expect(
+      await session.execute(`
+      function named() { return named; }
+      const arrow = () => 1;
+      const expression = function() {};
+      const explicit = function original() {};
+      const parenthesized = (() => 2);
+      const { callback = () => 3 } = {};
+      const [arrayCallback = function() {}] = [];
+      const Box = class {};
+      const __proto__ = () => 4;
+      [named.name, arrow.name, expression.name, explicit.name, parenthesized.name,
+       callback.name, arrayCallback.name, Box.name, __proto__.name];
+    `),
+    ).toEqual([
+      'named',
+      'arrow',
+      'expression',
+      'original',
+      'parenthesized',
+      'callback',
+      'arrayCallback',
+      'Box',
+      '__proto__',
+    ]);
+    await session.execute('const earlier = named;');
+    expect(
+      await session.execute(
+        'function named() { return 42; } [earlier.name, earlier() === named, named()]',
+      ),
+    ).toEqual(['named', true, 42]);
+    // Giving a reference another binding must not rename the referenced function.
+    expect(await session.execute('const alias = arrow; [alias === arrow, alias.name]')).toEqual([
+      true,
+      'arrow',
+    ]);
+  });
+  test('empty and side-effect imports load once in source order before the body', async () => {
+    const effects: string[] = [];
+    const module = { answer: 42 };
+    const session = new Evaluator({ effects }, async (name) => {
+      effects.push(name);
+      if (name === 'unsupported') throw new Error('not bundled');
+      return module;
+    });
+    expect(
+      await session.execute(`
+      effects.push('body');
+      import {} from 'first';
+      import 'second';
+      import { answer } from 'first';
+      import * as namespace from 'first';
+      [answer, namespace.answer];
+    `),
+    ).toEqual([42, 42]);
+    expect(effects).toEqual(['first', 'second', 'body']);
+    await expect(
+      session.execute(`import {} from 'unsupported'; effects.push('unreachable');`),
+    ).rejects.toThrow('not bundled');
+    expect(effects).toEqual(['first', 'second', 'body', 'unsupported']);
+    await session.execute(`import type { Ignored } from 'erased';`);
+    expect(effects).not.toContain('erased');
+    await session.execute(`import { type Ignored } from 'retained';`);
+    expect(effects.at(-1)).toBe('retained');
+  });
+  test('resource declarations are rejected before any mutation or module loading', async () => {
+    for (const source of [
+      'using resource = null;',
+      'await using resource = null;',
+      '{ using resource = null; }',
+      'async function later() { await using resource = null; }',
+      'for (using resource of []) {}',
+    ]) {
+      let loaded = false;
+      const session = new Evaluator({}, async () => {
+        loaded = true;
+        return {};
+      });
+      await session.execute('let retained = 0;');
+      let prepared = false;
+      await expect(
+        session.execute(`import 'example'; retained++; ${source}`, () => {
+          prepared = true;
+        }),
+      ).rejects.toThrow('Resource declarations (using and await using) are not supported');
+      expect(loaded).toBe(false);
+      expect(prepared).toBe(false);
+      expect(await session.execute('retained')).toBe(0);
+    }
+  });
+  test('missing static exports fail before replacing bindings or executing the body', async () => {
+    for (const source of [
+      'import { missing as retained } from "example";',
+      'import retained from "example";',
+      'import retained, * as namespace from "example";',
+      'import { answer } from "example"; import { missing } from "example";',
+    ]) {
+      const session = new Evaluator({}, async () => ({ answer: 42, present: undefined }));
+      await session.execute('let retained = 7; let mutations = 0;');
+      let prepared = false;
+      await expect(
+        session.execute(`${source} mutations++;`, () => {
+          prepared = true;
+        }),
+      ).rejects.toBeInstanceOf(SyntaxError);
+      expect(prepared).toBe(false);
+      expect(await session.execute('[retained, mutations]')).toEqual([7, 0]);
+      expect(await session.execute('import { present } from "example"; present;')).toBeUndefined();
+    }
+  });
   test('invalid declarations fail before any session mutation', async () => {
     for (const source of [
       'const missing;',

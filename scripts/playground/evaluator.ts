@@ -31,7 +31,7 @@ export class Evaluator {
     });
   }
   async execute(source: string, prepared: () => void = () => {}): Promise<unknown> {
-    const { code, declarations, internal } = compile(source);
+    const { code, declarations, internal, imports } = compile(source);
     // Parse the executable body before adding any bindings, including syntax checks
     // that TypeScript's transpile-only API does not perform.
     const execute = new Function(
@@ -55,6 +55,19 @@ export class Evaluator {
           : { kind, initialized: kind === 'var', value: undefined },
       );
     }
+    const modules: unknown[] = [];
+    const loaded = new Map<string, unknown>();
+    for (const { specifier, names } of imports) {
+      if (!loaded.has(specifier)) loaded.set(specifier, await this.importModule(specifier));
+      const module = loaded.get(specifier);
+      for (const name of names) {
+        if (module == null || !Object.hasOwn(module, name))
+          throw new SyntaxError(
+            `Module '${specifier}' does not provide an export named '${name}'.`,
+          );
+      }
+      modules.push(module);
+    }
     for (const [name, cell] of pending) this.cells.set(name, cell);
     prepared();
     const initialize = (name: string, value: unknown) => {
@@ -67,6 +80,7 @@ export class Evaluator {
     };
     return execute(this.scope, {
       importModule: this.importModule,
+      modules,
       initialize,
       binding: (name: string) => ({
         set value(value: unknown) {
