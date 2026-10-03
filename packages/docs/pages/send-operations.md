@@ -84,6 +84,27 @@ console.log(token.memo); // "Dinner"
 Memos are trimmed before persistence. Whitespace-only memos are treated as
 omitted.
 
+### Offline Sends
+
+Use `offline: true` to prepare a send from stored proofs and keysets without contacting the mint:
+
+```ts
+const prepared = await coco.ops.send.prepare({ mintUrl, amount: 100, offline: true });
+const { token } = await coco.ops.send.execute(prepared.id);
+```
+
+The mint must already be trusted and the selected proofs' keysets must be stored. Stored metadata
+may be stale, and the input keysets need not be active because this sends existing proofs without
+creating outputs. Preparation fails locally if an exact selection is unavailable; it leaves no
+reservations behind. `offline` cannot be combined with `forceSwap` or a send target such as P2PK.
+
+An offline send can be cancelled while prepared. Once executed, the token may have been shared:
+reclaiming it still requires the mint. Sending a token offline does not prove it is unspent or that
+the recipient has redeemed it. The recipient may pay input fees when redeeming the token.
+
+This option applies to the send only. It does not pause background watchers or startup recovery,
+and does not change the network behavior of sends that omit it.
+
 ### Forcing a Swap
 
 Default sends reuse ready proofs when they exactly match the requested amount. To reissue the

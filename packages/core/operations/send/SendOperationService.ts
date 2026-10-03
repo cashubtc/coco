@@ -214,7 +214,10 @@ export class SendOperationService {
    *
    * Throws if the operation is already in progress.
    */
-  async prepare(operation: InitSendOperation): Promise<PreparedSendOperation> {
+  async prepare(
+    operation: InitSendOperation,
+    options?: { offline?: boolean },
+  ): Promise<PreparedSendOperation> {
     const releaseLock = await this.acquireOperationLock(operation.id);
     let result: PrepareSendResult;
     try {
@@ -224,24 +227,33 @@ export class SendOperationService {
         if (!(await this.mintQueries.isTrustedMint(operation.mintUrl))) {
           throw new UnknownMintError(`Mint ${operation.mintUrl} is not trusted`);
         }
-        const metadata = await this.mintMetadataRefresh.refreshAndCommitIfStale(operation.mintUrl);
-        const keys = this.activeKeys(metadata, operation.unit);
-        const seed = await this.loadSeed();
-        const plan = handler.prepare({
-          operation,
-          activeKeys: keys,
-          mintInfo: metadata.mint.mintInfo,
-          outputDataCreator: this.outputDataCreator,
-        });
-        const updatedAt = Date.now();
-        result = await this.transactionRunner.run((tx) =>
-          tx.perform(prepareSend, {
-            operation: { ...operation, updatedAt },
+        if (options?.offline) {
+          const updatedAt = Date.now();
+          result = await this.transactionRunner.run((tx) =>
+            tx.perform(prepareSend, { operation: { ...operation, updatedAt }, offline: true }),
+          );
+        } else {
+          const metadata = await this.mintMetadataRefresh.refreshAndCommitIfStale(
+            operation.mintUrl,
+          );
+          const keys = this.activeKeys(metadata, operation.unit);
+          const seed = await this.loadSeed();
+          const plan = handler.prepare({
+            operation,
             activeKeys: keys,
-            seed,
-            ...plan,
-          }),
-        );
+            mintInfo: metadata.mint.mintInfo,
+            outputDataCreator: this.outputDataCreator,
+          });
+          const updatedAt = Date.now();
+          result = await this.transactionRunner.run((tx) =>
+            tx.perform(prepareSend, {
+              operation: { ...operation, updatedAt },
+              activeKeys: keys,
+              seed,
+              ...plan,
+            }),
+          );
+        }
       } finally {
         releaseMintLock();
       }

@@ -58,6 +58,13 @@ import {
 export const prepareSend = defineTransition<PrepareSendInput, PrepareSendResult>(
   async (tx, input) => {
     const operation = input.operation;
+    if (
+      input.offline &&
+      (operation.method !== 'default' ||
+        ('forceSwap' in operation.methodData && operation.methodData.forceSwap))
+    ) {
+      throw new ProofValidationError('Offline send cannot require a swap or a send target');
+    }
     const existing = await tx.sendOperations.getById(operation.id);
     if (existing) {
       throw new SendOperationConflictError(
@@ -72,7 +79,7 @@ export const prepareSend = defineTransition<PrepareSendInput, PrepareSendResult>
       unit: operation.unit,
       operationId: operation.id,
       amount: operation.amount,
-      forceSwap: input.forceSwap,
+      forceSwap: input.offline ? false : input.forceSwap,
     });
     const inputAmount = sumProofs(selected.proofs);
     const inputProofSecrets = selected.proofs.map((proof) => proof.secret);
@@ -80,6 +87,9 @@ export const prepareSend = defineTransition<PrepareSendInput, PrepareSendResult>
     let outputData: PreparedSendOperation['outputData'];
     let counterUpdate: PrepareSendResult['counter'];
     if (selected.needsSwap) {
+      if (input.offline) {
+        throw new ProofValidationError('Offline send requires proofs matching the exact amount');
+      }
       const allocation = await tx.outputs.allocate({
         mintUrl: operation.mintUrl,
         unit: operation.unit,
@@ -91,7 +101,7 @@ export const prepareSend = defineTransition<PrepareSendInput, PrepareSendResult>
       });
       outputData = allocation.outputData;
       counterUpdate = allocation.counter;
-    } else {
+    } else if (!input.offline) {
       await tx.outputs.assertActiveKeys(operation.mintUrl, operation.unit, input.activeKeys);
     }
 
