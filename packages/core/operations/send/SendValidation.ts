@@ -1,5 +1,6 @@
 import { Amount, sumProofs, type Proof, type Token } from '@cashu/cashu-ts';
 import { normalizeUnit } from '@core/amounts.ts';
+import { normalizeMintUrl } from '@core/utils.ts';
 import { ProofValidationError, SendOperationConflictError } from '@core/models/Error.ts';
 import type {
   ExecutingSendOperation,
@@ -153,4 +154,50 @@ function sameProof(left: Proof, right: Proof): boolean {
     left.witness === right.witness &&
     JSON.stringify(left.dleq) === JSON.stringify(right.dleq)
   );
+}
+
+// ============================================================================
+// Intent Identity
+// ============================================================================
+
+/**
+ * Identity-relevant fields of a send intent.
+ *
+ * Two operations that agree on these fields describe the same requested send, which lets a
+ * caller-supplied operation ID be joined when the intent matches and reported as a conflict when it
+ * does not.
+ */
+export type SendOperationIntent = Pick<
+  PreparedSendOperation,
+  'mintUrl' | 'amount' | 'unit' | 'method' | 'methodData'
+>;
+
+/** Compares two send intents, normalizing mint URL, unit, and method data. */
+export function isSameSendIntent(a: SendOperationIntent, b: SendOperationIntent): boolean {
+  return (
+    normalizeMintUrl(a.mintUrl) === normalizeMintUrl(b.mintUrl) &&
+    normalizeUnit(a.unit) === normalizeUnit(b.unit) &&
+    a.amount.equals(b.amount) &&
+    a.method === b.method &&
+    canonicalMethodData(a.methodData) === canonicalMethodData(b.methodData)
+  );
+}
+
+/**
+ * Stable string form of method data so key order and `undefined` placeholders alone do not read as
+ * a different intent. Repositories persist method data as JSON, which drops those placeholders.
+ */
+function canonicalMethodData(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalMethodData).join(',')}]`;
+  }
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, entry]) => entry !== undefined)
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+    return `{${entries
+      .map(([key, entry]) => `${JSON.stringify(key)}:${canonicalMethodData(entry)}`)
+      .join(',')}}`;
+  }
+  return value === undefined ? 'undefined' : JSON.stringify(value);
 }
