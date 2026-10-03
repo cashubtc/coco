@@ -229,7 +229,10 @@ runMintSwapPersistenceContract(
 runAuthSessionRepositoryContract({ createRepositories }, { describe, it, expect });
 
 runProofRepositoryContract({ createRepositories }, { describe, it, expect });
-runKeysetRepositoryContract({ createRepositories }, { describe, it, expect });
+runKeysetRepositoryContract(
+  { createRepositories, createSharedRepositories },
+  { describe, it, expect },
+);
 
 runMintOperationRepositoryContract({ createRepositories }, { describe, it, expect });
 

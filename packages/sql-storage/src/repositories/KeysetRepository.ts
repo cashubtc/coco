@@ -1,4 +1,7 @@
-import { reconcileKeysetKeypairs } from '@cashu/coco-core/adapter';
+import {
+  reconcileKeysetKeypairs,
+  RepositoryTransactionConflictError,
+} from '@cashu/coco-core/adapter';
 import type { KeysetRepository, Keyset } from '@cashu/coco-core/adapter';
 import type { SqlDatabase, SqlValue } from '../index.ts';
 import { getUnixTimeSeconds } from '../utils.ts';
@@ -91,35 +94,47 @@ export class SqliteKeysetRepository implements KeysetRepository {
 
   async addKeyset(keyset: Omit<Keyset, 'updatedAt'>): Promise<void> {
     const now = getUnixTimeSeconds();
-    const existing = await this.db.get<{ keypairs: string }>(
-      'SELECT keypairs FROM coco_cashu_keysets WHERE mintUrl = ? AND id = ? LIMIT 1',
-      [keyset.mintUrl, keyset.id],
-    );
-    await this.db.run(
-      `INSERT INTO coco_cashu_keysets (mintUrl, id, unit, keypairs, active, feePpk, updatedAt)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(mintUrl, id) DO UPDATE SET
-         unit=excluded.unit,
-         keypairs=excluded.keypairs,
-         active=excluded.active,
-         feePpk=excluded.feePpk,
-         updatedAt=excluded.updatedAt`,
-      [
-        keyset.mintUrl,
-        keyset.id,
-        keyset.unit,
-        JSON.stringify(
-          reconcileKeysetKeypairs(
-            keyset.mintUrl,
-            keyset.id,
-            existing?.keypairs ? JSON.parse(existing.keypairs) : undefined,
-            keyset.keypairs ?? {},
-          ),
+    // Reconcile against a snapshot, then update only if that exact snapshot is still current.
+    // This compare-and-swap closes the read/upsert race without opening a nested transaction.
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const existing = await this.db.get<{ keypairs: string }>(
+        'SELECT keypairs FROM coco_cashu_keysets WHERE mintUrl = ? AND id = ? LIMIT 1',
+        [keyset.mintUrl, keyset.id],
+      );
+      const keypairs = JSON.stringify(
+        reconcileKeysetKeypairs(
+          keyset.mintUrl,
+          keyset.id,
+          existing?.keypairs ? JSON.parse(existing.keypairs) : undefined,
+          keyset.keypairs ?? {},
         ),
-        keyset.active ? 1 : 0,
-        keyset.feePpk,
-        now,
-      ],
+      );
+      const result = await this.db.run(
+        `INSERT INTO coco_cashu_keysets (mintUrl, id, unit, keypairs, active, feePpk, updatedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(mintUrl, id) DO UPDATE SET
+           unit=excluded.unit,
+           keypairs=excluded.keypairs,
+           active=excluded.active,
+           feePpk=excluded.feePpk,
+           updatedAt=excluded.updatedAt
+         WHERE ? IS NOT NULL AND coco_cashu_keysets.keypairs = ?`,
+        [
+          keyset.mintUrl,
+          keyset.id,
+          keyset.unit,
+          keypairs,
+          keyset.active ? 1 : 0,
+          keyset.feePpk,
+          now,
+          existing?.keypairs ?? null,
+          existing?.keypairs ?? '',
+        ],
+      );
+      if (result.changes === 1) return;
+    }
+    throw new RepositoryTransactionConflictError(
+      `Keyset ${keyset.id} for mint ${keyset.mintUrl} changed concurrently`,
     );
   }
 

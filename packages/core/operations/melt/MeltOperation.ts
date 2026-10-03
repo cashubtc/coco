@@ -14,7 +14,7 @@
  * - executing: Swap/melt in progress
  * - pending: Melt started, payment inflight (only if PENDING response)
  * - finalized: melt successful, change claimed, operation finalized (can be reached directly from executing if PAID)
- * - failed: melt failed, proofs reclaimed
+ * - failed: legacy in-memory variant; current persistent adapters reject new failed rows
  * - rolling_back: Rollback in progress (reclaim swap being executed)
  * - rolled_back: Operation cancelled, proofs reclaimed
  */
@@ -182,16 +182,16 @@ export type FinalizedMeltOperation<M extends MeltMethod = MeltMethod> = Finalize
   };
 
 /**
- * Failed state - melt failed, proofs reclaimed
+ * Legacy failed state. New coordinator flows retain ambiguity or use rolled_back only after
+ * positive non-payment evidence because persistent adapters do not accept new failed rows.
  */
 export interface FailedMeltOperation extends MeltOperationBase, PreparedData {
   state: 'failed';
 }
 
 /**
- * Rolling back state - rollback in progress, reclaim swap being executed.
- * This is a transient state used to prevent race conditions with ProofStateWatcher.
- * Only used when rolling back from 'pending' state (which requires a reclaim swap).
+ * Legacy rollback-in-progress state retained for restart compatibility. New rollback settlement is
+ * applied atomically after a fresh canonical non-payment observation.
  */
 export interface RollingBackMeltOperation extends MeltOperationBase, PreparedData {
   state: 'rolling_back';
