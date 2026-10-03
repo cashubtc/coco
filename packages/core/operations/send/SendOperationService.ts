@@ -42,6 +42,7 @@ import {
   createSendOperation,
   isLegacyTokenlessP2pkSend,
   getSendProofSecrets,
+  resolveSendOperationId,
   type SendOperation,
   type InitSendOperation,
   type PreparedSendOperation,
@@ -194,7 +195,7 @@ export class SendOperationService {
       throw new ProofValidationError('Amount must be a positive number');
     }
 
-    const id = generateSubId();
+    const id = resolveSendOperationId(options.operationId);
     const operation = createSendOperation(id, mintUrl, parsed, options);
 
     this.logger?.debug('Send operation initialized in memory', {
