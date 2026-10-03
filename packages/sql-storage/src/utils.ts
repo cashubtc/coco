@@ -35,3 +35,32 @@ export function assertFieldPresent(
   }
   return value;
 }
+
+function getSqliteErrorCode(error: unknown): string {
+  if (typeof error !== 'object' || error === null) return '';
+  if ('code' in error) return String((error as { code?: unknown }).code).toUpperCase();
+  if ('errno' in error) return String((error as { errno?: unknown }).errno).toUpperCase();
+  return '';
+}
+
+export function hasSqliteTransactionConflictCode(error: unknown): boolean {
+  const code = getSqliteErrorCode(error);
+  return (
+    code === '5' ||
+    code === '6' ||
+    code.startsWith('SQLITE_BUSY') ||
+    code.startsWith('SQLITE_LOCKED')
+  );
+}
+
+export function isSqliteTransactionConflict(error: unknown): boolean {
+  if (hasSqliteTransactionConflictCode(error)) return true;
+
+  const message =
+    error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  return (
+    message.includes('database is locked') ||
+    message.includes('database table is locked') ||
+    message.includes('database is busy')
+  );
+}

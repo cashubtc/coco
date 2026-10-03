@@ -21,7 +21,7 @@ import type {
 import { IdbDb, type IdbDbOptions } from './lib/db.ts';
 import { ensureSchema } from './lib/schema.ts';
 import { IdbMintRepository } from './repositories/MintRepository.ts';
-import { IdbKeysetRepository } from './repositories/KeysetRepository.ts';
+import { IdbKeysetRepository, ScopedIdbKeysetRepository } from './repositories/KeysetRepository.ts';
 import { IdbKeyRingRepository } from './repositories/KeyRingRepository.ts';
 import { IdbCounterRepository } from './repositories/CounterRepository.ts';
 import { IdbProofRepository } from './repositories/ProofRepository.ts';
@@ -116,7 +116,7 @@ export class IndexedDbRepositories implements Repositories {
         mintRepository: new IdbMintRepository(scopedDb),
         keyRingRepository: new IdbKeyRingRepository(scopedDb),
         counterRepository: new IdbCounterRepository(scopedDb),
-        keysetRepository: new IdbKeysetRepository(scopedDb),
+        keysetRepository: new ScopedIdbKeysetRepository(scopedDb),
         proofRepository: new IdbProofRepository(scopedDb),
         meltQuoteRepository: new IdbMeltQuoteRepository(scopedDb),
         mintQuoteRepository: new IdbMintQuoteRepository(scopedDb),
