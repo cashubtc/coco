@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#111713" />
+    <title>Coco · Core playground</title>
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <div class="brand">
+          <span class="mark" aria-hidden="true">c.</span><strong>coco</strong
+          ><span class="slash">/</span><span>core playground</span>
+        </div>
+        <div class="session">
+          <span class="status-dot"></span><span id="status" role="status">Starting session…</span>
+        </div>
+      </header>
+      <main class="workspace">
+        <section class="code-pane" aria-label="Snippet editor">
+          <div class="pane-toolbar">
+            <div class="file-label"><span class="ts-icon">TS</span>snippet.ts</div>
+            <span class="source-label">WORKSPACE SOURCE</span>
+          </div>
+          <div class="editor-tools">
+            <label for="examples" class="sr-only">Load example</label>
+            <select id="examples">
+              <option value="">Load an example…</option>
+            </select>
+            <button id="run" class="primary" disabled>Run <kbd>⌘ / Ctrl ↵</kbd></button>
+          </div>
+          <div id="editor" aria-label="TypeScript editor"></div>
+          <div class="editor-footer">
+            <span id="cursor">Ln 1, Col 1</span><span>TypeScript · Monaco</span>
+          </div>
+        </section>
+        <section class="output-pane" aria-label="Execution output">
+          <div class="pane-toolbar">
+            <div class="output-tabs" role="tablist" aria-label="Output type">
+              <button id="console-tab" role="tab" aria-selected="true">
+                Console <span id="console-count">0</span></button
+              ><button id="events-tab" role="tab" aria-selected="false">
+                Events <span id="events-count">0</span>
+              </button>
+            </div>
+            <button id="clear" class="text-button">Clear</button>
+          </div>
+          <div id="output" role="tabpanel" aria-label="Console output" tabindex="0">
+            <div class="empty">
+              <span class="empty-symbol" aria-hidden="true">›_</span>
+              <h1>A fresh wallet. A blank slate.</h1>
+              <p>
+                Run a snippet to inspect its result.<br />Variables and wallet state stay here
+                between runs.
+              </p>
+              <code>coco · core · assert · console</code>
+            </div>
+          </div>
+          <div class="session-footer">
+            <div><strong>In memory</strong><span>Reset clears this session.</span></div>
+            <button id="reset">Reset state <kbd>⇧ ⌘ / Ctrl ↵</kbd></button>
+          </div>
+        </section>
+      </main>
+      <footer class="bottom-bar">
+        <span>Local source. Browser execution.</span
+        ><span>Refresh starts fresh <span class="separator">·</span> Background watchers off</span>
+      </footer>
+    </div>
+    <script type="module" src="/main.ts"></script>
+  </body>
+</html>
