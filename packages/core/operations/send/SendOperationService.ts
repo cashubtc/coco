@@ -223,7 +223,6 @@ export class SendOperationService {
     try {
       const releaseMintLock = await this.mintScopedLock.acquire(operation.mintUrl);
       try {
-        const handler = this.handlerProvider.get(operation.method);
         if (!(await this.mintQueries.isTrustedMint(operation.mintUrl))) {
           throw new UnknownMintError(`Mint ${operation.mintUrl} is not trusted`);
         }
@@ -233,6 +232,7 @@ export class SendOperationService {
             tx.perform(prepareSend, { operation: { ...operation, updatedAt }, offline: true }),
           );
         } else {
+          const handler = this.handlerProvider.get(operation.method);
           const metadata = await this.mintMetadataRefresh.refreshAndCommitIfStale(
             operation.mintUrl,
           );

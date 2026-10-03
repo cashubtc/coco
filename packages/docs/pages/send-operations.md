@@ -97,6 +97,8 @@ The mint must already be trusted and the selected proofs' keysets must be stored
 may be stale, and the input keysets need not be active because this sends existing proofs without
 creating outputs. Preparation fails locally if an exact selection is unavailable; it leaves no
 reservations behind. `offline` cannot be combined with `forceSwap` or a send target such as P2PK.
+Binary denominations use deterministic exact selection; other denominations retain the existing
+selection heuristic, which is not an exhaustive subset search.
 
 An offline send can be cancelled while prepared. Once executed, the token may have been shared:
 reclaiming it still requires the mint. Sending a token offline does not prove it is unspent or that

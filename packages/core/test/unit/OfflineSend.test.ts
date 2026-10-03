@@ -1,4 +1,4 @@
-import { Amount } from '@cashu/cashu-ts';
+import { Amount, deriveKeysetId, sumProofs } from '@cashu/cashu-ts';
 import { Database } from 'bun:sqlite';
 import { afterEach, describe, expect, it, spyOn } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -179,5 +179,85 @@ describe('offline sends through the public API', () => {
     expect(await manager.ops.send.listPrepared()).toEqual([]);
     expect((await manager.wallet.balances.byUnit()).sat?.spendable).toEqual(Amount.from(8));
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('keeps reservations exclusive across sessions and never releases an exposed token offline', async () => {
+    const repo = new MemoryRepositories();
+    await seedWallet(repo);
+    const fetch = blockNetwork();
+    const first = await start(repo);
+    const second = await start(repo);
+    const attempts = await Promise.allSettled([
+      first.ops.send.prepare({ mintUrl, amount: 8, offline: true }),
+      second.ops.send.prepare({ mintUrl, amount: 8, offline: true }),
+    ]);
+    expect(attempts.filter((attempt) => attempt.status === 'fulfilled')).toHaveLength(1);
+    const [prepared] = await first.ops.send.listPrepared();
+    expect((await second.wallet.balances.byUnit()).sat?.spendable).toEqual(Amount.zero());
+    await second.ops.send.cancel(prepared!.id);
+    const retry = await second.ops.send.prepare({ mintUrl, amount: 8, offline: true });
+    await first.ops.send.execute(retry.id);
+    expect(fetch).not.toHaveBeenCalled();
+    await expect(second.ops.send.reclaim(retry.id)).rejects.toThrow();
+    expect((await first.wallet.balances.total({ units: ['sat'] })).spendable).toEqual(
+      Amount.zero(),
+    );
+    expect((await first.ops.send.get(retry.id))?.state).toBe('pending');
+  });
+
+  it('does not suppress metadata refresh for subsequent online sends', async () => {
+    const repo = new MemoryRepositories();
+    await seedWallet(repo);
+    const fetch = blockNetwork();
+    const manager = await start(repo);
+    const prepared = await manager.ops.send.prepare({ mintUrl, amount: 8, offline: true });
+    await manager.ops.send.cancel(prepared.id);
+    expect(fetch).not.toHaveBeenCalled();
+    await expect(manager.ops.send.prepare({ mintUrl, amount: 8 })).rejects.toThrow(
+      'Failed to fetch mint',
+    );
+    expect(fetch).toHaveBeenCalled();
+    expect((await manager.wallet.balances.byUnit()).sat?.spendable).toEqual(Amount.from(8));
+  });
+
+  it("finds Sovran's exact binary amount even when randomized selection misses it", async () => {
+    const repo = new MemoryRepositories();
+    await seedWallet(repo);
+    await repo.proofRepository.deleteProofs(mintUrl, ['offline-sat']);
+    const amounts = [512, 1, 32, 32, 8, 1, 4, 1, 256, 4, 8, 512];
+    const keypairs = Object.fromEntries(amounts.map((amount) => [amount, testMintKeypairs['1']]));
+    const id = deriveKeysetId(keypairs, { unit: 'sat' });
+    await repo.keysetRepository.addKeyset({
+      mintUrl,
+      id,
+      unit: 'sat',
+      keypairs,
+      active: true,
+      feePpk: 0,
+    });
+    await repo.proofRepository.saveProofs(
+      mintUrl,
+      amounts.map((amount, index) => ({
+        mintUrl,
+        id,
+        unit: 'sat',
+        amount: Amount.from(amount),
+        secret: `selection-${index}`,
+        C: testMintKeypairs['1'],
+        state: 'ready' as const,
+      })),
+    );
+    const fetch = blockNetwork();
+    const manager = await start(repo);
+    const random = spyOn(Math, 'random').mockReturnValue(0);
+    try {
+      const prepared = await manager.ops.send.prepare({ mintUrl, amount: 1097, offline: true });
+      const { token } = await manager.ops.send.execute(prepared);
+      expect(sumProofs(token.proofs)).toEqual(Amount.from(1097));
+      expect(new Set(token.proofs.map((proof) => proof.secret)).size).toBe(token.proofs.length);
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      random.mockRestore();
+    }
   });
 });

@@ -80,6 +80,7 @@ export const prepareSend = defineTransition<PrepareSendInput, PrepareSendResult>
       operationId: operation.id,
       amount: operation.amount,
       forceSwap: input.offline ? false : input.forceSwap,
+      offline: input.offline,
     });
     const inputAmount = sumProofs(selected.proofs);
     const inputProofSecrets = selected.proofs.map((proof) => proof.secret);
