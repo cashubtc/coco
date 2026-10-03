@@ -1,6 +1,7 @@
 import ts from 'typescript';
 import path from 'node:path';
 import fs from 'node:fs';
+import { virtualTypePath } from './type-path';
 
 /** Build a virtual TypeScript filesystem directly from workspace source and its
  * reachable dependency declarations. Nothing depends on core's generated dist.
@@ -31,14 +32,7 @@ export function typeBundle(root: string) {
     ],
     options,
   );
-  const virtualPath = (filename: string) => {
-    if (filename.startsWith(`${core}/`))
-      return `node_modules/@cashu/coco-core/${path.relative(core, filename)}`;
-    const marker = filename.lastIndexOf('/node_modules/');
-    return marker >= 0
-      ? `node_modules/${filename.slice(marker + 14)}`
-      : `workspace/${path.relative(root, filename)}`;
-  };
+  const virtualPath = (filename: string) => virtualTypePath(root, filename);
   const libs: { path: string; content: string }[] = [];
   const paths: Record<string, string[]> = {
     '@cashu/coco-core': ['node_modules/@cashu/coco-core/index.ts'],
