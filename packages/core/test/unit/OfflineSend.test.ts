@@ -26,9 +26,13 @@ const disabledRuntime = {
 } satisfies Pick<CocoConfig, 'watchers' | 'processors'>;
 
 // Stored proofs stand in for earlier issuance. Assertions use the application API.
-async function seedWallet(repo: Repositories, options: { active?: boolean; unit?: string } = {}) {
+async function seedWallet(
+  repo: Repositories,
+  options: { active?: boolean; unit?: string; feePpk?: number } = {},
+) {
   const unit = options.unit ?? 'sat';
-  const id = testMintKeysetId(unit);
+  const feePpk = options.feePpk ?? 0;
+  const id = testMintKeysetId(unit, { input_fee_ppk: feePpk });
   await repo.init();
   await repo.mintRepository.addNewMint({
     mintUrl,
@@ -44,7 +48,7 @@ async function seedWallet(repo: Repositories, options: { active?: boolean; unit?
     unit,
     keypairs: testMintKeypairs,
     active: options.active ?? true,
-    feePpk: 0,
+    feePpk,
   });
   await repo.proofRepository.saveProofs(mintUrl, [
     {
@@ -181,6 +185,21 @@ describe('offline sends through the public API', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it('rejects a non-exact offline amount independently of mint swap fees', async () => {
+    const repo = new MemoryRepositories();
+    await seedWallet(repo, { feePpk: 10_000 });
+    const fetch = blockNetwork();
+    const manager = await start(repo);
+    await expect(manager.ops.send.prepare({ mintUrl, amount: 3, offline: true })).rejects.toThrow(
+      'Offline send requires proofs matching the exact amount',
+    );
+    expect(await manager.ops.send.listPrepared()).toEqual([]);
+    const prepared = await manager.ops.send.prepare({ mintUrl, amount: 8, offline: true });
+    expect(prepared.fee).toEqual(Amount.zero());
+    expect(prepared.needsSwap).toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('keeps reservations exclusive across sessions and never releases an exposed token offline', async () => {
     const repo = new MemoryRepositories();
     await seedWallet(repo);
@@ -220,7 +239,7 @@ describe('offline sends through the public API', () => {
     expect((await manager.wallet.balances.byUnit()).sat?.spendable).toEqual(Amount.from(8));
   });
 
-  it("finds Sovran's exact binary amount even when randomized selection misses it", async () => {
+  it('finds an exact binary amount even when randomized selection misses it', async () => {
     const repo = new MemoryRepositories();
     await seedWallet(repo);
     await repo.proofRepository.deleteProofs(mintUrl, ['offline-sat']);

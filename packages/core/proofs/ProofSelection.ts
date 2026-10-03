@@ -43,6 +43,10 @@ export function selectProofInputs(
     }
   }
 
+  if (operation.offline) {
+    throw new ProofValidationError('Offline send requires proofs matching the exact amount');
+  }
+
   const selected = selectProofs(available, operation.amount, keyChain, true).send;
   const fee = calculateProofFee(selected, keyChain);
   if (selected.length > 0 && sumProofs(selected).greaterThanOrEqual(operation.amount.add(fee))) {
