@@ -11,6 +11,34 @@ describe('resolveMintQuoteObservation', () => {
   const mintUrl = 'https://mint.test';
   const expiry = Math.floor(Date.now() / 1000) + 3600;
 
+  it.each([
+    [undefined, ''],
+    ['', undefined],
+  ])('ignores unlocked key representation changes from %j to %j', (local, remote) => {
+    const existing = mintQuoteFromBolt11Fixture(mintUrl, {
+      quote: 'unlocked-quote',
+      request: 'lnbc1test',
+      amount: Amount.from(10),
+      unit: 'sat',
+      expiry,
+      state: 'PAID',
+      pubkey: local,
+      updated_at: 20,
+    });
+
+    expect(resolveMintQuoteObservation(existing, { ...existing, pubkey: remote })).toEqual({
+      resolvedQuote: existing,
+      disposition: 'ignored-unchanged',
+    });
+    expect(
+      resolveMintQuoteObservation(existing, {
+        ...existing,
+        pubkey: remote,
+        remoteUpdatedAt: 21,
+      }).disposition,
+    ).toBe('accepted-freshness-only');
+  });
+
   it('treats a compatibility-only BOLT11 state transition as freshness-only', () => {
     const existing = mintQuoteFromBolt11Fixture(mintUrl, {
       quote: 'bolt11-state-change',

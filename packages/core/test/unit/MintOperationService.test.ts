@@ -14,6 +14,7 @@ import {
   type MintQuoteBolt11Response,
   type MintQuoteBolt12Response,
   type Proof,
+  type Wallet,
 } from '@cashu/cashu-ts';
 import { MintOpsApi } from '../../api/MintOpsApi';
 import { EventBus } from '../../events/EventBus';
@@ -35,6 +36,8 @@ import type {
   RecoverExecutingResult,
 } from '../../operations/mint/MintMethodHandler';
 import type { MintHandlerProvider } from '../../infra/handlers/mint';
+import { MintBolt11Handler } from '../../infra/handlers/mint/MintBolt11Handler';
+import type { KeyRingService } from '../../services/KeyRingService';
 import { getMintQuoteAvailableAmount } from '../../models/MintQuote';
 import { mintQuoteObservationFromOnchainResponse } from '../../models/MintQuoteObservationFactory';
 import {
@@ -2666,6 +2669,45 @@ describe('MintOperationService', () => {
     if (!stored || stored.state !== 'pending') {
       throw new Error('Expected pending operation to remain pending after unpaid check');
     }
+  });
+
+  it('checkPayment finalizes an unlocked paid quote with an empty remote pubkey', async () => {
+    await persistQuote();
+    const pendingOp = await service.prepare(
+      { mintUrl, method: 'bolt11', quoteId },
+      Amount.from(10),
+    );
+    const realHandler = new MintBolt11Handler({} as KeyRingService);
+    (handlerProvider.get as Mock<any>).mockReturnValue(realHandler);
+    (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValue(
+      cashuNormalizedBolt11Fixture({
+        quote: quoteId,
+        request: pendingOp.request,
+        amount: pendingOp.amount,
+        unit: pendingOp.unit,
+        expiry: pendingOp.expiry,
+        state: 'PAID',
+        pubkey: '',
+      }),
+    );
+    (walletService.getWalletWithActiveKeysetId as Mock<any>).mockResolvedValue({
+      wallet: {
+        mintProofsBolt11: mock(async () => outputProofs(pendingOp)),
+      } as unknown as Wallet,
+      keysetId,
+    });
+    const failed = mock(() => {});
+    eventBus.on('mint-op:failed', failed);
+
+    const result = await new MintOpsApi(service).checkPayment(pendingOp.id);
+
+    expect(result.category).toBe('ready');
+    expect((await operationRepo.getById(pendingOp.id))?.state).toBe('finalized');
+    expect(await proofRepo.getProofBySecret(mintUrl, 'out-1')).toMatchObject({
+      state: 'ready',
+      createdByOperationId: pendingOp.id,
+    });
+    expect(failed).not.toHaveBeenCalled();
   });
 
   it('classifies a fully issued canonical quote as completed', async () => {

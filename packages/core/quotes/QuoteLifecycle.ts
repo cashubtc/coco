@@ -61,6 +61,7 @@ import type {
   MintQuotePollingResult,
 } from './MintQuotePolling.ts';
 import { resolveMintQuoteObservation } from './MintQuoteObservation.ts';
+import { hasSameMintQuoteOwnership } from './MintQuoteOwnership.ts';
 import { assessMintQuoteClaimability } from '../models/MintQuoteClaimability.ts';
 
 const BUILT_IN_MINT_METHODS = new Set<MintMethod>(['bolt11', 'bolt12', 'onchain']);
@@ -179,7 +180,7 @@ function areMintQuotePollingSnapshotsEqual(
     normalizeUnit(left.unit) !== normalizeUnit(right.unit) ||
     left.expiry !== right.expiry ||
     left.updated_at !== right.updated_at ||
-    left.pubkey !== right.pubkey
+    !hasSameMintQuoteOwnership(method, left.pubkey, right.pubkey)
   ) {
     return false;
   }
@@ -866,7 +867,7 @@ export class QuoteLifecycle {
       snapshot.quote !== quoteId ||
       snapshot.request !== existing.request ||
       normalizeUnit(snapshot.unit) !== existing.unit ||
-      (snapshot.pubkey ?? undefined) !== (existing.pubkey ?? undefined)
+      !hasSameMintQuoteOwnership(method, snapshot.pubkey, existing.pubkey)
     ) {
       throw new MintQuoteValidationError(
         `Mint quote ${quoteId} batch observation conflicts with canonical identity fields`,

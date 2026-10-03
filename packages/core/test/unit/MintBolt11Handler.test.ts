@@ -426,24 +426,51 @@ describe('MintBolt11Handler', () => {
       expect(proofService.saveProofs).not.toHaveBeenCalled();
     });
 
-    it('leaves NUT-20 ownership contradictions unresolved for ambiguity-preserving recovery', async () => {
-      (mintAdapter.checkMintQuote as Mock<any>).mockImplementation(async () => ({
-        ...quote,
-        pubkey: `02${'22'.repeat(32)}`,
-      }));
+    it.each([
+      ['', undefined],
+      [undefined, ''],
+      ['', ''],
+    ])('recovers unlocked ownership for remote %j and local %j', async (remote, local) => {
+      const snapshot = { ...quote, pubkey: remote };
+      (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce(snapshot);
+      (wallet.mintProofsBolt11 as Mock<any>).mockResolvedValueOnce([]);
+      const ctx = buildRecoverContext();
+      ctx.operation = { ...ctx.operation, pubkey: local };
 
-      const result = await handler.recoverExecuting({
-        ...buildRecoverContext(),
-        operation: { ...executingOperation, pubkey: quotePubkey },
-      });
+      const result = await handler.recoverExecuting(ctx);
 
-      expect(result).toEqual({
-        status: 'UNRESOLVED',
-        error: 'Recovered BOLT11 mint operation has mismatched NUT-20 quote ownership',
-      });
-      expect(wallet.mintProofsBolt11).not.toHaveBeenCalled();
-      expect(proofService.recoverProofsFromOutputData).not.toHaveBeenCalled();
+      expect(result).toEqual({ status: 'ISSUED', proofs: [] });
+      expect(ctx.recordQuoteSnapshot).toHaveBeenCalledWith(snapshot);
+      expect(wallet.mintProofsBolt11).toHaveBeenCalledWith(
+        ctx.operation.amount,
+        quoteId,
+        { keysetId },
+        { type: 'custom', data: expect.any(Array) },
+      );
+      expect(keyRingService.getMintQuoteKeyPair).not.toHaveBeenCalled();
     });
+
+    it.each(['', undefined, `02${'22'.repeat(32)}`])(
+      'leaves remote ownership %j unresolved for a locked executing operation',
+      async (pubkey) => {
+        (mintAdapter.checkMintQuote as Mock<any>).mockImplementation(async () => ({
+          ...quote,
+          pubkey,
+        }));
+
+        const result = await handler.recoverExecuting({
+          ...buildRecoverContext(),
+          operation: { ...executingOperation, pubkey: quotePubkey },
+        });
+
+        expect(result).toEqual({
+          status: 'UNRESOLVED',
+          error: 'Recovered BOLT11 mint operation has mismatched NUT-20 quote ownership',
+        });
+        expect(wallet.mintProofsBolt11).not.toHaveBeenCalled();
+        expect(proofService.recoverProofsFromOutputData).not.toHaveBeenCalled();
+      },
+    );
 
     it('preserves quote context in recovery errors and logs', async () => {
       (mintAdapter.checkMintQuote as Mock<any>).mockRejectedValueOnce(
@@ -466,6 +493,38 @@ describe('MintBolt11Handler', () => {
   });
 
   describe('checkPending', () => {
+    it.each([
+      ['', undefined],
+      [undefined, ''],
+      ['', ''],
+      [undefined, undefined],
+      [quotePubkey, quotePubkey],
+    ])('accepts matching ownership for remote %j and local %j', async (remote, local) => {
+      const snapshot = { ...quote, pubkey: remote };
+      (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce(snapshot);
+      const ctx = buildPendingContext();
+      ctx.operation = { ...ctx.operation, pubkey: local };
+
+      const result = await handler.checkPending(ctx);
+
+      expect(result.validationFailure).toBeUndefined();
+      expect(result.quoteSnapshot).toEqual(snapshot);
+    });
+
+    it.each(['', undefined, `03${'22'.repeat(32)}`])(
+      'rejects remote ownership %j for a locked pending operation',
+      async (pubkey) => {
+        (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce({ ...quote, pubkey });
+        const ctx = buildPendingContext();
+        ctx.operation = { ...ctx.operation, pubkey: quotePubkey };
+
+        const result = await handler.checkPending(ctx);
+
+        expect(result.quoteSnapshot).toBeUndefined();
+        expect(result.validationFailure).toMatchObject({ code: 'invalid_quote', retryable: false });
+      },
+    );
+
     it.each([
       ['quote ID', { quote: 'other-quote' }],
       ['request', { request: 'lnbc1other' }],
