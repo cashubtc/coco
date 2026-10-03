@@ -111,10 +111,7 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
       };
     }
 
-    if (
-      (ctx.operation.pubkey !== undefined || remoteQuote.pubkey !== undefined) &&
-      remoteQuote.pubkey !== ctx.operation.pubkey
-    ) {
+    if ((remoteQuote.pubkey || undefined) !== (ctx.operation.pubkey || undefined)) {
       return {
         status: 'UNRESOLVED',
         error: 'Recovered BOLT11 mint operation has mismatched NUT-20 quote ownership',
@@ -257,7 +254,8 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
         `Polled BOLT11 mint quote ${quote.quote} conflicts with pending operation amount`,
       );
     }
-    if ((quote.pubkey ?? undefined) !== (operation.pubkey ?? undefined)) {
+    // Some mints report unlocked quotes with an empty public key.
+    if ((quote.pubkey || undefined) !== (operation.pubkey || undefined)) {
       throw new MintQuoteValidationError(
         `Polled BOLT11 mint quote ${quote.quote} conflicts with pending operation ownership`,
       );
