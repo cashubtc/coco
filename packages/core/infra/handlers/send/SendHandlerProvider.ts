@@ -4,29 +4,12 @@ import type {
   SendMethodHandlerRegistry,
 } from '../../../operations/send/SendMethodHandler';
 
-/**
- * Runtime registry for send method handlers.
- * Keeps wiring concerns out of the core send domain.
- */
+/** Lookup for send method handlers fixed at construction. */
 export class SendHandlerProvider {
-  private registry: Partial<Record<SendMethod, SendMethodHandler>> = {};
+  private readonly registry: Readonly<Partial<SendMethodHandlerRegistry>>;
 
-  constructor(initialHandlers?: Partial<SendMethodHandlerRegistry>) {
-    if (initialHandlers) {
-      this.registerMany(initialHandlers);
-    }
-  }
-
-  register<M extends SendMethod>(method: M, handler: SendMethodHandler<M>): void {
-    this.registry[method] = handler;
-  }
-
-  registerMany(handlers: Partial<SendMethodHandlerRegistry>): void {
-    for (const [method, handler] of Object.entries(handlers)) {
-      if (handler) {
-        this.registry[method as SendMethod] = handler;
-      }
-    }
+  constructor(initialHandlers: Partial<SendMethodHandlerRegistry> = {}) {
+    this.registry = Object.freeze({ ...initialHandlers });
   }
 
   get<M extends SendMethod>(method: M): SendMethodHandler<M> {
@@ -35,9 +18,5 @@ export class SendHandlerProvider {
       throw new Error(`No send handler registered for method ${method}`);
     }
     return handler as SendMethodHandler<M>;
-  }
-
-  getAll(): SendMethodHandlerRegistry {
-    return this.registry as SendMethodHandlerRegistry;
   }
 }
