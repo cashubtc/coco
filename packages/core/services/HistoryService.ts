@@ -84,28 +84,6 @@ export class HistoryService {
     return this.historyRepository.getHistoryEntryById(id);
   }
 
-  /**
-   * Get the operationId for a send history entry.
-   * @throws Error if entry not found, is not a send entry, or has no operation id
-   */
-  async getOperationIdFromHistoryEntry(historyId: string): Promise<string> {
-    const entry = await this.historyRepository.getHistoryEntryById(historyId);
-
-    if (!entry) {
-      throw new Error(`History entry ${historyId} not found`);
-    }
-
-    if (entry.type !== 'send') {
-      throw new Error(`History entry ${historyId} is not a send entry`);
-    }
-
-    if (!entry.operationId) {
-      throw new Error(`History entry ${historyId} is not backed by an operation`);
-    }
-
-    return entry.operationId;
-  }
-
   private async emitProjectedSend(mintUrl: string, operation: SendOperation): Promise<void> {
     await this.emitProjectedEntry(mintUrl, projectSendOperation(operation), 'send', operation.id);
   }
