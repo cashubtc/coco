@@ -31,12 +31,12 @@ export class Evaluator {
     });
   }
   async execute(source: string, prepared: () => void = () => {}): Promise<unknown> {
-    const { code, declarations } = compile(source);
+    const { code, declarations, internal } = compile(source);
     // Parse the executable body before adding any bindings, including syntax checks
     // that TypeScript's transpile-only API does not perform.
     const execute = new Function(
       '__cocoPlaygroundScope',
-      '__cocoPlayground',
+      internal,
       `with (__cocoPlaygroundScope) { return (async function() { "use strict";\n${code}\n}).call(undefined); }`,
     );
     const pending = new Map<string, Cell>();

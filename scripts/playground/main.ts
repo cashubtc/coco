@@ -277,6 +277,10 @@ window.addEventListener('pagehide', () => {
   editor.dispose();
   model.dispose();
 });
+window.addEventListener('pageshow', (event) => {
+  // Back/forward cache restores the page after pagehide disposed its session.
+  if (event.persisted) window.location.reload();
+});
 // Browser tests inspect Monaco and set buffers without relying on pixel coordinates.
 if (import.meta.env.MODE === 'test')
   Object.assign(window, { __playground: { editor, monaco, runtime } });

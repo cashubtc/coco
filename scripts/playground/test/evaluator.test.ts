@@ -4,6 +4,70 @@ import { format } from '../format';
 const evaluator = () =>
   new Evaluator({ answer: 42 }, async (name) => ({ default: name, answer: 42 }));
 describe('persistent browser evaluator', () => {
+  test('invalid declarations fail before any session mutation', async () => {
+    for (const source of [
+      'const missing;',
+      'let value = 1; { let inner = 2; var inner = 3; }',
+      'let eval = 1;',
+      'let arguments = 1;',
+    ]) {
+      const session = evaluator();
+      await session.execute('let untouched = 0;');
+      let prepared = false;
+      await expect(
+        session.execute(`untouched++; ${source}`, () => {
+          prepared = true;
+        }),
+      ).rejects.toBeInstanceOf(SyntaxError);
+      expect(prepared).toBe(false);
+      expect(await session.execute('untouched')).toBe(0);
+    }
+  });
+  test('nested class static blocks keep their var declarations local', async () => {
+    const session = evaluator();
+    expect(
+      await session.execute(`
+      let result;
+      { class Box { static { var privateValue = 7; this.value = privateValue; } }
+        result = Box.value; }
+      [result, typeof privateValue];
+    `),
+    ).toEqual([7, 'undefined']);
+    expect(
+      await session.execute(`
+      (class { static { var privateValue = 8; this.value = privateValue; } }).value;
+    `),
+    ).toBe(8);
+  });
+  test('catch parameters receive var initializers without changing the outer binding', async () => {
+    const session = evaluator();
+    expect(
+      await session.execute(`
+      var caught = 1; let inside;
+      try { throw 2; } catch (caught) { var caught = 3; inside = caught; }
+      [caught, inside];
+    `),
+    ).toEqual([1, 3]);
+  });
+  test('static imports are initialized before the snippet body', async () => {
+    const session = evaluator();
+    expect(
+      await session.execute(`
+      const first = imported;
+      import { answer as imported } from 'example';
+      first;
+    `),
+    ).toBe(42);
+  });
+  test('nested bindings cannot shadow the compiler helper', async () => {
+    const session = evaluator();
+    expect(
+      await session.execute(`
+      async function load(__cocoPlayground) { return (await import('example')).answer; }
+      await load(null);
+    `),
+    ).toBe(42);
+  });
   test('rerunning a buffer replaces its declarations without clearing other session state', async () => {
     const session = evaluator();
     await session.execute('let runs = 0; const unrelated = { kept: true };');
@@ -56,8 +120,8 @@ describe('persistent browser evaluator', () => {
     await session.execute('const fixed = 3; var repeat = 1;');
     await expect(session.execute('fixed = 4')).rejects.toThrow('constant');
     expect(await session.execute('let fixed = 5; fixed++; fixed')).toBe(6);
-    await expect(session.execute('let duplicate = 1; const duplicate = 2;')).rejects.toThrow(
-      'already been declared',
+    await expect(session.execute('let duplicate = 1; const duplicate = 2;')).rejects.toBeInstanceOf(
+      SyntaxError,
     );
     expect(await session.execute('const duplicate = 3; duplicate')).toBe(3);
     await expect(session.execute('let later = later')).rejects.toThrow('before initialization');

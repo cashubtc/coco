@@ -51,6 +51,8 @@ Other variables and wallet data remain available. Earlier closures read the late
 session bindings. `const` still cannot be reassigned with `=`, and duplicate lexical
 declarations within the same snippet remain errors.
 Runtime failures retain mutations made before the failure, as a REPL does.
+Invalid JavaScript declarations are rejected before any code executes. Static
+imports are available throughout the snippet, including above the import line.
 Write snippets without `export` declarations.
 
 Static and dynamic imports support `@cashu/coco-core`,
@@ -77,8 +79,10 @@ modules, timers, wallet data, and completion history, even during infinite loops
 or pending promises. The editor and output remain for reference.
 
 Refreshing or closing the page also discards the session. No wallet state or
-snippet history is saved to disk or browser storage. Only one snippet executes
-at a time. Output is bounded to 64,000 characters per execution, and the UI
+snippet history is saved to disk or browser storage. Returning to the page through
+the browser's back/forward cache starts a fresh session. Exceptions in timers and
+unhandled promise rejections appear in Console without discarding the session.
+Only one snippet executes at a time. Output is bounded to 64,000 characters per execution, and the UI
 retains at most 500 entries and 500,000 characters.
 
 Background Watchers and processors start disabled. Explicit APIs can contact

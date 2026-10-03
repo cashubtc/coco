@@ -123,6 +123,12 @@ async function start() {
     event.preventDefault();
     output('error', errorText(event.reason));
   });
+  worker.addEventListener('error', (event) => {
+    // A timer/listener exception belongs to the snippet, not to worker startup.
+    // Keep the session usable just as for an unhandled promise rejection.
+    event.preventDefault();
+    output('error', errorText(event.error ?? event.message));
+  });
   send({ type: 'ready' });
 }
 start().catch((error) => send({ type: 'fatal', error: errorText(error) }));

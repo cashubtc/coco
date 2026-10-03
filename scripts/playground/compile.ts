@@ -1,13 +1,25 @@
 import ts from 'typescript';
 
 export type Declaration = { name: string; kind: 'let' | 'const' | 'var' };
-const internal = '__cocoPlayground';
+const reserved = '__cocoPlayground';
 
 /** Erase types, route imports, then move session declarations into persistent cells.
  * Closures resolve the cells through the surrounding scope rather than copied locals.
  */
-export function compile(source: string): { code: string; declarations: Declaration[] } {
+export function compile(source: string): {
+  code: string;
+  declarations: Declaration[];
+  internal: string;
+} {
   const parsed = ts.createSourceFile('snippet.ts', source, ts.ScriptTarget.Latest, true);
+  const identifiers = new Set<string>();
+  const collectIdentifiers = (node: ts.Node) => {
+    if (ts.isIdentifier(node)) identifiers.add(node.text);
+    ts.forEachChild(node, collectIdentifiers);
+  };
+  collectIdentifiers(parsed);
+  let internal = reserved;
+  while (identifiers.has(internal)) internal += '_';
   for (const statement of parsed.statements) {
     if (
       ts.isExportDeclaration(statement) ||
@@ -88,7 +100,16 @@ export function compile(source: string): { code: string; declarations: Declarati
             }
             return ts.visitEachChild(node, visit, context);
           };
-          return (file) => ts.visitNode(file, visit) as ts.SourceFile;
+          // ES imports are available throughout the module, even above their declaration.
+          return (file) =>
+            ts.visitEachChild(
+              f.updateSourceFile(file, [
+                ...file.statements.filter(ts.isImportDeclaration),
+                ...file.statements.filter((statement) => !ts.isImportDeclaration(statement)),
+              ]),
+              visit,
+              context,
+            );
         },
       ],
     },
@@ -107,10 +128,19 @@ export function compile(source: string): { code: string; declarations: Declarati
     ts.ScriptKind.JS,
   );
   const declarations: Declaration[] = [];
+  // Validate before rewriting declarations: rewriting can otherwise hide missing
+  // const initializers, invalid strict-mode names, and block/var collisions.
+  const body = ts.createPrinter().printFile(
+    ts.factory.updateSourceFile(
+      file,
+      file.statements.filter((statement) => !ts.isExportDeclaration(statement)),
+    ),
+  );
+  new Function(`return async function() { "use strict";\n${body}\n};`);
   const collect = (name: ts.BindingName, kind: Declaration['kind']) => {
     if (ts.isIdentifier(name)) {
-      if (name.text.startsWith(internal))
-        throw new SyntaxError(`Names beginning with ${internal} are reserved.`);
+      if (name.text.startsWith(reserved))
+        throw new SyntaxError(`Names beginning with ${reserved} are reserved.`);
       declarations.push({ name: name.text, kind });
     } else
       for (const element of name.elements)
@@ -140,6 +170,7 @@ export function compile(source: string): { code: string; declarations: Declarati
   const transformed = ts.transform(file, [
     (context) => {
       const f = context.factory;
+      const catchBindings = new Set<string>();
       const helper = (method: string, args: ts.Expression[]) =>
         f.createCallExpression(
           f.createPropertyAccessExpression(f.createIdentifier(internal), method),
@@ -147,6 +178,9 @@ export function compile(source: string): { code: string; declarations: Declarati
           args,
         );
       const target = (name: ts.BindingName): ts.Expression => {
+        // A var declaration in a catch body is hoisted, but its initializer
+        // assigns the catch parameter when the names coincide.
+        if (ts.isIdentifier(name) && catchBindings.has(name.text)) return name;
         if (ts.isIdentifier(name))
           return f.createPropertyAccessExpression(
             helper('binding', [f.createStringLiteral(name.text)]),
@@ -194,6 +228,18 @@ export function compile(source: string): { code: string; declarations: Declarati
           ];
         });
       const visit: ts.Visitor = (node) => {
+        if (
+          ts.isCatchClause(node) &&
+          node.variableDeclaration &&
+          ts.isIdentifier(node.variableDeclaration.name)
+        ) {
+          const name = node.variableDeclaration.name.text;
+          const alreadyBound = catchBindings.has(name);
+          catchBindings.add(name);
+          const visited = ts.visitEachChild(node, visit, context);
+          if (!alreadyBound) catchBindings.delete(name);
+          return visited;
+        }
         if (ts.isFunctionLike(node)) {
           if (node.parent === file && ts.isFunctionDeclaration(node) && node.name) {
             hoisted.push(
@@ -230,6 +276,7 @@ export function compile(source: string): { code: string; declarations: Declarati
             ]),
           );
         }
+        if (ts.isClassDeclaration(node) || ts.isClassExpression(node)) return node;
         if (
           ts.isVariableStatement(node) &&
           (!(node.declarationList.flags & ts.NodeFlags.BlockScoped) || node.parent === file)
@@ -289,5 +336,5 @@ export function compile(source: string): { code: string; declarations: Declarati
   ]);
   const code = ts.createPrinter().printFile(transformed.transformed[0]!);
   transformed.dispose();
-  return { code, declarations };
+  return { code, declarations, internal };
 }

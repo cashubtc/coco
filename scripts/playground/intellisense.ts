@@ -16,6 +16,7 @@ import { SessionHistory } from './history';
 export function intellisense(model: monaco.editor.ITextModel) {
   typescriptDefaults.setCompilerOptions({
     target: ScriptTarget.ESNext,
+    lib: ['esnext', 'webworker'],
     module: ModuleKind.ESNext,
     moduleResolution: ModuleResolutionKind.NodeJs,
     strict: true,
