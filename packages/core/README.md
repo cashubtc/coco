@@ -297,6 +297,14 @@ those details are derived from canonical quote storage.
 
 ### AuthApi
 
+`AuthApi` is a structural type for `manager.auth`, implemented by the session's
+existing authentication module. Import it with `import type { AuthApi } from
+'@cashu/coco-core'`. The runtime `AuthApi` constructor has been removed; replace
+`new AuthApi(authService)` with `manager.auth` for application usage, or assign an
+existing implementation to an `AuthApi`-typed variable. Code that subclasses
+`AuthApi` should implement the interface instead. Its eight methods keep their
+existing parameters, return values, and error behavior.
+
 - `startDeviceAuth(mintUrl: string)`
 - `login(mintUrl, tokens): Promise<AuthSession>`
 - `restore(mintUrl): Promise<boolean>`
