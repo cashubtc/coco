@@ -79,7 +79,7 @@ export class MintAdapter {
    *
    * Takes the `/v1/keysets` entry rather than a bare id because a keyset id commits to its keys
    * (NUT-02) and a v2 id also commits to `unit`, `input_fee_ppk` and `final_expiry`. `/v1/keys`
-   * omits `final_expiry`, so only the advertised entry can derive the id the keys must match.
+   * may omit `final_expiry`, so derivation uses the advertised entry's metadata.
    * `Keyset.fromMintApi` reconciles the two responses and `verify` derives the id from the keys,
    * so keys that contradict or do not derive the advertised keyset are rejected.
    */
@@ -159,6 +159,7 @@ export class MintAdapter {
             unit: keyset.unit,
             active: keyset.active,
             feePpk: keyset.input_fee_ppk || 0,
+            finalExpiry: keyset.final_expiry ?? undefined,
             keypairs,
           };
         }),

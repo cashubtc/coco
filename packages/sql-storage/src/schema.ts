@@ -1566,6 +1566,10 @@ const MIGRATIONS: readonly Migration[] = [
         ON coco_cashu_mint_swap_operations(state, nextAttemptAt, createdAt, id);
     `,
   },
+  {
+    id: '043_keyset_final_expiry',
+    sql: `ALTER TABLE coco_cashu_keysets ADD COLUMN finalExpiry INTEGER`,
+  },
 ];
 
 // Export for testing

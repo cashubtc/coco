@@ -281,6 +281,10 @@ those details are derived from canonical quote storage.
 - `trustMint(mintUrl: string): Promise<void>`
 - `untrustMint(mintUrl: string): Promise<void>`
 
+Keyset metadata keeps the mint's optional `finalExpiry` (Unix seconds). A V2 keyset ID commits
+to it, so a Wallet rebuilt from stored keysets that dropped it fails NUT-02 verification and
+loses the keyset. Storage adapters must round-trip the field.
+
 ### WalletApi
 
 - `receive(token: Token | string): Promise<void>`

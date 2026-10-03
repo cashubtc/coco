@@ -60,12 +60,7 @@ export class RepositoryScopedMintMetadata implements ScopedMintMetadata {
       };
     }
     for (const keyset of observation.keysets) {
-      const existing = await this.keysets.getKeysetById(observation.mintUrl, keyset.id);
-      if (existing) {
-        await this.keysets.updateKeyset(keyset);
-      } else {
-        await this.keysets.addKeyset(keyset);
-      }
+      await this.keysets.addKeyset(keyset);
     }
     const mint = {
       ...(current ?? {

@@ -198,6 +198,7 @@ export class WalletService {
       unit: this.normalizeKeysetUnit(keyset.unit),
       active: keyset.active,
       input_fee_ppk: keyset.feePpk,
+      final_expiry: keyset.finalExpiry,
       keys: keyset.keypairs as Keys,
     }));
 
