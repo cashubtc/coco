@@ -30,7 +30,7 @@ domain/design documents. [CONTRIBUTING](../../../CONTRIBUTING.md#style-guide) al
 type-only imports, restrained use of `any`, JSDoc, early validation, domain errors, preserved causes,
 structured logging and URL normalization. Its workflows and release guidance should remain there.
 
-[CONTEXT-MAP](../../../CONTEXT-MAP.md) and [core CONTEXT](../../../packages/core/CONTEXT.md) own domain
+[GLOSSARY-MAP](../../../GLOSSARY-MAP.md) and [core glossary](../../../packages/core/GLOSSARY.md) own domain
 language. [TRANSACTION_DESIGN](../../../TRANSACTION_DESIGN.md) and
 [ADR-0011](../../../packages/core/docs/adr/0011-use-domain-transaction-gateways.md) own transaction
 authority, composition, naming and review steps. ADR-0011's filename retains “gateways,” but its current

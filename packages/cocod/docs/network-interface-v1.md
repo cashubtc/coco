@@ -32,9 +32,9 @@ Normative requirements use **MUST**, **MUST NOT**, **SHOULD**, and **MAY**.
 
 ## Domain language
 
-The interface uses the [Coco Cashu](../../core/CONTEXT.md) and
-[Cocod Host](../CONTEXT.md) glossaries routed by the repository's
-[context map](../../../CONTEXT-MAP.md).
+The interface uses the [Coco Cashu](../../core/GLOSSARY.md) and
+[Cocod Host](../GLOSSARY.md) glossaries routed by the repository's
+[glossary map](../../../GLOSSARY-MAP.md).
 
 **Wallet** is the durable, seed-rooted Cashu holding context. A Wallet continues to exist when cocod
 is stopped or its seed is locked.
