@@ -839,7 +839,7 @@ describe('initializeCoco', () => {
       secret,
       mintUrl: 'https://mint.test',
       unit: 'sat',
-      state: 'ready',
+      state: 'inflight',
       usedByOperationId: operationId,
     };
   }

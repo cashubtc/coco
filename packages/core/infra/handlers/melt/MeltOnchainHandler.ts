@@ -1,13 +1,9 @@
-import type { Amount, MeltQuoteOnchainResponse, OutputDataLike, Proof } from '@cashu/cashu-ts';
+import type { MeltQuoteOnchainResponse, OutputDataLike, Proof } from '@cashu/cashu-ts';
 import type {
   CreateMeltQuoteContext,
-  BasePrepareContext,
-  ExecuteContext,
+  ExecuteMeltContext,
   FetchRemoteMeltQuoteContext,
-  FinalizeContext,
-  FinalizeResult,
-  PendingContext,
-  RecoverExecutingContext,
+  MeltMethodFinalizedData,
 } from '@core/operations/melt';
 import { BaseQuoteMeltHandler, type QuoteMeltResponse } from './BaseQuoteMeltHandler.ts';
 
@@ -27,7 +23,7 @@ export class MeltOnchainHandler extends BaseQuoteMeltHandler<'onchain'> {
   }
 
   protected executeMelt(
-    ctx: ExecuteContext<'onchain'>,
+    ctx: ExecuteMeltContext<'onchain'>,
     proofsToMelt: Proof[],
     changeOutputs: OutputDataLike[],
     quoteId: string,
@@ -48,38 +44,9 @@ export class MeltOnchainHandler extends BaseQuoteMeltHandler<'onchain'> {
     );
   }
 
-  protected checkMeltQuote(
-    ctx: FinalizeContext<'onchain'> | RecoverExecutingContext<'onchain'>,
-  ): Promise<QuoteMeltResponse<'onchain'>> {
-    return ctx.mintAdapter.checkMeltQuoteOnchain(ctx.operation.mintUrl, ctx.operation.quoteId);
-  }
-
-  protected checkMeltQuoteState(
-    ctx: PendingContext<'onchain'> | RecoverExecutingContext<'onchain'>,
-  ): Promise<MeltQuoteOnchainResponse['state']> {
-    return ctx.mintAdapter.checkMeltQuoteOnchainState(ctx.operation.mintUrl, ctx.operation.quoteId);
-  }
-
-  protected getFeeReserveForQuote(
-    quote: MeltQuoteOnchainResponse,
-    operation: BasePrepareContext<'onchain'>['operation'],
-  ): Amount {
-    const feeIndex = operation.methodData.feeIndex;
-    if (feeIndex === undefined) {
-      throw new Error(`Onchain melt operation ${operation.id} does not include feeIndex`);
-    }
-
-    const feeOption = quote.fee_options.find((option) => option.fee_index === feeIndex);
-    if (!feeOption) {
-      throw new Error(`Onchain melt quote ${quote.quote} does not include fee option ${feeIndex}`);
-    }
-
-    return feeOption.fee_reserve;
-  }
-
   protected buildFinalizedData(
     response: QuoteMeltResponse<'onchain'>,
-  ): FinalizeResult<'onchain'>['finalizedData'] {
+  ): MeltMethodFinalizedData<'onchain'> | undefined {
     return response.outpoint == null ? undefined : { outpoint: response.outpoint };
   }
 }

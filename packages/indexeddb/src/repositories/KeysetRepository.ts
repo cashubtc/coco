@@ -46,53 +46,54 @@ export class IdbKeysetRepository implements KeysetRepository {
   }
 
   async updateKeyset(keyset: Omit<Keyset, 'keypairs' | 'updatedAt'>): Promise<void> {
-    const existing = (await (this.db as any)
-      .table('coco_cashu_keysets')
-      .get([keyset.mintUrl, keyset.id])) as KeysetRow | undefined;
-    const now = Math.floor(Date.now() / 1000);
-    if (!existing) {
-      await (this.db as any).table('coco_cashu_keysets').put({
-        mintUrl: keyset.mintUrl,
-        id: keyset.id,
-        unit: keyset.unit,
-        keypairs: JSON.stringify({}),
-        active: keyset.active ? 1 : 0,
-        feePpk: keyset.feePpk,
-        updatedAt: now,
-      } satisfies KeysetRow);
-      return;
-    }
-    await (this.db as any).table('coco_cashu_keysets').put({
-      ...existing,
-      unit: keyset.unit,
-      active: keyset.active ? 1 : 0,
-      feePpk: keyset.feePpk,
-      updatedAt: now,
-    } as KeysetRow);
+    await this.db.runTransaction('rw', ['coco_cashu_keysets'], async (tx) => {
+      const table = tx.table('coco_cashu_keysets');
+      const existing = (await table.get([keyset.mintUrl, keyset.id])) as KeysetRow | undefined;
+      const now = Math.floor(Date.now() / 1000);
+      await table.put(
+        existing
+          ? ({
+              ...existing,
+              unit: keyset.unit,
+              active: keyset.active ? 1 : 0,
+              feePpk: keyset.feePpk,
+              updatedAt: now,
+            } satisfies KeysetRow)
+          : ({
+              mintUrl: keyset.mintUrl,
+              id: keyset.id,
+              unit: keyset.unit,
+              keypairs: JSON.stringify({}),
+              active: keyset.active ? 1 : 0,
+              feePpk: keyset.feePpk,
+              updatedAt: now,
+            } satisfies KeysetRow),
+      );
+    });
   }
 
   async addKeyset(keyset: Omit<Keyset, 'updatedAt'>): Promise<void> {
-    const now = Math.floor(Date.now() / 1000);
-    const existing = (await (this.db as any)
-      .table('coco_cashu_keysets')
-      .get([keyset.mintUrl, keyset.id])) as KeysetRow | undefined;
-    const row: KeysetRow = {
-      mintUrl: keyset.mintUrl,
-      id: keyset.id,
-      unit: keyset.unit,
-      keypairs: JSON.stringify(
-        reconcileKeysetKeypairs(
-          keyset.mintUrl,
-          keyset.id,
-          existing?.keypairs ? JSON.parse(existing.keypairs) : undefined,
-          keyset.keypairs ?? {},
+    await this.db.runTransaction('rw', ['coco_cashu_keysets'], async (tx) => {
+      const table = tx.table('coco_cashu_keysets');
+      const existing = (await table.get([keyset.mintUrl, keyset.id])) as KeysetRow | undefined;
+      const row: KeysetRow = {
+        mintUrl: keyset.mintUrl,
+        id: keyset.id,
+        unit: keyset.unit,
+        keypairs: JSON.stringify(
+          reconcileKeysetKeypairs(
+            keyset.mintUrl,
+            keyset.id,
+            existing?.keypairs ? JSON.parse(existing.keypairs) : undefined,
+            keyset.keypairs ?? {},
+          ),
         ),
-      ),
-      active: keyset.active ? 1 : 0,
-      feePpk: keyset.feePpk,
-      updatedAt: now,
-    };
-    await (this.db as any).table('coco_cashu_keysets').put(row);
+        active: keyset.active ? 1 : 0,
+        feePpk: keyset.feePpk,
+        updatedAt: Math.floor(Date.now() / 1000),
+      };
+      await table.put(row);
+    });
   }
 
   async deleteKeyset(mintUrl: string, keysetId: string): Promise<void> {

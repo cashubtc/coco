@@ -17,7 +17,7 @@ import {
   MintQuoteValidationError,
   NetworkError,
 } from '../../models/Error.ts';
-import { type MintQuote } from '../../models/MintQuote.ts';
+import { mintQuoteToMethodSnapshot, type MintQuote } from '../../models/MintQuote.ts';
 import {
   cashuNormalizedBolt11Fixture,
   mintQuoteFromBolt11Fixture as mintQuoteFromBolt11Response,
@@ -129,7 +129,7 @@ describe('QuoteLifecycle mint quote polling', () => {
     });
   });
 
-  async function persistBolt11Quote(quoteId: string): Promise<void> {
+  async function persistBolt11Quote(quoteId: string, pubkey?: string): Promise<void> {
     await mintQuoteRepository.upsertMintQuote(
       mintQuoteFromBolt11Response(mintUrl, {
         quote: quoteId,
@@ -138,6 +138,7 @@ describe('QuoteLifecycle mint quote polling', () => {
         unit: 'sat',
         expiry,
         state: 'UNPAID',
+        pubkey,
       }),
     );
   }
@@ -396,6 +397,121 @@ describe('QuoteLifecycle mint quote polling', () => {
     expect(outcome.quote.pubkey).toBeUndefined();
     expect(await quoteLifecycle.getMintQuotePollingLimit(mintUrl, 'bolt11')).toBe(100);
   });
+
+  it('retains equivalent unlocked duplicates with empty and absent public keys', async () => {
+    await persistBolt11Quote('quote-a');
+    (mintAdapter.checkMintQuoteBatch as ReturnType<typeof mock>).mockResolvedValueOnce([
+      bolt11PollingSnapshot('quote-a', { pubkey: '' }),
+      bolt11PollingSnapshot('quote-a'),
+    ]);
+
+    const result = await quoteLifecycle.checkMintQuotesForPolling('bolt11', [
+      { mintUrl, quoteId: 'quote-a' },
+    ]);
+
+    expect(result.outcomes[0]).toMatchObject({ status: 'updated' });
+    expect(result.responseFailures).toHaveLength(1);
+    expect(result.responseFailures[0]?.error.message).toContain('contains duplicate quote');
+    await expect(
+      mintQuoteRepository.getMintQuote(mintUrl, 'bolt11', 'quote-a'),
+    ).resolves.toMatchObject({ state: 'PAID' });
+  });
+
+  it.each([
+    [true, undefined, ''],
+    [false, undefined, ''],
+    [true, '', undefined],
+    [false, '', undefined],
+  ] as const)(
+    'publishes paid unlocked observations (batch: %j, local: %j, remote: %j)',
+    async (batch, local, remote) => {
+      await persistBolt11Quote('quote-a', local);
+      if (!batch) await setNut29Methods([]);
+      const snapshot = bolt11PollingSnapshot('quote-a', { pubkey: remote });
+      (mintAdapter.checkMintQuoteBatch as ReturnType<typeof mock>).mockResolvedValue([snapshot]);
+      (mintAdapter.checkMintQuote as ReturnType<typeof mock>).mockResolvedValue(snapshot);
+      const persistedDuringEvents: Array<MintQuote | null> = [];
+      eventBus.on('mint-quote:updated', async ({ quote }) => {
+        persistedDuringEvents.push(
+          await mintQuoteRepository.getMintQuote(quote.mintUrl, quote.method, quote.quoteId),
+        );
+      });
+      const notifications: Array<{ params?: { payload?: { quote?: string } } }> = [];
+      const transport = new PollingTransport(
+        mintAdapter,
+        { intervalMs: 5_000 },
+        new NullLogger(),
+        quoteLifecycle,
+      );
+      transport.on(mintUrl, 'message', (event) => notifications.push(JSON.parse(event.data)));
+      transport.pause();
+      try {
+        transport.send(mintUrl, {
+          jsonrpc: '2.0',
+          method: 'subscribe',
+          params: {
+            kind: 'bolt11_mint_quote',
+            subId: 'unlocked-watcher',
+            filters: ['quote-a'],
+          },
+          id: 1,
+        });
+        transport.resume();
+        await waitFor(() =>
+          notifications.some(({ params }) => params?.payload?.quote === 'quote-a'),
+        );
+
+        expect(persistedDuringEvents).toHaveLength(1);
+        expect(persistedDuringEvents[0]).toMatchObject({
+          state: 'PAID',
+          amountPaid: Amount.from(10),
+          amountIssued: Amount.zero(),
+        });
+        expect(await quoteLifecycle.getMintQuotePollingLimit(mintUrl, 'bolt11')).toBe(
+          batch ? 100 : 1,
+        );
+        expect(
+          batch ? mintAdapter.checkMintQuoteBatch : mintAdapter.checkMintQuote,
+        ).toHaveBeenCalledTimes(1);
+      } finally {
+        transport.closeAll();
+      }
+    },
+  );
+
+  it.each(['bolt11', 'bolt12', 'onchain'] as const)(
+    'rejects missing, empty, and mismatched public keys for locked %s polling',
+    async (method) => {
+      if (method === 'bolt11') await persistBolt11Quote('locked', '02'.padEnd(66, '1'));
+      else if (method === 'bolt12') await persistBolt12Quote('locked');
+      else await persistOnchainQuote('locked');
+      const existing = await mintQuoteRepository.getMintQuote(mintUrl, method, 'locked');
+      if (!existing) throw new Error('Expected a canonical quote');
+      const updated = mock(() => {});
+      eventBus.on('mint-quote:updated', updated);
+
+      for (const pubkey of [undefined, '', '03'.padEnd(66, '4')]) {
+        const snapshot = {
+          ...mintQuoteToMethodSnapshot(existing),
+          pubkey,
+          amount_paid: Amount.from(10),
+        };
+        (mintAdapter.checkMintQuoteBatch as ReturnType<typeof mock>).mockResolvedValue([snapshot]);
+        (mintAdapter.checkMintQuote as ReturnType<typeof mock>).mockResolvedValue(snapshot);
+
+        const result = await quoteLifecycle.checkMintQuotesForPolling(method, [
+          { mintUrl, quoteId: 'locked' },
+        ]);
+
+        expect(result.outcomes[0]).toMatchObject({
+          status: 'failed',
+          failure: { category: 'validation' },
+        });
+        expect(await mintQuoteRepository.getMintQuote(mintUrl, method, 'locked')).toEqual(existing);
+        expect(updated).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it('downgrades batching after a polling observation contains a blank unit', async () => {
     await persistBolt11Quote('quote-a');

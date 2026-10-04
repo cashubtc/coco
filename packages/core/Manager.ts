@@ -1055,19 +1055,20 @@ export class Manager {
       withMintQuoteTransaction: (fn) =>
         repositories.withTransaction(({ mintQuoteRepository }) => fn(mintQuoteRepository)),
     });
-    const meltOperationService = new MeltOperationService(
-      meltHandlerProvider,
-      repositories.meltOperationRepository,
+    const meltOperationService = new MeltOperationService({
+      handlerProvider: meltHandlerProvider,
+      meltOperationQueries: repositories.meltOperationRepository,
+      proofQueries: repositories.proofRepository,
+      transactionRunner,
+      loadSeed: () => seedService.getSeed(),
       quoteLifecycle,
-      repositories.proofRepository,
-      proofService,
       mintService,
       walletService,
-      this.mintAdapter,
-      this.eventBus,
-      meltOperationLogger,
+      mintAdapter: this.mintAdapter,
+      eventBus: this.eventBus,
+      logger: meltOperationLogger,
       mintScopedLock,
-    );
+    });
     const meltOperationRepository = repositories.meltOperationRepository;
 
     const mintOperationLogger = this.getChildLogger('MintOperationService');
