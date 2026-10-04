@@ -20,7 +20,7 @@ want to solve and the approach you have in mind.
 
 ## Developing coco
 
-- Requirements: Bun (CI currently runs Bun 1.2.18)
+- Requirements: Bun; use the version configured in the relevant [CI workflow](.github/workflows).
 - Install dependencies from the repo root:
 
   ```bash
@@ -175,25 +175,18 @@ like `chore: update release workflow` is fine.
 
 ## Style guide
 
-Please follow the project guidance in `AGENTS.md`. The short version:
+Use the affected package's TypeScript configuration and [.prettierrc](.prettierrc) for compiler and
+formatting settings. Additional syntax conventions:
 
 - Use TypeScript with ESM `import` and `export`
 - Prefer `import type` for type-only imports
-- Keep formatting aligned with `.prettierrc`: 2 spaces, semicolons, 100-column lines
 - Order imports as external, then internal or alias, then relative
 - Use `PascalCase` for classes and types, `camelCase` for values and functions
-- Avoid `any` unless it is tightly scoped and justified
-- Add JSDoc for public APIs and non-obvious flows
 
 ### Core and adapter conventions
 
-- Validate inputs early and return empty arrays for no-op cases when appropriate
-- Prefer domain errors from `packages/core/models/Error.ts`
-- Preserve error causes when wrapping failures
-- Use structured logging with context
-- Keep repository operations atomic and check invariants before mutating state
-- Normalize mint URLs with `normalizeMintUrl()` before persistence
-- Export public package APIs through each package `index.ts`
+Use [CODING_STANDARDS.md](CODING_STANDARDS.md) for validation, types, errors, logging, persistence,
+public contracts and documentation expectations.
 
 ### React package conventions
 
@@ -205,6 +198,8 @@ Please follow the project guidance in `AGENTS.md`. The short version:
 ## Testing expectations
 
 We use `bun:test` across most packages, plus Vitest for some adapter coverage.
+Use the [behavior testing standards](CODING_STANDARDS.md#test-behavior) to choose meaningful coverage
+and handle asynchronous behavior.
 
 Run `bun run test:coverage:core` for core unit coverage. Core unit and integration coverage use
 `scripts/scope-core-coverage.ts` to report only core source, excluding generated `dist/` output and
@@ -214,8 +209,6 @@ tests; adapter coverage belongs in separate adapter reports.
 - Put tests under `test/unit` or `test/integration`
 - Name test files `*.test.ts`
 - Prefer Bun `mock()` for spies and doubles
-- Keep tests deterministic and await async work explicitly
-- Add or update tests with behavior changes whenever practical
 
 For browser coverage in `packages/indexeddb`, run:
 
