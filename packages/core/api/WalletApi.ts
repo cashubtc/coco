@@ -140,14 +140,12 @@ export class WalletApi {
 
   /**
    * Decode a token string into a Token object.
-   * If mintUrl is provided, decodes token with mint keysets (supports all token formats).
-   * If no mintUrl, attempts to decode using wallet's known keysets (may fail for some token formats).
-   *
-   * Note: For reliable decoding of all token formats, provide a mintUrl.
+   * Uses the provided mint URL or extracts it from the token metadata, then loads
+   * that mint's keysets through TokenService for decoding and unit resolution.
    *
    * @param tokenString - The encoded token string to decode
-   * @param mintUrl - Optional mint URL to use for decoding (provides access to mint keysets for decoding)
-   * @returns The decoded Token or array of Proofs
+   * @param mintUrl - Optional mint URL to use instead of the token metadata's mint
+   * @returns The decoded Token
    */
   async decodeToken(tokenString: string, mintUrl?: string): Promise<Token> {
     if (mintUrl) {

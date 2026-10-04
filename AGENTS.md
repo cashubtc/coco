@@ -9,6 +9,7 @@ and linked documents for details that change with the codebase.
   settings. If prose disagrees with executable config, follow the config and flag or fix the prose.
 - Use `CONTRIBUTING.md` for setup, development workflow, security fixes, testing, pull requests,
   changesets, and release expectations.
+- When reviewing changes, including before handoff, read [CODING_STANDARDS.md](CODING_STANDARDS.md).
 - Follow nearby source and tests for package-local conventions; avoid creating a second convention
   when an established pattern exists.
 
