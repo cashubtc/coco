@@ -11,7 +11,7 @@ Apply the accepted design to new and substantially reworked flows. A narrow fix 
 boundary when it avoids worsening that boundary and reports relevant deviations. Touching a file alone
 does not require migrating its whole module. Follow the owning design's migration scope.
 
-For domain changes, use the language and relevant ADRs routed by [CONTEXT-MAP](CONTEXT-MAP.md).
+For domain changes, use the language and relevant ADRs routed by [GLOSSARY-MAP](GLOSSARY-MAP.md).
 Distinguish an accepted design from its implementation status: an ADR can constrain future work without
 proving that a feature already exists. Resolve conflicts explicitly rather than copying a legacy example
 or treating a stale comment as the contract.
