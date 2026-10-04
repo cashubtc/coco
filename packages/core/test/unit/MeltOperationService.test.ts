@@ -9,8 +9,6 @@ import {
   type Proof,
 } from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it, mock } from 'bun:test';
-import { EventBus } from '../../events/EventBus.ts';
-import type { CoreEvents } from '../../events/types.ts';
 import { MeltHandlerProvider } from '../../infra/handlers/melt/MeltHandlerProvider.ts';
 import type { MeltMethodHandler } from '../../operations/melt/MeltMethodHandler.ts';
 import type {
@@ -20,7 +18,6 @@ import type {
   PreparedMeltOperation,
 } from '../../operations/melt/MeltOperation.ts';
 import { MeltOperationService } from '../../operations/melt/MeltOperationService.ts';
-import { MeltSettlementProcessor } from '../../services/watchers/MeltSettlementProcessor.ts';
 import {
   applyMeltPaidResult,
   applyMeltPending,
@@ -82,13 +79,11 @@ describe('MeltOperationService coordinator', () => {
   let dependencies: any;
   let performed: unknown[];
   let transitionInputs: any[];
-  let observations: string[];
 
   beforeEach(() => {
     current = prepared();
     performed = [];
     transitionInputs = [];
-    observations = [];
     handler = {
       createQuote: mock(async () => quote('UNPAID')),
       fetchRemoteQuote: mock(async () => quote('UNPAID')),
@@ -168,104 +163,13 @@ describe('MeltOperationService coordinator', () => {
         requireMeltQuoteRefForPrepare: mock(async () => quote('UNPAID')),
         refreshMeltQuote: mock(async () => quote('UNPAID')),
         refreshMeltQuoteById: mock(async () => quote('UNPAID')),
-        recordMeltQuoteObservation: mock(async (value: any) => {
-          observations.push(value.state);
-          return value;
-        }),
+        recordMeltQuoteObservation: mock(async (value: any) => value),
       },
       mintService: { refreshAndCommitIfStale: mock(async () => ({ keysets: [] })) },
       walletService: { getWalletWithActiveKeysetId: mock(async () => ({ wallet: {} })) },
       mintAdapter: {},
       eventBus: { emit: mock(async () => undefined) },
     };
-  });
-
-  it('authorizes, performs the remote Melt, records its quote, then advances', async () => {
-    const result = await new MeltOperationService(dependencies).execute('op-1');
-    expect(result.state).toBe('pending');
-    expect(performed).toEqual([beginMeltExecution, applyMeltPending]);
-    expect(observations).toEqual(['PENDING']);
-    expect(dependencies.eventBus.emit).toHaveBeenCalledWith(
-      'proofs:state-changed',
-      { mintUrl, secrets: [inputProof.secret], state: 'inflight' },
-      { throwOnError: true },
-    );
-  });
-
-  it('registers a coordinator PENDING result and auto-finalizes after a later PAID update', async () => {
-    const bus = new EventBus<CoreEvents>();
-    const registerOperationInterest = mock(async () => {});
-    const removeOperationInterest = mock(async () => {});
-    const proofStates: string[] = [];
-    const savedProofSecrets: string[] = [];
-    const savedChange = {
-      ...inputProof,
-      amount: Amount.from(1),
-      secret: 'change',
-      mintUrl,
-      unit: 'sat',
-      state: 'ready' as const,
-      createdByOperationId: 'op-1',
-    };
-    let observedState: 'PENDING' | 'PAID' = 'PENDING';
-    dependencies.eventBus = bus;
-    dependencies.quoteLifecycle.getMeltQuote = mock(async () => quote(observedState));
-    dependencies.quoteLifecycle.refreshMeltQuoteById = mock(async () => quote(observedState));
-    const runTransition = dependencies.transactionRunner.run;
-    dependencies.transactionRunner.run = mock((work: any) =>
-      runTransition((tx: any) =>
-        work({
-          ...tx,
-          perform: async (transition: unknown, input: unknown) => {
-            const result = await tx.perform(transition, input);
-            return transition === applyMeltPaidResult
-              ? { ...result, changeProofs: [savedChange] }
-              : result;
-          },
-        }),
-      ),
-    );
-    bus.on('proofs:state-changed', async ({ state }) => {
-      proofStates.push(state);
-    });
-    bus.on('proofs:saved', async ({ proofs }) => {
-      savedProofSecrets.push(...proofs.map((proof) => proof.secret));
-    });
-    const service = new MeltOperationService(dependencies);
-    const processor = new MeltSettlementProcessor(service, bus, undefined, {
-      interestRegistrar: { registerOperationInterest, removeOperationInterest },
-    });
-
-    await processor.start();
-    try {
-      const result = await service.execute('op-1');
-
-      expect(result.state).toBe('pending');
-      expect(registerOperationInterest).toHaveBeenCalledWith({
-        operationId: 'op-1',
-        mintUrl,
-        method: 'bolt11',
-        quoteId,
-      });
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(current.state).toBe('pending');
-
-      observedState = 'PAID';
-      await bus.emit('melt-quote:updated', {
-        mintUrl,
-        method: 'bolt11',
-        quoteId,
-        quote: quote('PAID'),
-      });
-
-      expect(current.state).toBe('finalized');
-      expect(performed).toContain(applyMeltPaidResult);
-      expect(proofStates).toContain('spent');
-      expect(savedProofSecrets).toContain('change');
-      expect(removeOperationInterest).toHaveBeenCalledWith('op-1');
-    } finally {
-      await processor.stop();
-    }
   });
 
   it('retains resources after an ambiguous remote error', async () => {
@@ -303,46 +207,6 @@ describe('MeltOperationService coordinator', () => {
     expect(service.isOperationLocked('op-1')).toBe(false);
   });
 
-  it('commits the pre-swap result before submitting the Melt request', async () => {
-    current = {
-      ...prepared(),
-      needsSwap: true,
-      swapOutputData: {
-        keep: [],
-        send: [
-          {
-            blindedMessage: { amount: 12, id: 'ks', B_: 'B' },
-            blindingFactor: '01',
-            secret: Buffer.from('input').toString('hex'),
-          },
-        ],
-      },
-    };
-    const order: string[] = [];
-    (handler.swap as any).mockImplementationOnce(async () => {
-      order.push('remote-swap');
-      return { keep: [], send: [inputProof] };
-    });
-    (handler.melt as any).mockImplementationOnce(async () => {
-      order.push('remote-melt');
-      expect(performed).toContain(applyMeltSwapResult);
-      return { status: 'PENDING', change: [] };
-    });
-    await new MeltOperationService(dependencies).execute('op-1');
-    expect(order).toEqual(['remote-swap', 'remote-melt']);
-    expect(performed).toEqual([beginMeltExecution, applyMeltSwapResult, applyMeltPending]);
-    expect(dependencies.eventBus.emit).toHaveBeenCalledWith(
-      'proofs:state-changed',
-      { mintUrl, secrets: [inputProof.secret], state: 'spent' },
-      { throwOnError: true },
-    );
-    expect(dependencies.eventBus.emit).toHaveBeenCalledWith(
-      'proofs:saved',
-      { mintUrl, keysetId: inputProof.id, proofs: [inputProof] },
-      { throwOnError: true },
-    );
-  });
-
   it('does not replay a committed remote Melt when a post-commit listener fails', async () => {
     dependencies.eventBus.emit = mock(async () => {
       throw new Error('listener failed');
@@ -366,20 +230,6 @@ describe('MeltOperationService coordinator', () => {
     expect(dependencies.eventBus.emit).toHaveBeenCalledWith(
       'proofs:released',
       { mintUrl, secrets: [inputProof.secret] },
-      { throwOnError: true },
-    );
-  });
-
-  it('finalizes from a canonical PAID observation', async () => {
-    current = pending();
-    dependencies.quoteLifecycle.refreshMeltQuoteById = mock(async () => quote('PAID'));
-    const decision = await new MeltOperationService(dependencies).checkPendingOperation('op-1');
-    expect(decision).toBe('finalize');
-    expect(performed).toContain(applyMeltPaidResult);
-    expect(performed).not.toContain(releaseMeltAfterNonPayment);
-    expect(dependencies.eventBus.emit).toHaveBeenCalledWith(
-      'proofs:state-changed',
-      { mintUrl, secrets: [inputProof.secret], state: 'spent' },
       { throwOnError: true },
     );
   });

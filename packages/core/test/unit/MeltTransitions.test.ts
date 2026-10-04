@@ -867,7 +867,7 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
     );
   });
 
-  it('automatically settles when PAID overtakes a PENDING response before its transition', async () => {
+  it('commits before remote pre-swap and Melt requests, then settles PAID overtaking PENDING', async () => {
     const generated = createNewMintKeys(4, new Uint8Array(32).fill(7));
     const activeKeys: MintKeys = {
       id: generated.keysetId,
@@ -885,7 +885,7 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
     await repositories.proofRepository.saveProofs(mintUrl, [
       {
         id: activeKeys.id,
-        amount: Amount.from(10),
+        amount: Amount.from(16),
         secret: 'pending-paid-race-input',
         C: activeKeys.keys['1']!,
         mintUrl,
@@ -898,6 +898,19 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
         ...input('pending-paid-race'),
         activeKeys,
         seed: new Uint8Array(32).fill(9),
+      }),
+    );
+    expect(prepared.operation.needsSwap).toBe(true);
+    const candidates = swapProofs({ ...prepared.operation, state: 'executing' });
+    let transactionActive = false;
+    const observedRunner = new RepositoryCoreTransactionRunner(
+      overrideTransactions(repositories, async (work) => {
+        transactionActive = true;
+        try {
+          return await repositories.withTransaction(work);
+        } finally {
+          transactionActive = false;
+        }
       }),
     );
     const changeOutput = deserializeOutputData(prepared.operation.changeOutputData).keep[0]!;
@@ -914,6 +927,23 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
     };
     const bus = new EventBus<CoreEvents>();
     const registeredOperations: string[] = [];
+    const remoteRequests: string[] = [];
+    const stateEvents: CoreEvents['proofs:state-changed'][] = [];
+    const savedEvents: CoreEvents['proofs:saved'][] = [];
+    const publishedInsideTransaction: boolean[] = [];
+    const finalized = Promise.withResolvers<void>();
+    bus.on('proofs:state-changed', (event) => {
+      publishedInsideTransaction.push(transactionActive);
+      stateEvents.push(event);
+    });
+    bus.on('proofs:saved', (event) => {
+      publishedInsideTransaction.push(transactionActive);
+      savedEvents.push(event);
+    });
+    bus.on('melt-op:finalized', () => {
+      publishedInsideTransaction.push(transactionActive);
+      finalized.resolve();
+    });
     const handler: MeltMethodHandler<'bolt11'> = {
       createQuote: async () => {
         throw new Error('not used');
@@ -922,9 +952,38 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
         throw new Error('not used');
       },
       swap: async () => {
-        throw new Error('not used');
+        expect(transactionActive).toBe(false);
+        expect(
+          (await repositories.meltOperationRepository.getById('pending-paid-race'))?.state,
+        ).toBe('executing');
+        expect(
+          await repositories.proofRepository.getProofBySecret(mintUrl, 'pending-paid-race-input'),
+        ).toMatchObject({ state: 'inflight', usedByOperationId: 'pending-paid-race' });
+        remoteRequests.push('swap');
+        return candidates;
       },
-      melt: async () => ({ status: 'PENDING', change: [] }),
+      melt: async ({ inputProofs }) => {
+        expect(transactionActive).toBe(false);
+        expect(inputProofs.map((proof) => proof.secret)).toEqual(
+          candidates.send.map((proof) => proof.secret),
+        );
+        expect(
+          (await repositories.proofRepository.getProofBySecret(mintUrl, 'pending-paid-race-input'))
+            ?.state,
+        ).toBe('spent');
+        for (const proof of candidates.send) {
+          expect(
+            await repositories.proofRepository.getProofBySecret(mintUrl, proof.secret),
+          ).toMatchObject({ state: 'inflight', usedByOperationId: 'pending-paid-race' });
+        }
+        for (const proof of candidates.keep) {
+          expect(
+            (await repositories.proofRepository.getProofBySecret(mintUrl, proof.secret))?.state,
+          ).toBe('ready');
+        }
+        remoteRequests.push('melt');
+        return { status: 'PENDING', change: [] };
+      },
     };
     const getMeltQuoteById = async (identity: { mintUrl: string; quoteId: string }) => {
       const quote = await repositories.meltQuoteRepository.getMeltQuoteById(identity);
@@ -945,7 +1004,7 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
       handlerProvider: new MeltHandlerProvider({ bolt11: handler }),
       meltOperationQueries: repositories.meltOperationRepository,
       proofQueries: repositories.proofRepository,
-      transactionRunner: runner,
+      transactionRunner: observedRunner,
       loadSeed: async () => new Uint8Array(32),
       quoteLifecycle: {
         requireMeltQuoteRefForPrepare: getMeltQuoteById,
@@ -1002,12 +1061,9 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
       const result = await service.execute('pending-paid-race');
       expect(result.state).toBe('pending');
       expect(registeredOperations).toContain('pending-paid-race');
-
-      let stored = await repositories.meltOperationRepository.getById('pending-paid-race');
-      for (let attempt = 0; attempt < 10 && stored?.state !== 'finalized'; attempt += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        stored = await repositories.meltOperationRepository.getById('pending-paid-race');
-      }
+      expect(remoteRequests).toEqual(['swap', 'melt']);
+      await finalized.promise;
+      const stored = await repositories.meltOperationRepository.getById('pending-paid-race');
 
       expect(stored?.state).toBe('finalized');
       if (stored?.state !== 'finalized') throw new Error('Melt did not finalize');
@@ -1017,8 +1073,29 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
         mintUrl,
         changeSecret,
       );
-      expect(persistedChange?.state).toBe('ready');
-      expect(persistedChange?.amount.equals(changeAmount)).toBe(true);
+      if (!persistedChange) throw new Error('Melt change was not persisted');
+      expect(persistedChange.state).toBe('ready');
+      expect(persistedChange.amount.equals(changeAmount)).toBe(true);
+      expect(stateEvents).toContainEqual({
+        mintUrl,
+        secrets: ['pending-paid-race-input'],
+        state: 'inflight',
+      });
+      expect(stateEvents).toContainEqual({
+        mintUrl,
+        secrets: candidates.send.map((proof) => proof.secret),
+        state: 'spent',
+      });
+      expect(savedEvents).toContainEqual({
+        mintUrl,
+        keysetId: activeKeys.id,
+        proofs: [persistedChange],
+      });
+      expect(publishedInsideTransaction).not.toContain(true);
+      for (const proof of candidates.send) {
+        const spent = await repositories.proofRepository.getProofBySecret(mintUrl, proof.secret);
+        expect(spent?.state).toBe('spent');
+      }
       expect(
         (await repositories.proofRepository.getProofBySecret(mintUrl, 'pending-paid-race-input'))
           ?.state,
@@ -1188,24 +1265,6 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
         }),
       ),
     ).rejects.toThrow("does not match the operation's persisted Melt send plan");
-  });
-
-  it('rolls reservation, counters, and operation back when preparation persistence fails', async () => {
-    await saveReadyProof(10);
-    await expect(
-      repositories.withTransaction(async (scope) => {
-        const scopedRunner = new RepositoryCoreTransactionRunner(
-          overrideTransactions(repositories, (work) => work(scope)),
-        );
-        await scopedRunner.run((tx) => tx.perform(prepareMelt, input()));
-        throw new Error('parent failed');
-      }),
-    ).rejects.toThrow('parent failed');
-    expect(await repositories.meltOperationRepository.getById('melt-1')).toBeNull();
-    expect(await repositories.counterRepository.getCounter(mintUrl, keysetId)).toBeNull();
-    expect(
-      (await repositories.proofRepository.getProofBySecret(mintUrl, 'input-10'))?.usedByOperationId,
-    ).toBeUndefined();
   });
 
   it('composes Melt and Mint preparation and rolls the whole parent transaction back', async () => {

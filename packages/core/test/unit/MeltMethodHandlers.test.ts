@@ -241,38 +241,6 @@ describe('remote-only Melt handlers', () => {
     });
   });
 
-  it('performs only the remote pre-swap and returns candidate proofs', async () => {
-    const input = { ...executing('bolt11'), needsSwap: true } as ExecutingMeltOperation;
-    input.swapOutputData = {
-      keep: [
-        {
-          blindedMessage: { amount: 1, id: 'ks', B_: 'keep-B' },
-          blindingFactor: '01',
-          secret: Buffer.from('keep').toString('hex'),
-        },
-      ],
-      send: [
-        {
-          blindedMessage: { amount: 11, id: 'ks', B_: 'send-B' },
-          blindingFactor: '02',
-          secret: Buffer.from('send').toString('hex'),
-        },
-      ],
-    } as any;
-    const candidates = {
-      keep: [{ ...proof, amount: Amount.from(1), secret: 'keep' }],
-      send: [{ ...proof, amount: Amount.from(11), secret: 'send' }],
-    };
-    const wallet = { send: mock(async () => candidates) } as unknown as Wallet;
-    const result = await new MeltBolt11Handler().swap({
-      operation: input as any,
-      wallet,
-      inputProofs: [proof],
-    });
-    expect(result).toEqual(candidates);
-    expect(wallet.send).toHaveBeenCalledTimes(1);
-  });
-
   it('routes BOLT12 and on-chain melts with method-specific data', async () => {
     const mintAdapter = {
       customMeltBolt12: mock(async () => ({
