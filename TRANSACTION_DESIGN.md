@@ -236,8 +236,40 @@ preserve coordinator-supplied timestamps, subject to existing adapter precision.
 
 A future Mint Swap coordinator can call `tx.perform(prepareMint, destinationInput)` with its
 predetermined child ID and compose additional local transitions before returning. Its remote quote creation and
-metadata/seed preflight still occur outside the transaction. Melt and Mint Swap scopes/transitions
-are separate migrations; this change supplies the Mint side of that composition.
+metadata/seed preflight still occur outside the transaction. Melt supplies the corresponding source
+side through `prepareMelt`; Mint Swap parent orchestration remains a separate migration.
+
+## Melt Operations
+
+`MeltOperationService` receives the shared runner, read-only operation/proof queries, seed loading,
+remote-only method handlers, and independent quote/metadata workflows. `prepareMelt` validates the
+canonical quote, trust, NUT-05 policy, active keys, and unit inside the transaction. It atomically
+reserves exact input proofs, allocates the blank NUT-08 change plan and optional pre-swap plan,
+advances their counter positions, and persists the prepared operation. New preparation creates no
+intermediate `init` row; `cleanupMeltInit` exists only for legacy recovery.
+
+`beginMeltExecution` atomically records `executing` and marks the exact original inputs inflight.
+That commit authorizes the first remote effect: NUT-05 directly, or NUT-03 for a pre-swap. A
+successful pre-swap is passed to `applyMeltSwapResult`, which atomically spends the original inputs,
+saves keep proofs ready, and saves the exact Melt inputs inflight before NUT-05 is submitted. This
+local checkpoint is required because the two remote calls cannot share a Wallet transaction.
+
+Handlers create/fetch quotes, perform the pre-swap, and submit Melt requests. They receive no Wallet
+repositories, mutation Services, or event bus and return candidate facts only. The coordinator
+records each remote quote observation before calling `applyMeltPending`, `applyMeltPaidResult`, or
+`releaseMeltAfterNonPayment`. Paid settlement validates NUT-08 change against the persisted output
+plan and atomically saves change, spends the exact Melt inputs, and finalizes the operation.
+
+Only fresh positive `UNPAID` evidence permits release. Prepared cancellation is safe because no
+remote effect was authorized. Timeouts, transport errors, malformed responses, incomplete pre-swap
+restoration, and contradictory proof/quote observations retain operation-owned value and use
+`deferMeltRecovery`. Recovery restores remote output candidates outside transactions, then passes
+them through the same result transitions as initial execution. Repositories preserve the
+coordinator-supplied timestamp, subject to adapter precision.
+
+A Mint Swap parent can compose predetermined `prepareMelt` and `prepareMint` child IDs in one runner
+callback. If later parent work fails, both child operations, Melt proof reservation, and all output
+counter changes roll back together. Their remote effects still occur only after that parent commit.
 
 ## Files and Dependencies
 
@@ -251,6 +283,10 @@ operations/mint/
   MintOperationService.ts                     # workflow orchestration
   MintTransitions.ts                         # preparation, issuance, settlement, and recovery
   MintTransitionTypes.ts                     # named Mint transition inputs and results
+operations/melt/
+  MeltOperationService.ts                    # Melt saga coordinator
+  MeltTransitions.ts                         # reservation, authorization, settlement, and recovery
+  MeltTransitionTypes.ts                     # named Melt transition inputs and results
 services/KeyRingService.ts                    # key management orchestration
 transactions/
   CoreTransaction.ts                         # scope, runner interface, implementation
@@ -358,8 +394,8 @@ Before completing a change involving Wallet persistence, operation coordination,
 
 ## Migration and Verification
 
-Send and Mint transitions, KeyRing mutations, and mint metadata refresh use coordinator-owned transactions.
-Legacy Receive, Melt, Mint Swap orchestration, Payment Request Receive parent/attempt/child
+Send, Mint, and Melt transitions, KeyRing mutations, and mint metadata refresh use coordinator-owned transactions.
+Legacy Receive, Mint Swap orchestration, Payment Request Receive parent/attempt/child
 atomicity, and MintService add/forced-update/trust/delete paths remain for their owning migrations.
 Those migrations should reuse domain capabilities and branded transitions, rather than add domain gateways.
 Runtime rejection of nested Wallet transactions remains nonuniform: IndexedDB rejects ambient

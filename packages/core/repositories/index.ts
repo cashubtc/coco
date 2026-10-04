@@ -271,7 +271,7 @@ export interface MeltOperationRepository {
   /** Create a new melt operation */
   create(operation: MeltOperation): Promise<void>;
 
-  /** Update an existing melt operation */
+  /** Update an existing melt operation, preserving the supplied updatedAt (adapter precision applies). */
   update(operation: MeltOperation): Promise<void>;
 
   /** Get a melt operation by ID */

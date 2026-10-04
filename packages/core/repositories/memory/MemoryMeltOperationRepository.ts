@@ -25,7 +25,7 @@ export class MemoryMeltOperationRepository implements MeltOperationRepository {
       throw new Error(`MeltOperation with id ${operation.id} not found`);
     }
     this.assertNoDuplicateQuoteOperation(operation);
-    this.operations.set(operation.id, { ...operation, updatedAt: Date.now() });
+    this.operations.set(operation.id, { ...operation });
   }
 
   async getById(id: string): Promise<MeltOperation | null> {
