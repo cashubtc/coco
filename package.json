@@ -9,10 +9,15 @@
     "packages/*"
   ],
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@types/bun": "1.3.10",
+    "@types/chai": "^5.2.3",
+    "chai": "^6.2.2",
+    "monaco-editor": "^0.57.0",
     "prettier": "3.8.1",
     "tsdown": "0.20.1",
     "typescript": "5.9.3",
+    "vite": "7.3.1",
     "vitepress": "2.0.0-alpha.15"
   },
   "overrides": {
@@ -27,6 +32,9 @@
     "@changesets/cli": "^2.29.8"
   },
   "scripts": {
+    "playground": "vite --config scripts/playground/vite.config.ts --open",
+    "playground:test": "bun test scripts/playground/test",
+    "playground:typecheck": "tsc --noEmit -p scripts/playground/tsconfig.json",
     "build": "bun scripts/build.ts build",
     "build:test:core": "bun run --filter='@cashu/coco-core' build && bun run --filter='@cashu/coco-adapter-tests' build",
     "typecheck": "bun scripts/build.ts typecheck",
@@ -36,6 +44,9 @@
     "docs:preview": "vitepress preview packages/docs",
     "security:release-age": "bun scripts/check-release-age.ts",
     "format": "prettier . --write",
-    "format:check": "prettier . --check"
+    "format:check": "prettier . --check",
+    "playground:build": "vite build --config scripts/playground/vite.config.ts",
+    "playground:preview": "vite preview --config scripts/playground/vite.config.ts --open",
+    "playground:test:browser": "playwright test --config scripts/playground/playwright.config.ts"
   }
 }

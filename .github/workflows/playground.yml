@@ -1,0 +1,41 @@
+name: Playground tests
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/playground/**'
+      - 'packages/core/**'
+      - 'package.json'
+      - 'bun.lock'
+      - '.github/workflows/playground.yml'
+  push:
+    branches: [master]
+    paths:
+      - 'scripts/playground/**'
+      - 'packages/core/**'
+      - 'package.json'
+      - 'bun.lock'
+      - '.github/workflows/playground.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  playground:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+      - run: bun install --frozen-lockfile
+      - run: bun run playground:typecheck
+      - run: bun run playground:test
+      - run: bunx playwright install --with-deps chromium
+      - run: bun run playground:test:browser
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playground-browser-results
+          path: test-results/playground
+          retention-days: 7
