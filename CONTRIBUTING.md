@@ -38,7 +38,7 @@ want to solve and the approach you have in mind.
 - `packages/core` - storage-agnostic core library, services, operations, models,
   repositories, and tests
 - `packages/react` - React hooks and providers for the core package
-- `packages/fountain` - optional binary fountain transport, Cashu helpers, and UR decoding
+- `standalone/fountain` - optional binary fountain transport, Cashu helpers, and UR decoding
 - `packages/adapter-tests` - shared contract test helpers for storage adapters
 - `packages/indexeddb` - IndexedDB adapter for web environments
 - `packages/expo-sqlite` - Expo SQLite adapter for React Native and Expo apps
@@ -67,15 +67,28 @@ bun run --filter='@cashu/coco-core' test
 bun run --filter='@cashu/coco-core' test:unit
 bun run --filter='@cashu/coco-core' test:integration
 bun run --filter='@cashu/coco-react' lint
-bun run --filter='@cashu/coco-fountain' test
-bun run --filter='@cashu/coco-fountain' test:browser
-bun run --filter='@cashu/coco-fountain' test:package
 bun run --filter='@cashu/coco-indexeddb' test
 bun run --filter='@cashu/coco-indexeddb' test:browser
 bun run --filter='@cashu/coco-sqlite' test
 bun run --filter='@cashu/coco-sqlite-bun' test
 bun --cwd packages/expo-sqlite test
 ```
+
+Fountain is a standalone subproject outside the root workspace. Install and run
+its checks separately:
+
+```bash
+cd standalone/fountain
+bun install --frozen-lockfile
+bun run test
+bun run typecheck
+bunx --no-install playwright install chromium
+bun run test:browser
+bun run test:package
+```
+
+Its manifest and lockfile own its dependencies. Keep shared dependency versions
+aligned with Coco when updating either project; the root overrides do not apply.
 
 Run the smallest relevant test set for your change. If you touch shared logic,
 running `bun run build`, `bun run typecheck`, and the affected package tests is a
@@ -152,7 +165,7 @@ expectations may lead to contribution restrictions.
 - Add screenshots when a PR changes UI or docs visuals
 - Mention follow-up work instead of bundling unrelated fixes into the same PR
 
-If your change affects a published package, add a changeset:
+If your change affects a published workspace package, add a changeset:
 
 ```bash
 bunx changeset
@@ -222,9 +235,13 @@ CI=1 bun run --filter='@cashu/coco-indexeddb' test:browser
 
 ## Releases and versioning
 
-Published packages are versioned with Changesets. If your PR changes runtime
+Published workspace packages are versioned with Changesets. If your PR changes runtime
 behavior, public types, package exports, or documentation for a published package,
 you should usually include a changeset unless a maintainer tells you otherwise.
+
+Fountain is versioned manually in `standalone/fountain/package.json` and
+`standalone/fountain/CHANGELOG.md`. Do not add fountain changesets. Follow its
+separate release checklist in `RELEASING.md`.
 
 Stable and prerelease npm publishes validate and publish the tagged commit.
 Package versions and changelogs must be committed before the GitHub Release is

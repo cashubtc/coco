@@ -7,9 +7,6 @@ description: Cut a coco prerelease/RC from a dedicated `release/X.Y.Z-rc` branch
 
 ## Purpose
 
-Fountain releases use their own versions and tags; see `RELEASING.md`. Use
-`bun run version:core` below to preserve fountain metadata during core versioning.
-
 Run the local git-side workflow for a coco RC release. This skill prepares the
 release commit and tag only; npm publish happens later when a GitHub prerelease
 is created for the tag.
@@ -73,7 +70,7 @@ releases; use `$cut-stable-release` instead.
 6. Generate prerelease versions and changelogs:
 
    ```bash
-   bun run version:core
+   bunx changeset version
    ```
 
 7. Derive release metadata from the versioned files:

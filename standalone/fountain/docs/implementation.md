@@ -427,9 +427,9 @@ QR byte mode can carry these binary frames directly. Rendering and scanning are 
 Run the package's existing checks from the repository root:
 
 ```sh
-bun run --cwd packages/fountain test
-bun run --cwd packages/fountain typecheck
-bun run --cwd packages/fountain test:browser
+bun run --cwd standalone/fountain test
+bun run --cwd standalone/fountain typecheck
+bun run --cwd standalone/fountain test:browser
 ```
 
 The browser command requires Playwright's Chromium installation. See the [validation record](validation.md) for the broader project test setup. No finite test suite proves every input correct. Wire changes should update the specification and its independent vectors; API or solver changes should update this guide without redefining the wire format.

@@ -1,0 +1,53 @@
+name: Publish fountain to npm
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    if: startsWith(github.event.release.tag_name, 'coco-fountain-v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: standalone/fountain
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.release.tag_name }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: 'https://registry.npmjs.org'
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+      - name: Check release version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          bun -e '
+            const { name, version } = await Bun.file("package.json").json();
+            const changelog = await Bun.file("CHANGELOG.md").text();
+            if (name !== "@cashu/coco-fountain" ||
+                !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version) ||
+                process.env.RELEASE_TAG !== `coco-fountain-v${version}` ||
+                process.env.RELEASE_PRERELEASE !== "false" ||
+                changelog.match(/^## (\S+)/m)?.[1] !== version) {
+              throw new Error("Fountain tag, package version, and changelog must match a stable release");
+            }
+          '
+      - name: Check dependency release age
+        run: bun ../../scripts/check-release-age.ts
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Test fountain
+        run: bun run test
+      - name: Check fountain types
+        run: bun run typecheck
+      - name: Publish fountain
+        run: npm publish --access public

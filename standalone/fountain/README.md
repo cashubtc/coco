@@ -187,3 +187,23 @@ The source was imported from [Egge21M/nut-fountain v0.1.0-alpha.1 at 130fb2c](ht
 The original MIT license and third-party notices are retained. The device playground
 remains in that repository. See Coco's [animated QR guide](https://cashubtc.github.io/coco/starting/animated-qr)
 for integration with send and receive operations.
+
+## Development and releases
+
+This package lives in `standalone/fountain`, outside Coco's root workspace and
+Changesets. It has its own manifest, lockfile, and install:
+
+```sh
+cd standalone/fountain
+bun install --frozen-lockfile
+bun run test
+bun run typecheck
+bunx --no-install playwright install chromium
+bun run test:browser
+bun run test:package
+```
+
+Keep shared dependency versions aligned with Coco when updating them. Root
+workspace overrides do not apply here. Versions and [changelog entries](CHANGELOG.md)
+are maintained directly; releases use `coco-fountain-vX.Y.Z` tags. See the
+[release checklist](https://github.com/cashubtc/coco/blob/master/RELEASING.md#fountain-releases).

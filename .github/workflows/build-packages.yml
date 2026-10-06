@@ -8,14 +8,6 @@ on:
       - 'packages/**'
       - 'scripts/build.ts'
       - 'scripts/check-release-age.ts'
-      - 'scripts/*release*.ts'
-      - 'scripts/prepare-publish.ts'
-      - 'scripts/version-fountain.ts'
-      - 'scripts/version-core.ts'
-      - '.agents/skills/cut-rc-release/**'
-      - '.agents/skills/cut-stable-release/**'
-      - '.changeset/**'
-      - '.github/workflows/publish.yml'
       - 'bun.lock'
       - 'bunfig.toml'
       - 'package.json'
@@ -25,14 +17,6 @@ on:
       - 'packages/**'
       - 'scripts/build.ts'
       - 'scripts/check-release-age.ts'
-      - 'scripts/*release*.ts'
-      - 'scripts/prepare-publish.ts'
-      - 'scripts/version-fountain.ts'
-      - 'scripts/version-core.ts'
-      - '.agents/skills/cut-rc-release/**'
-      - '.agents/skills/cut-stable-release/**'
-      - '.changeset/**'
-      - '.github/workflows/publish.yml'
       - 'bun.lock'
       - 'bunfig.toml'
       - 'package.json'
@@ -55,9 +39,6 @@ jobs:
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
-
-      - name: Test release isolation
-        run: bun run test:release
 
       - name: Build packages in dependency order
         run: bun run build

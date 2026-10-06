@@ -121,5 +121,5 @@ When migrating from `nut-fountain`, replace the package name in each import.
 The version-1 frame layout is retained, with alpha.1's expanded fragment limit.
 
 For detailed decoder contracts and wire rules, see the
-[package README](https://github.com/cashubtc/coco/tree/master/packages/fountain#readme)
-and [protocol specification](https://github.com/cashubtc/coco/blob/master/packages/fountain/docs/protocol.md).
+[package README](https://github.com/cashubtc/coco/tree/master/standalone/fountain#readme)
+and [protocol specification](https://github.com/cashubtc/coco/blob/master/standalone/fountain/docs/protocol.md).

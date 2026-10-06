@@ -5,7 +5,6 @@ import { resolve, join } from 'node:path';
 import { chromium } from 'playwright';
 
 // Pack the current source through prepack, then test the artifact without workspace symlinks.
-const root = resolve(import.meta.dir, '../../..');
 const packageRoot = resolve(import.meta.dir, '..');
 const temp = await mkdtemp(join(tmpdir(), 'coco-fountain-package-'));
 async function run(command: string[], cwd: string): Promise<string> {
@@ -34,6 +33,7 @@ for (const path of [
   'LICENSE',
   'NOTICE.md',
   'README.md',
+  'CHANGELOG.md',
   'docs/protocol.md',
   'docs/implementation.md',
   'docs/validation.md',
@@ -51,7 +51,7 @@ await Bun.write(
     dependencies: { '@cashu/coco-fountain': `file:${tarball}` },
   }),
 );
-await Bun.write(join(consumer, 'bunfig.toml'), Bun.file(join(root, 'bunfig.toml')));
+await Bun.write(join(consumer, 'bunfig.toml'), Bun.file(join(packageRoot, 'bunfig.toml')));
 await run(['bun', 'install', '--production'], consumer);
 for (const dependency of [
   '@gandlaf21/bc-ur',
@@ -102,7 +102,7 @@ if (typeof window !== 'undefined') check(!('Buffer' in globalThis) && !('process
 console.log('All six package entry points pass');
 `,
 );
-const tsc = join(root, 'node_modules/typescript/bin/tsc');
+const tsc = join(packageRoot, 'node_modules/typescript/bin/tsc');
 const flags = ['--strict', '--skipLibCheck', 'false', '--target', 'ES2022', '--lib', 'ES2022,DOM'];
 await run(
   [

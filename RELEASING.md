@@ -1,6 +1,6 @@
 # Releasing
 
-This repo publishes packages with Changesets and GitHub Releases. The release tag
+The core workspace publishes packages with Changesets and GitHub Releases. The release tag
 is the source of truth for npm artifacts: package versions, internal published
 package dependencies, and changelog headings must be committed before the tag is
 created.
@@ -9,23 +9,9 @@ The publish workflow checks out the GitHub Release tag, validates the committed
 release files, builds, and publishes. It does not create or modify release files
 in CI.
 
-Core packages share the fixed version group in `.changeset/config.json` and use
-`vX.Y.Z` / `vX.Y.Z-rc.N` release tags. `@cashu/coco-fountain` is versioned
-independently and uses `coco-fountain-vX.Y.Z` tags. Its APIs and binary wire format
-remain experimental during the 0.x series.
-
-Fountain is ignored by Changesets. Core releases must use `bun run version:core`,
-which also preserves fountain release files around a Changesets 2.29.x prerelease-exit
-bug that can otherwise patch ignored packages. Use `bun run version:fountain` to
-consume only fountain changesets. Keep
-fountain and core changes in separate changeset files; Changesets rejects a file
-that mixes an ignored package with a selected package.
-
-Publishing selects packages by release tag. `scripts/prepare-publish.ts` validates
-the selected release and marks other public packages private **only in the CI
-checkout**, before Changesets discovers packages to publish. Changesets' `ignore`
-setting controls versioning, not publishing. Never use a bare `changeset publish`
-from an unscoped checkout; use the GitHub Release workflow.
+Fountain lives in `standalone/fountain`, outside the root workspace and Changesets.
+Its independent release flow is documented under [Fountain releases](#fountain-releases).
+Core versioning and publishing commands do not discover fountain.
 
 ## Prerequisites
 
@@ -69,7 +55,7 @@ Skip this step when `.changeset/pre.json` is not present.
 3. Generate stable versions and changelogs:
 
 ```bash
-bun run version:core
+bunx changeset version
 ```
 
 4. Review the generated release files:
@@ -78,9 +64,9 @@ bun run version:core
 git diff
 ```
 
-Confirm that core fixed-group package versions are aligned, their internal package
-dependencies point at the same stable version, and each selected package changelog
-starts with that version. Fountain files and pending changesets must be unchanged.
+Confirm that publishable package versions are aligned, internal published package
+dependencies point at the same stable version, and each publishable package
+changelog starts with that version.
 
 5. Run a local build before tagging:
 
@@ -175,11 +161,11 @@ branch.
 3. Generate prerelease versions and changelogs:
 
 ```bash
-bun run version:core
+bunx changeset version
 ```
 
 For follow-up RCs in the same cycle, add or merge the new changesets, then run
-`bun run version:core` again. Changesets increments the prerelease number from
+`bunx changeset version` again. Changesets increments the prerelease number from
 the committed `.changeset/pre.json` state.
 
 4. Review the generated release files:
@@ -188,9 +174,9 @@ the committed `.changeset/pre.json` state.
 git diff
 ```
 
-Confirm that core fixed-group package versions are aligned, their internal package
-dependencies point at the same RC version, and each selected package changelog
-starts with that RC version. Fountain files and pending changesets must be unchanged.
+Confirm that publishable package versions are aligned, internal published package
+dependencies point at the same RC version, and each publishable package changelog
+starts with that RC version.
 
 5. Run a local build before tagging:
 
@@ -245,48 +231,6 @@ Users can install the RC with:
 npm install @cashu/coco-core@rc
 ```
 
-## Independent Fountain Releases
-
-Prepare fountain from a clean checkout outside Changesets prerelease mode (normally
-`master`). Do not enter global prerelease mode for fountain. The current policy
-publishes ordinary 0.x versions to fountain's own npm `latest` tag; it does not
-publish alpha/RC tags or imply a stable protocol contract.
-
-1. Add a fountain-only changeset in `.changeset/`. Because fountain is excluded
-   from the default Changesets command, write it directly, for example:
-
-   ```md
-   ---
-   '@cashu/coco-fountain': patch
-   ---
-
-   Describe the fountain change.
-   ```
-
-2. Run `bun run version:fountain`, then `bun install` to refresh `bun.lock`.
-   The command temporarily selects only fountain for Changesets versioning and
-   restores the normal configuration, including on failure. It rejects an active
-   or exiting core prerelease cycle. Review the manifest, changelog, and consumed
-   changesets; core versions and changesets must be unchanged. The new package
-   starts at `0.0.0`; its initial minor changeset produces `0.1.0`.
-3. Run `bun install --frozen-lockfile`, `bun run --cwd packages/fountain test`,
-   `bun run --cwd packages/fountain typecheck`, and the package's `test:browser`
-   and `test:package` scripts. Run `bun run test:release` for release isolation.
-4. Validate using the generated version (replace `0.1.0` as appropriate):
-
-   ```bash
-   RELEASE_TAG=coco-fountain-v0.1.0 RELEASE_PRERELEASE=false bun scripts/check-release.ts
-   ```
-
-5. Commit the release files, tag that commit `coco-fountain-v0.1.0`, push the
-   source branch and tag, and create a GitHub Release for the tag. Do not mark it
-   as a GitHub prerelease. The `publish-fountain` job validates and publishes only
-   `@cashu/coco-fountain`; core versions need not match.
-6. Verify with `npm view @cashu/coco-fountain@latest version`.
-
-Before the first publish, configure npm publishing access for the scoped package
-and this workflow. Neither local versioning command publishes packages.
-
 ## If Something Looks Wrong Before Publishing
 
 If the generated versions, changelogs, or tags are wrong before the GitHub
@@ -302,3 +246,30 @@ moving or replacing it.
 Fix the failing condition on a new commit, create a new tag, and publish a new
 GitHub Release. Do not reuse a tag for a different package artifact after npm has
 accepted any package from that tag.
+
+## Fountain releases
+
+Fountain uses manual versioning and `coco-fountain-vX.Y.Z` tags. Its experimental
+0.x versions publish to its own npm `latest` dist-tag. Root Changesets prerelease
+state does not affect this subproject.
+
+1. From a clean checkout of `master`, update `standalone/fountain/package.json`
+   and put the matching `## X.Y.Z` entry first in `standalone/fountain/CHANGELOG.md`.
+   Do not create a changeset. The initial version is prepared as `0.1.0`.
+2. In `standalone/fountain`, run `bun install` to refresh its lockfile, then
+   `bun install --frozen-lockfile`, `bun run test`, `bun run typecheck`,
+   `bun run test:browser`, and `bun run test:package`. Install Chromium with
+   `bunx --no-install playwright install chromium` if needed.
+3. Review and commit the manifest, changelog, and lockfile. Tag that commit
+   `coco-fountain-vX.Y.Z`, then push the branch and tag.
+4. Create a GitHub Release for that tag without marking it as a prerelease.
+   `.github/workflows/publish-fountain.yml` checks the tag against the committed
+   version and changelog, installs from fountain's lockfile, tests, and runs
+   `npm publish --access public` in `standalone/fountain`. Its `prepack` script
+   builds the artifact. The core publish job skips these tags.
+5. Verify with `npm view @cashu/coco-fountain@latest version`.
+
+Configure npm publishing access for `@cashu/coco-fountain` before its first release.
+When using trusted publishing, authorize `publish-fountain.yml` for this package.
+Fountain's own `bunfig.toml` applies Coco's dependency release-age policy; update
+both policies together if that policy changes.

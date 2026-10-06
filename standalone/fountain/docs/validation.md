@@ -7,7 +7,7 @@ Verified on 2026-10-06 after updating to upstream `v0.1.0-alpha.1`
 
 - Bun 1.3.14, TypeScript 5.9.3, Playwright 1.57.0, and Chromium 153.0.8010.12.
 - Runtime dependencies resolve to cashu-ts 5.0.0-rc.4, noble hashes 2.2.0, and cborg 4.3.2
-  in Coco's workspace lockfile. No cashu-ts 4.x dependency was introduced.
+  in fountain's standalone lockfile. No cashu-ts 4.x dependency was introduced.
 - All 109 library tests pass (393 assertions), including the original wire and UR vectors,
   large amounts, mixed serialized/object witnesses across grouped keysets, and the
   expanded 1024-fragment limit with repair-only recovery and independent 1 MiB bounds.
@@ -16,13 +16,18 @@ Verified on 2026-10-06 after updating to upstream `v0.1.0-alpha.1`
   strict NodeNext and Bundler type resolution, and Chromium execution across all six entry points.
 - Coco's root build, typecheck, documentation build, and dependency release-age check pass.
 
+Both the root and standalone lockfiles pass frozen installs. A second full development
+installation in a temporary directory was blocked by host disk exhaustion; the
+isolated production tarball checks above passed. Fountain's actual publish command
+was checked with `npm publish --dry-run --access public`; no package was published.
+
 Commands run from the Coco root:
 
 ```sh
-bun run --cwd packages/fountain test
-bun run --cwd packages/fountain typecheck
-bun run --cwd packages/fountain test:browser
-bun run --cwd packages/fountain test:package
+bun run --cwd standalone/fountain test
+bun run --cwd standalone/fountain typecheck
+bun run --cwd standalone/fountain test:browser
+bun run --cwd standalone/fountain test:package
 bun run build
 bun run typecheck
 bun run docs:build
@@ -35,11 +40,10 @@ Playwright 1.57.0's platform table, and installing its fallback browser exhauste
 host disk space. The CI workflow installs Playwright's matching Chromium on Ubuntu 24.04.
 This verifies library behavior, not physical QR scanning performance or wallet interoperability.
 
-Release isolation is separately covered by `bun run test:release`: core stable,
-RC entry/follow-up/exit, fountain-only versioning, failed versioning, and publication
-scope selection. Temporary rehearsals using the real repository manifests confirm
-that core releases select seven packages while a fountain release selects only
-`@cashu/coco-fountain`. No package was published during validation.
+Fountain is outside the root workspace. Release isolation is checked with temporary
+core stable/RC versioning rehearsals and workspace package discovery. Its dedicated
+publish workflow validates the tag and changelog before publishing from the package
+directory. No package was published during validation.
 
 Runtime source comparison against alpha.1 finds only Coco's Cashu witness
 compatibility helper differing after normalizing formatting and comments.
@@ -94,10 +98,10 @@ These are bundle-size reductions for the standalone UR reader, not QR capacity o
 
 ## Coco package artifact verification
 
-Run `bun run test:package` from `packages/fountain`. This packs the current source
+Run `bun run test:package` from `standalone/fountain`. This packs the current source
 using `bun pm pack` (which builds through `prepack`), checks exported JavaScript,
 declarations, documentation and license files, and installs that tarball into an
-isolated production-only consumer. It uses the root dependency release-age policy.
+isolated production-only consumer. It uses fountain's local dependency release-age policy.
 
 The consumer checks all six public entry points, binary repair recovery with loss,
 Cashu conversion, UR routing against an independent fixture, CBOR/base64 helpers,
