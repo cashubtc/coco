@@ -38,6 +38,7 @@ want to solve and the approach you have in mind.
 - `packages/core` - storage-agnostic core library, services, operations, models,
   repositories, and tests
 - `packages/react` - React hooks and providers for the core package
+- `packages/fountain` - optional binary fountain transport, Cashu helpers, and UR decoding
 - `packages/adapter-tests` - shared contract test helpers for storage adapters
 - `packages/indexeddb` - IndexedDB adapter for web environments
 - `packages/expo-sqlite` - Expo SQLite adapter for React Native and Expo apps
@@ -66,6 +67,9 @@ bun run --filter='@cashu/coco-core' test
 bun run --filter='@cashu/coco-core' test:unit
 bun run --filter='@cashu/coco-core' test:integration
 bun run --filter='@cashu/coco-react' lint
+bun run --filter='@cashu/coco-fountain' test
+bun run --filter='@cashu/coco-fountain' test:browser
+bun run --filter='@cashu/coco-fountain' test:package
 bun run --filter='@cashu/coco-indexeddb' test
 bun run --filter='@cashu/coco-indexeddb' test:browser
 bun run --filter='@cashu/coco-sqlite' test

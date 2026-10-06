@@ -36,6 +36,7 @@ export default defineConfig({
           { text: 'Minting Tokens', link: '/starting/minting' },
           { text: 'Melting Tokens', link: '/starting/melting' },
           { text: 'Sending & Receiving', link: '/starting/sending-receiving' },
+          { text: 'Animated QR Transfers', link: '/starting/animated-qr' },
           { text: 'Payment Requests', link: '/starting/payment-requests' },
         ],
       },

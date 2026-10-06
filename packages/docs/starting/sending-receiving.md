@@ -2,6 +2,9 @@
 
 Cashu tokens can be sent between users as encoded strings. Coco provides simple methods for both sending and receiving tokens.
 
+For animated QR delivery, see [Animated QR Transfers](./animated-qr.md), using the
+optional experimental `@cashu/coco-fountain` package.
+
 ## Receiving Tokens
 
 For app flows that need review, cancellation, or crash recovery, prefer

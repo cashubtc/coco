@@ -45,6 +45,8 @@ Native via `@cashu/coco-expo-sqlite`.
   in-memory repositories for testing.
 - `@cashu/coco-react` — React hooks and providers for integrating a Coco
   `Manager` into UI code.
+- `@cashu/coco-fountain` — optional, experimental binary fountain transport for
+  animated QR transfers, with Cashu token helpers and inbound UR decoding.
 - `@cashu/coco-sqlite` — Node adapter built on `better-sqlite3`.
 - `@cashu/coco-indexeddb` — IndexedDB adapter for web environments.
 - `@cashu/coco-expo-sqlite` — Expo SQLite adapter for React Native and Expo.

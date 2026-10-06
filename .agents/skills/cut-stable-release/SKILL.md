@@ -7,6 +7,9 @@ description: Cut a coco stable release from `master` or finalize a selected RC c
 
 ## Purpose
 
+Fountain releases use their own versions and tags; see `RELEASING.md`. Use
+`bun run version:core` below to preserve fountain metadata during core versioning.
+
 Run the local git-side workflow for a stable coco release. This skill prepares
 the stable release commit and tag only; npm publish happens later when a GitHub
 Release is created for the tag.
@@ -66,7 +69,7 @@ Use this for tags like `v2.0.0`. Use `$cut-rc-release` for RC tags like
 4. Generate stable versions and changelogs:
 
    ```bash
-   bunx changeset version
+   bun run version:core
    ```
 
 5. Continue at "Commit And Tag".
@@ -109,7 +112,7 @@ Use this for tags like `v2.0.0`. Use `$cut-rc-release` for RC tags like
    ```bash
    test -f .changeset/pre.json
    bunx changeset pre exit
-   bunx changeset version
+   bun run version:core
    ```
 
 5. Continue at "Commit And Tag" with `RELEASE_BRANCH`, `RC_CUTOFF_TAG`, and

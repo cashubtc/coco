@@ -36,6 +36,9 @@
     "docs:preview": "vitepress preview packages/docs",
     "security:release-age": "bun scripts/check-release-age.ts",
     "format": "prettier . --write",
-    "format:check": "prettier . --check"
+    "format:check": "prettier . --check",
+    "version:fountain": "bun scripts/version-fountain.ts",
+    "test:release": "bun test scripts/release.test.ts",
+    "version:core": "bun scripts/version-core.ts"
   }
 }

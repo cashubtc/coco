@@ -1,0 +1,86 @@
+{
+  "name": "@cashu/coco-fountain",
+  "type": "module",
+  "devDependencies": {
+    "buffer": "6.0.3",
+    "playwright": "^1.52.0",
+    "@gandlaf21/bc-ur": "1.1.12"
+  },
+  "dependencies": {
+    "@cashu/cashu-ts": "5.0.0-rc.4",
+    "cborg": "4.3.2",
+    "@noble/hashes": "^2.0.1"
+  },
+  "version": "0.0.0",
+  "description": "Experimental browser-compatible binary fountain transport with Cashu and inbound UR helpers",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./core": {
+      "types": "./dist/core.d.ts",
+      "import": "./dist/core.js"
+    },
+    "./cashu": {
+      "types": "./dist/cashu.d.ts",
+      "import": "./dist/cashu.js"
+    },
+    "./ur": {
+      "types": "./dist/ur.d.ts",
+      "import": "./dist/ur.js"
+    },
+    "./encoding": {
+      "types": "./dist/encoding.d.ts",
+      "import": "./dist/encoding.js"
+    },
+    "./auto": {
+      "types": "./dist/auto.d.ts",
+      "import": "./dist/auto.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "docs/protocol.md",
+    "docs/implementation.md",
+    "NOTICE.md",
+    "LICENSE",
+    "docs/validation.md"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "test": "bun run build && bun test test/unit",
+    "test:browser": "bun run build && bun scripts/browser.ts",
+    "prepack": "bun run build",
+    "test:package": "bun scripts/package.ts"
+  },
+  "license": "MIT",
+  "author": "Egge21M",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cashubtc/coco",
+    "directory": "packages/fountain"
+  },
+  "homepage": "https://github.com/cashubtc/coco/tree/master/packages/fountain#readme",
+  "bugs": {
+    "url": "https://github.com/cashubtc/coco/issues"
+  },
+  "keywords": [
+    "cashu",
+    "fountain",
+    "cbor",
+    "ur",
+    "typescript"
+  ],
+  "engines": {
+    "node": ">=22.4.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": false
+}

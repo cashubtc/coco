@@ -1,15 +1,7 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-type PackageJson = {
-  private?: boolean;
-  name?: string;
-  version?: string | null;
-  dependencies?: Record<string, string>;
-  devDependencies?: Record<string, string>;
-  peerDependencies?: Record<string, string>;
-  optionalDependencies?: Record<string, string>;
-};
+import { selectRelease } from './release-packages';
 
 type PreState = {
   mode?: unknown;
@@ -34,14 +26,6 @@ function readPreState(): PreState | undefined {
   }
 
   return readJson<PreState>(path);
-}
-
-function packageJsonPaths(): string[] {
-  return readdirSync('packages', { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .sort((a, b) => a.name.localeCompare(b.name))
-    .map((entry) => join('packages', entry.name, 'package.json'))
-    .filter((path) => existsSync(path));
 }
 
 function parseOptionalBoolean(value: string | undefined): boolean | undefined {
@@ -98,13 +82,8 @@ if (!releaseTag) {
   throw new Error('RELEASE_TAG or GITHUB_REF_NAME must be set to the GitHub Release tag');
 }
 
-const releaseTagMatch = releaseTag.match(/^v(.+)$/);
-
-if (!releaseTagMatch) {
-  throw new Error(`Release tag must start with "v", got "${releaseTag}"`);
-}
-
-const expectedVersion = releaseTagMatch[1]!;
+const release = selectRelease(releaseTag);
+const expectedVersion = release.version;
 const expectedReleaseKind = releaseKind(expectedVersion);
 const preState = readPreState();
 
@@ -120,10 +99,15 @@ if (releasePrerelease === false && expectedReleaseKind !== 'stable') {
   throw new Error(`Stable GitHub releases must use vX.Y.Z tags`);
 }
 
-if (expectedReleaseKind === 'prerelease') {
+if (release.scope === 'fountain') {
+  if (expectedReleaseKind !== 'stable') {
+    throw new Error('Fountain releases use coco-fountain-vX.Y.Z tags');
+  }
+  if (preState) throw new Error('Fountain releases must not contain .changeset/pre.json');
+} else if (expectedReleaseKind === 'prerelease') {
   if (preState?.mode !== 'pre' || preState.tag !== prereleaseTag) {
     throw new Error(
-      `Prerelease tags must commit .changeset/pre.json with mode "pre" and tag "${prereleaseTag}"`,
+      'Prerelease tags must commit .changeset/pre.json with mode "pre" and the expected tag',
     );
   }
 } else if (preState) {
@@ -132,17 +116,7 @@ if (expectedReleaseKind === 'prerelease') {
   );
 }
 
-const packages = packageJsonPaths().map((path) => ({
-  path,
-  json: readJson<PackageJson>(path),
-}));
-const publishablePackages = packages.filter(
-  ({ json }) => !json.private && json.name && typeof json.version === 'string',
-);
-
-if (publishablePackages.length === 0) {
-  throw new Error('No publishable packages found');
-}
+const publishablePackages = release.selected;
 
 const mismatchedVersions = publishablePackages.filter(
   ({ json }) => json.version !== expectedVersion,
@@ -210,5 +184,5 @@ if (mismatchedChangelogs.length > 0) {
 }
 
 console.log(
-  `Verified ${publishablePackages.length} packages for ${releaseTag} (${expectedReleaseKind})`,
+  `Verified ${publishablePackages.length} packages for ${releaseTag} (${release.scope}, ${expectedReleaseKind})`,
 );
