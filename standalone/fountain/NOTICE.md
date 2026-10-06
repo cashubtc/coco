@@ -1,5 +1,9 @@
 # Third-party notices
 
+Imported from Egge21M/nut-fountain v0.1.0-alpha.1, commit
+`130fb2c1bba617a1a5d4f0bb08898a29099a64fc`. The original MIT license is retained
+in LICENSE.
+
 The minimal Bytewords dictionary and MUR consensus-stack implementation in
 `src/internal/ur/` follow Blockchain Commons BCR-2020-012 and BCR-2024-001.
 The independent fixtures in `test/unit/fixtures/urkit.json` are from URKit's

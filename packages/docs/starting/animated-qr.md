@@ -119,7 +119,3 @@ for recovery and cancellation behavior.
 The package uses the same cashu-ts version as Coco and requires no Coco Session.
 When migrating from `nut-fountain`, replace the package name in each import.
 The version-1 frame layout is retained, with alpha.1's expanded fragment limit.
-
-For detailed decoder contracts and wire rules, see the
-[package README](https://github.com/cashubtc/coco/tree/master/standalone/fountain#readme)
-and [protocol specification](https://github.com/cashubtc/coco/blob/master/standalone/fountain/docs/protocol.md).

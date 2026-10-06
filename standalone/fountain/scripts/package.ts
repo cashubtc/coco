@@ -29,17 +29,9 @@ for (const entry of Object.values(metadata.exports) as { types: string; import: 
   for (const path of [entry.types, entry.import])
     assert.ok(paths.has(path.replace(/^\.\//, '')), `Missing export ${path}`);
 }
-for (const path of [
-  'LICENSE',
-  'NOTICE.md',
-  'README.md',
-  'CHANGELOG.md',
-  'docs/protocol.md',
-  'docs/implementation.md',
-  'docs/validation.md',
-])
-  assert.ok(paths.has(path));
-assert.ok(![...paths].some((path) => /^(src|test|scripts|node_modules|apps)\//.test(path)));
+for (const path of ['LICENSE', 'NOTICE.md', 'CHANGELOG.md']) assert.ok(paths.has(path));
+assert.ok(!paths.has('README.md'));
+assert.ok(![...paths].some((path) => /^(docs|src|test|scripts|node_modules|apps)\//.test(path)));
 assert.equal(metadata.license, 'MIT');
 const consumer = join(temp, 'consumer');
 await mkdir(consumer);

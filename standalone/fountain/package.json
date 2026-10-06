@@ -46,13 +46,9 @@
   },
   "files": [
     "dist",
-    "README.md",
     "CHANGELOG.md",
-    "docs/protocol.md",
-    "docs/implementation.md",
     "NOTICE.md",
-    "LICENSE",
-    "docs/validation.md"
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsdown",
@@ -69,7 +65,7 @@
     "url": "https://github.com/cashubtc/coco",
     "directory": "standalone/fountain"
   },
-  "homepage": "https://github.com/cashubtc/coco/tree/master/standalone/fountain#readme",
+  "homepage": "https://cashubtc.github.io/coco/starting/animated-qr",
   "bugs": {
     "url": "https://github.com/cashubtc/coco/issues"
   },

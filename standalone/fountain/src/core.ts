@@ -11,7 +11,7 @@ import {
 import { crc32 } from './internal/crc32.js';
 import { FountainSolver } from './internal/fountain.js';
 
-/** Experimental binary fountain transport. See docs/protocol.md for its wire format. */
+/** Experimental binary fountain transport. */
 export class FountainEncoder {
   /** Number of source fragments required to reconstruct this message. */
   readonly fragmentCount: number;
