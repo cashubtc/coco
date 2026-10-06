@@ -20,7 +20,8 @@ want to solve and the approach you have in mind.
 
 ## Developing coco
 
-- Requirements: Bun; use the version configured in the relevant [CI workflow](.github/workflows).
+- Use Bun for workspace installation and scripts; use the version configured in the relevant
+  [CI workflow](.github/workflows).
 - Install dependencies from the repo root:
 
   ```bash
@@ -32,6 +33,9 @@ want to solve and the approach you have in mind.
   ```bash
   bunx playwright install
   ```
+
+- Before running Cocod commands, follow its [development setup](packages/cocod/README.md#development)
+  for the workspace build prerequisite and command sequence.
 
 ### Repository map
 
@@ -173,27 +177,10 @@ We commonly use scoped messages such as:
 If a change spans the whole repository rather than one package, an unscoped title
 like `chore: update release workflow` is fine.
 
-## Style guide
+## Coding standards
 
-Use the affected package's TypeScript configuration and [.prettierrc](.prettierrc) for compiler and
-formatting settings. Additional syntax conventions:
-
-- Use TypeScript with ESM `import` and `export`
-- Prefer `import type` for type-only imports
-- Order imports as external, then internal or alias, then relative
-- Use `PascalCase` for classes and types, `camelCase` for values and functions
-
-### Core and adapter conventions
-
-Use [CODING_STANDARDS.md](CODING_STANDARDS.md) for validation, types, errors, logging, persistence,
-public contracts and documentation expectations.
-
-### React package conventions
-
-- Keep hook dependency arrays correct
-- Use `useCallback` or `useMemo` when a value participates in dependencies
-- Normalize unknown caught errors with
-  `e instanceof Error ? e : new Error(String(e))`
+Before implementing or reviewing changes, use [CODING_STANDARDS.md](CODING_STANDARDS.md) for coding
+conventions, package boundaries, transaction design and behavioral guarantees.
 
 ## Testing expectations
 

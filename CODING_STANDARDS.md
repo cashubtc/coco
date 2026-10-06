@@ -1,8 +1,8 @@
 # Coding standards
 
-Use these standards when reviewing changes, including the final review before handoff. They capture
+Use these standards before implementing or reviewing changes, including the final review before handoff. They capture
 judgments grounded in core; apply core-specific contracts only to the packages and behavior they govern.
-Use [CONTRIBUTING](CONTRIBUTING.md) for contribution workflow, test organization and syntax conventions.
+Use [CONTRIBUTING](CONTRIBUTING.md) for contribution workflow and test organization.
 Executable configuration owns commands, formatting, compiler settings and coverage requirements.
 
 ## Scope the review
@@ -16,6 +16,16 @@ Distinguish an accepted design from its implementation status: an ADR can constr
 proving that a feature already exists. Resolve conflicts explicitly rather than copying a legacy example
 or treating a stale comment as the contract.
 
+## Package boundaries
+
+- Persistence: put repository interfaces in `packages/core`, reusable SQL repositories and schema
+  logic in `packages/sql-storage`, and runtime bindings in the matching adapter:
+  `packages/indexeddb`, `packages/sqlite3`, `packages/sqlite-bun`, or `packages/expo-sqlite`.
+- Put storage conformance helpers shared by adapters in `packages/adapter-tests`.
+- New workspace packages with build-time dependencies on internal `@cashu/coco-*` packages must
+  declare those dependencies as `peerDependencies`; the [root build](scripts/build.ts) derives package
+  order from that graph.
+
 ## Keep responsibilities clear
 
 Extract shared domain rules or meaningful responsibility boundaries. Similar-looking code alone does not
@@ -27,11 +37,22 @@ Thin public API facades are intentional. Internal abstractions should hide meani
 constrain authority; a narrow interface can be useful even with one implementation. Check the concrete
 dependencies and composition wiring to establish what a module can actually do.
 
-For Wallet persistence, operation coordination or storage adapters, follow
-[TRANSACTION_DESIGN](TRANSACTION_DESIGN.md), including its naming rules and agent review steps, and
-[ADR-0011](packages/core/docs/adr/0011-use-domain-transaction-gateways.md). Review the full effect chain
-through helpers and injected dependencies. Typecheck and interface shape alone cannot establish
-transaction ownership, atomicity or recovery safety.
+### Transactions
+
+Before changing or reviewing Wallet persistence, operation coordination or storage adapters, read
+[TRANSACTION_DESIGN](TRANSACTION_DESIGN.md) and
+[ADR-0011](packages/core/docs/adr/0011-use-domain-transaction-gateways.md) for naming, dependencies and
+transaction ownership. Before handoff, complete the design's
+[Agent Review](TRANSACTION_DESIGN.md#agent-review), which defines the required dependency tracing,
+behavior verification, boundary/deviation report and paired design/ADR updates for contract changes.
+
+## Syntax and React conventions
+
+- Prefer `import type` for type-only imports.
+- Order imports as external, then internal or alias, then relative.
+- In `packages/react`, use `useCallback` or `useMemo` when a value participates in dependencies.
+- In `packages/react`, normalize unknown caught errors with
+  `e instanceof Error ? e : new Error(String(e))`.
 
 ## Preserve domain meaning and compatibility
 
