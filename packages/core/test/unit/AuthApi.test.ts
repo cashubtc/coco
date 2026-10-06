@@ -1,84 +1,96 @@
-import { beforeEach, describe, expect, it, mock } from 'bun:test';
-import { AuthApi } from '../../api/AuthApi.ts';
-import type { AuthService } from '../../services/AuthService.ts';
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { AuthSessionError, Manager, MemoryRepositories, type AuthApi } from '../../index.ts';
 
 const mintUrl = 'https://mint.test';
 
-const fakeSession = { mintUrl, accessToken: 'cat', expiresAt: 9999999999 } as any;
-const fakeDeviceAuth = {
-  verification_uri: 'https://auth.test/device',
-  verification_uri_complete: undefined,
-  user_code: 'ABCD',
-  poll: mock(async () => ({})),
-  cancel: mock(() => {}),
-};
+// Public consumers can supply an implementation structurally. Only these eight methods are visible.
+type AuthMethod =
+  | 'startDeviceAuth'
+  | 'login'
+  | 'restore'
+  | 'logout'
+  | 'getSession'
+  | 'hasSession'
+  | 'getAuthProvider'
+  | 'getPoolSize';
+const publicMethodsMatch: [keyof AuthApi] extends [AuthMethod]
+  ? [AuthMethod] extends [keyof AuthApi]
+    ? true
+    : false
+  : false = true;
 
-function makeAuthService() {
-  return {
-    startDeviceAuth: mock(async () => fakeDeviceAuth),
-    login: mock(async () => fakeSession),
-    restore: mock(async () => true),
-    logout: mock(async () => {}),
-    getSession: mock(async () => fakeSession),
-    hasSession: mock(async () => true),
-    getAuthProvider: mock(() => undefined),
-    getPoolSize: mock(() => 5),
-  } as unknown as AuthService;
+function assertPublicTypes(auth: AuthApi): void {
+  // @ts-expect-error Persistence dependencies are not part of the public authentication interface.
+  auth.authSessionService;
+  // @ts-expect-error Internal persistence helpers are not part of the public interface.
+  auth.saveSessionWithPool;
 }
 
-describe('AuthApi', () => {
-  let api: AuthApi;
-  let authService: AuthService;
+describe('manager.auth', () => {
+  let repositories: MemoryRepositories;
+  let manager: Manager;
+  const managers: Manager[] = [];
 
   beforeEach(() => {
-    authService = makeAuthService();
-    api = new AuthApi(authService);
+    repositories = new MemoryRepositories();
+    manager = new Manager(repositories, async () => new Uint8Array(64));
+    managers.push(manager);
   });
 
-  it('delegates startDeviceAuth to AuthService', async () => {
-    const result = await api.startDeviceAuth(mintUrl);
-    expect(result).toBe(fakeDeviceAuth);
-    expect(authService.startDeviceAuth).toHaveBeenCalledWith(mintUrl);
+  afterEach(async () => {
+    for (const session of managers.splice(0)) await session.dispose();
   });
 
-  it('delegates login to AuthService', async () => {
-    const tokens = { access_token: 'cat-abc', expires_in: 3600 };
-    const result = await api.login(mintUrl, tokens);
-    expect(result).toBe(fakeSession);
-    expect(authService.login).toHaveBeenCalledWith(mintUrl, tokens);
+  it('preserves login, session queries, provider access, logout, and auth events', async () => {
+    expect(publicMethodsMatch).toBe(true);
+    const events: string[] = [];
+    manager.on('auth-session:updated', ({ mintUrl }) => {
+      events.push(`updated:${mintUrl}`);
+    });
+    manager.on('auth-session:deleted', ({ mintUrl }) => {
+      events.push(`deleted:${mintUrl}`);
+    });
+
+    const auth: AuthApi = manager.auth;
+    const session = await auth.login(`${mintUrl}/`, {
+      access_token: 'cat-token',
+      expires_in: 3600,
+      scope: 'cashu',
+    });
+
+    expect(session.mintUrl).toBe(mintUrl);
+    expect(session.scope).toBe('cashu');
+    expect(await auth.getSession(mintUrl)).toEqual(session);
+    expect(await auth.hasSession(mintUrl)).toBe(true);
+    expect(auth.getAuthProvider(mintUrl)?.getCAT()).toBe('cat-token');
+    expect(auth.getPoolSize(mintUrl)).toBe(0);
+    expect(await repositories.authSessionRepository.getSession(mintUrl)).toEqual(session);
+
+    await auth.logout(`${mintUrl}/`);
+
+    expect(await auth.hasSession(mintUrl)).toBe(false);
+    expect(auth.getAuthProvider(mintUrl)).toBeUndefined();
+    expect(auth.getPoolSize(mintUrl)).toBe(0);
+    expect(await repositories.authSessionRepository.getSession(mintUrl)).toBeNull();
+    await expect(auth.getSession(mintUrl)).rejects.toBeInstanceOf(AuthSessionError);
+    expect(events).toEqual([`updated:${mintUrl}`, `deleted:${mintUrl}`]);
   });
 
-  it('delegates restore to AuthService', async () => {
-    const result = await api.restore(mintUrl);
-    expect(result).toBe(true);
-    expect(authService.restore).toHaveBeenCalledWith(mintUrl);
+  it('restores a persisted session in a new Coco Session', async () => {
+    await manager.auth.login(mintUrl, { access_token: 'persisted-cat', expires_in: 3600 });
+    const nextManager = new Manager(repositories, async () => new Uint8Array(64));
+    managers.push(nextManager);
+
+    expect(nextManager.auth.getAuthProvider(mintUrl)).toBeUndefined();
+    expect(await nextManager.auth.restore(`${mintUrl}/`)).toBe(true);
+    expect(nextManager.auth.getAuthProvider(mintUrl)?.getCAT()).toBe('persisted-cat');
+    expect((await nextManager.auth.getSession(mintUrl)).accessToken).toBe('persisted-cat');
   });
 
-  it('delegates logout to AuthService', async () => {
-    await api.logout(mintUrl);
-    expect(authService.logout).toHaveBeenCalledWith(mintUrl);
-  });
-
-  it('delegates getSession to AuthService', async () => {
-    const result = await api.getSession(mintUrl);
-    expect(result).toBe(fakeSession);
-    expect(authService.getSession).toHaveBeenCalledWith(mintUrl);
-  });
-
-  it('delegates hasSession to AuthService', async () => {
-    const result = await api.hasSession(mintUrl);
-    expect(result).toBe(true);
-    expect(authService.hasSession).toHaveBeenCalledWith(mintUrl);
-  });
-
-  it('delegates getAuthProvider to AuthService', () => {
-    api.getAuthProvider(mintUrl);
-    expect(authService.getAuthProvider).toHaveBeenCalledWith(mintUrl);
-  });
-
-  it('delegates getPoolSize to AuthService', () => {
-    const result = api.getPoolSize(mintUrl);
-    expect(result).toBe(5);
-    expect(authService.getPoolSize).toHaveBeenCalledWith(mintUrl);
+  it('keeps missing-session restore and query behavior', async () => {
+    expect(await manager.auth.restore(mintUrl)).toBe(false);
+    expect(await manager.auth.hasSession(mintUrl)).toBe(false);
+    expect(manager.auth.getAuthProvider(mintUrl)).toBeUndefined();
+    await expect(manager.auth.getSession(mintUrl)).rejects.toBeInstanceOf(AuthSessionError);
   });
 });
