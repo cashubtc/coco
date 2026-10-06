@@ -1,9 +1,7 @@
 # Coding standards
 
-Use these standards before implementing or reviewing changes, including the final review before handoff. They capture
-judgments grounded in core; apply core-specific contracts only to the packages and behavior they govern.
-Use [CONTRIBUTING](CONTRIBUTING.md) for contribution workflow and test organization.
-Executable configuration owns commands, formatting, compiler settings and coverage requirements.
+Apply core-specific contracts only to the packages and behavior they govern.
+Use [CONTRIBUTING](CONTRIBUTING.md) for contribution workflow, commands and test organization.
 
 ## Scope the review
 
@@ -11,7 +9,7 @@ Apply the accepted design to new and substantially reworked flows. A narrow fix 
 boundary when it avoids worsening that boundary and reports relevant deviations. Touching a file alone
 does not require migrating its whole module. Follow the owning design's migration scope.
 
-For domain changes, use the language and relevant ADRs routed by [GLOSSARY-MAP](GLOSSARY-MAP.md).
+For domain changes, follow [domain routing](docs/agents/domain.md) for vocabulary and relevant ADRs.
 Distinguish an accepted design from its implementation status: an ADR can constrain future work without
 proving that a feature already exists. Resolve conflicts explicitly rather than copying a legacy example
 or treating a stale comment as the contract.
@@ -41,10 +39,8 @@ dependencies and composition wiring to establish what a module can actually do.
 
 Before changing or reviewing Wallet persistence, operation coordination or storage adapters, read
 [TRANSACTION_DESIGN](TRANSACTION_DESIGN.md) and
-[ADR-0011](packages/core/docs/adr/0011-use-domain-transaction-gateways.md) for naming, dependencies and
-transaction ownership. Before handoff, complete the design's
-[Agent Review](TRANSACTION_DESIGN.md#agent-review), which defines the required dependency tracing,
-behavior verification, boundary/deviation report and paired design/ADR updates for contract changes.
+[ADR-0011](packages/core/docs/adr/0011-use-domain-transaction-gateways.md). Before handoff, complete every
+[Agent Review step](TRANSACTION_DESIGN.md#agent-review).
 
 ## Syntax and React conventions
 

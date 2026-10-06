@@ -20,6 +20,10 @@ want to solve and the approach you have in mind.
 
 ## Developing coco
 
+The affected package's `package.json`, root scripts and tool configuration own commands, formatting,
+compiler settings and coverage requirements. If prose disagrees, follow executable configuration and
+flag or fix the prose.
+
 - Use Bun for workspace installation and scripts; use the version configured in the relevant
   [CI workflow](.github/workflows).
 - Install dependencies from the repo root:
