@@ -242,6 +242,36 @@ describe('PaymentRequestService', () => {
   });
 
   describe('parse', () => {
+    it.each(['', 'invalid-prefix', 'creqAinvalid', 'CREQBinvalid'])(
+      'adds payment request context to decoder failure for %j',
+      async (encoded) => {
+        let thrown: unknown;
+        try {
+          await service.parse(encoded);
+        } catch (error) {
+          thrown = error;
+        }
+
+        expect(thrown).toBeInstanceOf(PaymentRequestError);
+        expect((thrown as Error).message).toBe(
+          'Failed to decode payment request; expected a valid creqA or creqB request',
+        );
+        expect((thrown as { cause?: unknown }).cause).toBeInstanceOf(Error);
+        expect(mockProofService.getBalancesByMint).not.toHaveBeenCalled();
+        expect(mockSendOperationService.init).not.toHaveBeenCalled();
+      },
+    );
+
+    it('preserves failures from balance lookup after successful decoding', async () => {
+      const cause = new Error('Storage unavailable');
+      mockProofService.getBalancesByMint = mock(async () => {
+        throw cause;
+      });
+      const encoded = new PaymentRequest([], 'request-id', 100, 'sat').toEncodedRequest();
+
+      await expect(service.parse(encoded)).rejects.toBe(cause);
+    });
+
     it('should decode an inband payment request', async () => {
       const pr = new PaymentRequest([], 'request-id-1', 100, 'sat', [testMintUrl], 'Test payment');
       const encoded = pr.toEncodedRequest();

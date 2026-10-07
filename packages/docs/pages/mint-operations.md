@@ -14,9 +14,10 @@ The operation lifecycle API is exposed through `coco.ops.mint`:
 - `prepare({ quote, amount })` prepares a pending mint operation from an
   existing canonical quote or quote ref. Reusable onchain quotes require
   `amount` because one quote can fund multiple operations.
-- `execute(operationOrId)` redeems a paid quote and returns the terminal state
-- `checkPayment(operationId)` checks the remote quote state for a pending
-  operation
+- `execute(operationOrId)` attempts issuance using the stored canonical quote
+  and returns the latest operation state, which may still be `pending`
+- `checkPayment(operationId)` checks the remote quote for a pending operation
+  and immediately reconciles paid or issued value; it can execute issuance
 - `refresh(operationId)` checks or recovers an operation and returns the latest
   stored state
 - `finalize(operationId)` executes or recovers the operation until it reaches a
@@ -104,7 +105,7 @@ Mint operations progress through the following states:
 | `pending`   | Quote and deterministic output data are persisted; payment may settle remotely |
 | `executing` | Quote redemption or recovery is in progress                                    |
 | `finalized` | Quote was issued and proofs were saved or recovered                            |
-| `failed`    | Quote reached a terminal non-issued state, such as expiry                      |
+| `failed`    | Issuance reached a terminal failure; elapsed quote expiry alone is advisory    |
 
 ```
 init -> pending -> executing -> finalized
@@ -114,13 +115,30 @@ init -> pending -> executing -> finalized
 
 ## Lifecycle Actions
 
-| Action                      | Valid input state                                       | Resulting state                                 | Use when                                                       |
-| --------------------------- | ------------------------------------------------------- | ----------------------------------------------- | -------------------------------------------------------------- |
-| `prepare(...)`              | canonical quote                                         | `pending`                                       | You are ready to track a quote as a mint operation.            |
-| `checkPayment(operationId)` | `pending`                                               | latest remote observation; may queue redemption | You want to update UI after the invoice may have been paid.    |
-| `execute(operationOrId)`    | `pending`                                               | `finalized` or `failed`                         | You know the quote is payable and want to redeem it now.       |
-| `refresh(operationId)`      | any, actively checks `pending` and recovers `executing` | latest stored state                             | You are showing stale persisted state or a recovery screen.    |
-| `finalize(operationId)`     | `pending`, `executing`, or terminal                     | terminal state when possible                    | You want one explicit call to settle or recover the operation. |
+| Action                      | Valid input state                                       | Resulting state                                  | Use when                                                       |
+| --------------------------- | ------------------------------------------------------- | ------------------------------------------------ | -------------------------------------------------------------- |
+| `prepare(...)`              | canonical quote                                         | `pending`                                        | You are ready to track a quote as a mint operation.            |
+| `checkPayment(operationId)` | `pending`                                               | observation category; may also finalize issuance | You want to update UI after the invoice may have been paid.    |
+| `execute(operationOrId)`    | `pending`, `executing`, or terminal                     | `pending`, `finalized`, or `failed`              | You know the quote is payable and want to redeem it now.       |
+| `refresh(operationId)`      | any, actively checks `pending` and recovers `executing` | latest stored state                              | You are showing stale persisted state or a recovery screen.    |
+| `finalize(operationId)`     | `pending`, `executing`, or terminal                     | latest stored state; terminal when possible      | You want one explicit call to settle or recover the operation. |
+
+`execute()` does not first fetch a fresh payment observation. Paying an invoice
+externally does not update Coco's canonical quote by itself: until a watcher or
+explicit refresh records that payment, `execute()` can return `pending` again.
+A resolved promise does not guarantee issuance; inspect `operation.state`.
+
+`checkPayment()` is an action that may issue proofs and emit `mint-op:executing`
+and `mint-op:finalized` before returning, even when the background processor is
+disabled. Its `category` describes the quote observation; `ready` can accompany
+an operation that has already finalized. Reload with `get(id)` to render the
+persisted operation. `refresh(id)` also checks/reconciles pending operations and
+can issue proofs. `get(id)` only reads stored state. Quote-level
+`quotes.mint.refresh(identity)` records a remote observation and emits an event;
+enabled processors may react to that event and advance operations.
+
+`finalize()` also returns the latest state when immediate completion is not
+possible. None of these calls waits indefinitely for an unpaid invoice.
 
 With the default mint watcher and processor enabled, apps usually do not need to
 poll `refresh()` in the happy path. BOLT11 mint quotes and reusable onchain mint
@@ -148,8 +166,13 @@ showInvoice(pending.request);
 const check = await coco.ops.mint.checkPayment(pending.id);
 
 if (check.category === 'ready' || check.category === 'completed') {
-  const terminal = await coco.ops.mint.finalize(pending.id);
-  console.log('Mint operation state:', terminal.state);
+  await coco.ops.mint.finalize(pending.id);
+}
+
+// checkPayment may already have finalized it; always render persisted state.
+const current = await coco.ops.mint.get(pending.id);
+if (current) {
+  console.log('Mint operation state:', current.state);
 }
 ```
 
