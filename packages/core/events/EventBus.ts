@@ -6,13 +6,12 @@ export type EventBusOptions<Events extends { [K in keyof Events]: unknown }> = {
     payload: Events[keyof Events];
     error: unknown;
   }) => void | Promise<void>;
-  concurrency?: 'sequential' | 'parallel';
   throwOnError?: boolean;
 };
 
 export type EmitOptions = {
   throwOnError?: boolean;
-  failFast?: boolean; // only relevant for sequential
+  failFast?: boolean; // stops on the first listener error when throwOnError is enabled
 };
 
 export class EventBus<Events extends { [K in keyof Events]: unknown }> {
@@ -44,6 +43,7 @@ export class EventBus<Events extends { [K in keyof Events]: unknown }> {
     if (set.size === 0) this.listeners.delete(event);
   }
 
+  /** Await each snapshotted listener in registration order. */
   async emit<E extends keyof Events>(
     event: E,
     payload: Events[E],
@@ -54,25 +54,6 @@ export class EventBus<Events extends { [K in keyof Events]: unknown }> {
 
     const handlers = Array.from(set) as Array<(payload: Events[E]) => void | Promise<void>>;
     const effectiveThrow = options?.throwOnError ?? this.options.throwOnError ?? false;
-    const concurrency = this.options.concurrency ?? 'sequential';
-
-    if (concurrency === 'parallel') {
-      const results = await Promise.allSettled(handlers.map((h) => h(payload)));
-      const errors: unknown[] = [];
-      for (const r of results) {
-        if (r.status === 'rejected') {
-          errors.push(r.reason);
-          if (this.options.onError) await this.options.onError({ event, payload, error: r.reason });
-        }
-      }
-      if (errors.length && effectiveThrow) {
-        throw new AggregateError(
-          errors,
-          `Event "${String(event)}" had ${errors.length} handler error(s)`,
-        );
-      }
-      return;
-    }
 
     const collectedErrors: unknown[] = [];
     for (const handler of handlers) {
