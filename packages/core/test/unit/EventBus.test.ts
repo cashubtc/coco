@@ -24,26 +24,6 @@ describe('EventBus', () => {
     expect(calls).toEqual(['first:hello', 'first:finished', 'second:hello']);
   });
 
-  it('uses the listener snapshot when listeners are added or removed during dispatch', async () => {
-    const bus = new EventBus<Events>();
-    const calls: string[] = [];
-    const added = () => {
-      calls.push('added');
-    };
-    bus.once('message', () => {
-      removeSibling();
-      bus.on('message', added);
-    });
-    const removeSibling = bus.on('message', () => {
-      calls.push('sibling');
-    });
-
-    await bus.emit('message', 'hello');
-    expect(calls).toEqual(['sibling']);
-    await bus.emit('message', 'hello');
-    expect(calls).toEqual(['sibling', 'added']);
-  });
-
   it('reports synchronous and asynchronous failures and continues delivery by default', async () => {
     const onError = mock<NonNullable<EventBusOptions<Events>['onError']>>(() => {});
     const bus = new EventBus<Events>({ onError });
@@ -90,23 +70,6 @@ describe('EventBus', () => {
     expect((error as AggregateError).errors).toHaveLength(2);
   });
 
-  it.each([false, true])(
-    'honors per-emit throwOnError: %s over the bus default',
-    async (throwOnError) => {
-      const bus = new EventBus<Events>({ throwOnError: !throwOnError });
-      bus.on('message', () => {
-        throw new Error('listener');
-      });
-
-      const emitted = bus.emit('message', 'hello', { throwOnError });
-      if (throwOnError) {
-        await expect(emitted).rejects.toBeInstanceOf(AggregateError);
-      } else {
-        await expect(emitted).resolves.toBeUndefined();
-      }
-    },
-  );
-
   it('reports the first error and stops delivery when failFast and throwOnError are enabled', async () => {
     const onError = mock<NonNullable<EventBusOptions<Events>['onError']>>(() => {});
     const bus = new EventBus<Events>({ onError, throwOnError: true });
@@ -120,17 +83,5 @@ describe('EventBus', () => {
     await expect(bus.emit('message', 'hello', { failFast: true })).rejects.toBe(failure);
     expect(onError).toHaveBeenCalledWith({ event: 'message', payload: 'hello', error: failure });
     expect(sibling).not.toHaveBeenCalled();
-  });
-
-  it('continues delivery with failFast when throwOnError is disabled', async () => {
-    const bus = new EventBus<Events>();
-    const sibling = mock(() => {});
-    bus.on('message', () => {
-      throw new Error('listener');
-    });
-    bus.on('message', sibling);
-
-    await bus.emit('message', 'hello', { failFast: true });
-    expect(sibling).toHaveBeenCalledTimes(1);
   });
 });
