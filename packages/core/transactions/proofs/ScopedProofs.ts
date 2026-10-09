@@ -25,6 +25,7 @@ export interface SelectAndReserveProofsInput {
   operationId: string;
   amount: Amount;
   forceSwap: boolean;
+  offline?: boolean;
 }
 
 export interface SelectAndReserveForMeltInput {
