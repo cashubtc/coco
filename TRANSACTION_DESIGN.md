@@ -234,10 +234,10 @@ reservation. Only a definitive non-issuance result permits failure. Recovery and
 share settlement. Events follow commit, and listener failures do not replay issuance. Repositories
 preserve coordinator-supplied timestamps, subject to existing adapter precision.
 
-A future Mint Swap coordinator can call `tx.perform(prepareMint, destinationInput)` with its
+The dormant Mint Swap coordinator calls `tx.perform(prepareMint, destinationInput)` with its
 predetermined child ID and compose additional local transitions before returning. Its remote quote creation and
 metadata/seed preflight still occur outside the transaction. Melt supplies the corresponding source
-side through `prepareMelt`; Mint Swap parent orchestration remains a separate migration.
+side through `prepareMelt`.
 
 ## Melt Operations
 
@@ -270,6 +270,32 @@ coordinator-supplied timestamp, subject to adapter precision.
 A Mint Swap parent can compose predetermined `prepareMelt` and `prepareMint` child IDs in one runner
 callback. If later parent work fails, both child operations, Melt proof reservation, and all output
 counter changes roll back together. Their remote effects still occur only after that parent commit.
+
+## Mint Swap Operations
+
+The internal `MintSwapOperationService` composes the existing Mint and Melt transitions with
+branded parent transitions. Opt-in `tx.mintSwapOperations` is bound to the same adapter transaction.
+Memory stores opt in with `new MemoryRepositories({ mintSwap: true })`; persistent adapters retain
+their existing opt-in capability and schema. The coordinator is not wired into Manager or public APIs.
+
+Locked destination quote creation follows an independent committed NUT-20 key allocation. Quote
+creation and metadata refresh intentionally survive later preparation failure. Parent preparation
+commits both exact child plans, source proof reservation, counter allocations, debit bounds, and the
+parent checkpoint together. Source and destination authorization compose their child transitions
+with parent progress; only a newly changed authorization permits initial remote dispatch.
+
+Source recovery observes before acting and never blindly repeats a payment. A pre-swap result must
+commit before NUT-05. Quote Observations commit before child settlement and parent reconciliation.
+Destination proof settlement does not invent remote issued accounting: the parent stays pending
+until canonical accounting and exact stored proofs agree. Contradictory parent accounting preserves
+a valid committed child settlement and records needs_attention. Ambiguous outcomes retain recovery
+material and persist bounded retry scheduling.
+
+One effect-driving Coco Session per Wallet store is required. Shared child operation locks coordinate
+ordinary child services with the parent; parent revisions do not fence network effects across
+independent sessions. Runtime enforcement and activation belong to #419. Child change snapshots are
+captured within each attempt and published after commit and lock release, so reentrant listeners
+cannot deadlock on the coordinator's child locks. Delivery remains best effort, without an outbox.
 
 ## Files and Dependencies
 
@@ -394,8 +420,8 @@ Before completing a change involving Wallet persistence, operation coordination,
 
 ## Migration and Verification
 
-Send, Mint, and Melt transitions, KeyRing mutations, and mint metadata refresh use coordinator-owned transactions.
-Legacy Receive, Mint Swap orchestration, Payment Request Receive parent/attempt/child
+Send, Mint, Melt, and the dormant Mint Swap coordinator, KeyRing mutations, and mint metadata refresh use coordinator-owned transactions.
+Legacy Receive, legacy public Mint Swap orchestration, Payment Request Receive parent/attempt/child
 atomicity, and MintService add/forced-update/trust/delete paths remain for their owning migrations.
 Those migrations should reuse domain capabilities and branded transitions, rather than add domain gateways.
 Runtime rejection of nested Wallet transactions remains nonuniform: IndexedDB rejects ambient

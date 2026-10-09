@@ -76,7 +76,10 @@ transactions. Their commits intentionally survive later caller failure. Only app
 observations publish events; older observations and timestamp ties retain the first committed
 snapshot. Coordinator dependencies remain acyclic.
 
-Send, Mint, KeyRing, and mint metadata refresh use this model. Other legacy workflows migrate separately.
+Send, Mint, Melt, the dormant Mint Swap coordinator, KeyRing, and mint metadata refresh use this model.
+Mint Swap composes exact child preparation, authorization, and settlement through the same runner
+scope. It requires shared child locks in one effect-driving Coco Session; runtime activation and
+enforcement remain #419. Other legacy workflows migrate separately.
 Consistent fail-fast rejection of nested transactions remains follow-up work and must distinguish
 nesting from legitimate concurrent calls. There are no public API or persisted-format changes.
 
