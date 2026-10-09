@@ -39,7 +39,7 @@ jobs:
       - name: Run sqlite-bun local adapter tests
         run: |
           cd packages/sqlite-bun
-          bun test src/test/contract.test.ts
+          bun test src/test/contract.test.ts src/test/mintSwapComposition.test.ts
 
       - name: Run sqlite-bun integration tests
         run: ./scripts/test-integration.sh sqlite-bun
