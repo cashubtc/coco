@@ -13,6 +13,7 @@ import { SqlStorageRepositories } from '../../../sql-storage/src/repositories.ts
 import { SqliteDb } from '../../../sqlite-bun/src/db.ts';
 import { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
+import { ProofValidationError } from '../../models/Error.ts';
 import { MeltHandlerProvider } from '../../infra/handlers/melt/MeltHandlerProvider.ts';
 import {
   meltQuoteFromBolt11Response,
@@ -326,7 +327,7 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
           quoteId: 'quote-expired',
         }),
       ),
-    ).rejects.toThrow('Cannot prepare expired melt quote');
+    ).rejects.toBeInstanceOf(ProofValidationError);
 
     expect(await repositories.meltOperationRepository.getById('expired')).toBeNull();
     expect(
