@@ -18,6 +18,11 @@ import { RepositoryTransactionConflictError } from '../../../../core/repositorie
 import { overrideTransactions } from '../../../../core/test/overrideTransactions.ts';
 import { deserializeOutputData } from '../../../../core/utils.ts';
 import { testMintKeysetId } from '../../../../core/test/fixtures/MintMetadata.ts';
+import { QuoteLifecycle } from '../../../../core/quotes/QuoteLifecycle.ts';
+import { MeltHandlerProvider } from '../../../../core/infra/handlers/melt/MeltHandlerProvider.ts';
+import type { MintService } from '../../../../core/services/MintService.ts';
+import type { WalletService } from '../../../../core/services/WalletService.ts';
+import type { ProofService } from '../../../../core/services/ProofService.ts';
 
 import type { MintSwapContractOptions, MintSwapTestRunner } from './contract.ts';
 
@@ -40,8 +45,185 @@ export function runMintSwapCoordinatorContract(
       store = undefined;
     });
 
+    for (const interruption of [
+      'unpaid response',
+      'authorization crash',
+      'cancelled request',
+    ] as const) {
+      it(`releases source proofs after ${interruption} through real canonical observations`, async () => {
+        await fixture.create();
+        await fixture.prepare();
+        const { repositories, dependencies } = fixture;
+        let updates = 0;
+        fixture.events.on('melt-quote:updated', () => {
+          updates++;
+        });
+        const lifecycle = new QuoteLifecycle({
+          ...dependencies,
+          mintQuoteRepository: repositories.mintQuoteRepository,
+          meltQuoteRepository: repositories.meltQuoteRepository,
+          proofRepository: repositories.proofRepository,
+          // These legacy dependencies are unused by Melt observation recording/refresh.
+          proofService: {} as ProofService,
+          mintService: dependencies.mintService as MintService,
+          walletService: dependencies.walletService as WalletService,
+          meltHandlerProvider: new MeltHandlerProvider({
+            bolt11: {
+              ...dependencies.meltHandlerProvider.get('bolt11'),
+              fetchRemoteQuote: async ({ quote }) => ({
+                ...quote,
+                state: 'UNPAID',
+                lastObservedRemoteState: 'UNPAID',
+                lastObservedRemoteStateAt: dependencies.now!(),
+                updatedAt: dependencies.now!(),
+              }),
+            },
+          }),
+        });
+        dependencies.quoteLifecycle = lifecycle;
+        fixture.setSourceState('UNPAID');
+        const service = fixture.service();
+        if (interruption !== 'unpaid response') {
+          await fixture.runner.run((tx) =>
+            tx.perform(beginMintSwapSource, { ...fixture.preparation, now: 1_001 }),
+          );
+          fixture.setTime(2_000);
+          if (interruption === 'cancelled request') await service.cancel('swap');
+        }
+        const parent =
+          interruption === 'unpaid response'
+            ? await service.execute('swap')
+            : await service.reconcile('swap');
+        expect(parent.state).toBe(interruption === 'cancelled request' ? 'cancelled' : 'failed');
+        expect(parent.valueNeutral?.sourcePayment).toBe('confirmed_unpaid');
+        expect(parent.retry.nextAttemptAt).toBeNull();
+        const proof = await repositories.proofRepository.getProofBySecret(sourceUrl, 'original');
+        expect(proof?.state).toBe('ready');
+        expect(proof?.usedByOperationId).toBeUndefined();
+        const observed = await repositories.meltQuoteRepository.getMeltQuote(
+          sourceUrl,
+          'bolt11',
+          'source-quote',
+        );
+        expect(observed!.lastObservedRemoteStateAt!).toBeGreaterThan(1_001);
+        expect(updates).toBe(0);
+        expect(fixture.requests.filter((request) => request === 'melt')).toHaveLength(
+          interruption === 'unpaid response' ? 1 : 0,
+        );
+      });
+    }
+
+    it('fails an expired preparing parent without retrying or reserving inputs', async () => {
+      await fixture.create(); // Crash after identities commit, before child preparation.
+      fixture.setTime(100_000_001);
+      const service = fixture.service();
+      await service.recoverDue();
+      const parent = await fixture.repositories.mintSwap!.operationRepository.getById('swap');
+      expect(parent?.state).toBe('failed');
+      expect(parent?.failure?.code).toBe('preparation_rejected');
+      expect(parent?.valueNeutral?.sourcePayment).toBe('not_authorized');
+      expect(parent?.retry.nextAttemptAt).toBeNull();
+      expect(await fixture.repositories.meltOperationRepository.getById('source-child')).toBeNull();
+      expect(
+        await fixture.repositories.mintOperationRepository.getById('destination-child'),
+      ).toBeNull();
+      expect(
+        await fixture.repositories.counterRepository.getCounter(destinationUrl, keys.id),
+      ).toBeNull();
+      expect(
+        (await fixture.repositories.proofRepository.getProofBySecret(sourceUrl, 'original'))
+          ?.usedByOperationId,
+      ).toBeUndefined();
+      await service.recoverDue();
+      expect(
+        (await fixture.repositories.mintSwap!.operationRepository.getById('swap'))?.revision,
+      ).toBe(parent?.revision);
+      expect(fixture.requests).toEqual([]);
+    });
+
+    for (const scan of ['recoverActive', 'recoverDue'] as const) {
+      for (const leg of ['source', 'destination'] as const) {
+        it(`${scan} continues with another parent while the ${leg} child is busy`, async () => {
+          await fixture.create();
+          await fixture.prepare();
+          if (leg === 'source') fixture.setSourceState('PENDING');
+          const service = fixture.service();
+          await service.execute('swap');
+          const { repositories } = fixture;
+          const source = await repositories.meltQuoteRepository.getMeltQuote(
+            sourceUrl,
+            'bolt11',
+            'source-quote',
+          );
+          const destination = await repositories.mintQuoteRepository.getMintQuote(
+            destinationUrl,
+            'bolt11',
+            'destination-quote',
+          );
+          await repositories.meltQuoteRepository.upsertMeltQuote({
+            ...source!,
+            quoteId: 'source-quote-2',
+            state: 'UNPAID',
+            lastObservedRemoteState: 'UNPAID',
+            lastObservedRemoteStateAt: 2_000,
+          });
+          await repositories.mintQuoteRepository.upsertMintQuote({
+            ...destination!,
+            quoteId: 'destination-quote-2',
+          });
+          await repositories.proofRepository.saveProofs(sourceUrl, [
+            {
+              mintUrl: sourceUrl,
+              id: keys.id,
+              unit: 'sat',
+              state: 'ready',
+              amount: Amount.from(8),
+              secret: 'original-2',
+              C: keys.keys['1'],
+            },
+          ]);
+          await repositories.mintSwap!.operationRepository.create({
+            ...fixture.parent,
+            id: 'swap-2',
+            sourceOperationId: 'source-child-2',
+            destinationOperationId: 'destination-child-2',
+            sourceQuote: { ...fixture.parent.sourceQuote, quoteId: 'source-quote-2' },
+            destinationQuote: {
+              ...fixture.parent.destinationQuote,
+              quoteId: 'destination-quote-2',
+            },
+            createdAt: 2_000,
+            updatedAt: 2_000,
+            stateEnteredAt: 2_000,
+            retry: { ...fixture.parent.retry, nextAttemptAt: 2_000 },
+          });
+          fixture.setTime(10_000);
+          const lock =
+            leg === 'source'
+              ? fixture.dependencies.sourceOperationLock
+              : fixture.dependencies.destinationOperationLock;
+          const release = await lock.acquire(`${leg}-child`);
+          try {
+            await service[scan]();
+            expect(
+              (await repositories.mintSwap!.operationRepository.getById('swap-2'))?.state,
+            ).toBe('prepared');
+            expect(lock.isLocked(`${leg}-child`)).toBe(true);
+          } finally {
+            release();
+          }
+          fixture.setSourceState('PAID');
+          fixture.setDestinationState('ISSUED');
+          expect((await service.reconcile('swap')).state).toBe('completed');
+        });
+      }
+    }
+
     for (const [name, changes] of [
       ['empty identity', { id: ' ' }],
+      ['leading identity whitespace', { id: ' swap' }],
+      ['trailing identity whitespace', { id: 'swap ' }],
+      ['surrounding identity whitespace', { id: '\t swap \n' }],
       ['same normalized mint', { destinationMintUrl: sourceUrl + '/' }],
       ['zero receive amount', { destinationAmount: Amount.zero() }],
       ['cap below receive amount', { sourceDebitCap: Amount.from(7) }],
@@ -789,6 +971,87 @@ export function runMintSwapCoordinatorContract(
       expect(fixture.requests.slice(0, 2)).toEqual(['swap', 'melt']);
     });
 
+    for (const leg of ['source', 'destination'] as const) {
+      it(`defers payment when the ${leg} deadline passes during pre-swap and recovers on fresh UNPAID`, async () => {
+        await setup(16);
+        await fixture.create();
+        await fixture.prepare();
+        const { repositories, dependencies } = fixture;
+        if (leg === 'source') {
+          const quote = await repositories.meltQuoteRepository.getMeltQuote(
+            sourceUrl,
+            'bolt11',
+            'source-quote',
+          );
+          await repositories.meltQuoteRepository.upsertMeltQuote({ ...quote!, expiry: 2 });
+        } else {
+          const quote = await repositories.mintQuoteRepository.getMintQuote(
+            destinationUrl,
+            'bolt11',
+            'destination-quote',
+          );
+          await repositories.mintQuoteRepository.upsertMintQuote({ ...quote!, expiry: 2 });
+        }
+        const source = await repositories.meltOperationRepository.getById('source-child');
+        if (!source || source.state !== 'prepared' || !source.swapOutputData)
+          throw new Error('Expected a prepared pre-swap');
+        const sendSecrets = outputProofs(source.swapOutputData, 'send').map(
+          (proof) => proof.secret,
+        );
+        const keepSecrets = outputProofs(source.swapOutputData).map((proof) => proof.secret);
+        const handler = dependencies.meltHandlerProvider.get('bolt11');
+        const swap = handler.swap;
+        handler.swap = async (context) => {
+          const result = await swap(context);
+          fixture.setTime(3_000);
+          return result;
+        };
+
+        const deferred = await fixture.service().execute('swap');
+        expect(deferred.state).toBe('source_pending');
+        expect(deferred.retry.nextAttemptAt).toBeGreaterThan(3_000);
+        expect(fixture.requests).toEqual(['swap']);
+        const checkpoint = await repositories.meltOperationRepository.getById('source-child');
+        expect(checkpoint?.state).toBe('executing');
+        if (!checkpoint || checkpoint.state !== 'executing') throw new Error('Missing checkpoint');
+        expect(checkpoint.swapOutputData).toEqual(source.swapOutputData);
+        expect(checkpoint.changeOutputData).toEqual(source.changeOutputData);
+        expect(
+          (await repositories.proofRepository.getProofBySecret(sourceUrl, 'original'))?.state,
+        ).toBe('spent');
+        const retained = await repositories.proofRepository.getProofsBySecrets(
+          sourceUrl,
+          sendSecrets,
+        );
+        expect(retained).toHaveLength(sendSecrets.length);
+        expect(
+          retained.every(
+            (proof) => proof.state === 'inflight' && proof.usedByOperationId === source.id,
+          ),
+        ).toBe(true);
+
+        // Even expired quotes can establish non-payment; release the checkpointed inputs only then.
+        fixture.setTime(200_000_000);
+        fixture.setSourceState('UNPAID');
+        const recovered = await fixture.service().reconcile('swap');
+        expect(recovered.state).toBe('failed');
+        expect(recovered.valueNeutral?.sourcePayment).toBe('confirmed_unpaid');
+        expect(recovered.valueNeutral?.sourceProofs).toBe('released');
+        expect(fixture.requests).toEqual(['swap', 'observe-source']);
+        const released = await repositories.proofRepository.getProofsBySecrets(sourceUrl, [
+          ...keepSecrets,
+          ...sendSecrets,
+        ]);
+        expect(released).toHaveLength(keepSecrets.length + sendSecrets.length);
+        expect(released.every((proof) => proof.state === 'ready' && !proof.usedByOperationId)).toBe(
+          true,
+        );
+        expect(
+          (await repositories.proofRepository.getProofBySecret(sourceUrl, 'original'))?.state,
+        ).toBe('spent');
+      });
+    }
+
     it('releases an unsubmitted pre-swap only after checking originals are remotely unspent', async () => {
       await setup(16);
       await fixture.create();
@@ -952,6 +1215,81 @@ export function runMintSwapCoordinatorContract(
       ).toHaveLength(originalSecrets.length);
       expect(fixture.requests).toContain('recover-mint');
     });
+
+    for (const leg of ['source', 'destination'] as const) {
+      for (const remainsActive of [true, false]) {
+        it(`${remainsActive ? 'uses' : 'rejects'} the persisted ${leg} keyset when a cheaper active keyset appears`, async () => {
+          await setup(16);
+          const { repositories } = fixture;
+          const mintUrl = leg === 'source' ? sourceUrl : destinationUrl;
+          const original = await repositories.keysetRepository.getKeysetById(mintUrl, keys.id);
+          await repositories.keysetRepository.updateKeyset({ ...original!, active: false });
+          const plannedKeyset = {
+            ...original!,
+            id: testMintKeysetId('sat', { input_fee_ppk: 1_000 }),
+            feePpk: 1_000,
+          };
+          await repositories.keysetRepository.addKeyset(plannedKeyset);
+          await fixture.create();
+          expect((await fixture.service().prepare(fixture.parent)).state).toBe('prepared');
+          const source = await repositories.meltOperationRepository.getById('source-child');
+          const destination =
+            await repositories.mintOperationRepository.getById('destination-child');
+          if (
+            !source ||
+            source.state !== 'prepared' ||
+            !destination ||
+            destination.state !== 'pending'
+          )
+            throw new Error('Expected prepared children');
+          const counter = await repositories.counterRepository.getCounter(
+            mintUrl,
+            plannedKeyset.id,
+          );
+
+          const cheaper = createNewMintKeys(5, new Uint8Array(32).fill(9));
+          await repositories.keysetRepository.addKeyset({
+            ...original!,
+            id: cheaper.keysetId,
+            keypairs: serializeMintKeys(cheaper.pubKeys),
+            feePpk: 0,
+          });
+          if (!remainsActive)
+            await repositories.keysetRepository.updateKeyset({ ...plannedKeyset, active: false });
+          fixture.setSourceState('PENDING');
+          const parent = await fixture.service().execute('swap');
+          expect(parent.state).toBe(remainsActive ? 'source_pending' : 'failed');
+          expect(fixture.requests.filter((request) => request === 'melt')).toHaveLength(
+            remainsActive ? 1 : 0,
+          );
+          const sourceAfter = await repositories.meltOperationRepository.getById(source.id);
+          const destinationAfter = await repositories.mintOperationRepository.getById(
+            destination.id,
+          );
+          if (
+            !sourceAfter ||
+            sourceAfter.state === 'init' ||
+            !destinationAfter ||
+            destinationAfter.state === 'init'
+          )
+            throw new Error('Missing prepared children');
+          expect(sourceAfter.swapOutputData).toEqual(source.swapOutputData);
+          expect(sourceAfter.changeOutputData).toEqual(source.changeOutputData);
+          expect(destinationAfter.outputData).toEqual(destination.outputData);
+          expect(
+            await repositories.counterRepository.getCounter(mintUrl, plannedKeyset.id),
+          ).toEqual(counter);
+          expect(
+            await repositories.counterRepository.getCounter(mintUrl, cheaper.keysetId),
+          ).toBeNull();
+          if (!remainsActive)
+            expect(
+              (await repositories.proofRepository.getProofBySecret(sourceUrl, 'original'))
+                ?.usedByOperationId,
+            ).toBeUndefined();
+        });
+      }
+    }
 
     it('rejects output rotation before funding and releases reserved inputs', async () => {
       await fixture.create();
