@@ -380,6 +380,7 @@ export class QuoteLifecycle {
     QuoteLifecycleDeps['withMintQuoteTransaction']
   >;
   private readonly mintQuoteObservationLock = new MintScopedLock();
+  private readonly meltQuoteObservationLock = new MintScopedLock();
   private readonly batchUnavailablePollingMethodsByMint = new Map<string, Set<MintMethod>>();
 
   constructor(deps: QuoteLifecycleDeps) {
@@ -1452,8 +1453,20 @@ export class QuoteLifecycle {
    * changed meaningfully.
    */
   async recordMeltQuoteObservation(canonicalQuote: MeltQuote): Promise<MeltQuote> {
-    const { quote, remoteQuoteChanged } =
-      await this.resolveAndPersistMeltQuoteObservation(canonicalQuote);
+    const observationKey = JSON.stringify([
+      normalizeMintUrl(canonicalQuote.mintUrl),
+      canonicalQuote.method,
+      canonicalQuote.quoteId,
+    ]);
+    const release = await this.meltQuoteObservationLock.acquire(observationKey);
+    let observation: { quote: MeltQuote; remoteQuoteChanged: boolean };
+    try {
+      // Serialize freshness-only writes with settlement so a refresh cannot overwrite PAID.
+      observation = await this.resolveAndPersistMeltQuoteObservation(canonicalQuote);
+    } finally {
+      release();
+    }
+    const { quote, remoteQuoteChanged } = observation;
     await this.emitMeltQuoteUpdatedIfNeeded(quote, remoteQuoteChanged);
     return quote;
   }
@@ -1485,6 +1498,22 @@ export class QuoteLifecycle {
 
     const remoteQuoteChanged = getMeltQuoteChange(existing, canonicalQuote);
     if (!remoteQuoteChanged && existing) {
+      // An unchanged state can still be fresh non-payment evidence for an authorized operation.
+      // Persist observation metadata without emitting a duplicate quote update or moving it back.
+      const observedAt = canonicalQuote.lastObservedRemoteStateAt;
+      if (
+        canonicalQuote.lastObservedRemoteState === canonicalQuote.state &&
+        observedAt !== undefined &&
+        observedAt > (existing.lastObservedRemoteStateAt ?? -1)
+      ) {
+        const quote = await this.persistCanonicalMeltQuote({
+          ...existing,
+          lastObservedRemoteState: canonicalQuote.lastObservedRemoteState,
+          lastObservedRemoteStateAt: observedAt,
+          updatedAt: Math.max(existing.updatedAt, canonicalQuote.updatedAt),
+        });
+        return { quote, remoteQuoteChanged: false };
+      }
       return {
         quote: existing,
         remoteQuoteChanged: false,
