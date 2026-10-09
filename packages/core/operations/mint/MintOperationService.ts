@@ -54,7 +54,7 @@ export interface ClaimMintQuoteOptions {
  * MintOperationService orchestrates mint quote redemption as a crash-safe saga.
  */
 export class MintOperationService {
-  private readonly operationIdLock = new OperationIdLock();
+  private readonly operationIdLock: OperationIdLock;
   private recoveryLock: Promise<void> | null = null;
   private readonly mintScopedLock: MintScopedLock;
 
@@ -84,8 +84,10 @@ export class MintOperationService {
       eventBus: EventBus<CoreEvents>;
       logger?: Logger;
       mintScopedLock?: MintScopedLock;
+      operationIdLock?: OperationIdLock;
     },
   ) {
+    this.operationIdLock = dependencies.operationIdLock ?? new OperationIdLock();
     this.mintScopedLock = dependencies.mintScopedLock ?? new MintScopedLock();
   }
 
