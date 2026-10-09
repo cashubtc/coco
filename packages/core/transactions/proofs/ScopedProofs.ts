@@ -61,7 +61,7 @@ export interface ScopedProofs extends ProofQueries {
     inputFee: Amount;
     needsSwap: boolean;
   }>;
-  getFee(mintUrl: string, unit: string, proofs: readonly CoreProof[]): Promise<Amount>;
+  getFee(mintUrl: string, unit: string, proofs: readonly Pick<CoreProof, 'id'>[]): Promise<Amount>;
   getOwned(input: OwnedProofsInput): Promise<CoreProof[]>;
   /**
    * Read a persisted pre-swap send plan. Legacy outputs may lack usedByOperationId, but must be
@@ -176,7 +176,11 @@ export class RepositoryScopedProofs implements ScopedProofs {
     };
   }
 
-  async getFee(mintUrl: string, unit: string, proofs: readonly CoreProof[]): Promise<Amount> {
+  async getFee(
+    mintUrl: string,
+    unit: string,
+    proofs: readonly Pick<CoreProof, 'id'>[],
+  ): Promise<Amount> {
     return calculateProofFee(
       proofs,
       createKeyChain(mintUrl, unit, await this.keysets.getKeysetsByMintUrl(mintUrl)),
