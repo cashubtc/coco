@@ -1073,11 +1073,11 @@ describe('ProofService', () => {
     });
   });
 
-  describe('balance queries', () => {
+  describe('balance queries (legacy/plugin delegation)', () => {
     const otherMintUrl = 'https://mint.other';
     const operationId = 'op-123';
 
-    it('returns canonical snapshot and legacy single-mint views', async () => {
+    it('compares canonical BalanceQueries views against legacy/plugin projections on the same fixture', async () => {
       const service = new ProofService(
         counterService,
         proofRepo,
@@ -1093,172 +1093,14 @@ describe('ProofService', () => {
         makeProof({ secret: 'a1', amount: Amount.from(100) }),
         makeProof({ secret: 'a2', amount: Amount.from(50) }),
       ]);
-      await proofRepo.reserveProofs(mintUrl, ['a1'], operationId);
-
-      await expect(service.getBalancesByMint({ mintUrls: [mintUrl] })).resolves.toEqual({
-        [mintUrl]: {
-          spendable: Amount.from(50),
-          reserved: Amount.from(100),
-          total: Amount.from(150),
-          unit: 'sat',
-        },
-      });
-      await expect(service.getBalanceTotal({ mintUrls: [mintUrl] })).resolves.toEqual({
-        spendable: Amount.from(50),
-        reserved: Amount.from(100),
-        total: Amount.from(150),
-        unit: 'sat',
-      });
-      await expect(service.getBalance(mintUrl)).resolves.toEqual(Amount.from(150));
-      await expect(service.getSpendableBalance(mintUrl)).resolves.toEqual(Amount.from(50));
-      await expect(service.getBalanceBreakdown(mintUrl)).resolves.toEqual({
-        ready: Amount.from(50),
-        reserved: Amount.from(100),
-        total: Amount.from(150),
-      });
-    });
-
-    it('uses mint-scoped ready proof reads for scoped balance queries', async () => {
-      const originalGetReadyProofs = proofRepo.getReadyProofs.bind(proofRepo);
-      const originalGetAllReadyProofs = proofRepo.getAllReadyProofs.bind(proofRepo);
-
-      proofRepo.getReadyProofs = mock((mintUrl: string, filter?: any) =>
-        originalGetReadyProofs(mintUrl, filter),
-      );
-      proofRepo.getAllReadyProofs = mock((filter?: any) => originalGetAllReadyProofs(filter));
-
-      const service = new ProofService(
-        counterService,
-        proofRepo,
-        walletService as any,
-        mintService as any,
-        keyRingService as any,
-        seedService,
-        undefined,
-        bus,
-      );
-
-      await proofRepo.saveProofs(mintUrl, [
-        makeProof({ secret: 'scope-a1', amount: Amount.from(100) }),
-        makeProof({ secret: 'scope-a2', amount: Amount.from(50) }),
-      ]);
-      await proofRepo.saveProofs(otherMintUrl, [
-        makeProof({ secret: 'scope-b1', amount: Amount.from(200), mintUrl: otherMintUrl }),
-      ]);
-      await proofRepo.reserveProofs(mintUrl, ['scope-a1'], operationId);
-
-      await expect(service.getBalancesByMint({ mintUrls: [mintUrl] })).resolves.toEqual({
-        [mintUrl]: {
-          spendable: Amount.from(50),
-          reserved: Amount.from(100),
-          total: Amount.from(150),
-          unit: 'sat',
-        },
-      });
-
-      expect(proofRepo.getReadyProofs).toHaveBeenCalledTimes(1);
-      expect(proofRepo.getReadyProofs).toHaveBeenCalledWith(mintUrl, { units: ['sat'] });
-      expect(proofRepo.getAllReadyProofs).not.toHaveBeenCalled();
-    });
-
-    it('returns an empty snapshot for an explicit empty mint selection', async () => {
-      const originalGetReadyProofs = proofRepo.getReadyProofs.bind(proofRepo);
-      const originalGetAllReadyProofs = proofRepo.getAllReadyProofs.bind(proofRepo);
-
-      proofRepo.getReadyProofs = mock((mintUrl: string, filter?: any) =>
-        originalGetReadyProofs(mintUrl, filter),
-      );
-      proofRepo.getAllReadyProofs = mock((filter?: any) => originalGetAllReadyProofs(filter));
-
-      const service = new ProofService(
-        counterService,
-        proofRepo,
-        walletService as any,
-        mintService as any,
-        keyRingService as any,
-        seedService,
-        undefined,
-        bus,
-      );
-
-      await proofRepo.saveProofs(mintUrl, [
-        makeProof({ secret: 'empty-a1', amount: Amount.from(100) }),
-      ]);
-      await proofRepo.saveProofs(otherMintUrl, [
-        makeProof({ secret: 'empty-b1', amount: Amount.from(200), mintUrl: otherMintUrl }),
-      ]);
-
-      await expect(service.getBalancesByMint({ mintUrls: [] })).resolves.toEqual({});
-      await expect(service.getBalanceTotal({ mintUrls: [] })).resolves.toEqual({
-        spendable: Amount.from(0),
-        reserved: Amount.from(0),
-        total: Amount.from(0),
-        unit: 'sat',
-      });
-
-      expect(proofRepo.getReadyProofs).not.toHaveBeenCalled();
-      expect(proofRepo.getAllReadyProofs).not.toHaveBeenCalled();
-    });
-
-    it('treats an explicit empty unit selection as no balance results', async () => {
-      const originalGetReadyProofs = proofRepo.getReadyProofs.bind(proofRepo);
-      const originalGetAllReadyProofs = proofRepo.getAllReadyProofs.bind(proofRepo);
-
-      proofRepo.getReadyProofs = mock((mintUrl: string, filter?: any) =>
-        originalGetReadyProofs(mintUrl, filter),
-      );
-      proofRepo.getAllReadyProofs = mock((filter?: any) => originalGetAllReadyProofs(filter));
-
-      const service = new ProofService(
-        counterService,
-        proofRepo,
-        walletService as any,
-        mintService as any,
-        keyRingService as any,
-        seedService,
-        undefined,
-        bus,
-      );
-
-      await proofRepo.saveProofs(mintUrl, [
-        makeProof({ secret: 'empty-unit-a1', amount: Amount.from(100), unit: 'sat' }),
-        makeProof({ secret: 'empty-unit-u1', amount: Amount.from(40), unit: 'usd' }),
-      ]);
-
-      await expect(service.getBalancesByMint({ units: [] })).resolves.toEqual({});
-      await expect(service.getBalanceTotal({ units: [] })).resolves.toEqual({
-        spendable: Amount.zero(),
-        reserved: Amount.zero(),
-        total: Amount.zero(),
-        unit: 'sat',
-      });
-
-      expect(proofRepo.getReadyProofs).not.toHaveBeenCalled();
-      expect(proofRepo.getAllReadyProofs).not.toHaveBeenCalled();
-    });
-
-    it('returns canonical and legacy map views for all mints', async () => {
-      const service = new ProofService(
-        counterService,
-        proofRepo,
-        walletService as any,
-        mintService as any,
-        keyRingService as any,
-        seedService,
-        undefined,
-        bus,
-      );
-
-      await proofRepo.saveProofs(mintUrl, [
-        makeProof({ secret: 'b1', amount: Amount.from(100) }),
-        makeProof({ secret: 'b2', amount: Amount.from(50) }),
-      ]);
       await proofRepo.saveProofs(otherMintUrl, [
         makeProof({ secret: 'c1', amount: Amount.from(200), mintUrl: otherMintUrl }),
       ]);
-      await proofRepo.reserveProofs(mintUrl, ['b1'], operationId);
+      await proofRepo.reserveProofs(mintUrl, ['a1'], operationId);
 
-      await expect(service.getBalancesByMint()).resolves.toEqual({
+      // Canonical BalanceQueries-backed views on the same fixture.
+      const canonical = await service.getBalancesByMint();
+      expect(canonical).toEqual({
         [mintUrl]: {
           spendable: Amount.from(50),
           reserved: Amount.from(100),
@@ -1267,128 +1109,52 @@ describe('ProofService', () => {
         },
         [otherMintUrl]: {
           spendable: Amount.from(200),
-          reserved: Amount.from(0),
+          reserved: Amount.zero(),
           total: Amount.from(200),
           unit: 'sat',
         },
       });
-      await expect(service.getBalanceTotal()).resolves.toEqual({
-        spendable: Amount.from(250),
+      const canonicalTotal = await service.getBalanceTotal({ mintUrls: [mintUrl] });
+      expect(canonicalTotal).toEqual({
+        spendable: Amount.from(50),
         reserved: Amount.from(100),
-        total: Amount.from(350),
+        total: Amount.from(150),
         unit: 'sat',
       });
+
+      // Legacy/plugin projections must agree with the canonical view above.
+      await expect(service.getBalance(mintUrl)).resolves.toEqual(canonical[mintUrl]!.total);
+      await expect(service.getSpendableBalance(mintUrl)).resolves.toEqual(
+        canonical[mintUrl]!.spendable,
+      );
+      await expect(service.getBalanceBreakdown(mintUrl)).resolves.toEqual({
+        ready: canonical[mintUrl]!.spendable,
+        reserved: canonical[mintUrl]!.reserved,
+        total: canonical[mintUrl]!.total,
+      });
       await expect(service.getBalances()).resolves.toEqual({
-        [mintUrl]: Amount.from(150),
-        [otherMintUrl]: Amount.from(200),
+        [mintUrl]: canonical[mintUrl]!.total,
+        [otherMintUrl]: canonical[otherMintUrl]!.total,
       });
       await expect(service.getSpendableBalances()).resolves.toEqual({
-        [mintUrl]: Amount.from(50),
-        [otherMintUrl]: Amount.from(200),
+        [mintUrl]: canonical[mintUrl]!.spendable,
+        [otherMintUrl]: canonical[otherMintUrl]!.spendable,
       });
       await expect(service.getBalancesBreakdown()).resolves.toEqual({
-        [mintUrl]: { ready: Amount.from(50), reserved: Amount.from(100), total: Amount.from(150) },
+        [mintUrl]: {
+          ready: canonical[mintUrl]!.spendable,
+          reserved: canonical[mintUrl]!.reserved,
+          total: canonical[mintUrl]!.total,
+        },
         [otherMintUrl]: {
-          ready: Amount.from(200),
-          reserved: Amount.zero(),
-          total: Amount.from(200),
+          ready: canonical[otherMintUrl]!.spendable,
+          reserved: canonical[otherMintUrl]!.reserved,
+          total: canonical[otherMintUrl]!.total,
         },
       });
     });
 
-    it('keeps mixed-unit balances separated', async () => {
-      const service = new ProofService(
-        counterService,
-        proofRepo,
-        walletService as any,
-        mintService as any,
-        keyRingService as any,
-        seedService,
-        undefined,
-        bus,
-      );
-
-      await proofRepo.saveProofs(mintUrl, [
-        makeProof({ secret: 'sat-ready', amount: Amount.from(100), unit: 'sat' }),
-        makeProof({ secret: 'usd-ready', amount: Amount.from(40), unit: 'usd' }),
-        makeProof({ secret: 'usd-reserved', amount: Amount.from(10), unit: 'usd' }),
-      ]);
-      await proofRepo.saveProofs(otherMintUrl, [
-        makeProof({
-          secret: 'other-usd',
-          amount: Amount.from(7),
-          mintUrl: otherMintUrl,
-          unit: 'usd',
-        }),
-      ]);
-      await proofRepo.reserveProofs(mintUrl, ['usd-reserved'], operationId);
-
-      await expect(service.getBalancesByMint()).resolves.toEqual({
-        [mintUrl]: {
-          spendable: Amount.from(100),
-          reserved: Amount.zero(),
-          total: Amount.from(100),
-          unit: 'sat',
-        },
-      });
-      await expect(service.getBalancesByMint({ units: ['usd'] })).resolves.toEqual({
-        [mintUrl]: {
-          spendable: Amount.from(40),
-          reserved: Amount.from(10),
-          total: Amount.from(50),
-          unit: 'usd',
-        },
-        [otherMintUrl]: {
-          spendable: Amount.from(7),
-          reserved: Amount.zero(),
-          total: Amount.from(7),
-          unit: 'usd',
-        },
-      });
-      await expect(service.getBalancesByMintAndUnit()).resolves.toEqual({
-        [mintUrl]: {
-          sat: {
-            spendable: Amount.from(100),
-            reserved: Amount.zero(),
-            total: Amount.from(100),
-            unit: 'sat',
-          },
-          usd: {
-            spendable: Amount.from(40),
-            reserved: Amount.from(10),
-            total: Amount.from(50),
-            unit: 'usd',
-          },
-        },
-        [otherMintUrl]: {
-          usd: {
-            spendable: Amount.from(7),
-            reserved: Amount.zero(),
-            total: Amount.from(7),
-            unit: 'usd',
-          },
-        },
-      });
-      await expect(service.getBalanceTotal({ units: ['sat', 'usd'] })).rejects.toThrow(
-        ProofValidationError,
-      );
-      await expect(service.getBalanceTotalByUnit()).resolves.toEqual({
-        sat: {
-          spendable: Amount.from(100),
-          reserved: Amount.zero(),
-          total: Amount.from(100),
-          unit: 'sat',
-        },
-        usd: {
-          spendable: Amount.from(47),
-          reserved: Amount.from(10),
-          total: Amount.from(57),
-          unit: 'usd',
-        },
-      });
-    });
-
-    it('filters trusted balances across canonical and legacy queries', async () => {
+    it('compares canonical and legacy trusted-only views on the same fixture', async () => {
       const service = new ProofService(
         counterService,
         proofRepo,
@@ -1409,7 +1175,8 @@ describe('ProofService', () => {
       ]);
       await proofRepo.reserveProofs(mintUrl, ['d1'], operationId);
 
-      await expect(service.getBalancesByMint({ trustedOnly: true })).resolves.toEqual({
+      const canonicalTrusted = await service.getBalancesByMint({ trustedOnly: true });
+      expect(canonicalTrusted).toEqual({
         [mintUrl]: {
           spendable: Amount.from(50),
           reserved: Amount.from(100),
@@ -1417,20 +1184,19 @@ describe('ProofService', () => {
           unit: 'sat',
         },
       });
-      await expect(service.getBalanceTotal({ trustedOnly: true })).resolves.toEqual({
-        spendable: Amount.from(50),
-        reserved: Amount.from(100),
-        total: Amount.from(150),
-        unit: 'sat',
-      });
+
       await expect(service.getTrustedBalances()).resolves.toEqual({
-        [mintUrl]: Amount.from(150),
+        [mintUrl]: canonicalTrusted[mintUrl]!.total,
       });
       await expect(service.getTrustedSpendableBalances()).resolves.toEqual({
-        [mintUrl]: Amount.from(50),
+        [mintUrl]: canonicalTrusted[mintUrl]!.spendable,
       });
       await expect(service.getTrustedBalancesBreakdown()).resolves.toEqual({
-        [mintUrl]: { ready: Amount.from(50), reserved: Amount.from(100), total: Amount.from(150) },
+        [mintUrl]: {
+          ready: canonicalTrusted[mintUrl]!.spendable,
+          reserved: canonicalTrusted[mintUrl]!.reserved,
+          total: canonicalTrusted[mintUrl]!.total,
+        },
       });
     });
   });
