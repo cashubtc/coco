@@ -9,5 +9,5 @@ export * from './ReceiveOpsApi.ts';
 export * from './MeltOpsApi.ts';
 export * from './MintOpsApi.ts';
 export * from './QuoteApi.ts';
-export * from './OpsApi.ts';
+export type { OpsApi } from './OpsApi.ts';
 export * from './PaymentRequestsApi.ts';
