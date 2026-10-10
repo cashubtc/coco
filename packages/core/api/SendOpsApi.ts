@@ -29,6 +29,12 @@ export interface PrepareSendInput {
   forceSwap?: boolean;
   /** Optional non-default send target, for example a P2PK recipient. */
   target?: SendTarget;
+  /**
+   * Host command ID. Coco namespaces it before persistence, so it only needs to be unique in the
+   * host's own command space. Re-issuing the same ID with the same intent joins the existing
+   * operation; a different intent throws.
+   */
+  operationId?: string;
 }
 
 export interface SendRecoveryApi {
@@ -178,11 +184,14 @@ export class SendOpsApi {
   private getCreateOptions({
     forceSwap,
     target,
-  }: Pick<PrepareSendInput, 'forceSwap' | 'target'>): CreateSendOperationOptions {
+    operationId,
+  }: Pick<PrepareSendInput, 'forceSwap' | 'target' | 'operationId'>): CreateSendOperationOptions {
+    const identity = operationId === undefined ? {} : { operationId };
     if (!target) {
       return {
         method: 'default',
         methodData: forceSwap ? { forceSwap: true } : {},
+        ...identity,
       };
     }
 
@@ -190,6 +199,7 @@ export class SendOpsApi {
     return {
       method: type,
       methodData: methodData as SendMethodData<typeof type>,
+      ...identity,
     } as CreateSendOperationOptions;
   }
 

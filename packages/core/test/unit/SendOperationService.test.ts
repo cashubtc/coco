@@ -11,7 +11,7 @@ import type {
   PreparedSendOperation,
   PendingSendOperation,
 } from '../../operations/send/SendOperation';
-import { MintOperationError, NetworkError } from '../../models/Error.ts';
+import { MintOperationError, NetworkError, InvalidOperationIdError, SendOperationConflictError } from '../../models/Error.ts';
 import { makeOutputDataCreator } from '../fixtures/OutputDataCreator.ts';
 import { SendOpsApi } from '../../api/SendOpsApi.ts';
 import { ProofStateWatcherService } from '../../services/watchers/ProofStateWatcherService.ts';
@@ -897,5 +897,75 @@ describe('SendOperationService', () => {
       expect.stringContaining('Manual recovery via seed restore may be needed'),
       expect.objectContaining({ operationId: prepared.id }),
     );
+  });
+
+  it('rejects a blank caller-supplied operation ID', async () => {
+    await expect(
+      service.init(mintUrl, unitAmount(10), {
+        method: 'default',
+        methodData: {},
+        operationId: '   ',
+      }),
+    ).rejects.toThrow(InvalidOperationIdError);
+  });
+
+  it('rejects a padded caller-supplied operation ID', async () => {
+    await expect(
+      service.init(mintUrl, unitAmount(10), {
+        method: 'default',
+        methodData: {},
+        operationId: ' leading',
+      }),
+    ).rejects.toThrow(InvalidOperationIdError);
+  });
+
+  it('namespaces a caller-supplied operation ID with send:', async () => {
+    const operation = await service.init(mintUrl, unitAmount(10), {
+      method: 'default',
+      methodData: {},
+      operationId: 'cmd-1',
+    });
+
+    expect(operation.id).toBe('send:cmd-1');
+  });
+
+  it('persists a caller-supplied operation ID under send:', async () => {
+    await proofRepo.saveProofs(mintUrl, [makeProof('proof-1', 10)]);
+    const prepared = await service.prepare(
+      await service.init(mintUrl, unitAmount(10), {
+        method: 'default',
+        methodData: {},
+        operationId: 'cmd-1',
+      }),
+    );
+
+    expect(prepared.id).toBe('send:cmd-1');
+    const persisted = await sendOpRepo.getById('send:cmd-1');
+    expect(persisted?.id).toBe('send:cmd-1');
+  });
+
+  it('rejects a duplicate caller-supplied operation ID before committing proofs', async () => {
+    await proofRepo.saveProofs(mintUrl, [makeProof('proof-1', 10)]);
+    const callerId = 'cmd-2';
+    await service.prepare(
+      await service.init(mintUrl, unitAmount(10), {
+        method: 'default',
+        methodData: {},
+        operationId: callerId,
+      }),
+    );
+
+    const conflict = await service
+      .init(mintUrl, unitAmount(10), {
+        method: 'default',
+        methodData: {},
+        operationId: callerId,
+      })
+      .then((operation) => service.prepare(operation))
+      .catch((error: unknown) => error);
+
+    expect(conflict).toBeInstanceOf(SendOperationConflictError);
+    expect(await sendOpRepo.getByState('prepared')).toHaveLength(1);
+    expect(await proofRepo.getAvailableProofs(mintUrl)).toHaveLength(0);
   });
 });
