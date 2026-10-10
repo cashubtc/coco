@@ -1,4 +1,5 @@
-import { Amount, type Keys, type Proof, type SerializedBlindedSignature } from '@cashu/cashu-ts';
+import { Amount, type Proof, type SerializedBlindedSignature } from '@cashu/cashu-ts';
+import { unblindMeltChange } from './MeltChange.ts';
 import type { MeltOperationRepository, ProofRepository } from '../../repositories';
 import type {
   ExecutingMeltOperation,
@@ -79,15 +80,17 @@ export interface MeltOperationServiceDependencies {
   eventBus: EventBus<CoreEvents>;
   logger?: Logger;
   mintScopedLock?: MintScopedLock;
+  operationIdLock?: OperationIdLock;
 }
 
 /** Coordinates committed local Melt transitions around remote protocol effects. */
 export class MeltOperationService {
-  private readonly operationIdLock = new OperationIdLock();
+  private readonly operationIdLock: OperationIdLock;
   private recoveryLock: Promise<void> | null = null;
   private readonly mintScopedLock: MintScopedLock;
 
   constructor(private readonly dependencies: MeltOperationServiceDependencies) {
+    this.operationIdLock = dependencies.operationIdLock ?? new OperationIdLock();
     this.mintScopedLock = dependencies.mintScopedLock ?? new MintScopedLock();
   }
 
@@ -590,16 +593,7 @@ export class MeltOperationService {
   ): Promise<Proof[]> {
     if (signatures.length === 0) return [];
     const metadata = await this.dependencies.mintService.refreshAndCommitIfStale(operation.mintUrl);
-    const outputs = deserializeOutputData(operation.changeOutputData).keep;
-    if (signatures.length > outputs.length) {
-      throw new ProofValidationError('Mint returned more change signatures than allocated outputs');
-    }
-    return signatures.map((signature, index) => {
-      const output = outputs[index];
-      const keyset = metadata.keysets.find((candidate) => candidate.id === signature.id);
-      if (!output || !keyset) throw new ProofValidationError('Melt change keyset is unavailable');
-      return output.toProof(signature, { id: keyset.id, keys: keyset.keypairs as Keys });
-    });
+    return unblindMeltChange(operation, signatures, metadata.keysets);
   }
 
   private async releaseAfterNonPayment(

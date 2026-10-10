@@ -559,7 +559,8 @@ function assertQuoteMatchesPreparation(
   assertSameUnit(quote.unit, unit, `Melt quote ${quote.quoteId}`);
   if (quote.state !== 'UNPAID')
     throw new Error(`Cannot prepare melt quote in state ${quote.state}`);
-  if (quote.expiry * 1000 <= input.now) throw new Error('Cannot prepare expired melt quote');
+  if (quote.expiry * 1000 <= input.now)
+    throw new ProofValidationError('Cannot prepare expired melt quote');
   switch (input.method) {
     case 'bolt11':
       if ((input.methodData as { invoice: string }).invoice !== quote.request)

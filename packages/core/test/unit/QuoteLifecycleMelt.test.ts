@@ -53,6 +53,54 @@ describe('QuoteLifecycle Melt settlement observations', () => {
     });
   });
 
+  for (const state of ['UNPAID', 'PENDING'] as const) {
+    it(`persists newer ${state} observation evidence without publishing a duplicate update`, async () => {
+      const original = bolt11Quote({
+        state,
+        lastObservedRemoteState: state,
+        lastObservedRemoteStateAt: 10,
+        updatedAt: 10,
+      });
+      await repository.upsertMeltQuote(original);
+      fetchRemoteQuote.mockResolvedValueOnce({
+        ...original,
+        lastObservedRemoteStateAt: 20,
+        updatedAt: 20,
+      });
+
+      const refreshed = await lifecycle.refreshMeltQuote(mintUrl, 'bolt11', original.quoteId);
+      expect(refreshed.lastObservedRemoteStateAt).toBe(20);
+      expect(refreshed.createdAt).toBe(original.createdAt);
+      expect(await repository.getMeltQuote(mintUrl, 'bolt11', original.quoteId)).toEqual(refreshed);
+
+      const older = await lifecycle.recordMeltQuoteObservation({
+        ...original,
+        lastObservedRemoteStateAt: 15,
+        updatedAt: 15,
+      });
+      expect(older.lastObservedRemoteStateAt).toBe(20);
+      expect(older.updatedAt).toBe(refreshed.updatedAt);
+      expect(updatedQuotes).toHaveLength(0);
+    });
+  }
+
+  it('records fresh evidence for a legacy unchanged quote without observation metadata', async () => {
+    const original = bolt11Quote({
+      lastObservedRemoteState: undefined,
+      lastObservedRemoteStateAt: undefined,
+    });
+    await repository.upsertMeltQuote(original);
+    const recorded = await lifecycle.recordMeltQuoteObservation({
+      ...original,
+      lastObservedRemoteState: 'UNPAID',
+      lastObservedRemoteStateAt: 20,
+      updatedAt: 20,
+    });
+    expect(recorded.lastObservedRemoteState).toBe('UNPAID');
+    expect(recorded.lastObservedRemoteStateAt).toBe(20);
+    expect(updatedQuotes).toHaveLength(0);
+  });
+
   it('does not downgrade a terminal PAID quote from a stale observation', async () => {
     await repository.upsertMeltQuote(
       bolt11Quote({ state: 'PAID', change, payment_preimage: 'preimage', updatedAt: 10 }),
@@ -66,6 +114,27 @@ describe('QuoteLifecycle Melt settlement observations', () => {
     expect(recorded.change).toEqual(change);
     expect(recorded.method === 'bolt11' && recorded.payment_preimage).toBe('preimage');
     expect(updatedQuotes).toHaveLength(0);
+  });
+
+  it('does not let a concurrent unchanged UNPAID refresh overwrite PAID settlement', async () => {
+    const original = bolt11Quote({ lastObservedRemoteStateAt: 10 });
+    await repository.upsertMeltQuote(original);
+    await Promise.all([
+      lifecycle.recordMeltQuoteObservation({
+        ...original,
+        state: 'PAID',
+        lastObservedRemoteState: 'PAID',
+        lastObservedRemoteStateAt: 20,
+        change,
+        payment_preimage: 'preimage',
+      }),
+      lifecycle.recordMeltQuoteObservation({ ...original, lastObservedRemoteStateAt: 30 }),
+    ]);
+    const stored = await repository.getMeltQuote(mintUrl, 'bolt11', original.quoteId);
+    expect(stored?.state).toBe('PAID');
+    expect(stored?.lastObservedRemoteState).toBe('PAID');
+    expect(stored?.change).toEqual(change);
+    expect(updatedQuotes).toHaveLength(1);
   });
 
   it('refreshes and enriches an incomplete cached PAID BOLT settlement', async () => {
