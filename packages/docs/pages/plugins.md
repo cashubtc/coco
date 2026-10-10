@@ -109,6 +109,34 @@ const externalQuotePlugin: Plugin<['quotes']> = {
 };
 ```
 
+## Migrating history operation lookups
+
+`historyService.getOperationIdFromHistoryEntry()` has been removed. It was a send-only
+lookup that threw when an entry was missing, was another history type, or had no operation ID.
+Plugins already declaring `historyService` can read the entry directly:
+
+```ts
+const entry = await ctx.services.historyService.getHistoryEntryById(historyId);
+const operationId = entry?.operationId?.trim() || null;
+```
+
+This accepts every history type and returns `null` for missing entries or absent/blank
+operation IDs. If your plugin depends on the former send-only errors, retain those checks:
+
+```ts
+const entry = await ctx.services.historyService.getHistoryEntryById(historyId);
+if (!entry) throw new Error(`History entry ${historyId} not found`);
+if (entry.type !== 'send') throw new Error(`History entry ${historyId} is not a send entry`);
+if (!entry.operationId) {
+  throw new Error(`History entry ${historyId} is not backed by an operation`);
+}
+const operationId = entry.operationId;
+```
+
+Applications can continue to use `manager.history.getOperationIdForHistoryEntry(historyId)`.
+That lookup accepts every history type, trims operation IDs, and returns `null` for
+missing entries or absent/blank IDs.
+
 ## Plugin Extensions
 
 Plugins can register custom APIs that become accessible via `manager.ext`. This allows plugins to expose their own public interface to consumers.
