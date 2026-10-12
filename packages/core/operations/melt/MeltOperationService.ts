@@ -1,101 +1,94 @@
+import { Amount, type Keys, type Proof, type SerializedBlindedSignature } from '@cashu/cashu-ts';
 import type { MeltOperationRepository, ProofRepository } from '../../repositories';
 import type {
-  MeltOperation,
-  InitMeltOperation,
-  PreparedMeltOperation,
   ExecutingMeltOperation,
-  PendingMeltOperation,
   FinalizedMeltOperation,
+  InitMeltOperation,
+  MeltMethodFinalizedData,
+  MeltOperation,
+  PendingMeltOperation,
+  PreparedMeltOperation,
   RollingBackMeltOperation,
-  RolledBackMeltOperation,
-  PreparedOrLaterOperation,
 } from './MeltOperation';
-import { createMeltOperation, hasPreparedData } from './MeltOperation';
+import { hasPreparedData } from './MeltOperation';
 import type {
   MeltMethod,
   MeltMethodData,
-  MeltMethodInputData,
+  MeltRemoteResult,
   PendingCheckResult,
 } from './MeltMethodHandler';
-import { normalizeMeltMethodData } from './MeltMethodHandler';
 import type { MintService } from '../../services/MintService';
 import type { WalletService } from '../../services/WalletService';
-import type { ProofService } from '../../services/ProofService';
 import type { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
-import { generateSubId, normalizeMintUrl } from '../../utils';
-import { UnknownMintError, ProofValidationError } from '../../models/Error';
+import {
+  deserializeOutputData,
+  generateSubId,
+  getSecretsFromSerializedOutputData,
+  normalizeMintUrl,
+} from '../../utils';
+import { ProofValidationError } from '../../models/Error';
 import type { MintAdapter } from '@core/infra';
 import type { MeltHandlerProvider } from '../../infra/handlers/melt';
-import type { FinalizeResult } from './MeltMethodHandler';
 import { MintScopedLock } from '../MintScopedLock';
 import { OperationIdLock } from '../OperationIdLock';
-import { DEFAULT_UNIT, normalizeUnit } from '../../amounts.ts';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle';
 import { resolveOnchainMeltFeeOption, type MeltQuote } from '../../models/MeltQuote.ts';
 import type { MeltQuoteRef, QuoteIdentity } from '../../models/QuoteIdentity.ts';
+import type { CoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
+import {
+  applyMeltPaidResult,
+  applyMeltPending,
+  applyMeltSwapResult,
+  beginMeltExecution,
+  cancelPreparedMelt,
+  cleanupMeltInit,
+  deferMeltRecovery,
+  prepareMelt,
+  releaseMeltAfterNonPayment,
+} from './MeltTransitions.ts';
+import { createKeyChain } from '../../proofs/KeysetSelection.ts';
+import { restoreOutputProofs } from '../../infra/ProofRestore.ts';
 
-/**
- * MeltOperationService orchestrates melt sagas while delegating
- * method-specific behavior to MeltMethodHandlers.
- */
+type MeltOperationQueries = Pick<
+  MeltOperationRepository,
+  'getById' | 'getByQuoteId' | 'getByMintUrl' | 'getByState' | 'getPending'
+>;
+type MeltProofQueries = Pick<ProofRepository, 'getProofsBySecrets' | 'getProofsByOperationId'>;
+type MeltQuoteLifecycle = Pick<
+  QuoteLifecycle,
+  | 'requireMeltQuoteRefForPrepare'
+  | 'getMeltQuote'
+  | 'getMeltQuoteById'
+  | 'refreshMeltQuote'
+  | 'refreshMeltQuoteById'
+  | 'recordMeltQuoteObservation'
+>;
+
+export interface MeltOperationServiceDependencies {
+  handlerProvider: MeltHandlerProvider;
+  meltOperationQueries: MeltOperationQueries;
+  proofQueries: MeltProofQueries;
+  transactionRunner: CoreTransactionRunner;
+  loadSeed: () => Promise<Uint8Array>;
+  quoteLifecycle: MeltQuoteLifecycle;
+  mintService: Pick<MintService, 'refreshAndCommitIfStale'>;
+  walletService: Pick<WalletService, 'getWalletWithActiveKeysetId'>;
+  mintAdapter: MintAdapter;
+  eventBus: EventBus<CoreEvents>;
+  logger?: Logger;
+  mintScopedLock?: MintScopedLock;
+}
+
+/** Coordinates committed local Melt transitions around remote protocol effects. */
 export class MeltOperationService {
-  private readonly handlerProvider: MeltHandlerProvider;
-  private readonly meltOperationRepository: MeltOperationRepository;
-  private readonly quoteLifecycle: QuoteLifecycle;
-  private readonly proofRepository: ProofRepository;
-  private readonly proofService: ProofService;
-  private readonly mintService: MintService;
-  private readonly walletService: WalletService;
-  private readonly mintAdapter: MintAdapter;
-  private readonly eventBus: EventBus<CoreEvents>;
-  private readonly logger?: Logger;
-
   private readonly operationIdLock = new OperationIdLock();
   private recoveryLock: Promise<void> | null = null;
   private readonly mintScopedLock: MintScopedLock;
 
-  constructor(
-    handlerProvider: MeltHandlerProvider,
-    meltOperationRepository: MeltOperationRepository,
-    quoteLifecycle: QuoteLifecycle,
-    proofRepository: ProofRepository,
-    proofService: ProofService,
-    mintService: MintService,
-    walletService: WalletService,
-    mintAdapter: MintAdapter,
-    eventBus: EventBus<CoreEvents>,
-    logger?: Logger,
-    mintScopedLock?: MintScopedLock,
-  ) {
-    this.handlerProvider = handlerProvider;
-    this.meltOperationRepository = meltOperationRepository;
-    this.quoteLifecycle = quoteLifecycle;
-    this.proofRepository = proofRepository;
-    this.proofService = proofService;
-    this.mintService = mintService;
-    this.walletService = walletService;
-    this.mintAdapter = mintAdapter;
-    this.eventBus = eventBus;
-    this.logger = logger;
-    this.mintScopedLock = mintScopedLock ?? new MintScopedLock();
-  }
-
-  private buildDeps() {
-    return {
-      proofRepository: this.proofRepository,
-      proofService: this.proofService,
-      walletService: this.walletService,
-      mintService: this.mintService,
-      mintAdapter: this.mintAdapter,
-      eventBus: this.eventBus,
-      logger: this.logger,
-    };
-  }
-
-  private async acquireOperationLock(operationId: string): Promise<() => void> {
-    return this.operationIdLock.acquire(operationId);
+  constructor(private readonly dependencies: MeltOperationServiceDependencies) {
+    this.mintScopedLock = dependencies.mintScopedLock ?? new MintScopedLock();
   }
 
   isOperationLocked(operationId: string): boolean {
@@ -106,347 +99,157 @@ export class MeltOperationService {
     return this.recoveryLock !== null;
   }
 
-  private async resolvePendingSettlementQuote(
-    op: PendingMeltOperation,
-    canonicalQuote?: MeltQuote,
-  ): Promise<MeltQuote> {
-    if (canonicalQuote) {
-      if (canonicalQuote.state === 'PAID' && !Array.isArray(canonicalQuote.change)) {
-        return this.quoteLifecycle.refreshMeltQuote(op.mintUrl, op.method, op.quoteId);
-      }
-      return canonicalQuote;
-    }
-
-    const persistedQuote = await this.quoteLifecycle.getMeltQuote(
-      op.mintUrl,
-      op.method,
-      op.quoteId,
-    );
-    if (persistedQuote?.state === 'PAID' && Array.isArray(persistedQuote.change)) {
-      return persistedQuote;
-    }
-
-    return this.quoteLifecycle.refreshMeltQuote(op.mintUrl, op.method, op.quoteId);
+  async prepareExistingQuote(
+    quoteRef: MeltQuoteRef,
+    options: { feeIndex?: number } = {},
+  ): Promise<PreparedMeltOperation> {
+    const quote = await this.dependencies.quoteLifecycle.requireMeltQuoteRefForPrepare(quoteRef);
+    return this.prepareResolvedQuote(quote, generateSubId(), options);
   }
 
-  async init(
-    mintUrl: string,
-    method: MeltMethod,
-    methodData: MeltMethodInputData,
-    unit = DEFAULT_UNIT,
-    options?: { quoteId?: string },
-  ): Promise<InitMeltOperation> {
-    const normalizedUnit = normalizeUnit(unit, { defaultUnit: DEFAULT_UNIT });
-    const trusted = await this.mintService.isTrustedMint(mintUrl);
-    if (!trusted) {
-      throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
-    }
-
-    let normalizedMethodData;
-    try {
-      normalizedMethodData = normalizeMeltMethodData(methodData);
-      if (
-        'amountSats' in normalizedMethodData &&
-        normalizedMethodData.amountSats !== undefined &&
-        normalizedMethodData.amountSats.isZero()
-      ) {
-        throw new ProofValidationError('Amount must be a positive number');
-      }
-    } catch (error) {
-      if (error instanceof ProofValidationError) {
-        throw error;
-      }
-      throw new ProofValidationError('Amount must be a positive number');
-    }
-
-    const id = generateSubId();
-    const createOperation = async (operationMintUrl: string, operationQuoteId?: string) => {
-      const operation = createMeltOperation(
-        id,
-        operationMintUrl,
-        {
-          method,
-          methodData: normalizedMethodData,
-        },
-        normalizedUnit,
-        operationQuoteId ? { quoteId: operationQuoteId } : undefined,
+  /** Prepares a legacy init row without creating any new intermediate init operation. */
+  async prepare(operationId: string): Promise<PreparedMeltOperation> {
+    const operation = await this.requireOperation(operationId);
+    if (operation.state !== 'init' || !operation.quoteId) {
+      throw new Error(
+        `Cannot prepare operation ${operationId}: expected quote-bound state 'init' but found '${operation.state}'`,
       );
-
-      await this.meltOperationRepository.create(operation);
-      return operation;
-    };
-
-    const operation = options?.quoteId
-      ? await this.createQuoteBoundInitOperation(
-          mintUrl,
-          method,
-          options.quoteId,
-          normalizedUnit,
-          createOperation,
-        )
-      : await createOperation(mintUrl);
-
-    this.logger?.debug('Melt operation created', {
-      operationId: id,
+    }
+    const quote = await this.dependencies.quoteLifecycle.requireMeltQuoteRefForPrepare({
       mintUrl: operation.mintUrl,
-      method,
-      unit: normalizedUnit,
+      method: operation.method,
       quoteId: operation.quoteId,
     });
-
-    return operation;
+    const feeIndex =
+      operation.method === 'onchain'
+        ? (operation.methodData as MeltMethodData<'onchain'>).feeIndex
+        : undefined;
+    return this.prepareResolvedQuote(quote, operation.id, { feeIndex });
   }
 
-  private async createQuoteBoundInitOperation(
-    mintUrl: string,
-    method: MeltMethod,
-    quoteId: string,
-    expectedUnit: string,
-    createOperation: (mintUrl: string, quoteId: string) => Promise<InitMeltOperation>,
-  ): Promise<InitMeltOperation> {
-    const releaseMintLock = await this.mintScopedLock.acquire(normalizeMintUrl(mintUrl));
+  private async prepareResolvedQuote(
+    quote: MeltQuote,
+    operationId: string,
+    options: { feeIndex?: number },
+  ): Promise<PreparedMeltOperation> {
+    const releaseMintLock = await this.mintScopedLock.acquire(quote.mintUrl);
     try {
-      const quote = await this.quoteLifecycle.requireMeltQuoteForPrepare(
-        mintUrl,
-        method,
-        quoteId,
-        expectedUnit,
+      const metadata = await this.dependencies.mintService.refreshAndCommitIfStale(quote.mintUrl);
+      const activeKeys = createKeyChain(quote.mintUrl, quote.unit, metadata.keysets)
+        .getCheapestKeyset()
+        .toMintKeys();
+      if (!activeKeys) throw new ProofValidationError('Active keyset is missing mint keys');
+      const seed = await this.dependencies.loadSeed();
+      const now = Date.now();
+      const result = await this.dependencies.transactionRunner.run((tx) =>
+        tx.perform(prepareMelt, {
+          operationId,
+          mintUrl: quote.mintUrl,
+          method: quote.method,
+          methodData: this.methodDataFromMeltQuote(quote, options),
+          quoteId: quote.quoteId,
+          unit: quote.unit,
+          activeKeys,
+          seed,
+          now,
+        }),
       );
-      const existing = await this.getTrackedOperationForQuote(quote.mintUrl, method, quote.quoteId);
-      if (existing) {
-        throw new Error(
-          `Melt quote ${quote.quoteId} is already tracked by operation ${existing.id} in state ${existing.state}`,
-        );
+      if (result.changed) {
+        if (result.counter) await this.publishCommittedEvent('counter:updated', result.counter);
+        await this.publishCommittedEvent('proofs:reserved', {
+          mintUrl: result.operation.mintUrl,
+          operationId: result.operation.id,
+          secrets: result.operation.inputProofSecrets,
+          amount: { amount: result.operation.inputAmount, unit: result.operation.unit },
+        });
+        await this.publishCommittedEvent('melt-op:prepared', {
+          mintUrl: result.operation.mintUrl,
+          operationId: result.operation.id,
+          operation: result.operation,
+        });
       }
-
-      return createOperation(quote.mintUrl, quote.quoteId);
+      return result.operation;
     } finally {
       releaseMintLock();
     }
   }
 
-  private async getTrackedOperationForQuote(
-    mintUrl: string,
-    method: MeltMethod,
-    quoteId: string,
-  ): Promise<MeltOperation | null> {
-    const operations = await this.meltOperationRepository.getByQuoteId(mintUrl, quoteId);
-    const matching = operations.filter((operation) => operation.method === method);
-    if (matching.length === 0) {
-      return null;
-    }
-
-    return matching.sort((a, b) => b.updatedAt - a.updatedAt)[0] ?? null;
-  }
-
-  async prepareExistingQuote(
-    quoteRef: MeltQuoteRef,
-    options: { feeIndex?: number } = {},
-  ): Promise<PreparedMeltOperation> {
-    const quote = await this.quoteLifecycle.requireMeltQuoteRefForPrepare(quoteRef);
-    const methodData = this.methodDataFromMeltQuote(quote, options);
-    const initOperation = await this.init(quote.mintUrl, quote.method, methodData, quote.unit, {
-      quoteId: quote.quoteId,
-    });
-    return this.prepare(initOperation.id);
-  }
-
-  private methodDataFromMeltQuote(
-    quote: MeltQuote,
-    options: { feeIndex?: number } = {},
-  ): MeltMethodData {
-    switch (quote.method) {
-      case 'bolt11':
-        return { invoice: quote.request };
-      case 'bolt12':
-        return { offer: quote.request };
-      case 'onchain': {
-        const { feeIndex } = resolveOnchainMeltFeeOption(quote, options.feeIndex);
-        return {
-          address: quote.request,
-          amountSats: quote.amount,
-          feeIndex,
-        };
-      }
-    }
-  }
-
-  /**
-   * Prepare the operation by reserving proofs and creating outputs.
-   * After this step, the operation can be executed or rolled back.
-   *
-   * If preparation fails, automatically attempts to recover the init operation.
-   * Throws if the operation is already in progress.
-   */
-  async prepare(operationId: string): Promise<PreparedMeltOperation> {
-    const releaseLock = await this.acquireOperationLock(operationId);
-    try {
-      const operation = await this.meltOperationRepository.getById(operationId);
-      if (!operation || operation.state !== 'init') {
-        throw new Error(
-          `Cannot prepare operation ${operationId}: expected state 'init' but found '${
-            operation?.state ?? 'not found'
-          }'`,
-        );
-      }
-
-      const initOp = operation as InitMeltOperation;
-      const releaseMintLock = await this.mintScopedLock.acquire(initOp.mintUrl);
-
-      try {
-        const handler = this.handlerProvider.get(initOp.method);
-        await this.mintService.assertMethodUnitSupported(
-          initOp.mintUrl,
-          5,
-          initOp.method,
-          initOp.unit,
-        );
-        const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
-          initOp.mintUrl,
-          initOp.unit,
-        );
-        const quote = await this.quoteLifecycle.loadMeltQuoteSnapshotForOperation(initOp);
-        const prepared = await handler.prepare({
-          ...this.buildDeps(),
-          operation: initOp,
-          wallet,
-          quote,
-        });
-
-        const preparedOp: PreparedMeltOperation = {
-          ...prepared,
-          state: 'prepared',
-          updatedAt: Date.now(),
-        };
-
-        await this.meltOperationRepository.update(preparedOp);
-        await this.eventBus.emit('melt-op:prepared', {
-          mintUrl: preparedOp.mintUrl,
-          operationId: preparedOp.id,
-          operation: preparedOp,
-        });
-
-        this.logger?.info('Melt operation prepared', {
-          operationId: preparedOp.id,
-          method: preparedOp.method,
-        });
-
-        return preparedOp;
-      } catch (e) {
-        // Attempt to clean up the init operation before re-throwing
-        await this.tryRecoverInitOperation(initOp);
-        throw e;
-      } finally {
-        releaseMintLock();
-      }
-    } finally {
-      releaseLock();
-    }
-  }
-
-  /**
-   * Execute the prepared operation.
-   * Performs the melt (swap if needed) and processes the result.
-   *
-   * If execution fails after transitioning to 'executing' state,
-   * automatically attempts to recover the operation.
-   * Throws if the operation is already in progress.
-   */
   async execute(operationId: string): Promise<PendingMeltOperation | FinalizedMeltOperation> {
-    const releaseLock = await this.acquireOperationLock(operationId);
+    while (this.operationIdLock.isLocked(operationId)) {
+      await this.operationIdLock.waitForUnlock(operationId);
+    }
+    const operation = await this.requireOperation(operationId);
+    if (operation.state === 'pending' || operation.state === 'finalized') return operation;
+    if (operation.state === 'executing') {
+      await this.recoverExecutingOperation(operation);
+      const recovered = await this.requireOperation(operationId);
+      if (recovered.state === 'pending' || recovered.state === 'finalized') return recovered;
+      throw new Error(`Operation ${operationId} remains ${recovered.state} after recovery`);
+    }
+    return this.executePrepared(operationId);
+  }
+
+  private async executePrepared(
+    operationId: string,
+  ): Promise<PendingMeltOperation | FinalizedMeltOperation> {
+    const releaseLock = await this.operationIdLock.acquire(operationId);
     try {
-      const operation = await this.meltOperationRepository.getById(operationId);
-      if (!operation || operation.state !== 'prepared') {
+      const current = await this.dependencies.meltOperationQueries.getById(operationId);
+      if (!current || current.state !== 'prepared') {
         throw new Error(
-          `Cannot execute operation ${operationId}: expected state 'prepared' but found '${
-            operation?.state ?? 'not found'
-          }'`,
+          `Cannot execute operation ${operationId}: expected state 'prepared' but found '${current?.state ?? 'not found'}'`,
         );
       }
-
-      const preparedOp = operation as PreparedMeltOperation;
-
-      // Mark as executing FIRST - this must happen before any mint interaction
-      const executing: ExecutingMeltOperation = {
-        ...preparedOp,
-        state: 'executing',
-        updatedAt: Date.now(),
-      };
-      await this.meltOperationRepository.update(executing);
-
+      const authorizationNow = Date.now();
+      const authorization = await this.dependencies.transactionRunner.run((tx) =>
+        tx.perform(beginMeltExecution, { operationId, now: authorizationNow }),
+      );
+      if (!authorization.changed || authorization.operation.state !== 'executing') {
+        throw new Error(`Melt operation ${operationId} could not be authorized`);
+      }
+      const executing = authorization.operation;
+      await this.publishProofState(
+        executing.mintUrl,
+        authorization.inputProofs.map((proof) => proof.secret),
+        'inflight',
+      );
+      let meltInputs = authorization.inputProofs;
       try {
-        const handler = this.handlerProvider.get(executing.method);
-        const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
+        const handler = this.dependencies.handlerProvider.get(executing.method);
+        const { wallet } = await this.dependencies.walletService.getWalletWithActiveKeysetId(
           executing.mintUrl,
           executing.unit,
         );
-        const operationProofs = await this.proofRepository.getProofsByOperationId(
-          executing.mintUrl,
-          executing.id,
-        );
-        const reservedProofs = operationProofs.filter((p) => p.usedByOperationId === operationId);
-
-        const result = await handler.execute({
-          ...this.buildDeps(),
-          operation: executing,
-          wallet,
-          reservedProofs,
-        });
-
-        switch (result.status) {
-          case 'PAID': {
-            // Melt was immediately paid, finalize right away
-            const finalizedOp: FinalizedMeltOperation = {
-              ...result.finalized,
-              state: 'finalized',
-              updatedAt: Date.now(),
-            };
-
-            await this.meltOperationRepository.update(finalizedOp);
-            await this.eventBus.emit('melt-op:finalized', {
-              mintUrl: finalizedOp.mintUrl,
-              operationId: finalizedOp.id,
-              operation: finalizedOp,
-            });
-
-            this.logger?.info('Melt operation executing -> finalized (immediate)', {
-              operationId: finalizedOp.id,
-              method: finalizedOp.method,
-            });
-
-            return finalizedOp;
-          }
-          case 'PENDING': {
-            // Melt is pending, move to pending state
-            const pendingOp: PendingMeltOperation = {
-              ...result.pending,
-              state: 'pending',
-              updatedAt: Date.now(),
-            };
-
-            await this.meltOperationRepository.update(pendingOp);
-            await this.eventBus.emit('melt-op:pending', {
-              mintUrl: pendingOp.mintUrl,
-              operationId: pendingOp.id,
-              operation: pendingOp,
-            });
-
-            this.logger?.info('Melt operation executing -> pending', {
-              operationId: pendingOp.id,
-              method: pendingOp.method,
-            });
-
-            return pendingOp;
-          }
-          case 'FAILED': {
-            // Execution reported failure, trigger recovery
-            throw new Error(result.failed.error ?? 'Melt execution failed');
-          }
+        if (executing.needsSwap) {
+          const swapped = await handler.swap({
+            operation: executing as any,
+            wallet,
+            inputProofs: meltInputs,
+            logger: this.dependencies.logger,
+          });
+          const swapAppliedAt = Date.now();
+          const applied = await this.dependencies.transactionRunner.run((tx) =>
+            tx.perform(applyMeltSwapResult, {
+              operation: executing,
+              keepProofs: swapped.keep,
+              sendProofs: swapped.send,
+              now: swapAppliedAt,
+            }),
+          );
+          await this.publishAppliedSwap(applied);
+          meltInputs = applied.sendProofs;
         }
-      } catch (e) {
-        // Attempt to recover the executing operation before re-throwing
-        await this.tryRecoverExecutingOperation(executing);
-        throw e;
+        const remote = await handler.melt({
+          operation: executing as any,
+          inputProofs: meltInputs,
+          mintAdapter: this.dependencies.mintAdapter,
+          logger: this.dependencies.logger,
+        });
+        const quote = await this.recordRemoteResult(executing, remote);
+        return await this.applyObservedQuote(executing, quote);
+      } catch (error) {
+        await this.defer(executing.id, error);
+        throw error;
       }
     } finally {
       releaseLock();
@@ -456,464 +259,180 @@ export class MeltOperationService {
   async finalize(
     operationId: string,
     options: { canonicalQuote?: MeltQuote } = {},
-  ): Promise<FinalizeResult> {
-    const releaseLock = await this.acquireOperationLock(operationId);
+  ): Promise<{
+    changeAmount?: Amount;
+    effectiveFee?: Amount;
+    finalizedData?: MeltMethodFinalizedData;
+  }> {
+    const releaseLock = await this.operationIdLock.acquire(operationId);
     try {
-      const operation = await this.meltOperationRepository.getById(operationId);
-      if (!operation) {
-        throw new Error(`Operation ${operationId} not found`);
+      const current = await this.requireOperation(operationId);
+      if (current.state === 'finalized') return this.finalizeResult(current);
+      if (current.state !== 'pending' && current.state !== 'executing') {
+        throw new Error(`Cannot finalize operation in state ${current.state}`);
       }
-      if (operation.state === 'finalized') {
-        this.logger?.debug('Operation already finalized', { operationId });
-        const finalizedOp = operation as FinalizedMeltOperation;
-        return {
-          changeAmount: finalizedOp.changeAmount,
-          effectiveFee: finalizedOp.effectiveFee,
-          finalizedData: finalizedOp.finalizedData,
-        };
+      let quote = options.canonicalQuote;
+      if (!quote || (quote.state === 'PAID' && !Array.isArray(quote.change))) {
+        quote = await this.dependencies.quoteLifecycle.refreshMeltQuote(
+          current.mintUrl,
+          current.method,
+          current.quoteId,
+        );
       }
-      if (operation.state === 'rolled_back' || operation.state === 'rolling_back') {
-        this.logger?.debug('Operation was rolled back or is rolling back, skipping finalization', {
-          operationId,
-        });
-        return { changeAmount: undefined, effectiveFee: undefined, finalizedData: undefined };
+      if (quote.state !== 'PAID') {
+        throw new Error(`Cannot finalize operation from quote state ${quote.state}`);
       }
-
-      if (operation.state !== 'pending') {
-        throw new Error(`Cannot finalize operation in state ${operation.state}`);
-      }
-
-      const pendingOp = operation as PendingMeltOperation;
-      const handler = this.handlerProvider.get(pendingOp.method);
-      const canonicalQuote = await this.resolvePendingSettlementQuote(
-        pendingOp,
-        options.canonicalQuote,
-      );
-      const finalizeResult = await handler.finalize?.({
-        ...this.buildDeps(),
-        operation: pendingOp,
-        canonicalQuote,
-      });
-
-      const finalized: FinalizedMeltOperation = {
-        ...pendingOp,
-        state: 'finalized',
-        updatedAt: Date.now(),
-        changeAmount: finalizeResult?.changeAmount,
-        effectiveFee: finalizeResult?.effectiveFee,
-        finalizedData: finalizeResult?.finalizedData,
-      };
-
-      await this.meltOperationRepository.update(finalized);
-      await this.eventBus.emit('melt-op:finalized', {
-        mintUrl: pendingOp.mintUrl,
-        operationId,
-        operation: finalized,
-      });
-
-      this.logger?.info('Melt operation finalized', {
-        operationId,
-        changeAmount: finalized.changeAmount,
-        effectiveFee: finalized.effectiveFee,
-      });
-
-      return {
-        changeAmount: finalized.changeAmount,
-        effectiveFee: finalized.effectiveFee,
-        finalizedData: finalized.finalizedData,
-      };
+      return this.finalizeResult(await this.applyPaid(current, quote));
     } finally {
       releaseLock();
     }
   }
 
-  async rollback(
-    operationId: string,
-    reason = 'Rolled back',
-    options: { canonicalQuote?: MeltQuote } = {},
-  ): Promise<void> {
-    const releaseLock = await this.acquireOperationLock(operationId);
+  async rollback(operationId: string, reason = 'Rolled back'): Promise<void> {
+    const releaseLock = await this.operationIdLock.acquire(operationId);
     try {
-      const operation = await this.meltOperationRepository.getById(operationId);
-      if (!operation) {
-        throw new Error(`Operation ${operationId} not found`);
+      const operation = await this.requireOperation(operationId);
+      if (operation.state === 'prepared') {
+        const now = Date.now();
+        const result = await this.dependencies.transactionRunner.run((tx) =>
+          tx.perform(cancelPreparedMelt, { operationId, reason, now }),
+        );
+        if (result.changed) await this.publishRolledBack(result);
+        return;
       }
-
-      if (
-        operation.state === 'finalized' ||
-        operation.state === 'rolled_back' ||
-        operation.state === 'rolling_back' ||
-        operation.state === 'init' ||
-        operation.state === 'executing'
-      ) {
+      if (operation.state !== 'pending') {
         throw new Error(`Cannot rollback operation in state ${operation.state}`);
       }
-
-      if (!hasPreparedData(operation)) {
-        throw new Error(`Operation ${operationId} is not in a rollbackable state`);
-      }
-
-      const handler = this.handlerProvider.get(operation.method);
-      const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
+      const quote = await this.dependencies.quoteLifecycle.refreshMeltQuote(
         operation.mintUrl,
-        operation.unit,
+        operation.method,
+        operation.quoteId,
       );
-
-      // For pending operations, verify the quote is actually UNPAID before rolling back.
-      // This prevents releasing proofs that are still inflight with the Lightning network.
-      if (operation.state === 'pending') {
-        const pendingOp = operation as PendingMeltOperation;
-        // Re-read the quote while holding the operation lock; a pre-lock snapshot may be stale.
-        const canonicalQuote = await this.resolvePendingSettlementQuote(pendingOp);
-        const decision = await handler.checkPending?.({
-          ...this.buildDeps(),
-          operation: pendingOp,
-          wallet,
-          canonicalQuote,
-        });
-        if (decision !== 'rollback') {
-          throw new Error(
-            `Cannot rollback pending operation: quote state is not UNPAID (decision: ${decision})`,
-          );
-        }
+      if (quote.state !== 'UNPAID') {
+        throw new Error(`Cannot rollback pending operation: quote state is ${quote.state}`);
       }
-
-      let opForRollback: PreparedOrLaterOperation = operation;
-      const rolling: RollingBackMeltOperation = {
-        ...operation,
-        state: 'rolling_back',
-        updatedAt: Date.now(),
-      };
-      await this.meltOperationRepository.update(rolling);
-      opForRollback = rolling;
-
-      await handler.rollback?.({
-        ...this.buildDeps(),
-        operation: opForRollback,
-        wallet,
-      });
-
-      await this.markAsRolledBack(opForRollback, reason);
+      await this.releaseAfterNonPayment(operation, quote, reason);
     } finally {
       releaseLock();
-    }
-  }
-
-  /**
-   * Recover pending operations on startup.
-   * This should be called during initialization.
-   * Throws if recovery is already in progress.
-   */
-  async recoverPendingOperations(): Promise<void> {
-    if (this.recoveryLock) {
-      throw new Error('Recovery is already in progress');
-    }
-
-    let releaseRecoveryLock: () => void;
-    this.recoveryLock = new Promise<void>((resolve) => {
-      releaseRecoveryLock = resolve;
-    });
-
-    try {
-      let initCount = 0;
-      let executingCount = 0;
-      let pendingCount = 0;
-      let rollingBackCount = 0;
-      let orphanCount = 0;
-
-      // 1. Clean up failed init operations
-      const initOps = await this.meltOperationRepository.getByState('init');
-      for (const op of initOps) {
-        await this.recoverInitOperation(op as InitMeltOperation);
-        initCount++;
-      }
-
-      // 2. Log warnings for prepared operations (leave for user to decide)
-      const preparedOps = await this.meltOperationRepository.getByState('prepared');
-      for (const op of preparedOps) {
-        this.logger?.warn('Found stale prepared operation, user can rollback manually', {
-          operationId: op.id,
-        });
-      }
-
-      // 3. Recover executing operations
-      const executingOps = await this.meltOperationRepository.getByState('executing');
-      for (const op of executingOps) {
-        try {
-          await this.recoverExecutingOperation(op as ExecutingMeltOperation);
-          executingCount++;
-        } catch (e) {
-          this.logger?.error('Error recovering executing operation', {
-            operationId: op.id,
-            error: e instanceof Error ? e.message : String(e),
-          });
-        }
-      }
-
-      // 4. Check pending operations
-      const pendingOps = await this.meltOperationRepository.getByState('pending');
-      for (const op of pendingOps) {
-        try {
-          await this.checkPendingOperation(op.id);
-          pendingCount++;
-        } catch (e) {
-          this.logger?.error('Error checking pending melt operation', {
-            operationId: op.id,
-            error: e instanceof Error ? e.message : String(e),
-          });
-        }
-      }
-
-      // 5. Warn about rolling_back operations (need manual intervention)
-      const rollingBackOps = await this.meltOperationRepository.getByState('rolling_back');
-      for (const op of rollingBackOps) {
-        this.logger?.warn(
-          'Found operation stuck in rolling_back state. ' +
-            'This indicates a crash during rollback. Manual recovery may be needed.',
-          {
-            operationId: op.id,
-            mintUrl: op.mintUrl,
-            method: op.method,
-          },
-        );
-        rollingBackCount++;
-      }
-
-      this.logger?.info('Recovery completed', {
-        initOperations: initCount,
-        executingOperations: executingCount,
-        pendingOperations: pendingCount,
-        rollingBackOperations: rollingBackCount,
-        orphanedReservations: orphanCount,
-      });
-    } finally {
-      this.recoveryLock = null;
-      releaseRecoveryLock!();
     }
   }
 
   async checkPendingOperation(operationId: string): Promise<PendingCheckResult> {
-    const op = await this.getOperation(operationId);
-    if (!op || op.state !== 'pending') {
-      throw new Error(
-        `Cannot check operation ${operationId}: expected state 'pending' but found '${
-          op?.state ?? 'not found'
-        }'`,
+    const releaseLock = await this.operationIdLock.acquire(operationId);
+    try {
+      const operation = await this.requireOperation(operationId);
+      if (operation.state !== 'pending') {
+        throw new Error(
+          `Cannot check operation ${operationId}: expected state 'pending' but found '${operation.state}'`,
+        );
+      }
+      const persistedQuote = await this.dependencies.quoteLifecycle.getMeltQuote(
+        operation.mintUrl,
+        operation.method,
+        operation.quoteId,
       );
-    }
-    const persistedQuote = await this.quoteLifecycle.getMeltQuote(
-      op.mintUrl,
-      op.method,
-      op.quoteId,
-    );
-    if (persistedQuote?.state === 'PAID') {
-      await this.finalize(op.id, { canonicalQuote: persistedQuote });
-      return 'finalize';
-    }
-
-    const handler = this.handlerProvider.get(op.method);
-    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(op.mintUrl, op.unit);
-    const quote = await this.quoteLifecycle.refreshMeltQuoteById({
-      mintUrl: op.mintUrl,
-      quoteId: op.quoteId,
-    });
-    const decision: PendingCheckResult =
-      (await handler.checkPending?.({
-        ...this.buildDeps(),
-        operation: op,
-        wallet,
-        canonicalQuote: quote,
-      })) ?? 'stay_pending';
-
-    if (decision === 'finalize') {
-      await this.finalize(op.id, { canonicalQuote: quote });
-      return 'finalize';
-    } else if (decision === 'rollback') {
-      await this.rollback(op.id, 'Rollback requested by handler');
-      return 'rollback';
-    } else {
-      this.logger?.debug('Pending melt remains pending', { operationId: op.id });
+      if (persistedQuote?.state === 'PAID' && Array.isArray(persistedQuote.change)) {
+        await this.applyPaid(operation, persistedQuote);
+        return 'finalize';
+      }
+      const quote = await this.dependencies.quoteLifecycle.refreshMeltQuoteById({
+        mintUrl: operation.mintUrl,
+        quoteId: operation.quoteId,
+      });
+      if (quote.state === 'PAID') {
+        await this.applyPaid(operation, quote);
+        return 'finalize';
+      }
+      if (quote.state === 'UNPAID') {
+        await this.releaseAfterNonPayment(operation, quote, 'Canonical quote is UNPAID');
+        return 'rollback';
+      }
       return 'stay_pending';
+    } finally {
+      releaseLock();
     }
   }
 
-  private async markAsRolledBack(
-    op: PreparedOrLaterOperation,
-    error: string,
-  ): Promise<RolledBackMeltOperation> {
-    const rolledBack: RolledBackMeltOperation = {
-      ...op,
-      state: 'rolled_back',
-      updatedAt: Date.now(),
-      error,
-    };
-    await this.meltOperationRepository.update(rolledBack);
-
-    await this.eventBus.emit('melt-op:rolled-back', {
-      mintUrl: op.mintUrl,
-      operationId: op.id,
-      operation: rolledBack,
-    });
-
-    this.logger?.info('Melt operation rolled back', {
-      operationId: op.id,
-      error,
-    });
-
-    return rolledBack;
-  }
-
-  /**
-   * Clean up a failed init operation.
-   * Releases any orphaned proof reservations and deletes the operation.
-   */
-  private async recoverInitOperation(op: InitMeltOperation): Promise<void> {
-    // Find any proofs that might have been reserved for this operation
-    const reservedProofs = await this.proofRepository.getReservedProofs();
-    const orphanedForOp = reservedProofs.filter((p) => p.usedByOperationId === op.id);
-
-    if (orphanedForOp.length > 0) {
-      await this.proofService.releaseProofs(
-        op.mintUrl,
-        orphanedForOp.map((p) => p.secret),
-      );
-    }
-
-    await this.meltOperationRepository.delete(op.id);
-    this.logger?.info('Cleaned up failed init operation', { operationId: op.id });
-  }
-
-  /**
-   * Attempts to recover an init operation, swallowing recovery errors.
-   * If recovery fails, logs warning and leaves for startup recovery.
-   */
-  private async tryRecoverInitOperation(op: InitMeltOperation): Promise<void> {
+  async recoverPendingOperations(): Promise<void> {
+    if (this.recoveryLock) throw new Error('Recovery is already in progress');
+    let releaseRecovery!: () => void;
+    this.recoveryLock = new Promise<void>((resolve) => (releaseRecovery = resolve));
     try {
-      await this.recoverInitOperation(op);
-      this.logger?.info('Recovered init operation after failure', { operationId: op.id });
-    } catch (recoveryError) {
-      this.logger?.warn('Failed to recover init operation, will retry on next startup', {
-        operationId: op.id,
-        error: recoveryError instanceof Error ? recoveryError.message : String(recoveryError),
-      });
-    }
-  }
-
-  /**
-   * Recover an executing operation.
-   * Delegates to handler for proof cleanup and state determination.
-   * Updates operation state based on handler result (finalized, pending, or failed).
-   */
-  async recoverExecutingOperation(
-    op: ExecutingMeltOperation,
-    options?: { skipLock?: boolean },
-  ): Promise<void> {
-    const releaseLock = options?.skipLock ? undefined : await this.acquireOperationLock(op.id);
-    try {
-      const current = await this.meltOperationRepository.getById(op.id);
-      if (!current) {
-        this.logger?.warn('Melt operation missing during recovery', { operationId: op.id });
-        return;
+      for (const operation of await this.dependencies.meltOperationQueries.getByState('init')) {
+        await this.recoverInitOperation(operation as InitMeltOperation);
       }
-
-      if (
-        current.state === 'finalized' ||
-        current.state === 'failed' ||
-        current.state === 'rolled_back'
-      ) {
-        return;
-      }
-
-      if (current.state !== 'executing') {
-        this.logger?.debug('Melt operation not executing during recovery', {
-          operationId: current.id,
-          state: current.state,
-        });
-        return;
-      }
-
-      const executing = current as ExecutingMeltOperation;
-      const handler = this.handlerProvider.get(executing.method);
-      const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
-        executing.mintUrl,
-        executing.unit,
-      );
-
-      const result = await handler.recoverExecuting({
-        ...this.buildDeps(),
-        operation: executing,
-        wallet,
-      });
-
-      switch (result.status) {
-        case 'PAID': {
-          const finalizedOp: FinalizedMeltOperation = {
-            ...result.finalized,
-            state: 'finalized',
-            updatedAt: Date.now(),
-          };
-          await this.meltOperationRepository.update(finalizedOp);
-          await this.eventBus.emit('melt-op:finalized', {
-            mintUrl: finalizedOp.mintUrl,
-            operationId: finalizedOp.id,
-            operation: finalizedOp,
+      for (const operation of await this.dependencies.meltOperationQueries.getByState(
+        'executing',
+      )) {
+        try {
+          await this.recoverExecutingOperation(operation as ExecutingMeltOperation);
+        } catch (error) {
+          this.dependencies.logger?.warn('Melt execution remains ambiguous', {
+            operationId: operation.id,
+            error,
           });
-          this.logger?.info('Recovered executing operation as finalized', {
-            operationId: executing.id,
-          });
-          break;
         }
-        case 'PENDING': {
-          const pendingOp: PendingMeltOperation = {
-            ...result.pending,
-            state: 'pending',
-            updatedAt: Date.now(),
-          };
-          await this.meltOperationRepository.update(pendingOp);
-          await this.eventBus.emit('melt-op:pending', {
-            mintUrl: pendingOp.mintUrl,
-            operationId: pendingOp.id,
-            operation: pendingOp,
+      }
+      for (const operation of await this.dependencies.meltOperationQueries.getByState('pending')) {
+        try {
+          await this.checkPendingOperation(operation.id);
+        } catch (error) {
+          this.dependencies.logger?.warn('Pending Melt recovery deferred', {
+            operationId: operation.id,
+            error,
           });
-          this.logger?.info('Recovered executing operation as pending', {
-            operationId: executing.id,
-          });
-          break;
         }
-        case 'FAILED': {
-          await this.markAsRolledBack(
-            executing,
-            result.failed.error ?? 'Recovered: operation failed',
-          );
-          break;
+      }
+      for (const operation of await this.dependencies.meltOperationQueries.getByState(
+        'rolling_back',
+      )) {
+        try {
+          const rolling = operation as RollingBackMeltOperation;
+          const quote = await this.dependencies.quoteLifecycle.refreshMeltQuoteById({
+            mintUrl: rolling.mintUrl,
+            quoteId: rolling.quoteId,
+          });
+          if (quote.state === 'UNPAID') {
+            await this.releaseAfterNonPayment(rolling, quote, 'Recovered legacy rollback');
+          } else {
+            await this.defer(rolling.id, new Error(`Legacy rollback quote is ${quote.state}`));
+          }
+        } catch (error) {
+          await this.defer(operation.id, error);
         }
       }
     } finally {
-      if (releaseLock) {
-        releaseLock();
-      }
+      this.recoveryLock = null;
+      releaseRecovery();
     }
   }
 
-  /**
-   * Attempts to recover an executing operation, swallowing recovery errors.
-   * If recovery fails (e.g., mint unreachable), logs warning and leaves
-   * for startup recovery.
-   */
-  private async tryRecoverExecutingOperation(op: ExecutingMeltOperation): Promise<void> {
+  async recoverExecutingOperation(
+    operation: ExecutingMeltOperation,
+    options: { skipLock?: boolean } = {},
+  ): Promise<void> {
+    const releaseLock = options.skipLock
+      ? undefined
+      : await this.operationIdLock.acquire(operation.id);
     try {
-      await this.recoverExecutingOperation(op, { skipLock: true });
-      this.logger?.info('Recovered executing operation after failure', { operationId: op.id });
-    } catch (recoveryError) {
-      this.logger?.warn('Failed to recover executing operation, will retry on next startup', {
-        operationId: op.id,
-        error: recoveryError instanceof Error ? recoveryError.message : String(recoveryError),
+      const current = await this.dependencies.meltOperationQueries.getById(operation.id);
+      if (!current || current.state !== 'executing') return;
+      const quote = await this.dependencies.quoteLifecycle.refreshMeltQuoteById({
+        mintUrl: current.mintUrl,
+        quoteId: current.quoteId,
       });
+      if (current.needsSwap) await this.recoverPreSwap(current, quote);
+      else await this.applyRecoveryObservation(current, quote);
+    } catch (error) {
+      await this.defer(operation.id, error);
+      throw error;
+    } finally {
+      releaseLock?.();
     }
   }
 
   async getOperation(operationId: string): Promise<MeltOperation | null> {
-    return this.meltOperationRepository.getById(operationId);
+    return this.dependencies.meltOperationQueries.getById(operationId);
   }
 
   async getOperationByQuote(
@@ -921,62 +440,384 @@ export class MeltOperationService {
     method: MeltMethod,
     quoteId: string,
   ): Promise<MeltOperation | null> {
-    const operations = await this.meltOperationRepository.getByQuoteId(mintUrl, quoteId);
-    const matching = operations.filter(
-      (operation) => operation.method === method && hasPreparedData(operation),
+    const operations = await this.dependencies.meltOperationQueries.getByQuoteId(
+      normalizeMintUrl(mintUrl),
+      quoteId,
     );
-
-    if (matching.length === 0) {
-      return null;
-    }
-
+    const matching = operations.filter((op) => op.method === method && hasPreparedData(op));
     if (matching.length > 1) {
-      throw new Error(
-        `Found ${matching.length} melt operations for mint ${mintUrl}, method ${method}, and quote ${quoteId}`,
-      );
+      throw new Error(`Found ${matching.length} melt operations for quote ${quoteId}`);
     }
-
-    return matching[0]!;
+    return matching[0] ?? null;
   }
 
   async getOperationByQuoteIdentity(identity: QuoteIdentity): Promise<MeltOperation | null> {
-    const quote = await this.quoteLifecycle.getMeltQuoteById(identity);
-    if (!quote) {
-      return null;
-    }
-
-    const operations = await this.meltOperationRepository.getByQuoteId(
+    const quote = await this.dependencies.quoteLifecycle.getMeltQuoteById(identity);
+    if (!quote) return null;
+    const operations = await this.dependencies.meltOperationQueries.getByQuoteId(
       normalizeMintUrl(quote.mintUrl),
       quote.quoteId,
     );
-
-    if (operations.length === 0) {
-      return null;
-    }
-
     if (operations.length > 1) {
-      throw new Error(
-        `Found ${operations.length} melt operations for mint ${quote.mintUrl} and quote ${quote.quoteId}`,
-      );
+      throw new Error(`Found ${operations.length} melt operations for quote ${quote.quoteId}`);
     }
-
-    return operations[0]!;
+    return operations[0] ?? null;
   }
 
   async listOperationsByQuote(mintUrl: string, quoteId: string): Promise<MeltOperation[]> {
-    const operations = await this.meltOperationRepository.getByQuoteId(
+    const operations = await this.dependencies.meltOperationQueries.getByQuoteId(
       normalizeMintUrl(mintUrl),
       quoteId,
     );
     return operations.sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
   }
 
-  async getPendingOperations(): Promise<MeltOperation[]> {
-    return this.meltOperationRepository.getPending();
+  getPendingOperations(): Promise<MeltOperation[]> {
+    return this.dependencies.meltOperationQueries.getPending();
   }
 
   async getPreparedOperations(): Promise<PreparedMeltOperation[]> {
-    const ops = await this.meltOperationRepository.getByState('prepared');
-    return ops.filter((op): op is PreparedMeltOperation => op.state === 'prepared');
+    const operations = await this.dependencies.meltOperationQueries.getByState('prepared');
+    return operations.filter((op): op is PreparedMeltOperation => op.state === 'prepared');
+  }
+
+  private methodDataFromMeltQuote(
+    quote: MeltQuote,
+    options: { feeIndex?: number },
+  ): MeltMethodData {
+    if (quote.method === 'bolt11') return { invoice: quote.request };
+    if (quote.method === 'bolt12') return { offer: quote.request };
+    const { feeIndex } = resolveOnchainMeltFeeOption(quote, options.feeIndex);
+    return { address: quote.request, amountSats: quote.amount, feeIndex };
+  }
+
+  private async recordRemoteResult(
+    operation: ExecutingMeltOperation,
+    result: MeltRemoteResult,
+  ): Promise<MeltQuote> {
+    const existing = await this.dependencies.quoteLifecycle.getMeltQuote(
+      operation.mintUrl,
+      operation.method,
+      operation.quoteId,
+    );
+    if (!existing) throw new Error(`Melt quote ${operation.quoteId} was not found`);
+    const now = Date.now();
+    const observation = {
+      ...existing,
+      state: result.status,
+      change: result.change,
+      lastObservedRemoteState: result.status,
+      lastObservedRemoteStateAt: now,
+      updatedAt: now,
+      ...(operation.method === 'onchain'
+        ? { outpoint: result.finalizedData?.outpoint }
+        : { payment_preimage: result.finalizedData?.preimage }),
+    } as MeltQuote;
+    return this.dependencies.quoteLifecycle.recordMeltQuoteObservation(observation);
+  }
+
+  private async applyObservedQuote(
+    operation: ExecutingMeltOperation,
+    quote: MeltQuote,
+  ): Promise<PendingMeltOperation | FinalizedMeltOperation> {
+    if (quote.state === 'PAID') return this.applyPaid(operation, quote);
+    if (quote.state === 'PENDING') return this.applyPending(operation);
+    if (quote.state === 'UNPAID') {
+      await this.releaseAfterNonPayment(operation, quote, 'Melt response was UNPAID');
+      throw new Error('Melt was not paid');
+    }
+    throw new Error(`Unsupported Melt quote state ${String(quote.state)}`);
+  }
+
+  private async applyPending(operation: ExecutingMeltOperation): Promise<PendingMeltOperation> {
+    const now = Date.now();
+    const result = await this.dependencies.transactionRunner.run((tx) =>
+      tx.perform(applyMeltPending, { operation, now }),
+    );
+    if (result.operation.state !== 'pending') throw new Error('Melt did not enter pending state');
+    if (result.changed) {
+      await this.publishCommittedEvent('melt-op:pending', {
+        mintUrl: operation.mintUrl,
+        operationId: operation.id,
+        operation: result.operation,
+      });
+    }
+    return result.operation;
+  }
+
+  private async applyPaid(
+    operation: ExecutingMeltOperation | PendingMeltOperation,
+    quote: MeltQuote,
+  ): Promise<FinalizedMeltOperation> {
+    if (!Array.isArray(quote.change)) {
+      throw new Error(
+        `Cannot finalize Melt quote ${quote.quoteId}: settlement change is incomplete`,
+      );
+    }
+    const proofs = await this.unblindChange(operation, quote.change);
+    const finalizedData =
+      quote.method === 'onchain'
+        ? quote.outpoint === undefined
+          ? undefined
+          : ({ outpoint: quote.outpoint } as MeltMethodFinalizedData)
+        : quote.payment_preimage == null
+          ? undefined
+          : ({ preimage: quote.payment_preimage } as MeltMethodFinalizedData);
+    const now = Date.now();
+    const result = await this.dependencies.transactionRunner.run((tx) =>
+      tx.perform(applyMeltPaidResult, {
+        operation,
+        changeProofs: proofs,
+        finalizedData,
+        now,
+      }),
+    );
+    if (result.changed) {
+      await this.publishProofState(operation.mintUrl, result.spentInputSecrets, 'spent');
+      await this.publishSavedProofs(operation.mintUrl, result.changeProofs);
+      await this.publishCommittedEvent('melt-op:finalized', {
+        mintUrl: operation.mintUrl,
+        operationId: operation.id,
+        operation: result.operation,
+      });
+    }
+    return result.operation;
+  }
+
+  private async unblindChange(
+    operation: ExecutingMeltOperation | PendingMeltOperation,
+    signatures: SerializedBlindedSignature[],
+  ): Promise<Proof[]> {
+    if (signatures.length === 0) return [];
+    const metadata = await this.dependencies.mintService.refreshAndCommitIfStale(operation.mintUrl);
+    const outputs = deserializeOutputData(operation.changeOutputData).keep;
+    if (signatures.length > outputs.length) {
+      throw new ProofValidationError('Mint returned more change signatures than allocated outputs');
+    }
+    return signatures.map((signature, index) => {
+      const output = outputs[index];
+      const keyset = metadata.keysets.find((candidate) => candidate.id === signature.id);
+      if (!output || !keyset) throw new ProofValidationError('Melt change keyset is unavailable');
+      return output.toProof(signature, { id: keyset.id, keys: keyset.keypairs as Keys });
+    });
+  }
+
+  private async releaseAfterNonPayment(
+    operation: ExecutingMeltOperation | PendingMeltOperation | RollingBackMeltOperation,
+    quote: MeltQuote,
+    reason: string,
+    originalProofsUnspent = false,
+  ): Promise<void> {
+    if (quote.state !== 'UNPAID' || quote.lastObservedRemoteStateAt === undefined) {
+      throw new Error('Fresh UNPAID evidence is required before releasing Melt proofs');
+    }
+    const now = Date.now();
+    const result = await this.dependencies.transactionRunner.run((tx) =>
+      tx.perform(releaseMeltAfterNonPayment, {
+        operationId: operation.id,
+        evidence: {
+          kind: 'quote-observation-unpaid',
+          mintUrl: operation.mintUrl,
+          method: operation.method,
+          quoteId: operation.quoteId,
+          observedAt: quote.lastObservedRemoteStateAt!,
+          originalProofsUnspent,
+        },
+        reason,
+        now,
+      }),
+    );
+    if (result.changed) await this.publishRolledBack(result);
+  }
+
+  private async recoverPreSwap(operation: ExecutingMeltOperation, quote: MeltQuote): Promise<void> {
+    if (!operation.swapOutputData) throw new Error('Melt pre-swap plan is missing');
+    const { keepSecrets, sendSecrets } = getSecretsFromSerializedOutputData(
+      operation.swapOutputData,
+    );
+    const outputSecrets = [...keepSecrets, ...sendSecrets];
+    const stored = await this.dependencies.proofQueries.getProofsBySecrets(
+      operation.mintUrl,
+      outputSecrets,
+    );
+    if (stored.length === outputSecrets.length) {
+      await this.applyRecoveryObservation(operation, quote);
+      return;
+    }
+    if (stored.length !== 0) throw new Error('Pre-swap recovery found partial outputs');
+    const originals = await this.dependencies.proofQueries.getProofsBySecrets(
+      operation.mintUrl,
+      operation.inputProofSecrets,
+    );
+    const { wallet } = await this.dependencies.walletService.getWalletWithActiveKeysetId(
+      operation.mintUrl,
+      operation.unit,
+    );
+    if (originals.length === operation.inputProofSecrets.length) {
+      const states = await wallet.checkProofsStates(originals);
+      if (
+        states.length === originals.length &&
+        states.every((state) => state.state === 'UNSPENT')
+      ) {
+        if (quote.state !== 'UNPAID') {
+          throw new Error('Melt quote advanced although pre-swap inputs are unspent');
+        }
+        await this.releaseAfterNonPayment(
+          operation,
+          quote,
+          'Pre-swap inputs are confirmed unspent',
+          true,
+        );
+        return;
+      }
+    }
+    const metadata = await this.dependencies.mintService.refreshAndCommitIfStale(operation.mintUrl);
+    const restored = await restoreOutputProofs(
+      wallet,
+      metadata.keysets,
+      operation.unit,
+      operation.swapOutputData,
+    );
+    const outputData = deserializeOutputData(operation.swapOutputData);
+    const keepSecretSet = new Set(
+      outputData.keep.map((output) => new TextDecoder().decode(output.secret)),
+    );
+    const sendSecretSet = new Set(sendSecrets);
+    const keep = restored.filter((proof) => keepSecretSet.has(proof.secret));
+    const send = restored.filter((proof) => sendSecretSet.has(proof.secret));
+    if (keep.length + send.length !== outputData.keep.length + outputData.send.length) {
+      throw new Error('Pre-swap outcome remains ambiguous; restored output set is incomplete');
+    }
+    const swapAppliedAt = Date.now();
+    const applied = await this.dependencies.transactionRunner.run((tx) =>
+      tx.perform(applyMeltSwapResult, {
+        operation,
+        keepProofs: keep,
+        sendProofs: send,
+        now: swapAppliedAt,
+      }),
+    );
+    await this.publishAppliedSwap(applied);
+    await this.applyRecoveryObservation(operation, quote);
+  }
+
+  private async applyRecoveryObservation(
+    operation: ExecutingMeltOperation,
+    quote: MeltQuote,
+  ): Promise<void> {
+    if (quote.state === 'PAID') {
+      await this.applyPaid(operation, quote);
+      return;
+    }
+    if (quote.state === 'PENDING') {
+      await this.applyPending(operation);
+      return;
+    }
+    await this.releaseAfterNonPayment(operation, quote, 'Recovered Melt as UNPAID');
+  }
+
+  private async recoverInitOperation(operation: InitMeltOperation): Promise<void> {
+    const result = await this.dependencies.transactionRunner.run((tx) =>
+      tx.perform(cleanupMeltInit, operation.id),
+    );
+    if (result.changed && result.releasedSecrets.length > 0) {
+      await this.publishCommittedEvent('proofs:released', {
+        mintUrl: operation.mintUrl,
+        secrets: result.releasedSecrets,
+      });
+    }
+  }
+
+  private async defer(operationId: string, error: unknown): Promise<void> {
+    try {
+      const now = Date.now();
+      await this.dependencies.transactionRunner.run((tx) =>
+        tx.perform(deferMeltRecovery, {
+          operationId,
+          error: error instanceof Error ? error.message : String(error),
+          now,
+        }),
+      );
+    } catch (deferError) {
+      this.dependencies.logger?.warn('Failed to persist deferred Melt recovery', {
+        operationId,
+        error: deferError,
+      });
+    }
+  }
+
+  private async requireOperation(operationId: string): Promise<MeltOperation> {
+    const operation = await this.dependencies.meltOperationQueries.getById(operationId);
+    if (!operation) throw new Error(`Operation ${operationId} not found`);
+    return operation;
+  }
+
+  private finalizeResult(operation: FinalizedMeltOperation) {
+    return {
+      changeAmount: operation.changeAmount,
+      effectiveFee: operation.effectiveFee,
+      finalizedData: operation.finalizedData,
+    };
+  }
+
+  private async publishRolledBack(result: {
+    operation: MeltOperation;
+    restoredSecrets: string[];
+    releasedSecrets: string[];
+  }): Promise<void> {
+    await this.publishProofState(result.operation.mintUrl, result.restoredSecrets, 'ready');
+    if (result.releasedSecrets.length > 0) {
+      await this.publishCommittedEvent('proofs:released', {
+        mintUrl: result.operation.mintUrl,
+        secrets: result.releasedSecrets,
+      });
+    }
+    await this.publishCommittedEvent('melt-op:rolled-back', {
+      mintUrl: result.operation.mintUrl,
+      operationId: result.operation.id,
+      operation: result.operation,
+    });
+  }
+
+  private async publishAppliedSwap(result: {
+    operation: ExecutingMeltOperation;
+    savedProofs: import('@core/types.ts').CoreProof[];
+    spentInputSecrets: string[];
+    changed: boolean;
+  }): Promise<void> {
+    if (!result.changed) return;
+    await this.publishProofState(result.operation.mintUrl, result.spentInputSecrets, 'spent');
+    await this.publishSavedProofs(result.operation.mintUrl, result.savedProofs);
+  }
+
+  private async publishSavedProofs(
+    mintUrl: string,
+    proofs: import('@core/types.ts').CoreProof[],
+  ): Promise<void> {
+    const grouped = new Map<string, typeof proofs>();
+    for (const proof of proofs) grouped.set(proof.id, [...(grouped.get(proof.id) ?? []), proof]);
+    for (const [keysetId, group] of grouped) {
+      await this.publishCommittedEvent('proofs:saved', { mintUrl, keysetId, proofs: group });
+    }
+  }
+
+  private async publishProofState(
+    mintUrl: string,
+    secrets: string[],
+    state: 'inflight' | 'ready' | 'spent',
+  ): Promise<void> {
+    if (secrets.length === 0) return;
+    await this.publishCommittedEvent('proofs:state-changed', { mintUrl, secrets, state });
+  }
+
+  private async publishCommittedEvent<E extends keyof CoreEvents>(
+    event: E,
+    payload: CoreEvents[E],
+  ): Promise<void> {
+    try {
+      await this.dependencies.eventBus.emit(event, payload, { throwOnError: true });
+    } catch (error) {
+      this.dependencies.logger?.warn('Melt event listener failed after commit', { event, error });
+    }
   }
 }

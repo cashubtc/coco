@@ -1,10 +1,9 @@
 import { Amount, type AmountLike } from '@cashu/cashu-ts';
 import type { RealTimeTransport, TransportEvent } from './RealTimeTransport.ts';
 import type { WsRequest } from './SubscriptionProtocol.ts';
-import type { WebSocketFactory } from './WsConnectionManager.ts';
+import { WsConnectionManager, type WebSocketFactory } from './WsConnectionManager.ts';
 import type { Logger } from '../logging/Logger.ts';
 import type { MintAdapter } from './MintAdapter.ts';
-import { WsTransport } from './WsTransport.ts';
 import { PollingTransport } from './PollingTransport.ts';
 import type { MintQuotePollingOperation } from '../quotes/MintQuotePolling.ts';
 
@@ -23,7 +22,7 @@ export interface HybridTransportOptions {
  * - Deduplication: Both transports emit the same notifications, so we deduplicate at this layer.
  */
 export class HybridTransport implements RealTimeTransport {
-  private readonly wsTransport: WsTransport;
+  private readonly wsTransport: RealTimeTransport;
   private readonly pollingTransport: PollingTransport;
   private readonly logger?: Logger;
   private readonly options: Required<HybridTransportOptions>;
@@ -57,8 +56,8 @@ export class HybridTransport implements RealTimeTransport {
       fastPollingIntervalMs: options?.fastPollingIntervalMs ?? 5000,
     };
 
-    // Create WsTransport with reconnection disabled - we rely on polling as fallback
-    this.wsTransport = new WsTransport(wsFactory, logger, { disableReconnect: true });
+    // Disable reconnection - we rely on polling as fallback
+    this.wsTransport = new WsConnectionManager(wsFactory, logger, { disableReconnect: true });
 
     // Create PollingTransport with slow interval initially
     this.pollingTransport = new PollingTransport(
@@ -141,7 +140,7 @@ export class HybridTransport implements RealTimeTransport {
   }
 
   /**
-   * Register internal handlers on WsTransport to track connection state.
+   * Register internal WebSocket handlers to track connection state.
    * Only registers once per mint.
    */
   private ensureInternalHandlers(mintUrl: string): void {

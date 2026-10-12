@@ -1,4 +1,10 @@
-import { Amount, isBlsKeyset, type AmountLike } from '@cashu/cashu-ts';
+import {
+  Amount,
+  Keyset as CashuKeyset,
+  isBlsKeyset,
+  type AmountLike,
+  type Keys,
+} from '@cashu/cashu-ts';
 import {
   MINT_REFRESH_TTL_S,
   type MintMetadata,
@@ -614,44 +620,40 @@ export class MintService {
     await Promise.all(
       keysets.map(async (ks) => {
         const existingKeyset = await this.keysetRepo.getKeysetById(mint.mintUrl, ks.id);
-        if (existingKeyset) {
-          const keysetModel: Omit<Keyset, 'keypairs' | 'updatedAt'> = {
+        try {
+          // A v2 keyset id commits to its keys and advertised metadata. Reuse cached keys only
+          // while they still derive the current entry; otherwise fetch and verify the complete
+          // keyset before allowing its unit or fee metadata to change.
+          const keypairs =
+            existingKeyset &&
+            CashuKeyset.verifyKeysetId({ ...ks, keys: existingKeyset.keypairs as Keys })
+              ? existingKeyset.keypairs
+              : await this.mintAdapter.fetchKeysForId(mint.mintUrl, ks);
+          return this.keysetRepo.addKeyset({
             mintUrl: mint.mintUrl,
             id: ks.id,
             unit: ks.unit,
+            keypairs,
             active: ks.active,
             feePpk: ks.input_fee_ppk || 0,
-          };
-          return this.keysetRepo.updateKeyset(keysetModel);
-        } else {
-          try {
-            const keysRes = await this.mintAdapter.fetchKeysForId(mint.mintUrl, ks);
-            return this.keysetRepo.addKeyset({
-              mintUrl: mint.mintUrl,
-              id: ks.id,
-              unit: ks.unit,
-              keypairs: keysRes,
-              active: ks.active,
-              feePpk: ks.input_fee_ppk || 0,
-            });
-          } catch (err) {
-            // Refusing one keyset's keys must not cost the Wallet the keysets that did verify.
-            if (err instanceof KeysetVerificationError) {
-              this.logger?.warn('Skipping keyset whose keys failed NUT-02 verification', {
-                mintUrl: mint.mintUrl,
-                keysetId: ks.id,
-                err,
-              });
-              return;
-            }
-            this.logger?.error('Failed to sync keyset', {
+          });
+        } catch (err) {
+          // Refusing one keyset's keys must not cost the Wallet the keysets that did verify.
+          if (err instanceof KeysetVerificationError) {
+            this.logger?.warn('Skipping keyset whose keys failed NUT-02 verification', {
               mintUrl: mint.mintUrl,
               keysetId: ks.id,
               err,
             });
-            if (err instanceof KeysetSyncError) throw err;
-            throw new KeysetSyncError(mint.mintUrl, ks.id, undefined, err);
+            return;
           }
+          this.logger?.error('Failed to sync keyset', {
+            mintUrl: mint.mintUrl,
+            keysetId: ks.id,
+            err,
+          });
+          if (err instanceof KeysetSyncError) throw err;
+          throw new KeysetSyncError(mint.mintUrl, ks.id, undefined, err);
         }
       }),
     );

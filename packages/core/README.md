@@ -309,7 +309,7 @@ those details are derived from canonical quote storage.
 ### PaymentRequestsApi
 
 - `parse(paymentRequest: string): Promise<ResolvedPaymentRequest>`
-- `prepare(request: ResolvedPaymentRequest, options: { mintUrl: string; amount?: AmountLike }): Promise<PreparedPaymentRequest>`
+- `prepare(request: ResolvedPaymentRequest, options: { mintUrl: string; amount?: UnitAmountLike }): Promise<PreparedPaymentRequest>`
 - `execute(transaction: PreparedPaymentRequest): Promise<PaymentRequestExecutionResult>`
 - `incoming.create(input: CreateIncomingPaymentRequestInput): Promise<PaymentRequestReceiveOperation>`
 
@@ -390,7 +390,7 @@ include:
 
 - **Purpose**: Extend the core by hooking into lifecycle events with access only to the services you declare.
 - **Lifecycle hooks**: `onInit` (after services are created), `onReady` (after APIs are built), `onDispose` (on shutdown).
-- **Cleanup**: Hooks must return a cleanup function (sync or async), similar to React’s `useEffect`.
+- **Cleanup**: `onInit` and `onReady` may return a cleanup function (sync or async). Return cleanup for resources acquired by the hook, such as subscriptions; hooks that acquire no resources can return nothing. `onDispose` may complete synchronously or asynchronously.
 
 ### Types
 
@@ -448,7 +448,8 @@ await manager.dispose();
 
 ### Error handling
 
-- Errors thrown in `onInit`, `onReady`, and `onDispose` are caught. Hook errors are logged with the plugin name; a failure during plugin boot is also logged by the injected `Logger`.
+- Ordinary errors thrown in `onInit` or `onReady` are caught and logged to the console with the plugin name. Extension registration conflicts propagate as `ExtensionRegistrationError`.
+- During plugin disposal, all `onDispose` hooks and registered cleanup functions are attempted. Failures are collected and disposal rejects with an `AggregateError`; `manager.dispose()` propagates that failure.
 
 ## Exports
 

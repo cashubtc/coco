@@ -206,6 +206,49 @@ describe('WalletApi - Trust Enforcement', () => {
       });
     });
 
+    it('drives balances from an explicitly injected BalanceQueries, not ProofService', async () => {
+      const mockBalanceQueries = {
+        getBalancesByMint: mock(async () => ({
+          [testMintUrl]: {
+            spendable: Amount.from(20),
+            reserved: Amount.from(0),
+            total: Amount.from(20),
+            unit: 'sat',
+          },
+        })),
+        getBalancesByMintAndUnit: mock(async () => ({})),
+        getBalanceTotal: mock(async () => ({
+          spendable: Amount.from(20),
+          reserved: Amount.from(0),
+          total: Amount.from(20),
+          unit: 'sat',
+        })),
+        getBalanceTotalByUnit: mock(async () => ({})),
+      };
+
+      const walletApiWithInjectedQueries = new WalletApi(
+        mockMintService,
+        mockWalletService,
+        mockProofService,
+        mockWalletRestoreService,
+        receiveOperationService,
+        tokenService,
+        undefined,
+        mockBalanceQueries,
+      );
+
+      await expect(walletApiWithInjectedQueries.balances.byMint()).resolves.toEqual({
+        [testMintUrl]: {
+          spendable: Amount.from(20),
+          reserved: Amount.from(0),
+          total: Amount.from(20),
+          unit: 'sat',
+        },
+      });
+      expect(mockBalanceQueries.getBalancesByMint).toHaveBeenCalledTimes(1);
+      expect(mockProofService.getBalancesByMint).not.toHaveBeenCalled();
+    });
+
     it('should reject tokens from untrusted mints', async () => {
       const token = {
         mint: testMintUrl,

@@ -23,6 +23,7 @@ import type { KeyRingService } from '../../../services/KeyRingService';
 import { mintQuoteFromBolt11Response, type MintQuote } from '../../../models/MintQuote';
 import { mintQuoteObservationFromBolt11Response } from '../../../models/MintQuoteObservationFactory';
 import { assessMintQuoteClaimability } from '../../../models/MintQuoteClaimability.ts';
+import { hasSameMintQuoteOwnership } from '../../../quotes/MintQuoteOwnership.ts';
 
 export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
   constructor(private readonly keyRingService: KeyRingService) {}
@@ -111,10 +112,7 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
       };
     }
 
-    if (
-      (ctx.operation.pubkey !== undefined || remoteQuote.pubkey !== undefined) &&
-      remoteQuote.pubkey !== ctx.operation.pubkey
-    ) {
+    if (!hasSameMintQuoteOwnership('bolt11', remoteQuote.pubkey, ctx.operation.pubkey)) {
       return {
         status: 'UNRESOLVED',
         error: 'Recovered BOLT11 mint operation has mismatched NUT-20 quote ownership',
@@ -257,7 +255,7 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
         `Polled BOLT11 mint quote ${quote.quote} conflicts with pending operation amount`,
       );
     }
-    if ((quote.pubkey ?? undefined) !== (operation.pubkey ?? undefined)) {
+    if (!hasSameMintQuoteOwnership('bolt11', quote.pubkey, operation.pubkey)) {
       throw new MintQuoteValidationError(
         `Polled BOLT11 mint quote ${quote.quote} conflicts with pending operation ownership`,
       );
