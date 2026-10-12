@@ -3,7 +3,7 @@ export * from './WalletBalancesApi.ts';
 export * from './MintApi.ts';
 export * from './KeyRingApi.ts';
 export * from './HistoryApi.ts';
-export * from './AuthApi.ts';
+export type { AuthApi } from './AuthApi.ts';
 export * from './SendOpsApi.ts';
 export * from './ReceiveOpsApi.ts';
 export * from './MeltOpsApi.ts';

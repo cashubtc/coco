@@ -1,21 +1,19 @@
-import type { AuthProvider } from '@cashu/cashu-ts';
+import type { AuthProvider, TokenResponse } from '@cashu/cashu-ts';
 import type { AuthSession } from '@core/models';
-import type { AuthService } from '@core/services';
 
-/**
- * Public API for NUT-21/22 authentication.
- *
- * Thin wrapper that delegates to AuthService,
- * consistent with the other Api → Service pattern.
- */
-export class AuthApi {
-  constructor(private readonly authService: AuthService) {}
+/** Public authentication interface for NUT-21/22, available as `manager.auth`. */
+export interface AuthApi {
+  /** Start device authorization; polling persists the session and connects the provider. */
+  startDeviceAuth(mintUrl: string): Promise<{
+    verification_uri: string;
+    verification_uri_complete: string | undefined;
+    user_code: string;
+    poll: () => Promise<TokenResponse>;
+    cancel: () => void;
+  }>;
 
-  async startDeviceAuth(mintUrl: string) {
-    return this.authService.startDeviceAuth(mintUrl);
-  }
-
-  async login(
+  /** Persist externally obtained tokens and connect the mint's authentication provider. */
+  login(
     mintUrl: string,
     tokens: {
       access_token: string;
@@ -23,31 +21,23 @@ export class AuthApi {
       expires_in?: number;
       scope?: string;
     },
-  ): Promise<AuthSession> {
-    return this.authService.login(mintUrl, tokens);
-  }
+  ): Promise<AuthSession>;
 
-  async restore(mintUrl: string): Promise<boolean> {
-    return this.authService.restore(mintUrl);
-  }
+  /** Restore a persisted session; return false if it cannot be restored. */
+  restore(mintUrl: string): Promise<boolean>;
 
-  async logout(mintUrl: string): Promise<void> {
-    return this.authService.logout(mintUrl);
-  }
+  /** Delete the persisted session and disconnect the mint's authentication provider. */
+  logout(mintUrl: string): Promise<void>;
 
-  async getSession(mintUrl: string): Promise<AuthSession> {
-    return this.authService.getSession(mintUrl);
-  }
+  /** Get a valid session; reject if it is missing or expired. */
+  getSession(mintUrl: string): Promise<AuthSession>;
 
-  async hasSession(mintUrl: string): Promise<boolean> {
-    return this.authService.hasSession(mintUrl);
-  }
+  /** Check whether a valid session exists. */
+  hasSession(mintUrl: string): Promise<boolean>;
 
-  getAuthProvider(mintUrl: string): AuthProvider | undefined {
-    return this.authService.getAuthProvider(mintUrl);
-  }
+  /** Get the provider for an authenticated mint. */
+  getAuthProvider(mintUrl: string): AuthProvider | undefined;
 
-  getPoolSize(mintUrl: string): number {
-    return this.authService.getPoolSize(mintUrl);
-  }
+  /** Get the available blind authentication token count. */
+  getPoolSize(mintUrl: string): number;
 }

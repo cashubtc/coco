@@ -63,7 +63,7 @@ import {
   WalletApi,
   HistoryApi,
   KeyRingApi,
-  AuthApi,
+  type AuthApi,
   OpsApi,
   SendOpsApi,
   ReceiveOpsApi,
@@ -1195,7 +1195,7 @@ export class Manager {
     const melt = new MeltOpsApi(this.meltOperationService);
     const ops = new OpsApi(send, receive, mintOps, melt);
     const quotes = new QuoteApi(this.quoteLifecycle);
-    const auth = new AuthApi(this.authService);
+    const auth: AuthApi = this.authService;
     const paymentRequests = new PaymentRequestsApi(
       this.paymentRequestService,
       this.paymentRequestReceiveService,
