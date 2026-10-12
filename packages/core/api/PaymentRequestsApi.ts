@@ -26,6 +26,11 @@ export type CreateIncomingPaymentRequestInput = Omit<
 };
 
 export interface IncomingPaymentRequestsApi {
+  /**
+   * Create and persist an incoming payment request. Encoding defaults to creqB.
+   * @throws PaymentRequestError if encoding fails, preserving the encoder error as its cause.
+   * Shorten oversized request fields or explicitly choose creqA if the other wallet supports it.
+   */
   create(input: CreateIncomingPaymentRequestInput): Promise<PaymentRequestReceiveOperation>;
   cancel(operationId: string, reason?: string): Promise<PaymentRequestReceiveOperation>;
   get(operationId: string): Promise<PaymentRequestReceiveOperation | null>;
@@ -86,6 +91,7 @@ export class PaymentRequestsApi {
 
   /**
    * Parse and validate an encoded payment request.
+   * @throws PaymentRequestError if decoding fails, preserving the decoder error as its cause.
    */
   async parse(paymentRequest: string): Promise<ResolvedPaymentRequest> {
     return this.paymentRequestService.parse(paymentRequest);

@@ -48,11 +48,13 @@ high-water mark, so its committed index is never reused.
 
 ### Importing Existing Keypairs
 
-You can import external keypairs by providing a 32-byte secret key:
+You can import external keypairs by providing a valid 32-byte secp256k1 secret key.
+The bytes must encode a nonzero scalar below the curve order; a zero-filled
+`new Uint8Array(32)` is invalid. Supply the key from your existing secure key store:
 
 ```ts
 // Import a keypair from a 32-byte secret key
-const secretKey = new Uint8Array(32); // Your 32-byte secret key
+declare const secretKey: Uint8Array; // Valid secret supplied by your application
 const keypair = await coco.keyring.addKeyPair(secretKey);
 console.log('Imported public key:', keypair.publicKeyHex);
 ```
@@ -136,12 +138,21 @@ When you receive a P2PK token, Coco automatically handles the signature verifica
 const token = 'cashuA...'; // P2PK token
 
 try {
-  const result = await coco.wallet.receive(token);
-  console.log('Successfully received P2PK token:', result.amount);
+  await coco.wallet.receive(token); // Resolves with no return value
+  console.log('Successfully received P2PK token');
 } catch (error) {
-  console.error('Failed to receive token:', error.message);
+  console.error('Failed to receive token:', error instanceof Error ? error.message : error);
   // This might fail if you don't have the required keypair
 }
+```
+
+`wallet.receive()` returns `Promise<void>`. To inspect the amount, fee, or durable
+state, use [receive operations](./receive-operations.md):
+
+```ts
+const prepared = await coco.ops.receive.prepare({ token });
+const received = await coco.ops.receive.execute(prepared.id);
+console.log('Received amount:', received.amount.toString(), received.unit);
 ```
 
 ## TypeScript Types
@@ -188,7 +199,7 @@ when the same seed is reused.
 try {
   await coco.wallet.receive(p2pkToken);
 } catch (error) {
-  if (error.message.includes('Key pair not found')) {
+  if (error instanceof Error && error.message.includes('Key pair not found')) {
     console.error("You don't have the required keypair to spend this token");
     // You might need to import the keypair or ask the sender to unlock it
   }
@@ -197,7 +208,7 @@ try {
 try {
   await coco.keyring.addKeyPair(invalidKey);
 } catch (error) {
-  if (error.message.includes('must be exactly 32 bytes')) {
+  if (error instanceof Error && error.message.includes('must be exactly 32 bytes')) {
     console.error('Invalid secret key size');
   }
 }
