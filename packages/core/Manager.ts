@@ -979,11 +979,12 @@ export class Manager {
     );
     const walletRestoreService = new WalletRestoreService(
       proofService,
-      counterService,
+      transactionRunner,
       walletService,
       this.mintRequestProvider,
       walletRestoreLogger,
       this.outputDataCreator,
+      this.eventBus,
     );
 
     // One shared instance across every counter-consuming operation service so that

@@ -73,8 +73,10 @@ export class WalletApi {
     return this.receiveOperationService.receive(token);
   }
 
-  // Restoration logic is delegated to WalletRestoreService
-
+  /**
+   * Restore deterministic proofs per keyset, preserving existing ownership and counter positions.
+   * Pending proofs are skipped; call again after settlement to discover newly unspent proofs.
+   */
   async restore(mintUrl: string, options?: WalletRestoreOptions) {
     this.logger?.info('Starting restore', { mintUrl });
     const mint = await this.mintService.addMintByUrl(mintUrl, { trusted: true });

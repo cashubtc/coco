@@ -10,7 +10,12 @@ import {
 import { describe, it, beforeEach, afterEach, expect, mock } from 'bun:test';
 import { WalletRestoreService } from '../../services/WalletRestoreService';
 import type { ProofService } from '../../services/ProofService';
-import type { CounterService } from '../../services/CounterService';
+import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
+import { RepositoryTransactionConflictError } from '../../repositories/RepositoryTransactionError.ts';
+import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
+import { EventBus, type CoreEvents } from '../../events/index.ts';
+import type { CoreProof } from '../../types.ts';
+import { overrideTransactions } from '../overrideTransactions.ts';
 import type { WalletService } from '../../services/WalletService';
 import type { MintRequestProvider } from '../../infra/MintRequestProvider';
 import type { Logger } from '../../logging/Logger';
@@ -33,7 +38,9 @@ describe('WalletRestoreService', () => {
   const bip39seed = new Uint8Array(64).fill(7);
 
   let proofService: ProofService;
-  let counterService: CounterService;
+  let repositories: MemoryRepositories;
+  let transactionRunner: RepositoryCoreTransactionRunner;
+  let eventBus: EventBus<CoreEvents>;
   let walletService: WalletService;
   let requestProvider: MintRequestProvider;
   let logger: Logger;
@@ -60,10 +67,9 @@ describe('WalletRestoreService', () => {
       saveProofs: mock(() => Promise.resolve()),
     } as unknown as ProofService;
 
-    // Mock CounterService
-    counterService = {
-      overwriteCounter: mock(() => Promise.resolve()),
-    } as unknown as CounterService;
+    repositories = new MemoryRepositories();
+    transactionRunner = new RepositoryCoreTransactionRunner(repositories);
+    eventBus = new EventBus<CoreEvents>();
 
     // Mock WalletService
     walletService = {
@@ -100,10 +106,12 @@ describe('WalletRestoreService', () => {
 
     service = new WalletRestoreService(
       proofService,
-      counterService,
+      transactionRunner,
       walletService,
       requestProvider,
       logger,
+      undefined,
+      eventBus,
     );
   });
 
@@ -167,7 +175,7 @@ describe('WalletRestoreService', () => {
       });
       service = new WalletRestoreService(
         proofService,
-        counterService,
+        transactionRunner,
         walletService,
         requestProvider,
         logger,
@@ -193,6 +201,44 @@ describe('WalletRestoreService', () => {
       );
       expect(restoreRequest).toHaveBeenCalledWith({ outputs: [output.blindedMessage] });
     });
+
+    it('only submits positively unspent sweep inputs', async () => {
+      const proofs = ['unspent', 'pending', 'spent'].map((secret) => makeProof(50, secret));
+      Wallet.prototype.batchRestore = mock(async () => ({ proofs }));
+      Wallet.prototype.checkProofsStates = mock(
+        async () =>
+          [{ state: 'UNSPENT' }, { state: 'PENDING' }, { state: 'SPENT' }] as ProofState[],
+      );
+      Wallet.prototype.getFeesForProofs = mock(() => Amount.from(1));
+      const walletResult = await walletService.getWalletWithActiveKeysetId(mintUrl, 'sat');
+      const { wallet } = walletResult;
+      walletService.getWalletWithActiveKeysetId = mock(async () => walletResult);
+      await service.sweepKeyset(mintUrl, keysetId, bip39seed);
+      expect(wallet.send).toHaveBeenCalledWith(
+        Amount.from(49),
+        [proofs[0]],
+        undefined,
+        expect.anything(),
+      );
+    });
+
+    it.each(['PENDING', 'UNKNOWN', undefined])(
+      'never sweeps ineligible state %s',
+      async (state) => {
+        Wallet.prototype.batchRestore = mock(async () => ({ proofs: [makeProof(50, 'pending')] }));
+        Wallet.prototype.checkProofsStates = mock(async () => [{ state }] as ProofState[]);
+        const walletResult = await walletService.getWalletWithActiveKeysetId(mintUrl, 'sat');
+        const { wallet } = walletResult;
+        walletService.getWalletWithActiveKeysetId = mock(async () => walletResult);
+        if (state === 'PENDING') await service.sweepKeyset(mintUrl, keysetId, bip39seed);
+        else
+          await expect(service.sweepKeyset(mintUrl, keysetId, bip39seed)).rejects.toThrow(
+            'Malformed state check',
+          );
+        expect(proofService.createOutputsAndIncrementCounters).not.toHaveBeenCalled();
+        expect(wallet.send).not.toHaveBeenCalled();
+      },
+    );
 
     it('should successfully sweep a keyset with ready proofs', async () => {
       const proofs = [makeProof(50, 'proof1'), makeProof(50, 'proof2')];
@@ -273,7 +319,7 @@ describe('WalletRestoreService', () => {
 
       await service.sweepKeyset(mintUrl, keysetId, bip39seed);
 
-      expect(logger.warn).toHaveBeenCalledWith('No ready proofs to sweep, all spent', {
+      expect(logger.warn).toHaveBeenCalledWith('No unspent proofs to sweep', {
         mintUrl,
         keysetId,
         spentCount: 2,
@@ -332,15 +378,9 @@ describe('WalletRestoreService', () => {
       Wallet.prototype.batchRestore = mockBatchRestore;
       Wallet.prototype.checkProofsStates = mockCheckProofsStates;
 
-      expect(service.sweepKeyset(mintUrl, keysetId, bip39seed)).rejects.toThrow(
+      await expect(service.sweepKeyset(mintUrl, keysetId, bip39seed)).rejects.toThrow(
         'Malformed state check',
       );
-      expect(logger.error).toHaveBeenCalledWith('Malformed state check', {
-        mintUrl,
-        keysetId,
-        statesLength: 1,
-        proofsLength: 2,
-      });
     });
 
     it('should throw when state check returns non-array', async () => {
@@ -352,7 +392,7 @@ describe('WalletRestoreService', () => {
       Wallet.prototype.batchRestore = mockBatchRestore;
       Wallet.prototype.checkProofsStates = mockCheckProofsStates;
 
-      expect(service.sweepKeyset(mintUrl, keysetId, bip39seed)).rejects.toThrow(
+      await expect(service.sweepKeyset(mintUrl, keysetId, bip39seed)).rejects.toThrow(
         'Malformed state check',
       );
     });
@@ -414,253 +454,406 @@ describe('WalletRestoreService', () => {
   });
 
   describe('restoreKeyset', () => {
-    let mockWallet: any;
+    const remoteWallet = (
+      proofs: Proof[] = [makeProof(50, 'proof1')],
+      states: unknown = [{ state: 'UNSPENT' }],
+      lastCounterWithSignature: number | null | undefined = 10,
+    ): Wallet =>
+      ({
+        batchRestore: mock(async () => ({ proofs, lastCounterWithSignature })),
+        checkProofsStates: mock(async () => states),
+      }) as unknown as Wallet;
 
-    beforeEach(() => {
-      mockWallet = {
-        batchRestore: mock(() =>
-          Promise.resolve({
-            proofs: [makeProof(50, 'proof1')],
-            lastCounterWithSignature: 10,
-          }),
+    const storedProof = (secret: string, overrides: Partial<CoreProof> = {}): CoreProof => ({
+      ...makeProof(50, secret),
+      mintUrl,
+      unit: 'sat',
+      state: 'ready',
+      ...overrides,
+    });
+
+    it.each([
+      [0, 0, 1],
+      [null, 50, 50],
+      [undefined, 50, 50],
+      [10, 50, 50],
+      [99, 50, 100],
+    ])(
+      'preserves the high-water mark (observed %s, existing %s)',
+      async (last, existing, expected) => {
+        await repositories.counterRepository.setCounter(mintUrl, keysetId, existing!);
+        const wallet = remoteWallet();
+        wallet.batchRestore = mock(async () => ({
+          proofs: [makeProof(50, 'proof1')],
+          lastCounterWithSignature: last,
+        })) as Wallet['batchRestore'];
+        await service.restoreKeyset(mintUrl, wallet, keysetId);
+        expect((await repositories.counterRepository.getCounter(mintUrl, keysetId))?.counter).toBe(
+          expected,
+        );
+        expect(await repositories.proofRepository.getAvailableProofs(mintUrl)).toHaveLength(1);
+      },
+    );
+
+    it('normalizes the mint URL and unit before persistence and event publication', async () => {
+      const saved = mock(() => {});
+      eventBus.on('proofs:saved', saved);
+      await service.restoreKeyset('https://MINT.test:443/', remoteWallet(), keysetId, 'USD');
+      const proofs = await repositories.proofRepository.getAvailableProofs(mintUrl);
+      expect(proofs).toEqual([expect.objectContaining({ mintUrl, unit: 'usd', state: 'ready' })]);
+      expect(saved).toHaveBeenCalledWith({ mintUrl, keysetId, proofs });
+    });
+
+    it('is idempotent and only publishes newly committed changes', async () => {
+      const saved = mock(() => {});
+      const counter = mock(() => {});
+      eventBus.on('proofs:saved', saved);
+      eventBus.on('counter:updated', counter);
+      await service.restoreKeyset(mintUrl, remoteWallet(), keysetId);
+      await service.restoreKeyset(mintUrl, remoteWallet(), keysetId);
+      expect(await repositories.proofRepository.getAvailableProofs(mintUrl)).toHaveLength(1);
+      expect(saved).toHaveBeenCalledTimes(1);
+      expect(counter).toHaveBeenCalledTimes(1);
+    });
+
+    it('skips pending and spent proofs but advances past all signatures', async () => {
+      const proofs = ['ready', 'pending', 'spent'].map((secret) => makeProof(50, secret));
+      await service.restoreKeyset(
+        mintUrl,
+        remoteWallet(proofs, [{ state: 'UNSPENT' }, { state: 'PENDING' }, { state: 'SPENT' }], 29),
+        keysetId,
+      );
+      expect(
+        (await repositories.proofRepository.getAvailableProofs(mintUrl)).map(
+          (proof) => proof.secret,
         ),
-        checkProofsStates: mock(() => Promise.resolve([{ state: 'UNSPENT' }])),
-      };
-    });
-
-    it('should successfully restore a keyset', async () => {
-      await service.restoreKeyset(mintUrl, mockWallet, keysetId);
-
-      expect(mockWallet.batchRestore).toHaveBeenCalledWith({
-        gapLimit: 300,
-        batchSize: 100,
-        counter: 0,
-        keysetId,
-        filterSpent: false,
-      });
-      expect(mockWallet.checkProofsStates).toHaveBeenCalledTimes(1);
-      expect(counterService.overwriteCounter).toHaveBeenCalledWith(mintUrl, keysetId, 11);
-      expect(proofService.saveProofs).toHaveBeenCalledTimes(1);
-      expect(logger.info).toHaveBeenCalledWith('Saved restored proofs for keyset', {
-        mintUrl,
-        keysetId,
-        total: 1,
-      });
-    });
-
-    it('should persist restored proofs with the requested unit', async () => {
-      await service.restoreKeyset(mintUrl, mockWallet, keysetId, 'USD');
-
-      const savedProofsCall = (proofService.saveProofs as any).mock.calls[0];
-      expect(savedProofsCall[0]).toBe(mintUrl);
-      expect(savedProofsCall[1]).toHaveLength(1);
-      expect(savedProofsCall[1][0].unit).toBe('usd');
-    });
-
-    it('should return early when no proofs are restored', async () => {
-      mockWallet.batchRestore = mock(() =>
-        Promise.resolve({ proofs: [], lastCounterWithSignature: 0 }),
+      ).toEqual(['ready']);
+      expect(
+        await repositories.proofRepository.getProofsBySecrets(mintUrl, ['pending', 'spent']),
+      ).toEqual([]);
+      expect((await repositories.counterRepository.getCounter(mintUrl, keysetId))?.counter).toBe(
+        30,
       );
-
-      await service.restoreKeyset(mintUrl, mockWallet, keysetId);
-
-      expect(logger.warn).toHaveBeenCalledWith('No proofs to restore', { mintUrl, keysetId });
-      expect(counterService.overwriteCounter).not.toHaveBeenCalled();
-      expect(proofService.saveProofs).not.toHaveBeenCalled();
     });
 
-    it('should throw when restored proofs are fewer than existing proofs', async () => {
-      const existingProofs = [
-        { id: keysetId, amount: Amount.from(50) },
-        { id: keysetId, amount: Amount.from(25) },
-        { id: keysetId, amount: Amount.from(10) },
+    it('can import a skipped pending proof on a later Restore without lowering the counter', async () => {
+      const proofs = [makeProof(50, 'pending')];
+      const saved = mock(() => {});
+      eventBus.on('proofs:saved', saved);
+      await service.restoreKeyset(
+        mintUrl,
+        remoteWallet(proofs, [{ state: 'PENDING' }], 0),
+        keysetId,
+      );
+      expect(await repositories.proofRepository.getProofBySecret(mintUrl, 'pending')).toBeNull();
+      expect((await repositories.counterRepository.getCounter(mintUrl, keysetId))?.counter).toBe(1);
+      expect(saved).not.toHaveBeenCalled();
+      await repositories.counterRepository.setCounter(mintUrl, keysetId, 20);
+      await service.restoreKeyset(
+        mintUrl,
+        remoteWallet(proofs, [{ state: 'UNSPENT' }], 0),
+        keysetId,
+      );
+      expect(await repositories.proofRepository.getProofBySecret(mintUrl, 'pending')).toMatchObject(
+        { state: 'ready' },
+      );
+      expect((await repositories.counterRepository.getCounter(mintUrl, keysetId))?.counter).toBe(
+        20,
+      );
+    });
+
+    it('preserves reservations, attribution, witnesses, and inflight/spent state', async () => {
+      const existing = [
+        storedProof('reserved', { usedByOperationId: 'send', createdByOperationId: 'mint' }),
+        storedProof('inflight', { state: 'inflight', usedByOperationId: 'melt' }),
+        storedProof('spent', {
+          state: 'spent',
+          createdByOperationId: 'previous',
+          witness: 'witness',
+        }),
+        storedProof('unobserved'),
       ];
-      proofService.getProofsByKeysetId = mock(() => Promise.resolve(existingProofs as any));
-
-      mockWallet.batchRestore = mock(() =>
-        Promise.resolve({
-          proofs: [makeProof(50, 'proof1')],
-          lastCounterWithSignature: 10,
-        }),
-      );
-
-      expect(service.restoreKeyset(mintUrl, mockWallet, keysetId)).rejects.toThrow(
-        'Restored less proofs than expected.',
-      );
-      expect(logger.warn).toHaveBeenCalledWith('Restored fewer proofs than previously stored', {
+      await repositories.proofRepository.saveProofs(mintUrl, existing);
+      await service.restoreKeyset(
         mintUrl,
+        remoteWallet(existing.slice(0, 3), [
+          { state: 'UNSPENT' },
+          { state: 'UNSPENT' },
+          { state: 'UNSPENT' },
+        ]),
         keysetId,
-        previous: 3,
-        restored: 1,
-      });
-    });
-
-    it('should handle malformed state check', async () => {
-      mockWallet.checkProofsStates = mock(() =>
-        Promise.resolve([{ state: 'UNSPENT' }, { state: 'SPENT' }]),
-      ); // Wrong length
-
-      expect(service.restoreKeyset(mintUrl, mockWallet, keysetId)).rejects.toThrow(
-        'Malformed state check',
       );
-      expect(logger.error).toHaveBeenCalledWith('Malformed state check', {
-        mintUrl,
-        keysetId,
-        statesLength: 2,
-        proofsLength: 1,
-      });
+      expect(
+        await repositories.proofRepository.getProofsBySecrets(
+          mintUrl,
+          existing.map((proof) => proof.secret),
+        ),
+      ).toEqual(existing);
     });
 
-    it('should handle non-array state check response', async () => {
-      mockWallet.checkProofsStates = mock(() => Promise.resolve(null));
-
-      expect(service.restoreKeyset(mintUrl, mockWallet, keysetId)).rejects.toThrow(
-        'Malformed state check',
+    it('rereads ownership and counters changed while the remote state check was pending', async () => {
+      const existing = storedProof('existing', { createdByOperationId: 'mint' });
+      await repositories.proofRepository.saveProofs(mintUrl, [existing]);
+      const checking = Promise.withResolvers<void>();
+      const checked = Promise.withResolvers<ProofState[]>();
+      const wallet = remoteWallet([existing]);
+      wallet.checkProofsStates = mock(() => {
+        checking.resolve();
+        return checked.promise;
+      });
+      const restoring = service.restoreKeyset(mintUrl, wallet, keysetId);
+      await checking.promise;
+      try {
+        await repositories.withTransaction(async (scope) => {
+          await scope.proofRepository.reserveProofs(mintUrl, [existing.secret], 'melt');
+          await scope.proofRepository.setProofState(mintUrl, [existing.secret], 'inflight');
+          await scope.counterRepository.setCounter(mintUrl, keysetId, 70);
+        });
+      } finally {
+        checked.resolve([{ state: 'UNSPENT' } as ProofState]);
+      }
+      await restoring;
+      expect(await repositories.proofRepository.getProofBySecret(mintUrl, existing.secret)).toEqual(
+        {
+          ...existing,
+          state: 'inflight',
+          usedByOperationId: 'melt',
+        },
+      );
+      expect((await repositories.counterRepository.getCounter(mintUrl, keysetId))?.counter).toBe(
+        70,
       );
     });
 
-    it('should throw when proof is missing during state check', async () => {
-      mockWallet.batchRestore = mock(() =>
-        Promise.resolve({
-          proofs: [makeProof(50, 'proof1')],
-          lastCounterWithSignature: 10,
+    it('retries local reconciliation against fresh state without repeating remote work or events', async () => {
+      const existing = storedProof('existing', { usedByOperationId: 'send' });
+      await repositories.proofRepository.saveProofs(mintUrl, [existing]);
+      let attempts = 0;
+      const runner = new RepositoryCoreTransactionRunner(
+        overrideTransactions(repositories, async (work) => {
+          try {
+            return await repositories.withTransaction(async (scope) => {
+              const result = await work(scope);
+              if (++attempts === 1) throw new RepositoryTransactionConflictError('retry Restore');
+              return result;
+            });
+          } catch (error) {
+            // A competing transaction commits after the first Restore attempt rolls back.
+            await repositories.withTransaction(async (scope) => {
+              await scope.proofRepository.setProofState(mintUrl, [existing.secret], 'spent');
+              await scope.counterRepository.setCounter(mintUrl, keysetId, 80);
+            });
+            throw error;
+          }
         }),
       );
-      // Create a sparse array-like object that has a missing proof
-      mockWallet.checkProofsStates = mock(() =>
-        Promise.resolve([{ state: 'UNSPENT' }, { state: 'SPENT' }]),
+      service = new WalletRestoreService(
+        proofService,
+        runner,
+        walletService,
+        requestProvider,
+        logger,
+        undefined,
+        eventBus,
       );
-
-      // This will pass the length check but fail during iteration
-      mockWallet.batchRestore = mock(() =>
-        Promise.resolve({
-          proofs: [makeProof(50, 'proof1'), undefined as any, makeProof(25, 'proof3')],
-          lastCounterWithSignature: 10,
-        }),
+      const saved = mock(() => {});
+      const counter = mock(() => {});
+      eventBus.on('proofs:saved', saved);
+      eventBus.on('counter:updated', counter);
+      const wallet = remoteWallet(
+        [existing, makeProof(50, 'new')],
+        [{ state: 'UNSPENT' }, { state: 'UNSPENT' }],
       );
-      mockWallet.checkProofsStates = mock(() =>
-        Promise.resolve([{ state: 'UNSPENT' }, { state: 'SPENT' }, { state: 'UNSPENT' }]),
+      await service.restoreKeyset(mintUrl, wallet, keysetId);
+      expect(attempts).toBe(2);
+      expect(wallet.batchRestore).toHaveBeenCalledTimes(1);
+      expect(wallet.checkProofsStates).toHaveBeenCalledTimes(1);
+      expect(await repositories.proofRepository.getProofBySecret(mintUrl, existing.secret)).toEqual(
+        {
+          ...existing,
+          state: 'spent',
+        },
       );
-
-      expect(service.restoreKeyset(mintUrl, mockWallet, keysetId)).rejects.toThrow(
-        'Proof not found',
+      expect(await repositories.proofRepository.getAvailableProofs(mintUrl)).toEqual([
+        storedProof('new'),
+      ]);
+      expect((await repositories.counterRepository.getCounter(mintUrl, keysetId))?.counter).toBe(
+        80,
       );
-      expect(logger.error).toHaveBeenCalledWith('Proof not found', { mintUrl, keysetId, index: 1 });
+      expect(saved).toHaveBeenCalledTimes(1);
+      expect(counter).not.toHaveBeenCalled();
     });
 
-    it('should correctly separate spent and ready proofs', async () => {
-      const proofs = [makeProof(50, 'proof1'), makeProof(25, 'proof2'), makeProof(10, 'proof3')];
+    it.each(['UNSPENT', 'PENDING', 'SPENT'])(
+      'rejects conflicting stored material even when remotely %s',
+      async (state) => {
+        const existing = storedProof('existing', { createdByOperationId: 'mint' });
+        await repositories.proofRepository.saveProofs(mintUrl, [existing]);
+        await repositories.counterRepository.setCounter(mintUrl, keysetId, 2);
+        const saved = mock(() => {});
+        const counter = mock(() => {});
+        eventBus.on('proofs:saved', saved);
+        eventBus.on('counter:updated', counter);
+        await expect(
+          service.restoreKeyset(
+            mintUrl,
+            remoteWallet(
+              [makeProof(50, 'new'), { ...makeProof(50, 'existing'), C: 'conflict' }],
+              [{ state: 'UNSPENT' }, { state }],
+            ),
+            keysetId,
+          ),
+        ).rejects.toThrow('Conflicting proof');
+        expect(await repositories.proofRepository.getProofBySecret(mintUrl, 'new')).toBeNull();
+        expect(await repositories.proofRepository.getProofBySecret(mintUrl, 'existing')).toEqual(
+          existing,
+        );
+        expect((await repositories.counterRepository.getCounter(mintUrl, keysetId))?.counter).toBe(
+          2,
+        );
+        expect(saved).not.toHaveBeenCalled();
+        expect(counter).not.toHaveBeenCalled();
+      },
+    );
 
-      mockWallet.batchRestore = mock(() =>
-        Promise.resolve({
-          proofs,
-          lastCounterWithSignature: 20,
+    it.each([
+      null,
+      [],
+      [{ state: 'UNKNOWN' }],
+      [null],
+      [{}],
+      [{ state: 'UNSPENT' }, { state: 'SPENT' }],
+    ])('rejects malformed state observations without persistence', async (states) => {
+      await expect(
+        service.restoreKeyset(mintUrl, remoteWallet(undefined, states), keysetId),
+      ).rejects.toThrow('Malformed state check');
+      expect(await repositories.counterRepository.getCounter(mintUrl, keysetId)).toBeNull();
+      expect(await repositories.proofRepository.getAvailableProofs(mintUrl)).toEqual([]);
+    });
+
+    it.each([-1, 0.5, NaN, Infinity, Number.MAX_SAFE_INTEGER])(
+      'rejects invalid counter %s atomically',
+      async (last) => {
+        await expect(
+          service.restoreKeyset(mintUrl, remoteWallet(undefined, undefined, last), keysetId),
+        ).rejects.toThrow('Invalid restored counter');
+        expect(await repositories.counterRepository.getCounter(mintUrl, keysetId)).toBeNull();
+        expect(await repositories.proofRepository.getAvailableProofs(mintUrl)).toEqual([]);
+      },
+    );
+
+    it('rejects mixed keysets and duplicate observations before persistence', async () => {
+      const proof = makeProof(50, 'proof1');
+      await expect(
+        service.restoreKeyset(mintUrl, remoteWallet([{ ...proof, id: 'wrong' }]), keysetId),
+      ).rejects.toThrow('Invalid restored proof');
+      await expect(
+        service.restoreKeyset(
+          mintUrl,
+          remoteWallet([proof, proof], [{ state: 'UNSPENT' }, { state: 'PENDING' }]),
+          keysetId,
+        ),
+      ).rejects.toThrow('Invalid restored proof');
+      expect(await repositories.counterRepository.getCounter(mintUrl, keysetId)).toBeNull();
+    });
+
+    it('preserves a counter when no signatures are found', async () => {
+      await repositories.counterRepository.setCounter(mintUrl, keysetId, 90);
+      const wallet = remoteWallet([], [], null);
+      await service.restoreKeyset(mintUrl, wallet, keysetId);
+      expect(wallet.checkProofsStates).not.toHaveBeenCalled();
+      expect((await repositories.counterRepository.getCounter(mintUrl, keysetId))?.counter).toBe(
+        90,
+      );
+    });
+
+    it('rolls back counter and imported proofs on a persistence failure', async () => {
+      const runner = new RepositoryCoreTransactionRunner(
+        overrideTransactions(repositories, (work) =>
+          repositories.withTransaction((scope) =>
+            work({
+              ...scope,
+              proofRepository: new Proxy(scope.proofRepository, {
+                get(target, property, receiver) {
+                  if (property === 'saveProofs')
+                    return async (...args: Parameters<typeof target.saveProofs>) => {
+                      await target.saveProofs(...args);
+                      throw new Error('storage failure');
+                    };
+                  const value = Reflect.get(target, property, receiver);
+                  return typeof value === 'function' ? value.bind(target) : value;
+                },
+              }),
+            }),
+          ),
+        ),
+      );
+      service = new WalletRestoreService(
+        proofService,
+        runner,
+        walletService,
+        requestProvider,
+        logger,
+        undefined,
+        eventBus,
+      );
+      await expect(service.restoreKeyset(mintUrl, remoteWallet(), keysetId)).rejects.toThrow(
+        'storage failure',
+      );
+      expect(await repositories.counterRepository.getCounter(mintUrl, keysetId)).toBeNull();
+      expect(await repositories.proofRepository.getAvailableProofs(mintUrl)).toEqual([]);
+    });
+
+    it('keeps remote calls outside the transaction and publishes only committed state', async () => {
+      let inTransaction = false;
+      const runner = new RepositoryCoreTransactionRunner(
+        overrideTransactions(repositories, async (work) => {
+          inTransaction = true;
+          try {
+            return await repositories.withTransaction(work);
+          } finally {
+            inTransaction = false;
+          }
         }),
       );
-      mockWallet.checkProofsStates = mock(() =>
-        Promise.resolve([{ state: 'SPENT' }, { state: 'UNSPENT' }, { state: 'SPENT' }]),
+      service = new WalletRestoreService(
+        proofService,
+        runner,
+        walletService,
+        requestProvider,
+        logger,
+        undefined,
+        eventBus,
       );
-
-      await service.restoreKeyset(mintUrl, mockWallet, keysetId);
-
-      expect(logger.debug).toHaveBeenCalledWith('Checked proof states', {
-        mintUrl,
-        keysetId,
-        ready: 1,
-        spent: 2,
+      const wallet = remoteWallet();
+      wallet.batchRestore = mock(async () => {
+        expect(inTransaction).toBe(false);
+        return { proofs: [makeProof(50, 'proof1')], lastCounterWithSignature: 10 };
       });
-      expect(logger.info).toHaveBeenCalledWith('Saved restored proofs for keyset', {
-        mintUrl,
-        keysetId,
-        total: 3,
+      wallet.checkProofsStates = mock(async () => {
+        expect(inTransaction).toBe(false);
+        return [{ state: 'UNSPENT' } as ProofState];
       });
-    });
-
-    it('should set counter to 0 when lastCounterWithSignature is null', async () => {
-      mockWallet.batchRestore = mock(() =>
-        Promise.resolve({
-          proofs: [makeProof(50, 'proof1')],
-          lastCounterWithSignature: null,
-        }),
-      );
-
-      await service.restoreKeyset(mintUrl, mockWallet, keysetId);
-
-      expect(counterService.overwriteCounter).toHaveBeenCalledWith(mintUrl, keysetId, 0);
-    });
-
-    it('should set counter to 0 when lastCounterWithSignature is 0', async () => {
-      mockWallet.batchRestore = mock(() =>
-        Promise.resolve({
-          proofs: [makeProof(50, 'proof1')],
-          lastCounterWithSignature: 0,
-        }),
-      );
-
-      await service.restoreKeyset(mintUrl, mockWallet, keysetId);
-
-      expect(counterService.overwriteCounter).toHaveBeenCalledWith(mintUrl, keysetId, 0);
-    });
-
-    it('should increment counter when lastCounterWithSignature is positive', async () => {
-      mockWallet.batchRestore = mock(() =>
-        Promise.resolve({
-          proofs: [makeProof(50, 'proof1')],
-          lastCounterWithSignature: 99,
-        }),
-      );
-
-      await service.restoreKeyset(mintUrl, mockWallet, keysetId);
-
-      expect(counterService.overwriteCounter).toHaveBeenCalledWith(mintUrl, keysetId, 100);
-      expect(logger.debug).toHaveBeenCalledWith('Requested counter overwrite for keyset', {
-        mintUrl,
-        keysetId,
-        counter: 100,
+      const observed: string[] = [];
+      eventBus.on('counter:updated', async (counter) => {
+        expect(inTransaction).toBe(false);
+        expect(counter.counter).toBe(11);
+        expect(await repositories.proofRepository.getAvailableProofs(mintUrl)).toHaveLength(1);
+        observed.push('counter');
+        throw new Error('counter listener failed');
       });
-    });
-
-    it('should log all key stages during restore', async () => {
-      const existingProofs = [{ id: keysetId, amount: Amount.from(25) }];
-      proofService.getProofsByKeysetId = mock(() => Promise.resolve(existingProofs as any));
-
-      await service.restoreKeyset(mintUrl, mockWallet, keysetId);
-
-      expect(logger.debug).toHaveBeenCalledWith('Restoring keyset', { mintUrl, keysetId });
-      expect(logger.debug).toHaveBeenCalledWith('Existing proofs before restore', {
-        mintUrl,
-        keysetId,
-        count: 1,
+      eventBus.on('proofs:saved', async (event) => {
+        expect(inTransaction).toBe(false);
+        expect(event.proofs).toHaveLength(1);
+        expect((await repositories.counterRepository.getCounter(mintUrl, keysetId))?.counter).toBe(
+          11,
+        );
+        observed.push('proofs');
+        throw new Error('proof listener failed');
       });
-      expect(logger.info).toHaveBeenCalledWith('Batch restore result', {
-        mintUrl,
-        keysetId,
-        restored: 1,
-        lastCounterWithSignature: 10,
-      });
-    });
-
-    it('should save only ready proofs, not spent ones', async () => {
-      const proofs = [makeProof(50, 'proof1'), makeProof(25, 'proof2')];
-
-      mockWallet.batchRestore = mock(() =>
-        Promise.resolve({
-          proofs,
-          lastCounterWithSignature: 5,
-        }),
-      );
-      mockWallet.checkProofsStates = mock(() =>
-        Promise.resolve([{ state: 'SPENT' }, { state: 'UNSPENT' }]),
-      );
-
-      await service.restoreKeyset(mintUrl, mockWallet, keysetId);
-
-      // Verify saveProofs was called with only ready proofs
-      expect(proofService.saveProofs).toHaveBeenCalledTimes(1);
-      const savedProofsCall = (proofService.saveProofs as any).mock.calls[0];
-      expect(savedProofsCall[0]).toBe(mintUrl);
-      // The second argument should be mapped proofs, we just check it was called
-      expect(savedProofsCall[1]).toBeDefined();
+      await service.restoreKeyset(mintUrl, wallet, keysetId);
+      expect(observed).toEqual(['counter', 'proofs']);
+      expect(logger.warn).toHaveBeenCalledTimes(2);
     });
   });
 

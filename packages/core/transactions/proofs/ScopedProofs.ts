@@ -1,8 +1,9 @@
 import { selectProofsRGLI, sumProofs, type Amount, type SelectProofs } from '@cashu/cashu-ts';
-import { normalizeUnit } from '@core/amounts.ts';
+import { DEFAULT_UNIT, normalizeUnit } from '@core/amounts.ts';
 import { ProofValidationError } from '@core/models/Error.ts';
 import { createKeyChain } from '@core/proofs/KeysetSelection.ts';
 import type { ProofQueries } from '@core/proofs/ProofQueries.ts';
+import type { RestoredProofObservation } from '@core/proofs/RestoredProofs.ts';
 import { selectProofInputs, calculateProofFee } from '@core/proofs/ProofSelection.ts';
 import type { KeysetRepository, ProofRepository } from '@core/repositories';
 import type { CoreProof } from '@core/types.ts';
@@ -47,8 +48,17 @@ export interface MeltSendProofsInput extends Omit<OwnedProofsInput, 'ownership'>
   outputs: readonly MeltSendProofPlan[];
 }
 
+export interface ReconcileRestoredProofsInput {
+  mintUrl: string;
+  keysetId: string;
+  unit: string;
+  observations: readonly RestoredProofObservation[];
+}
+
 /** Proof reads and mutations within an existing transaction; never opens or commits one. */
 export interface ScopedProofs extends ProofQueries {
+  /** Import missing UNSPENT proofs without changing any existing state or operation ownership. */
+  reconcileRestored(input: ReconcileRestoredProofsInput): Promise<CoreProof[]>;
   saveCreated(mintUrl: string, proofs: CoreProof[]): Promise<void>;
   selectAndReserve(input: SelectAndReserveProofsInput): Promise<{
     proofs: CoreProof[];
@@ -85,6 +95,49 @@ export class RepositoryScopedProofs implements ScopedProofs {
     private readonly keysets: KeysetRepository,
     private readonly selectProofs: SelectProofs = selectProofsRGLI,
   ) {}
+
+  async reconcileRestored(input: ReconcileRestoredProofsInput): Promise<CoreProof[]> {
+    const secrets = input.observations.map(({ proof }) => proof.secret);
+    if (new Set(secrets).size !== secrets.length) {
+      throw new ProofValidationError('Duplicate restored proof observations');
+    }
+    const existing = await this.proofs.getProofsBySecrets(input.mintUrl, secrets);
+    const storedBySecret = new Map(existing.map((proof) => [proof.secret, proof]));
+    const imported: CoreProof[] = [];
+    for (const { proof, state } of input.observations) {
+      if (proof.id !== input.keysetId) {
+        throw new ProofValidationError('Restored proof belongs to a different keyset');
+      }
+      const stored = storedBySecret.get(proof.secret);
+      if (stored) {
+        if (
+          stored.id !== proof.id ||
+          !stored.amount.equals(proof.amount) ||
+          stored.C !== proof.C ||
+          normalizeUnit(stored.unit, { defaultUnit: DEFAULT_UNIT }) !== input.unit
+        ) {
+          throw new ProofValidationError('Conflicting proof already exists for restored output');
+        }
+        // Restore cannot release reservations, replace attribution, or revive terminal proofs.
+        continue;
+      }
+      if (state === 'UNSPENT') {
+        imported.push({
+          id: proof.id,
+          amount: proof.amount,
+          secret: proof.secret,
+          C: proof.C,
+          ...(proof.dleq ? { dleq: proof.dleq } : {}),
+          ...(proof.witness ? { witness: proof.witness } : {}),
+          mintUrl: input.mintUrl,
+          unit: input.unit,
+          state: 'ready',
+        });
+      }
+    }
+    if (imported.length > 0) await this.proofs.saveProofs(input.mintUrl, imported);
+    return imported;
+  }
 
   async saveCreated(mintUrl: string, proofs: CoreProof[]): Promise<void> {
     const existing = await this.proofs.getProofsBySecrets(

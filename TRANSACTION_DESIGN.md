@@ -271,6 +271,23 @@ A Mint Swap parent can compose predetermined `prepareMelt` and `prepareMint` chi
 callback. If later parent work fails, both child operations, Melt proof reservation, and all output
 counter changes roll back together. Their remote effects still occur only after that parent commit.
 
+## Seed-based Restore
+
+`WalletRestoreService` performs batch Restore and proof-state checks before opening its shared
+runner. `applyRestoredKeyset` imports only missing, positively `UNSPENT` proofs and advances the
+keyset counter to at least the last observed signature index plus one, including index zero.
+Null or absent observations never lower the existing counter. Both changes share one transaction
+with authoritative proof and counter reads, including when composed with Output Allocation.
+
+Existing proofs retain all state and ownership. Conflicting stored material rejects the whole
+keyset application. Newly observed `PENDING` and `SPENT` proofs are skipped; a later explicit
+Restore can find a previously pending proof because scans still start at zero. Restore does not
+release operation-owned resources or introduce a pending-proof lifecycle. Events describe new
+imports and counter advances only after commit, with listener failures logged separately.
+
+Sweep shares the strict proof eligibility rule. Its remote swap and legacy output allocation
+remain outside this migration, as does cross-keyset atomicity.
+
 ## Files and Dependencies
 
 ```text
@@ -288,6 +305,7 @@ operations/melt/
   MeltTransitions.ts                         # reservation, authorization, settlement, and recovery
   MeltTransitionTypes.ts                     # named Melt transition inputs and results
 services/KeyRingService.ts                    # key management orchestration
+services/WalletRestoreTransitions.ts          # atomic per-keyset Restore application
 transactions/
   CoreTransaction.ts                         # scope, runner interface, implementation
   TransactionLifetime.ts                     # internal containment mechanism
@@ -323,7 +341,8 @@ bound to an existing transaction. Their methods include reads and mutations but 
 a transaction. `Transition` names the domain change performed within that scope; one transaction may
 compose several transitions.
 
-Workflow transitions live alongside their operation code under `operations/<domain>/`, with their
+Management transitions such as Restore live alongside their service without introducing a durable
+Operation. Workflow transitions live alongside their operation code under `operations/<domain>/`, with their
 named input and result types in `<Domain>TransitionTypes.ts`. This keeps domain behavior with its
 lifecycle while `transactions/` contains the shared transaction machinery and scoped implementations.
 Start with one `<Domain>Transitions.ts` module for the complete lifecycle. In Send, order functions by
@@ -331,7 +350,7 @@ preparation, execution, completion, cancellation and reclaim, then recovery. Rec
 transitions, so its entry point does not determine a separate module boundary. Extract a smaller
 `*Transitions.ts` module only when a cohesive responsibility warrants it; splitting by phase or by
 individual transition is optional. Every runtime export from `*Transitions.ts` and
-`*TransitionTypes.ts` modules under `operations/` must be a branded `Transition`; an export guard test
+`*TransitionTypes.ts` modules under `operations/` and `services/` must be a branded `Transition`; an export guard test
 enforces this. Type-only exports are allowed. Exported pure helpers live in separate modules alongside
 the transitions, such as `operations/send/SendValidation.ts`.
 
@@ -394,7 +413,7 @@ Before completing a change involving Wallet persistence, operation coordination,
 
 ## Migration and Verification
 
-Send, Mint, and Melt transitions, KeyRing mutations, and mint metadata refresh use coordinator-owned transactions.
+Send, Mint, and Melt transitions, per-keyset Restore, KeyRing mutations, and mint metadata refresh use coordinator-owned transactions.
 Legacy Receive, Mint Swap orchestration, Payment Request Receive parent/attempt/child
 atomicity, and MintService add/forced-update/trust/delete paths remain for their owning migrations.
 Those migrations should reuse domain capabilities and branded transitions, rather than add domain gateways.

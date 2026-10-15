@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   runRepositoryTransactionContract,
+  runWalletRestoreContract,
   runKeypairAllocationContract,
   allocateKeypairForTest,
   runAuthSessionRepositoryContract,
@@ -395,3 +396,8 @@ describe('hydration corruption guard', () => {
     }
   });
 });
+
+runWalletRestoreContract(
+  { createRepositories, createSharedRepositories },
+  { describe, it, expect },
+);
