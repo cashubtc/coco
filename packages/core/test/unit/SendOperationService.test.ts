@@ -11,7 +11,14 @@ import type {
   PreparedSendOperation,
   PendingSendOperation,
 } from '../../operations/send/SendOperation';
-import { MintOperationError, NetworkError } from '../../models/Error.ts';
+import { isSameSendIntent } from '../../operations/send/SendValidation';
+import {
+  MintOperationError,
+  NetworkError,
+  InvalidOperationIdError,
+  SendOperationConflictError,
+  SendOperationIntentConflictError,
+} from '../../models/Error.ts';
 import { makeOutputDataCreator } from '../fixtures/OutputDataCreator.ts';
 import { SendOpsApi } from '../../api/SendOpsApi.ts';
 import { ProofStateWatcherService } from '../../services/watchers/ProofStateWatcherService.ts';
@@ -897,5 +904,196 @@ describe('SendOperationService', () => {
       expect.stringContaining('Manual recovery via seed restore may be needed'),
       expect.objectContaining({ operationId: prepared.id }),
     );
+  });
+
+  it('rejects a blank caller-supplied operation ID', async () => {
+    await expect(
+      service.init(mintUrl, unitAmount(10), {
+        method: 'default',
+        methodData: {},
+        operationId: '   ',
+      }),
+    ).rejects.toThrow(InvalidOperationIdError);
+  });
+
+  it('rejects a padded caller-supplied operation ID', async () => {
+    await expect(
+      service.init(mintUrl, unitAmount(10), {
+        method: 'default',
+        methodData: {},
+        operationId: ' leading',
+      }),
+    ).rejects.toThrow(InvalidOperationIdError);
+  });
+
+  it('namespaces a caller-supplied operation ID with send:', async () => {
+    const operation = await service.init(mintUrl, unitAmount(10), {
+      method: 'default',
+      methodData: {},
+      operationId: 'cmd-1',
+    });
+
+    expect(operation.id).toBe('send:cmd-1');
+  });
+
+  it('persists a caller-supplied operation ID under send:', async () => {
+    await proofRepo.saveProofs(mintUrl, [makeProof('proof-1', 10)]);
+    const prepared = await service.prepare(
+      await service.init(mintUrl, unitAmount(10), {
+        method: 'default',
+        methodData: {},
+        operationId: 'cmd-1',
+      }),
+    );
+
+    expect(prepared.id).toBe('send:cmd-1');
+    const persisted = await sendOpRepo.getById('send:cmd-1');
+    expect(persisted?.id).toBe('send:cmd-1');
+  });
+
+  it('joins a re-issued prepare for a namespaced caller-supplied operation ID after a restart', async () => {
+    await proofRepo.saveProofs(mintUrl, [makeProof('proof-1', 10), makeProof('proof-2', 10)]);
+    const callerId = 'caller-command-1';
+    const options = { method: 'default' as const, methodData: {}, operationId: callerId };
+
+    const prepared = await service.prepare(await service.init(mintUrl, unitAmount(10), options));
+
+    expect(prepared.id).toBe('send:caller-command-1');
+    expect(await sendOpRepo.getByState('prepared')).toHaveLength(1);
+    expect(await proofRepo.getAvailableProofs(mintUrl, { unit: 'sat' })).toHaveLength(1);
+
+    let preparedEvents = 0;
+    eventBus.on('send:prepared', () => {
+      preparedEvents++;
+    });
+    repositories.transactionCount = 0;
+
+    const restarted = environment.buildService({ eventBus });
+    const joined = await restarted.prepare(await restarted.init(mintUrl, unitAmount(10), options));
+
+    expect(joined.id).toBe('send:caller-command-1');
+    expect(joined.state).toBe('prepared');
+    expect(joined.inputProofSecrets).toEqual(prepared.inputProofSecrets);
+    expect(await sendOpRepo.getByState('prepared')).toHaveLength(1);
+    // The join is resolved by the transition's own authoritative read, so the re-issued prepare
+    // opens exactly one transaction and commits nothing new.
+    expect(repositories.transactionCount).toBe(1);
+    expect(preparedEvents).toBe(0);
+    expect(await proofRepo.getAvailableProofs(mintUrl, { unit: 'sat' })).toHaveLength(1);
+  });
+
+  it('joins a concurrent duplicate from a second service instance that shares storage', async () => {
+    await proofRepo.saveProofs(mintUrl, [makeProof('proof-1', 10), makeProof('proof-2', 10)]);
+    const callerId = 'caller-command-2';
+    const options = { method: 'default' as const, methodData: {}, operationId: callerId };
+
+    // A second instance has its own in-memory lock — the case the previous revision could not
+    // handle. Its transaction reads committed state and joins instead of creating a second send.
+    const secondInstance = environment.buildService({ eventBus: new EventBus<CoreEvents>() });
+    const [first, second] = await Promise.all([
+      service
+        .init(mintUrl, unitAmount(10), options)
+        .then((operation) => service.prepare(operation)),
+      secondInstance
+        .init(mintUrl, unitAmount(10), options)
+        .then((operation) => secondInstance.prepare(operation)),
+    ]);
+
+    expect(first.id).toBe('send:caller-command-2');
+    expect(second.inputProofSecrets).toEqual(first.inputProofSecrets);
+    expect(await sendOpRepo.getByState('prepared')).toHaveLength(1);
+    expect(await proofRepo.getAvailableProofs(mintUrl, { unit: 'sat' })).toHaveLength(1);
+  });
+
+  it('waits for and joins a concurrent duplicate from the same service instance', async () => {
+    await proofRepo.saveProofs(mintUrl, [makeProof('proof-1', 10), makeProof('proof-2', 10)]);
+    const callerId = 'caller-command-2-same';
+    const options = { method: 'default' as const, methodData: {}, operationId: callerId };
+
+    // One instance, one in-memory lock: the second prepare must wait for the first to release and
+    // then join via the transaction's authoritative read, not fail with OperationInProgressError.
+    const [first, second] = await Promise.all([
+      service
+        .init(mintUrl, unitAmount(10), options)
+        .then((operation) => service.prepare(operation)),
+      service
+        .init(mintUrl, unitAmount(10), options)
+        .then((operation) => service.prepare(operation)),
+    ]);
+
+    expect(first.id).toBe('send:caller-command-2-same');
+    expect(second.inputProofSecrets).toEqual(first.inputProofSecrets);
+    expect(await sendOpRepo.getByState('prepared')).toHaveLength(1);
+    expect(await proofRepo.getAvailableProofs(mintUrl, { unit: 'sat' })).toHaveLength(1);
+  });
+
+  it('rejects a duplicate caller-supplied operation ID with a different intent', async () => {
+    await proofRepo.saveProofs(mintUrl, [makeProof('proof-1', 10), makeProof('proof-2', 20)]);
+    const callerId = 'caller-command-3';
+    const prepared = await service.prepare(
+      await service.init(mintUrl, unitAmount(10), {
+        method: 'default',
+        methodData: {},
+        operationId: callerId,
+      }),
+    );
+    repositories.transactionCount = 0;
+
+    const conflict = await service
+      .init(mintUrl, unitAmount(20), { method: 'default', methodData: {}, operationId: callerId })
+      .then((operation) => service.prepare(operation))
+      .catch((error: unknown) => error);
+
+    expect(conflict).toBeInstanceOf(SendOperationIntentConflictError);
+    expect(conflict).toBeInstanceOf(SendOperationConflictError);
+    expect((conflict as SendOperationIntentConflictError).operationId).toBe(
+      'send:caller-command-3',
+    );
+    // The conflict is decided inside the transaction, which commits nothing.
+    expect(repositories.transactionCount).toBe(1);
+    const persisted = await sendOpRepo.getById('send:caller-command-3');
+    expect(persisted?.amount.equals(prepared.amount)).toBe(true);
+    expect(persisted?.updatedAt).toBe(prepared.updatedAt);
+    expect(persisted?.revision).toBe(prepared.revision);
+  });
+
+  it('rejects a duplicate caller-supplied operation ID that already progressed past prepare', async () => {
+    const callerId = 'caller-command-4';
+    await sendOpRepo.create(
+      pendingSend('send:caller-command-4', [makeProof('caller-command-4-input', 10)]),
+    );
+    repositories.transactionCount = 0;
+
+    const conflict = await service
+      .init(mintUrl, unitAmount(10), { method: 'default', methodData: {}, operationId: callerId })
+      .then((operation) => service.prepare(operation))
+      .catch((error: unknown) => error);
+
+    expect(conflict).toBeInstanceOf(SendOperationConflictError);
+    expect(conflict).not.toBeInstanceOf(SendOperationIntentConflictError);
+    expect((conflict as Error).message).toContain("state 'pending'");
+    expect(repositories.transactionCount).toBe(1);
+    expect((await sendOpRepo.getById('send:caller-command-4'))?.state).toBe('pending');
+  });
+
+  it('compares send intent by normalized mint, amount, unit, method, and method data', () => {
+    const intent = {
+      mintUrl,
+      amount: Amount.from(10),
+      unit: 'sat',
+      method: 'default' as const,
+      methodData: {},
+    };
+
+    expect(isSameSendIntent(intent, { ...intent })).toBe(true);
+    expect(isSameSendIntent(intent, { ...intent, mintUrl: `${mintUrl}/` })).toBe(true);
+    expect(isSameSendIntent(intent, { ...intent, unit: 'SAT' })).toBe(true);
+    expect(isSameSendIntent(intent, { ...intent, amount: Amount.from(20) })).toBe(false);
+    expect(isSameSendIntent(intent, { ...intent, unit: 'usd' })).toBe(false);
+    expect(isSameSendIntent(intent, { ...intent, mintUrl: 'https://other.test' })).toBe(false);
+    expect(
+      isSameSendIntent(intent, { ...intent, method: 'p2pk', methodData: { pubkey: 'pubkey-1' } }),
+    ).toBe(false);
+    expect(isSameSendIntent(intent, { ...intent, methodData: { forceSwap: true } })).toBe(false);
   });
 });

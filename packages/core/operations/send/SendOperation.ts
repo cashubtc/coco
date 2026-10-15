@@ -25,9 +25,14 @@ export type SendOperationState =
   | 'rolled_back';
 
 import type { Amount, Token } from '@cashu/cashu-ts';
-import { getSecretsFromSerializedOutputData, type SerializedOutputData } from '../../utils';
+import {
+  generateSubId,
+  getSecretsFromSerializedOutputData,
+  type SerializedOutputData,
+} from '../../utils';
 import { normalizeUnit, type UnitAmount } from '../../amounts.ts';
 import type { SendMethod, SendMethodData } from './SendMethodHandler';
+import { InvalidOperationIdError } from '../../models/Error.ts';
 
 // ============================================================================
 // Base and Data Interfaces
@@ -306,10 +311,43 @@ export function getKeepProofSecrets(op: PreparedOrLaterOperation): string[] {
 export interface CreateSendOperationOptions<M extends SendMethod = SendMethod> {
   method: M;
   methodData: SendMethodData<M>;
+  /**
+   * Optional host command ID.
+   *
+   * Coco namespaces it with a `send:` prefix before persistence, so it only needs to be unique in
+   * the host's command space. When omitted, Coco generates the operation ID.
+   */
+  operationId?: string;
 }
 
 /**
- * Creates a new SendOperation in init state
+ * Resolve a caller-supplied Send operation ID.
+ *
+ * Generates a fresh sub-ID when none is supplied. Otherwise validates that the host ID is a
+ * non-empty string without surrounding whitespace and returns it namespaced as `send:<id>`.
+ */
+export function resolveSendOperationId(suppliedId?: string): string {
+  if (suppliedId === undefined) {
+    return generateSubId();
+  }
+
+  if (!suppliedId || suppliedId.trim() !== suppliedId) {
+    throw new InvalidOperationIdError(
+      'Caller-supplied operationId must be a non-empty string without surrounding whitespace',
+    );
+  }
+
+  if (suppliedId.startsWith('send:')) {
+    throw new InvalidOperationIdError(
+      'Caller-supplied operationId must not include the reserved "send:" namespace prefix',
+    );
+  }
+
+  return `send:${suppliedId}`;
+}
+
+/**
+ * Creates a new SendOperation in init state.
  */
 export function createSendOperation<M extends SendMethod = SendMethod>(
   id: string,
