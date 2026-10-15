@@ -24,25 +24,8 @@ export class MemoryKeysetRepository implements KeysetRepository {
     return this.getMintMap(mintUrl).get(id) ?? null;
   }
 
-  async updateKeyset(keyset: Omit<Keyset, 'keypairs' | 'updatedAt'>): Promise<void> {
-    const mintMap = this.getMintMap(keyset.mintUrl);
-    const existing = mintMap.get(keyset.id);
-    if (!existing) {
-      // If unknown, create an empty one and then update
-      mintMap.set(keyset.id, {
-        ...keyset,
-        keypairs: {},
-        updatedAt: Math.floor(Date.now() / 1000),
-      });
-      return;
-    }
-    mintMap.set(keyset.id, {
-      ...existing,
-      unit: keyset.unit,
-      active: keyset.active,
-      feePpk: keyset.feePpk,
-      updatedAt: Math.floor(Date.now() / 1000),
-    });
+  updateKeyset(keyset: Omit<Keyset, 'keypairs' | 'updatedAt'>): Promise<void> {
+    return this.addKeyset({ ...keyset, keypairs: {} });
   }
 
   async addKeyset(keyset: Omit<Keyset, 'updatedAt'>): Promise<void> {
