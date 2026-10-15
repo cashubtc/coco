@@ -65,6 +65,7 @@ export interface CounterRepository {
 }
 
 export interface ProofRepository {
+  /** Save the complete batch across keysets atomically; a rejection leaves no new proofs saved. */
   saveProofs(mintUrl: string, proofs: CoreProof[]): Promise<void>;
   getReadyProofs(mintUrl: string, filter?: ProofUnitFilter): Promise<CoreProof[]>;
   /**

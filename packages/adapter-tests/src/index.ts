@@ -2681,6 +2681,60 @@ export async function runProofRepositoryContract(
   const { describe, it, expect } = runner;
 
   describe('ProofRepository contract', () => {
+    it('saves a complete multi-keyset proof batch', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const proofs = [
+          createDummyProof({ id: 'keyset-a', secret: 'batch-a' }),
+          createDummyProof({ id: 'keyset-b', secret: 'batch-b' }),
+        ];
+        await repositories.proofRepository.saveProofs('https://mint.test', proofs);
+
+        const saved = await repositories.proofRepository.getProofsBySecrets(
+          'https://mint.test',
+          proofs.map((proof) => proof.secret),
+        );
+        const keysetIds = saved.map((proof) => proof.id).sort();
+        expect(keysetIds).toHaveLength(2);
+        expect(keysetIds[0]).toBe('keyset-a');
+        expect(keysetIds[1]).toBe('keyset-b');
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('rejects a multi-keyset batch without saving new proofs when any keyset collides', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const existing = createDummyProof({ id: 'keyset-b', secret: 'existing-proof' });
+        await repositories.proofRepository.saveProofs('https://mint.test', [existing]);
+        const proofs = [
+          createDummyProof({ id: 'keyset-a', secret: 'new-a' }),
+          createDummyProof({ id: 'keyset-b', secret: 'existing-proof', amount: Amount.from(2) }),
+          createDummyProof({ id: 'keyset-b', secret: 'new-b' }),
+        ];
+
+        await expectThrows(
+          () => repositories.proofRepository.saveProofs('https://mint.test', proofs),
+          expect,
+        );
+
+        const newProofs = await repositories.proofRepository.getProofsBySecrets(
+          'https://mint.test',
+          ['new-a', 'new-b'],
+        );
+        expect(newProofs).toHaveLength(0);
+        const stored = await repositories.proofRepository.getProofBySecret(
+          'https://mint.test',
+          existing.secret,
+        );
+        expect(stored!.amount.equals(existing.amount)).toBe(true);
+        expect(stored!.id).toBe(existing.id);
+      } finally {
+        await dispose();
+      }
+    });
+
     it('preserves request material across metadata mutations and caller-owned snapshots', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {
