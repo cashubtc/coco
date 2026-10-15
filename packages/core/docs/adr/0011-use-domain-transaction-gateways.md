@@ -34,7 +34,8 @@ their binding to an existing transaction: their methods include reads and mutati
 or commit a transaction. A transition expresses a domain change within that scope, and several
 transitions may share one transaction.
 
-Branded workflow transitions live alongside their operation code in `operations/<domain>/`.
+Management transitions such as per-keyset Restore live alongside their service without creating
+a durable Operation. Branded workflow transitions live alongside their operation code in `operations/<domain>/`.
 `transactions/` contains the shared transaction machinery and scoped implementations. Start with one
 `<Domain>Transitions.ts` module containing the complete lifecycle. Send keeps preparation, execution,
 completion, cancellation, reclaim, and recovery together in `operations/send/SendTransitions.ts`,
@@ -65,7 +66,7 @@ be a `Transition`. Private helper errors must propagate to the enclosing transit
 attempt. Expected outcomes use results such as `changed`, because a transition rejection fails the
 whole attempt even if its caller catches it. Bodies receive the full `CoreTransaction`.
 
-Every runtime export from `*Transitions.ts` and `*TransitionTypes.ts` under `operations/` must be a
+Every runtime export from `*Transitions.ts` and `*TransitionTypes.ts` under `operations/` and `services/` must be a
 `Transition`, enforced by an export guard test. Exported pure helpers live in separate modules
 alongside the transitions. No-input transitions use `void` and
 `tx.perform(transition)`; id-only transitions may accept a bare string. The brand and internal body
@@ -76,7 +77,7 @@ transactions. Their commits intentionally survive later caller failure. Only app
 observations publish events; older observations and timestamp ties retain the first committed
 snapshot. Coordinator dependencies remain acyclic.
 
-Send, Mint, KeyRing, and mint metadata refresh use this model. Other legacy workflows migrate separately.
+Send, Mint, Melt, per-keyset Restore, KeyRing, and mint metadata refresh use this model. Other legacy workflows migrate separately.
 Consistent fail-fast rejection of nested transactions remains follow-up work and must distinguish
 nesting from legitimate concurrent calls. There are no public API or persisted-format changes.
 

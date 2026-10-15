@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import {
   runKeysetRepositoryContract,
   runRepositoryTransactionContract,
+  runWalletRestoreContract,
 } from '@cashu/coco-adapter-tests';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 
@@ -56,3 +57,8 @@ describe('MemoryRepositories transaction byte isolation', () => {
     expect(Array.from(stored!.secretKey)).toEqual([1, 2, 3]);
   });
 });
+
+runWalletRestoreContract(
+  { createRepositories, createSharedRepositories },
+  { describe, it, expect },
+);

@@ -3,6 +3,7 @@ import { Amount } from '@cashu/cashu-ts';
 import Dexie from 'dexie';
 import {
   runRepositoryTransactionContract,
+  runWalletRestoreContract,
   createDummyMint,
   runKeypairAllocationContract,
   allocateKeypairForTest,
@@ -747,3 +748,8 @@ describe('hydration corruption guard', () => {
     }
   });
 });
+
+runWalletRestoreContract(
+  { createRepositories, createSharedRepositories },
+  { describe, it, expect },
+);

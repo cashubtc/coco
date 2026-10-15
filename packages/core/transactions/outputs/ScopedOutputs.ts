@@ -40,6 +40,12 @@ export interface AllocateBlankOutputsInput {
 
 /** Output allocation within an existing transaction; never opens or commits a transaction. */
 export interface ScopedOutputs {
+  /** Preserve committed positions, including Restore observations for inactive keysets. */
+  advanceCounterToAtLeast(
+    mintUrl: string,
+    keysetId: string,
+    minimum: number,
+  ): Promise<Counter | undefined>;
   assertActiveKeys(mintUrl: string, unit: string, activeKeys: MintKeys): Promise<void>;
   /** Calculate the proof amount whose spendable value covers `amount` after input fees. */
   includeInputFees(input: {
@@ -61,6 +67,23 @@ export class RepositoryScopedOutputs implements ScopedOutputs {
     private readonly keysets: KeysetRepository,
     private readonly creator: OutputDataCreator = OutputData,
   ) {}
+
+  async advanceCounterToAtLeast(
+    mintUrl: string,
+    keysetId: string,
+    minimum: number,
+  ): Promise<Counter | undefined> {
+    if (!Number.isSafeInteger(minimum) || minimum < 0) {
+      throw new ProofValidationError('Invalid output counter');
+    }
+    const current = (await this.counters.getCounter(mintUrl, keysetId))?.counter ?? 0;
+    if (!Number.isSafeInteger(current) || current < 0) {
+      throw new ProofValidationError('Invalid stored output counter');
+    }
+    if (minimum <= current) return undefined;
+    await this.counters.setCounter(mintUrl, keysetId, minimum);
+    return { mintUrl, keysetId, counter: minimum };
+  }
 
   async assertActiveKeys(mintUrl: string, unit: string, activeKeys: MintKeys): Promise<void> {
     const keyset = await this.keysets.getKeysetById(mintUrl, activeKeys.id);

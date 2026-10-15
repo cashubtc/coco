@@ -2752,3 +2752,5 @@ export {
   runMintSwapPersistenceContract,
   type MintSwapContractOptions,
 } from './mintSwap.ts';
+
+export { runWalletRestoreContract } from './walletRestore.ts';
