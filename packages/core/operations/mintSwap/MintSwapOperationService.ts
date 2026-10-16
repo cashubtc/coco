@@ -127,10 +127,6 @@ export class MintSwapOperationService {
       let parent = await this.dependencies.parentQueries.getById(intent.id);
       if (parent) assertMintSwapIntent(parent, intent);
       else {
-        // Fail before independent key/quote creation on a store without the opt-in capability.
-        await this.dependencies.transactionRunner.run(async (tx) => {
-          if (!tx.mintSwapOperations) throw new Error('Mint Swap persistence is not enabled');
-        });
         await this.preflight(intent);
         await this.dependencies.transactionRunner.run(async (tx) => {
           await tx.mintMetadata.assertCanMint(
@@ -163,7 +159,6 @@ export class MintSwapOperationService {
         const now = this.now();
         const candidate = {
           ...intent,
-          schemaVersion: 1 as const,
           state: 'preparing' as const,
           revision: 0,
           unit: 'sat' as const,
@@ -627,8 +622,8 @@ export class MintSwapOperationService {
       parent.destinationOperationId,
     );
     try {
-      if (!(await this.dependencies.mintService.isTrustedMint(parent.destinationMintUrl)))
-        throw new UnknownMintError('Mint Swap destination is no longer trusted');
+      // Paid source value must remain redeemable through this persisted quote and output plan.
+      // The scoped authorization below validates funding and ownership without restoring trust.
       await this.dependencies.quoteLifecycle.refreshMintQuote(
         parent.destinationMintUrl,
         'bolt11',
@@ -826,7 +821,7 @@ export class MintSwapOperationService {
   }
 
   private async childSnapshot(tx: CoreTransaction, id: string): Promise<ChildSnapshot> {
-    const parent = await tx.mintSwapOperations!.getById(id);
+    const parent = await tx.mintSwapOperations.getById(id);
     if (!parent) throw new Error('Mint Swap was not found');
     const source = await tx.meltOperations.getById(parent.sourceOperationId);
     const destination = await tx.mintOperations.getById(parent.destinationOperationId);

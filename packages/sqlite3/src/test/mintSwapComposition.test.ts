@@ -12,11 +12,11 @@ async function createRepositories() {
   const filename = join(directory, 'wallet.sqlite');
   let database = new Database(filename);
   return {
-    repositories: new SqliteRepositories({ database, mintSwap: true }),
+    repositories: new SqliteRepositories({ database }),
     reopen: async () => {
       database.close();
       database = new Database(filename);
-      const repositories = new SqliteRepositories({ database, mintSwap: true });
+      const repositories = new SqliteRepositories({ database });
       await repositories.init();
       return repositories;
     },

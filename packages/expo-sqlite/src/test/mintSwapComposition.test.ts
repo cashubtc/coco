@@ -26,14 +26,12 @@ for (const [name, Shim] of [
       return {
         repositories: new SqliteRepositories({
           database: database as unknown as SqliteRepositoriesOptions['database'],
-          mintSwap: true,
         }),
         reopen: async () => {
           await database.closeAsync();
           database = new Shim(filename);
           const repositories = new SqliteRepositories({
             database: database as unknown as SqliteRepositoriesOptions['database'],
-            mintSwap: true,
           });
           await repositories.init();
           return repositories;

@@ -60,7 +60,7 @@ export class MemoryRepositories implements Repositories {
   receiveOperationRepository: ReceiveOperationRepository;
   paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
   paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
-  readonly mintSwap?: MintSwapPersistence;
+  readonly mintSwap: MintSwapPersistence;
 
   private readonly state: MemoryRepositoryState;
   private transactionQueue: Promise<void> = Promise.resolve();
@@ -69,12 +69,11 @@ export class MemoryRepositories implements Repositories {
   private rootOperationsIdle: Promise<void> = Promise.resolve();
   private releaseRootOperations!: () => void;
 
-  constructor(options: { mintSwap?: boolean } = {}) {
-    this.state = createMemoryRepositoryState(options.mintSwap);
-    if (this.state.mintSwap)
-      this.mintSwap = {
-        operationRepository: this.wrapRootRepository(this.state.mintSwap.operationRepository),
-      };
+  constructor() {
+    this.state = createMemoryRepositoryState();
+    this.mintSwap = {
+      operationRepository: this.wrapRootRepository(this.state.mintSwap.operationRepository),
+    };
     this.mintRepository = this.wrapRootRepository(this.state.mintRepository);
     this.keyRingRepository = this.wrapRootRepository(this.state.keyRingRepository);
     this.counterRepository = this.wrapRootRepository(this.state.counterRepository);
@@ -168,7 +167,7 @@ export class MemoryRepositories implements Repositories {
 
 type MemoryRepositoryState = ReturnType<typeof createMemoryRepositoryState>;
 
-function createMemoryRepositoryState(mintSwap = false) {
+function createMemoryRepositoryState() {
   const sendOperationRepository = new MemorySendOperationRepository();
   const meltOperationRepository = new MemoryMeltOperationRepository();
   const mintOperationRepository = new MemoryMintOperationRepository();
@@ -206,14 +205,12 @@ function createMemoryRepositoryState(mintSwap = false) {
   const repositories = state satisfies StateOwnerConstraint;
   return {
     ...repositories,
-    mintSwap: mintSwap
-      ? { operationRepository: new MemoryMintSwapOperationRepository() }
-      : undefined,
+    mintSwap: { operationRepository: new MemoryMintSwapOperationRepository() },
   };
 }
 
 function cloneMemoryRepositoryState(source: MemoryRepositoryState): MemoryRepositoryState {
-  const clone = createMemoryRepositoryState(!!source.mintSwap);
+  const clone = createMemoryRepositoryState();
   copyMemoryRepositoryState(clone, source);
   return clone;
 }
@@ -224,10 +221,9 @@ function copyMemoryRepositoryState(
 ): void {
   for (const key of Object.keys(source) as (keyof MemoryRepositoryState)[]) {
     if (key === 'mintSwap') {
-      if (target.mintSwap && source.mintSwap)
-        target.mintSwap.operationRepository[COPY_MEMORY_REPOSITORY_STATE](
-          source.mintSwap.operationRepository,
-        );
+      target.mintSwap.operationRepository[COPY_MEMORY_REPOSITORY_STATE](
+        source.mintSwap.operationRepository,
+      );
       continue;
     }
     // createMemoryRepositoryState statically enforces the protocol; this loop loses key correlation.

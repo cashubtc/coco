@@ -5,10 +5,15 @@ import {
   serializeMintKeys,
   createBlindSignature,
   pointFromHex,
+  type Proof,
   type Wallet,
 } from '@cashu/cashu-ts';
 import { mintSwapFixture, sourceUrl, destinationUrl, keys, outputProofs } from './fixture.ts';
-import { beginMintSwapSource } from '../../../../core/operations/mintSwap/MintSwapTransitions.ts';
+import {
+  beginMintSwapSource,
+  beginMintSwapDestination,
+} from '../../../../core/operations/mintSwap/MintSwapTransitions.ts';
+import { beginMintExecution } from '../../../../core/operations/mint/MintTransitions.ts';
 import { MeltOperationService } from '../../../../core/operations/melt/MeltOperationService.ts';
 import { KeyRingService } from '../../../../core/services/KeyRingService.ts';
 import { KeypairDerivation } from '../../../../core/keypairs/KeypairDerivation.ts';
@@ -20,6 +25,10 @@ import { deserializeOutputData } from '../../../../core/utils.ts';
 import { testMintKeysetId } from '../../../../core/test/fixtures/MintMetadata.ts';
 import { QuoteLifecycle } from '../../../../core/quotes/QuoteLifecycle.ts';
 import { MeltHandlerProvider } from '../../../../core/infra/handlers/melt/MeltHandlerProvider.ts';
+import { MintHandlerProvider } from '../../../../core/infra/handlers/mint/MintHandlerProvider.ts';
+import { MintBolt11Handler } from '../../../../core/infra/handlers/mint/MintBolt11Handler.ts';
+import { cashuNormalizedBolt11Fixture } from '../../../../core/test/normalizedMintQuoteFixtures.ts';
+import type { MintAdapter } from '../../../../core/infra/MintAdapter.ts';
 import type { MintService } from '../../../../core/services/MintService.ts';
 import type { WalletService } from '../../../../core/services/WalletService.ts';
 import type { ProofService } from '../../../../core/services/ProofService.ts';
@@ -118,7 +127,7 @@ export function runMintSwapCoordinatorContract(
       fixture.setTime(100_000_001);
       const service = fixture.service();
       await service.recoverDue();
-      const parent = await fixture.repositories.mintSwap!.operationRepository.getById('swap');
+      const parent = await fixture.repositories.mintSwap.operationRepository.getById('swap');
       expect(parent?.state).toBe('failed');
       expect(parent?.failure?.code).toBe('preparation_rejected');
       expect(parent?.valueNeutral?.sourcePayment).toBe('not_authorized');
@@ -136,7 +145,7 @@ export function runMintSwapCoordinatorContract(
       ).toBeUndefined();
       await service.recoverDue();
       expect(
-        (await fixture.repositories.mintSwap!.operationRepository.getById('swap'))?.revision,
+        (await fixture.repositories.mintSwap.operationRepository.getById('swap'))?.revision,
       ).toBe(parent?.revision);
       expect(fixture.requests).toEqual([]);
     });
@@ -182,7 +191,7 @@ export function runMintSwapCoordinatorContract(
               C: keys.keys['1'],
             },
           ]);
-          await repositories.mintSwap!.operationRepository.create({
+          await repositories.mintSwap.operationRepository.create({
             ...fixture.parent,
             id: 'swap-2',
             sourceOperationId: 'source-child-2',
@@ -205,9 +214,9 @@ export function runMintSwapCoordinatorContract(
           const release = await lock.acquire(`${leg}-child`);
           try {
             await service[scan]();
-            expect(
-              (await repositories.mintSwap!.operationRepository.getById('swap-2'))?.state,
-            ).toBe('prepared');
+            expect((await repositories.mintSwap.operationRepository.getById('swap-2'))?.state).toBe(
+              'prepared',
+            );
             expect(lock.isLocked(`${leg}-child`)).toBe(true);
           } finally {
             release();
@@ -233,7 +242,7 @@ export function runMintSwapCoordinatorContract(
           fixture.service().prepare({ ...fixture.parent, ...changes }),
         ).rejects.toThrow();
         expect(fixture.requests).toEqual([]);
-        expect(await fixture.repositories.mintSwap!.operationRepository.listActive()).toEqual([]);
+        expect(await fixture.repositories.mintSwap.operationRepository.listActive()).toEqual([]);
       });
     }
 
@@ -279,7 +288,7 @@ export function runMintSwapCoordinatorContract(
       expect(
         await repositories.keyRingRepository.getPersistedKeyPair(allocatedKey, 'p2pk'),
       ).toBeNull();
-      expect(await repositories.mintSwap!.operationRepository.getById('swap')).toBeNull();
+      expect(await repositories.mintSwap.operationRepository.getById('swap')).toBeNull();
       expect(
         (await repositories.proofRepository.getProofBySecret(sourceUrl, 'original'))
           ?.usedByOperationId,
@@ -301,7 +310,7 @@ export function runMintSwapCoordinatorContract(
         run: (work) =>
           runner.run(async (tx) => {
             const result = await work(tx);
-            if (fail && (await tx.mintSwapOperations!.getById('swap'))?.state === 'prepared') {
+            if (fail && (await tx.mintSwapOperations.getById('swap'))?.state === 'prepared') {
               fail = false;
               throw new Error('commit failed');
             }
@@ -343,7 +352,7 @@ export function runMintSwapCoordinatorContract(
         });
         await expect(fixture.service().prepare(fixture.parent)).rejects.toThrow();
         expect(fixture.requests).toEqual([]);
-        expect(await fixture.repositories.mintSwap!.operationRepository.getById('swap')).toBeNull();
+        expect(await fixture.repositories.mintSwap.operationRepository.getById('swap')).toBeNull();
       });
     }
 
@@ -488,7 +497,7 @@ export function runMintSwapCoordinatorContract(
           repositories.withTransaction(async (scope) => {
             const result = await work(scope);
             if (
-              (await scope.mintSwap!.operationRepository.getById('swap'))?.state === 'prepared' &&
+              (await scope.mintSwap.operationRepository.getById('swap'))?.state === 'prepared' &&
               ++attempts === 1
             )
               throw new RepositoryTransactionConflictError('retry preparation');
@@ -515,7 +524,7 @@ export function runMintSwapCoordinatorContract(
       }> = [];
       fixture.events.on('mint-op:pending', async () => {
         const snapshot = {
-          state: (await fixture.repositories.mintSwap!.operationRepository.getById('swap'))?.state,
+          state: (await fixture.repositories.mintSwap.operationRepository.getById('swap'))?.state,
           active: fixture.transactionActive,
           locked:
             fixture.dependencies.sourceOperationLock.isLocked('source-child') ||
@@ -581,7 +590,7 @@ export function runMintSwapCoordinatorContract(
       await service.recoverDue();
       expect(fixture.requests).toEqual([]);
       expect(
-        (await fixture.repositories.mintSwap!.operationRepository.getById('swap'))?.revision,
+        (await fixture.repositories.mintSwap.operationRepository.getById('swap'))?.revision,
       ).toBe(failed.revision);
     });
 
@@ -593,10 +602,10 @@ export function runMintSwapCoordinatorContract(
           fixture.setSourceState('PENDING');
           await fixture.service().execute('swap');
           await fixture.service().cancel('swap');
-          const before = await fixture.repositories.mintSwap!.operationRepository.getById('swap');
+          const before = await fixture.repositories.mintSwap.operationRepository.getById('swap');
           const reopened = await store!.reopen!();
           fixture = await mintSwapFixture(reopened, { initialize: false });
-          expect((await reopened.mintSwap!.operationRepository.getById('swap'))?.revision).toBe(
+          expect((await reopened.mintSwap.operationRepository.getById('swap'))?.revision).toBe(
             before!.revision,
           );
           fixture.setTime(20_000);
@@ -845,12 +854,12 @@ export function runMintSwapCoordinatorContract(
       await fixture.prepare();
       fixture.setSourceState('PENDING');
       await fixture.service().execute('swap');
-      const stale = await fixture.repositories.mintSwap!.operationRepository.getById('swap');
+      const stale = await fixture.repositories.mintSwap.operationRepository.getById('swap');
       await fixture.service().reconcile('swap');
       fixture.dependencies.parentQueries = {
         ...fixture.dependencies.parentQueries,
-        getById: (id) => fixture.repositories.mintSwap!.operationRepository.getById(id),
-        listActive: () => fixture.repositories.mintSwap!.operationRepository.listActive(),
+        getById: (id) => fixture.repositories.mintSwap.operationRepository.getById(id),
+        listActive: () => fixture.repositories.mintSwap.operationRepository.listActive(),
         listDue: async () => [stale!],
       };
       fixture.requests.length = 0;
@@ -879,9 +888,9 @@ export function runMintSwapCoordinatorContract(
       await fixture.prepare();
       await fixture.service().recoverActive();
       expect(fixture.requests).toEqual([]);
-      expect(
-        (await fixture.repositories.mintSwap!.operationRepository.getById('swap'))?.state,
-      ).toBe('prepared');
+      expect((await fixture.repositories.mintSwap.operationRepository.getById('swap'))?.state).toBe(
+        'prepared',
+      );
     });
 
     it('observes after a crash immediately following authorization without redispatch', async () => {
@@ -1373,7 +1382,241 @@ export function runMintSwapCoordinatorContract(
       expect(fixture.requests.filter((request) => request === 'melt')).toHaveLength(1);
     });
 
-    it('pauses recovery when trust is revoked and never silently restores trust', async () => {
+    for (const interrupted of ['before issuance', 'after a lost issuance response'] as const) {
+      it(`recovers paid destination value ${interrupted} after trust revocation`, async () => {
+        const { repositories, dependencies } = fixture;
+        const generated = createNewMintKeys(5, new Uint8Array(32).fill(7));
+        const destinationKeys = {
+          id: generated.keysetId,
+          keys: serializeMintKeys(generated.pubKeys),
+        };
+        const old = await repositories.keysetRepository.getKeysetById(destinationUrl, keys.id);
+        await repositories.keysetRepository.updateKeyset({ ...old!, active: false });
+        await repositories.keysetRepository.addKeyset({
+          mintUrl: destinationUrl,
+          id: destinationKeys.id,
+          keypairs: destinationKeys.keys,
+          unit: 'sat',
+          active: true,
+          feePpk: 0,
+        });
+        await fixture.create();
+        await fixture.service().prepare(fixture.parent);
+        const destination = await repositories.mintOperationRepository.getById('destination-child');
+        if (!destination || destination.state !== 'pending') throw new Error('Missing destination');
+        const counter = await repositories.counterRepository.getCounter(
+          destinationUrl,
+          destinationKeys.id,
+        );
+        const outputs = deserializeOutputData(destination.outputData).keep;
+        const blindedMessages = outputs.map((output) => output.blindedMessage);
+        const signatures = blindedMessages.map((output) => ({
+          id: destinationKeys.id,
+          amount: Amount.from(output.amount),
+          C_: createBlindSignature(
+            pointFromHex(output.B_),
+            generated.privKeys[output.amount.toString()]!,
+            destinationKeys.id,
+          ).C_.toHex(true),
+        }));
+        const issuedProofs = outputs.map((output, i) =>
+          output.toProof(signatures[i]!, destinationKeys),
+        );
+        let remoteState: 'UNPAID' | 'PAID' | 'ISSUED' =
+          interrupted === 'before issuance' ? 'UNPAID' : 'PAID';
+        // Exercise the real destination handler, quote observations, key lookup and restoration
+        // against simulated mint responses, including issuance succeeding before a lost reply.
+        const keyRing = new KeyRingService(
+          repositories.keyRingRepository,
+          dependencies.transactionRunner,
+          new KeypairDerivation(dependencies.loadSeed),
+          new KeypairP2pkSigner(repositories.keyRingRepository),
+        );
+        dependencies.mintHandlerProvider = new MintHandlerProvider({
+          bolt11: new MintBolt11Handler(keyRing),
+        });
+        dependencies.mintAdapter.checkMintQuote = (async (mintUrl, method, quoteId) => {
+          expect(fixture.transactionActive).toBe(false);
+          expect([mintUrl, method, quoteId]).toEqual([
+            destinationUrl,
+            'bolt11',
+            destination.quoteId,
+          ]);
+          fixture.requests.push('observe-destination');
+          return cashuNormalizedBolt11Fixture({
+            quote: destination.quoteId,
+            request: destination.request,
+            amount: destination.amount,
+            unit: destination.unit,
+            expiry: destination.expiry,
+            pubkey: destination.pubkey,
+            state: remoteState,
+          });
+        }) as MintAdapter['checkMintQuote'];
+        const getWallet = dependencies.walletService.getWalletWithActiveKeysetId;
+        dependencies.walletService.getWalletWithActiveKeysetId = async (...args) => {
+          const original = await getWallet(...args);
+          return {
+            ...original,
+            wallet: {
+              mintProofsBolt11: async (
+                ...[amount, quoteId, signingOptions, outputData]: Parameters<
+                  Wallet['mintProofsBolt11']
+                >
+              ) => {
+                expect(fixture.transactionActive).toBe(false);
+                expect(Amount.from(amount).equals(destination.amount)).toBe(true);
+                expect(quoteId).toBe(destination.quoteId);
+                expect(signingOptions).toEqual({
+                  privkey: '01'.repeat(32),
+                  keysetId: destinationKeys.id,
+                });
+                expect(outputData).toEqual({ type: 'custom', data: outputs });
+                remoteState = 'ISSUED';
+                fixture.requests.push('mint');
+                if (interrupted === 'after a lost issuance response')
+                  throw new Error('Lost issuance response');
+                return issuedProofs;
+              },
+              mint: {
+                restore: async ({ outputs: requested }: { outputs: typeof blindedMessages }) => {
+                  expect(fixture.transactionActive).toBe(false);
+                  expect(requested).toEqual(blindedMessages);
+                  expect(remoteState).toBe('ISSUED');
+                  fixture.requests.push('restore-mint');
+                  return { outputs: blindedMessages, signatures };
+                },
+              },
+              checkProofsStates: async (proofs: Proof[]) => {
+                expect(fixture.transactionActive).toBe(false);
+                expect(proofs).toEqual(issuedProofs);
+                return proofs.map(() => ({ state: 'UNSPENT' }));
+              },
+            } as unknown as Wallet,
+          };
+        };
+        const lifecycle = new QuoteLifecycle({
+          ...dependencies,
+          mintQuoteRepository: repositories.mintQuoteRepository,
+          meltQuoteRepository: repositories.meltQuoteRepository,
+          proofRepository: repositories.proofRepository,
+          // These legacy dependencies are unused by Mint observation recording/refresh.
+          proofService: {} as ProofService,
+          mintService: dependencies.mintService as MintService,
+          walletService: dependencies.walletService as WalletService,
+        });
+        dependencies.quoteLifecycle = {
+          ...dependencies.quoteLifecycle,
+          refreshMintQuote: lifecycle.refreshMintQuote.bind(lifecycle),
+          recordMintQuoteSnapshot: lifecycle.recordMintQuoteSnapshot.bind(lifecycle),
+        };
+        expect((await fixture.service().execute('swap')).state).toBe(
+          interrupted === 'before issuance' ? 'destination_funded' : 'destination_pending',
+        );
+        const mint = await repositories.mintRepository.getMintByUrl(destinationUrl);
+        await repositories.mintRepository.addOrUpdateMint({ ...mint, trusted: false });
+        if (interrupted === 'before issuance') remoteState = 'PAID';
+        fixture.setTime(20_000);
+        await fixture.service().recoverDue();
+        fixture.setTime(40_000);
+        await fixture.service().recoverDue();
+        const parent = await repositories.mintSwap.operationRepository.getById('swap');
+        expect(parent?.state).toBe('completed');
+        expect(await repositories.mintRepository.isTrustedMint(destinationUrl)).toBe(false);
+        const child = await repositories.mintOperationRepository.getById(destination.id);
+        expect(child?.state).toBe('finalized');
+        if (!child || child.state === 'init') throw new Error('Missing destination');
+        expect(child.outputData).toEqual(destination.outputData);
+        expect(child.quoteId).toBe(destination.quoteId);
+        expect(
+          await repositories.counterRepository.getCounter(destinationUrl, destinationKeys.id),
+        ).toEqual(counter);
+        const proofs = await repositories.proofRepository.getProofsBySecrets(
+          destinationUrl,
+          outputProofs(destination.outputData).map((proof) => proof.secret),
+        );
+        expect(Amount.sum(proofs.map((proof) => proof.amount)).equals(destination.amount)).toBe(
+          true,
+        );
+        expect(proofs.every((proof) => proof.createdByOperationId === destination.id)).toBe(true);
+        expect(proofs.map((proof) => proof.C)).toEqual(issuedProofs.map((proof) => proof.C));
+        expect(fixture.requests.filter((request) => request === 'melt')).toHaveLength(1);
+        expect(fixture.requests.filter((request) => request === 'mint')).toHaveLength(1);
+        expect(fixture.requests).not.toContain('destination-quote');
+        expect(fixture.requests).not.toContain('allocate-key');
+        if (interrupted === 'after a lost issuance response')
+          expect(fixture.requests.filter((request) => request === 'restore-mint')).toHaveLength(1);
+      });
+    }
+
+    for (const missing of [
+      'paid source quote',
+      'source proof evidence',
+      'owned quote key',
+    ] as const) {
+      it(`refuses untrusted destination authorization without ${missing}`, async () => {
+        await fixture.create();
+        await fixture.prepare();
+        fixture.setDestinationState('UNPAID');
+        expect((await fixture.service().execute('swap')).state).toBe('destination_funded');
+        const { repositories } = fixture;
+        const mint = await repositories.mintRepository.getMintByUrl(destinationUrl);
+        await repositories.mintRepository.addOrUpdateMint({ ...mint, trusted: false });
+        await fixture.saveDestination('PAID');
+        if (missing === 'paid source quote') await fixture.saveSource('UNPAID');
+        else if (missing === 'source proof evidence') {
+          await repositories.proofRepository.setProofState(sourceUrl, ['original'], 'ready');
+        } else {
+          const quote = await repositories.mintQuoteRepository.getMintQuote(
+            destinationUrl,
+            'bolt11',
+            fixture.parent.destinationQuote.quoteId,
+          );
+          if (!quote || quote.method !== 'bolt11') throw new Error('Missing destination quote');
+          await repositories.mintQuoteRepository.upsertMintQuote({ ...quote, pubkey: undefined });
+        }
+        await expect(
+          fixture.runner.run((tx) =>
+            tx.perform(beginMintSwapDestination, {
+              id: 'swap',
+              now: 2_000,
+            }),
+          ),
+        ).rejects.toThrow();
+        expect(
+          (await repositories.mintOperationRepository.getById('destination-child'))?.state,
+        ).toBe('pending');
+        expect((await repositories.mintSwap.operationRepository.getById('swap'))?.state).toBe(
+          'destination_funded',
+        );
+        expect(fixture.requests).not.toContain('mint');
+        expect(await repositories.mintRepository.isTrustedMint(destinationUrl)).toBe(false);
+      });
+    }
+
+    it('still rejects ordinary mint execution and new source payment after destination trust revocation', async () => {
+      await fixture.create();
+      await fixture.prepare();
+      const mint = await fixture.repositories.mintRepository.getMintByUrl(destinationUrl);
+      await fixture.repositories.mintRepository.addOrUpdateMint({ ...mint, trusted: false });
+      await expect(
+        fixture.runner.run((tx) =>
+          tx.perform(beginMintExecution, {
+            operationId: 'destination-child',
+            now: 2_000,
+          }),
+        ),
+      ).rejects.toThrow();
+      expect(
+        (await fixture.repositories.mintOperationRepository.getById('destination-child'))?.state,
+      ).toBe('pending');
+      expect((await fixture.service().execute('swap')).state).toBe('prepared');
+      expect(fixture.requests).not.toContain('melt');
+      expect(fixture.requests).not.toContain('mint');
+      expect(await fixture.repositories.mintRepository.isTrustedMint(destinationUrl)).toBe(false);
+    });
+
+    it('pauses unpaid source recovery when trust is revoked and never silently restores trust', async () => {
       await fixture.create();
       await fixture.prepare();
       fixture.setSourceState('PENDING');

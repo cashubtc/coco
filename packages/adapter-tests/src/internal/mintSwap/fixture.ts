@@ -7,7 +7,7 @@ import {
   testMintKeysetId,
 } from '../../../../core/test/fixtures/MintMetadata.ts';
 import { mintQuoteFromBolt11Fixture } from '../../../../core/test/normalizedMintQuoteFixtures.ts';
-import { meltQuoteFromBolt11Response, type MeltQuote } from '../../../../core/models/MeltQuote.ts';
+import { meltQuoteFromBolt11Response } from '../../../../core/models/MeltQuote.ts';
 import { deserializeOutputData, type SerializedOutputData } from '../../../../core/utils.ts';
 import {
   invoiceHash,
@@ -158,7 +158,6 @@ export async function mintSwapFixture(
   }
   const runner = new RepositoryCoreTransactionRunner(repositories);
   const parent: PreparingMintSwapOperation = {
-    schemaVersion: 1,
     id: 'swap',
     revision: 0,
     state: 'preparing',
@@ -206,7 +205,7 @@ export async function mintSwapFixture(
           }
         }),
     },
-    parentQueries: repositories.mintSwap!.operationRepository,
+    parentQueries: repositories.mintSwap.operationRepository,
     sourceQueries: repositories.meltOperationRepository,
     destinationQueries: repositories.mintOperationRepository,
     proofQueries: repositories.proofRepository,

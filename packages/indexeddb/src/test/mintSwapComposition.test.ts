@@ -5,12 +5,12 @@ import { runMintSwapTransitionContract } from '../../../adapter-tests/src/intern
 
 async function createRepositories() {
   const name = `mint-swap-composition-${crypto.randomUUID()}`;
-  let repositories = new IndexedDbRepositories({ name, mintSwap: true });
+  let repositories = new IndexedDbRepositories({ name });
   return {
     repositories,
     reopen: async () => {
       repositories.db.close();
-      repositories = new IndexedDbRepositories({ name, mintSwap: true });
+      repositories = new IndexedDbRepositories({ name });
       await repositories.init();
       return repositories;
     },

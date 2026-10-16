@@ -43,19 +43,6 @@ async function createRepositories() {
   } as const;
 }
 
-async function createMintSwapRepositories() {
-  const rawDatabase = new BunExpoSqliteDatabaseShim();
-  const repositories = new Repositories({
-    database: rawDatabase as unknown as SqliteRepositoriesOptions['database'],
-    mintSwap: true,
-  });
-  await repositories.init();
-  return {
-    repositories,
-    dispose: async () => rawDatabase.closeAsync(),
-  };
-}
-
 async function createSharedRepositories() {
   const directory = await mkdtemp(join(tmpdir(), 'coco-expo-sqlite-keyring-'));
   const filename = join(directory, 'wallet.sqlite');
@@ -119,8 +106,7 @@ runKeypairAllocationContract(
 
 runMintSwapPersistenceContract(
   {
-    createRepositories: createMintSwapRepositories,
-    createDisabledRepositories: createRepositories,
+    createRepositories,
   },
   { describe, it, expect },
 );

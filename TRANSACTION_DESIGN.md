@@ -274,9 +274,10 @@ counter changes roll back together. Their remote effects still occur only after 
 ## Mint Swap Operations
 
 The internal `MintSwapOperationService` composes the existing Mint and Melt transitions with
-branded parent transitions. Opt-in `tx.mintSwapOperations` is bound to the same adapter transaction.
-Memory stores opt in with `new MemoryRepositories({ mintSwap: true })`; persistent adapters retain
-their existing opt-in capability and schema. The coordinator is not wired into Manager or public APIs.
+branded parent transitions. Required `tx.mintSwapOperations` is bound to the same adapter transaction
+in Memory and all persistent adapters without a feature option. The coordinator is not wired into
+Manager or public APIs. Adapter migrations own persisted format changes; legacy records containing
+`schemaVersion: 1` remain readable, with that obsolete field discarded by the parser.
 
 Locked destination quote creation follows an independent committed NUT-20 key allocation. Quote
 creation and metadata refresh intentionally survive later preparation failure. Parent preparation
@@ -290,6 +291,12 @@ Destination proof settlement does not invent remote issued accounting: the paren
 until canonical accounting and exact stored proofs agree. Contradictory parent accounting preserves
 a valid committed child settlement and records needs_attention. Ambiguous outcomes retain recovery
 material and persist bounded retry scheduling.
+
+After source payment, destination trust revocation does not prevent recovery of already-paid value.
+`beginMintSwapDestination` validates the funded parent, exact children and quotes, source settlement,
+and owned proof evidence in the same scope that reserves destination claimable value through
+`reserveMintQuoteForExecution`. It never restores trust or replaces output plans. Ordinary
+`beginMintExecution` still checks trust before composing that shared reservation transition.
 
 One effect-driving Coco Session per Wallet store is required. Shared child operation locks coordinate
 ordinary child services with the parent; parent revisions do not fence network effects across

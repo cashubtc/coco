@@ -10,7 +10,6 @@ import {
   deferMintSwap,
   prepareMintSwap,
   createMintSwap,
-  applyMintSwapPreSwap,
 } from '../../../../core/operations/mintSwap/MintSwapTransitions.ts';
 import {
   beginMeltExecution,
@@ -22,7 +21,6 @@ import {
   applyMintResult,
   prepareMint,
 } from '../../../../core/operations/mint/MintTransitions.ts';
-import { MintSwapDebitCapError } from '../../../../core/operations/mintSwap/MintSwapDebitCapError.ts';
 import { MintSwapIntentConflictError } from '../../../../core/operations/mintSwap/MintSwapValidation.ts';
 import { defineTransition } from '../../../../core/transactions/Transition.ts';
 import { RepositoryCoreTransactionRunner } from '../../../../core/transactions/CoreTransaction.ts';
@@ -53,11 +51,11 @@ export function runMintSwapTransitionContract(
     it('drains a dropped composed preparation before commit and expires captured parent methods', async () => {
       const escaped = await fixture.runner.run(async (tx) => {
         void tx.perform(prepareMintSwap, fixture.preparation);
-        return tx.mintSwapOperations!.getById;
+        return tx.mintSwapOperations.getById;
       });
-      expect(
-        (await fixture.repositories.mintSwap!.operationRepository.getById('swap'))?.state,
-      ).toBe('prepared');
+      expect((await fixture.repositories.mintSwap.operationRepository.getById('swap'))?.state).toBe(
+        'prepared',
+      );
       expect(
         (await fixture.repositories.meltOperationRepository.getById('source-child'))?.state,
       ).toBe('prepared');
@@ -201,9 +199,9 @@ export function runMintSwapTransitionContract(
           }
         }),
       ).rejects.toThrow('late parent failure');
-      expect(
-        (await fixture.repositories.mintSwap!.operationRepository.getById('swap'))?.state,
-      ).toBe('preparing');
+      expect((await fixture.repositories.mintSwap.operationRepository.getById('swap'))?.state).toBe(
+        'preparing',
+      );
       expect(await fixture.repositories.meltOperationRepository.getById('source-child')).toBeNull();
       expect(
         await fixture.repositories.mintOperationRepository.getById('destination-child'),
@@ -229,13 +227,13 @@ export function runMintSwapTransitionContract(
       };
       await expect(
         fixture.repositories.withTransaction(async (scope) => {
-          await scope.mintSwap!.operationRepository.create(other);
+          await scope.mintSwap.operationRepository.create(other);
           throw new Error('rollback');
         }),
       ).rejects.toThrow('rollback');
-      await fixture.repositories.mintSwap!.operationRepository.create(other);
+      await fixture.repositories.mintSwap.operationRepository.create(other);
       expect(
-        await fixture.repositories.mintSwap!.operationRepository.getById('other'),
+        await fixture.repositories.mintSwap.operationRepository.getById('other'),
       ).not.toBeNull();
     });
 
@@ -257,7 +255,7 @@ export function runMintSwapTransitionContract(
             return work({
               ...scope,
               mintSwap: {
-                operationRepository: new Proxy(scope.mintSwap!.operationRepository, {
+                operationRepository: new Proxy(scope.mintSwap.operationRepository, {
                   get(target, key) {
                     if (key === 'transition') return async () => false;
                     const value = Reflect.get(target, key);
@@ -588,7 +586,7 @@ export function runMintSwapTransitionContract(
       expect(parent.state).toBe('needs_attention');
       expect(parent.attention?.evidence.code).toBe('child_missing');
       expect(
-        await fixture.repositories.mintSwap!.operationRepository.listDue(999_999, 10),
+        await fixture.repositories.mintSwap.operationRepository.listDue(999_999, 10),
       ).toHaveLength(0);
     });
   });
