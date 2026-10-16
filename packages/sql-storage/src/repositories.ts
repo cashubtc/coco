@@ -48,7 +48,6 @@ import { SqliteMintSwapOperationRepository } from './repositories/MintSwapOperat
 
 export interface SqlStorageRepositoriesOptions {
   database: SqlDatabase;
-  mintSwap?: boolean;
 }
 
 class RepositoryTransactionCallbackFailure extends Error {
@@ -59,10 +58,7 @@ class RepositoryTransactionCallbackFailure extends Error {
   }
 }
 
-function createRepositoryScope(
-  database: SqlDatabase,
-  mintSwapEnabled: boolean,
-): RepositoryTransactionScope {
+function createRepositoryScope(database: SqlDatabase): RepositoryTransactionScope {
   return {
     mintRepository: new SqliteMintRepository(database),
     keyRingRepository: new SqliteKeyRingRepository(database),
@@ -84,9 +80,7 @@ function createRepositoryScope(
     paymentRequestReceiveAttemptRepository: new SqlitePaymentRequestReceiveAttemptRepository(
       database,
     ),
-    ...(mintSwapEnabled
-      ? { mintSwap: { operationRepository: new SqliteMintSwapOperationRepository(database) } }
-      : {}),
+    mintSwap: { operationRepository: new SqliteMintSwapOperationRepository(database) },
   };
 }
 
@@ -107,14 +101,12 @@ export class SqlStorageRepositories implements Repositories {
   readonly receiveOperationRepository: ReceiveOperationRepository;
   readonly paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
   readonly paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
-  readonly mintSwap?: MintSwapPersistence;
+  readonly mintSwap: MintSwapPersistence;
   private readonly database: SqlDatabase;
-  private readonly mintSwapEnabled: boolean;
 
   constructor(options: SqlStorageRepositoriesOptions) {
     this.database = options.database;
-    this.mintSwapEnabled = options.mintSwap ?? false;
-    const repositories = createRepositoryScope(this.database, this.mintSwapEnabled);
+    const repositories = createRepositoryScope(this.database);
     this.mintRepository = repositories.mintRepository;
     this.keyRingRepository = new SqliteKeyRingRepository(this.database);
     this.counterRepository = repositories.counterRepository;
@@ -145,7 +137,7 @@ export class SqlStorageRepositories implements Repositories {
       return await this.database.transaction(
         async (txDatabase) => {
           try {
-            return await fn(createRepositoryScope(txDatabase, this.mintSwapEnabled));
+            return await fn(createRepositoryScope(txDatabase));
           } catch (error) {
             if (error instanceof RepositoryTransactionConflictError) throw error;
             if (hasSqliteTransactionConflictCode(error)) {

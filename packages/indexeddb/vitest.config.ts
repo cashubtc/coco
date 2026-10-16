@@ -7,6 +7,7 @@ const browsers = process.env.CI
   : [{ browser: 'chromium' }];
 
 export default defineConfig({
+  resolve: { alias: { '@core': decodeURIComponent(new URL('../core', import.meta.url).pathname) } },
   test: {
     browser: {
       enabled: true,
