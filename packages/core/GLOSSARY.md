@@ -66,17 +66,6 @@ Operation and one exact destination Mint Operation. It owns cross-child progress
 evidence, but never owns or duplicates either child's state.
 _Avoid_: Child operation owner, transfer operation, generic Saga
 
-**Batch Mint Operation**:
-A durable aggregate intent to atomically claim value from an exact group of two or more compatible
-Mint Quotes through one issuance outcome. It appears as one aggregate mint history entry rather
-than one Mint Operation per quote.
-_Avoid_: Mint Operation parent, Mint Batch Attempt, transparent batch
-
-**Batch Mint Member**:
-An ordered allocation of an amount from one canonical Mint Quote within a Batch Mint Operation. It
-is not a child operation and does not have an independent operation outcome.
-_Avoid_: Child Mint Operation, batch item, quote owner
-
 **Quote Observation**:
 A mint response that reports the current remote state of a quote. Coco may accept, merge, or ignore
 it against the canonical quote row before any Quote-backed Operation is advanced from it.
