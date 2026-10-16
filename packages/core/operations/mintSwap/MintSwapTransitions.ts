@@ -20,7 +20,11 @@ import {
   releaseMeltAfterNonPayment,
   cancelPreparedMelt,
 } from '../melt/MeltTransitions.ts';
-import { prepareMint, beginMintExecution, applyMintResult } from '../mint/MintTransitions.ts';
+import {
+  prepareMint,
+  reserveMintQuoteForExecution,
+  applyMintResult,
+} from '../mint/MintTransitions.ts';
 import type { PreparedOrLaterOperation, FinalizedMeltOperation } from '../melt/MeltOperation.ts';
 import type { MeltQuote } from '../../models/MeltQuote.ts';
 import type { ExecutingMintOperation, PendingOrLaterOperation } from '../mint/MintOperation.ts';
@@ -44,7 +48,6 @@ import {
 import { MintSwapDebitCapError } from './MintSwapDebitCapError.ts';
 
 async function requireParent(tx: CoreTransaction, id: string): Promise<MintSwapOperation> {
-  if (!tx.mintSwapOperations) throw new Error('Mint Swap persistence is not enabled');
   const operation = await tx.mintSwapOperations.getById(id);
   if (!operation) throw new Error('Mint Swap was not found');
   return operation;
@@ -56,7 +59,7 @@ async function save(
   next: MintSwapOperation,
 ): Promise<MintSwapOperation> {
   if (
-    !(await tx.mintSwapOperations!.transition({
+    !(await tx.mintSwapOperations.transition({
       operationId: current.id,
       expectedState: current.state,
       expectedRevision: current.revision,
@@ -194,7 +197,6 @@ async function markAttention(
 /** Persist immutable quote/child identities before any input reservation. */
 export const createMintSwap = defineTransition<PreparingMintSwapOperation, MintSwapOperation>(
   async (tx, input) => {
-    if (!tx.mintSwapOperations) throw new Error('Mint Swap persistence is not enabled');
     const current = await tx.mintSwapOperations.getById(input.id);
     if (current) {
       assertMintSwapIntent(current, input);
@@ -368,11 +370,20 @@ export const beginMintSwapDestination = defineTransition<
 >(async (tx, input) => {
   const parent = await requireParent(tx, input.id);
   if (parent.state !== 'destination_funded') return { operation: parent, changed: false };
-  const { destination } = await children(tx, parent);
+  const { source, destination, canonical } = await children(tx, parent);
+  // Funding is durable authority to redeem this exact child after trust revocation.
+  // Recheck the paid source and its owned proofs in the same scope as the reservation.
+  if (source.state !== 'finalized' || canonical.source.state !== 'PAID')
+    throw new MintSwapInvariantError('source_settlement', 'settlement_mismatch', 'source');
+  await requireBounds(tx, parent, source);
+  await verifySourceSettlement(tx, source, canonical.source);
   if (destination.state !== 'pending')
     return { operation: await reconcile(tx, parent, input.now), changed: false };
   const now = Math.max(input.now, parent.updatedAt);
-  const started = await tx.perform(beginMintExecution, { operationId: destination.id, now });
+  const started = await tx.perform(reserveMintQuoteForExecution, {
+    operationId: destination.id,
+    now,
+  });
   if (!started.changed || started.operation.state !== 'executing')
     return { operation: parent, changed: false };
   return {

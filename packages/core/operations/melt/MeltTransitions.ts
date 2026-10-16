@@ -1,4 +1,4 @@
-import { Amount, sumProofs, type Proof } from '@cashu/cashu-ts';
+import { Amount, sumProofs } from '@cashu/cashu-ts';
 import { assertSameUnit, normalizeUnit } from '@core/amounts.ts';
 import { ProofValidationError } from '@core/models/Error.ts';
 import type { MeltQuote } from '@core/models/MeltQuote.ts';

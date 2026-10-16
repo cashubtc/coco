@@ -31,7 +31,7 @@ export interface CoreTransaction {
   readonly keypairs: ScopedKeypairs;
   readonly proofs: ScopedProofs;
   readonly outputs: ScopedOutputs;
-  readonly mintSwapOperations?: Pick<
+  readonly mintSwapOperations: Pick<
     MintSwapOperationRepository,
     'getById' | 'create' | 'transition'
   >;
@@ -112,7 +112,7 @@ export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
       mintQuotes: repositories.mintQuoteRepository,
       meltOperations: repositories.meltOperationRepository,
       meltQuotes: repositories.meltQuoteRepository,
-      mintSwapOperations: repositories.mintSwap?.operationRepository,
+      mintSwapOperations: repositories.mintSwap.operationRepository,
       mintMetadata,
       keypairs: new RepositoryScopedKeypairs(repositories.keyRingRepository),
       proofs,

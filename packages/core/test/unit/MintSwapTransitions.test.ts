@@ -5,7 +5,7 @@ import { runMintSwapTransitionContract } from '../../../adapter-tests/src/intern
 runMintSwapTransitionContract(
   {
     createRepositories: async () => ({
-      repositories: new MemoryRepositories({ mintSwap: true }),
+      repositories: new MemoryRepositories(),
       dispose: async () => {},
     }),
   },

@@ -471,7 +471,6 @@ export function parseMintSwapOperation(value: unknown): MintSwapOperation {
   fields(
     record,
     [
-      'schemaVersion',
       'id',
       'revision',
       'state',
@@ -490,9 +489,11 @@ export function parseMintSwapOperation(value: unknown): MintSwapOperation {
       'retry',
       ...STATE_FIELDS[state],
     ],
-    ['sourceDebitCap', 'cancellationRequestedAt'],
+    ['sourceDebitCap', 'cancellationRequestedAt', 'schemaVersion'],
   );
-  check(record.schemaVersion === 1, 'schema version');
+  // Older adapters stored this field in recordJson. Accept and discard it on read;
+  // persisted format changes are governed by adapter migrations.
+  check(record.schemaVersion === undefined || record.schemaVersion === 1, 'legacy schema version');
   const sourceMintUrl = mintUrl(record.sourceMintUrl);
   const destinationMintUrl = mintUrl(record.destinationMintUrl);
   check(sourceMintUrl !== destinationMintUrl, 'distinct mints');
@@ -509,7 +510,6 @@ export function parseMintSwapOperation(value: unknown): MintSwapOperation {
       : time(record.cancellationRequestedAt, createdAt, updatedAt, 'cancellation request time');
 
   const base = {
-    schemaVersion: 1 as const,
     id: id(record.id),
     revision: integer(record.revision, 'revision'),
     sourceMintUrl,

@@ -16,7 +16,6 @@ const TRANSITIONS: Record<MintSwapOperationState, readonly MintSwapOperationStat
 
 /** Parent identity and caller intent that no transition may replace or remove. */
 const IMMUTABLE_FIELDS = [
-  'schemaVersion',
   'id',
   'sourceMintUrl',
   'destinationMintUrl',

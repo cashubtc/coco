@@ -18,7 +18,6 @@ export function mintSwapFixtures(
   createdAt = MINT_SWAP_CREATED_AT,
 ): { [S in MintSwapOperationState]: Extract<MintSwapOperation, { state: S }> } {
   const base = {
-    schemaVersion: 1 as const,
     id,
     revision: 0,
     sourceMintUrl: 'https://source.example',
