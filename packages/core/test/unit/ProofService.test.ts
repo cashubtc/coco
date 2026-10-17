@@ -628,7 +628,7 @@ describe('ProofService', () => {
       const events: Array<{
         mintUrl: string;
         secrets: string[];
-        state: 'inflight' | 'ready' | 'spent';
+        state: CoreProof['state'];
       }> = [];
       bus.on('proofs:state-changed', (payload) => {
         events.push(payload);

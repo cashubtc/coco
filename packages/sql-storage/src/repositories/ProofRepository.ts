@@ -131,11 +131,23 @@ export class SqliteProofRepository implements ProofRepository {
   }
 
   async getInflightProofs(mintUrls?: string[], filter?: ProofUnitFilter): Promise<CoreProof[]> {
+    return this.getProofsInState('inflight', mintUrls, filter);
+  }
+
+  async getPendingProofs(mintUrls?: string[], filter?: ProofUnitFilter): Promise<CoreProof[]> {
+    return this.getProofsInState('pending', mintUrls, filter);
+  }
+
+  private async getProofsInState(
+    state: 'inflight' | 'pending',
+    mintUrls?: string[],
+    filter?: ProofUnitFilter,
+  ): Promise<CoreProof[]> {
     if (!mintUrls || mintUrls.length === 0) {
       const params: SqlValue[] = [];
       const rows = await this.db.all<ProofRow>(
         appendUnitFilter(
-          `SELECT ${PROOF_COLUMNS} FROM coco_cashu_proofs WHERE state = 'inflight'`,
+          `SELECT ${PROOF_COLUMNS} FROM coco_cashu_proofs WHERE state = '${state}'`,
           params,
           filter,
         ),
@@ -150,7 +162,7 @@ export class SqliteProofRepository implements ProofRepository {
     const params: SqlValue[] = uniqueMintUrls;
     const rows = await this.db.all<ProofRow>(
       appendUnitFilter(
-        `SELECT ${PROOF_COLUMNS} FROM coco_cashu_proofs WHERE state = 'inflight' AND mintUrl IN (${placeholders})`,
+        `SELECT ${PROOF_COLUMNS} FROM coco_cashu_proofs WHERE state = '${state}' AND mintUrl IN (${placeholders})`,
         params,
         filter,
       ),

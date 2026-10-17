@@ -286,6 +286,7 @@ describe('SendOperationService', () => {
       };
       const setProofState = mock(async () => {});
       const watcher = new ProofStateWatcherService(
+        transactionRunner,
         subscriptions as unknown as SubscriptionManager,
         { isTrustedMint: async () => true } as unknown as MintService,
         { setProofState } as unknown as ProofService,

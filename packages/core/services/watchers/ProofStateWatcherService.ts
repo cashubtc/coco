@@ -1,6 +1,8 @@
 import type { EventBus, CoreEvents } from '@core/events';
 import type { Logger } from '../../logging/Logger.ts';
 import type { SubscriptionManager, UnsubscribeHandler } from '@core/infra/SubscriptionManager.ts';
+import type { CoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
+import { reconcileRestoredPending } from '../../operations/restore/RestoreTransitions.ts';
 import type { MintService } from '../MintService';
 import type { ProofService } from '../ProofService';
 import type { SendOperationService } from '../../operations/send/SendOperationService';
@@ -23,7 +25,7 @@ type ProofStateNotification = {
 };
 
 export interface ProofStateWatcherOptions {
-  // Scan existing inflight proofs on start.
+  // Scan existing inflight and pending proofs on start.
   watchExistingInflightOnStart?: boolean;
 }
 
@@ -38,13 +40,19 @@ export class ProofStateWatcherService {
   private sendOperationService?: SendOperationService;
 
   private running = false;
+  private epoch = 0;
+  private stopping?: Promise<void>;
+  private readonly ownedWork = new Set<Promise<void>>();
+  private readonly acquiringByKey = new Set<ProofKey>();
+  private readonly mintGeneration = new Map<string, number>();
   private unsubscribeByKey = new Map<ProofKey, UnsubscribeHandler>();
-  private inflightByKey = new Set<ProofKey>();
+  private readonly processingByKey = new Map<ProofKey, Promise<void>>();
   private offProofsStateChanged?: () => void;
   private offProofsSaved?: () => void;
   private offUntrusted?: () => void;
 
   constructor(
+    private readonly transactionRunner: CoreTransactionRunner,
     subs: SubscriptionManager,
     mintService: MintService,
     proofs: ProofService,
@@ -75,109 +83,128 @@ export class ProofStateWatcherService {
   }
 
   async start(): Promise<void> {
+    if (this.stopping) await this.stopping;
     if (this.running) return;
     this.running = true;
+    const epoch = ++this.epoch;
     this.logger?.info('ProofStateWatcherService started');
 
     // React to proofs being marked inflight via state change
     this.offProofsStateChanged = this.bus.on(
       'proofs:state-changed',
-      async ({ mintUrl, secrets, state }) => {
-        try {
-          if (!this.running) return;
-          if (state === 'inflight') {
-            try {
-              await this.watchProof(mintUrl, secrets);
-            } catch (err) {
-              this.logger?.warn('Failed to watch inflight proofs', {
-                mintUrl,
-                count: secrets.length,
-                err,
-              });
-            }
-          } else if (state === 'spent') {
-            const operationIds = new Set<string>();
-
-            // Stop watching if we already are
-            for (const secret of secrets) {
-              const key = toKey(mintUrl, secret);
+      ({ mintUrl, secrets, state }) =>
+        this.runOwned(async () => {
+          try {
+            if (!this.running || epoch !== this.epoch) return;
+            if (state === 'inflight' || state === 'pending') {
               try {
-                await this.stopWatching(key);
+                await this.watchProof(mintUrl, secrets);
               } catch (err) {
-                this.logger?.warn('Failed to stop watcher on spent proof', {
+                this.logger?.warn('Failed to watch inflight proofs', {
                   mintUrl,
-                  secret,
+                  count: secrets.length,
                   err,
                 });
               }
+            } else if (state === 'ready') {
+              for (const secret of secrets) await this.stopWatching(toKey(mintUrl, secret));
+            } else if (state === 'spent') {
+              const operationIds = new Set<string>();
 
-              if (!this.sendOperationService) continue;
-
-              try {
-                const operationId = await this.getSendOperationIdForSpentProof(mintUrl, secret);
-                if (operationId) {
-                  operationIds.add(operationId);
+              // Stop watching if we already are
+              for (const secret of secrets) {
+                const key = toKey(mintUrl, secret);
+                try {
+                  await this.stopWatching(key);
+                } catch (err) {
+                  this.logger?.warn('Failed to stop watcher on spent proof', {
+                    mintUrl,
+                    secret,
+                    err,
+                  });
                 }
-              } catch (err) {
-                this.logger?.warn('Failed to resolve send operation from spent proof event', {
-                  mintUrl,
-                  secret,
-                  err,
-                });
+
+                if (!this.sendOperationService) continue;
+
+                try {
+                  const operationId = await this.getSendOperationIdForSpentProof(mintUrl, secret);
+                  if (operationId) {
+                    operationIds.add(operationId);
+                  }
+                } catch (err) {
+                  this.logger?.warn('Failed to resolve send operation from spent proof event', {
+                    mintUrl,
+                    secret,
+                    err,
+                  });
+                }
+              }
+
+              for (const operationId of operationIds) {
+                await this.tryFinalizeSendOperation(mintUrl, operationId);
               }
             }
-
-            for (const operationId of operationIds) {
-              await this.tryFinalizeSendOperation(mintUrl, operationId);
-            }
+          } catch (err) {
+            this.logger?.error('Error handling proofs:state-changed', { err });
           }
-        } catch (err) {
-          this.logger?.error('Error handling proofs:state-changed', { err });
-        }
-      },
+        }),
     );
 
     // React to proofs being saved with inflight state (e.g., from swap operations)
-    this.offProofsSaved = this.bus.on('proofs:saved', async ({ mintUrl, proofs }) => {
-      try {
-        if (!this.running) return;
-        const inflightSecrets = proofs.filter((p) => p.state === 'inflight').map((p) => p.secret);
-        if (inflightSecrets.length > 0) {
-          try {
-            await this.watchProof(mintUrl, inflightSecrets);
-          } catch (err) {
-            this.logger?.warn('Failed to watch inflight proofs from saved event', {
-              mintUrl,
-              count: inflightSecrets.length,
-              err,
-            });
+    this.offProofsSaved = this.bus.on('proofs:saved', ({ mintUrl, proofs }) =>
+      this.runOwned(async () => {
+        try {
+          if (!this.running || epoch !== this.epoch) return;
+          const inflightSecrets = proofs
+            .filter((p) => p.state === 'inflight' || p.state === 'pending')
+            .map((p) => p.secret);
+          if (inflightSecrets.length > 0) {
+            try {
+              await this.watchProof(mintUrl, inflightSecrets);
+            } catch (err) {
+              this.logger?.warn('Failed to watch inflight proofs from saved event', {
+                mintUrl,
+                count: inflightSecrets.length,
+                err,
+              });
+            }
           }
+        } catch (err) {
+          this.logger?.error('Error handling proofs:saved', { err });
         }
-      } catch (err) {
-        this.logger?.error('Error handling proofs:saved', { err });
-      }
-    });
+      }),
+    );
 
     // Stop watching proofs when mint is untrusted
-    this.offUntrusted = this.bus.on('mint:untrusted', async ({ mintUrl }) => {
-      try {
-        await this.stopWatchingMint(mintUrl);
-      } catch (err) {
-        this.logger?.error('Failed to stop watching mint proofs on untrust', { mintUrl, err });
-      }
-    });
+    this.offUntrusted = this.bus.on('mint:untrusted', ({ mintUrl }) =>
+      this.runOwned(async () => {
+        try {
+          if (epoch !== this.epoch) return;
+          await this.stopWatchingMint(mintUrl);
+        } catch (err) {
+          this.logger?.error('Failed to stop watching mint proofs on untrust', { mintUrl, err });
+        }
+      }),
+    );
 
     if (this.options.watchExistingInflightOnStart) {
-      void this.bootstrapInflightProofs().catch((err) => {
+      void this.runOwned(() => this.bootstrapInflightProofs()).catch((err) => {
         this.logger?.warn('Failed to bootstrap inflight proof watchers', { err });
       });
     }
   }
 
-  async stop(): Promise<void> {
-    if (!this.running) return;
+  stop(): Promise<void> {
+    if (this.stopping) return this.stopping;
+    if (!this.running) return Promise.resolve();
     this.running = false;
+    this.stopping = this.drainAndStop().finally(() => {
+      this.stopping = undefined;
+    });
+    return this.stopping;
+  }
 
+  private async drainAndStop(): Promise<void> {
     if (this.offProofsStateChanged) {
       try {
         this.offProofsStateChanged();
@@ -208,6 +235,9 @@ export class ProofStateWatcherService {
       }
     }
 
+    // In-progress subscriptions release themselves when they see running=false. Drain callbacks
+    // too: stop() resolves only after any already-started transaction and event delivery finish.
+    while (this.ownedWork.size) await Promise.allSettled([...this.ownedWork]);
     const entries = Array.from(this.unsubscribeByKey.entries());
     this.unsubscribeByKey.clear();
     for (const [key, unsub] of entries) {
@@ -218,93 +248,171 @@ export class ProofStateWatcherService {
         this.logger?.warn('Failed to unsubscribe proof watcher', { key, err });
       }
     }
-    this.inflightByKey.clear();
+    this.processingByKey.clear();
     this.logger?.info('ProofStateWatcherService stopped');
   }
 
-  async watchProof(mintUrl: string, secrets: string[]): Promise<void> {
+  private runOwned(work: () => Promise<void>): Promise<void> {
+    if (!this.running) return Promise.resolve();
+    const task = Promise.resolve().then(work);
+    this.ownedWork.add(task);
+    void task.finally(() => this.ownedWork.delete(task)).catch(() => {});
+    return task;
+  }
+
+  watchProof(mintUrl: string, secrets: string[]): Promise<void> {
+    return this.runOwned(() => this.acquireWatch(mintUrl, secrets));
+  }
+
+  private async acquireWatch(mintUrl: string, secrets: string[]): Promise<void> {
     if (!this.running) return;
 
     // Only watch proofs for trusted mints
+    const epoch = this.epoch;
+    const generation = this.mintGeneration.get(mintUrl) ?? 0;
+    const isActive = () =>
+      this.running &&
+      epoch === this.epoch &&
+      (this.mintGeneration.get(mintUrl) ?? 0) === generation;
     const trusted = await this.mintService.isTrustedMint(mintUrl);
-    if (!trusted) {
+    if (!trusted || !isActive()) {
       this.logger?.debug('Skipping watch for untrusted mint', { mintUrl });
       return;
     }
 
     // Filter out secrets already being watched
     const unique = Array.from(new Set(secrets));
-    const toWatch = unique.filter((secret) => !this.unsubscribeByKey.has(toKey(mintUrl, secret)));
+    const toWatch = unique.filter(
+      (secret) =>
+        !this.unsubscribeByKey.has(toKey(mintUrl, secret)) &&
+        !this.acquiringByKey.has(toKey(mintUrl, secret)),
+    );
     if (toWatch.length === 0) return;
 
-    // Compute Y hex for all secrets and build maps
-    const { secretByYHex, yHexBySecret } = buildYHexMapsForSecrets(toWatch);
-    const filters = Array.from(secretByYHex.keys());
+    for (const secret of toWatch) this.acquiringByKey.add(toKey(mintUrl, secret));
+    try {
+      // Compute Y hex for all secrets and build maps
+      const { secretByYHex, yHexBySecret } = buildYHexMapsForSecrets(toWatch);
+      const filters = Array.from(secretByYHex.keys());
 
-    const { subId, unsubscribe } = await this.subs.subscribe<ProofStateNotification>(
-      mintUrl,
-      'proof_state',
-      filters,
-      async (payload) => {
-        if (payload.state !== 'SPENT') return;
-        const secret = secretByYHex.get(payload.Y);
-        if (!secret) return;
-        const key = toKey(mintUrl, secret);
-        if (this.inflightByKey.has(key)) return;
-        this.inflightByKey.add(key);
-        try {
-          const sendOperationId = this.sendOperationService
-            ? await this.getSendOperationIdForSpentProof(mintUrl, secret)
-            : undefined;
-          const handledBySend =
-            sendOperationId && this.sendOperationService
-              ? await this.sendOperationService.recordProofSpent(sendOperationId, secret)
-              : false;
-          if (!handledBySend) {
-            await this.proofs.setProofState(mintUrl, [secret], 'spent');
-          }
-          this.logger?.info('Marked inflight proof as spent from mint notification', {
-            mintUrl,
-            subId,
-          });
-          await this.stopWatching(key);
-        } catch (err) {
-          this.logger?.error('Failed to mark inflight proof as spent', { mintUrl, subId, err });
-        } finally {
-          this.inflightByKey.delete(key);
-        }
-      },
-    );
+      const resolved = new Set<string>();
+      const { subId, unsubscribe } = await this.subs.subscribe<ProofStateNotification>(
+        mintUrl,
+        'proof_state',
+        filters,
+        (payload) =>
+          this.runOwned(async () => {
+            if (!isActive() || !['UNSPENT', 'PENDING', 'SPENT'].includes(payload.state)) return;
+            const secret = secretByYHex.get(payload.Y);
+            if (!secret || resolved.has(secret)) return;
+            const key = toKey(mintUrl, secret);
+            // Do not drop a terminal observation arriving while an earlier PENDING check runs.
+            // Both WebSocket and polling transports may deliver a state change only once.
+            const previous = this.processingByKey.get(key) ?? Promise.resolve();
+            const work = previous
+              .catch(() => {})
+              .then(async () => {
+                if (!isActive() || resolved.has(secret)) return;
+                try {
+                  const stored = await this.proofRepository.getProofBySecret(mintUrl, secret);
+                  if (!isActive()) return;
+                  if (stored?.state === 'pending') {
+                    const changed = await this.transactionRunner.run((tx) =>
+                      tx.perform(reconcileRestoredPending, {
+                        mintUrl,
+                        secret,
+                        state: payload.state,
+                      }),
+                    );
+                    if (changed) {
+                      resolved.add(secret);
+                      try {
+                        await this.bus.emit(
+                          'proofs:state-changed',
+                          { mintUrl, secrets: [secret], state: changed.state },
+                          { throwOnError: true },
+                        );
+                      } catch (error) {
+                        this.logger?.warn('Pending proof reconciled but event delivery failed', {
+                          mintUrl,
+                          error,
+                        });
+                      }
+                      await this.stopWatching(key);
+                    }
+                    return;
+                  }
+                  if (stored?.state !== 'inflight' || payload.state !== 'SPENT') return;
+                  const sendOperationId = this.sendOperationService
+                    ? stored.usedByOperationId || stored.createdByOperationId
+                    : undefined;
+                  const handledBySend =
+                    sendOperationId && this.sendOperationService
+                      ? await this.sendOperationService.recordProofSpent(sendOperationId, secret)
+                      : false;
+                  if (!handledBySend) {
+                    await this.proofs.setProofState(mintUrl, [secret], 'spent');
+                  }
+                  resolved.add(secret);
+                  this.logger?.info('Marked inflight proof as spent from mint notification', {
+                    mintUrl,
+                  });
+                  await this.stopWatching(key);
+                } catch (err) {
+                  this.logger?.error('Failed to mark inflight proof as spent', { mintUrl, err });
+                }
+              });
+            this.processingByKey.set(key, work);
+            try {
+              await work;
+            } finally {
+              if (this.processingByKey.get(key) === work) this.processingByKey.delete(key);
+            }
+          }),
+      );
+      if (!isActive()) {
+        await unsubscribe();
+        return;
+      }
 
-    // Wrap a group unsubscribe to be idempotent
-    let didUnsubscribe = false;
-    const remaining = new Set(filters);
-    const groupUnsubscribeOnce: UnsubscribeHandler = async () => {
-      if (didUnsubscribe) return;
-      didUnsubscribe = true;
-      await unsubscribe();
-      this.logger?.debug('Unsubscribed watcher for inflight proof group', { mintUrl, subId });
-    };
-
-    // For each secret, register a per-key stopper that shrinks the remaining set and
-    // unsubscribes the group when the last filter is removed
-    for (const secret of toWatch) {
-      const key = toKey(mintUrl, secret);
-      const yHex = yHexBySecret.get(secret)!;
-      const perKeyStop: UnsubscribeHandler = async () => {
-        if (remaining.has(yHex)) remaining.delete(yHex);
-        if (remaining.size === 0) {
-          await groupUnsubscribeOnce();
-        }
+      // Wrap a group unsubscribe to be idempotent
+      let didUnsubscribe = false;
+      const remaining = new Set(
+        toWatch
+          .filter((secret) => !resolved.has(secret))
+          .map((secret) => yHexBySecret.get(secret)!),
+      );
+      const groupUnsubscribeOnce: UnsubscribeHandler = async () => {
+        if (didUnsubscribe) return;
+        didUnsubscribe = true;
+        await unsubscribe();
+        this.logger?.debug('Unsubscribed watcher for inflight proof group', { mintUrl, subId });
       };
-      this.unsubscribeByKey.set(key, perKeyStop);
-    }
 
-    this.logger?.debug('Watching inflight proof states', {
-      mintUrl,
-      subId,
-      filterCount: filters.length,
-    });
+      // For each secret, register a per-key stopper that shrinks the remaining set and
+      // unsubscribes the group when the last filter is removed
+      for (const secret of toWatch) {
+        if (resolved.has(secret)) continue;
+        const key = toKey(mintUrl, secret);
+        const yHex = yHexBySecret.get(secret)!;
+        const perKeyStop: UnsubscribeHandler = async () => {
+          if (remaining.has(yHex)) remaining.delete(yHex);
+          if (remaining.size === 0) {
+            await groupUnsubscribeOnce();
+          }
+        };
+        this.unsubscribeByKey.set(key, perKeyStop);
+      }
+
+      if (remaining.size === 0) await groupUnsubscribeOnce();
+      this.logger?.debug('Watching inflight proof states', {
+        mintUrl,
+        subId,
+        filterCount: filters.length,
+      });
+    } finally {
+      for (const secret of toWatch) this.acquiringByKey.delete(toKey(mintUrl, secret));
+    }
   }
 
   private async bootstrapInflightProofs(): Promise<void> {
@@ -314,7 +422,10 @@ export class ProofStateWatcherService {
     await this.proofs.checkInflightProofs();
     if (!this.running) return;
 
-    const inflightProofs = await this.proofRepository.getInflightProofs();
+    const inflightProofs = [
+      ...(await this.proofRepository.getInflightProofs()),
+      ...(await this.proofRepository.getPendingProofs()),
+    ];
     if (!this.running || inflightProofs.length === 0) return;
 
     const byMint = new Map<string, string[]>();
@@ -353,6 +464,7 @@ export class ProofStateWatcherService {
   }
 
   async stopWatchingMint(mintUrl: string): Promise<void> {
+    this.mintGeneration.set(mintUrl, (this.mintGeneration.get(mintUrl) ?? 0) + 1);
     this.logger?.info('Stopping all proof watchers for mint', { mintUrl });
     const prefix = `${mintUrl}::`;
     const keysToStop: ProofKey[] = [];
@@ -360,13 +472,6 @@ export class ProofStateWatcherService {
     for (const key of this.unsubscribeByKey.keys()) {
       if (key.startsWith(prefix)) {
         keysToStop.push(key);
-      }
-    }
-
-    // Also clear inflight tracking for this mint
-    for (const key of this.inflightByKey) {
-      if (key.startsWith(prefix)) {
-        this.inflightByKey.delete(key);
       }
     }
 

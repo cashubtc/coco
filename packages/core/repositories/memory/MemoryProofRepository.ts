@@ -58,12 +58,24 @@ export class MemoryProofRepository implements ProofRepository {
   }
 
   async getInflightProofs(mintUrls?: string[], filter?: ProofUnitFilter): Promise<CoreProof[]> {
+    return this.getProofsInState('inflight', mintUrls, filter);
+  }
+
+  async getPendingProofs(mintUrls?: string[], filter?: ProofUnitFilter): Promise<CoreProof[]> {
+    return this.getProofsInState('pending', mintUrls, filter);
+  }
+
+  private async getProofsInState(
+    state: 'inflight' | 'pending',
+    mintUrls?: string[],
+    filter?: ProofUnitFilter,
+  ): Promise<CoreProof[]> {
     const unitFilter = getUnitFilter(filter);
     if (!mintUrls || mintUrls.length === 0) {
       const all: CoreProof[] = [];
       for (const map of this.proofsByMint.values()) {
         for (const p of map.values()) {
-          if (p.state === 'inflight' && matchesUnit(p, unitFilter)) {
+          if (p.state === state && matchesUnit(p, unitFilter)) {
             all.push(cloneMemoryValue(p));
           }
         }
@@ -78,7 +90,7 @@ export class MemoryProofRepository implements ProofRepository {
       const map = this.proofsByMint.get(mintUrl);
       if (!map) continue;
       for (const p of map.values()) {
-        if (p.state === 'inflight' && matchesUnit(p, unitFilter)) {
+        if (p.state === state && matchesUnit(p, unitFilter)) {
           results.push(cloneMemoryValue(p));
         }
       }

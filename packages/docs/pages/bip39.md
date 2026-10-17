@@ -27,7 +27,7 @@ Once instantiated you can use the deterministic secret restore `coco.wallet.rest
 
 ```ts
 await coco.wallet.restore('https://mint.url');
-// After this the balance for this mint will be restored.
+// Discovered proofs and counters are committed together for each keyset.
 // Note: Restore will automatically cache the mint info if not already present
 ```
 
@@ -46,3 +46,13 @@ await coco.wallet.sweep('https://mint.url', oldSeed, { units: ['usd'] });
 ```
 
 > **Note:** The `restore()` method will add and trust the mint automatically. If you want to display mint info to the user before proceeding use `addMint()` as described in [Adding a Mint](../starting/adding-mints.md)
+
+Restore adds missing proofs without deleting local proofs or lowering the stored output counter.
+Repeating it preserves existing proof state and operation ownership. Each keyset commits independently;
+a failure on a later keyset leaves earlier successful keysets committed.
+
+Newly discovered proofs that the mint reports as `PENDING` are stored as `pending`, excluded from
+spendable, reserved, and total balances. The proof watcher checks them live and after restart,
+releasing unowned proofs to `ready` on `UNSPENT` or marking them `spent` on `SPENT`. Repeating Restore
+also reconciles these proofs when watchers are disabled. Missing proofs already reported as `SPENT`
+are not imported.

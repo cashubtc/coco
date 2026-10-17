@@ -1,3 +1,5 @@
+import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
+import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
 import { Amount } from '@cashu/cashu-ts';
 import { describe, it, expect, beforeEach, mock, type Mock } from 'bun:test';
 import { EventBus } from '../../events/EventBus.ts';
@@ -53,6 +55,7 @@ describe('ProofStateWatcherService', () => {
     } as unknown as ProofService;
     const proofRepository = {
       getInflightProofs,
+      getPendingProofs: async () => [],
     } as unknown as ProofRepository;
     const subs = {} as SubscriptionManager;
     const mintService = {
@@ -60,6 +63,7 @@ describe('ProofStateWatcherService', () => {
     } as unknown as MintService;
 
     const watcher = new ProofStateWatcherService(
+      new RepositoryCoreTransactionRunner(new MemoryRepositories()),
       subs,
       mintService,
       proofService,
@@ -93,6 +97,7 @@ describe('ProofStateWatcherService', () => {
     } as unknown as ProofService;
     const proofRepository = {
       getInflightProofs,
+      getPendingProofs: async () => [],
     } as unknown as ProofRepository;
     const subs = {} as SubscriptionManager;
     const mintService = {
@@ -100,6 +105,7 @@ describe('ProofStateWatcherService', () => {
     } as unknown as MintService;
 
     const watcher = new ProofStateWatcherService(
+      new RepositoryCoreTransactionRunner(new MemoryRepositories()),
       subs,
       mintService,
       proofService,
@@ -145,6 +151,7 @@ describe('ProofStateWatcherService', () => {
     }));
 
     const watcher = new ProofStateWatcherService(
+      new RepositoryCoreTransactionRunner(new MemoryRepositories()),
       {} as SubscriptionManager,
       {} as MintService,
       {} as ProofService,
@@ -200,6 +207,7 @@ describe('ProofStateWatcherService', () => {
     }));
 
     const watcher = new ProofStateWatcherService(
+      new RepositoryCoreTransactionRunner(new MemoryRepositories()),
       {} as SubscriptionManager,
       {} as MintService,
       {} as ProofService,
@@ -265,6 +273,7 @@ describe('ProofStateWatcherService', () => {
     }));
 
     const watcher = new ProofStateWatcherService(
+      new RepositoryCoreTransactionRunner(new MemoryRepositories()),
       {} as SubscriptionManager,
       {} as MintService,
       {} as ProofService,
@@ -319,6 +328,7 @@ describe('ProofStateWatcherService', () => {
     }));
 
     const watcher = new ProofStateWatcherService(
+      new RepositoryCoreTransactionRunner(new MemoryRepositories()),
       {} as SubscriptionManager,
       {} as MintService,
       {} as ProofService,
@@ -362,7 +372,7 @@ describe('ProofStateWatcherService', () => {
       },
     );
     const getProofBySecret = mock(async () =>
-      makeProof({ secret, state: 'spent', usedByOperationId: 'send-op-1' }),
+      makeProof({ secret, state: 'inflight', usedByOperationId: 'send-op-1' }),
     );
     const getProofsBySecrets = mock(async () => [makeProof({ secret, state: 'spent' })]);
     const finalize = mock(async () => {});
@@ -391,6 +401,7 @@ describe('ProofStateWatcherService', () => {
     }));
 
     const watcher = new ProofStateWatcherService(
+      new RepositoryCoreTransactionRunner(new MemoryRepositories()),
       { subscribe } as unknown as SubscriptionManager,
       {
         isTrustedMint: mock(async () => true),

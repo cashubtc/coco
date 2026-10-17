@@ -101,19 +101,31 @@ export class IdbProofRepository implements ProofRepository {
   }
 
   async getInflightProofs(mintUrls?: string[], filter?: ProofUnitFilter): Promise<CoreProof[]> {
+    return this.getProofsInState('inflight', mintUrls, filter);
+  }
+
+  async getPendingProofs(mintUrls?: string[], filter?: ProofUnitFilter): Promise<CoreProof[]> {
+    return this.getProofsInState('pending', mintUrls, filter);
+  }
+
+  private async getProofsInState(
+    state: 'inflight' | 'pending',
+    mintUrls?: string[],
+    filter?: ProofUnitFilter,
+  ): Promise<CoreProof[]> {
     const unitFilter = getUnitFilter(filter);
     if (!mintUrls || mintUrls.length === 0) {
       const rows = (await (this.db as any)
         .table('coco_cashu_proofs')
         .where('state')
-        .equals('inflight')
+        .equals(state)
         .toArray()) as ProofRow[];
       return rows.filter((row) => matchesUnit(row, unitFilter)).map(rowToProof);
     }
     const mintUrlList = mintUrls.map((url) => url.trim()).filter((url) => url.length > 0);
     if (mintUrlList.length === 0) return [];
     const uniqueMintUrls = Array.from(new Set(mintUrlList));
-    const keys = uniqueMintUrls.map((mintUrl) => [mintUrl, 'inflight'] as [string, string]);
+    const keys = uniqueMintUrls.map((mintUrl) => [mintUrl, state] as [string, string]);
     const rows = (await (this.db as any)
       .table('coco_cashu_proofs')
       .where('[mintUrl+state]')

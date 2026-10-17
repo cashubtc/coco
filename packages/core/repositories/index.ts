@@ -70,6 +70,8 @@ export interface ProofRepository {
   /**
    * Retrieves all proofs marked as inflight. Can be optionally filtered by a list of mint URLs.
    */
+  /** Mint-held proofs unavailable until their pending mint transaction resolves. */
+  getPendingProofs(mintUrls?: string[], filter?: ProofUnitFilter): Promise<CoreProof[]>;
   getInflightProofs(mintUrls?: string[], filter?: ProofUnitFilter): Promise<CoreProof[]>;
   getAllReadyProofs(filter?: ProofUnitFilter): Promise<CoreProof[]>;
   setProofState(mintUrl: string, secrets: string[], state: ProofState): Promise<void>;

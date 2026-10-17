@@ -57,6 +57,7 @@ const EXPECTED_MIGRATION_IDS = [
   '040_send_execution_memo',
   '041_send_reclaim_data',
   '042_mint_swap_operations',
+  '043_pending_proofs',
 ] as const;
 
 async function allocateP2pkKey(db: SqlDatabase) {
@@ -1295,4 +1296,55 @@ describe('shared SQL schema migrations', () => {
       });
     },
   );
+});
+
+describe('pending proof migration', () => {
+  it('preserves historical proof material, ownership, counters and indexes', async () => {
+    const database = new Database(':memory:');
+    const db = createBunSqlDatabase(database);
+    try {
+      await ensureSchemaUpTo(db, '043_pending_proofs');
+      await db.run(
+        `INSERT INTO coco_cashu_proofs
+        (mintUrl, id, unit, amount, secret, C, dleqJson, witnessJson, state, createdAt, usedByOperationId, createdByOperationId)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          'https://mint.test',
+          'old',
+          'usd',
+          '9007199254740993',
+          'secret',
+          'C',
+          '{"e":"e","s":"s","r":"r"}',
+          '"witness"',
+          'inflight',
+          123,
+          'send',
+          'mint',
+        ],
+      );
+      const repositories = new SqlStorageRepositories({ database: db });
+      await repositories.counterRepository.setCounter('https://mint.test', 'old', 47);
+      const before = await db.all('SELECT * FROM coco_cashu_proofs');
+      const indices = await db.all<{ name: string }>(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'coco_cashu_proofs' ORDER BY name",
+      );
+      await ensureSchemaUpTo(db);
+      expect(await db.all('SELECT * FROM coco_cashu_proofs')).toEqual(before);
+      expect(
+        (await repositories.counterRepository.getCounter('https://mint.test', 'old'))?.counter,
+      ).toBe(47);
+      expect(
+        await db.all(
+          "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'coco_cashu_proofs' ORDER BY name",
+        ),
+      ).toEqual(indices);
+      await db.run("UPDATE coco_cashu_proofs SET state = 'pending'");
+      expect((await db.get<{ state: string }>('SELECT state FROM coco_cashu_proofs'))?.state).toBe(
+        'pending',
+      );
+    } finally {
+      database.close();
+    }
+  });
 });

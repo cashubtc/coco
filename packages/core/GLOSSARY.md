@@ -151,6 +151,12 @@ _Avoid_: Recovery, Wallet Import, restored mint, restored wallet
 The act of reconciling persisted in-flight wallet operations after interruption so local operation state, proof state, and mint state agree again.
 _Avoid_: Restore, restart, resume
 
+**Pending Proof**:
+A proof retained by the Wallet as unavailable while a mint-reported transaction remains unresolved.
+Its return to spendable funds depends on resolving that transaction and respecting any local
+operation that owns the proof.
+_Avoid_: Unclaimed Send token, pending quote
+
 **Exact Operation Request**:
 Immutable mint request material owned by a durable operation and reused for both initial submission
 and Operation Recovery.
@@ -166,6 +172,12 @@ _Avoid_: Failed operation, timed-out operation
 A durable commitment of deterministic counter positions to planned Cashu outputs. Output derivation
 inside a transaction that does not commit is not an Output Allocation.
 _Avoid_: Output generation, tentative outputs, counter increment
+
+**Output Counter**:
+The Wallet's durable high-water mark for the next deterministic output position at one mint and
+keyset, including positions committed to outputs that were never issued. It is distinct from the
+last position with a mint signature; Restore may advance this boundary but never lower it.
+_Avoid_: Issued proof count, last signed position
 
 **Keypair Allocation**:
 A durable commitment of one purpose-specific Wallet derivation index and its derived keypair. Key
