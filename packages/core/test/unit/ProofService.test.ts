@@ -1,7 +1,11 @@
 import { Amount, type OutputDataLike } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, afterEach, expect, mock } from 'bun:test';
+import { Database } from 'bun:sqlite';
+import { SqlStorageRepositories } from '../../../sql-storage/src/repositories.ts';
+import { SqliteDb } from '../../../sqlite-bun/src/db.ts';
 import { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
+import type { ProofRepository } from '../../repositories/index.ts';
 import { ProofService } from '../../services/ProofService.ts';
 import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepository.ts';
 import { MemoryCounterRepository } from '../../repositories/memory/MemoryCounterRepository.ts';
@@ -22,7 +26,7 @@ describe('ProofService', () => {
   const mintUrl = 'https://mint.test';
   const keysetId = 'keyset-1';
 
-  let proofRepo: MemoryProofRepository;
+  let proofRepo: ProofRepository;
   let counterRepo: MemoryCounterRepository;
   let counterService: CounterService;
   let bus: EventBus<CoreEvents>;
@@ -505,9 +509,18 @@ describe('ProofService', () => {
     });
   });
 
-  describe('saveProofs', () => {
-    it('throws when a proof is missing unit metadata', async () => {
-      const service = new ProofService(
+  describe.each(['memory', 'sqlite'] as const)('saveProofs (%s)', (adapter) => {
+    let database: Database | undefined;
+    let service: ProofService;
+
+    beforeEach(async () => {
+      if (adapter === 'sqlite') {
+        database = new Database(':memory:');
+        const repositories = new SqlStorageRepositories({ database: new SqliteDb({ database }) });
+        await repositories.init();
+        proofRepo = repositories.proofRepository;
+      }
+      service = new ProofService(
         counterService,
         proofRepo,
         walletService as any,
@@ -517,6 +530,11 @@ describe('ProofService', () => {
         undefined,
         bus,
       );
+    });
+
+    afterEach(() => database?.close());
+
+    it('throws when a proof is missing unit metadata', async () => {
       const proof = makeProof({ secret: 'missing-unit' }) as unknown as Omit<CoreProof, 'unit'>;
       delete (proof as { unit?: string }).unit;
 
@@ -525,21 +543,14 @@ describe('ProofService', () => {
       );
     });
 
-    it('emits per-group events and persists on success', async () => {
-      const service = new ProofService(
-        counterService,
-        proofRepo,
-        walletService as any,
-        mintService as any,
-        keyRingService as any,
-        seedService,
-        undefined,
-        bus,
-      );
-
+    it('persists the complete batch before emitting per-keyset events', async () => {
       const events: Array<{ mintUrl: string; keysetId: string; proofs: CoreProof[] }> = [];
-      bus.on('proofs:saved', (payload) => {
+      const savedAtNotification: string[][] = [];
+      bus.on('proofs:saved', async (payload) => {
         events.push(payload);
+        savedAtNotification.push(
+          (await proofRepo.getReadyProofs(mintUrl)).map((proof) => proof.secret).sort(),
+        );
       });
 
       const proofs: CoreProof[] = [
@@ -550,44 +561,77 @@ describe('ProofService', () => {
 
       await service.saveProofs(mintUrl, proofs);
 
-      // Two groups: k1 and k2
-      expect(events.length).toBe(2);
-      const groupIds = events.map((e) => e.keysetId).sort();
-      expect(groupIds).toEqual(['k1', 'k2']);
-
-      const ready = await proofRepo.getReadyProofs(mintUrl);
-      expect(ready.length).toBe(3);
+      expect(events).toEqual([
+        { mintUrl, keysetId: 'k1', proofs: proofs.slice(0, 2) },
+        { mintUrl, keysetId: 'k2', proofs: proofs.slice(2) },
+      ]);
+      expect(savedAtNotification).toEqual([
+        ['s1', 's2', 's3'],
+        ['s1', 's2', 's3'],
+      ]);
     });
 
-    it('aggregates failures across groups and throws ProofOperationError', async () => {
-      const service = new ProofService(
-        counterService,
-        proofRepo,
-        walletService as any,
-        mintService as any,
-        keyRingService as any,
-        seedService,
-        undefined,
-        bus,
+    it('preserves single-keyset event payloads and persistence', async () => {
+      const proofs = [makeProof({ secret: 'single-keyset', id: 'k1', amount: Amount.from(5) })];
+      const events: CoreEvents['proofs:saved'][] = [];
+      bus.on('proofs:saved', (payload) => {
+        events.push(payload);
+      });
+
+      await service.saveProofs(mintUrl, proofs);
+
+      expect(events).toEqual([{ mintUrl, keysetId: 'k1', proofs }]);
+      expect((await proofRepo.getProofBySecret(mintUrl, 'single-keyset'))?.amount.equals(5)).toBe(
+        true,
       );
+    });
 
-      // Pre-seed repository with a proof to force a collision for keyset kBad
-      await proofRepo.saveProofs(mintUrl, [
-        makeProof({ secret: 'dup', id: 'kBad', amount: Amount.from(1) }),
-      ]);
+    it.each(['first', 'last'] as const)(
+      'rejects the whole batch when the %s keyset collides',
+      async (position) => {
+        const existing = makeProof({ secret: 'dup', id: 'kBad', amount: Amount.from(1) });
+        await proofRepo.saveProofs(mintUrl, [existing]);
+        const collision = makeProof({ secret: 'dup', id: 'kBad', amount: Amount.from(2) });
+        const newProof = makeProof({ secret: 'new-proof', id: 'kOk', amount: Amount.from(3) });
+        const proofs = position === 'first' ? [collision, newProof] : [newProof, collision];
+        const events: CoreEvents['proofs:saved'][] = [];
+        bus.on('proofs:saved', (payload) => {
+          events.push(payload);
+        });
 
-      const proofs: CoreProof[] = [
-        // This one will collide (same secret under same mint)
-        makeProof({ secret: 'dup', id: 'kBad', amount: Amount.from(2) }),
-        // Another independent group should succeed
-        makeProof({ secret: 'ok1', id: 'kOk', amount: Amount.from(3) }),
+        await expect(service.saveProofs(mintUrl, proofs)).rejects.toThrow(ProofOperationError);
+
+        expect(await proofRepo.getProofBySecret(mintUrl, 'new-proof')).toBeNull();
+        expect((await proofRepo.getProofBySecret(mintUrl, 'dup'))?.amount.equals(1)).toBe(true);
+        expect(events).toEqual([]);
+      },
+    );
+
+    it('rejects duplicate secrets across keysets without saving any new proofs', async () => {
+      const proofs = [
+        makeProof({ secret: 'new-proof', id: 'k1' }),
+        makeProof({ secret: 'shared-secret', id: 'k1' }),
+        makeProof({ secret: 'shared-secret', id: 'k2' }),
       ];
+      const events: CoreEvents['proofs:saved'][] = [];
+      bus.on('proofs:saved', (payload) => {
+        events.push(payload);
+      });
 
       await expect(service.saveProofs(mintUrl, proofs)).rejects.toThrow(ProofOperationError);
+
+      expect(await proofRepo.getReadyProofs(mintUrl)).toEqual([]);
+      expect(events).toEqual([]);
     });
 
-    it('returns early when proofs array is empty', async () => {
-      const service = new ProofService(
+    it('does not reject committed proofs or skip later notifications when a listener fails', async () => {
+      const strictBus = new EventBus<CoreEvents>({ throwOnError: true });
+      const notifications: string[] = [];
+      strictBus.on('proofs:saved', ({ keysetId }) => {
+        notifications.push(keysetId);
+        if (keysetId === 'k1') throw new Error('listener failed');
+      });
+      const strictService = new ProofService(
         counterService,
         proofRepo,
         walletService as any,
@@ -595,9 +639,41 @@ describe('ProofService', () => {
         keyRingService as any,
         seedService,
         undefined,
-        bus,
+        strictBus,
       );
+      const proofs = [makeProof({ secret: 's1', id: 'k1' }), makeProof({ secret: 's2', id: 'k2' })];
 
+      await expect(strictService.saveProofs(mintUrl, proofs)).resolves.toBeUndefined();
+
+      expect(notifications).toEqual(['k1', 'k2']);
+      expect((await proofRepo.getReadyProofs(mintUrl)).map((proof) => proof.secret).sort()).toEqual(
+        ['s1', 's2'],
+      );
+    });
+
+    if (adapter === 'sqlite') {
+      it('rolls back earlier inserts when a later keyset has a persistence failure', async () => {
+        database!.exec(
+          'CREATE TRIGGER fail_proof_save BEFORE INSERT ON coco_cashu_proofs ' +
+            "WHEN NEW.secret = 'persist-failure' BEGIN SELECT RAISE(ABORT, 'injected proof persistence failure'); END;",
+        );
+        const events: CoreEvents['proofs:saved'][] = [];
+        bus.on('proofs:saved', (payload) => {
+          events.push(payload);
+        });
+        const proofs = [
+          makeProof({ secret: 'first-insert', id: 'k1' }),
+          makeProof({ secret: 'persist-failure', id: 'k2' }),
+        ];
+
+        await expect(service.saveProofs(mintUrl, proofs)).rejects.toThrow(ProofOperationError);
+
+        expect(await proofRepo.getReadyProofs(mintUrl)).toEqual([]);
+        expect(events).toEqual([]);
+      });
+    }
+
+    it('returns early when proofs array is empty', async () => {
       const events: Array<{ mintUrl: string; keysetId: string; proofs: CoreProof[] }> = [];
       bus.on('proofs:saved', (payload) => {
         events.push(payload);

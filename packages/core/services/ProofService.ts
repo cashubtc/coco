@@ -273,6 +273,7 @@ export class ProofService {
     return { keep: data.keep, send: data.send, sendAmount, keepAmount };
   }
 
+  /** Persist the complete batch atomically, then publish the existing per-keyset notifications. */
   async saveProofs(mintUrl: string, proofs: CoreProof[]): Promise<void> {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
@@ -285,45 +286,39 @@ export class ProofService {
     }));
     const groupedByKeyset = this.groupProofsByKeysetId(normalizedProofs);
 
-    const entries = Array.from(groupedByKeyset.entries());
-    const tasks = entries.map(([keysetId, group]) =>
-      (async () => {
-        await this.proofRepository.saveProofs(mintUrl, group);
+    try {
+      // Separate group writes reject cross-keyset secret collisions. Keep that protection when
+      // combining the batch, including for adapters that otherwise upsert duplicate input secrets.
+      const keysetsBySecret = new Map<string, string>();
+      for (const proof of normalizedProofs) {
+        const keysetId = keysetsBySecret.get(proof.secret);
+        if (keysetId !== undefined && keysetId !== proof.id) {
+          throw new ProofValidationError('A proof secret cannot belong to multiple keysets');
+        }
+        keysetsBySecret.set(proof.secret, proof.id);
+      }
+      await this.proofRepository.saveProofs(mintUrl, normalizedProofs);
+    } catch (error) {
+      this.logger?.error('Failed to persist proof batch', {
+        mintUrl,
+        keysetIds: Array.from(groupedByKeyset.keys()),
+        error,
+      });
+      throw new ProofOperationError(mintUrl, 'Failed to persist proof batch', undefined, error);
+    }
+
+    for (const [keysetId, group] of groupedByKeyset) {
+      try {
         await this.eventBus?.emit('proofs:saved', {
           mintUrl,
           keysetId,
           proofs: group,
         });
-        this.logger?.info('Proofs saved', { mintUrl, keysetId, count: group.length });
-      })().catch((error) => {
-        // Enrich the rejection with keyset context so we can log precise details later
-        throw { keysetId, error };
-      }),
-    );
-    const results = await Promise.allSettled(tasks);
-
-    const failed = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
-    if (failed.length > 0) {
-      // Log each failure with its original error for maximum visibility
-      for (const fr of failed) {
-        const { keysetId, error } = fr.reason as { keysetId?: string; error?: unknown };
-        this.logger?.error('Failed to persist proofs for keyset', { mintUrl, keysetId, error });
+      } catch (error) {
+        // Publication cannot turn an already committed batch into a failed save.
+        this.logger?.error('Failed to publish saved proofs', { mintUrl, keysetId, error });
       }
-      const details = failed.map((fr) => fr.reason as { keysetId?: string; error?: unknown });
-      const failedKeysets = details
-        .map((d) => d.keysetId)
-        .filter((id): id is string => Boolean(id));
-      const aggregate = new AggregateError(
-        details.map((d) => (d?.error instanceof Error ? d.error : new Error(String(d?.error)))),
-        `Failed to persist proofs for ${failed.length} keyset group(s)`,
-      );
-      const message =
-        failedKeysets.length > 0
-          ? `Failed to persist proofs for ${failed.length} keyset group(s) [${failedKeysets.join(
-              ', ',
-            )}]`
-          : `Failed to persist proofs for ${failed.length} keyset group(s)`;
-      throw new ProofOperationError(mintUrl, message, undefined, aggregate);
+      this.logger?.info('Proofs saved', { mintUrl, keysetId, count: group.length });
     }
   }
 
