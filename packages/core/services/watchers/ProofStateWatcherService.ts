@@ -326,6 +326,9 @@ export class ProofStateWatcherService {
                     );
                     if (changed) {
                       resolved.add(secret);
+                      // Readiness listeners may spend this proof and create a new subscription.
+                      // Finish the pending subscription's cleanup before publishing the change.
+                      await this.stopWatching(key);
                       try {
                         await this.bus.emit(
                           'proofs:state-changed',
@@ -338,7 +341,6 @@ export class ProofStateWatcherService {
                           error,
                         });
                       }
-                      await this.stopWatching(key);
                     }
                     return;
                   }

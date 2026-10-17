@@ -37,19 +37,33 @@ async function fixture(pauseAcquisition = false) {
   const acquired = deferred<void>();
   const unsubscribe = mock(async () => {});
   let notify!: (payload: { Y: string; state: string }) => Promise<void>;
+  const activeCallbacks = new Set<typeof notify>();
   const subs = {
     subscribe: async (_mint: string, _kind: string, _filters: string[], cb: typeof notify) => {
       notify = cb;
+      activeCallbacks.add(cb);
       subscribed.resolve();
       if (pauseAcquisition) await acquired.promise;
-      return { subId: 'test', unsubscribe };
+      return {
+        subId: 'test',
+        unsubscribe: async () => {
+          activeCallbacks.delete(cb);
+          await unsubscribe();
+        },
+      };
     },
   } as unknown as SubscriptionManager;
   const watcher = new ProofStateWatcherService(
     runner,
     subs,
     { isTrustedMint: async () => true } as unknown as MintService,
-    { checkInflightProofs: async () => {} } as unknown as ProofService,
+    {
+      checkInflightProofs: async () => {},
+      setProofState: async (url, secrets, state) => {
+        await repositories.proofRepository.setProofState(url, secrets, state);
+        await bus.emit('proofs:state-changed', { mintUrl: url, secrets, state });
+      },
+    } as Pick<ProofService, 'checkInflightProofs' | 'setProofState'> as ProofService,
     repositories.proofRepository,
     bus,
   );
@@ -63,10 +77,45 @@ async function fixture(pauseAcquisition = false) {
     unsubscribe,
     notify: (state: string) =>
       notify({ Y: buildYHexMapsForSecrets([proof.secret]).yHexBySecret.get(proof.secret)!, state }),
+    notifyActive: (state: string) =>
+      Promise.all(
+        [...activeCallbacks].map((cb) =>
+          cb({ Y: buildYHexMapsForSecrets([proof.secret]).yHexBySecret.get(proof.secret)!, state }),
+        ),
+      ),
   };
 }
 
 describe('Restored pending proof watcher', () => {
+  it('keeps watching a proof sent from its readiness event listener', async () => {
+    const f = await fixture();
+    await f.repositories.proofRepository.saveProofs(mintUrl, [proof]);
+    await f.watcher.start();
+    await f.subscribed.promise;
+    await f.watcher.watchProof(mintUrl, [proof.secret]);
+    f.bus.on('proofs:state-changed', async ({ state }) => {
+      if (state !== 'ready') return;
+      await f.repositories.proofRepository.setProofState(mintUrl, [proof.secret], 'inflight');
+      await f.bus.emit('proofs:state-changed', {
+        mintUrl,
+        secrets: [proof.secret],
+        state: 'inflight',
+      });
+    });
+
+    try {
+      await f.notify('UNSPENT');
+      expect(f.unsubscribe).toHaveBeenCalledTimes(1);
+      await f.notifyActive('SPENT');
+      expect(
+        (await f.repositories.proofRepository.getProofBySecret(mintUrl, proof.secret))?.state,
+      ).toBe('spent');
+      expect(f.unsubscribe).toHaveBeenCalledTimes(2);
+    } finally {
+      await f.watcher.stop();
+    }
+  });
+
   it.each(['UNSPENT', 'SPENT'])(
     'reconciles %s after restart and ignores late callbacks after stop',
     async (state) => {

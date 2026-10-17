@@ -9,4 +9,6 @@
 
 Restore now imports proofs and advances counters atomically per keyset, preserving the durable counter high-water mark and existing operation ownership. Newly restored mint-held proofs use the new `pending` state and reconcile through the proof watcher or a repeated Restore.
 
+Finish pending proof subscription cleanup before publishing readiness so a Send started by an event listener keeps its replacement subscription.
+
 Remove the plugin-facing `CounterService.overwriteCounter()` method. Custom proof repositories must implement `getPendingProofs()`. SQL adapters migrate their proof-state constraint while preserving existing records; IndexedDB accepts the additional state. Pending proofs remain excluded from existing balances. Melt inputs still use `inflight` pending a separate migration.
