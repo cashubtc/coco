@@ -18,6 +18,13 @@ function matchesUnit(proof: CoreProof, unitFilter?: Set<string>): boolean {
 }
 
 export class MemoryProofRepository implements ProofRepository {
+  async getPendingProofs(): Promise<CoreProof[]> {
+    return Array.from(this.proofsByMint.values()).flatMap((proofs) =>
+      Array.from(proofs.values())
+        .filter((proof) => proof.state === 'pending')
+        .map((proof) => cloneMemoryValue(proof)),
+    );
+  }
   private proofsByMint: Map<string, Map<string, CoreProof>> = new Map();
 
   [COPY_MEMORY_REPOSITORY_STATE](source: MemoryProofRepository): void {

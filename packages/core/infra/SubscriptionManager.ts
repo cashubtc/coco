@@ -363,7 +363,8 @@ export class SubscriptionManager {
       return {
         subId,
         unsubscribe: async () => {
-          await this.unsubscribe(mintUrl, subId);
+          if (onNotification) this.removeCallback(subId, onNotification);
+          if (active.callbacks.size === 0) await this.unsubscribe(mintUrl, subId);
         },
       };
     }
@@ -387,7 +388,8 @@ export class SubscriptionManager {
     return {
       subId,
       unsubscribe: async () => {
-        await this.unsubscribe(mintUrl, subId);
+        if (onNotification) this.removeCallback(subId, onNotification);
+        if (active.callbacks.size === 0) await this.unsubscribe(mintUrl, subId);
       },
     };
   }

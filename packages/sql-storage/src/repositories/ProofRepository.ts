@@ -72,6 +72,12 @@ function rowToProof(r: ProofRow): CoreProof {
 }
 
 export class SqliteProofRepository implements ProofRepository {
+  async getPendingProofs(): Promise<CoreProof[]> {
+    const rows = await this.db.all<ProofRow>(
+      `SELECT ${PROOF_COLUMNS} FROM coco_cashu_proofs WHERE state = 'pending'`,
+    );
+    return rows.map(rowToProof);
+  }
   private readonly db: SqlDatabase;
 
   constructor(db: SqlDatabase) {

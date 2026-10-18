@@ -239,9 +239,11 @@ See [ADR-0012](packages/core/docs/adr/0012-distinguish-mint-held-pending-proofs.
 
 Re-running Restore reconciles eligible pending records: fresh observations leave them pending on
 `PENDING`, release them to ready on `UNSPENT`, or mark them spent on `SPENT`. Each application
-rechecks current local state and operation ownership inside the keyset transaction. Automatic
-pending-proof watching and its subscription lifecycle are deferred to a separate change; the
-existing proof watcher continues to handle inflight proofs only.
+rechecks current local state and operation ownership inside the keyset transaction. The dedicated
+pending-proof watcher applies terminal observations through the shared runner and ScopedProofs,
+rechecking local state and ownership inside its transaction. It removes subscription interest before
+cancellable post-commit publication; shutdown drains acquisitions and writes without waiting for
+application listeners. The existing inflight watcher remains unchanged.
 
 Pending proofs are excluded from the existing `spendable`, `reserved`, and `total` balances, just as
 inflight proofs are. They contribute to those balances only after becoming ready. A separate pending

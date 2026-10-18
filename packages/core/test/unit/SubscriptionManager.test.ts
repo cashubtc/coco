@@ -436,6 +436,35 @@ describe('SubscriptionManager pause/resume', () => {
     expect(callback).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])(
+    'keeps a shared subscription when its original subscriber leaves (paused: %s)',
+    async (paused) => {
+      const mintUrl = 'https://mint.example.com';
+      if (paused) subManager.pause();
+      const firstCallback = mock(() => {});
+      const secondCallback = mock(() => {});
+      const first = await subManager.subscribe(mintUrl, 'proof_state', ['proof'], firstCallback);
+      const second = await subManager.subscribe(mintUrl, 'proof_state', ['proof'], secondCallback);
+      expect(second.subId).toBe(first.subId);
+      await first.unsubscribe();
+      expect(
+        mockTransport.sentMessages.filter((request) => request.method === 'unsubscribe'),
+      ).toHaveLength(0);
+      mockTransport.triggerMessage(mintUrl, {
+        jsonrpc: '2.0',
+        method: 'subscribe',
+        params: { subId: first.subId, payload: { Y: 'proof', state: 'SPENT' } },
+      });
+      await Promise.resolve();
+      expect(firstCallback).not.toHaveBeenCalled();
+      expect(secondCallback).toHaveBeenCalledTimes(1);
+      await second.unsubscribe();
+      expect(
+        mockTransport.sentMessages.filter((request) => request.method === 'unsubscribe'),
+      ).toHaveLength(1);
+    },
+  );
+
   it('logs a synchronous callback failure and delivers to sibling subscribers', async () => {
     const mintUrl = 'https://mint.example.com';
     const callbackError = new Error('callback failed');

@@ -259,6 +259,7 @@ export class HybridTransport implements RealTimeTransport {
   private getNotificationSignature(
     payload:
       | {
+          Y?: unknown;
           state?: unknown;
           amount_paid?: unknown;
           amount_issued?: unknown;
@@ -267,6 +268,9 @@ export class HybridTransport implements RealTimeTransport {
       | undefined,
   ): string | undefined {
     if (!payload) return undefined;
+    // Proof watchers unsubscribe after committing a terminal observation. Keep repeated polling
+    // observations deliverable so a failed local write can retry on the next poll.
+    if (typeof payload.Y === 'string') return undefined;
 
     const expirySignature = this.getExpirySignature(payload);
     if (payload.amount_paid !== undefined && payload.amount_issued !== undefined) {
