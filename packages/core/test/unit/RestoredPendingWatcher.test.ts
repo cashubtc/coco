@@ -87,30 +87,152 @@ async function fixture(pauseAcquisition = false) {
 }
 
 describe('Restored pending proof watcher', () => {
-  it('keeps watching a proof sent from its readiness event listener', async () => {
+  it.each(['before', 'after'])(
+    'keeps watching when the readiness listener is registered %s the watcher',
+    async (order) => {
+      const f = await fixture();
+      await f.repositories.proofRepository.saveProofs(mintUrl, [proof]);
+      const listen = () =>
+        f.bus.on('proofs:state-changed', async ({ state }) => {
+          if (state !== 'ready') return;
+          await f.repositories.proofRepository.setProofState(mintUrl, [proof.secret], 'inflight');
+          await f.bus.emit('proofs:state-changed', {
+            mintUrl,
+            secrets: [proof.secret],
+            state: 'inflight',
+          });
+        });
+      if (order === 'before') listen();
+      await f.watcher.start();
+      await f.subscribed.promise;
+      await f.watcher.watchProof(mintUrl, [proof.secret]);
+      if (order === 'after') listen();
+
+      try {
+        await f.notify('UNSPENT');
+        expect(f.unsubscribe).toHaveBeenCalledTimes(1);
+        await f.notifyActive('SPENT');
+        expect(
+          (await f.repositories.proofRepository.getProofBySecret(mintUrl, proof.secret))?.state,
+        ).toBe('spent');
+        expect(f.unsubscribe).toHaveBeenCalledTimes(2);
+      } finally {
+        await f.watcher.stop();
+      }
+    },
+  );
+
+  it.each(['UNSPENT', 'SPENT'])(
+    'allows a %s reconciliation listener to await shutdown without delivering later callbacks',
+    async (state) => {
+      const f = await fixture();
+      await f.repositories.proofRepository.saveProofs(mintUrl, [proof]);
+      await f.watcher.start();
+      await f.subscribed.promise;
+      const stopped = deferred<void>();
+      f.bus.on('proofs:state-changed', async () => {
+        await f.watcher.stop();
+        stopped.resolve();
+      });
+      const later = mock(() => {});
+      f.bus.on('proofs:state-changed', later);
+
+      await f.notify(state);
+      await stopped.promise;
+      expect(f.watcher.isRunning()).toBe(false);
+      expect(f.unsubscribe).toHaveBeenCalledTimes(1);
+      expect(later).not.toHaveBeenCalled();
+      await f.notify('SPENT');
+      expect(
+        (await f.repositories.proofRepository.getProofBySecret(mintUrl, proof.secret))?.state,
+      ).toBe(state === 'UNSPENT' ? 'ready' : 'spent');
+    },
+    1000,
+  );
+
+  it('drains subscription acquisition when a reconciliation listener requests shutdown', async () => {
+    const f = await fixture(true);
+    await f.repositories.proofRepository.saveProofs(mintUrl, [proof]);
+    await f.watcher.start();
+    await f.subscribed.promise;
+    const entered = deferred<void>();
+    const finished = deferred<void>();
+    let stopped = false;
+    f.bus.on('proofs:state-changed', async () => {
+      const stop = f.watcher.stop();
+      entered.resolve();
+      await stop;
+      stopped = true;
+      finished.resolve();
+    });
+
+    const notification = f.notify('UNSPENT');
+    await entered.promise;
+    await notification;
+    expect(stopped).toBe(false);
+    f.acquired.resolve();
+    await finished.promise;
+    expect(f.unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('starts fresh event delivery after the watcher restarts', async () => {
+    const f = await fixture();
+    await f.repositories.proofRepository.saveProofs(mintUrl, [proof]);
+    await f.watcher.start();
+    await f.subscribed.promise;
+    await f.watcher.stop();
+    const changed = mock(() => {});
+    f.bus.on('proofs:state-changed', changed);
+
+    await f.watcher.start();
+    await f.watcher.watchProof(mintUrl, [proof.secret]);
+    await f.notify('UNSPENT');
+    expect(changed).toHaveBeenCalledTimes(1);
+    expect(
+      (await f.repositories.proofRepository.getProofBySecret(mintUrl, proof.secret))?.state,
+    ).toBe('ready');
+    await f.watcher.stop();
+  });
+
+  it('preserves a watch reused by an inflight event while an older ready read is pending', async () => {
     const f = await fixture();
     await f.repositories.proofRepository.saveProofs(mintUrl, [proof]);
     await f.watcher.start();
     await f.subscribed.promise;
     await f.watcher.watchProof(mintUrl, [proof.secret]);
-    f.bus.on('proofs:state-changed', async ({ state }) => {
-      if (state !== 'ready') return;
-      await f.repositories.proofRepository.setProofState(mintUrl, [proof.secret], 'inflight');
-      await f.bus.emit('proofs:state-changed', {
-        mintUrl,
-        secrets: [proof.secret],
-        state: 'inflight',
-      });
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    const repository = f.repositories.proofRepository;
+    const read = repository.getProofBySecret.bind(repository);
+    let pause = true;
+    repository.getProofBySecret = async (url, secret) => {
+      const stored = await read(url, secret);
+      if (pause) {
+        pause = false;
+        entered.resolve();
+        await release.promise;
+      }
+      return stored;
+    };
+    await repository.setProofState(mintUrl, [proof.secret], 'ready');
+    const ready = f.bus.emit('proofs:state-changed', {
+      mintUrl,
+      secrets: [proof.secret],
+      state: 'ready',
     });
-
+    await entered.promise;
+    await repository.setProofState(mintUrl, [proof.secret], 'inflight');
+    await f.bus.emit('proofs:state-changed', {
+      mintUrl,
+      secrets: [proof.secret],
+      state: 'inflight',
+    });
+    release.resolve();
+    await ready;
     try {
-      await f.notify('UNSPENT');
-      expect(f.unsubscribe).toHaveBeenCalledTimes(1);
+      expect(f.unsubscribe).not.toHaveBeenCalled();
       await f.notifyActive('SPENT');
-      expect(
-        (await f.repositories.proofRepository.getProofBySecret(mintUrl, proof.secret))?.state,
-      ).toBe('spent');
-      expect(f.unsubscribe).toHaveBeenCalledTimes(2);
+      expect((await read(mintUrl, proof.secret))?.state).toBe('spent');
     } finally {
       await f.watcher.stop();
     }
@@ -172,7 +294,7 @@ describe('Restored pending proof watcher', () => {
     ).toBe('pending');
   });
 
-  it('waits for an active reconciliation and its committed event before stop resolves', async () => {
+  it('drains an active reconciliation while cancelling event delivery on shutdown', async () => {
     const f = await fixture();
     const entered = deferred<void>();
     const release = deferred<void>();
@@ -197,7 +319,7 @@ describe('Restored pending proof watcher', () => {
     expect(stopped).toBe(false);
     release.resolve();
     await Promise.all([notification, stop]);
-    expect(changed).toHaveBeenCalledTimes(1);
+    expect(changed).not.toHaveBeenCalled();
     expect(
       (await f.repositories.proofRepository.getProofBySecret(mintUrl, proof.secret))?.state,
     ).toBe('ready');

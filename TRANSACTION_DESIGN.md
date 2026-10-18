@@ -242,6 +242,11 @@ observations leave eligible pending proofs pending, release them to ready on `UN
 spent on `SPENT`. Each application rechecks current local state and operation ownership in a short
 transaction. Re-running Restore also reconciles eligible pending records, independently of whether
 background watchers are enabled. Reconciliation must respect the watcher's shutdown guarantees.
+Shutdown cancels pending-proof event delivery, skips listeners that have not started, and drains
+active local transactions and subscription acquisition. An already-started application listener may
+finish after shutdown; it can await shutdown without making the watcher wait on itself. Cancellation
+does not roll back committed proof state. Readiness-event cleanup rechecks current proof state and
+the subscription's identity and watch-request revision so it cannot discard a newer Send watch.
 
 Pending proofs are excluded from the existing `spendable`, `reserved`, and `total` balances, just as
 inflight proofs are. They contribute to those balances only after becoming ready. A separate pending

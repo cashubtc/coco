@@ -20,6 +20,13 @@ on `UNSPENT`, and become spent on `SPENT`. Re-running Restore provides the same 
 background watchers are disabled. Current local state and operation ownership must be rechecked
 before applying an observation.
 
+Pending-proof event delivery is cancellable at watcher shutdown. Shutdown still drains active local
+transactions and subscription acquisition, but stops waiting for the active application listener and
+skips remaining listeners. An already-started listener may finish and may itself await shutdown.
+Committed proof state is retained even when its notification is cancelled. Readiness events recheck
+current proof state and watch identity/revision before cleanup, preserving newer Send subscriptions
+regardless of application-listener registration order.
+
 Preserve existing balance semantics: pending proofs, like inflight proofs, contribute to none of
 `spendable`, `reserved`, or `total` until they become ready. Separate pending balance reporting is
 outside this migration.

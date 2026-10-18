@@ -12,6 +12,11 @@ import { buildYHexMapsForSecrets } from '../../utils.ts';
 
 type ProofKey = string; // `${mintUrl}::${secret}`
 
+type ProofWatch = {
+  unsubscribe: UnsubscribeHandler;
+  revision: number;
+};
+
 function toKey(mintUrl: string, secret: string): ProofKey {
   return `${mintUrl}::${secret}`;
 }
@@ -42,10 +47,11 @@ export class ProofStateWatcherService {
   private running = false;
   private epoch = 0;
   private stopping?: Promise<void>;
+  private eventDelivery = new AbortController();
   private readonly ownedWork = new Set<Promise<void>>();
   private readonly acquiringByKey = new Set<ProofKey>();
   private readonly mintGeneration = new Map<string, number>();
-  private unsubscribeByKey = new Map<ProofKey, UnsubscribeHandler>();
+  private watchByKey = new Map<ProofKey, ProofWatch>();
   private readonly processingByKey = new Map<ProofKey, Promise<void>>();
   private offProofsStateChanged?: () => void;
   private offProofsSaved?: () => void;
@@ -86,6 +92,7 @@ export class ProofStateWatcherService {
     if (this.stopping) await this.stopping;
     if (this.running) return;
     this.running = true;
+    this.eventDelivery = new AbortController();
     const epoch = ++this.epoch;
     this.logger?.info('ProofStateWatcherService started');
 
@@ -107,7 +114,18 @@ export class ProofStateWatcherService {
                 });
               }
             } else if (state === 'ready') {
-              for (const secret of secrets) await this.stopWatching(toKey(mintUrl, secret));
+              for (const secret of secrets) {
+                const key = toKey(mintUrl, secret);
+                const subscription = this.watchByKey.get(key);
+                if (!subscription) continue;
+                const revision = subscription.revision;
+                // Earlier listeners may have spent the proof before this event reaches us.
+                const proof = await this.proofRepository.getProofBySecret(mintUrl, secret);
+                if (!this.running || epoch !== this.epoch) return;
+                if (proof?.state === 'ready' && subscription.revision === revision) {
+                  await this.stopWatching(key, subscription);
+                }
+              }
             } else if (state === 'spent') {
               const operationIds = new Set<string>();
 
@@ -198,6 +216,8 @@ export class ProofStateWatcherService {
     if (this.stopping) return this.stopping;
     if (!this.running) return Promise.resolve();
     this.running = false;
+    // A listener may itself await stop(). Cancel this publication instead of waiting on it.
+    this.eventDelivery.abort();
     this.stopping = this.drainAndStop().finally(() => {
       this.stopping = undefined;
     });
@@ -235,14 +255,14 @@ export class ProofStateWatcherService {
       }
     }
 
-    // In-progress subscriptions release themselves when they see running=false. Drain callbacks
-    // too: stop() resolves only after any already-started transaction and event delivery finish.
+    // In-progress subscriptions release themselves when they see running=false. Drain owned work,
+    // including active transactions; cancelled event delivery cannot start another listener.
     while (this.ownedWork.size) await Promise.allSettled([...this.ownedWork]);
-    const entries = Array.from(this.unsubscribeByKey.entries());
-    this.unsubscribeByKey.clear();
-    for (const [key, unsub] of entries) {
+    const entries = Array.from(this.watchByKey.entries());
+    this.watchByKey.clear();
+    for (const [key, watch] of entries) {
       try {
-        await unsub();
+        await watch.unsubscribe();
         this.logger?.debug('Stopped watching proof', { key });
       } catch (err) {
         this.logger?.warn('Failed to unsubscribe proof watcher', { key, err });
@@ -261,6 +281,11 @@ export class ProofStateWatcherService {
   }
 
   watchProof(mintUrl: string, secrets: string[]): Promise<void> {
+    // A new watch request supersedes an older ready event, even when reusing the subscription.
+    for (const secret of secrets) {
+      const watch = this.watchByKey.get(toKey(mintUrl, secret));
+      if (watch) watch.revision++;
+    }
     return this.runOwned(() => this.acquireWatch(mintUrl, secrets));
   }
 
@@ -269,6 +294,7 @@ export class ProofStateWatcherService {
 
     // Only watch proofs for trusted mints
     const epoch = this.epoch;
+    const eventSignal = this.eventDelivery.signal;
     const generation = this.mintGeneration.get(mintUrl) ?? 0;
     const isActive = () =>
       this.running &&
@@ -284,7 +310,7 @@ export class ProofStateWatcherService {
     const unique = Array.from(new Set(secrets));
     const toWatch = unique.filter(
       (secret) =>
-        !this.unsubscribeByKey.has(toKey(mintUrl, secret)) &&
+        !this.watchByKey.has(toKey(mintUrl, secret)) &&
         !this.acquiringByKey.has(toKey(mintUrl, secret)),
     );
     if (toWatch.length === 0) return;
@@ -333,7 +359,7 @@ export class ProofStateWatcherService {
                         await this.bus.emit(
                           'proofs:state-changed',
                           { mintUrl, secrets: [secret], state: changed.state },
-                          { throwOnError: true },
+                          { throwOnError: true, signal: eventSignal },
                         );
                       } catch (error) {
                         this.logger?.warn('Pending proof reconciled but event delivery failed', {
@@ -398,12 +424,13 @@ export class ProofStateWatcherService {
         const key = toKey(mintUrl, secret);
         const yHex = yHexBySecret.get(secret)!;
         const perKeyStop: UnsubscribeHandler = async () => {
+          resolved.add(secret);
           if (remaining.has(yHex)) remaining.delete(yHex);
           if (remaining.size === 0) {
             await groupUnsubscribeOnce();
           }
         };
-        this.unsubscribeByKey.set(key, perKeyStop);
+        this.watchByKey.set(key, { unsubscribe: perKeyStop, revision: 0 });
       }
 
       if (remaining.size === 0) await groupUnsubscribeOnce();
@@ -453,15 +480,14 @@ export class ProofStateWatcherService {
     }
   }
 
-  private async stopWatching(key: ProofKey): Promise<void> {
-    const unsubscribe = this.unsubscribeByKey.get(key);
-    if (!unsubscribe) return;
+  private async stopWatching(key: ProofKey, watch = this.watchByKey.get(key)): Promise<void> {
+    if (!watch || this.watchByKey.get(key) !== watch) return;
+    // Remove only this subscription, before awaiting transport cleanup or allowing replacement.
+    this.watchByKey.delete(key);
     try {
-      await unsubscribe();
+      await watch.unsubscribe();
     } catch (err) {
       this.logger?.warn('Unsubscribe proof watcher failed', { key, err });
-    } finally {
-      this.unsubscribeByKey.delete(key);
     }
   }
 
@@ -471,7 +497,7 @@ export class ProofStateWatcherService {
     const prefix = `${mintUrl}::`;
     const keysToStop: ProofKey[] = [];
 
-    for (const key of this.unsubscribeByKey.keys()) {
+    for (const key of this.watchByKey.keys()) {
       if (key.startsWith(prefix)) {
         keysToStop.push(key);
       }
