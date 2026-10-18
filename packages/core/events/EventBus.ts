@@ -12,11 +12,6 @@ export type EventBusOptions<Events extends { [K in keyof Events]: unknown }> = {
 export type EmitOptions = {
   throwOnError?: boolean;
   failFast?: boolean; // stops on the first listener error when throwOnError is enabled
-  /**
-   * Stop waiting for the active listener and skip remaining listeners when aborted.
-   * An already-started listener may finish; cancellation does not undo its work.
-   */
-  signal?: AbortSignal;
 };
 
 export class EventBus<Events extends { [K in keyof Events]: unknown }> {
@@ -48,56 +43,37 @@ export class EventBus<Events extends { [K in keyof Events]: unknown }> {
     if (set.size === 0) this.listeners.delete(event);
   }
 
-  /** Await each snapshotted listener in registration order, unless delivery is cancelled. */
+  /** Await each snapshotted listener in registration order. */
   async emit<E extends keyof Events>(
     event: E,
     payload: Events[E],
     options?: EmitOptions,
   ): Promise<void> {
     const set = this.listeners.get(event);
-    const signal = options?.signal;
-    if (!set || set.size === 0 || signal?.aborted) return;
+    if (!set || set.size === 0) return;
 
     const handlers = Array.from(set) as Array<(payload: Events[E]) => void | Promise<void>>;
     const effectiveThrow = options?.throwOnError ?? this.options.throwOnError ?? false;
 
-    let onAbort: (() => void) | undefined;
-    const cancelled = signal
-      ? new Promise<void>((resolve) => {
-          onAbort = resolve;
-          signal.addEventListener('abort', onAbort, { once: true });
-        })
-      : undefined;
-    const waitFor = (delivery: void | Promise<void>) =>
-      cancelled ? Promise.race([delivery, cancelled]) : delivery;
-
-    try {
-      const collectedErrors: unknown[] = [];
-      for (const handler of handlers) {
-        if (signal?.aborted) return;
-        try {
-          await waitFor(handler(payload));
-        } catch (error) {
-          if (signal?.aborted) return;
-          if (this.options.onError) await waitFor(this.options.onError({ event, payload, error }));
-          if (signal?.aborted) return;
-          if (effectiveThrow && options?.failFast) {
-            throw error;
-          }
-          if (effectiveThrow) {
-            collectedErrors.push(error);
-          }
+    const collectedErrors: unknown[] = [];
+    for (const handler of handlers) {
+      try {
+        await handler(payload);
+      } catch (error) {
+        if (this.options.onError) await this.options.onError({ event, payload, error });
+        if (effectiveThrow && options?.failFast) {
+          throw error;
+        }
+        if (effectiveThrow) {
+          collectedErrors.push(error);
         }
       }
-      if (signal?.aborted) return;
-      if (collectedErrors.length && effectiveThrow) {
-        throw new AggregateError(
-          collectedErrors,
-          `Event "${String(event)}" had ${collectedErrors.length} handler error(s)`,
-        );
-      }
-    } finally {
-      if (onAbort) signal?.removeEventListener('abort', onAbort);
+    }
+    if (collectedErrors.length && effectiveThrow) {
+      throw new AggregateError(
+        collectedErrors,
+        `Event "${String(event)}" had ${collectedErrors.length} handler error(s)`,
+      );
     }
   }
 }

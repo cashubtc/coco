@@ -449,6 +449,50 @@ describe('WalletRestoreService', () => {
       expect(saved).toHaveBeenCalledTimes(1);
     });
 
+    it.each(['UNSPENT', 'SPENT'] as const)(
+      'reconciles a pending proof on repeated Restore observing %s',
+      async (observation) => {
+        const repositories = new MemoryRepositories();
+        await repositories.init();
+        const bus = new EventBus<CoreEvents>({ throwOnError: true });
+        const state = observation === 'UNSPENT' ? 'ready' : 'spent';
+        const changed = mock(async (event: CoreEvents['proofs:state-changed']) => {
+          expect(event).toEqual({ mintUrl, secrets: ['pending'], state });
+          expect(
+            (await repositories.proofRepository.getProofBySecret(mintUrl, 'pending'))?.state,
+          ).toBe(state);
+        });
+        bus.on('proofs:state-changed', changed);
+        const restored = new WalletRestoreService(
+          proofService,
+          new RepositoryCoreTransactionRunner(repositories),
+          walletService,
+          requestProvider,
+          logger,
+          undefined,
+          bus,
+        );
+        let remoteState: 'PENDING' | 'UNSPENT' | 'SPENT' = 'PENDING';
+        const wallet = {
+          batchRestore: async () => ({
+            proofs: [makeProof(8, 'pending')],
+            lastCounterWithSignature: 4,
+          }),
+          checkProofsStates: async () => [{ state: remoteState }],
+        } as unknown as Wallet;
+        await restored.restoreKeyset(mintUrl, wallet, keysetId);
+        expect(await repositories.proofRepository.getAvailableProofs(mintUrl)).toHaveLength(0);
+        expect(changed).not.toHaveBeenCalled();
+        remoteState = observation;
+        await restored.restoreKeyset(mintUrl, wallet, keysetId);
+        await restored.restoreKeyset(mintUrl, wallet, keysetId);
+        expect(changed).toHaveBeenCalledTimes(1);
+        expect(await repositories.proofRepository.getAvailableProofs(mintUrl)).toHaveLength(
+          observation === 'UNSPENT' ? 1 : 0,
+        );
+      },
+    );
+
     it('rejects malformed state checks without committing proofs or counters', async () => {
       const repositories = new MemoryRepositories();
       await repositories.init();

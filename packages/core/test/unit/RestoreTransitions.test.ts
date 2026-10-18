@@ -154,6 +154,33 @@ describe.each(['memory', 'sqlite'] as const)('Restore transactions (%s)', (adapt
     expect((await repositories.counterRepository.getCounter(mintUrl, activeId))?.counter).toBe(31);
   });
 
+  it.each(['ready', 'spent'] as const)(
+    'reconciles unowned pending proofs to %s while preserving either operation owner',
+    async (state) => {
+      const stored: CoreProof[] = [
+        { ...proof, state: 'pending' },
+        { ...proof, secret: 'used', state: 'pending', usedByOperationId: 'send' },
+        { ...proof, secret: 'created', state: 'pending', createdByOperationId: 'mint' },
+      ];
+      await repositories.proofRepository.saveProofs(mintUrl, stored);
+      const runner = new RepositoryCoreTransactionRunner(repositories);
+      const result = await runner.run((tx) =>
+        tx.perform(applyRestoreResult, {
+          mintUrl,
+          keysetId,
+          nextCounter: 3,
+          proofs: stored.map(({ secret }) => ({ ...proof, secret, state })),
+        }),
+      );
+      expect(result.updated).toEqual([{ ...proof, state }]);
+      for (const expected of [{ ...proof, state }, ...stored.slice(1)]) {
+        expect(
+          await repositories.proofRepository.getProofBySecret(mintUrl, expected.secret),
+        ).toEqual(expected);
+      }
+    },
+  );
+
   it('rolls back pending reconciliation and counter advancement on conflicting immutable data', async () => {
     await repositories.proofRepository.saveProofs(mintUrl, [
       { ...proof, state: 'pending' },

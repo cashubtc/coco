@@ -52,7 +52,7 @@ Repeating it preserves existing proof state and operation ownership. Each keyset
 a failure on a later keyset leaves earlier successful keysets committed.
 
 Newly discovered proofs that the mint reports as `PENDING` are stored as `pending`, excluded from
-spendable, reserved, and total balances. The proof watcher checks them live and after restart,
-releasing unowned proofs to `ready` on `UNSPENT` or marking them `spent` on `SPENT`. Repeating Restore
-also reconciles these proofs when watchers are disabled. Missing proofs already reported as `SPENT`
-are not imported.
+spendable, reserved, and total balances. Repeat Restore to reconcile them: unowned pending proofs
+become `ready` on `UNSPENT` or `spent` on `SPENT`. Until then, they remain unavailable. Automatic
+pending-proof watching is deferred to a follow-up. Missing proofs already reported as `SPENT` are
+not imported.

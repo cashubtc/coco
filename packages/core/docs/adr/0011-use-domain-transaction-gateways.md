@@ -99,4 +99,7 @@ Only actual committed insertions, state changes, and counter advances publish up
 state for Restore. This is an explicit proof-state format and public type extension; it does not
 change the single-scope transaction composition model.
 
+Initial pending-proof reconciliation happens through repeated Restore, inside its keyset transaction.
+Automatic pending-proof watching and its lifecycle changes are deferred to a separate migration.
+
 [Transaction Design](../../../../TRANSACTION_DESIGN.md) defines the implementation and review contract.

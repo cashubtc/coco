@@ -7,25 +7,21 @@ status: accepted
 Add a local `pending` proof state for newly restored proofs whose mint reports `PENDING`. Local
 `inflight` also represents outgoing Send tokens that a recipient can still claim while the mint
 reports `UNSPENT`; treating both cases identically would either strand restored proofs or make
-outstanding Send tokens spendable again. Restore and its watcher implement this distinction.
+outstanding Send tokens spendable again. Restore implements this distinction.
 
 The initial migration preserves existing operation-owned proof state and ownership. Releasing a
 restored pending proof after a fresh `UNSPENT` observation requires checking its current local state
 and ownership inside the applying transaction. The proof remains unavailable until that release or
 confirmation that it was spent.
 
-Extend the existing proof watcher to discover pending proofs both live and after restart. Apply
-fresh observations transactionally: eligible pending proofs remain pending on `PENDING`, become ready
-on `UNSPENT`, and become spent on `SPENT`. Re-running Restore provides the same reconciliation when
-background watchers are disabled. Current local state and operation ownership must be rechecked
-before applying an observation.
+Initially, re-running Restore provides reconciliation: eligible pending proofs remain pending on
+`PENDING`, become ready on `UNSPENT`, and become spent on `SPENT`. Current local state and operation
+ownership are rechecked inside the keyset transaction before applying an observation.
 
-Pending-proof event delivery is cancellable at watcher shutdown. Shutdown still drains active local
-transactions and subscription acquisition, but stops waiting for the active application listener and
-skips remaining listeners. An already-started listener may finish and may itself await shutdown.
-Committed proof state is retained even when its notification is cancelled. Readiness events recheck
-current proof state and watch identity/revision before cleanup, preserving newer Send subscriptions
-regardless of application-listener registration order.
+Automatic pending-proof watching is deferred to a separate change. That work must account for
+subscription acquisition, replacement subscriptions, overlapping notifications, and shutdown,
+including event publication through called services. This migration leaves the existing inflight
+watcher and EventBus lifecycle unchanged.
 
 Preserve existing balance semantics: pending proofs, like inflight proofs, contribute to none of
 `spendable`, `reserved`, or `total` until they become ready. Separate pending balance reporting is

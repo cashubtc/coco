@@ -27,20 +27,3 @@ export const applyRestoreResult = defineTransition(
     return { ...changes, counter };
   },
 );
-
-/** Re-read state and ownership before applying a fresh mint observation. */
-export const reconcileRestoredPending = defineTransition(
-  async (
-    tx,
-    input: {
-      mintUrl: string;
-      secret: string;
-      state: 'UNSPENT' | 'PENDING' | 'SPENT';
-    },
-  ) =>
-    tx.proofs.reconcilePending(
-      input.mintUrl,
-      input.secret,
-      input.state === 'UNSPENT' ? 'ready' : input.state === 'SPENT' ? 'spent' : 'pending',
-    ),
-);

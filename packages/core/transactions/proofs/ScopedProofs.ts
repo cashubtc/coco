@@ -56,12 +56,6 @@ export interface MeltSendProofsInput extends Omit<OwnedProofsInput, 'ownership'>
 /** Proof reads and mutations within an existing transaction; never opens or commits one. */
 export interface ScopedProofs extends ProofQueries {
   importRestored(mintUrl: string, proofs: CoreProof[]): Promise<RestoredProofChanges>;
-  /** Only unowned mint-held proofs can be released without an owning operation's decision. */
-  reconcilePending(
-    mintUrl: string,
-    secret: string,
-    state: 'ready' | 'pending' | 'spent',
-  ): Promise<CoreProof | undefined>;
   saveCreated(mintUrl: string, proofs: CoreProof[]): Promise<void>;
   selectAndReserve(input: SelectAndReserveProofsInput): Promise<{
     proofs: CoreProof[];
@@ -134,37 +128,22 @@ export class RepositoryScopedProofs implements ScopedProofs {
         ) {
           throw new ProofValidationError('Conflicting proof already exists for restored output');
         }
-        const changed = await this.reconcilePending(
-          mintUrl,
-          stored.secret,
-          incoming.state as 'ready' | 'pending' | 'spent',
-        );
-        if (changed) updated.push(changed);
+        // Only unowned mint-held proofs can be released without an operation's decision.
+        if (
+          stored.state === 'pending' &&
+          stored.usedByOperationId == null &&
+          stored.createdByOperationId == null &&
+          incoming.state !== 'pending'
+        ) {
+          await this.proofs.setProofState(mintUrl, [stored.secret], incoming.state);
+          updated.push({ ...stored, state: incoming.state });
+        }
       } else if (incoming.state !== 'spent') {
         inserted.push(incoming);
       }
     }
     if (inserted.length) await this.proofs.saveProofs(mintUrl, inserted);
     return { inserted, updated };
-  }
-
-  async reconcilePending(
-    mintUrl: string,
-    secret: string,
-    state: 'ready' | 'pending' | 'spent',
-  ): Promise<CoreProof | undefined> {
-    mintUrl = normalizeMintUrl(mintUrl);
-    const stored = await this.proofs.getProofBySecret(mintUrl, secret);
-    if (
-      !stored ||
-      stored.state !== 'pending' ||
-      stored.usedByOperationId != null ||
-      stored.createdByOperationId != null ||
-      state === 'pending'
-    )
-      return;
-    await this.proofs.setProofState(mintUrl, [secret], state);
-    return { ...stored, state };
   }
 
   async saveCreated(mintUrl: string, proofs: CoreProof[]): Promise<void> {

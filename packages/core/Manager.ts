@@ -300,7 +300,6 @@ export class Manager {
   private meltSettlementProcessor?: MeltSettlementProcessor;
   private legacyMintQuoteRepository: LegacyMintQuoteRepository;
   private quoteLifecycle: QuoteLifecycle;
-  private transactionRunner: RepositoryCoreTransactionRunner;
   private proofStateWatcher?: ProofStateWatcherService;
   private historyService: HistoryService;
   private seedService: SeedService;
@@ -364,7 +363,6 @@ export class Manager {
       for (const p of plugins) this.pluginHost.use(p);
     }
     const core = this.buildCoreServices(repositories, seedGetter);
-    this.transactionRunner = core.transactionRunner;
     this.mintService = core.mintService;
     this.walletService = core.walletService;
     this.proofService = core.proofService;
@@ -633,7 +631,6 @@ export class Manager {
       ? this.logger.child({ module: 'ProofStateWatcherService' })
       : this.logger;
     this.proofStateWatcher = new ProofStateWatcherService(
-      this.transactionRunner,
       this.subscriptions,
       this.mintService,
       this.proofService,
@@ -894,7 +891,6 @@ export class Manager {
     proofService: ProofService;
     tokenService: TokenService;
     walletRestoreService: WalletRestoreService;
-    transactionRunner: RepositoryCoreTransactionRunner;
     keyRingService: KeyRingService;
     legacyMintQuoteRepository: LegacyMintQuoteRepository;
     quoteLifecycle: QuoteLifecycle;
@@ -1148,7 +1144,6 @@ export class Manager {
       proofService,
       tokenService,
       walletRestoreService,
-      transactionRunner,
       keyRingService,
       legacyMintQuoteRepository,
       quoteLifecycle,

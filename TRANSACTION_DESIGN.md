@@ -237,16 +237,11 @@ to use `inflight` in this migration; moving them to `pending` is follow-up work 
 release rules. Once this Restore PR is opened, open a linked follow-up issue for that Melt migration.
 See [ADR-0012](packages/core/docs/adr/0012-distinguish-mint-held-pending-proofs.md).
 
-The existing proof watcher discovers pending proofs after insertion and after restart. Fresh
-observations leave eligible pending proofs pending, release them to ready on `UNSPENT`, or mark them
-spent on `SPENT`. Each application rechecks current local state and operation ownership in a short
-transaction. Re-running Restore also reconciles eligible pending records, independently of whether
-background watchers are enabled. Reconciliation must respect the watcher's shutdown guarantees.
-Shutdown cancels pending-proof event delivery, skips listeners that have not started, and drains
-active local transactions and subscription acquisition. An already-started application listener may
-finish after shutdown; it can await shutdown without making the watcher wait on itself. Cancellation
-does not roll back committed proof state. Readiness-event cleanup rechecks current proof state and
-the subscription's identity and watch-request revision so it cannot discard a newer Send watch.
+Re-running Restore reconciles eligible pending records: fresh observations leave them pending on
+`PENDING`, release them to ready on `UNSPENT`, or mark them spent on `SPENT`. Each application
+rechecks current local state and operation ownership inside the keyset transaction. Automatic
+pending-proof watching and its subscription lifecycle are deferred to a separate change; the
+existing proof watcher continues to handle inflight proofs only.
 
 Pending proofs are excluded from the existing `spendable`, `reserved`, and `total` balances, just as
 inflight proofs are. They contribute to those balances only after becoming ready. A separate pending

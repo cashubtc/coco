@@ -2681,22 +2681,21 @@ export async function runProofRepositoryContract(
   const { describe, it, expect } = runner;
 
   describe('ProofRepository contract', () => {
-    it('persists pending proofs, filters them by mint and unit, and excludes them from available proofs', async () => {
+    it('persists pending proofs across units and excludes them from available and inflight proofs', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {
         const proof = createDummyProof({ secret: 'pending', state: 'pending' });
         const other = createDummyProof({ secret: 'other', state: 'pending', unit: 'usd' });
         await repositories.proofRepository.saveProofs(proof.mintUrl, [proof, other]);
-        expect((await repositories.proofRepository.getPendingProofs()).length).toBe(2);
-        const pending = await repositories.proofRepository.getPendingProofs([proof.mintUrl], {
-          unit: 'sat',
-        });
-        expect(pending).toHaveLength(1);
-        expect(pending[0]!.secret).toBe(proof.secret);
-        expect(pending[0]!.state).toBe('pending');
-        expect(
-          await repositories.proofRepository.getPendingProofs(['https://absent.test']),
-        ).toHaveLength(0);
+        for (const expected of [proof, other]) {
+          const stored = await repositories.proofRepository.getProofBySecret(
+            expected.mintUrl,
+            expected.secret,
+          );
+          expect(stored?.state).toBe('pending');
+          expect(stored?.unit).toBe(expected.unit);
+          expect(stored?.amount.equals(expected.amount)).toBe(true);
+        }
         expect(await repositories.proofRepository.getAvailableProofs(proof.mintUrl)).toHaveLength(
           0,
         );
