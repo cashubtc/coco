@@ -22,6 +22,7 @@ import type { MeltQuote } from '../../models/MeltQuote.ts';
 import type { MintService } from '../../services/MintService.ts';
 import type { ProofService } from '../../services/ProofService.ts';
 import { ProofStateWatcherService } from '../../services/watchers/ProofStateWatcherService.ts';
+import { ProofValidationError } from '../../models/Error.ts';
 import { MeltHandlerProvider } from '../../infra/handlers/melt/MeltHandlerProvider.ts';
 import {
   meltQuoteFromBolt11Response,
@@ -738,7 +739,7 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
           quoteId: 'quote-expired',
         }),
       ),
-    ).rejects.toThrow('Cannot prepare expired melt quote');
+    ).rejects.toBeInstanceOf(ProofValidationError);
 
     expect(await repositories.meltOperationRepository.getById('expired')).toBeNull();
     expect(
@@ -1161,7 +1162,7 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
 
   it('persists a pre-swap result after its source inputs were observed spent', async () => {
     await saveReadyProof(16);
-    const prepared = await runner.run((tx) => tx.perform(prepareMelt, input()));
+    await runner.run((tx) => tx.perform(prepareMelt, input()));
     const authorization = await runner.run((tx) =>
       tx.perform(beginMeltExecution, { operationId: 'melt-1', now: 2_000 }),
     );

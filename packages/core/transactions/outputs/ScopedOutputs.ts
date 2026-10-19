@@ -46,6 +46,7 @@ export interface ScopedOutputs {
     keysetId: string,
     nextCounter: number,
   ): Promise<Counter | undefined>;
+  getCounter(mintUrl: string, keysetId: string): Promise<Counter | null>;
   assertActiveKeys(mintUrl: string, unit: string, activeKeys: MintKeys): Promise<void>;
   /** Calculate the proof amount whose spendable value covers `amount` after input fees. */
   includeInputFees(input: {
@@ -84,6 +85,10 @@ export class RepositoryScopedOutputs implements ScopedOutputs {
     if (nextCounter <= current) return;
     await this.counters.setCounter(mintUrl, keysetId, nextCounter);
     return { mintUrl, keysetId, counter: nextCounter };
+  }
+
+  getCounter(mintUrl: string, keysetId: string): Promise<Counter | null> {
+    return this.counters.getCounter(mintUrl, keysetId);
   }
 
   async assertActiveKeys(mintUrl: string, unit: string, activeKeys: MintKeys): Promise<void> {

@@ -41,19 +41,6 @@ async function createRepositories() {
   };
 }
 
-async function createMintSwapRepositories() {
-  const rawDatabase = new Database(':memory:');
-  const repositories = new Repositories({ database: rawDatabase, mintSwap: true });
-  await repositories.init();
-  return {
-    repositories,
-    rawDatabase,
-    dispose: async () => {
-      rawDatabase.close();
-    },
-  };
-}
-
 async function createSharedRepositories(useAlias = false) {
   const directory = await mkdtemp(join(tmpdir(), 'coco-sqlite3-keyring-'));
   const filename = join(directory, 'wallet.sqlite');
@@ -231,16 +218,15 @@ describe('synchronous SQLite contention', () => {
 
 runMintSwapPersistenceContract(
   {
-    createRepositories: createMintSwapRepositories,
-    createDisabledRepositories: createRepositories,
+    createRepositories,
   },
   { describe, it, expect },
 );
 
 describe('Mint Swap create error classification', () => {
   it('does not relabel an unrelated SQL failure when an identity already exists', async () => {
-    const { repositories, rawDatabase, dispose } = await createMintSwapRepositories();
-    const repository = repositories.mintSwap!.operationRepository;
+    const { repositories, rawDatabase, dispose } = await createRepositories();
+    const repository = repositories.mintSwap.operationRepository;
     const operation = createMintSwapFixtures('sql-create-failure').preparing;
     try {
       await repository.create(operation);
