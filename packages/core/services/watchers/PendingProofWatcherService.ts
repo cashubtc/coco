@@ -75,6 +75,16 @@ export class PendingProofWatcherService {
         ),
       ),
       this.bus.on('proofs:state-changed', ({ mintUrl, secrets }) => refresh(mintUrl, secrets)),
+      this.bus.on('proofs:deleted', ({ mintUrl, secrets }) => refresh(mintUrl, secrets)),
+      this.bus.on('proofs:wiped', ({ mintUrl }) =>
+        // Wipes carry no secrets; revalidate this mint's watches against current storage.
+        refresh(
+          mintUrl,
+          [...this.watches.values()]
+            .filter((watch) => watch.mintUrl === normalizeMintUrl(mintUrl))
+            .map((watch) => watch.secret),
+        ),
+      ),
       this.bus.on('mint:untrusted', ({ mintUrl }) =>
         this.track(async () => {
           if (session.signal.aborted) return;

@@ -105,6 +105,66 @@ describe('restored pending proof watcher', () => {
     );
   }
 
+  for (const removal of ['deleted', 'wiped'] as const) {
+    it.each([false, true])(
+      `releases ${removal} proofs (subscription acquisition pending: %s)`,
+      async (acquiring) => {
+        const f = await fixture();
+        const entered = deferred(),
+          release = deferred();
+        if (acquiring) {
+          const subscribe = f.subscribe.getMockImplementation()!;
+          f.subscribe.mockImplementation(async (...args) => {
+            const subscription = await subscribe(...args);
+            entered.resolve();
+            await release.promise;
+            return subscription;
+          });
+        }
+        const starting = f.watcher.start();
+        if (acquiring) await entered.promise;
+        else await starting;
+        try {
+          if (removal === 'deleted') {
+            await f.repos.proofRepository.deleteProofs(mintUrl, [proof.secret]);
+            await f.bus.emit('proofs:deleted', { mintUrl, secrets: [proof.secret] });
+          } else {
+            await f.repos.proofRepository.wipeProofsByKeysetId(mintUrl, proof.id);
+            await f.bus.emit('proofs:wiped', { mintUrl, keysetId: proof.id });
+          }
+        } finally {
+          release.resolve();
+          await starting;
+        }
+        expect(f.subscriptions[0]!.unsubscribe).toHaveBeenCalledTimes(1);
+        const run = f.runner.run.bind(f.runner);
+        let attempts = 0;
+        f.runner.run = async (work) => {
+          attempts++;
+          return run(work);
+        };
+        await f.notify('PENDING');
+        await f.notify('UNSPENT');
+        expect(attempts).toBe(0);
+        expect(await f.stored()).toBeNull();
+      },
+    );
+  }
+
+  it('keeps other keysets watched after a wipe', async () => {
+    const other = { ...proof, id: 'other-keyset', secret: 'other' };
+    const f = await fixture({ proofs: [proof, other] });
+    await f.watcher.start();
+    await f.repos.proofRepository.wipeProofsByKeysetId(mintUrl, proof.id);
+    await f.bus.emit('proofs:wiped', { mintUrl, keysetId: proof.id });
+    expect(f.subscriptions[0]!.unsubscribe).not.toHaveBeenCalled();
+    await f.notify('UNSPENT', 0, other.secret);
+    expect((await f.repos.proofRepository.getProofBySecret(mintUrl, other.secret))?.state).toBe(
+      'ready',
+    );
+    expect(f.subscriptions[0]!.unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
   it('does not start work when stopped immediately after start', async () => {
     const f = await fixture();
     await Promise.all([f.watcher.start(), f.watcher.stop()]);
