@@ -62,7 +62,7 @@ describe('Pause/Resume Integration Test', () => {
   it('should pause and resume subscriptions with real mint', async () => {
     // Verify initial state - watchers and processor should be running
     expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-    expect(manager['inflightProofWatcher']?.isRunning()).toBe(true);
+    expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
     expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
 
     // Add mint first (as trusted, since createMintQuote requires trust)
@@ -82,7 +82,7 @@ describe('Pause/Resume Integration Test', () => {
 
     // Verify watchers and processor are stopped
     expect(manager['mintOperationWatcher']).toBeUndefined();
-    expect(manager['inflightProofWatcher']).toBeUndefined();
+    expect(manager['proofStateWatcher']).toBeUndefined();
     expect(manager['mintOperationProcessor']).toBeUndefined();
 
     // Create another quote while paused (this should still work - just creating locally)
@@ -96,7 +96,7 @@ describe('Pause/Resume Integration Test', () => {
 
     // Verify watchers and processor are running again
     expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-    expect(manager['inflightProofWatcher']?.isRunning()).toBe(true);
+    expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
     expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
 
     console.log('Pause/Resume cycle completed successfully');
@@ -143,7 +143,7 @@ describe('Pause/Resume Integration Test', () => {
 
     // Everything should still be running
     expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-    expect(manager['inflightProofWatcher']?.isRunning()).toBe(true);
+    expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
     expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
 
     // Wait for processing
@@ -177,12 +177,12 @@ describe('Pause/Resume Integration Test', () => {
 
     // Verify initial state
     expect(manager['mintOperationWatcher']).toBeUndefined();
-    expect(manager['inflightProofWatcher']?.isRunning()).toBe(true);
+    expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
     expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
 
     // Pause
     await manager.pauseSubscriptions();
-    expect(manager['inflightProofWatcher']).toBeUndefined();
+    expect(manager['proofStateWatcher']).toBeUndefined();
     expect(manager['mintOperationProcessor']).toBeUndefined();
 
     // Resume
@@ -190,7 +190,7 @@ describe('Pause/Resume Integration Test', () => {
 
     // Verify configuration is respected - mintOperationWatcher should stay disabled
     expect(manager['mintOperationWatcher']).toBeUndefined();
-    expect(manager['inflightProofWatcher']?.isRunning()).toBe(true);
+    expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
     expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
   });
 });

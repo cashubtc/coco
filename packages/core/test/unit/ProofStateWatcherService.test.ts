@@ -2,7 +2,7 @@ import { Amount } from '@cashu/cashu-ts';
 import { describe, it, expect, beforeEach, mock, type Mock } from 'bun:test';
 import { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
-import { InflightProofWatcherService } from '../../services/watchers/InflightProofWatcherService.ts';
+import { ProofStateWatcherService } from '../../services/watchers/ProofStateWatcherService.ts';
 import type { SubscriptionManager } from '../../infra/SubscriptionManager.ts';
 import type { MintService } from '../../services/MintService.ts';
 import type { ProofService } from '../../services/ProofService.ts';
@@ -12,7 +12,7 @@ import type { SendOperationService } from '../../operations/send/SendOperationSe
 import { NullLogger } from '../../logging/NullLogger.ts';
 import { buildYHexMapsForSecrets } from '../../utils.ts';
 
-describe('InflightProofWatcherService', () => {
+describe('ProofStateWatcherService', () => {
   const mintUrlA = 'https://mint-a.test';
   const mintUrlB = 'https://mint-b.test';
 
@@ -44,7 +44,7 @@ describe('InflightProofWatcherService', () => {
       makeProof({ mintUrl: mintUrlA, secret: '' }),
     ];
     const getInflightProofs = mock(async () => inflightProofs);
-    const watchProof: Mock<InflightProofWatcherService['watchProof']> = mock(
+    const watchProof: Mock<ProofStateWatcherService['watchProof']> = mock(
       async (_mintUrl: string, _secrets: string[]) => {},
     );
 
@@ -59,7 +59,7 @@ describe('InflightProofWatcherService', () => {
       isTrustedMint: mock(async () => true),
     } as unknown as MintService;
 
-    const watcher = new InflightProofWatcherService(
+    const watcher = new ProofStateWatcherService(
       subs,
       mintService,
       proofService,
@@ -84,7 +84,7 @@ describe('InflightProofWatcherService', () => {
   it('skips bootstrapping inflight proofs when disabled', async () => {
     const checkInflightProofs = mock(async () => {});
     const getInflightProofs = mock(async () => []);
-    const watchProof: Mock<InflightProofWatcherService['watchProof']> = mock(
+    const watchProof: Mock<ProofStateWatcherService['watchProof']> = mock(
       async (_mintUrl: string, _secrets: string[]) => {},
     );
 
@@ -99,7 +99,7 @@ describe('InflightProofWatcherService', () => {
       isTrustedMint: mock(async () => true),
     } as unknown as MintService;
 
-    const watcher = new InflightProofWatcherService(
+    const watcher = new ProofStateWatcherService(
       subs,
       mintService,
       proofService,
@@ -144,7 +144,7 @@ describe('InflightProofWatcherService', () => {
       updatedAt: 0,
     }));
 
-    const watcher = new InflightProofWatcherService(
+    const watcher = new ProofStateWatcherService(
       {} as SubscriptionManager,
       {} as MintService,
       {} as ProofService,
@@ -199,7 +199,7 @@ describe('InflightProofWatcherService', () => {
       updatedAt: 0,
     }));
 
-    const watcher = new InflightProofWatcherService(
+    const watcher = new ProofStateWatcherService(
       {} as SubscriptionManager,
       {} as MintService,
       {} as ProofService,
@@ -264,7 +264,7 @@ describe('InflightProofWatcherService', () => {
       updatedAt: 0,
     }));
 
-    const watcher = new InflightProofWatcherService(
+    const watcher = new ProofStateWatcherService(
       {} as SubscriptionManager,
       {} as MintService,
       {} as ProofService,
@@ -318,7 +318,7 @@ describe('InflightProofWatcherService', () => {
       updatedAt: 0,
     }));
 
-    const watcher = new InflightProofWatcherService(
+    const watcher = new ProofStateWatcherService(
       {} as SubscriptionManager,
       {} as MintService,
       {} as ProofService,
@@ -390,7 +390,7 @@ describe('InflightProofWatcherService', () => {
       updatedAt: 0,
     }));
 
-    const watcher = new InflightProofWatcherService(
+    const watcher = new ProofStateWatcherService(
       { subscribe } as unknown as SubscriptionManager,
       {
         isTrustedMint: mock(async () => true),

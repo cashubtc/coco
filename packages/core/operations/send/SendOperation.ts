@@ -164,7 +164,7 @@ export interface FinalizedSendOperation extends SendOperationBase, PreparedData,
 
 /**
  * Rolling back state - rollback in progress, reclaim swap being executed.
- * This is a transient state used to prevent race conditions with InflightProofWatcherService.
+ * This is a transient state used to prevent race conditions with ProofStateWatcher.
  * Only used when rolling back from 'pending' state (which requires a reclaim swap).
  */
 export interface RollingBackSendOperation extends SendOperationBase, PreparedData, SendTokenData {

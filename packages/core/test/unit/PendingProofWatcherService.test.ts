@@ -9,7 +9,7 @@ import type { SubscriptionManager } from '../../infra/SubscriptionManager.ts';
 import type { Repositories } from '../../repositories';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 import { PendingProofWatcherService } from '../../services/watchers/PendingProofWatcherService.ts';
-import { InflightProofWatcherService } from '../../services/watchers/InflightProofWatcherService.ts';
+import { ProofStateWatcherService } from '../../services/watchers/ProofStateWatcherService.ts';
 import type { MintService } from '../../services/MintService.ts';
 import type { ProofService } from '../../services/ProofService.ts';
 import {
@@ -346,7 +346,7 @@ describe('restored pending proof watcher', () => {
     'preserves the Send watch created by a ready listener (registered first: %s)',
     async (before) => {
       const f = await fixture();
-      const inflight = new InflightProofWatcherService(
+      const inflight = new ProofStateWatcherService(
         f.subs,
         f.mint as unknown as MintService,
         {} as ProofService,

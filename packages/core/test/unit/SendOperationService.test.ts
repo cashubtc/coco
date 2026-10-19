@@ -14,7 +14,7 @@ import type {
 import { MintOperationError, NetworkError } from '../../models/Error.ts';
 import { makeOutputDataCreator } from '../fixtures/OutputDataCreator.ts';
 import { SendOpsApi } from '../../api/SendOpsApi.ts';
-import { InflightProofWatcherService } from '../../services/watchers/InflightProofWatcherService.ts';
+import { ProofStateWatcherService } from '../../services/watchers/ProofStateWatcherService.ts';
 import type { SubscriptionManager, SubscriptionCallback } from '../../infra/SubscriptionManager.ts';
 import type { MintService } from '../../services/MintService.ts';
 import type { ProofService } from '../../services/ProofService.ts';
@@ -285,7 +285,7 @@ describe('SendOperationService', () => {
         },
       };
       const setProofState = mock(async () => {});
-      const watcher = new InflightProofWatcherService(
+      const watcher = new ProofStateWatcherService(
         subscriptions as unknown as SubscriptionManager,
         { isTrustedMint: async () => true } as unknown as MintService,
         { setProofState } as unknown as ProofService,
