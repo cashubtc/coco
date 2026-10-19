@@ -13,7 +13,7 @@ import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories
 import type { MintService } from '../../services/MintService.ts';
 import type { ProofService } from '../../services/ProofService.ts';
 import { PendingProofWatcherService } from '../../services/watchers/PendingProofWatcherService.ts';
-import { ProofStateWatcherService } from '../../services/watchers/ProofStateWatcherService.ts';
+import { InflightProofWatcherService } from '../../services/watchers/InflightProofWatcherService.ts';
 import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
 import type { CoreProof } from '../../types.ts';
 import { buildYHexMapsForSecrets } from '../../utils.ts';
@@ -68,7 +68,7 @@ it('keeps Send subscribed when a repeated Restore readiness listener sends the r
     f.runner,
     f.bus,
   );
-  const inflight = new ProofStateWatcherService(
+  const inflight = new InflightProofWatcherService(
     subs,
     f.mint as unknown as MintService,
     {} as ProofService,

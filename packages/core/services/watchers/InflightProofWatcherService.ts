@@ -22,19 +22,19 @@ type ProofStateNotification = {
   witness?: unknown;
 };
 
-export interface ProofStateWatcherOptions {
+export interface InflightProofWatcherOptions {
   // Scan existing inflight proofs on start.
   watchExistingInflightOnStart?: boolean;
 }
 
-export class ProofStateWatcherService {
+export class InflightProofWatcherService {
   private readonly subs: SubscriptionManager;
   private readonly mintService: MintService;
   private readonly proofs: ProofService;
   private readonly proofRepository: ProofRepository;
   private readonly bus: EventBus<CoreEvents>;
   private readonly logger?: Logger;
-  private readonly options: ProofStateWatcherOptions;
+  private readonly options: InflightProofWatcherOptions;
   private sendOperationService?: SendOperationService;
 
   private running = false;
@@ -51,7 +51,7 @@ export class ProofStateWatcherService {
     proofRepository: ProofRepository,
     bus: EventBus<CoreEvents>,
     logger?: Logger,
-    options: ProofStateWatcherOptions = { watchExistingInflightOnStart: true },
+    options: InflightProofWatcherOptions = { watchExistingInflightOnStart: true },
   ) {
     this.subs = subs;
     this.mintService = mintService;
@@ -77,7 +77,7 @@ export class ProofStateWatcherService {
   async start(): Promise<void> {
     if (this.running) return;
     this.running = true;
-    this.logger?.info('ProofStateWatcherService started');
+    this.logger?.info('InflightProofWatcherService started');
 
     // React to proofs being marked inflight via state change
     this.offProofsStateChanged = this.bus.on(
@@ -219,7 +219,7 @@ export class ProofStateWatcherService {
       }
     }
     this.inflightByKey.clear();
-    this.logger?.info('ProofStateWatcherService stopped');
+    this.logger?.info('InflightProofWatcherService stopped');
   }
 
   async watchProof(mintUrl: string, secrets: string[]): Promise<void> {

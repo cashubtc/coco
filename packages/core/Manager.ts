@@ -23,7 +23,7 @@ import {
   WalletService,
   SeedService,
   WalletRestoreService,
-  ProofStateWatcherService,
+  InflightProofWatcherService,
   HistoryService,
   KeyRingService,
   PaymentRequestService,
@@ -304,7 +304,7 @@ export class Manager {
   private meltSettlementProcessor?: MeltSettlementProcessor;
   private legacyMintQuoteRepository: LegacyMintQuoteRepository;
   private quoteLifecycle: QuoteLifecycle;
-  private proofStateWatcher?: ProofStateWatcherService;
+  private inflightProofWatcher?: InflightProofWatcherService;
   private pendingProofWatcher?: PendingProofWatcherService;
   private transactionRunner: CoreTransactionRunner;
   private historyService: HistoryService;
@@ -633,11 +633,11 @@ export class Manager {
     watchExistingInflightOnStart?: boolean;
   }): Promise<void> {
     if (this.disposed) return;
-    if (this.proofStateWatcher?.isRunning()) return;
+    if (this.inflightProofWatcher?.isRunning()) return;
     const watcherLogger = this.logger.child
-      ? this.logger.child({ module: 'ProofStateWatcherService' })
+      ? this.logger.child({ module: 'InflightProofWatcherService' })
       : this.logger;
-    this.proofStateWatcher = new ProofStateWatcherService(
+    this.inflightProofWatcher = new InflightProofWatcherService(
       this.subscriptions,
       this.mintService,
       this.proofService,
@@ -646,23 +646,23 @@ export class Manager {
       watcherLogger,
       { watchExistingInflightOnStart: options?.watchExistingInflightOnStart ?? true },
     );
-    this.proofStateWatcher.setSendOperationService(this.sendOperationService);
+    this.inflightProofWatcher.setSendOperationService(this.sendOperationService);
     this.pendingProofWatcher = new PendingProofWatcherService(
       this.subscriptions,
       this.mintService,
       this.proofRepository,
       this.transactionRunner,
       this.eventBus,
-      watcherLogger,
+      this.getChildLogger('PendingProofWatcherService'),
     );
-    await Promise.all([this.proofStateWatcher.start(), this.pendingProofWatcher.start()]);
+    await Promise.all([this.inflightProofWatcher.start(), this.pendingProofWatcher.start()]);
   }
 
   async disableProofStateWatcher(): Promise<void> {
-    const inflight = this.proofStateWatcher;
+    const inflight = this.inflightProofWatcher;
     const pending = this.pendingProofWatcher;
     await Promise.all([inflight?.stop(), pending?.stop()]);
-    if (this.proofStateWatcher === inflight) this.proofStateWatcher = undefined;
+    if (this.inflightProofWatcher === inflight) this.inflightProofWatcher = undefined;
     if (this.pendingProofWatcher === pending) this.pendingProofWatcher = undefined;
   }
 

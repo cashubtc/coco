@@ -303,7 +303,7 @@ describe('initializeCoco', () => {
 
       // Verify watchers are running (they have isRunning methods)
       expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
+      expect(manager['inflightProofWatcher']?.isRunning()).toBe(true);
       expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
 
       // Verify processors are running
@@ -1058,7 +1058,7 @@ describe('initializeCoco', () => {
       });
 
       expect(manager['mintOperationWatcher']).toBeUndefined();
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
+      expect(manager['inflightProofWatcher']?.isRunning()).toBe(true);
       expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
       expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
       expect(manager['meltSettlementProcessor']?.isRunning()).toBe(true);
@@ -1074,7 +1074,7 @@ describe('initializeCoco', () => {
         },
       });
 
-      expect(manager['proofStateWatcher']).toBeUndefined();
+      expect(manager['inflightProofWatcher']).toBeUndefined();
       expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
       expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
 
@@ -1092,7 +1092,7 @@ describe('initializeCoco', () => {
 
       expect(manager['meltQuoteWatcher']).toBeUndefined();
       expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
+      expect(manager['inflightProofWatcher']?.isRunning()).toBe(true);
       expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
       expect(manager['meltSettlementProcessor']?.isRunning()).toBe(true);
 
@@ -1110,7 +1110,7 @@ describe('initializeCoco', () => {
       });
 
       expect(manager['mintOperationWatcher']).toBeUndefined();
-      expect(manager['proofStateWatcher']).toBeUndefined();
+      expect(manager['inflightProofWatcher']).toBeUndefined();
       expect(manager['meltQuoteWatcher']).toBeUndefined();
       expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
       expect(manager['meltSettlementProcessor']?.isRunning()).toBe(true);
@@ -1176,7 +1176,7 @@ describe('initializeCoco', () => {
 
       expect(manager['mintOperationProcessor']).toBeUndefined();
       expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
+      expect(manager['inflightProofWatcher']?.isRunning()).toBe(true);
 
       await manager.disableMintOperationWatcher();
       await manager.disableProofStateWatcher();
@@ -1193,7 +1193,7 @@ describe('initializeCoco', () => {
       expect(manager['meltSettlementProcessor']).toBeUndefined();
       expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
       expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
+      expect(manager['inflightProofWatcher']?.isRunning()).toBe(true);
       expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
 
       await manager.dispose();
@@ -1261,7 +1261,7 @@ describe('initializeCoco', () => {
       });
 
       expect(manager['mintOperationWatcher']).toBeUndefined();
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
+      expect(manager['inflightProofWatcher']?.isRunning()).toBe(true);
       expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
 
       await manager.disableProofStateWatcher();
@@ -1286,7 +1286,7 @@ describe('initializeCoco', () => {
       });
 
       expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-      expect(manager['proofStateWatcher']).toBeUndefined();
+      expect(manager['inflightProofWatcher']).toBeUndefined();
       expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
       expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
       expect(manager['meltSettlementProcessor']?.isRunning()).toBe(true);
@@ -1352,7 +1352,7 @@ describe('initializeCoco', () => {
       await manager.subscriptions.subscribe('https://mint.test', 'bolt11_mint_quote', ['quote-1']);
 
       expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
+      expect(manager['inflightProofWatcher']?.isRunning()).toBe(true);
       expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
       expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
       expect(manager['meltSettlementProcessor']?.isRunning()).toBe(true);
@@ -1363,7 +1363,7 @@ describe('initializeCoco', () => {
       await manager.dispose();
 
       expect(manager['mintOperationWatcher']).toBeUndefined();
-      expect(manager['proofStateWatcher']).toBeUndefined();
+      expect(manager['inflightProofWatcher']).toBeUndefined();
       expect(manager['meltQuoteWatcher']).toBeUndefined();
       expect(manager['mintOperationProcessor']).toBeUndefined();
       expect(manager['meltSettlementProcessor']).toBeUndefined();
@@ -1443,7 +1443,7 @@ describe('initializeCoco', () => {
       await manager.enableMeltSettlementProcessor();
 
       expect(manager['mintOperationWatcher']).toBeUndefined();
-      expect(manager['proofStateWatcher']).toBeUndefined();
+      expect(manager['inflightProofWatcher']).toBeUndefined();
       expect(manager['meltQuoteWatcher']).toBeUndefined();
       expect(manager['mintOperationProcessor']).toBeUndefined();
       expect(manager['meltSettlementProcessor']).toBeUndefined();
@@ -1458,7 +1458,7 @@ describe('initializeCoco', () => {
       });
 
       expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
+      expect(manager['inflightProofWatcher']?.isRunning()).toBe(true);
       expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
 
       await manager.dispose();
@@ -1484,7 +1484,7 @@ describe('initializeCoco', () => {
       });
 
       expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
+      expect(manager['inflightProofWatcher']?.isRunning()).toBe(true);
       expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
       expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
       expect(manager['meltSettlementProcessor']?.isRunning()).toBe(true);
@@ -1507,7 +1507,7 @@ describe('initializeCoco', () => {
       });
 
       expect(manager['mintOperationWatcher']).toBeUndefined();
-      expect(manager['proofStateWatcher']).toBeUndefined();
+      expect(manager['inflightProofWatcher']).toBeUndefined();
       expect(manager['meltQuoteWatcher']).toBeUndefined();
       expect(manager['mintOperationProcessor']).toBeUndefined();
       expect(manager['meltSettlementProcessor']).toBeUndefined();
@@ -1647,7 +1647,7 @@ describe('initializeCoco', () => {
       const manager = await initializeCoco(baseConfig);
 
       expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
+      expect(manager['inflightProofWatcher']?.isRunning()).toBe(true);
       expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
       expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
       expect(manager['meltSettlementProcessor']?.isRunning()).toBe(true);
@@ -1656,7 +1656,7 @@ describe('initializeCoco', () => {
 
       // After pause, watchers and processor are disabled (set to undefined)
       expect(manager['mintOperationWatcher']).toBeUndefined();
-      expect(manager['proofStateWatcher']).toBeUndefined();
+      expect(manager['inflightProofWatcher']).toBeUndefined();
       expect(manager['meltQuoteWatcher']).toBeUndefined();
       expect(manager['mintOperationProcessor']).toBeUndefined();
       expect(manager['meltSettlementProcessor']).toBeUndefined();
@@ -1669,7 +1669,7 @@ describe('initializeCoco', () => {
       await manager.resumeSubscriptions();
 
       expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
+      expect(manager['inflightProofWatcher']?.isRunning()).toBe(true);
       expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
       expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
       expect(manager['meltSettlementProcessor']?.isRunning()).toBe(true);
@@ -1686,7 +1686,7 @@ describe('initializeCoco', () => {
 
       // After pause, watchers and processor are disabled (set to undefined)
       expect(manager['mintOperationWatcher']).toBeUndefined();
-      expect(manager['proofStateWatcher']).toBeUndefined();
+      expect(manager['inflightProofWatcher']).toBeUndefined();
       expect(manager['meltQuoteWatcher']).toBeUndefined();
       expect(manager['mintOperationProcessor']).toBeUndefined();
       expect(manager['meltSettlementProcessor']).toBeUndefined();
@@ -1701,7 +1701,7 @@ describe('initializeCoco', () => {
       await manager.resumeSubscriptions();
 
       expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
+      expect(manager['inflightProofWatcher']?.isRunning()).toBe(true);
       expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
       expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
       expect(manager['meltSettlementProcessor']?.isRunning()).toBe(true);
@@ -1716,7 +1716,7 @@ describe('initializeCoco', () => {
       await manager.resumeSubscriptions();
 
       expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
+      expect(manager['inflightProofWatcher']?.isRunning()).toBe(true);
       expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
       expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
       expect(manager['meltSettlementProcessor']?.isRunning()).toBe(true);
@@ -1739,7 +1739,7 @@ describe('initializeCoco', () => {
       });
 
       expect(manager['mintOperationWatcher']).toBeUndefined();
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
+      expect(manager['inflightProofWatcher']?.isRunning()).toBe(true);
       expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
       expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
       expect(manager['meltSettlementProcessor']?.isRunning()).toBe(true);
@@ -1750,7 +1750,7 @@ describe('initializeCoco', () => {
       // mintOperationWatcher should remain undefined (was disabled)
       expect(manager['mintOperationWatcher']).toBeUndefined();
       // Others should be running again
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
+      expect(manager['inflightProofWatcher']?.isRunning()).toBe(true);
       expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
       expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
       expect(manager['meltSettlementProcessor']?.isRunning()).toBe(true);
@@ -1773,7 +1773,7 @@ describe('initializeCoco', () => {
       });
 
       expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
+      expect(manager['inflightProofWatcher']?.isRunning()).toBe(true);
       expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
       expect(manager['mintOperationProcessor']).toBeUndefined();
       expect(manager['meltSettlementProcessor']).toBeUndefined();
@@ -1783,7 +1783,7 @@ describe('initializeCoco', () => {
 
       // Watchers should be running again
       expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
+      expect(manager['inflightProofWatcher']?.isRunning()).toBe(true);
       expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
       // Processor should remain undefined (was disabled)
       expect(manager['mintOperationProcessor']).toBeUndefined();
@@ -1811,7 +1811,7 @@ describe('initializeCoco', () => {
 
       // All should remain undefined
       expect(manager['mintOperationWatcher']).toBeUndefined();
-      expect(manager['proofStateWatcher']).toBeUndefined();
+      expect(manager['inflightProofWatcher']).toBeUndefined();
       expect(manager['meltQuoteWatcher']).toBeUndefined();
       expect(manager['mintOperationProcessor']).toBeUndefined();
       expect(manager['meltSettlementProcessor']).toBeUndefined();
