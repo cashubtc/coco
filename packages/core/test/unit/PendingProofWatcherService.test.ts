@@ -56,21 +56,34 @@ async function fixture(options: { sqlite?: boolean; proofs?: CoreProof[] } = {})
   const subscriptions: {
     callback: (payload: Notification) => void | Promise<void>;
     unsubscribe: ReturnType<typeof mock>;
+    removeFilters: ReturnType<typeof mock>;
     filters: string[];
   }[] = [];
   const subscribe = mock(
     async (
       _mint: string,
-      _kind: string,
       filters: string[],
       callback: (payload: Notification) => void | Promise<void>,
     ) => {
       const unsubscribe = mock(async () => {});
-      subscriptions.push({ callback, unsubscribe, filters });
-      return { subId: String(subscriptions.length), unsubscribe };
+      const removeFilters = mock(async () => {});
+      subscriptions.push({ callback, unsubscribe, removeFilters, filters });
+      return {
+        subId: String(subscriptions.length),
+        unsubscribe,
+        removeFilters,
+      };
     },
   );
-  const subs = { subscribe } as unknown as SubscriptionManager;
+  const subs = {
+    subscribeProofStates: subscribe,
+    subscribe: (
+      _mint: string,
+      _kind: string,
+      filters: string[],
+      callback: (payload: Notification) => void | Promise<void>,
+    ) => subscribe(_mint, filters, callback),
+  } as unknown as SubscriptionManager;
   const mint = { isTrustedMint: mock(async () => true) };
   const runner: CoreTransactionRunner = new RepositoryCoreTransactionRunner(repos);
   const watcher = new PendingProofWatcherService(subs, mint, repos.proofRepository, runner, bus);
@@ -212,6 +225,19 @@ describe('restored pending proof watcher', () => {
     await f.repos.proofRepository.setCreatedByOperation(mintUrl, [proof.secret], 'melt');
     await f.notify('UNSPENT');
     expect((await f.stored())?.state).toBe('pending');
+    expect(f.subscriptions[0]!.unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('publishes a committed change even if partial subscription cleanup fails', async () => {
+    const f = await fixture({ proofs: [proof, { ...proof, secret: 'remaining' }] });
+    const published = mock(() => {});
+    f.bus.on('proofs:state-changed', published);
+    await f.watcher.start();
+    f.subscriptions[0]!.removeFilters.mockRejectedValueOnce(new Error('transport cleanup failed'));
+    await f.notify('UNSPENT');
+    expect((await f.stored())?.state).toBe('ready');
+    expect(published).toHaveBeenCalledTimes(1);
+    await f.watcher.stop();
     expect(f.subscriptions[0]!.unsubscribe).toHaveBeenCalledTimes(1);
   });
 

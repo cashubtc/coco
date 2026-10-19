@@ -653,7 +653,7 @@ export class Manager {
       this.proofRepository,
       this.transactionRunner,
       this.eventBus,
-      watcherLogger,
+      this.getChildLogger('PendingProofWatcherService'),
     );
     await Promise.all([this.proofStateWatcher.start(), this.pendingProofWatcher.start()]);
   }

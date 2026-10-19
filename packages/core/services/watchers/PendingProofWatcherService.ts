@@ -1,5 +1,8 @@
 import type { CoreEvents, EventBus } from '../../events';
-import type { SubscriptionManager, UnsubscribeHandler } from '../../infra/SubscriptionManager.ts';
+import type {
+  SubscriptionManager,
+  ProofStateSubscription,
+} from '../../infra/SubscriptionManager.ts';
 import type { Logger } from '../../logging/Logger.ts';
 import type { ProofRepository } from '../../repositories';
 import type { CoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
@@ -9,13 +12,14 @@ import type { MintService } from '../MintService';
 
 interface WatchGroup {
   keys: Set<string>;
-  unsubscribe?: UnsubscribeHandler;
+  subscription?: ProofStateSubscription;
 }
 
 interface Watch {
   key: string;
   mintUrl: string;
   secret: string;
+  filter: string;
   group: WatchGroup;
   tail: Promise<unknown>;
 }
@@ -145,11 +149,19 @@ export class PendingProofWatcherService {
       if (signal.aborted) return;
       const group: WatchGroup = { keys: new Set() };
       const watches: Watch[] = [];
+      const { secretByYHex, yHexBySecret } = buildYHexMapsForSecrets(batch.map((p) => p.secret));
       // Reserve each key before the first await, so stop/untrust/state events can invalidate it.
       for (const proof of batch) {
         const key = `${mintUrl}::${proof.secret}`;
         if (this.watches.has(key)) continue;
-        const watch: Watch = { key, mintUrl, secret: proof.secret, group, tail: Promise.resolve() };
+        const watch: Watch = {
+          key,
+          mintUrl,
+          secret: proof.secret,
+          filter: yHexBySecret.get(proof.secret)!,
+          group,
+          tail: Promise.resolve(),
+        };
         this.watches.set(key, watch);
         group.keys.add(key);
         watches.push(watch);
@@ -164,12 +176,10 @@ export class PendingProofWatcherService {
           for (const watch of watches) await this.remove(watch);
           continue;
         }
-        const { secretByYHex } = buildYHexMapsForSecrets(watches.map((w) => w.secret));
         const bySecret = new Map(watches.map((watch) => [watch.secret, watch]));
-        const subscription = await this.subs.subscribe<{ Y: string; state: string }>(
+        const subscription = await this.subs.subscribeProofStates<{ Y: string; state: string }>(
           mintUrl,
-          'proof_state',
-          [...secretByYHex.keys()],
+          watches.map((watch) => watch.filter),
           (payload) => {
             const secret = secretByYHex.get(payload.Y);
             const watch = secret && bySecret.get(secret);
@@ -206,9 +216,13 @@ export class PendingProofWatcherService {
             });
           },
         );
-        group.unsubscribe = subscription.unsubscribe;
-        // A state change or shutdown may have removed every key while subscribe was pending.
+        group.subscription = subscription;
+        // Remove interests invalidated while acquisition was pending, including partial groups.
         if (!group.keys.size) await this.release(group);
+        else
+          await subscription.removeFilters(
+            watches.filter((w) => !group.keys.has(w.key)).map((w) => w.filter),
+          );
         const current = await this.proofs.getProofsBySecrets(
           mintUrl,
           watches.map((w) => w.secret),
@@ -237,13 +251,21 @@ export class PendingProofWatcherService {
     this.watches.delete(watch.key);
     watch.group.keys.delete(watch.key);
     if (!watch.group.keys.size) await this.release(watch.group);
+    else {
+      try {
+        await watch.group.subscription?.removeFilters([watch.filter]);
+      } catch (error) {
+        // Subscription cleanup cannot suppress publication of an already committed proof change.
+        this.logger?.warn('Could not remove pending proof interest', { error });
+      }
+    }
   }
 
   private async release(group: WatchGroup): Promise<void> {
-    const unsubscribe = group.unsubscribe;
-    group.unsubscribe = undefined;
+    const subscription = group.subscription;
+    group.subscription = undefined;
     try {
-      await unsubscribe?.();
+      await subscription?.unsubscribe();
     } catch (error) {
       this.logger?.warn('Could not unsubscribe pending proofs', { error });
     }

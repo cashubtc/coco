@@ -65,6 +65,10 @@ pending proofs found by Restore. Pending proofs stay unavailable on `PENDING`, b
 resume, and watches newly restored proofs through the existing WebSocket/polling transport. Only
 trusted mints are watched; operation-owned proofs remain under their operation's authority.
 Repeated proof-state polling observations allow failed local writes to retry on the next poll.
+Resolved, deleted, and wiped proofs are removed from transport interest even when other proofs in
+the same group remain pending. Proof interests stay grouped to avoid consuming a WebSocket
+subscription slot per proof; removing part of a group replaces its subscription with the remaining
+filters while preserving other listeners.
 
 `watchExistingInflightOnStart` controls only the legacy inflight scan. Pending proofs are always
 scanned when the watcher is enabled. Disable `proofStateWatcher` to disable both; explicit Restore
