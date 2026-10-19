@@ -210,7 +210,6 @@ export async function mintSwapFixture(
     destinationQueries: repositories.mintOperationRepository,
     proofQueries: repositories.proofRepository,
     mintService: {
-      isTrustedMint: (url) => repositories.mintRepository.isTrustedMint(url),
       refreshAndCommitIfStale: async (mintUrl) => {
         assertRemote();
         return {

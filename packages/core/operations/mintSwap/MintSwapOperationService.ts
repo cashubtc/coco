@@ -22,11 +22,7 @@ import { OperationIdLock } from '../OperationIdLock.ts';
 import type { MintScopedLock } from '../MintScopedLock.ts';
 import { createKeyChain } from '../../proofs/KeysetSelection.ts';
 import { generateSubId, getSecretsFromSerializedOutputData } from '../../utils.ts';
-import {
-  OperationInProgressError,
-  ProofValidationError,
-  UnknownMintError,
-} from '../../models/Error.ts';
+import { OperationInProgressError, ProofValidationError } from '../../models/Error.ts';
 import { restoreOutputProofs } from '../../infra/ProofRestore.ts';
 import { unblindMeltChange } from '../melt/MeltChange.ts';
 import type {
@@ -75,7 +71,7 @@ export interface MintSwapOperationServiceDependencies {
   sourceQueries: Pick<MeltOperationRepository, 'getById'>;
   destinationQueries: Pick<MintOperationRepository, 'getById' | 'getByQuoteId'>;
   proofQueries: Pick<ProofRepository, 'getProofsBySecrets'>;
-  mintService: Pick<MintService, 'refreshAndCommitIfStale' | 'isTrustedMint'>;
+  mintService: Pick<MintService, 'refreshAndCommitIfStale'>;
   walletService: Pick<WalletService, 'getWalletWithActiveKeysetId'>;
   keyRingService: Pick<KeyRingService, 'allocateAndCommitMintQuoteKeyPair'>;
   quoteLifecycle: Pick<
@@ -400,8 +396,8 @@ export class MintSwapOperationService {
       if (inputs.length !== result.send.length)
         throw new MintSwapInvariantError('recovery_material', 'proofs_missing', 'source');
     }
-    if (!(await this.dependencies.mintService.isTrustedMint(source.mintUrl)))
-      throw new UnknownMintError('Mint Swap source is no longer trusted');
+    // The committed source authorization covers both pre-swap and payment. Later trust
+    // revocation must not interrupt that exact request or its recovery.
     // Pre-swap I/O may outlive either payment deadline. Read both canonical quotes together,
     // then sample the clock after the read completes, immediately before submitting payment.
     const paymentDeadline = await this.dependencies.transactionRunner.run(async (tx) => {
@@ -467,8 +463,6 @@ export class MintSwapOperationService {
       if (parent.state === 'prepared' || parent.state === 'source_pending') {
         const source = await this.dependencies.sourceQueries.getById(parent.sourceOperationId);
         if (source?.state === 'rolled_back') {
-          if (!(await this.dependencies.mintService.isTrustedMint(parent.sourceMintUrl)))
-            throw new UnknownMintError('Mint Swap source is no longer trusted');
           await this.dependencies.quoteLifecycle.refreshMeltQuote(
             parent.sourceMintUrl,
             'bolt11',
@@ -481,8 +475,8 @@ export class MintSwapOperationService {
         }
       }
       if (parent.state === 'source_pending') {
-        if (!(await this.dependencies.mintService.isTrustedMint(parent.sourceMintUrl)))
-          throw new UnknownMintError('Mint Swap source is no longer trusted');
+        // Payment may already have succeeded remotely even when its observation never committed.
+        // Recover the authorized child regardless of current trust; never redispatch payment here.
         const source = await this.dependencies.sourceQueries.getById(parent.sourceOperationId);
         if (source?.state === 'executing' || source?.state === 'pending') {
           const quote = await this.dependencies.quoteLifecycle.refreshMeltQuote(

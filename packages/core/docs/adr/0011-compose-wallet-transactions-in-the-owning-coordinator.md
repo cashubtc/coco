@@ -82,6 +82,10 @@ accepted and discarded on read. Funded Mint Swap redemption derives authority fr
 parent and exact child, quote, and proof evidence checked in the same scope as the Mint Quote
 Reservation. It can recover paid value after trust revocation; ordinary Mint execution retains its
 trust gate. Both paths compose the same reservation transition and exact-output settlement.
+Mint Swap checks both mints' trust during initial source authorization in the owning transaction.
+After that commit, trust revocation cannot interrupt the authorized request or its reconciliation:
+source payment may have succeeded before its observation was persisted. Recovery retains all exact
+request and ownership checks, never restores trust, and never blindly redispatches source payment.
 
 Send, Mint, Melt, the dormant Mint Swap coordinator, KeyRing, and mint metadata refresh use this model.
 Mint Swap composes exact child preparation, authorization, and settlement through the same runner

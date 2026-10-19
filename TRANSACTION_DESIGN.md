@@ -292,6 +292,12 @@ until canonical accounting and exact stored proofs agree. Contradictory parent a
 a valid committed child settlement and records needs_attention. Ambiguous outcomes retain recovery
 material and persist bounded retry scheduling.
 
+Initial source authorization checks both mints' trust inside the same transaction that records
+`source_pending`. Once committed, that authorization covers the exact pre-swap and source payment;
+later trust revocation does not interrupt dispatch, quote observation, settlement, or recovery. A
+source payment may already be PAID remotely while its canonical observation is still missing.
+Recovery observes the existing child without redispatching payment or restoring either mint's trust.
+
 After source payment, destination trust revocation does not prevent recovery of already-paid value.
 `beginMintSwapDestination` validates the funded parent, exact children and quotes, source settlement,
 and owned proof evidence in the same scope that reserves destination claimable value through
