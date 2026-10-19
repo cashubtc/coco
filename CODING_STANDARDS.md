@@ -39,7 +39,7 @@ dependencies and composition wiring to establish what a module can actually do.
 
 Before changing or reviewing Wallet persistence, operation coordination or storage adapters, read
 [TRANSACTION_DESIGN](TRANSACTION_DESIGN.md) and
-[ADR-0011](packages/core/docs/adr/0011-use-domain-transaction-gateways.md). Before handoff, complete every
+[ADR-0011](packages/core/docs/adr/0011-compose-wallet-transactions-in-the-owning-coordinator.md). Before handoff, complete every
 [Agent Review step](TRANSACTION_DESIGN.md#agent-review).
 
 ## Syntax and React conventions

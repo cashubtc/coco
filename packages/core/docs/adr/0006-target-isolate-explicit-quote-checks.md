@@ -12,6 +12,7 @@ Later polling turns check one quote at the configured cadence, preserving normal
 requeueing behavior.
 
 Network failures, authentication interruptions, rate limits, and server failures do not set the
-marker. A successful mint metadata refresh clears the affected mint's markers, and a new Coco
-Session starts without downgrade state. The policy has no recursive splitting, adaptive learned
-limit, internal retry loop, or persisted compatibility state.
+marker. An applied and committed mint metadata refresh clears the affected mint's markers;
+ignored older observations and timestamp ties do not publish a refresh event or clear the markers.
+A new Coco Session starts without downgrade state. The policy has no recursive splitting,
+adaptive learned limit, internal retry loop, or persisted compatibility state.

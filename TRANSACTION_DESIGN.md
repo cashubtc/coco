@@ -1,7 +1,7 @@
 # Transaction Design
 
 Status: accepted
-([ADR-0011](./packages/core/docs/adr/0011-use-domain-transaction-gateways.md))
+([ADR-0011](./packages/core/docs/adr/0011-compose-wallet-transactions-in-the-owning-coordinator.md))
 
 ## Purpose
 
