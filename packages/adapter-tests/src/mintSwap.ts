@@ -12,7 +12,6 @@ import type { ContractRunner, TransactionFactory } from './index.ts';
 
 export type MintSwapContractOptions<TRepositories extends Repositories = Repositories> = {
   createRepositories: TransactionFactory<TRepositories>;
-  createDisabledRepositories?: TransactionFactory<TRepositories>;
 };
 
 const CREATED_AT = 1_700_000_000_000;
@@ -22,7 +21,6 @@ function fixtures(
   createdAt = CREATED_AT,
 ): { [S in MintSwapOperationState]: Extract<MintSwapOperation, { state: S }> } {
   const base = {
-    schemaVersion: 1 as const,
     id,
     revision: 0,
     sourceMintUrl: 'https://source.example',
@@ -181,29 +179,19 @@ export function runMintSwapPersistenceContract(
   const { describe, it, expect } = runner;
 
   describe('Mint Swap persistence contract', () => {
-    it('exposes one opt-in bundle and remains absent by default', async () => {
-      const enabled = await options.createRepositories();
+    it('provides Mint Swap persistence by default in root and transaction scopes', async () => {
+      const { repositories, dispose } = await options.createRepositories();
       try {
-        expect(enabled.repositories.mintSwap !== undefined).toBe(true);
-        expect(enabled.repositories.mintSwap?.operationRepository !== undefined).toBe(true);
+        expect(repositories.mintSwap.operationRepository !== undefined).toBe(true);
+        await repositories.withTransaction(async (scope) => {
+          expect(scope.mintSwap.operationRepository !== undefined).toBe(true);
+        });
       } finally {
-        await enabled.dispose();
-      }
-
-      if (options.createDisabledRepositories) {
-        const disabled = await options.createDisabledRepositories();
-        try {
-          expect(disabled.repositories.mintSwap).toBe(undefined);
-          await disabled.repositories.withTransaction(async (scope) => {
-            expect(scope.mintSwap).toBe(undefined);
-          });
-        } finally {
-          await disabled.dispose();
-        }
+        await dispose();
       }
     });
 
-    it('round-trips every V1 state with lossless Amount values', async () => {
+    it('round-trips every state with lossless Amount values', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {
         const repository = requireMintSwap(repositories);
@@ -739,7 +727,6 @@ export function runMintSwapPersistenceContract(
 }
 
 function requireMintSwap(repositories: Repositories | RepositoryTransactionScope) {
-  if (!repositories.mintSwap) throw new Error('Mint Swap persistence is not enabled');
   return repositories.mintSwap.operationRepository;
 }
 

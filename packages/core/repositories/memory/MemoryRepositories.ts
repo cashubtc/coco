@@ -31,6 +31,8 @@ import { MemoryMintRepository } from './MemoryMintRepository';
 import { MemoryProofRepository } from './MemoryProofRepository';
 import { MemorySendOperationRepository } from './MemorySendOperationRepository';
 import { MemoryMintOperationRepository } from './MemoryMintOperationRepository';
+import { MemoryMintSwapOperationRepository } from './MemoryMintSwapOperationRepository';
+import type { MintSwapPersistence } from '../../operations/mintSwap/MintSwapOperationRepository';
 import { MemoryReceiveOperationRepository } from './MemoryReceiveOperationRepository';
 import {
   MemoryPaymentRequestReceiveAttemptRepository,
@@ -58,6 +60,7 @@ export class MemoryRepositories implements Repositories {
   receiveOperationRepository: ReceiveOperationRepository;
   paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
   paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
+  readonly mintSwap: MintSwapPersistence;
 
   private readonly state: MemoryRepositoryState;
   private transactionQueue: Promise<void> = Promise.resolve();
@@ -68,6 +71,9 @@ export class MemoryRepositories implements Repositories {
 
   constructor() {
     this.state = createMemoryRepositoryState();
+    this.mintSwap = {
+      operationRepository: this.wrapRootRepository(this.state.mintSwap.operationRepository),
+    };
     this.mintRepository = this.wrapRootRepository(this.state.mintRepository);
     this.keyRingRepository = this.wrapRootRepository(this.state.keyRingRepository);
     this.counterRepository = this.wrapRootRepository(this.state.counterRepository);
@@ -196,7 +202,11 @@ function createMemoryRepositoryState() {
   type StateOwnerConstraint = {
     [Key in keyof typeof state]: MemoryRepositoryStateOwner<(typeof state)[Key]>;
   };
-  return state satisfies StateOwnerConstraint;
+  const repositories = state satisfies StateOwnerConstraint;
+  return {
+    ...repositories,
+    mintSwap: { operationRepository: new MemoryMintSwapOperationRepository() },
+  };
 }
 
 function cloneMemoryRepositoryState(source: MemoryRepositoryState): MemoryRepositoryState {
@@ -210,6 +220,12 @@ function copyMemoryRepositoryState(
   source: MemoryRepositoryState,
 ): void {
   for (const key of Object.keys(source) as (keyof MemoryRepositoryState)[]) {
+    if (key === 'mintSwap') {
+      target.mintSwap.operationRepository[COPY_MEMORY_REPOSITORY_STATE](
+        source.mintSwap.operationRepository,
+      );
+      continue;
+    }
     // createMemoryRepositoryState statically enforces the protocol; this loop loses key correlation.
     const targetRepository = target[key] as MemoryRepositoryStateOwner<object>;
     targetRepository[COPY_MEMORY_REPOSITORY_STATE](source[key]);

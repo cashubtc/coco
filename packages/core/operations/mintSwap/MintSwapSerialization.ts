@@ -35,7 +35,7 @@ export function serializeMintSwapOperation(operation: MintSwapOperation): string
   return JSON.stringify(transformAmounts(parseMintSwapOperation(operation), true));
 }
 
-/** Hydrate an untrusted stored record through the authoritative V1 parser. */
+/** Hydrate an untrusted stored record through the authoritative parser. */
 export function deserializeMintSwapOperation(recordJson: string): MintSwapOperation {
   return parseMintSwapOperation(transformAmounts(JSON.parse(recordJson), false));
 }

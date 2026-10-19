@@ -7,7 +7,7 @@ import {
 import { mintSwapFixtures } from '../fixtures/MintSwap.ts';
 
 describe('Mint Swap persistence serialization', () => {
-  it('round-trips every V1 state and nested Amount as a decimal string', () => {
+  it('round-trips every state and nested Amount as a decimal string', () => {
     for (const operation of Object.values(mintSwapFixtures())) {
       const json = serializeMintSwapOperation(operation);
       expect(json).not.toContain('destinationAmount":{"');
@@ -31,6 +31,6 @@ describe('Mint Swap persistence serialization', () => {
   it('supports an omitted optional source debit cap and rejects malformed stored records', () => {
     const operation = { ...mintSwapFixtures().preparing, sourceDebitCap: undefined };
     expect(deserializeMintSwapOperation(serializeMintSwapOperation(operation))).toEqual(operation);
-    expect(() => deserializeMintSwapOperation('{"schemaVersion":2}')).toThrow(TypeError);
+    expect(() => deserializeMintSwapOperation('{}')).toThrow(TypeError);
   });
 });

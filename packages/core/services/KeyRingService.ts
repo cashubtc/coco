@@ -27,6 +27,11 @@ export class KeyRingService {
   }
 
   async generateMintQuoteKeyPair(): Promise<Keypair> {
+    return this.allocateAndCommitMintQuoteKeyPair();
+  }
+
+  /** Independent allocation retained even if later quote creation fails. */
+  async allocateAndCommitMintQuoteKeyPair(): Promise<Keypair> {
     return (await this.generateKeyPairForPurpose('nut20_mint_quote', {
       dumpSecretKey: true,
     })) as Keypair;

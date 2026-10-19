@@ -40,9 +40,7 @@ import {
 } from './repositories/PaymentRequestReceiveRepository.ts';
 import { IdbMintSwapOperationRepository } from './repositories/MintSwapOperationRepository.ts';
 
-export interface IndexedDbRepositoriesOptions extends IdbDbOptions {
-  mintSwap?: boolean;
-}
+export type IndexedDbRepositoriesOptions = IdbDbOptions;
 
 export class IndexedDbRepositories implements Repositories {
   readonly mintRepository: MintRepository;
@@ -61,14 +59,12 @@ export class IndexedDbRepositories implements Repositories {
   readonly receiveOperationRepository: ReceiveOperationRepository;
   readonly paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
   readonly paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
-  readonly mintSwap?: MintSwapPersistence;
+  readonly mintSwap: MintSwapPersistence;
   readonly db: IdbDb;
-  private readonly mintSwapEnabled: boolean;
   private initialized = false;
 
   constructor(options: IndexedDbRepositoriesOptions) {
     this.db = new IdbDb(options);
-    this.mintSwapEnabled = options.mintSwap ?? false;
     this.mintRepository = new IdbMintRepository(this.db);
     this.keyRingRepository = new IdbKeyRingRepository(this.db);
     this.counterRepository = new IdbCounterRepository(this.db);
@@ -89,9 +85,7 @@ export class IndexedDbRepositories implements Repositories {
     this.paymentRequestReceiveAttemptRepository = new IdbPaymentRequestReceiveAttemptRepository(
       this.db,
     );
-    this.mintSwap = this.mintSwapEnabled
-      ? { operationRepository: new IdbMintSwapOperationRepository(this.db) }
-      : undefined;
+    this.mintSwap = { operationRepository: new IdbMintSwapOperationRepository(this.db) };
   }
 
   async init(): Promise<void> {
@@ -133,9 +127,7 @@ export class IndexedDbRepositories implements Repositories {
         paymentRequestReceiveAttemptRepository: new IdbPaymentRequestReceiveAttemptRepository(
           scopedDb,
         ),
-        ...(this.mintSwapEnabled
-          ? { mintSwap: { operationRepository: new IdbMintSwapOperationRepository(scopedDb) } }
-          : {}),
+        mintSwap: { operationRepository: new IdbMintSwapOperationRepository(scopedDb) },
       };
       return fn(scopedRepositories);
     });

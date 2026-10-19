@@ -40,6 +40,7 @@ export interface AllocateBlankOutputsInput {
 
 /** Output allocation within an existing transaction; never opens or commits a transaction. */
 export interface ScopedOutputs {
+  getCounter(mintUrl: string, keysetId: string): Promise<Counter | null>;
   assertActiveKeys(mintUrl: string, unit: string, activeKeys: MintKeys): Promise<void>;
   /** Calculate the proof amount whose spendable value covers `amount` after input fees. */
   includeInputFees(input: {
@@ -61,6 +62,10 @@ export class RepositoryScopedOutputs implements ScopedOutputs {
     private readonly keysets: KeysetRepository,
     private readonly creator: OutputDataCreator = OutputData,
   ) {}
+
+  getCounter(mintUrl: string, keysetId: string): Promise<Counter | null> {
+    return this.counters.getCounter(mintUrl, keysetId);
+  }
 
   async assertActiveKeys(mintUrl: string, unit: string, activeKeys: MintKeys): Promise<void> {
     const keyset = await this.keysets.getKeysetById(mintUrl, activeKeys.id);

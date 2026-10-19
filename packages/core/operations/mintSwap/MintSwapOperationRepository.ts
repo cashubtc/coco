@@ -1,8 +1,7 @@
 import type { MintSwapOperation, MintSwapOperationState } from './MintSwapOperation.ts';
 
 /**
- * Feature-owned persistence; ordinary Coco repository bags do not require this capability.
- * #417 binds this same contract to the active Wallet transaction's physical handle and lifetime.
+ * Required Mint Swap persistence, bound to the active Wallet transaction's handle and lifetime.
  * A scoped handle must share parent/child/proof commit and rollback, including parent revisions.
  */
 export interface MintSwapPersistence {
