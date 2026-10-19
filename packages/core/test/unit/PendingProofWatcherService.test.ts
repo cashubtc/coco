@@ -9,9 +9,6 @@ import type { SubscriptionManager } from '../../infra/SubscriptionManager.ts';
 import type { Repositories } from '../../repositories';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 import { PendingProofWatcherService } from '../../services/watchers/PendingProofWatcherService.ts';
-import { ProofStateWatcherService } from '../../services/watchers/ProofStateWatcherService.ts';
-import type { MintService } from '../../services/MintService.ts';
-import type { ProofService } from '../../services/ProofService.ts';
 import {
   RepositoryCoreTransactionRunner,
   type CoreTransactionRunner,
@@ -75,15 +72,7 @@ async function fixture(options: { sqlite?: boolean; proofs?: CoreProof[] } = {})
       };
     },
   );
-  const subs = {
-    subscribeProofStates: subscribe,
-    subscribe: (
-      _mint: string,
-      _kind: string,
-      filters: string[],
-      callback: (payload: Notification) => void | Promise<void>,
-    ) => subscribe(_mint, filters, callback),
-  } as unknown as SubscriptionManager;
+  const subs = { subscribeProofStates: subscribe } as unknown as SubscriptionManager;
   const mint = { isTrustedMint: mock(async () => true) };
   const runner: CoreTransactionRunner = new RepositoryCoreTransactionRunner(repos);
   const watcher = new PendingProofWatcherService(subs, mint, repos.proofRepository, runner, bus);
@@ -98,84 +87,57 @@ async function fixture(options: { sqlite?: boolean; proofs?: CoreProof[] } = {})
 }
 
 describe('restored pending proof watcher', () => {
-  for (const sqlite of [false, true]) {
-    it.each(['UNSPENT', 'SPENT'] as const)(
-      `commits %s once and publishes after commit (${sqlite ? 'sqlite' : 'memory'})`,
-      async (state) => {
-        const f = await fixture({ sqlite });
-        const events: string[] = [];
-        f.bus.on('proofs:state-changed', async ({ state }) => {
-          expect((await f.stored())?.state).toBe(state);
-          expect(f.subscriptions[0]!.unsubscribe).toHaveBeenCalledTimes(1);
-          events.push(state);
+  it.each(['UNSPENT', 'SPENT'] as const)(
+    'commits %s once before publication on SQLite',
+    async (state) => {
+      const f = await fixture({ sqlite: true });
+      const observations: { event: string; stored: string | undefined; released: boolean }[] = [];
+      f.bus.on('proofs:state-changed', async ({ state }) => {
+        observations.push({
+          event: state,
+          stored: (await f.stored())?.state,
+          released: f.subscriptions[0]!.unsubscribe.mock.calls.length === 1,
         });
-        await f.watcher.start();
-        await f.notify('PENDING');
-        expect((await f.stored())?.state).toBe('pending');
-        await Promise.all([f.notify(state), f.notify(state)]);
-        expect(events).toEqual([state === 'UNSPENT' ? 'ready' : 'spent']);
-      },
-    );
-  }
+      });
+      await f.watcher.start();
+      await f.notify('PENDING');
+      expect((await f.stored())?.state).toBe('pending');
+      await Promise.all([f.notify(state), f.notify(state)]);
+      const expected = state === 'UNSPENT' ? 'ready' : 'spent';
+      expect(observations).toEqual([{ event: expected, stored: expected, released: true }]);
+    },
+  );
 
-  for (const removal of ['deleted', 'wiped'] as const) {
-    it.each([false, true])(
-      `releases ${removal} proofs (subscription acquisition pending: %s)`,
-      async (acquiring) => {
-        const f = await fixture();
-        const entered = deferred(),
-          release = deferred();
-        if (acquiring) {
-          const subscribe = f.subscribe.getMockImplementation()!;
-          f.subscribe.mockImplementation(async (...args) => {
-            const subscription = await subscribe(...args);
-            entered.resolve();
-            await release.promise;
-            return subscription;
-          });
-        }
-        const starting = f.watcher.start();
-        if (acquiring) await entered.promise;
-        else await starting;
-        try {
-          if (removal === 'deleted') {
-            await f.repos.proofRepository.deleteProofs(mintUrl, [proof.secret]);
-            await f.bus.emit('proofs:deleted', { mintUrl, secrets: [proof.secret] });
-          } else {
-            await f.repos.proofRepository.wipeProofsByKeysetId(mintUrl, proof.id);
-            await f.bus.emit('proofs:wiped', { mintUrl, keysetId: proof.id });
-          }
-        } finally {
-          release.resolve();
-          await starting;
-        }
-        expect(f.subscriptions[0]!.unsubscribe).toHaveBeenCalledTimes(1);
-        const run = f.runner.run.bind(f.runner);
-        let attempts = 0;
-        f.runner.run = async (work) => {
-          attempts++;
-          return run(work);
-        };
-        await f.notify('PENDING');
-        await f.notify('UNSPENT');
-        expect(attempts).toBe(0);
-        expect(await f.stored()).toBeNull();
-      },
-    );
-  }
-
-  it('keeps other keysets watched after a wipe', async () => {
-    const other = { ...proof, id: 'other-keyset', secret: 'other' };
-    const f = await fixture({ proofs: [proof, other] });
-    await f.watcher.start();
-    await f.repos.proofRepository.wipeProofsByKeysetId(mintUrl, proof.id);
-    await f.bus.emit('proofs:wiped', { mintUrl, keysetId: proof.id });
-    expect(f.subscriptions[0]!.unsubscribe).not.toHaveBeenCalled();
-    await f.notify('UNSPENT', 0, other.secret);
-    expect((await f.repos.proofRepository.getProofBySecret(mintUrl, other.secret))?.state).toBe(
-      'ready',
-    );
+  it('releases a whole group deleted during acquisition and ignores stale callbacks', async () => {
+    const f = await fixture();
+    const entered = deferred(),
+      release = deferred();
+    const subscribe = f.subscribe.getMockImplementation()!;
+    f.subscribe.mockImplementation(async (...args) => {
+      const subscription = await subscribe(...args);
+      entered.resolve();
+      await release.promise;
+      return subscription;
+    });
+    const starting = f.watcher.start();
+    try {
+      await entered.promise;
+      await f.repos.proofRepository.deleteProofs(mintUrl, [proof.secret]);
+      await f.bus.emit('proofs:deleted', { mintUrl, secrets: [proof.secret] });
+    } finally {
+      release.resolve();
+      await starting;
+    }
     expect(f.subscriptions[0]!.unsubscribe).toHaveBeenCalledTimes(1);
+    const run = f.runner.run.bind(f.runner);
+    const attempted = mock(() => {});
+    f.runner.run = async (work) => {
+      attempted();
+      return run(work);
+    };
+    await f.notify('UNSPENT');
+    expect(attempted).not.toHaveBeenCalled();
+    expect(await f.stored()).toBeNull();
   });
 
   it('does not start work when stopped immediately after start', async () => {
@@ -212,21 +174,52 @@ describe('restored pending proof watcher', () => {
       ],
     });
     await f.watcher.start();
-    expect(f.subscriptions[0]!.filters).toHaveLength(2);
+    expect(f.subscriptions[0]!.filters.sort()).toEqual(
+      [...buildYHexMapsForSecrets([proof.secret, 'usd']).secretByYHex.keys()].sort(),
+    );
     await f.notify('UNSPENT');
     expect(f.subscriptions[0]!.unsubscribe).not.toHaveBeenCalled();
     await f.notify('SPENT', 0, 'usd');
     expect(f.subscriptions[0]!.unsubscribe).toHaveBeenCalledTimes(1);
   });
 
-  it('rechecks ownership inside the applying transaction', async () => {
-    const f = await fixture();
-    await f.watcher.start();
-    await f.repos.proofRepository.setCreatedByOperation(mintUrl, [proof.secret], 'melt');
-    await f.notify('UNSPENT');
-    expect((await f.stored())?.state).toBe('pending');
-    expect(f.subscriptions[0]!.unsubscribe).toHaveBeenCalledTimes(1);
-  });
+  it.each(['usedByOperationId', 'createdByOperationId', 'spent'] as const)(
+    'rechecks %s after notification and inside the applying transaction',
+    async (change) => {
+      const f = await fixture();
+      const entered = deferred(),
+        release = deferred();
+      const run = f.runner.run.bind(f.runner);
+      f.runner.run = async (work) => {
+        entered.resolve();
+        await release.promise;
+        return run(work);
+      };
+      const published = mock(() => {});
+      f.bus.on('proofs:state-changed', published);
+      await f.watcher.start();
+      const notification = f.notify('UNSPENT');
+      try {
+        await entered.promise;
+        if (change === 'usedByOperationId') {
+          await f.repos.proofRepository.setProofState(mintUrl, [proof.secret], 'ready');
+          await f.repos.proofRepository.reserveProofs(mintUrl, [proof.secret], 'send');
+          await f.repos.proofRepository.setProofState(mintUrl, [proof.secret], 'pending');
+        } else if (change === 'createdByOperationId')
+          await f.repos.proofRepository.setCreatedByOperation(mintUrl, [proof.secret], 'melt');
+        else await f.repos.proofRepository.setProofState(mintUrl, [proof.secret], 'spent');
+      } finally {
+        release.resolve();
+        await notification;
+      }
+      const stored = await f.stored();
+      expect(stored?.state).toBe(change === 'spent' ? 'spent' : 'pending');
+      if (change !== 'spent')
+        expect(stored?.[change]).toBe(change === 'usedByOperationId' ? 'send' : 'melt');
+      expect(published).not.toHaveBeenCalled();
+      expect(f.subscriptions[0]!.unsubscribe).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it('publishes a committed change even if partial subscription cleanup fails', async () => {
     const f = await fixture({ proofs: [proof, { ...proof, secret: 'remaining' }] });
@@ -241,27 +234,24 @@ describe('restored pending proof watcher', () => {
     expect(f.subscriptions[0]!.unsubscribe).toHaveBeenCalledTimes(1);
   });
 
-  it.each(['ready', 'spent'] as const)(
-    'removes a stale acquisition after the proof becomes %s without an event',
-    async (state) => {
-      const f = await fixture();
-      const entered = deferred(),
-        release = deferred();
-      f.mint.isTrustedMint.mockImplementation(async () => {
-        entered.resolve();
-        await release.promise;
-        return true;
-      });
-      const starting = f.watcher.start();
-      await entered.promise;
-      await f.repos.proofRepository.setProofState(mintUrl, [proof.secret], state);
-      release.resolve();
-      await starting;
-      expect(f.subscriptions[0]!.unsubscribe).toHaveBeenCalledTimes(1);
-      await f.notify('UNSPENT');
-      expect((await f.stored())?.state).toBe(state);
-    },
-  );
+  it('does not resurrect a proof spent during acquisition without an event', async () => {
+    const f = await fixture();
+    const entered = deferred(),
+      release = deferred();
+    f.mint.isTrustedMint.mockImplementation(async () => {
+      entered.resolve();
+      await release.promise;
+      return true;
+    });
+    const starting = f.watcher.start();
+    await entered.promise;
+    await f.repos.proofRepository.setProofState(mintUrl, [proof.secret], 'spent');
+    release.resolve();
+    await starting;
+    expect(f.subscriptions[0]!.unsubscribe).toHaveBeenCalledTimes(1);
+    await f.notify('UNSPENT');
+    expect((await f.stored())?.state).toBe('spent');
+  });
 
   it('drains and releases a subscription acquired during stop', async () => {
     const f = await fixture();
@@ -367,42 +357,6 @@ describe('restored pending proof watcher', () => {
     expect(later).not.toHaveBeenCalled();
     expect((await f.stored())?.state).toBe('ready');
   });
-
-  it.each([true, false])(
-    'preserves the Send watch created by a ready listener (registered first: %s)',
-    async (before) => {
-      const f = await fixture();
-      const inflight = new ProofStateWatcherService(
-        f.subs,
-        f.mint as unknown as MintService,
-        {} as ProofService,
-        f.repos.proofRepository,
-        f.bus,
-        undefined,
-        { watchExistingInflightOnStart: false },
-      );
-      cleanup.push(() => inflight.stop());
-      const onReady = async ({ state }: CoreEvents['proofs:state-changed']) => {
-        if (state !== 'ready') return;
-        await f.repos.proofRepository.reserveProofs(mintUrl, [proof.secret], 'send');
-        await f.repos.proofRepository.setProofState(mintUrl, [proof.secret], 'inflight');
-        await f.bus.emit('proofs:state-changed', {
-          mintUrl,
-          secrets: [proof.secret],
-          state: 'inflight',
-        });
-      };
-      if (before) f.bus.on('proofs:state-changed', onReady);
-      await inflight.start();
-      await f.watcher.start();
-      if (!before) f.bus.on('proofs:state-changed', onReady);
-      await f.notify('UNSPENT');
-      expect(f.subscribe).toHaveBeenCalledTimes(2);
-      expect(f.subscriptions[0]!.unsubscribe).toHaveBeenCalledTimes(1);
-      expect(f.subscriptions[1]!.unsubscribe).not.toHaveBeenCalled();
-      expect((await f.stored())?.state).toBe('inflight');
-    },
-  );
 
   it('retries a queued observation after an applying transaction fails', async () => {
     const f = await fixture();

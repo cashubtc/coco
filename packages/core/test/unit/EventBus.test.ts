@@ -84,7 +84,7 @@ describe('EventBus', () => {
     expect(onError).toHaveBeenCalledWith({ event: 'message', payload: 'hello', error: failure });
     expect(sibling).not.toHaveBeenCalled();
   });
-  it('cancels future listeners without waiting for the running listener to finish', async () => {
+  it('lets a running listener finish but suppresses later and pre-aborted delivery', async () => {
     const bus = new EventBus<Events>();
     const controller = new AbortController();
     let release!: () => void;
@@ -92,16 +92,19 @@ describe('EventBus', () => {
       release = resolve;
     });
     const sibling = mock(() => {});
-    bus.on('message', async () => {
+    const first = mock(async () => {
       await blocked;
     });
+    bus.on('message', first);
     bus.on('message', sibling);
     const emission = bus.emit('message', 'hello', { signal: controller.signal });
     controller.abort();
     release();
     await emission;
+    expect(first).toHaveBeenCalledTimes(1);
     expect(sibling).not.toHaveBeenCalled();
     await bus.emit('message', 'hello', { signal: controller.signal });
+    expect(first).toHaveBeenCalledTimes(1);
     expect(sibling).not.toHaveBeenCalled();
   });
   it.each([

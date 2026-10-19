@@ -4,11 +4,9 @@ import { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
 import { HybridTransport } from '../../infra/HybridTransport.ts';
 import type { MintAdapter } from '../../infra/MintAdapter.ts';
-import type { RealTimeTransport } from '../../infra/RealTimeTransport.ts';
 import { SubscriptionManager } from '../../infra/SubscriptionManager.ts';
 import type { WsRequest } from '../../infra/SubscriptionProtocol.ts';
 import type { WebSocketLike } from '../../infra/WsConnectionManager.ts';
-import { NullLogger } from '../../logging/NullLogger.ts';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 import type { MintService } from '../../services/MintService.ts';
 import type { ProofService } from '../../services/ProofService.ts';
@@ -35,163 +33,22 @@ function deferred() {
   });
   return { promise, resolve };
 }
-async function fixture() {
+async function transportFixture(proofs: CoreProof[] = []) {
   const repos = new MemoryRepositories();
   await repos.init();
-  await repos.proofRepository.saveProofs(mintUrl, [proof]);
-  return {
+  await repos.proofRepository.saveProofs(mintUrl, [proof, ...proofs]);
+  const f = {
     repos,
     bus: new EventBus<CoreEvents>(),
     runner: new RepositoryCoreTransactionRunner(repos),
     mint: { isTrustedMint: async () => true },
   };
-}
-
-it('keeps Send subscribed when a repeated Restore readiness listener sends the released proof', async () => {
-  const f = await fixture();
-  const sent: WsRequest[] = [];
-  const transport: RealTimeTransport = {
-    on() {},
-    send(_mint, request) {
-      sent.push(request);
-    },
-    closeAll() {},
-    closeMint() {},
-    pause() {},
-    resume() {},
-  };
-  const subs = new SubscriptionManager(transport, {} as MintAdapter);
-  const pending = new PendingProofWatcherService(
-    subs,
-    f.mint,
-    f.repos.proofRepository,
-    f.runner,
-    f.bus,
-  );
-  const inflight = new ProofStateWatcherService(
-    subs,
-    f.mint as unknown as MintService,
-    {} as ProofService,
-    f.repos.proofRepository,
-    f.bus,
-    undefined,
-    { watchExistingInflightOnStart: false },
-  );
-  try {
-    f.bus.on('proofs:state-changed', async ({ state }) => {
-      if (state !== 'ready') return;
-      await f.repos.proofRepository.reserveProofs(mintUrl, [proof.secret], 'send');
-      await f.repos.proofRepository.setProofState(mintUrl, [proof.secret], 'inflight');
-      await f.bus.emit('proofs:state-changed', {
-        mintUrl,
-        secrets: [proof.secret],
-        state: 'inflight',
-      });
-    });
-    await inflight.start();
-    await pending.start();
-    await f.repos.proofRepository.setProofState(mintUrl, [proof.secret], 'ready');
-    await f.bus.emit('proofs:state-changed', { mintUrl, secrets: [proof.secret], state: 'ready' });
-    expect(sent.filter((request) => request.method === 'subscribe')).toHaveLength(1);
-    expect(sent.filter((request) => request.method === 'unsubscribe')).toHaveLength(0);
-    await inflight.stop();
-    expect(sent.filter((request) => request.method === 'unsubscribe')).toHaveLength(1);
-  } finally {
-    await pending.stop();
-    await inflight.stop();
-    subs.closeAll();
-  }
-});
-
-it('retries a failed local write when HybridTransport observes the same terminal proof state again', async () => {
-  const f = await fixture();
-  const messageHandlers = new Set<(event: { data: string }) => void>();
-  let subId = '';
-  const socket: WebSocketLike = {
-    send(data) {
-      const request = JSON.parse(data) as WsRequest;
-      if (request.method === 'subscribe') subId = request.params.subId;
-    },
-    close() {},
-    addEventListener(type, listener) {
-      if (type === 'message') messageHandlers.add(listener);
-    },
-    removeEventListener(type, listener) {
-      if (type === 'message') messageHandlers.delete(listener);
-    },
-  };
-  const mintAdapter = { checkProofStates: async () => [] } as unknown as MintAdapter;
-  const hybrid = new HybridTransport(() => socket, mintAdapter);
-  const subs = new SubscriptionManager(hybrid, mintAdapter);
-  const failed = deferred(),
-    committed = deferred();
-  const run = f.runner.run.bind(f.runner);
-  let attempts = 0;
-  f.runner.run = async (work) => {
-    attempts++;
-    if (attempts === 1) throw new Error('temporary database failure');
-    return run(work);
-  };
-  const logger = new NullLogger();
-  logger.warn = () => failed.resolve();
-  const watcher = new PendingProofWatcherService(
-    subs,
-    f.mint,
-    f.repos.proofRepository,
-    f.runner,
-    f.bus,
-    logger,
-  );
-  f.bus.on('proofs:state-changed', () => committed.resolve());
-  try {
-    await watcher.start();
-    // A socket send can wait for open. The subscription id is also present on the polling request.
-    if (!subId) {
-      // The manager's public return value supplies the shared id without a second transport request.
-      const shared = await subs.subscribe(mintUrl, 'proof_state', [
-        buildYHexMapsForSecrets([proof.secret]).yHexBySecret.get(proof.secret)!,
-      ]);
-      subId = shared.subId;
-    }
-    const data = JSON.stringify({
-      jsonrpc: '2.0',
-      method: 'subscribe',
-      params: {
-        subId,
-        payload: {
-          Y: buildYHexMapsForSecrets([proof.secret]).yHexBySecret.get(proof.secret)!,
-          state: 'UNSPENT',
-        },
-      },
-    });
-    for (const handler of messageHandlers) handler({ data });
-    await failed.promise;
-    expect((await f.repos.proofRepository.getProofBySecret(mintUrl, proof.secret))?.state).toBe(
-      'pending',
-    );
-    for (const handler of messageHandlers) handler({ data });
-    await committed.promise;
-    expect(attempts).toBe(2);
-    expect((await f.repos.proofRepository.getProofBySecret(mintUrl, proof.secret))?.state).toBe(
-      'ready',
-    );
-  } finally {
-    await watcher.stop();
-    subs.closeAll();
-  }
-});
-
-async function groupedTransportFixture(proofs: CoreProof[]) {
-  const f = await fixture();
-  await f.repos.proofRepository.saveProofs(mintUrl, proofs);
   const handlers = new Map<string, Set<(event: { data?: string }) => void>>();
   const active = new Map<string, string[]>();
-  const requests: WsRequest[] = [];
   let peak = 0;
   const socket: WebSocketLike = {
     send(data) {
       const request = JSON.parse(data) as WsRequest;
-      requests.push(request);
       if (request.method === 'subscribe' && 'filters' in request.params) {
         active.set(request.params.subId, request.params.filters);
         peak = Math.max(peak, active.size);
@@ -245,7 +102,7 @@ async function groupedTransportFixture(proofs: CoreProof[]) {
     watcher,
     subs,
     active,
-    requests,
+    adapter,
     open,
     notify,
     peak: () => peak,
@@ -255,8 +112,126 @@ async function groupedTransportFixture(proofs: CoreProof[]) {
   };
 }
 
+for (const source of ['restore event', 'mint observation'] as const) {
+  it.each([true, false])(
+    `keeps the Send proof watch after ${source} (ready listener first: %s)`,
+    async (first) => {
+      const f = await transportFixture();
+      const delivered = deferred(),
+        spent = deferred();
+      const inflight = new ProofStateWatcherService(
+        f.subs,
+        f.mint as unknown as MintService,
+        {
+          setProofState: async (mint, secrets, state) => {
+            await f.repos.proofRepository.setProofState(mint, secrets, state);
+            await f.bus.emit('proofs:state-changed', { mintUrl: mint, secrets, state });
+          },
+        } as ProofService,
+        f.repos.proofRepository,
+        f.bus,
+        undefined,
+        { watchExistingInflightOnStart: false },
+      );
+      const sendOnReady = async ({ state }: CoreEvents['proofs:state-changed']) => {
+        if (state !== 'ready') return;
+        await f.repos.proofRepository.reserveProofs(mintUrl, [proof.secret], 'send');
+        await f.repos.proofRepository.setProofState(mintUrl, [proof.secret], 'inflight');
+        await f.bus.emit('proofs:state-changed', {
+          mintUrl,
+          secrets: [proof.secret],
+          state: 'inflight',
+        });
+      };
+      try {
+        if (first) f.bus.on('proofs:state-changed', sendOnReady);
+        await inflight.start();
+        await f.watcher.start();
+        if (!first) f.bus.on('proofs:state-changed', sendOnReady);
+        f.bus.on('proofs:state-changed', ({ state }) => {
+          if (state === 'ready') delivered.resolve();
+          if (state === 'spent') spent.resolve();
+        });
+        f.open();
+        if (source === 'restore event') {
+          await f.repos.proofRepository.setProofState(mintUrl, [proof.secret], 'ready');
+          await f.bus.emit('proofs:state-changed', {
+            mintUrl,
+            secrets: [proof.secret],
+            state: 'ready',
+          });
+        } else f.notify(proof.secret, 'UNSPENT');
+        await delivered.promise;
+        expect((await f.repos.proofRepository.getProofBySecret(mintUrl, proof.secret))?.state).toBe(
+          'inflight',
+        );
+        expect([...f.active.values()]).toEqual([
+          [buildYHexMapsForSecrets([proof.secret]).yHexBySecret.get(proof.secret)!],
+        ]);
+        f.notify(proof.secret, 'SPENT');
+        await spent.promise;
+        expect((await f.repos.proofRepository.getProofBySecret(mintUrl, proof.secret))?.state).toBe(
+          'spent',
+        );
+      } finally {
+        await f.watcher.stop();
+        await inflight.stop();
+        f.subs.closeAll();
+      }
+    },
+  );
+}
+
+it('retries a rolled-back proof write from an identical later polling observation', async () => {
+  const f = await transportFixture();
+  const failed = deferred(),
+    retry = deferred(),
+    committed = deferred();
+  let polls = 0,
+    attempts = 0;
+  f.adapter.checkProofStates = async (_mint, filters) => {
+    if (++polls > 1) await retry.promise;
+    return filters.map((Y) => ({ Y, state: 'UNSPENT' as const, witness: null }));
+  };
+  const run = f.runner.run.bind(f.runner);
+  f.runner.run = async (work) => {
+    const attempt = ++attempts;
+    try {
+      return await run(async (tx) => {
+        const result = await work(tx);
+        if (attempt === 1) throw new Error('database failure after applying proof change');
+        return result;
+      });
+    } catch (error) {
+      failed.resolve();
+      throw error;
+    }
+  };
+  f.bus.on('proofs:state-changed', () => committed.resolve());
+  try {
+    await f.watcher.start();
+    f.open();
+    await failed.promise;
+    expect((await f.repos.proofRepository.getProofBySecret(mintUrl, proof.secret))?.state).toBe(
+      'pending',
+    );
+    retry.resolve();
+    await committed.promise;
+    expect(polls).toBeGreaterThanOrEqual(2);
+    expect(attempts).toBe(2);
+    expect((await f.repos.proofRepository.getProofBySecret(mintUrl, proof.secret))?.state).toBe(
+      'ready',
+    );
+    expect(f.active.size).toBe(0);
+  } finally {
+    retry.resolve();
+    await f.watcher.stop();
+    f.subs.closeAll();
+  }
+});
+
 it('uses one WebSocket subscription for 101 restored proofs and releases it on stop', async () => {
-  const f = await groupedTransportFixture(
+  const f = await transportFixture(
     Array.from({ length: 100 }, (_, i) => ({ ...proof, secret: `pending-${i}` })),
   );
   try {
@@ -278,7 +253,7 @@ for (const removal of ['resolved', 'deleted', 'wiped'] as const) {
     `removes ${removal} proof filters from WebSocket and polling during a partial group (acquiring: %s)`,
     async (acquiring) => {
       const other = { ...proof, secret: 'remaining', id: 'other-keyset' };
-      const f = await groupedTransportFixture([other]);
+      const f = await transportFixture([other]);
       const entered = deferred(),
         release = deferred(),
         committed = deferred(),
