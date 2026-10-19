@@ -10,7 +10,7 @@ export type EventBusOptions<Events extends { [K in keyof Events]: unknown }> = {
 };
 
 export type EmitOptions = {
-  /** Stop delivery before the next listener; an already-running listener may finish. */
+  /** Stop delivery before the next listener; running listeners retain normal error handling. */
   signal?: AbortSignal;
   throwOnError?: boolean;
   failFast?: boolean; // stops on the first listener error when throwOnError is enabled
@@ -59,11 +59,10 @@ export class EventBus<Events extends { [K in keyof Events]: unknown }> {
 
     const collectedErrors: unknown[] = [];
     for (const handler of handlers) {
-      if (options?.signal?.aborted) return;
+      if (options?.signal?.aborted) break;
       try {
         await handler(payload);
       } catch (error) {
-        if (options?.signal?.aborted) return;
         if (this.options.onError) await this.options.onError({ event, payload, error });
         if (effectiveThrow && options?.failFast) {
           throw error;
