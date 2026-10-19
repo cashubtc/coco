@@ -9,6 +9,7 @@ export interface ScopedMintMetadata {
   assertCanMint(mintUrl: string, method: string, unit: string, amount: Amount): Promise<void>;
   assertCanMelt(mintUrl: string, method: string, unit: string): Promise<void>;
   assertTrusted(mintUrl: string): Promise<void>;
+  assertSupports(mintUrl: string, nuts: readonly (7 | 9 | 20)[]): Promise<void>;
   applyObservation(observation: MintMetadataObservation): Promise<MintMetadataApplyResult>;
 }
 
@@ -55,6 +56,14 @@ export class RepositoryScopedMintMetadata implements ScopedMintMetadata {
   async assertTrusted(mintUrl: string): Promise<void> {
     if (!(await this.mints.isTrustedMint(mintUrl)))
       throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
+  }
+
+  async assertSupports(mintUrl: string, nuts: readonly (7 | 9 | 20)[]): Promise<void> {
+    const mint = await this.mints.findMintByUrl(mintUrl);
+    for (const nut of nuts) {
+      if (!mint?.mintInfo.nuts[nut]?.supported)
+        throw new ProofValidationError(`Mint does not support NUT-${nut}`);
+    }
   }
 
   async applyObservation(observation: MintMetadataObservation): Promise<MintMetadataApplyResult> {

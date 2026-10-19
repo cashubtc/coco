@@ -76,7 +76,22 @@ transactions. Their commits intentionally survive later caller failure. Only app
 observations publish events; older observations and timestamp ties retain the first committed
 snapshot. Coordinator dependencies remain acyclic.
 
-Send, Mint, KeyRing, and mint metadata refresh use this model. Other legacy workflows migrate separately.
+Mint Swap persistence is a required part of every Wallet transaction scope, independently of runtime
+activation. Adapter migrations govern persisted model changes. Funded Mint Swap redemption derives
+authority from the persisted paid parent and exact child, quote, and proof evidence checked in the
+same scope as the Mint Quote Reservation. It can recover paid value after trust revocation; ordinary
+Mint execution retains its trust gate. Both paths compose the same reservation transition and exact-output settlement.
+Mint Swap checks both mints' trust during initial source authorization in the owning transaction.
+After that commit, trust revocation cannot interrupt the authorized request or its reconciliation:
+source payment may have succeeded before its observation was persisted. Recovery retains all exact
+request and ownership checks, never restores trust, and never blindly redispatches source payment.
+
+Send, Mint, Melt, the dormant Mint Swap coordinator, KeyRing, and mint metadata refresh use this model.
+Mint Swap composes exact child preparation, authorization, and settlement through the same runner
+scope. It requires shared child locks in one effect-driving Coco Session; runtime activation and
+enforcement remain #419. Legacy Receive, legacy public Mint Swap orchestration, Payment Request Receive
+parent/attempt/child atomicity, and MintService add/forced-update/trust/delete paths remain for their
+owning migrations.
 Consistent fail-fast rejection of nested transactions remains follow-up work and must distinguish
 nesting from legitimate concurrent calls. There are no public API or persisted-format changes.
 

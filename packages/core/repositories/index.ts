@@ -403,8 +403,8 @@ interface RepositoriesBase {
   receiveOperationRepository: ReceiveOperationRepository;
   paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
   paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
-  /** Dormant feature capability, exposed only by adapters configured for Mint Swap persistence. */
-  mintSwap?: MintSwapPersistence;
+  /** Mint Swap persistence participates in every Wallet transaction; runtime activation is separate. */
+  mintSwap: MintSwapPersistence;
 }
 
 export interface Repositories extends RepositoriesBase {

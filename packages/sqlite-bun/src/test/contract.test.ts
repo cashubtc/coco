@@ -38,16 +38,6 @@ async function createRepositories() {
   };
 }
 
-async function createMintSwapRepositories() {
-  const rawDatabase = new Database(':memory:');
-  const repositories = new Repositories({ database: rawDatabase, mintSwap: true });
-  await repositories.init();
-  return {
-    repositories,
-    dispose: async () => rawDatabase.close(),
-  };
-}
-
 async function createSharedRepositories(useAlias = false) {
   const directory = await mkdtemp(join(tmpdir(), 'coco-sqlite-bun-keyring-'));
   const filename = join(directory, 'wallet.sqlite');
@@ -105,8 +95,7 @@ runKeypairAllocationContract(
 
 runMintSwapPersistenceContract(
   {
-    createRepositories: createMintSwapRepositories,
-    createDisabledRepositories: createRepositories,
+    createRepositories,
   },
   { describe, it, expect },
 );

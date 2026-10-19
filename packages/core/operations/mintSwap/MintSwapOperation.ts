@@ -86,7 +86,6 @@ export interface MintSwapAttention {
 }
 
 interface MintSwapBase {
-  schemaVersion: 1;
   id: string;
   /** Persistence assigns this metadata; commands never choose a revision. */
   readonly revision: number;
