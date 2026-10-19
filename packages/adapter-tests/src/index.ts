@@ -2681,6 +2681,35 @@ export async function runProofRepositoryContract(
   const { describe, it, expect } = runner;
 
   describe('ProofRepository contract', () => {
+    it('persists pending proofs across units and excludes them from available and inflight proofs', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const proof = createDummyProof({ secret: 'pending', state: 'pending' });
+        const other = createDummyProof({ secret: 'other', state: 'pending', unit: 'usd' });
+        await repositories.proofRepository.saveProofs(proof.mintUrl, [proof, other]);
+        for (const expected of [proof, other]) {
+          const stored = await repositories.proofRepository.getProofBySecret(
+            expected.mintUrl,
+            expected.secret,
+          );
+          expect(stored?.state).toBe('pending');
+          expect(stored?.unit).toBe(expected.unit);
+          expect(stored?.amount.equals(expected.amount)).toBe(true);
+        }
+        expect(await repositories.proofRepository.getAvailableProofs(proof.mintUrl)).toHaveLength(
+          0,
+        );
+        expect(await repositories.proofRepository.getInflightProofs()).toHaveLength(0);
+        await repositories.proofRepository.setProofState(proof.mintUrl, [proof.secret], 'ready');
+        const available = await repositories.proofRepository.getAvailableProofs(proof.mintUrl);
+        expect(available).toHaveLength(1);
+        expect(available[0]!.secret).toBe(proof.secret);
+        expect(available[0]!.state).toBe('ready');
+      } finally {
+        await dispose();
+      }
+    });
+
     it('preserves request material across metadata mutations and caller-owned snapshots', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {

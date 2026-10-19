@@ -206,6 +206,57 @@ failures are logged without turning a committed mutation into a failure or repla
 Delivery remains best effort: a crash between commit and publication can lose an event. An outbox
 is separate future work.
 
+## Restore and Legacy Counter Migration
+
+Restore uses the shared runner and transaction-scoped monotonic advancement, without an interim
+CounterService rewrite. Restore retains the greater of the committed Output Counter and the position after the last
+restored signature, using an authoritative counter read inside the transaction; position zero is a
+valid signed position.
+
+Restore applies each keyset in one coordinator-owned transaction: a branded Restore transition
+composes proof import through ScopedProofs with monotonic counter advancement through ScopedOutputs.
+Both changes commit together or roll back together. Neither the transition nor either capability
+opens another transaction. Remote scanning and proof-state checks happen before the transaction;
+authoritative local reads happen inside it, and events follow commit. Successful keysets remain
+committed if a later keyset fails. Restore reconstructs existing outputs and needs no new output plan
+or durable operation row.
+
+Restore is additive: insert missing eligible proofs, preserve matching existing records except for
+the pending reconciliation below, and leave local proofs absent from the scan untouched. Reject
+conflicting immutable data for the same proof inside the keyset transaction. Remove the legacy
+comparison between the local ready-proof count and the restored signature count; those counts do
+not establish completeness. A successful Restore means the discovered results were safely applied,
+not that every historical output was found. An empty discovery does not lower the counter or remove
+local proofs.
+
+Add a local `pending` proof state for newly restored proofs observed as remotely `PENDING`, so they
+remain unavailable without being confused with an unclaimed Send token. Existing operation-owned
+proofs retain their local state and ownership. A pending proof may become ready after a fresh
+`UNSPENT` observation only if authoritative local checks still permit release. Melt inputs continue
+to use `inflight` in this migration; moving them to `pending` is follow-up work with operation-owned
+release rules. Once this Restore PR is opened, open a linked follow-up issue for that Melt migration.
+See [ADR-0012](packages/core/docs/adr/0012-distinguish-mint-held-pending-proofs.md).
+
+Re-running Restore reconciles eligible pending records: fresh observations leave them pending on
+`PENDING`, release them to ready on `UNSPENT`, or mark them spent on `SPENT`. Each application
+rechecks current local state and operation ownership inside the keyset transaction. Automatic
+pending-proof watching and its subscription lifecycle are deferred to a separate change; the
+existing proof watcher continues to handle inflight proofs only.
+
+Pending proofs are excluded from the existing `spendable`, `reserved`, and `total` balances, just as
+inflight proofs are. They contribute to those balances only after becoming ready. A separate pending
+balance field and any change to total-balance semantics are outside this migration.
+
+Publish proof-saved, proof-state-changed, and counter-updated events only for actual committed
+changes. Matching existing proofs and unchanged counters produce no duplicate update events.
+Listener failures follow the existing post-commit publication policy and do not undo the Restore.
+
+Remove `CounterService.overwriteCounter()` when its Restore caller moves, without retaining a
+compatibility wrapper. Migrate the remaining legacy output allocators, including Receive and sweep,
+then remove CounterService and its plugin-facing entry once no callers remain. These removals
+intentionally change the plugin-facing service API. Restore's migration alone does not establish
+exclusive Output Allocation or prevent later stale writes by legacy counter callers.
+
 ## Mint Operations
 
 `MintOperationService` receives the shared runner, read-only operation/proof queries, seed loading,
@@ -432,7 +483,8 @@ Before completing a change involving Wallet persistence, operation coordination,
 
 ## Migration and Verification
 
-Send, Mint, Melt, and the dormant Mint Swap coordinator, KeyRing mutations, and mint metadata refresh use coordinator-owned transactions.
+Send, Mint, Melt, and Restore transitions, the dormant Mint Swap coordinator, KeyRing mutations,
+and mint metadata refresh use coordinator-owned transactions.
 Legacy Receive, legacy public Mint Swap orchestration, Payment Request Receive parent/attempt/child
 atomicity, and MintService add/forced-update/trust/delete paths remain for their owning migrations.
 Those migrations should reuse domain capabilities and branded transitions, rather than add domain gateways.
@@ -454,5 +506,6 @@ Behavior tests cover memory and persistent adapters:
 - Ambiguous remote outcomes retain exact recovery material and owned resources.
 
 Public APIs, package exports, persisted formats, and protocol behavior do not change with this
-internal composition model. `CoreTransaction`, `Transition`, their helpers, and the runner remain internal implementation details.
+internal composition model, except for the explicitly accepted proof-state addition and plugin-facing removals in the
+Restore and legacy counter migration above. `CoreTransaction`, `Transition`, their helpers, and the runner remain internal implementation details.
 They must not be exported from package entry points.

@@ -95,4 +95,26 @@ owning migrations.
 Consistent fail-fast rejection of nested transactions remains follow-up work and must distinguish
 nesting from legitimate concurrent calls. There are no public API or persisted-format changes.
 
+The Restore migration adds an explicit exception
+to the public API compatibility policy: move Restore directly to scoped monotonic advancement and
+remove plugin-facing `overwriteCounter()`, without first reworking CounterService. After migrating
+the remaining legacy output allocators, remove CounterService and its plugin-facing entry. Until
+those callers migrate, Restore's scoped advancement alone cannot prevent their stale counter writes
+or make their output derivation and later counter increment one atomic Output Allocation.
+
+Restore commits proof import and counter advancement together per keyset. Its coordinator opens
+one transaction, and a branded transition composes ScopedProofs and ScopedOutputs within that scope.
+Remote discovery precedes the transaction and events follow commit; no nested transaction or new
+durable operation is required. Failure in one keyset does not roll back previously committed keysets.
+Restore applies discoveries additively, preserving local records absent from the scan and rejecting
+conflicting proof identity. A proof-count comparison cannot establish completeness and is removed.
+Only actual committed insertions, state changes, and counter advances publish update events.
+
+[ADR-0012](0012-distinguish-mint-held-pending-proofs.md) additionally accepts a local `pending` proof
+state for Restore. This is an explicit proof-state format and public type extension; it does not
+change the single-scope transaction composition model.
+
+Initial pending-proof reconciliation happens through repeated Restore, inside its keyset transaction.
+Automatic pending-proof watching and its lifecycle changes are deferred to a separate migration.
+
 [Transaction Design](../../../../TRANSACTION_DESIGN.md) defines the implementation and review contract.

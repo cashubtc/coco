@@ -297,11 +297,12 @@ describe('StoredBalanceQueries', () => {
     });
   });
 
-  it('excludes inflight and spent proofs from every balance view', async () => {
+  it('excludes inflight, pending and spent proofs from every balance view', async () => {
     const queries = new StoredBalanceQueries(proofRepo, mints as any);
 
     await proofRepo.saveProofs(mintUrl, [
       makeProof({ secret: 'ready-1', amount: Amount.from(100), state: 'ready' }),
+      makeProof({ secret: 'pending-1', amount: Amount.from(9999), state: 'pending' }),
       makeProof({ secret: 'inflight-1', amount: Amount.from(9999), state: 'inflight' }),
       makeProof({ secret: 'spent-1', amount: Amount.from(9999), state: 'spent' }),
     ]);

@@ -10,7 +10,7 @@ import { normalizeUnit } from '@core/amounts.ts';
 import type { Counter } from '@core/models/Counter.ts';
 import { ProofValidationError } from '@core/models/Error.ts';
 import type { CounterRepository, KeysetRepository } from '@core/repositories';
-import { serializeOutputData, type SerializedOutputData } from '@core/utils.ts';
+import { normalizeMintUrl, serializeOutputData, type SerializedOutputData } from '@core/utils.ts';
 
 export interface AllocateOutputsInput {
   mintUrl: string;
@@ -40,6 +40,12 @@ export interface AllocateBlankOutputsInput {
 
 /** Output allocation within an existing transaction; never opens or commits a transaction. */
 export interface ScopedOutputs {
+  /** Preserve every previously consumed position, including positions without issued proofs. */
+  advanceCounterToAtLeast(
+    mintUrl: string,
+    keysetId: string,
+    nextCounter: number,
+  ): Promise<Counter | undefined>;
   getCounter(mintUrl: string, keysetId: string): Promise<Counter | null>;
   assertActiveKeys(mintUrl: string, unit: string, activeKeys: MintKeys): Promise<void>;
   /** Calculate the proof amount whose spendable value covers `amount` after input fees. */
@@ -62,6 +68,24 @@ export class RepositoryScopedOutputs implements ScopedOutputs {
     private readonly keysets: KeysetRepository,
     private readonly creator: OutputDataCreator = OutputData,
   ) {}
+
+  async advanceCounterToAtLeast(
+    mintUrl: string,
+    keysetId: string,
+    nextCounter: number,
+  ): Promise<Counter | undefined> {
+    mintUrl = normalizeMintUrl(mintUrl);
+    if (!Number.isSafeInteger(nextCounter) || nextCounter < 0) {
+      throw new ProofValidationError('Invalid restored output counter');
+    }
+    const current = (await this.counters.getCounter(mintUrl, keysetId))?.counter ?? 0;
+    if (!Number.isSafeInteger(current) || current < 0) {
+      throw new ProofValidationError('Invalid persisted output counter');
+    }
+    if (nextCounter <= current) return;
+    await this.counters.setCounter(mintUrl, keysetId, nextCounter);
+    return { mintUrl, keysetId, counter: nextCounter };
+  }
 
   getCounter(mintUrl: string, keysetId: string): Promise<Counter | null> {
     return this.counters.getCounter(mintUrl, keysetId);

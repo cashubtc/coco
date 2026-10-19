@@ -6,6 +6,12 @@ import type { ProofQueries } from '@core/proofs/ProofQueries.ts';
 import { selectProofInputs, calculateProofFee } from '@core/proofs/ProofSelection.ts';
 import type { KeysetRepository, ProofRepository } from '@core/repositories';
 import type { CoreProof } from '@core/types.ts';
+import { normalizeMintUrl } from '@core/utils.ts';
+
+export interface RestoredProofChanges {
+  inserted: CoreProof[];
+  updated: CoreProof[];
+}
 
 const MELT_SWAP_THRESHOLD_NUMERATOR = 11;
 const MELT_SWAP_THRESHOLD_DENOMINATOR = 10;
@@ -49,6 +55,7 @@ export interface MeltSendProofsInput extends Omit<OwnedProofsInput, 'ownership'>
 
 /** Proof reads and mutations within an existing transaction; never opens or commits one. */
 export interface ScopedProofs extends ProofQueries {
+  importRestored(mintUrl: string, proofs: CoreProof[]): Promise<RestoredProofChanges>;
   saveCreated(mintUrl: string, proofs: CoreProof[]): Promise<void>;
   selectAndReserve(input: SelectAndReserveProofsInput): Promise<{
     proofs: CoreProof[];
@@ -85,6 +92,59 @@ export class RepositoryScopedProofs implements ScopedProofs {
     private readonly keysets: KeysetRepository,
     private readonly selectProofs: SelectProofs = selectProofsRGLI,
   ) {}
+
+  async importRestored(mintUrl: string, proofs: CoreProof[]): Promise<RestoredProofChanges> {
+    mintUrl = normalizeMintUrl(mintUrl);
+    if (
+      new Set(proofs.map((proof) => proof.secret)).size !== proofs.length ||
+      proofs.some(
+        (proof) =>
+          proof.mintUrl !== mintUrl ||
+          !['ready', 'pending', 'spent'].includes(proof.state) ||
+          proof.usedByOperationId != null ||
+          proof.createdByOperationId != null,
+      )
+    ) {
+      throw new ProofValidationError('Invalid restored proof identities');
+    }
+    const existing = new Map(
+      (
+        await this.proofs.getProofsBySecrets(
+          mintUrl,
+          proofs.map((proof) => proof.secret),
+        )
+      ).map((proof) => [proof.secret, proof]),
+    );
+    const inserted: CoreProof[] = [];
+    const updated: CoreProof[] = [];
+    for (const incoming of proofs) {
+      const stored = existing.get(incoming.secret);
+      if (stored) {
+        if (
+          stored.id !== incoming.id ||
+          !stored.amount.equals(incoming.amount) ||
+          stored.C !== incoming.C ||
+          stored.unit !== incoming.unit
+        ) {
+          throw new ProofValidationError('Conflicting proof already exists for restored output');
+        }
+        // Only unowned mint-held proofs can be released without an operation's decision.
+        if (
+          stored.state === 'pending' &&
+          stored.usedByOperationId == null &&
+          stored.createdByOperationId == null &&
+          incoming.state !== 'pending'
+        ) {
+          await this.proofs.setProofState(mintUrl, [stored.secret], incoming.state);
+          updated.push({ ...stored, state: incoming.state });
+        }
+      } else if (incoming.state !== 'spent') {
+        inserted.push(incoming);
+      }
+    }
+    if (inserted.length) await this.proofs.saveProofs(mintUrl, inserted);
+    return { inserted, updated };
+  }
 
   async saveCreated(mintUrl: string, proofs: CoreProof[]): Promise<void> {
     const existing = await this.proofs.getProofsBySecrets(

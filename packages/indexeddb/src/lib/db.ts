@@ -151,7 +151,7 @@ export interface ProofRow {
   C: string;
   dleqJson?: string | null;
   witness?: string | null;
-  state: 'inflight' | 'ready' | 'spent';
+  state: 'inflight' | 'pending' | 'ready' | 'spent';
   createdAt: number;
   usedByOperationId?: string | null;
   createdByOperationId?: string | null;
