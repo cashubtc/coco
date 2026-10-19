@@ -276,8 +276,7 @@ counter changes roll back together. Their remote effects still occur only after 
 The internal `MintSwapOperationService` composes the existing Mint and Melt transitions with
 branded parent transitions. Required `tx.mintSwapOperations` is bound to the same adapter transaction
 in Memory and all persistent adapters without a feature option. The coordinator is not wired into
-Manager or public APIs. Adapter migrations own persisted format changes; legacy records containing
-`schemaVersion: 1` remain readable, with that obsolete field discarded by the parser.
+Manager or public APIs. Adapter migrations own persisted format changes.
 
 Locked destination quote creation follows an independent committed NUT-20 key allocation. Quote
 creation and metadata refresh intentionally survive later preparation failure. Parent preparation

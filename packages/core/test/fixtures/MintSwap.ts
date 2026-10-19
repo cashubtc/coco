@@ -12,7 +12,7 @@ export function initialMintSwapRetry(nextAttemptAt: number | null): MintSwapRetr
   return { attemptCount: 0, lastAttemptAt: null, nextAttemptAt, lastError: null };
 }
 
-/** One explicit, valid runtime fixture per V1 state. */
+/** One explicit, valid runtime fixture per state. */
 export function mintSwapFixtures(
   id = 'swap',
   createdAt = MINT_SWAP_CREATED_AT,

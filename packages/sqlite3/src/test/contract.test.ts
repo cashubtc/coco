@@ -223,45 +223,6 @@ runMintSwapPersistenceContract(
   { describe, it, expect },
 );
 
-describe('Mint Swap legacy record compatibility', () => {
-  it('reads and advances stored version-1 records without retaining schemaVersion', async () => {
-    const { repositories, rawDatabase, dispose } = await createRepositories();
-    const records = createMintSwapFixtures('legacy-record');
-    try {
-      const repository = repositories.mintSwap.operationRepository;
-      await repository.create(records.preparing);
-      rawDatabase
-        .prepare('UPDATE coco_cashu_mint_swap_operations SET recordJson = ? WHERE id = ?')
-        .run(JSON.stringify({ ...records.preparing, schemaVersion: 1 }), records.preparing.id);
-      expect(await repository.getById(records.preparing.id)).toEqual(records.preparing);
-      expect(await repository.listActive()).toEqual([records.preparing]);
-      expect(await repository.listDue(records.preparing.updatedAt, 10)).toEqual([
-        records.preparing,
-      ]);
-      await repositories.withTransaction(async (scope) => {
-        expect(
-          await scope.mintSwap.operationRepository.transition({
-            operationId: records.preparing.id,
-            expectedRevision: 0,
-            expectedState: 'preparing',
-            next: records.prepared,
-          }),
-        ).toBe(true);
-      });
-      expect(await repository.getById(records.preparing.id)).toEqual({
-        ...records.prepared,
-        revision: 1,
-      });
-      const row = rawDatabase
-        .prepare('SELECT recordJson FROM coco_cashu_mint_swap_operations WHERE id = ?')
-        .get(records.preparing.id) as { recordJson: string };
-      expect(JSON.parse(row.recordJson)).not.toHaveProperty('schemaVersion');
-    } finally {
-      await dispose();
-    }
-  });
-});
-
 describe('Mint Swap create error classification', () => {
   it('does not relabel an unrelated SQL failure when an identity already exists', async () => {
     const { repositories, rawDatabase, dispose } = await createRepositories();

@@ -191,7 +191,7 @@ export function runMintSwapPersistenceContract(
       }
     });
 
-    it('round-trips every V1 state with lossless Amount values', async () => {
+    it('round-trips every state with lossless Amount values', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {
         const repository = requireMintSwap(repositories);

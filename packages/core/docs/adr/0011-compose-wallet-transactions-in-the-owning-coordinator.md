@@ -77,11 +77,10 @@ observations publish events; older observations and timestamp ties retain the fi
 snapshot. Coordinator dependencies remain acyclic.
 
 Mint Swap persistence is a required part of every Wallet transaction scope, independently of runtime
-activation. Adapter migrations govern persisted model changes; legacy per-record version metadata is
-accepted and discarded on read. Funded Mint Swap redemption derives authority from the persisted paid
-parent and exact child, quote, and proof evidence checked in the same scope as the Mint Quote
-Reservation. It can recover paid value after trust revocation; ordinary Mint execution retains its
-trust gate. Both paths compose the same reservation transition and exact-output settlement.
+activation. Adapter migrations govern persisted model changes. Funded Mint Swap redemption derives
+authority from the persisted paid parent and exact child, quote, and proof evidence checked in the
+same scope as the Mint Quote Reservation. It can recover paid value after trust revocation; ordinary
+Mint execution retains its trust gate. Both paths compose the same reservation transition and exact-output settlement.
 Mint Swap checks both mints' trust during initial source authorization in the owning transaction.
 After that commit, trust revocation cannot interrupt the authorized request or its reconciliation:
 source payment may have succeeded before its observation was persisted. Recovery retains all exact
