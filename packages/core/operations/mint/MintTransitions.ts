@@ -111,7 +111,7 @@ export const prepareMint = defineTransition<PrepareMintInput, PrepareMintResult>
   },
 );
 
-/** Claimable balance and the executing reservation are read/written under the same adapter lock. */
+/** Ordinary issuance still requires current trust before reserving paid quote value. */
 export const beginMintExecution = defineTransition<
   BeginMintExecutionInput,
   BeginMintExecutionResult
@@ -119,6 +119,20 @@ export const beginMintExecution = defineTransition<
   const operation = await requireOperation(tx, input.operationId);
   if (operation.state !== 'pending') return { operation, changed: false };
   await tx.mintMetadata.assertTrusted(operation.mintUrl);
+  return tx.perform(reserveMintQuoteForExecution, input);
+});
+
+/**
+ * Reserve claimable value for the exact persisted output plan in the caller's scope.
+ * The caller must authorize issuance in that scope: ordinary execution requires trust;
+ * a funded Mint Swap validates its paid source and exact destination child instead.
+ */
+export const reserveMintQuoteForExecution = defineTransition<
+  BeginMintExecutionInput,
+  BeginMintExecutionResult
+>(async (tx, input) => {
+  const operation = await requireOperation(tx, input.operationId);
+  if (operation.state !== 'pending') return { operation, changed: false };
   const quote = await tx.mintQuotes.getMintQuote(
     operation.mintUrl,
     operation.method,

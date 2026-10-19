@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    "lib": ["ESNext"],
+    "lib": ["ESNext", "DOM"],
     "target": "ESNext",
     "module": "Preserve",
     "moduleDetection": "force",
@@ -21,6 +21,7 @@
     "noPropertyAccessFromIndexSignature": false,
     "baseUrl": ".",
     "paths": {
+      "@core/*": ["../core/*"],
       "@cashu/coco-sql-storage": ["../sql-storage/src/index.ts"],
       "@cashu/coco-sql-storage/test": ["../sql-storage/src/test/index.ts"]
     }

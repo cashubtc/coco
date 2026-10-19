@@ -32,7 +32,10 @@ export function selectProofInputs(
   throw new ProofValidationError('Send amount is not sufficient after fees');
 }
 
-export function calculateProofFee(proofs: readonly Proof[], keyChain: KeyChain): Amount {
+export function calculateProofFee(
+  proofs: readonly Pick<Proof, 'id'>[],
+  keyChain: KeyChain,
+): Amount {
   const ppk = proofs.reduce((sum, proof) => {
     let fee: number;
     try {

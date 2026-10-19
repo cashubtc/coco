@@ -25,7 +25,7 @@ function stamp(next: MintSwapOperation, revision = 1): MintSwapOperation {
   return { ...next, revision };
 }
 
-describe('Mint Swap V1 persisted state shapes', () => {
+describe('Mint Swap persisted state shapes', () => {
   for (const state of STATES) {
     it(`round-trips ${state} with reconstructed Amount values`, () => {
       const fixture = mintSwapFixtures()[state];
@@ -105,9 +105,6 @@ describe('Mint Swap V1 persisted state shapes', () => {
 
 describe('Mint Swap identity and serialization boundaries', () => {
   const invalid: Array<[string, unknown]> = [
-    ['schemaVersion', 0],
-    ['schemaVersion', 2],
-    ['schemaVersion', '1'],
     ['state', 'issuing'],
     ['unit', 'msat'],
     ['unit', 'SAT'],
