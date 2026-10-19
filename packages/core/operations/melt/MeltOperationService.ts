@@ -211,7 +211,7 @@ export class MeltOperationService {
       await this.publishProofState(
         executing.mintUrl,
         authorization.inputProofs.map((proof) => proof.secret),
-        'inflight',
+        'pending',
       );
       let meltInputs = authorization.inputProofs;
       try {
@@ -804,7 +804,7 @@ export class MeltOperationService {
   private async publishProofState(
     mintUrl: string,
     secrets: string[],
-    state: 'inflight' | 'ready' | 'spent',
+    state: 'pending' | 'ready' | 'spent',
   ): Promise<void> {
     if (secrets.length === 0) return;
     await this.publishCommittedEvent('proofs:state-changed', { mintUrl, secrets, state });

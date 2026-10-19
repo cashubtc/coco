@@ -76,8 +76,12 @@ export interface ScopedProofs extends ProofQueries {
    */
   getMeltSendProofs(input: MeltSendProofsInput): Promise<CoreProof[]>;
   markInflight(input: Omit<OwnedProofsInput, 'state'>): Promise<void>;
+  /** Mark mint-held inputs before the owning operation submits its exact request. */
+  markPending(input: Omit<OwnedProofsInput, 'state' | 'ownership'>): Promise<void>;
   /** The owning transition must establish that these inputs were never submitted or shared. */
   releaseUnsubmitted(input: Omit<OwnedProofsInput, 'state' | 'ownership'>): Promise<void>;
+  /** The Melt transition must establish non-payment; inflight supports persisted legacy inputs. */
+  releaseMeltUnsubmitted(input: Omit<OwnedProofsInput, 'state' | 'ownership'>): Promise<void>;
   settleSpend(input: OwnedProofsInput & { outputs: CoreProof[] }): Promise<void>;
   recordSpent(input: Omit<OwnedProofsInput, 'state'>): Promise<void>;
   recordMeltSendSpent(input: Omit<MeltSendProofsInput, 'state'>): Promise<void>;
@@ -326,6 +330,19 @@ export class RepositoryScopedProofs implements ScopedProofs {
     await this.proofs.releaseProofs(input.mintUrl, input.secrets);
   }
 
+  async markPending(input: Omit<OwnedProofsInput, 'state' | 'ownership'>): Promise<void> {
+    await this.getOwned({ ...input, state: 'ready' });
+    await this.proofs.setProofState(input.mintUrl, input.secrets, 'pending');
+  }
+
+  async releaseMeltUnsubmitted(
+    input: Omit<OwnedProofsInput, 'state' | 'ownership'>,
+  ): Promise<void> {
+    await this.getOwned({ ...input, state: ['ready', 'pending', 'inflight'] });
+    await this.proofs.setProofState(input.mintUrl, input.secrets, 'ready');
+    await this.proofs.releaseProofs(input.mintUrl, input.secrets);
+  }
+
   async settleSpend(input: OwnedProofsInput & { outputs: CoreProof[] }): Promise<void> {
     await this.getOwned(input);
     for (const proof of input.outputs) {
@@ -346,12 +363,12 @@ export class RepositoryScopedProofs implements ScopedProofs {
   }
 
   async recordMeltSendSpent(input: Omit<MeltSendProofsInput, 'state'>): Promise<void> {
-    await this.getMeltSendProofs({ ...input, state: 'inflight' });
+    await this.getMeltSendProofs({ ...input, state: ['pending', 'inflight'] });
     await this.proofs.setProofState(input.mintUrl, input.secrets, 'spent');
   }
 
   async releaseMeltSendUnsubmitted(input: Omit<MeltSendProofsInput, 'state'>): Promise<void> {
-    await this.getMeltSendProofs({ ...input, state: ['ready', 'inflight'] });
+    await this.getMeltSendProofs({ ...input, state: ['ready', 'pending', 'inflight'] });
     await this.proofs.setProofState(input.mintUrl, input.secrets, 'ready');
     await this.proofs.releaseProofs(input.mintUrl, input.secrets);
   }
