@@ -1,6 +1,12 @@
-import { Amount, type MeltQuoteOnchainResponse } from '@cashu/cashu-ts';
+import {
+  Amount,
+  type MeltQuoteOnchainResponse,
+  type SerializedBlindedSignature,
+} from '@cashu/cashu-ts';
 import { describe, expect, it } from 'bun:test';
 import {
+  meltQuoteFromBolt11Response,
+  meltQuoteFromBolt12Response,
   meltQuoteFromOnchainResponse,
   resolveOnchainMeltFeeOption,
   type MeltQuote,
@@ -47,6 +53,42 @@ function makeOnchainQuote(overrides: Partial<MeltQuote<'onchain'>> = {}): MeltQu
 }
 
 describe('MeltQuote model', () => {
+  for (const method of ['bolt11', 'bolt12', 'onchain'] as const) {
+    for (const state of ['UNPAID', 'PENDING', 'PAID'] as const) {
+      it.each(['omitted', 'empty', 'nonempty'] as const)(
+        `converts ${method} ${state} responses with %s change`,
+        (changeKind) => {
+          const change: SerializedBlindedSignature[] =
+            changeKind === 'nonempty'
+              ? [{ id: 'keyset', amount: Amount.from(1), C_: '02'.padEnd(66, '1') }]
+              : [];
+          const response = {
+            quote: 'quote',
+            request: 'request',
+            amount: Amount.from(10),
+            unit: 'sat',
+            expiry: 100,
+            state,
+            fee_reserve: Amount.from(2),
+            payment_preimage: state === 'PAID' ? 'preimage' : null,
+            ...(changeKind === 'omitted' ? {} : { change }),
+          };
+          const quote =
+            method === 'onchain'
+              ? meltQuoteFromOnchainResponse(mintUrl, makeOnchainResponse(response))
+              : method === 'bolt11'
+                ? meltQuoteFromBolt11Response(mintUrl, response)
+                : meltQuoteFromBolt12Response(mintUrl, response);
+
+          expect(quote.state).toBe(state);
+          expect(quote.change).toEqual(
+            changeKind === 'omitted' && state !== 'PAID' ? undefined : change,
+          );
+        },
+      );
+    }
+  }
+
   it('requires an explicit onchain fee index', () => {
     expect(() => resolveOnchainMeltFeeOption(makeOnchainQuote())).toThrow(
       'requires an explicit feeIndex',

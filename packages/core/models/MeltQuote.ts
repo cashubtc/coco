@@ -70,7 +70,7 @@ function meltQuoteFromBoltResponse<M extends BoltMeltMethod>(
     expiry: quote.expiry,
     state: quote.state,
     payment_preimage: quote.payment_preimage,
-    change: quote.change,
+    change: quote.state === 'PAID' ? (quote.change ?? []) : quote.change,
     lastObservedRemoteState: quote.state,
     lastObservedRemoteStateAt: now,
     createdAt: now,
@@ -78,6 +78,7 @@ function meltQuoteFromBoltResponse<M extends BoltMeltMethod>(
   } as MeltQuote<M>;
 }
 
+/** Convert a complete remote response; omitted PAID change means no change to return. */
 export function meltQuoteFromBolt11Response(
   mintUrl: string,
   quote: MeltMethodQuoteSnapshot<'bolt11'>,
@@ -86,6 +87,7 @@ export function meltQuoteFromBolt11Response(
   return meltQuoteFromBoltResponse(mintUrl, 'bolt11', quote, options);
 }
 
+/** Convert a complete remote response; omitted PAID change means no change to return. */
 export function meltQuoteFromBolt12Response(
   mintUrl: string,
   quote: MeltMethodQuoteSnapshot<'bolt12'>,
@@ -94,6 +96,7 @@ export function meltQuoteFromBolt12Response(
   return meltQuoteFromBoltResponse(mintUrl, 'bolt12', quote, options);
 }
 
+/** Convert a complete remote response; omitted PAID change means no change to return. */
 export function meltQuoteFromOnchainResponse(
   mintUrl: string,
   quote: MeltMethodQuoteSnapshot<'onchain'>,
@@ -113,7 +116,7 @@ export function meltQuoteFromOnchainResponse(
     expiry: quote.expiry,
     state: quote.state,
     outpoint: quote.outpoint ?? undefined,
-    change: quote.change,
+    change: quote.state === 'PAID' ? (quote.change ?? []) : quote.change,
     lastObservedRemoteState: quote.state,
     lastObservedRemoteStateAt: now,
     createdAt: now,
