@@ -9,7 +9,7 @@ import { WalletRestoreService } from '../../services/WalletRestoreService';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { SweepKeysetResult } from '../../models/Sweep.ts';
-import { SweepError, UnknownMintError } from '../../models/Error';
+import { UnknownMintError } from '../../models/Error';
 import { getEncodedToken, OutputData, PaymentRequest } from '@cashu/cashu-ts';
 import type { Proof } from '@cashu/cashu-ts';
 import type { ReceiveOperationService } from '../../operations/receive/ReceiveOperationService';
@@ -499,20 +499,53 @@ describe('WalletApi - Trust Enforcement', () => {
         if (id === 'bad') throw cause;
         return outcomes.find((outcome) => outcome.keysetId === id);
       });
-      let failure: unknown;
-      try {
-        await walletApi.sweep(`${testMintUrl}/`, new Uint8Array(64));
-      } catch (error) {
-        failure = error;
-      }
-      expect(failure).toBeInstanceOf(SweepError);
-      expect((failure as SweepError).report).toEqual({ mintUrl: testMintUrl, keysets: outcomes });
-      expect((failure as SweepError).cause).toBe(cause);
+      const report = await walletApi.sweep(`${testMintUrl}/`, new Uint8Array(64));
+      expect(report).toEqual({ mintUrl: testMintUrl, keysets: outcomes });
     });
 
     it('returns an empty report when no units match', async () => {
       const result = await walletApi.sweep(testMintUrl, new Uint8Array(64), { units: [] });
       expect(result).toEqual({ mintUrl: testMintUrl, keysets: [] });
+    });
+
+    it.each(['failed', 'unresolved'] as const)(
+      'returns the full report when every keyset is %s',
+      async (status) => {
+        const keysets = Array.from({ length: 5 }, (_, index) => ({
+          id: `keyset-${index}`,
+          unit: 'sat',
+        }));
+        mockMintService.addMintByUrl.mockResolvedValue({ keysets });
+        const outcomes: SweepKeysetResult[] = keysets.map(({ id, unit }) => ({
+          keysetId: id,
+          unit,
+          error: new Error('mint unavailable'),
+          ...(status === 'unresolved'
+            ? { status, receiveOperationId: `receive-${id}` }
+            : { status }),
+        }));
+        mockWalletRestoreService.sweepKeyset = mock(async (_mint: string, id: string) =>
+          outcomes.find((outcome) => outcome.keysetId === id),
+        );
+        const report = await walletApi.sweep(testMintUrl, new Uint8Array(64));
+        expect(report).toEqual({ mintUrl: testMintUrl, keysets: outcomes });
+      },
+    );
+
+    it('rejects mint setup failures before processing keysets', async () => {
+      const error = new Error('mint setup failed');
+      mockMintService.addMintByUrl.mockRejectedValue(error);
+      mockWalletRestoreService.sweepKeyset = mock();
+      await expect(walletApi.sweep(testMintUrl, new Uint8Array(64))).rejects.toBe(error);
+      expect(mockWalletRestoreService.sweepKeyset).not.toHaveBeenCalled();
+    });
+
+    it('rejects invalid unit filters before processing keysets', async () => {
+      mockWalletRestoreService.sweepKeyset = mock();
+      await expect(
+        walletApi.sweep(testMintUrl, new Uint8Array(64), { units: [' '] }),
+      ).rejects.toThrow('Unit cannot be empty');
+      expect(mockWalletRestoreService.sweepKeyset).not.toHaveBeenCalled();
     });
   });
 

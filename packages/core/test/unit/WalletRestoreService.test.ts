@@ -188,14 +188,35 @@ describe('WalletRestoreService', () => {
     });
 
     it.each([null, [], [{ state: 'UNKNOWN' }], [null]].map((states) => [states]))(
-      'rejects malformed proof-state observations %j',
+      'reports malformed proof-state observations %j as failed',
       async (states) => {
         Wallet.prototype.batchRestore = mock(async () => ({ proofs: [makeProof(8, 'source')] }));
         Wallet.prototype.checkProofsStates = mock(async () => states as ProofState[]);
-        await expect(service.sweepKeyset(mintUrl, keysetId, bip39seed)).rejects.toThrow(
-          'Malformed state check',
-        );
+        expect(await service.sweepKeyset(mintUrl, keysetId, bip39seed)).toMatchObject({
+          keysetId,
+          unit: 'sat',
+          status: 'failed',
+          error: new Error('Malformed state check'),
+        });
         expect(receive.prepare).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(['loadMint', 'batchRestore', 'checkProofsStates'] as const)(
+      'reports a discovery failure in %s without pending observations',
+      async (method) => {
+        const error = new Error('discovery unavailable');
+        Wallet.prototype.batchRestore = mock(async () => ({ proofs: [makeProof(8, 'source')] }));
+        Wallet.prototype[method] = mock(async () => {
+          throw error;
+        });
+        expect(await service.sweepKeyset(mintUrl, keysetId, bip39seed)).toEqual({
+          keysetId,
+          unit: 'sat',
+          status: 'failed',
+          error,
+        });
+        expect(receive.init).not.toHaveBeenCalled();
       },
     );
 

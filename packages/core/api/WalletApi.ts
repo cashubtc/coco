@@ -15,7 +15,6 @@ import type { ReceiveOperationService } from '../operations/receive/ReceiveOpera
 import type { Logger } from '../logging/Logger.ts';
 import type { BalanceQueries } from '../proofs/BalanceQueries.ts';
 import { WalletBalancesApi } from './WalletBalancesApi.ts';
-import { SweepError } from '../models/Error.ts';
 import type { SweepReport } from '../models/Sweep.ts';
 import { normalizeMintUrl } from '../utils.ts';
 import { DEFAULT_UNIT, normalizeUnit, normalizeUnitList } from '../amounts.ts';
@@ -114,9 +113,10 @@ export class WalletApi {
   /**
    * Exchange a source Wallet Seed's available proofs through ordinary Receive operations.
    * Keysets are independent; pending and uneconomic value are reported as skips.
-   * @returns Per-keyset outcomes, with amounts scoped to each keyset's unit.
-   * @throws {SweepError} After all keysets are attempted, if any failed or remain unresolved.
-   * The error carries the complete report. Inspect unresolved Receive IDs before retrying.
+   * @returns All per-keyset outcomes, even if every keyset fails or remains unresolved.
+   * Callers must inspect the report; resolution does not imply a successful transfer.
+   * Amounts are scoped to each keyset's unit. Inspect unresolved Receive IDs before retrying.
+   * @throws If input validation or mint setup fails before keyset processing.
    * @param mintUrl - The URL of the mint to sweep
    * @param bip39seed - The BIP39 seed of the wallet to sweep
    */
@@ -126,13 +126,13 @@ export class WalletApi {
     options?: WalletSweepOptions,
   ): Promise<SweepReport> {
     mintUrl = normalizeMintUrl(mintUrl);
+    const unitFilter = this.getUnitFilter(options?.units);
     this.logger?.info('Starting sweep', { mintUrl });
     const mint = await this.mintService.addMintByUrl(mintUrl, { trusted: true });
     this.logger?.debug('Mint fetched for sweep', {
       mintUrl,
       keysetCount: mint.keysets.length,
     });
-    const unitFilter = this.getUnitFilter(options?.units);
     const report: SweepReport = { mintUrl, keysets: [] };
     for (const { keyset, unit } of this.getUnitScopedKeysets(mint.keysets, unitFilter)) {
       try {
@@ -147,11 +147,6 @@ export class WalletApi {
           error: cause instanceof Error ? cause : new Error(String(cause)),
         });
       }
-    }
-    if (
-      report.keysets.some((result) => result.status === 'failed' || result.status === 'unresolved')
-    ) {
-      throw new SweepError(report);
     }
     return report;
   }

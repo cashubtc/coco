@@ -301,8 +301,10 @@ reported as `pending: { count, amount }`; skips distinguish `pending` from `unec
 A transferred result includes `received`, `fee`, and `receiveOperationId`. All amounts are cashu-ts
 `Amount` values in that result's unit. Discovery failures may have no pending observations.
 
-If any keyset fails or remains unresolved, `SweepError.report` contains every outcome, including
-successful transfers. Inspect its Receive IDs through `ops.receive` before retrying. Receive owns
+Sweep returns the complete report even when all keysets fail or remain unresolved. Callers must
+inspect every status; a resolved call does not imply a successful transfer. Input validation and
+mint setup failures still reject before keyset processing.
+Inspect unresolved Receive IDs through `ops.receive` before retrying. Receive owns
 exchange recovery and ordinary Receive history; Sweep does not resume unvisited keysets after
 restart or deduplicate a later sweep against unresolved exchanges. See the [Sweep guide](../docs/pages/bip39.md#sweep).
 

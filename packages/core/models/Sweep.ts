@@ -19,7 +19,11 @@ export type SweepKeysetResult = SweepKeysetSummary &
     | { status: 'unresolved'; error: Error; receiveOperationId: string }
   );
 
-/** Outcomes in discovery order. Amounts are never aggregated across units. */
+/**
+ * All keyset outcomes in discovery order, including when every keyset fails.
+ * Callers must inspect statuses; a resolved Sweep does not imply successful transfers.
+ * Amounts are never aggregated across units.
+ */
 export interface SweepReport {
   mintUrl: string;
   keysets: SweepKeysetResult[];

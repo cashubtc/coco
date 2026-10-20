@@ -57,27 +57,20 @@ Only `UNSPENT` proofs are exchanged. `PENDING` proofs are skipped and may be swe
 available; `SPENT` proofs are excluded.
 
 ```ts
-import { SweepError } from '@cashu/coco-core';
-
-try {
-  const report = await coco.wallet.sweep('https://mint.url', oldSeed, { units: ['usd'] });
-  for (const result of report.keysets) {
-    console.log(result.keysetId, result.unit, result.status);
-    if (result.pending) {
-      console.log('Skipped pending:', result.pending.count, result.pending.amount.toString());
-    }
-    if (result.status === 'transferred') {
-      console.log('Received:', result.received.toString(), result.unit, result.receiveOperationId);
-    }
+// Input validation and mint setup can reject before keyset processing starts.
+const report = await coco.wallet.sweep('https://mint.url', oldSeed, { units: ['usd'] });
+for (const result of report.keysets) {
+  console.log(result.keysetId, result.unit, result.status);
+  if (result.pending) {
+    console.log('Skipped pending:', result.pending.count, result.pending.amount.toString());
   }
-} catch (error) {
-  if (!(error instanceof SweepError)) throw error;
-  // Includes completed transfers and skips, as well as every failed/unresolved keyset.
-  for (const result of error.report.keysets) {
-    if (result.status === 'unresolved') {
-      const operation = await coco.ops.receive.get(result.receiveOperationId);
-      console.log('Inspect existing Receive before retrying:', operation);
-    }
+  if (result.status === 'transferred') {
+    console.log('Received:', result.received.toString(), result.unit, result.receiveOperationId);
+  } else if (result.status === 'failed') {
+    console.error('Keyset failed:', result.keysetId, result.error);
+  } else if (result.status === 'unresolved') {
+    const operation = await coco.ops.receive.get(result.receiveOperationId);
+    console.log('Inspect existing Receive before retrying:', operation);
   }
 }
 ```
@@ -98,9 +91,14 @@ was transferred or a later step failed. Its amount uses the entry's unit. It is 
 could not establish the observations. A preparation failure can occur before an operation ID is
 returned, so a failed result does not always include one.
 
-Keysets are attempted independently. `SweepError` is thrown after processing if any failed or remain
-unresolved; earlier transfers remain committed. Mint setup or invalid options can reject before
-keyset processing without a report.
+Keysets are attempted independently. Once processing starts, Sweep returns the complete report,
+even if every keyset fails or remains unresolved. Earlier transfers remain committed. A resolved
+call does not mean that value was transferred: callers must inspect each result's `status`.
+Mint setup or invalid options can reject before keyset processing without a report.
+
+Plugins calling `walletRestoreService.sweepKeyset()` directly must also inspect the result.
+Discovery and exchange failures are returned as `failed` or `unresolved`; invalid mint URLs or units
+still reject before discovery. This replaces the earlier exception-based failure contract.
 
 Receive recovery reconciles existing submitted exchanges, including after restart. Prepared operations
 follow Receive's normal resume/cancellation policy. Sweep does not resume discovery or unvisited

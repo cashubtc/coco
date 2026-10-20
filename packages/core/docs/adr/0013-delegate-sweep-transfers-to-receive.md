@@ -27,9 +27,12 @@ Swept value appears through ordinary Receive history and events. Sweep-specific 
 outside this change, preserving reuse through Receive's existing coordinator methods.
 
 Keysets are processed independently. A failed keyset does not undo completed transfers or prevent
-attempting the remaining keysets. After processing, any failures cause Sweep to reject with an error
-carrying the per-keyset report, including successes, skips, failures, and Receive operation IDs when
-available. A rejected Receive call alone does not establish that its exchange failed: Sweep must
+attempting the remaining keysets. Once keyset processing starts, Sweep resolves with the complete
+per-keyset report even if every keyset fails or remains unresolved. Callers must inspect the report;
+resolution alone does not imply a successful transfer. Invalid input or mint setup failures reject
+before keyset processing. The plugin-facing `sweepKeyset()` likewise reports discovery and exchange
+failures as results; invalid mint URLs or units still reject before discovery.
+A rejected Receive call alone does not establish that its exchange failed: Sweep must
 use the public operation state to distinguish a completed exchange from an unresolved outcome.
 
 Receive owns recovery of its exchanges; Sweep does not automatically resume discovery or untouched

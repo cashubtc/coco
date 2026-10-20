@@ -1,4 +1,3 @@
-import type { SweepReport } from './Sweep.ts';
 import type { KeypairPurpose } from './Keypair.ts';
 
 export { HttpResponseError, MintOperationError, NetworkError } from '@cashu/cashu-ts';
@@ -208,17 +207,5 @@ export class QuoteIdentityConflictError extends Error {
     this.mintUrl = mintUrl;
     this.quoteId = quoteId;
     this.methods = [...methods];
-  }
-}
-
-/** One or more Sweep keysets failed or have an unresolved Receive outcome. */
-export class SweepError extends Error {
-  constructor(readonly report: SweepReport) {
-    super('Failed to sweep some keysets; inspect the report before retrying');
-    this.name = 'SweepError';
-    const failure = report.keysets.find(
-      (result) => result.status === 'failed' || result.status === 'unresolved',
-    );
-    if (failure && 'error' in failure) this.cause = failure.error;
   }
 }

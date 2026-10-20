@@ -6,7 +6,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SqlStorageRepositories } from '../../../sql-storage/src/repositories.ts';
 import { SqliteDb } from '../../../sqlite-bun/src/db.ts';
-import { SweepError } from '../../models/Error.ts';
 import type { Repositories } from '../../repositories/index.ts';
 import { initializeCoco, type Manager } from '../../Manager.ts';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
@@ -106,16 +105,8 @@ describe('wallet.sweep with real Receive and storage', () => {
       database.exec(
         "CREATE TRIGGER interrupt_sweep BEFORE INSERT ON coco_cashu_proofs BEGIN SELECT RAISE(ABORT, 'settlement interrupted'); END",
       );
-      let failure: unknown;
-      try {
-        await destination.wallet.sweep(mintUrl, sourceSeed, { units: ['sat'] });
-      } catch (error) {
-        failure = error;
-      }
-      expect(failure).toBeInstanceOf(SweepError);
-      const unresolved = (failure as SweepError).report.keysets.find(
-        (result) => result.status === 'unresolved',
-      );
+      const report = await destination.wallet.sweep(mintUrl, sourceSeed, { units: ['sat'] });
+      const unresolved = report.keysets.find((result) => result.status === 'unresolved');
       expect(unresolved?.receiveOperationId).toBeString();
       const operationId = unresolved!.receiveOperationId;
       expect((await destination.ops.receive.get(operationId))?.state).toBe('executing');

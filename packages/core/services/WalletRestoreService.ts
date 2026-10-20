@@ -37,7 +37,11 @@ export class WalletRestoreService {
     this.outputDataCreator = outputDataCreator;
   }
 
-  /** Discover a source keyset and delegate its available value to the Receive coordinator. */
+  /**
+   * Discover a source keyset and delegate its available value to the Receive coordinator.
+   * Returns a result for discovery and exchange failures; callers must inspect its status.
+   * Invalid mint URLs or units reject before discovery starts.
+   */
   async sweepKeyset(
     mintUrl: string,
     keysetId: string,
@@ -47,40 +51,40 @@ export class WalletRestoreService {
     mintUrl = normalizeMintUrl(mintUrl);
     const normalizedUnit = normalizeUnit(unit, { defaultUnit: DEFAULT_UNIT });
     const summary: SweepKeysetSummary = { keysetId, unit: normalizedUnit };
-    const sweepWallet = new Wallet(
-      new Mint(mintUrl, { customRequest: this.requestProvider.getRequestFn(mintUrl) }),
-      { bip39seed, unit: normalizedUnit, outputDataCreator: this.outputDataCreator },
-    );
-    await sweepWallet.loadMint();
-    const { proofs } = await sweepWallet.batchRestore({
-      gapLimit: this.restoreGapLimit,
-      batchSize: this.restoreBatchSize,
-      counter: this.restoreStartCounter,
-      keysetId,
-      filterSpent: false,
-    });
-    const states = proofs.length ? await sweepWallet.checkProofsStates(proofs) : [];
-    if (
-      !Array.isArray(states) ||
-      states.length !== proofs.length ||
-      states.some((state) => !state || !['UNSPENT', 'PENDING', 'SPENT'].includes(state.state))
-    ) {
-      throw new Error('Malformed state check');
-    }
-    const available: Proof[] = [];
-    const pending: Proof[] = [];
-    for (const [index, state] of states.entries()) {
-      if (state.state === 'UNSPENT') available.push(proofs[index]!);
-      if (state.state === 'PENDING') pending.push(proofs[index]!);
-    }
-    summary.pending = { count: pending.length, amount: sumProofs(pending) };
-    if (!available.length) {
-      return pending.length
-        ? { ...summary, status: 'skipped', reason: 'pending' }
-        : { ...summary, status: 'noop' };
-    }
     let receiveOperationId: string | undefined;
     try {
+      const sweepWallet = new Wallet(
+        new Mint(mintUrl, { customRequest: this.requestProvider.getRequestFn(mintUrl) }),
+        { bip39seed, unit: normalizedUnit, outputDataCreator: this.outputDataCreator },
+      );
+      await sweepWallet.loadMint();
+      const { proofs } = await sweepWallet.batchRestore({
+        gapLimit: this.restoreGapLimit,
+        batchSize: this.restoreBatchSize,
+        counter: this.restoreStartCounter,
+        keysetId,
+        filterSpent: false,
+      });
+      const states = proofs.length ? await sweepWallet.checkProofsStates(proofs) : [];
+      if (
+        !Array.isArray(states) ||
+        states.length !== proofs.length ||
+        states.some((state) => !state || !['UNSPENT', 'PENDING', 'SPENT'].includes(state.state))
+      ) {
+        throw new Error('Malformed state check');
+      }
+      const available: Proof[] = [];
+      const pending: Proof[] = [];
+      for (const [index, state] of states.entries()) {
+        if (state.state === 'UNSPENT') available.push(proofs[index]!);
+        if (state.state === 'PENDING') pending.push(proofs[index]!);
+      }
+      summary.pending = { count: pending.length, amount: sumProofs(pending) };
+      if (!available.length) {
+        return pending.length
+          ? { ...summary, status: 'skipped', reason: 'pending' }
+          : { ...summary, status: 'noop' };
+      }
       // Preflight only decides whether this is an economic transfer. Receive owns
       // authoritative fees, output allocation, settlement, and recovery.
       const amount = sumProofs(available);
