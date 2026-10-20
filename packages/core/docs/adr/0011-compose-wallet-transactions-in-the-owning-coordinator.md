@@ -101,9 +101,8 @@ remove plugin-facing `overwriteCounter()`, without first reworking CounterServic
 the remaining legacy output allocators, remove CounterService and its plugin-facing entry. Until
 those callers migrate, Restore's scoped advancement alone cannot prevent their stale counter writes
 or make their output derivation and later counter increment one atomic Output Allocation. Receive now
-owns transactional Output Allocation, and Sweep delegates exchanges through its coordinator methods under
-[ADR-0013](0013-delegate-sweep-transfers-to-receive.md); the legacy plugin-facing allocation helpers
-remain outside that migration.
+owns transactional Output Allocation, and Sweep delegates exchanges through its coordinator methods.
+The legacy plugin-facing allocation helpers remain outside that migration.
 
 Restore commits proof import and counter advancement together per keyset. Its coordinator opens
 one transaction, and a branded transition composes ScopedProofs and ScopedOutputs within that scope.
