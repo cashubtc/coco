@@ -21,9 +21,8 @@ const mintHandler = {
 const meltHandler = {
   createQuote: unused,
   fetchRemoteQuote: unused,
-  prepare: unused,
-  execute: unused,
-  recoverExecuting: unused,
+  swap: unused,
+  melt: unused,
 } satisfies MeltMethodHandlerRegistry['bolt11'];
 
 const sendHandler = {

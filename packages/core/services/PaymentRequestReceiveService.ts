@@ -599,18 +599,29 @@ export class PaymentRequestReceiveService {
         { mint: payload.mint, unit: payload.unit, proofs: payload.proofs },
         sourceMetadata,
       );
+      const preparedReceive = await this.receiveOperationService.prepare(initReceive);
       currentAttempt = await this.updateAttempt({
         ...currentAttempt,
         state: 'receiving',
-        receiveOperationId: initReceive.id,
+        receiveOperationId: preparedReceive.id,
       });
-      await this.resumeInitChildReceive(currentAttempt, initReceive, {
+      await this.resumePreparedChildReceive(currentAttempt, preparedReceive, {
         ignoreMissingTransportHandler: true,
       });
     } catch (error) {
       const receiveOperation = currentAttempt.receiveOperationId
         ? await this.receiveOperationService.getOperation(currentAttempt.receiveOperationId)
         : await this.receiveOperationRepository.getByPaymentRequestAttemptId(currentAttempt.id);
+
+      if (receiveOperation && !currentAttempt.receiveOperationId) {
+        // The prepared child is durable. Retry linking it before submitting any mint request.
+        this.logger?.warn('Payment request child link deferred', {
+          attemptId: currentAttempt.id,
+          receiveOperationId: receiveOperation.id,
+          error,
+        });
+        return;
+      }
 
       if (receiveOperation?.state === 'finalized') {
         await this.finalizeAttemptFromReceive(currentAttempt, receiveOperation, {
@@ -741,13 +752,13 @@ export class PaymentRequestReceiveService {
         { mint: payload.mint, unit: payload.unit, proofs: payload.proofs },
         sourceMetadata,
       );
+      const preparedReceive = await this.receiveOperationService.prepare(initReceive);
       attempt = await this.updateAttempt({
         ...attempt,
         state: 'receiving',
-        receiveOperationId: initReceive.id,
+        receiveOperationId: preparedReceive.id,
       });
 
-      const preparedReceive = await this.receiveOperationService.prepare(initReceive);
       const netAmount = preparedReceive.amount.subtract(preparedReceive.fee);
       attempt = await this.updateAttempt({
         ...attempt,
@@ -768,7 +779,7 @@ export class PaymentRequestReceiveService {
     } catch (error) {
       const receiveOperation = attempt.receiveOperationId
         ? await this.receiveOperationService.getOperation(attempt.receiveOperationId)
-        : undefined;
+        : await this.receiveOperationRepository.getByPaymentRequestAttemptId(attempt.id);
       if (receiveOperation?.state === 'finalized') {
         attempt = await this.finalizeAttemptFromReceive(attempt, receiveOperation);
         const updatedOperation = await this.operationRepository.getById(operation.id);
