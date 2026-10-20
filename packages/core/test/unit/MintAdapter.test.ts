@@ -1,6 +1,11 @@
 import { Amount, type OutputData, type Proof } from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it, mock } from 'bun:test';
 import { MintAdapter } from '../../infra/MintAdapter.ts';
+import {
+  testLegacyMintKeysetId,
+  testMintKeypairs,
+  testMintKeysetId,
+} from '../fixtures/MintMetadata.ts';
 import type { MintRequestProvider } from '../../infra/MintRequestProvider.ts';
 
 const mintUrl = 'https://mint.test';
@@ -15,7 +20,8 @@ const mintInfo = {
     '5': { methods: [], disabled: false },
   },
 };
-const keysets = { keysets: [{ id: 'keyset-1', unit: 'sat', active: true }] };
+const keysetEntry = { id: testMintKeysetId(), unit: 'sat', active: true };
+const keysets = { keysets: [keysetEntry] };
 const onchainMintQuote = {
   quote: 'mint-quote',
   request: 'bc1ptest',
@@ -100,7 +106,9 @@ describe('MintAdapter', () => {
         requiresClearAuthToken: mock(() => false),
       })),
       getKeySets: mock(async () => keysets),
-      getKeys: mock(async () => ({ keysets: [{ keys: { '1': 'pubkey' } }] })),
+      getKeys: mock(async () => ({
+        keysets: [{ id: keysetEntry.id, unit: 'sat', keys: testMintKeypairs }],
+      })),
       checkMintQuote: mock(async () => onchainMintQuote),
       checkMintQuoteBatch: mock(async () => [
         {
@@ -152,12 +160,12 @@ describe('MintAdapter', () => {
   it('delegates mint metadata and quote checks to the cached Cashu mint', async () => {
     await expect(adapter.fetchMintInfo(mintUrl)).resolves.toEqual(mintInfo);
     await expect(adapter.fetchKeysets(mintUrl)).resolves.toEqual(keysets);
-    await expect(adapter.fetchKeysForId(mintUrl, 'keyset-1')).resolves.toEqual({ '1': 'pubkey' });
+    await expect(adapter.fetchKeysForId(mintUrl, keysetEntry)).resolves.toEqual(testMintKeypairs);
     await expect(adapter.checkMintQuote(mintUrl, 'onchain', 'mint-quote')).resolves.toEqual(
       onchainMintQuote,
     );
 
-    expect(fakeMint.getKeys).toHaveBeenCalledWith('keyset-1');
+    expect(fakeMint.getKeys).toHaveBeenCalledWith(keysetEntry.id);
     expect(fakeMint.checkMintQuote).toHaveBeenCalledWith('onchain', 'mint-quote');
   });
 
@@ -180,9 +188,96 @@ describe('MintAdapter', () => {
   it('rejects key lookups that return anything other than one keyset', async () => {
     fakeMint.getKeys = mock(async () => ({ keysets: [] }));
 
-    await expect(adapter.fetchKeysForId(mintUrl, 'missing-keyset')).rejects.toThrow(
-      'Expected 1 keyset',
+    await expect(adapter.fetchKeysForId(mintUrl, keysetEntry)).rejects.toThrow('Expected 1 keyset');
+  });
+
+  it('rejects keys that do not derive the advertised keyset id', async () => {
+    fakeMint.getKeys = mock(async () => ({
+      keysets: [
+        {
+          id: keysetEntry.id,
+          unit: 'sat',
+          keys: { ...testMintKeypairs, '1': `02${'a'.repeat(64)}` },
+        },
+      ],
+    }));
+
+    await expect(adapter.fetchKeysForId(mintUrl, keysetEntry)).rejects.toThrow('do not derive');
+  });
+
+  it('accepts legacy `00`-prefixed keyset ids, which derive from the keys alone', async () => {
+    const legacy = { id: testLegacyMintKeysetId(), unit: 'sat', active: true };
+    fakeMint.getKeys = mock(async () => ({
+      keysets: [{ id: legacy.id, unit: 'sat', keys: testMintKeypairs }],
+    }));
+
+    await expect(adapter.fetchKeysForId(mintUrl, legacy)).resolves.toEqual(testMintKeypairs);
+  });
+
+  it('accepts a keyset whose id commits to a final expiry `/v1/keys` omits', async () => {
+    const final_expiry = 2059210353;
+    const expiring = {
+      id: testMintKeysetId('sat', { expiry: final_expiry }),
+      unit: 'sat',
+      active: true,
+    };
+    fakeMint.getKeys = mock(async () => ({
+      keysets: [{ id: expiring.id, unit: 'sat', keys: testMintKeypairs }],
+    }));
+
+    await expect(adapter.fetchKeysForId(mintUrl, { ...expiring, final_expiry })).resolves.toEqual(
+      testMintKeypairs,
     );
+  });
+
+  it('rejects a keys response that contradicts the advertised entry', async () => {
+    fakeMint.getKeys = mock(async () => ({
+      keysets: [{ id: keysetEntry.id, unit: 'usd', keys: testMintKeypairs }],
+    }));
+
+    await expect(adapter.fetchKeysForId(mintUrl, keysetEntry)).rejects.toThrow('contradict');
+  });
+
+  it('skips an unverifiable keyset instead of failing the whole metadata refresh', async () => {
+    const bad = { id: `01${'a'.repeat(64)}`, unit: 'sat', active: false };
+    fakeMint.getKeySets = mock(async () => ({ keysets: [keysetEntry, bad] }));
+    fakeMint.getKeys = mock(async (id: string) => ({
+      keysets: [{ id, unit: 'sat', keys: testMintKeypairs }],
+    }));
+
+    const metadata = await adapter.fetchMintMetadata(mintUrl, []);
+
+    expect(metadata.keysets).toHaveLength(1);
+    expect(metadata.keysets[0]?.id).toBe(keysetEntry.id);
+  });
+
+  it('refetches stored keys once the advertised entry no longer derives them', async () => {
+    const known = { mintUrl, ...keysetEntry, feePpk: 0, updatedAt: 0, keypairs: testMintKeypairs };
+    // An `01` id commits to the fee, so this entry cannot be the keyset the stored keys belong to.
+    fakeMint.getKeySets = mock(async () => ({
+      keysets: [{ ...keysetEntry, input_fee_ppk: 100 }],
+    }));
+
+    const metadata = await adapter.fetchMintMetadata(mintUrl, [known]);
+
+    expect(fakeMint.getKeys).toHaveBeenCalledWith(keysetEntry.id);
+    expect(metadata.keysets).toHaveLength(0);
+  });
+
+  it('reuses stored keys that still derive the advertised entry', async () => {
+    const known = { mintUrl, ...keysetEntry, feePpk: 0, updatedAt: 0, keypairs: testMintKeypairs };
+
+    const metadata = await adapter.fetchMintMetadata(mintUrl, [known]);
+
+    expect(fakeMint.getKeys).not.toHaveBeenCalled();
+    expect(metadata.keysets[0]?.keypairs).toEqual(testMintKeypairs);
+  });
+
+  it('derives the advertised id from the keyset entry, not the keys response', async () => {
+    // The mint charges a fee the /v1/keys response omits; the advertised entry is authoritative.
+    await expect(
+      adapter.fetchKeysForId(mintUrl, { ...keysetEntry, input_fee_ppk: 2 }),
+    ).rejects.toThrow('do not derive');
   });
 
   it('delegates melt quote checks and state-only helpers', async () => {

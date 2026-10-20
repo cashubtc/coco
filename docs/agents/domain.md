@@ -4,7 +4,7 @@ How the engineering skills should consume this repo's domain documentation.
 
 ## Before exploring, read these
 
-- **`CONTEXT-MAP.md`** at the repository root; read every context it routes for the area being
+- **`GLOSSARY-MAP.md`** at the repository root; read every context it routes for the area being
   changed.
 - **Context-scoped `docs/adr/` directories**; read ADRs relevant to the area being changed.
 - **`docs/adr/`** at the repository root when it exists; it contains cross-context decisions.
@@ -18,14 +18,14 @@ This is a multi-context repository:
 
 ```text
 /
-├── CONTEXT-MAP.md
+├── GLOSSARY-MAP.md
 ├── docs/adr/                         # cross-context decisions, when needed
 └── packages/
     ├── core/
-    │   ├── CONTEXT.md
+    │   ├── GLOSSARY.md
     │   └── docs/adr/                 # Coco Cashu decisions
     └── cocod/
-        ├── CONTEXT.md
+        ├── GLOSSARY.md
         └── docs/adr/                 # Cocod Host decisions, when needed
 ```
 
@@ -35,7 +35,7 @@ and Coco Cashu contexts because the host consumes the wallet domain.
 
 ## Use each glossary's vocabulary
 
-When output names a domain concept, use the term defined in the routed `CONTEXT.md`. Do not drift
+When output names a domain concept, use the term defined in the routed `GLOSSARY.md`. Do not drift
 to synonyms the glossary explicitly avoids.
 
 If a needed concept is absent, reconsider whether the project uses that language or note the gap

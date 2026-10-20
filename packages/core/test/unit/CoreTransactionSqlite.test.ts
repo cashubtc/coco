@@ -1,11 +1,21 @@
 import { describe, expect, it } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { Amount } from '@cashu/cashu-ts';
+import {
+  applySendResult,
+  claimSendRecovery,
+  recoverLegacyExactSend,
+  completePendingSend,
+} from '../../operations/send/SendTransitions.ts';
+
+import {
+  RepositoryCoreTransactionRunner,
+  type CoreTransaction,
+} from '../../transactions/CoreTransaction.ts';
 import { KeypairDerivation } from '../../keypairs/KeypairDerivation.ts';
-import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
+import type { KeyRingRepository } from '../../repositories/index.ts';
 import { SqlStorageRepositories } from '../../../sql-storage/src/repositories.ts';
 import { SqliteDb } from '../../../sqlite-bun/src/db.ts';
-import { CoreSendTransactions } from '../../transactions/send/SendTransactions.ts';
 import type {
   ExecutingSendOperation,
   PendingSendOperation,
@@ -14,13 +24,71 @@ import type { CoreProof } from '../../types.ts';
 import { preparedSend } from '../fixtures/SendOperation.ts';
 
 describe('CoreTransaction with SQLite', () => {
+  it.each(['commit', 'rollback'] as const)(
+    'prevents valueOf from retaining repository access after %s',
+    async (completion) => {
+      const database = new Database(':memory:');
+      const repositories = new SqlStorageRepositories({ database: new SqliteDb({ database }) });
+      const abort = new Error('abort owning transaction');
+      const existingKey = {
+        publicKeyHex: 'existing-key',
+        secretKey: new Uint8Array(32).fill(1),
+        purpose: 'p2pk' as const,
+      };
+      const lateKey = { ...existingKey, publicKeyHex: 'late-key' };
+      let guarded!: CoreTransaction['keypairs'];
+      let escaped: KeyRingRepository | undefined;
+
+      try {
+        await repositories.init();
+        await repositories.keyRingRepository.setPersistedKeyPair(existingKey);
+        const runner = new RepositoryCoreTransactionRunner(repositories);
+        const attempt = runner.run(async (tx) => {
+          guarded = tx.keypairs;
+          const capabilityValueOf = Reflect.get(tx.keypairs, 'valueOf');
+          if (typeof capabilityValueOf === 'function') {
+            const capability = await Reflect.apply(capabilityValueOf, tx.keypairs, []);
+            const repository = Reflect.get(capability as object, 'repository');
+            const repositoryValueOf = Reflect.get(repository, 'valueOf');
+            if (typeof repositoryValueOf === 'function') {
+              escaped = await Reflect.apply(repositoryValueOf, repository, []);
+            }
+          }
+          if (completion === 'rollback') throw abort;
+        });
+        if (completion === 'rollback') await expect(attempt).rejects.toBe(abort);
+        else await attempt;
+
+        await expect(guarded.importP2pk(lateKey)).rejects.toThrow(
+          'Wallet transaction scope is closed',
+        );
+        // A returned facade is safe only if its reads and writes are still revoked.
+        const lateRead = escaped
+          ? await escaped.getPersistedKeyPair(existingKey.publicKeyHex, 'p2pk').catch(() => null)
+          : null;
+        if (escaped) await escaped.setPersistedKeyPair(lateKey).catch(() => {});
+
+        expect(
+          await repositories.keyRingRepository.getPersistedKeyPair(lateKey.publicKeyHex, 'p2pk'),
+        ).toBeNull();
+        expect(lateRead).toBeNull();
+        expect(
+          await repositories.keyRingRepository.getPersistedKeyPair(
+            existingKey.publicKeyHex,
+            'p2pk',
+          ),
+        ).toMatchObject(existingKey);
+      } finally {
+        database.close();
+      }
+    },
+  );
+
   it('rolls back legacy send output reconciliation when the pending transition fails', async () => {
     const database = new Database(':memory:');
     const repositories = new SqlStorageRepositories({ database: new SqliteDb({ database }) });
     await repositories.init();
-    const transactions = new CoreSendTransactions(
-      new RepositoryCoreTransactionRunner(repositories),
-    );
+    const transactionRunner = new RepositoryCoreTransactionRunner(repositories);
     const mintUrl = 'https://mint.test';
     const input: CoreProof = {
       id: 'keyset',
@@ -65,7 +133,9 @@ describe('CoreTransaction with SQLite', () => {
         sendProofs: [send],
         token: { mint: mintUrl, unit: 'sat', proofs: [send] },
       };
-      await expect(transactions.applyResult(result)).rejects.toThrow('pending transition failed');
+      await expect(
+        transactionRunner.run((tx) => tx.perform(applySendResult, result)),
+      ).rejects.toThrow('pending transition failed');
       expect(await repositories.sendOperationRepository.getById(executing.id)).toEqual(
         beforeOperation,
       );
@@ -74,7 +144,7 @@ describe('CoreTransaction with SQLite', () => {
       ).toEqual(beforeProofs);
 
       database.exec('DROP TRIGGER reject_pending');
-      await transactions.applyResult(result);
+      await transactionRunner.run((tx) => tx.perform(applySendResult, result));
       expect((await repositories.sendOperationRepository.getById(executing.id))?.state).toBe(
         'pending',
       );
@@ -102,9 +172,7 @@ describe('CoreTransaction with SQLite', () => {
       const database = new Database(':memory:');
       const repositories = new SqlStorageRepositories({ database: new SqliteDb({ database }) });
       await repositories.init();
-      const transactions = new CoreSendTransactions(
-        new RepositoryCoreTransactionRunner(repositories),
-      );
+      const transactionRunner = new RepositoryCoreTransactionRunner(repositories);
       const mintUrl = 'https://mint.test';
       const amount = Amount.from(10);
       const tokenless = scenario === 'tokenless-p2pk' || scenario === 'tokenless-conflict';
@@ -186,9 +254,9 @@ describe('CoreTransaction with SQLite', () => {
               WHEN NEW.state = 'finalized'
               BEGIN SELECT RAISE(ABORT, 'completion failed'); END;
             `);
-            await expect(transactions.completePending(completion)).rejects.toThrow(
-              'completion failed',
-            );
+            await expect(
+              transactionRunner.run((tx) => tx.perform(completePendingSend, completion)),
+            ).rejects.toThrow('completion failed');
             expect((await repositories.sendOperationRepository.getById(operation.id))?.state).toBe(
               'pending',
             );
@@ -197,7 +265,9 @@ describe('CoreTransaction with SQLite', () => {
             ).toMatchObject(input);
             return;
           }
-          const result = await transactions.completePending(completion);
+          const result = await transactionRunner.run((tx) =>
+            tx.perform(completePendingSend, completion),
+          );
           expect(result.releasedInputSecrets).toEqual(tokenless ? [input.secret] : []);
           if (tokenless) {
             expect(result.operation.token).toBeUndefined();
@@ -217,18 +287,22 @@ describe('CoreTransaction with SQLite', () => {
             mintUrl,
             send.secret,
           );
-          await transactions.claimRecovery({
-            operationId: operation.id,
-            expectedRevision: 0,
-            updatedAt: 2000,
-          });
-          const result = await transactions.applyResult({
-            operationId: operation.id,
-            updatedAt: 3000,
-            keepProofs: [],
-            sendProofs: [send],
-            token: { mint: mintUrl, unit: 'sat', proofs: [send] },
-          });
+          await transactionRunner.run((tx) =>
+            tx.perform(claimSendRecovery, {
+              operationId: operation.id,
+              expectedRevision: 0,
+              updatedAt: 2000,
+            }),
+          );
+          const result = await transactionRunner.run((tx) =>
+            tx.perform(applySendResult, {
+              operationId: operation.id,
+              updatedAt: 3000,
+              keepProofs: [],
+              sendProofs: [send],
+              token: { mint: mintUrl, unit: 'sat', proofs: [send] },
+            }),
+          );
           expect(result.operation.state).toBe('pending');
           expect(result.savedProofs).toEqual([]);
           expect(await repositories.proofRepository.getProofBySecret(mintUrl, send.secret)).toEqual(
@@ -245,7 +319,9 @@ describe('CoreTransaction with SQLite', () => {
             BEGIN SELECT RAISE(ABORT, 'recovery failed'); END;
           `);
           await expect(
-            transactions.recoverLegacyExact({ operationId: operation.id, updatedAt: 2000 }),
+            transactionRunner.run((tx) =>
+              tx.perform(recoverLegacyExactSend, { operationId: operation.id, updatedAt: 2000 }),
+            ),
           ).rejects.toThrow('recovery failed');
           expect((await repositories.sendOperationRepository.getById(operation.id))?.state).toBe(
             'executing',
@@ -254,7 +330,9 @@ describe('CoreTransaction with SQLite', () => {
             await repositories.proofRepository.getProofBySecret(mintUrl, input.secret),
           ).toMatchObject(input);
         } else {
-          await transactions.recoverLegacyExact({ operationId: operation.id, updatedAt: 2000 });
+          await transactionRunner.run((tx) =>
+            tx.perform(recoverLegacyExactSend, { operationId: operation.id, updatedAt: 2000 }),
+          );
           expect((await repositories.sendOperationRepository.getById(operation.id))?.state).toBe(
             'rolled_back',
           );
@@ -287,8 +365,8 @@ describe('CoreTransaction with SQLite', () => {
 
     try {
       await expect(
-        runner.run((scope) => {
-          pending = [scope.keypairs.allocate(input), scope.keypairs.importP2pk(imported)];
+        runner.run((tx) => {
+          pending = [tx.keypairs.allocate(input), tx.keypairs.importP2pk(imported)];
           return Promise.all(pending);
         }),
       ).rejects.toThrow('import failed');
@@ -302,7 +380,7 @@ describe('CoreTransaction with SQLite', () => {
       expect(
         await repositories.keyRingRepository.getLastAllocatedIndex('nut20_mint_quote'),
       ).toBeNull();
-      await expect(runner.run((scope) => scope.keypairs.allocate(input))).resolves.toMatchObject({
+      await expect(runner.run((tx) => tx.keypairs.allocate(input))).resolves.toMatchObject({
         derivationIndex: 0,
       });
     } finally {

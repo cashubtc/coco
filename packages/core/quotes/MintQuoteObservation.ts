@@ -3,6 +3,7 @@ import {
   isStatefulMintQuote,
   type MintQuote,
 } from '../models/MintQuote';
+import { hasSameMintQuoteOwnership } from './MintQuoteOwnership.ts';
 
 export type MintQuoteObservationDisposition =
   | 'accepted-meaningful-change'
@@ -40,7 +41,7 @@ function hasMeaningfulChange(existing: MintQuote | null, incoming: MintQuote): b
     existing.request !== incoming.request ||
     existing.unit !== incoming.unit ||
     existing.expiry !== incoming.expiry ||
-    (existing.pubkey ?? null) !== (incoming.pubkey ?? null) ||
+    !hasSameMintQuoteOwnership(existing.method, existing.pubkey, incoming.pubkey) ||
     existing.reusable !== incoming.reusable ||
     !existing.amountPaid.equals(incoming.amountPaid) ||
     !existing.amountIssued.equals(incoming.amountIssued)

@@ -2,7 +2,8 @@ import type { Amount, Mint, Proof } from '@cashu/cashu-ts';
 
 export type MintInfo = Awaited<ReturnType<Mint['getInfo']>>;
 
-export type ProofState = 'inflight' | 'ready' | 'spent';
+/** `pending` is mint-held; `inflight` includes outgoing proofs still claimable by a recipient. */
+export type ProofState = 'inflight' | 'pending' | 'ready' | 'spent';
 
 export interface BalanceSnapshot {
   spendable: Amount;

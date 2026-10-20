@@ -23,6 +23,31 @@ async function executingEnvironment() {
 }
 
 describe('Receive recovery', () => {
+  it('preserves a pending proof from Restore when applying unspent issuance evidence', async () => {
+    const env = await executingEnvironment();
+    const proofs = receivedCoreProofs(env.executing);
+    const pending = {
+      ...proofs[0]!,
+      state: 'pending' as const,
+      createdByOperationId: undefined,
+    };
+    await env.repositories.proofRepository.saveProofs(receiveMint, [pending]);
+    const result = await env.transactions.applyResult({
+      operationId: env.executing.id,
+      updatedAt: Date.now(),
+      proofs,
+    });
+    expect(result?.operation.state).toBe('finalized');
+    expect(
+      (await env.repositories.proofRepository.getProofsBySecrets(receiveMint, [pending.secret]))[0],
+    ).toEqual(pending);
+    expect(
+      (await env.repositories.proofRepository.getAvailableProofs(receiveMint)).some(
+        (proof) => proof.secret === pending.secret,
+      ),
+    ).toBe(false);
+  });
+
   it('replays exactly the saved request after restart without loading a seed', async () => {
     const env = await executingEnvironment();
     env.remote.checkProofStates.mockImplementation(async (proofs) => proofStates(proofs));
@@ -275,7 +300,7 @@ describe('Receive recovery', () => {
       updatedAt: Date.now(),
       proofs: outputs,
     });
-    expect(replay?.committed).toBe(false);
+    expect(replay?.changed).toBe(false);
     expect(await env.repositories.proofRepository.getAvailableProofs(receiveMint)).toEqual([]);
   });
 });

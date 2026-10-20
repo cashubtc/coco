@@ -16,11 +16,12 @@ import type {
   PaymentRequestReceiveOperationRepository,
   ReceiveOperationRepository,
   RepositoryTransactionScope,
+  MintSwapPersistence,
 } from '@cashu/coco-core/adapter';
 import { IdbDb, type IdbDbOptions } from './lib/db.ts';
 import { ensureSchema } from './lib/schema.ts';
 import { IdbMintRepository } from './repositories/MintRepository.ts';
-import { IdbKeysetRepository } from './repositories/KeysetRepository.ts';
+import { IdbKeysetRepository, ScopedIdbKeysetRepository } from './repositories/KeysetRepository.ts';
 import { IdbKeyRingRepository } from './repositories/KeyRingRepository.ts';
 import { IdbCounterRepository } from './repositories/CounterRepository.ts';
 import { IdbProofRepository } from './repositories/ProofRepository.ts';
@@ -37,8 +38,9 @@ import {
   IdbPaymentRequestReceiveAttemptRepository,
   IdbPaymentRequestReceiveOperationRepository,
 } from './repositories/PaymentRequestReceiveRepository.ts';
+import { IdbMintSwapOperationRepository } from './repositories/MintSwapOperationRepository.ts';
 
-export interface IndexedDbRepositoriesOptions extends IdbDbOptions {}
+export type IndexedDbRepositoriesOptions = IdbDbOptions;
 
 export class IndexedDbRepositories implements Repositories {
   readonly mintRepository: MintRepository;
@@ -57,6 +59,7 @@ export class IndexedDbRepositories implements Repositories {
   readonly receiveOperationRepository: ReceiveOperationRepository;
   readonly paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
   readonly paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
+  readonly mintSwap: MintSwapPersistence;
   readonly db: IdbDb;
   private initialized = false;
 
@@ -82,6 +85,7 @@ export class IndexedDbRepositories implements Repositories {
     this.paymentRequestReceiveAttemptRepository = new IdbPaymentRequestReceiveAttemptRepository(
       this.db,
     );
+    this.mintSwap = { operationRepository: new IdbMintSwapOperationRepository(this.db) };
   }
 
   async init(): Promise<void> {
@@ -106,7 +110,7 @@ export class IndexedDbRepositories implements Repositories {
         mintRepository: new IdbMintRepository(scopedDb),
         keyRingRepository: new IdbKeyRingRepository(scopedDb),
         counterRepository: new IdbCounterRepository(scopedDb),
-        keysetRepository: new IdbKeysetRepository(scopedDb),
+        keysetRepository: new ScopedIdbKeysetRepository(scopedDb),
         proofRepository: new IdbProofRepository(scopedDb),
         meltQuoteRepository: new IdbMeltQuoteRepository(scopedDb),
         mintQuoteRepository: new IdbMintQuoteRepository(scopedDb),
@@ -123,6 +127,7 @@ export class IndexedDbRepositories implements Repositories {
         paymentRequestReceiveAttemptRepository: new IdbPaymentRequestReceiveAttemptRepository(
           scopedDb,
         ),
+        mintSwap: { operationRepository: new IdbMintSwapOperationRepository(scopedDb) },
       };
       return fn(scopedRepositories);
     });
@@ -148,4 +153,5 @@ export {
   IdbReceiveOperationRepository,
   IdbPaymentRequestReceiveOperationRepository,
   IdbPaymentRequestReceiveAttemptRepository,
+  IdbMintSwapOperationRepository,
 };

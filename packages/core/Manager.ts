@@ -1,8 +1,6 @@
-import { CoreReceiveTransactions } from './transactions/receive/ReceiveTransactions.ts';
-import { CashuReceiveRemote } from './infra/handlers/receive/CashuReceiveRemote.ts';
 import type { OutputDataCreator } from '@cashu/cashu-ts';
-import { CoreMintMetadataTransactions } from './transactions/mints/MintMetadataTransactions.ts';
 import { StoredMintQueries } from './mints/MintMetadata.ts';
+import { StoredBalanceQueries, type BalanceQueries } from './proofs/BalanceQueries.ts';
 import { CashuSendRemote } from './infra/handlers/send/CashuSendRemote.ts';
 import type {
   Repositories,
@@ -37,6 +35,7 @@ import {
 import { SendOperationService } from './operations/send/SendOperationService';
 import { MeltOperationService } from './operations/melt/MeltOperationService';
 import { MintOperationService } from './operations/mint/MintOperationService';
+import { CashuReceiveRemote } from './infra/handlers/receive/CashuReceiveRemote.ts';
 import { ReceiveOperationService } from './operations/receive/ReceiveOperationService';
 import { MintScopedLock } from './operations/MintScopedLock';
 import {
@@ -85,8 +84,6 @@ import {
 } from './models/MintQuote.ts';
 import { assessMintQuoteClaimability } from './models/MintQuoteClaimability.ts';
 import { RepositoryCoreTransactionRunner } from './transactions/CoreTransaction.ts';
-import { CoreSendTransactions } from './transactions/send/SendTransactions.ts';
-import { CoreKeyRingTransactions } from './transactions/keypairs/KeyRingTransactions.ts';
 import { KeypairDerivation } from './keypairs/KeypairDerivation.ts';
 import { KeypairP2pkSigner } from './keypairs/P2pkSigner.ts';
 
@@ -324,6 +321,7 @@ export class Manager {
   private paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
   private paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
   private proofRepository: Repositories['proofRepository'];
+  private balanceQueries: BalanceQueries;
   private readonly pluginHost: PluginHost = new PluginHost();
   private subscriptionsPaused = false;
   private originalWatcherConfig: CocoConfig['watchers'];
@@ -355,7 +353,10 @@ export class Manager {
       refillPerMinute: 20,
       logger: this.getChildLogger('RequestRateLimiter'),
     });
-    this.mintAdapter = new MintAdapter(this.mintRequestProvider);
+    this.mintAdapter = new MintAdapter(
+      this.mintRequestProvider,
+      this.getChildLogger('MintAdapter'),
+    );
 
     this.originalWatcherConfig = watchers;
     this.originalProcessorConfig = processors;
@@ -389,6 +390,7 @@ export class Manager {
     this.mintOperationService = core.mintOperationService;
     this.mintOperationRepository = core.mintOperationRepository;
     this.proofRepository = repositories.proofRepository;
+    this.balanceQueries = core.balanceQueries;
     this.subscriptions = this.createSubscriptionManager(webSocketFactory, subscriptions);
     const apis = this.buildApis();
     this.mint = apis.mint;
@@ -908,6 +910,7 @@ export class Manager {
     authService: AuthService;
     mintOperationService: MintOperationService;
     mintOperationRepository: MintOperationRepository;
+    balanceQueries: BalanceQueries;
   } {
     const mintLogger = this.getChildLogger('MintService');
     const walletLogger = this.getChildLogger('WalletService');
@@ -918,7 +921,7 @@ export class Manager {
     const historyLogger = this.getChildLogger('HistoryService');
     const tokenLogger = this.getChildLogger('TokenService');
     const seedService = new SeedService(seedGetter);
-    const coreTransactionRunner = new RepositoryCoreTransactionRunner(
+    const transactionRunner = new RepositoryCoreTransactionRunner(
       repositories,
       this.outputDataCreator,
     );
@@ -932,17 +935,16 @@ export class Manager {
       this.mintAdapter,
       {
         queries: mintQueries,
-        transactions: new CoreMintMetadataTransactions(coreTransactionRunner),
+        transactionRunner,
       },
       mintLogger,
       this.eventBus,
     );
-    const keyRingTransactions = new CoreKeyRingTransactions(coreTransactionRunner);
     const keypairDerivation = new KeypairDerivation(() => seedService.getSeed());
     const p2pkSigner = new KeypairP2pkSigner(repositories.keyRingRepository);
     const keyRingService = new KeyRingService(
       repositories.keyRingRepository,
-      keyRingTransactions,
+      transactionRunner,
       keypairDerivation,
       p2pkSigner,
       keyRingLogger,
@@ -960,6 +962,10 @@ export class Manager {
       counterLogger,
       this.eventBus,
     );
+    const balanceQueries = new StoredBalanceQueries(
+      repositories.proofRepository,
+      repositories.mintRepository,
+    );
     const proofService = new ProofService(
       counterService,
       repositories.proofRepository,
@@ -970,14 +976,16 @@ export class Manager {
       proofLogger,
       this.eventBus,
       this.outputDataCreator,
+      balanceQueries,
     );
     const walletRestoreService = new WalletRestoreService(
       proofService,
-      counterService,
+      transactionRunner,
       walletService,
       this.mintRequestProvider,
       walletRestoreLogger,
       this.outputDataCreator,
+      this.eventBus,
     );
 
     // One shared instance across every counter-consuming operation service so that
@@ -990,11 +998,10 @@ export class Manager {
       default: new DefaultSendHandler(),
       p2pk: new P2pkSendHandler(),
     });
-    const sendTransactions = new CoreSendTransactions(coreTransactionRunner);
     const sendOperationService = new SendOperationService({
       operationQueries: repositories.sendOperationRepository,
       proofQueries: repositories.proofRepository,
-      transactions: sendTransactions,
+      transactionRunner,
       mintQueries: repositories.mintRepository,
       mintMetadataRefresh: mintService,
       remote: new CashuSendRemote(
@@ -1016,7 +1023,7 @@ export class Manager {
     const receiveOperationLogger = this.getChildLogger('ReceiveOperationService');
     const receiveOperationService = new ReceiveOperationService({
       operations: repositories.receiveOperationRepository,
-      transactions: new CoreReceiveTransactions(coreTransactionRunner),
+      transactionRunner,
       mintQueries: repositories.mintRepository,
       mintMetadataRefresh: mintService,
       signer: p2pkSigner,
@@ -1059,35 +1066,37 @@ export class Manager {
       withMintQuoteTransaction: (fn) =>
         repositories.withTransaction(({ mintQuoteRepository }) => fn(mintQuoteRepository)),
     });
-    const meltOperationService = new MeltOperationService(
-      meltHandlerProvider,
-      repositories.meltOperationRepository,
+    const meltOperationService = new MeltOperationService({
+      handlerProvider: meltHandlerProvider,
+      meltOperationQueries: repositories.meltOperationRepository,
+      proofQueries: repositories.proofRepository,
+      transactionRunner,
+      loadSeed: () => seedService.getSeed(),
       quoteLifecycle,
-      repositories.proofRepository,
-      proofService,
       mintService,
       walletService,
-      this.mintAdapter,
-      this.eventBus,
-      meltOperationLogger,
+      mintAdapter: this.mintAdapter,
+      eventBus: this.eventBus,
+      logger: meltOperationLogger,
       mintScopedLock,
-    );
+    });
     const meltOperationRepository = repositories.meltOperationRepository;
 
     const mintOperationLogger = this.getChildLogger('MintOperationService');
-    const mintOperationService = new MintOperationService(
-      mintHandlerProvider,
-      repositories.mintOperationRepository,
+    const mintOperationService = new MintOperationService({
+      handlerProvider: mintHandlerProvider,
+      mintOperationQueries: repositories.mintOperationRepository,
+      proofQueries: repositories.proofRepository,
+      transactionRunner,
+      loadSeed: () => seedService.getSeed(),
       quoteLifecycle,
-      repositories.proofRepository,
-      proofService,
       mintService,
       walletService,
-      this.mintAdapter,
-      this.eventBus,
-      mintOperationLogger,
+      mintAdapter: this.mintAdapter,
+      eventBus: this.eventBus,
+      logger: mintOperationLogger,
       mintScopedLock,
-    );
+    });
     const mintOperationRepository = repositories.mintOperationRepository;
 
     const historyService = new HistoryService(
@@ -1154,6 +1163,7 @@ export class Manager {
       authService,
       mintOperationService,
       mintOperationRepository,
+      balanceQueries,
     };
   }
 
@@ -1177,6 +1187,7 @@ export class Manager {
       this.receiveOperationService,
       this.tokenService,
       walletApiLogger,
+      this.balanceQueries,
     );
     const keyring = new KeyRingApi(this.keyRingService);
     const history = new HistoryApi(this.historyService);

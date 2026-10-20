@@ -6,20 +6,22 @@ compatibility support for persisted legacy rows.
 
 ## Ownership of effects
 
-| Boundary              | Owner                                 | Committed changes                                                                 |
-| --------------------- | ------------------------------------- | --------------------------------------------------------------------------------- |
-| Metadata prerequisite | `MintService.refreshAndCommitIfStale` | Independently committed mint metadata; may survive later preparation failure      |
-| Prepare               | `ReceiveTransactions.prepare`         | Signed inputs, fee, deterministic outputs, counter allocation, prepared operation |
-| Authorize             | `ReceiveTransactions.beginExecution`  | Prepared → executing, revision increment                                          |
-| Claim recovery        | `ReceiveTransactions.claimRecovery`   | Conditional executing revision increment before remote work                       |
-| Apply issuance        | `ReceiveTransactions.applyResult`     | Missing proofs, conclusive spent-state updates, finalized operation               |
-| Reject or cancel      | `failExecution` / `cancel`            | Conditional terminal state; committed counters remain consumed                    |
-| Legacy cleanup        | `cleanupLegacyInit`                   | Delete only a row still in init                                                   |
+| Boundary              | Owner                                    | Committed changes                                                                 |
+| --------------------- | ---------------------------------------- | --------------------------------------------------------------------------------- |
+| Metadata prerequisite | `MintService.refreshAndCommitIfStale`    | Independently committed mint metadata; may survive later preparation failure      |
+| Prepare               | `prepareReceive`                         | Signed inputs, fee, deterministic outputs, counter allocation, prepared operation |
+| Authorize             | `beginReceiveExecution`                  | Prepared → executing, revision increment                                          |
+| Claim recovery        | `claimReceiveRecovery`                   | Conditional executing revision increment before remote work                       |
+| Apply issuance        | `applyReceiveResult`                     | Missing proofs, conclusive spent-state updates, finalized operation               |
+| Reject or cancel      | `failReceiveExecution` / `cancelReceive` | Conditional terminal state; committed counters remain consumed                    |
+| Legacy cleanup        | `cleanupReceiveInit`                     | Delete only a row still in init                                                   |
 
-Each gateway method opens one runner transaction. Receive composes shared scoped mint trust,
-proof fee/reconciliation, and output allocation commands from that same adapter scope. These
-modules receive neither Services nor a transaction opener. Authorizing reads occur inside the
-transaction; the coordinator has only informational queries, its gateway, and explicit effects.
+The Receive coordinator opens one runner transaction for each transition through `tx.perform`.
+Branded transitions compose shared scoped mint trust, proof fee/reconciliation, and output allocation
+capabilities from that same adapter scope. Transitions receive neither Services nor a transaction
+opener. Authorizing reads occur inside the transaction; the coordinator receives informational
+queries, the shared runner, and explicit effects. Transitions can also compose inside a larger local
+transaction without opening another one.
 
 Preflight decodes the token, checks any input DLEQ through cashu-ts, signs P2PK inputs with existing
 keys, removes input blinding data from the mint request, and loads the seed. The protocol adapter
@@ -69,11 +71,11 @@ uses authoritative stored data; abandoned init cleanup cannot delete a prepared 
 Payment Request Receive commits the child before linking the attempt. A failed link preserves the
 validating attempt; recovery locates that child by source attempt ID and links it before execution.
 Parent/attempt/child atomicity remains owned by the later Payment Request migration. Incoming token
-proofs are not locally reserved; the mint resolves competing receives. Legacy Mint/Melt counter
-writers still share the session's mint lock until their migrations. Live events remain best effort;
+proofs are not locally reserved; the mint resolves competing receives. The remaining legacy output allocators
+still share the session's mint lock until their migrations. Live events remain best effort;
 this change adds no durable outbox or uniform nested-transaction rejection.
 
-Behavior tests exercise real gateways with memory and SQLite, including interrupted grouped writes,
+Behavior tests exercise real transitions with memory and SQLite, including interrupted grouped writes,
 independent connections, late rejection races, immutable replay, partial legacy saves, and post-commit
 listener failure. Protocol tests use real Cashu blinding/unblinding and inspect submitted requests.
 The adapter contracts cover conditional revisions, nested snapshot isolation, and grouped rollback.

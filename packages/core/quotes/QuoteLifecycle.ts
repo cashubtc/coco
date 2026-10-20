@@ -61,6 +61,7 @@ import type {
   MintQuotePollingResult,
 } from './MintQuotePolling.ts';
 import { resolveMintQuoteObservation } from './MintQuoteObservation.ts';
+import { hasSameMintQuoteOwnership } from './MintQuoteOwnership.ts';
 import { assessMintQuoteClaimability } from '../models/MintQuoteClaimability.ts';
 
 const BUILT_IN_MINT_METHODS = new Set<MintMethod>(['bolt11', 'bolt12', 'onchain']);
@@ -179,7 +180,7 @@ function areMintQuotePollingSnapshotsEqual(
     normalizeUnit(left.unit) !== normalizeUnit(right.unit) ||
     left.expiry !== right.expiry ||
     left.updated_at !== right.updated_at ||
-    left.pubkey !== right.pubkey
+    !hasSameMintQuoteOwnership(method, left.pubkey, right.pubkey)
   ) {
     return false;
   }
@@ -379,6 +380,7 @@ export class QuoteLifecycle {
     QuoteLifecycleDeps['withMintQuoteTransaction']
   >;
   private readonly mintQuoteObservationLock = new MintScopedLock();
+  private readonly meltQuoteObservationLock = new MintScopedLock();
   private readonly batchUnavailablePollingMethodsByMint = new Map<string, Set<MintMethod>>();
 
   constructor(deps: QuoteLifecycleDeps) {
@@ -866,7 +868,7 @@ export class QuoteLifecycle {
       snapshot.quote !== quoteId ||
       snapshot.request !== existing.request ||
       normalizeUnit(snapshot.unit) !== existing.unit ||
-      (snapshot.pubkey ?? undefined) !== (existing.pubkey ?? undefined)
+      !hasSameMintQuoteOwnership(method, snapshot.pubkey, existing.pubkey)
     ) {
       throw new MintQuoteValidationError(
         `Mint quote ${quoteId} batch observation conflicts with canonical identity fields`,
@@ -1451,8 +1453,20 @@ export class QuoteLifecycle {
    * changed meaningfully.
    */
   async recordMeltQuoteObservation(canonicalQuote: MeltQuote): Promise<MeltQuote> {
-    const { quote, remoteQuoteChanged } =
-      await this.resolveAndPersistMeltQuoteObservation(canonicalQuote);
+    const observationKey = JSON.stringify([
+      normalizeMintUrl(canonicalQuote.mintUrl),
+      canonicalQuote.method,
+      canonicalQuote.quoteId,
+    ]);
+    const release = await this.meltQuoteObservationLock.acquire(observationKey);
+    let observation: { quote: MeltQuote; remoteQuoteChanged: boolean };
+    try {
+      // Serialize freshness-only writes with settlement so a refresh cannot overwrite PAID.
+      observation = await this.resolveAndPersistMeltQuoteObservation(canonicalQuote);
+    } finally {
+      release();
+    }
+    const { quote, remoteQuoteChanged } = observation;
     await this.emitMeltQuoteUpdatedIfNeeded(quote, remoteQuoteChanged);
     return quote;
   }
@@ -1484,6 +1498,22 @@ export class QuoteLifecycle {
 
     const remoteQuoteChanged = getMeltQuoteChange(existing, canonicalQuote);
     if (!remoteQuoteChanged && existing) {
+      // An unchanged state can still be fresh non-payment evidence for an authorized operation.
+      // Persist observation metadata without emitting a duplicate quote update or moving it back.
+      const observedAt = canonicalQuote.lastObservedRemoteStateAt;
+      if (
+        canonicalQuote.lastObservedRemoteState === canonicalQuote.state &&
+        observedAt !== undefined &&
+        observedAt > (existing.lastObservedRemoteStateAt ?? -1)
+      ) {
+        const quote = await this.persistCanonicalMeltQuote({
+          ...existing,
+          lastObservedRemoteState: canonicalQuote.lastObservedRemoteState,
+          lastObservedRemoteStateAt: observedAt,
+          updatedAt: Math.max(existing.updatedAt, canonicalQuote.updatedAt),
+        });
+        return { quote, remoteQuoteChanged: false };
+      }
       return {
         quote: existing,
         remoteQuoteChanged: false,

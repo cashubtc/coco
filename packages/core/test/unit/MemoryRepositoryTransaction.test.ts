@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'bun:test';
-import { runRepositoryTransactionContract } from '@cashu/coco-adapter-tests';
+import {
+  runKeysetRepositoryContract,
+  runRepositoryTransactionContract,
+} from '@cashu/coco-adapter-tests';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 
 async function createRepositories() {
@@ -27,6 +30,8 @@ runRepositoryTransactionContract(
   },
   { describe, it, expect },
 );
+
+runKeysetRepositoryContract({ createRepositories }, { describe, it, expect });
 
 describe('MemoryRepositories transaction byte isolation', () => {
   it('rolls back mutations to Buffer-backed key material', async () => {

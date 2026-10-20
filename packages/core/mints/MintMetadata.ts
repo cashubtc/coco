@@ -32,14 +32,14 @@ export interface MintQueries {
 export class StoredMintQueries implements MintQueries {
   constructor(
     private readonly mints: {
-      getAllMints(): Promise<Mint[]>;
+      findMintByUrl(mintUrl: string): Promise<Mint | null>;
     },
     private readonly keysets: { getKeysetsByMintUrl(mintUrl: string): Promise<Keyset[]> },
   ) {}
 
   async getMetadata(mintUrl: string): Promise<MintMetadata | null> {
     mintUrl = normalizeMintUrl(mintUrl);
-    const mint = (await this.mints.getAllMints()).find((item) => item.mintUrl === mintUrl);
+    const mint = await this.mints.findMintByUrl(mintUrl);
     if (!mint) return null;
     const keysets = await this.keysets.getKeysetsByMintUrl(mintUrl);
     return { mint, keysets: keysets.filter((keyset) => !isBlsKeyset(keyset.id)) };

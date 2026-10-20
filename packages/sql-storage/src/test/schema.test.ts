@@ -56,7 +56,9 @@ const EXPECTED_MIGRATION_IDS = [
   '039_send_operation_revision',
   '040_send_execution_memo',
   '041_send_reclaim_data',
-  '042_receive_operation_revision',
+  '042_mint_swap_operations',
+  '043_pending_proofs',
+  '044_receive_operation_revision',
 ] as const;
 
 async function allocateP2pkKey(db: SqlDatabase) {
@@ -328,6 +330,52 @@ describe('shared SQL schema migrations', () => {
     await expect(allocateP2pkKey(db)).resolves.toMatchObject({ derivationIndex: 7 });
     expect(await repository.getLastAllocatedIndex('nut20_mint_quote')).toBe(3);
     expect(await repository.getHighestStoredDerivationIndex('nut20_mint_quote')).toBe(3);
+  });
+
+  itWithDatabase('installs only the Mint Swap parent schema and required indexes', async (db) => {
+    await ensureSchemaUpTo(db, '042_mint_swap_operations');
+    expect(
+      await db.get(`SELECT name FROM sqlite_master WHERE name = 'coco_cashu_mint_swap_operations'`),
+    ).toBeUndefined();
+
+    await ensureSchemaUpTo(db);
+
+    expect(await getColumnNames(db, 'coco_cashu_mint_swap_operations')).toEqual([
+      'id',
+      'state',
+      'revision',
+      'nextAttemptAt',
+      'createdAt',
+      'updatedAt',
+      'sourceQuoteMintUrl',
+      'sourceQuoteMethod',
+      'sourceQuoteId',
+      'destinationQuoteMintUrl',
+      'destinationQuoteMethod',
+      'destinationQuoteId',
+      'sourceOperationId',
+      'destinationOperationId',
+      'recordJson',
+    ]);
+    expect(await getIndexNames(db, 'coco_cashu_mint_swap_operations')).toEqual(
+      expect.arrayContaining([
+        'ux_coco_cashu_mint_swap_source_quote',
+        'ux_coco_cashu_mint_swap_destination_quote',
+        'ux_coco_cashu_mint_swap_source_child',
+        'ux_coco_cashu_mint_swap_destination_child',
+        'idx_coco_cashu_mint_swap_state_revision',
+        'idx_coco_cashu_mint_swap_state_due',
+      ]),
+    );
+    expect(
+      await db.get(`SELECT name FROM sqlite_master WHERE name LIKE '%operation_event_outbox%'`),
+    ).toBeUndefined();
+    expect(await getColumnNames(db, 'coco_cashu_melt_operations')).not.toEqual(
+      expect.arrayContaining(['parentSwapOperationId', 'parentExecutionPhase']),
+    );
+    expect(await getColumnNames(db, 'coco_cashu_mint_operations')).not.toContain(
+      'parentSwapOperationId',
+    );
   });
 
   itWithDatabase('normalizes pre-purpose keypairs before allocation backfill', async (db) => {
@@ -1251,17 +1299,69 @@ describe('shared SQL schema migrations', () => {
   );
 });
 
+describe('pending proof migration', () => {
+  it('preserves historical proof material, ownership, counters and indexes', async () => {
+    const database = new Database(':memory:');
+    const db = createBunSqlDatabase(database);
+    try {
+      await ensureSchemaUpTo(db, '043_pending_proofs');
+      await db.run(
+        `INSERT INTO coco_cashu_proofs
+        (mintUrl, id, unit, amount, secret, C, dleqJson, witnessJson, state, createdAt, usedByOperationId, createdByOperationId)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          'https://mint.test',
+          'old',
+          'usd',
+          '9007199254740993',
+          'secret',
+          'C',
+          '{"e":"e","s":"s","r":"r"}',
+          '"witness"',
+          'inflight',
+          123,
+          'send',
+          'mint',
+        ],
+      );
+      const repositories = new SqlStorageRepositories({ database: db });
+      await repositories.counterRepository.setCounter('https://mint.test', 'old', 47);
+      const before = await db.all('SELECT * FROM coco_cashu_proofs');
+      const indices = await db.all<{ name: string }>(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'coco_cashu_proofs' ORDER BY name",
+      );
+      await ensureSchemaUpTo(db);
+      expect(await db.all('SELECT * FROM coco_cashu_proofs')).toEqual(before);
+      expect(
+        (await repositories.counterRepository.getCounter('https://mint.test', 'old'))?.counter,
+      ).toBe(47);
+      expect(
+        await db.all(
+          "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'coco_cashu_proofs' ORDER BY name",
+        ),
+      ).toEqual(indices);
+      await db.run("UPDATE coco_cashu_proofs SET state = 'pending'");
+      expect((await db.get<{ state: string }>('SELECT state FROM coco_cashu_proofs'))?.state).toBe(
+        'pending',
+      );
+    } finally {
+      database.close();
+    }
+  });
+});
+
 describe('Receive revision migration', () => {
   for (const oldMigration of [
     undefined,
     '040_receive_operation_revision',
     '041_receive_operation_revision',
+    '042_receive_operation_revision',
   ]) {
     it(`preserves legacy requests and existing revisions from ${oldMigration ?? 'no revision column'}`, async () => {
       const database = new Database(':memory:');
       const db = createBunSqlDatabase(database);
       try {
-        await ensureSchemaUpTo(db, '042_receive_operation_revision');
+        await ensureSchemaUpTo(db, '044_receive_operation_revision');
         if (oldMigration) {
           await db.exec(
             'ALTER TABLE coco_cashu_receive_operations ADD COLUMN revision INTEGER NOT NULL DEFAULT 0',

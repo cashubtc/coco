@@ -12,7 +12,16 @@ import type { PreparedOrLaterOperation } from '../../operations/receive/ReceiveO
 import type { Repositories, RepositoryTransactionScope } from '../../repositories/index.ts';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
-import { CoreReceiveTransactions } from '../../transactions/receive/ReceiveTransactions.ts';
+import {
+  prepareReceive,
+  beginReceiveExecution,
+  claimReceiveRecovery,
+  applyReceiveResult,
+  failReceiveExecution,
+  cancelReceive,
+  cleanupReceiveInit,
+} from '../../operations/receive/ReceiveTransitions.ts';
+import type { Transition } from '../../transactions/Transition.ts';
 import {
   computeYHexForSecrets,
   getSecretsFromSerializedOutputData,
@@ -113,9 +122,20 @@ export async function createReceiveEnvironment(
     active: true,
     feePpk: 0,
   });
-  const transactions = new CoreReceiveTransactions(
-    new RepositoryCoreTransactionRunner(repositories),
-  );
+  const transactionRunner = new RepositoryCoreTransactionRunner(repositories);
+  const run =
+    <I, O>(transition: Transition<I, O>) =>
+    (input: I) =>
+      transactionRunner.run((tx) => tx.perform(transition, input));
+  const transactions = {
+    prepare: run(prepareReceive),
+    beginExecution: run(beginReceiveExecution),
+    claimRecovery: run(claimReceiveRecovery),
+    applyResult: run(applyReceiveResult),
+    failExecution: run(failReceiveExecution),
+    cancel: run(cancelReceive),
+    cleanupLegacyInit: run(cleanupReceiveInit),
+  };
   const eventBus = new EventBus<CoreEvents>();
   const remoteSession = {
     receive: mock<ReceiveRemoteSession['receive']>(async (request) =>
@@ -137,7 +157,7 @@ export async function createReceiveEnvironment(
   const metadataRemote = createMintMetadataRemoteDouble();
   const dependencies: ReceiveOperationServiceDependencies = {
     operations: repositories.receiveOperationRepository,
-    transactions,
+    transactionRunner,
     mintQueries: repositories.mintRepository,
     mintMetadataRefresh: createMintServiceForMetadata(repositories, metadataRemote, eventBus),
     signer: new KeypairP2pkSigner(repositories.keyRingRepository),
@@ -152,6 +172,7 @@ export async function createReceiveEnvironment(
   const prepare = async (token = receiveToken()) => service.prepare(await service.init(token));
   return {
     repositories,
+    transactionRunner,
     transactions,
     eventBus,
     remote,

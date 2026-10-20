@@ -39,7 +39,7 @@ jobs:
       - name: Run sqlite3 local adapter tests
         run: |
           cd packages/sqlite3
-          bun run vitest run src/test/contract.test.ts
+          bun run vitest run src/test/contract.test.ts src/test/mintSwapComposition.test.ts
 
       - name: Run sqlite3 integration tests
         run: ./scripts/test-integration.sh sqlite3

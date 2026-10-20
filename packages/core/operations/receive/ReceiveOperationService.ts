@@ -22,8 +22,7 @@ import { createKeyChain } from '@core/proofs/KeysetSelection.ts';
 import { prepareProofsForReceiving } from '@core/proofs/ProofPreparation.ts';
 import type { MintService } from '@core/services/MintService.ts';
 import { decodeTokenWithKeysets } from '@core/tokens/TokenDecoding.ts';
-import type { ReceiveTransactions } from '@core/transactions/receive/ReceiveTransactions.ts';
-import type { AppliedReceiveResult } from '@core/transactions/receive/types.ts';
+import type { CoreTransactionRunner } from '@core/transactions/CoreTransaction.ts';
 import {
   computeYHexForSecrets,
   generateSubId,
@@ -45,6 +44,17 @@ import {
 import type { ReceiveOperationQueries } from './ReceiveOperationQueries.ts';
 import type { ReceiveRemote, ReceiveRemoteSession } from './ReceiveRemote.ts';
 
+import {
+  prepareReceive,
+  beginReceiveExecution,
+  claimReceiveRecovery,
+  applyReceiveResult,
+  failReceiveExecution,
+  cancelReceive,
+  cleanupReceiveInit,
+} from './ReceiveTransitions.ts';
+import type { AppliedReceiveResult } from './ReceiveTransitionTypes.ts';
+
 // Request-validation failures prove non-effect only on the first submission, before any recovery
 // claimant can replay it. Pending, already-spent, already-signed, and unknown errors do not.
 const INITIAL_REJECTION_CODES = new Set([
@@ -54,7 +64,7 @@ type Publications = Array<() => Promise<void>>;
 
 export interface ReceiveOperationServiceDependencies {
   operations: ReceiveOperationQueries;
-  transactions: ReceiveTransactions;
+  transactionRunner: CoreTransactionRunner;
   mintQueries: { isTrustedMint(mintUrl: string): Promise<boolean> };
   mintMetadataRefresh: Pick<MintService, 'refreshAndCommitIfStale'>;
   signer: P2pkSigner;
@@ -150,7 +160,10 @@ export class ReceiveOperationService {
       const releaseMint = await this.mintLock.acquire(operation.mintUrl);
       let prepared;
       try {
-        prepared = await this.deps.transactions.prepare({ operation, activeKeys, seed, updatedAt });
+        const preparedInput = { operation, activeKeys, seed, updatedAt };
+        prepared = await this.deps.transactionRunner.run((tx) =>
+          tx.perform(prepareReceive, preparedInput),
+        );
       } finally {
         releaseMint();
       }
@@ -182,22 +195,28 @@ export class ReceiveOperationService {
         );
       // Metadata loading can fail without turning a never-submitted operation into executing.
       const remote = await this.openRemote(current);
-      const executing = await this.deps.transactions.beginExecution({
+      const executingInput = {
         operationId: id,
         updatedAt: Date.now(),
-      });
+      };
+      const executing = await this.deps.transactionRunner.run((tx) =>
+        tx.perform(beginReceiveExecution, executingInput),
+      );
       let received: Proof[];
       try {
         received = await remote.receive(executing);
       } catch (error) {
         if (error instanceof MintOperationError && INITIAL_REJECTION_CODES.has(error.code)) {
           try {
-            const failed = await this.deps.transactions.failExecution({
+            const failedInput = {
               operationId: id,
               expectedRevision: executing.revision ?? 0,
               updatedAt: Date.now(),
               error: error.message,
-            });
+            };
+            const failed = await this.deps.transactionRunner.run((tx) =>
+              tx.perform(failReceiveExecution, failedInput),
+            );
             this.publishRolledBack(publications, failed);
             throw error;
           } catch (failure) {
@@ -224,11 +243,14 @@ export class ReceiveOperationService {
           operationId,
           `Cannot finalize operation in state ${operation.state}`,
         );
-      const result = await this.deps.transactions.applyResult({
+      const resultInput = {
         operationId,
         proofs: [],
         updatedAt: Date.now(),
-      });
+      };
+      const result = await this.deps.transactionRunner.run((tx) =>
+        tx.perform(applyReceiveResult, resultInput),
+      );
       if (!result)
         throw new ProofValidationError('Cannot finalize receive operation: outputs not persisted');
       this.publishApplied(publications, result);
@@ -243,22 +265,28 @@ export class ReceiveOperationService {
     try {
       const operation = await this.require(operationId);
       if (operation.state !== 'executing') return;
-      const local = await this.deps.transactions.applyResult({
+      const localInput = {
         operationId,
         proofs: [],
         updatedAt: Date.now(),
-      });
+      };
+      const local = await this.deps.transactionRunner.run((tx) =>
+        tx.perform(applyReceiveResult, localInput),
+      );
       if (local) {
         this.publishApplied(publications, local);
         return;
       }
       const remote = await this.openRemote(operation);
       // This fences a late rejection from the initial executor before any recovery submission.
-      const claimed = await this.deps.transactions.claimRecovery({
+      const claimedInput = {
         operationId,
         expectedRevision: operation.revision ?? 0,
         updatedAt: Date.now(),
-      });
+      };
+      const claimed = await this.deps.transactionRunner.run((tx) =>
+        tx.perform(claimReceiveRecovery, claimedInput),
+      );
       let states = await this.observeStates(remote, claimed.inputProofs);
       if (states.every((state) => state.state === 'UNSPENT')) {
         try {
@@ -283,22 +311,28 @@ export class ReceiveOperationService {
           { unit: claimed.unit, createdByOperationId: claimed.id },
         ),
       );
-      const result = await this.deps.transactions.applyResult({
+      const resultInput = {
         operationId,
         proofs,
         updatedAt: Date.now(),
-      });
+      };
+      const result = await this.deps.transactionRunner.run((tx) =>
+        tx.perform(applyReceiveResult, resultInput),
+      );
       if (result) {
         this.publishApplied(publications, result);
       } else if (restored.length === 0) {
         // Complete input SPENT evidence plus a well-formed empty Restore proves this allocation
         // was not issued. Any local output or a newer claimant blocks the terminal transition.
-        const failed = await this.deps.transactions.failExecution({
+        const failedInput = {
           operationId,
           expectedRevision: claimed.revision ?? 0,
           updatedAt: Date.now(),
           error: 'Recovered: input proofs spent without recoverable outputs',
-        });
+        };
+        const failed = await this.deps.transactionRunner.run((tx) =>
+          tx.perform(failReceiveExecution, failedInput),
+        );
         this.publishRolledBack(publications, failed);
       }
     } catch (error) {
@@ -332,14 +366,17 @@ export class ReceiveOperationService {
     proofs: Proof[],
     publications: Publications,
   ) {
-    const result = await this.deps.transactions.applyResult({
+    const resultInput = {
       operationId: operation.id,
       updatedAt: Date.now(),
       proofs: mapProofToCoreProof(operation.mintUrl, 'ready', proofs, {
         unit: operation.unit,
         createdByOperationId: operation.id,
       }),
-    });
+    };
+    const result = await this.deps.transactionRunner.run((tx) =>
+      tx.perform(applyReceiveResult, resultInput),
+    );
     if (!result) throw new ProofValidationError('Receive result is incomplete');
     this.publishApplied(publications, result);
     return result.operation;
@@ -357,7 +394,7 @@ export class ReceiveOperationService {
       for (const operation of await this.deps.operations.getByState('init')) {
         try {
           await this.locked(operation.id, () =>
-            this.deps.transactions.cleanupLegacyInit(operation.id),
+            this.deps.transactionRunner.run((tx) => tx.perform(cleanupReceiveInit, operation.id)),
           );
         } catch (error) {
           this.deps.logger?.warn('Receive init cleanup deferred', {
@@ -381,11 +418,14 @@ export class ReceiveOperationService {
 
   async rollback(operationId: string, reason = 'User cancelled receive operation'): Promise<void> {
     await this.locked(operationId, async (publications) => {
-      const result = await this.deps.transactions.cancel({
+      const resultInput = {
         operationId,
         updatedAt: Date.now(),
         reason,
-      });
+      };
+      const result = await this.deps.transactionRunner.run((tx) =>
+        tx.perform(cancelReceive, resultInput),
+      );
       if (result) this.publishRolledBack(publications, result);
     });
   }
@@ -429,7 +469,7 @@ export class ReceiveOperationService {
   }
 
   private publishApplied(publications: Publications, result: AppliedReceiveResult) {
-    if (!result.committed) return;
+    if (!result.changed) return;
     const byKeyset = new Map<string, typeof result.savedProofs>();
     for (const proof of result.savedProofs) {
       const group = byKeyset.get(proof.id) ?? [];

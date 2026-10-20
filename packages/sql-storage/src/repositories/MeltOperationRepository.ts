@@ -7,7 +7,7 @@ import {
   stringifyJson,
 } from '@cashu/coco-core/adapter';
 import type { SqlDatabase, SqlValue } from '../index.ts';
-import { getUnixTimeSeconds, assertFieldPresent } from '../utils.ts';
+import { assertFieldPresent } from '../utils.ts';
 
 type MeltOperation = NonNullable<Awaited<ReturnType<MeltOperationRepository['getById']>>>;
 type MeltOperationState = Parameters<MeltOperationRepository['getByState']>[0];
@@ -228,7 +228,7 @@ export class SqliteMeltOperationRepository implements MeltOperationRepository {
 
     await this.assertNoDuplicateQuoteOperation(operation);
 
-    const updatedAtSeconds = getUnixTimeSeconds();
+    const updatedAtSeconds = Math.floor(operation.updatedAt / 1000);
 
     if (operation.state === 'init') {
       await this.db.run(

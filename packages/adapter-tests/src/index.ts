@@ -20,6 +20,7 @@ import {
   type KeypairPurpose,
   type Keypair,
   DerivationIndexExhaustedError,
+  KeysetKeysConflictError,
   QuoteIdentityConflictError,
   RepositoryTransactionConflictError,
 } from '@cashu/coco-core/adapter';
@@ -247,6 +248,266 @@ export function runKeypairAllocationContract(
             2,
             expect,
           );
+        } finally {
+          await dispose();
+        }
+      });
+    }
+  });
+}
+
+export async function runKeysetRepositoryContract(
+  options: ContractOptions,
+  runner: ContractRunner,
+): Promise<void> {
+  const { describe, it, expect } = runner;
+
+  describe('keyset repository contract', () => {
+    for (const empty of [false, true]) {
+      for (const shared of [false, true]) {
+        if (shared && !options.createSharedRepositories) continue;
+        it(`preserves keys across concurrent metadata and key writes (empty: ${empty}, shared: ${shared})`, async () => {
+          const { first, second, dispose } = shared
+            ? await options.createSharedRepositories!()
+            : await options.createRepositories().then(({ repositories, dispose }) => ({
+                first: repositories,
+                second: repositories,
+                dispose,
+              }));
+          try {
+            const keyset = { ...createDummyKeyset(), keypairs: { '1': '02aa' }, active: false };
+            if (empty) await first.keysetRepository.updateKeyset(keyset);
+            const writes = [
+              () => first.keysetRepository.updateKeyset(keyset),
+              () => second.keysetRepository.addKeyset(keyset),
+            ];
+            const results = await Promise.allSettled(writes.map((write) => write()));
+            expect(results.some((result) => result.status === 'fulfilled')).toBe(true);
+            for (const [index, result] of results.entries()) {
+              if (result.status === 'rejected') {
+                // Independent SQL writers may reject contention; retry only after both settle.
+                expect(shared).toBe(true);
+                expect(result.reason?.name).toBe(RepositoryTransactionConflictError.name);
+                await writes[index]!();
+              }
+            }
+            const stored = await first.keysetRepository.getKeysetById(keyset.mintUrl, keyset.id);
+            expect(stored?.keypairs['1']).toBe(keyset.keypairs['1']);
+            expect(stored?.active).toBe(false);
+            await expectThrowsNamed(
+              () => second.keysetRepository.addKeyset({ ...keyset, keypairs: { '1': '02ff' } }),
+              KeysetKeysConflictError.name,
+              expect,
+            );
+          } finally {
+            await dispose();
+          }
+        });
+      }
+    }
+
+    for (const empty of [false, true]) {
+      for (const transactional of [false, true]) {
+        for (const shared of [false, true]) {
+          if (shared && !options.createSharedRepositories) continue;
+          it(`rejects conflicting concurrent keysets (empty: ${empty}, transaction: ${transactional}, shared: ${shared})`, async () => {
+            const fixture = shared
+              ? await options.createSharedRepositories!()
+              : await options.createRepositories().then(({ repositories, dispose }) => ({
+                  first: repositories,
+                  second: repositories,
+                  dispose,
+                }));
+            const { first, second, dispose } = fixture;
+            try {
+              const keyset = createDummyKeyset();
+              if (empty) await first.keysetRepository.updateKeyset(keyset);
+              const candidates = [
+                { ...keyset, keypairs: { '1': '02aa' }, active: true, feePpk: 1 },
+                { ...keyset, keypairs: { '1': '02ff' }, active: false, feePpk: 2 },
+              ];
+              const results = await Promise.allSettled(
+                [first, second].map((repositories, index) =>
+                  transactional
+                    ? repositories.withTransaction((scope) =>
+                        scope.keysetRepository.addKeyset(candidates[index]!),
+                      )
+                    : repositories.keysetRepository.addKeyset(candidates[index]!),
+                ),
+              );
+              expect(results.filter((result) => result.status === 'fulfilled').length).toBe(1);
+              expect(results.filter((result) => result.status === 'rejected').length).toBe(1);
+              const rejected = results.find((result) => result.status === 'rejected');
+              expect(
+                rejected?.status === 'rejected' &&
+                  [KeysetKeysConflictError.name, RepositoryTransactionConflictError.name].includes(
+                    rejected.reason?.name,
+                  ),
+              ).toBe(true);
+              const winner =
+                candidates[results.findIndex((result) => result.status === 'fulfilled')]!;
+              const stored = await first.keysetRepository.getKeysetById(keyset.mintUrl, keyset.id);
+              expect(stored?.keypairs['1']).toBe(winner.keypairs['1']);
+              expect(stored?.active).toBe(winner.active);
+              expect(stored?.feePpk).toBe(winner.feePpk);
+              await second.keysetRepository.addKeyset(winner);
+            } finally {
+              await dispose();
+            }
+          });
+        }
+      }
+    }
+
+    it('allows concurrent identical keys and preserves keys on a metadata-only write', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const keyset = { ...createDummyKeyset(), keypairs: { '1': '02aa' } };
+        await Promise.all([
+          repositories.keysetRepository.addKeyset(keyset),
+          repositories.keysetRepository.addKeyset(keyset),
+        ]);
+        await repositories.withTransaction(async (scope) => {
+          await scope.keysetRepository.addKeyset({ ...keyset, keypairs: {}, active: false });
+          await scope.keysetRepository.addKeyset({ ...keyset, active: false });
+        });
+        const stored = await repositories.keysetRepository.getKeysetById(keyset.mintUrl, keyset.id);
+        expect(stored?.keypairs['1']).toBe('02aa');
+        expect(stored?.active).toBe(false);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('rolls back the full transaction when a keyset write conflicts', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const keyset = createDummyKeyset();
+        await expectThrowsNamed(
+          () =>
+            repositories.withTransaction(async (scope) => {
+              await scope.mintRepository.addOrUpdateMint(createDummyMint());
+              await scope.keysetRepository.addKeyset({ ...keyset, keypairs: { '1': '02aa' } });
+              await scope.keysetRepository.addKeyset({ ...keyset, keypairs: { '1': '02ff' } });
+            }),
+          KeysetKeysConflictError.name,
+          expect,
+        );
+        expect(await repositories.keysetRepository.getKeysetById(keyset.mintUrl, keyset.id)).toBe(
+          null,
+        );
+        expect((await repositories.mintRepository.getAllMints()).length).toBe(0);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('keeps stored keys when a keyset is written again', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const keyset = createDummyKeyset();
+        const keys = { '1': '02aa', '2': '02bb' };
+        await repositories.keysetRepository.addKeyset({ ...keyset, keypairs: keys });
+
+        // A keyset id commits to its keys (NUT-02), so re-writing the same keys is a no-op
+        // that still refreshes the metadata around them.
+        await repositories.keysetRepository.addKeyset({
+          ...keyset,
+          keypairs: { '2': '02bb', '1': '02aa' },
+          active: false,
+          feePpk: 4,
+        });
+
+        const stored = await repositories.keysetRepository.getKeysetById(keyset.mintUrl, keyset.id);
+        expect(stored?.keypairs['1']).toBe('02aa');
+        expect(stored?.keypairs['2']).toBe('02bb');
+        expect(stored?.active).toBe(false);
+        expect(stored?.feePpk).toBe(4);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('rejects a write that would replace stored keys with different keys', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const keyset = createDummyKeyset();
+        await repositories.keysetRepository.addKeyset({ ...keyset, keypairs: { '1': '02aa' } });
+
+        await expectThrowsNamed(
+          () => repositories.keysetRepository.addKeyset({ ...keyset, keypairs: { '1': '02ff' } }),
+          KeysetKeysConflictError.name,
+          expect,
+        );
+
+        const stored = await repositories.keysetRepository.getKeysetById(keyset.mintUrl, keyset.id);
+        expect(stored?.keypairs['1']).toBe('02aa');
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('backfills keys onto a keyset recorded without them', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const keyset = createDummyKeyset();
+        const { keypairs: _ignored, updatedAt: _updatedAt, ...metadata } = keyset;
+        await repositories.keysetRepository.updateKeyset(metadata);
+        await repositories.keysetRepository.addKeyset({ ...keyset, keypairs: { '1': '02aa' } });
+
+        const stored = await repositories.keysetRepository.getKeysetById(keyset.mintUrl, keyset.id);
+        expect(stored?.keypairs['1']).toBe('02aa');
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('does not let concurrent writers replace the winning keyset keys', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const keyset = createDummyKeyset();
+        const results = await Promise.all([
+          settle(
+            repositories.keysetRepository.addKeyset({
+              ...keyset,
+              keypairs: { '1': '02aa' },
+            }),
+          ),
+          settle(
+            repositories.keysetRepository.addKeyset({
+              ...keyset,
+              keypairs: { '1': '02ff' },
+            }),
+          ),
+        ]);
+
+        expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+        const rejected = results.find((result) => result.status === 'rejected');
+        expect(
+          rejected?.status === 'rejected' && rejected.reason instanceof Error
+            ? rejected.reason.name
+            : undefined,
+        ).toBe(KeysetKeysConflictError.name);
+        const stored = await repositories.keysetRepository.getKeysetById(keyset.mintUrl, keyset.id);
+        expect(stored?.keypairs['1'] === '02aa' || stored?.keypairs['1'] === '02ff').toBe(true);
+      } finally {
+        await dispose();
+      }
+    });
+
+    if (options.createSharedRepositories) {
+      it('reconciles keyset keys across independent roots sharing one store', async () => {
+        const { first, second, dispose } = await options.createSharedRepositories!();
+        try {
+          const keyset = createDummyKeyset();
+          const results = await Promise.all([
+            settle(first.keysetRepository.addKeyset({ ...keyset, keypairs: { '1': '02aa' } })),
+            settle(second.keysetRepository.addKeyset({ ...keyset, keypairs: { '1': '02ff' } })),
+          ]);
+
+          expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+          const stored = await first.keysetRepository.getKeysetById(keyset.mintUrl, keyset.id);
+          expect(stored?.keypairs['1'] === '02aa' || stored?.keypairs['1'] === '02ff').toBe(true);
         } finally {
           await dispose();
         }
@@ -1160,6 +1421,26 @@ export async function runMintOperationRepositoryContract(
         expect(stored).toBeDefined();
         expect(stored!.state).toBe('init');
         expect(stored!.quoteId).toBe('init-mint-quote');
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('preserves the coordinator timestamp when updating mint operations', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = createDummyMintOperation({ createdAt: 1000, updatedAt: 1000 });
+        await repositories.mintOperationRepository.create(operation);
+        await repositories.withTransaction(async ({ mintOperationRepository }) => {
+          await mintOperationRepository.update({
+            ...operation,
+            state: 'executing',
+            updatedAt: 2000,
+          });
+        });
+        expect((await repositories.mintOperationRepository.getById(operation.id))?.updatedAt).toBe(
+          2000,
+        );
       } finally {
         await dispose();
       }
@@ -2359,6 +2640,22 @@ export async function runMeltOperationRepositoryContract(
   const { describe, it, expect } = runner;
 
   describe('MeltOperationRepository contract', () => {
+    it('preserves the coordinator timestamp when updating melt operations', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = createDummyMeltOperation({ createdAt: 1000, updatedAt: 1000 });
+        await repositories.meltOperationRepository.create(operation);
+        await repositories.withTransaction(async ({ meltOperationRepository }) => {
+          await meltOperationRepository.update({ ...operation, updatedAt: 2000 });
+        });
+        expect((await repositories.meltOperationRepository.getById(operation.id))?.updatedAt).toBe(
+          2000,
+        );
+      } finally {
+        await dispose();
+      }
+    });
+
     it('round-trips custom-unit init melt operations', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {
@@ -2541,6 +2838,35 @@ export async function runProofRepositoryContract(
   const { describe, it, expect } = runner;
 
   describe('ProofRepository contract', () => {
+    it('persists pending proofs across units and excludes them from available and inflight proofs', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const proof = createDummyProof({ secret: 'pending', state: 'pending' });
+        const other = createDummyProof({ secret: 'other', state: 'pending', unit: 'usd' });
+        await repositories.proofRepository.saveProofs(proof.mintUrl, [proof, other]);
+        for (const expected of [proof, other]) {
+          const stored = await repositories.proofRepository.getProofBySecret(
+            expected.mintUrl,
+            expected.secret,
+          );
+          expect(stored?.state).toBe('pending');
+          expect(stored?.unit).toBe(expected.unit);
+          expect(stored?.amount.equals(expected.amount)).toBe(true);
+        }
+        expect(await repositories.proofRepository.getAvailableProofs(proof.mintUrl)).toHaveLength(
+          0,
+        );
+        expect(await repositories.proofRepository.getInflightProofs()).toHaveLength(0);
+        await repositories.proofRepository.setProofState(proof.mintUrl, [proof.secret], 'ready');
+        const available = await repositories.proofRepository.getAvailableProofs(proof.mintUrl);
+        expect(available).toHaveLength(1);
+        expect(available[0]!.secret).toBe(proof.secret);
+        expect(available[0]!.state).toBe('ready');
+      } finally {
+        await dispose();
+      }
+    });
+
     it('preserves request material across metadata mutations and caller-owned snapshots', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {
@@ -2746,3 +3072,8 @@ export type { IntegrationTestRunner, IntegrationTestOptions } from './integratio
 // export type { MigrationTestRunner, MigrationTestOptions } from './migrations.ts';
 export { createFakeInvoice } from 'fake-bolt11';
 export type { FakeInvoiceOptions } from 'fake-bolt11';
+export {
+  createMintSwapFixtures,
+  runMintSwapPersistenceContract,
+  type MintSwapContractOptions,
+} from './mintSwap.ts';

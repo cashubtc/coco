@@ -15,6 +15,8 @@ import type { MintService } from '../../services/MintService.ts';
 import type { MintOperationService } from '../../operations/mint/MintOperationService.ts';
 import type {
   FailedMintOperation,
+  FinalizedMintOperation,
+  MintOperation,
   PendingMintOperation,
 } from '../../operations/mint/MintOperation.ts';
 import type { MintQuote } from '../../models/MintQuote.ts';
@@ -77,6 +79,23 @@ describe('MintOperationWatcherService', () => {
       createdAt: Date.now(),
       updatedAt: Date.now(),
     }) as PendingMintOperation<'onchain'>;
+
+  const makeBolt12Operation = (): PendingMintOperation<'bolt12'> =>
+    ({
+      id: 'mint-op-bolt12-1',
+      state: 'pending',
+      mintUrl,
+      method: 'bolt12',
+      methodData: {},
+      amount: Amount.from(10),
+      unit: 'sat',
+      quoteId,
+      request: 'lno1offer',
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      outputData: '{"keep":[],"send":[]}' as unknown as PendingMintOperation['outputData'],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    }) as PendingMintOperation<'bolt12'>;
 
   const makeBolt11Quote = (): MintQuote<'bolt11'> => ({
     mintUrl,
@@ -977,5 +996,190 @@ describe('MintOperationWatcherService', () => {
 
     await watcher.stop();
     expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps quote watching when an operation starts executing', async () => {
+    const operation = makePendingOperation();
+
+    const watcher = makeWatcher({
+      mintOperations: {
+        getPendingOperations: mock(async () => [operation]),
+      } as unknown as MintOperationService,
+      options: { watchExistingPendingQuotesOnStart: false },
+    });
+
+    await watcher.start();
+    expect(subscribe).toHaveBeenCalledTimes(1);
+
+    await bus.emit('mint-op:executing', {
+      mintUrl,
+      operationId: operation.id,
+      operation: { ...operation, state: 'executing' } as unknown as MintOperation,
+    });
+
+    expect(unsubscribe).not.toHaveBeenCalled();
+
+    await watcher.stop();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops watching once the canonical quote completes', async () => {
+    const operation = makePendingOperation();
+    const completedQuote: MintQuote<'bolt11'> = {
+      ...makeBolt11Quote(),
+      state: 'ISSUED',
+      amountPaid: Amount.from(10),
+      amountIssued: Amount.from(10),
+    };
+
+    const watcher = makeWatcher({
+      options: { watchExistingPendingOnStart: false, watchExistingPendingQuotesOnStart: false },
+    });
+
+    await watcher.start();
+    await bus.emit('mint-op:pending', {
+      mintUrl,
+      operationId: operation.id,
+      operation,
+    });
+    expect(subscribe).toHaveBeenCalledTimes(1);
+
+    await bus.emit('mint-quote:updated', {
+      mintUrl,
+      method: 'bolt11',
+      quoteId,
+      quote: completedQuote,
+    });
+
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+
+    await watcher.stop();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('releases quote watches when the mint is untrusted', async () => {
+    const operation = makePendingOperation();
+
+    const watcher = makeWatcher({
+      options: { watchExistingPendingOnStart: false, watchExistingPendingQuotesOnStart: false },
+    });
+
+    await watcher.start();
+    await bus.emit('mint-op:pending', {
+      mintUrl,
+      operationId: operation.id,
+      operation,
+    });
+    expect(subscribe).toHaveBeenCalledTimes(1);
+
+    await bus.emit('mint:untrusted', { mintUrl });
+
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+
+    await watcher.stop();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps BOLT12 quote watching across operation executing, finalized and failed events', async () => {
+    const operation = makeBolt12Operation();
+
+    const watcher = makeWatcher({
+      mintOperations: {
+        getPendingOperations: mock(async () => [operation]),
+      } as unknown as MintOperationService,
+      options: { watchExistingPendingQuotesOnStart: false },
+    });
+
+    await watcher.start();
+    expect(subscribe).toHaveBeenCalledTimes(1);
+
+    await bus.emit('mint-op:executing', {
+      mintUrl,
+      operationId: operation.id,
+      operation: { ...operation, state: 'executing' } as unknown as MintOperation,
+    });
+    await bus.emit('mint-op:finalized', {
+      mintUrl,
+      operationId: operation.id,
+      operation: { ...operation, state: 'finalized' } as unknown as FinalizedMintOperation,
+    });
+    await bus.emit('mint-op:failed', {
+      mintUrl,
+      operationId: operation.id,
+      operation: makeFailedOperation(operation as unknown as PendingMintOperation),
+    });
+
+    expect(unsubscribe).not.toHaveBeenCalled();
+
+    await watcher.stop();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  const expectWatchKeptWhenOperationEventArrivesDuringAcquisition = async (
+    emitOperationEvent: (operation: PendingMintOperation) => Promise<void>,
+  ) => {
+    const operation = makePendingOperation();
+    let releaseSubscribe: (() => void) | undefined;
+    const subscribeGate = new Promise<void>((resolve) => {
+      releaseSubscribe = resolve;
+    });
+    subscribe = mock(async () => {
+      await subscribeGate;
+      return { subId: 'sub-1', unsubscribe };
+    });
+
+    const watcher = makeWatcher({
+      options: { watchExistingPendingOnStart: false, watchExistingPendingQuotesOnStart: false },
+    });
+
+    await watcher.start();
+    const pendingEmit = bus.emit('mint-op:pending', {
+      mintUrl,
+      operationId: operation.id,
+      operation,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(subscribe).toHaveBeenCalledTimes(1);
+
+    await emitOperationEvent(operation);
+
+    releaseSubscribe?.();
+    await pendingEmit;
+
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    expect(unsubscribe).not.toHaveBeenCalled();
+
+    await watcher.stop();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  };
+
+  it('keeps the quote watch when an operation starts executing while subscription is being acquired', async () => {
+    await expectWatchKeptWhenOperationEventArrivesDuringAcquisition((operation) =>
+      bus.emit('mint-op:executing', {
+        mintUrl,
+        operationId: operation.id,
+        operation: { ...operation, state: 'executing' } as unknown as MintOperation,
+      }),
+    );
+  });
+
+  it('keeps the quote watch when an operation finalizes while subscription is being acquired', async () => {
+    await expectWatchKeptWhenOperationEventArrivesDuringAcquisition((operation) =>
+      bus.emit('mint-op:finalized', {
+        mintUrl,
+        operationId: operation.id,
+        operation: { ...operation, state: 'finalized' },
+      }),
+    );
+  });
+
+  it('keeps the quote watch when an operation fails while subscription is being acquired', async () => {
+    await expectWatchKeptWhenOperationEventArrivesDuringAcquisition((operation) =>
+      bus.emit('mint-op:failed', {
+        mintUrl,
+        operationId: operation.id,
+        operation: makeFailedOperation(operation),
+      }),
+    );
   });
 });
