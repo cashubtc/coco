@@ -252,8 +252,10 @@ changes. Matching existing proofs and unchanged counters produce no duplicate up
 Listener failures follow the existing post-commit publication policy and do not undo the Restore.
 
 Remove `CounterService.overwriteCounter()` when its Restore caller moves, without retaining a
-compatibility wrapper. Migrate the remaining legacy output allocators, including Receive and sweep,
-then remove CounterService and its plugin-facing entry once no callers remain. These removals
+compatibility wrapper. Receive now owns its transactional Output Allocation, and Sweep delegates
+exchanges through Receive's public coordinator methods. Legacy plugin-facing ProofService allocation helpers and
+CounterService remain; migrate their remaining callers, then remove CounterService and its
+plugin-facing entry once no callers remain. These removals
 intentionally change the plugin-facing service API. Restore's migration alone does not establish
 exclusive Output Allocation or prevent later stale writes by legacy counter callers.
 

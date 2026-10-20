@@ -140,6 +140,10 @@ _Avoid_: Recovery, Wallet Import, restored mint, restored wallet
 The act of reconciling persisted in-flight wallet operations after interruption so local operation state, proof state, and mint state agree again.
 _Avoid_: Restore, restart, resume
 
+**Sweep**:
+The act of discovering proofs from a source Wallet Seed and exchanging their available value for newly issued proofs belonging to the destination Wallet. Unlike Restore, Sweep transfers value through a mint exchange.
+_Avoid_: Restore, Wallet Import
+
 **Pending Proof**:
 A proof retained by the Wallet as unavailable while a mint-reported transaction remains unresolved.
 Its return to spendable funds depends on resolving that transaction and respecting any local
