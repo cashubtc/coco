@@ -1,5 +1,5 @@
-import { reconcileKeysetKeypairs } from '@cashu/coco-core/adapter';
-import type { KeysetRepository, Keyset } from '@cashu/coco-core/adapter';
+import { reconcileKeysetKeypairs } from '@cashu/coco-core/internal';
+import type { KeysetRepository, Keyset } from '@cashu/coco-core/internal';
 import type { IdbDb, KeysetRow } from '../lib/db.ts';
 
 export class ScopedIdbKeysetRepository implements KeysetRepository {

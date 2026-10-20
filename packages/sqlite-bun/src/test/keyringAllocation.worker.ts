@@ -1,7 +1,7 @@
 import { parentPort, workerData } from 'node:worker_threads';
 import { Database } from 'bun:sqlite';
-import { allocateKeypairForTest } from '@cashu/coco-adapter-tests';
-import { SqliteRepositories } from '../index.ts';
+import { allocateKeypairForTest } from '@cashu/coco-adapter-tests/internal';
+import { SqliteRepositories } from '../internal.ts';
 
 type AllocationWorkerData = {
   filename: string;

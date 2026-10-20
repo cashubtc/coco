@@ -46,12 +46,12 @@ repository implementation when instantiating. The `@cashu/coco-sqlite` package
 helps us bridge `better-sqlite3` to Coco.
 
 ```ts
-// repo.ts
-import { SqliteRepositories } from '@cashu/coco-sqlite';
+// storage.ts
+import { createSqliteStorage } from '@cashu/coco-sqlite';
 import Database from 'better-sqlite3';
 
 const db = new Database('./coco.db');
-export const repo = new SqliteRepositories({ database: db });
+export const storage = createSqliteStorage({ database: db });
 ```
 
 ### Websockets
@@ -72,12 +72,12 @@ Now that we have all the parts prepared we can bring them together and instantia
 
 ```ts
 import { initializeCoco } from '@cashu/coco-core';
-import { repo } from './repo.ts';
+import { storage } from './storage.ts';
 import { websocketFactory } from './websocket.ts';
 import { cachedSeedGetter } from './seedgetter.ts';
 
 export const coco = await initializeCoco({
-  repo: repo,
+  storage: storage,
   seedGetter: cachedSeedGetter(),
   websocketFactory: websocketFactory,
 });

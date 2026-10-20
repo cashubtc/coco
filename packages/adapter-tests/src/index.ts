@@ -1,3 +1,5 @@
+/** INTERNAL: no compatibility or versioning guarantees, including patch/minor releases. */
+import { createStorageHandle } from '@cashu/coco-core/internal';
 import { Amount } from '@cashu/cashu-ts';
 import { Manager } from '@cashu/coco-core';
 import {
@@ -23,7 +25,7 @@ import {
   KeysetKeysConflictError,
   QuoteIdentityConflictError,
   RepositoryTransactionConflictError,
-} from '@cashu/coco-core/adapter';
+} from '@cashu/coco-core/internal';
 
 /** Creates one initialized, isolated repository root for a contract test. */
 export type TransactionFactory<TRepositories extends Repositories = Repositories> = () => Promise<{
@@ -91,7 +93,10 @@ export async function allocateKeypairForTest(
   repositories: Repositories,
   purpose: KeypairPurpose,
 ): Promise<Keypair> {
-  const manager = new Manager(repositories, async () => new Uint8Array(64));
+  const manager = new Manager(
+    createStorageHandle(() => repositories),
+    async () => new Uint8Array(64),
+  );
   let allocate: (() => Promise<Keypair>) | undefined;
   manager.use({
     name: 'keypair-allocation-contract',

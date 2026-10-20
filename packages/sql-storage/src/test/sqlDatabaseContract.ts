@@ -1,4 +1,5 @@
 import type { SqlDatabase } from '../index.ts';
+import { SqlTransactionConflictError } from '../SqlTransactionConflictError.ts';
 
 export interface SqlDatabaseTestHandle {
   readonly database: SqlDatabase;
@@ -199,6 +200,7 @@ export function runSqlDatabaseContract(
         `);
 
         await database.transaction(async (tx) => {
+          expect(tx.maxParameters ?? 999).toBe(database.maxParameters ?? 999);
           await tx.run('INSERT INTO contract_transactions (label) VALUES (?)', ['alpha']);
         });
 
@@ -291,13 +293,99 @@ export function runSqlDatabaseContract(
         });
 
         releaseFirst.resolve();
-        await Promise.all([firstTransaction, secondTransaction]);
+        const outcomes = await Promise.allSettled([firstTransaction, secondTransaction]);
+        for (const outcome of outcomes) {
+          if (outcome.status === 'rejected') {
+            expect(outcome.reason instanceof SqlTransactionConflictError).toBe(true);
+          }
+        }
 
         const rows = await database.all<ContractLabelRow>(
           'SELECT label FROM contract_concurrent_transactions ORDER BY id ASC',
         );
-        expect(rows).toEqual([{ label: 'first' }, { label: 'second' }]);
+        expect(rows).toEqual(
+          outcomes[1]?.status === 'fulfilled'
+            ? [{ label: 'first' }, { label: 'second' }]
+            : [{ label: 'first' }],
+        );
       });
     });
+
+    it('rolls back nested work and preserves the original callback error', async () => {
+      await withDatabase(options, async (database) => {
+        await database.exec('CREATE TABLE contract_nested_rollback (value TEXT)');
+        const failure = Object.assign(new Error('database is locked'), { code: 'SQLITE_BUSY' });
+        let caught: unknown;
+        try {
+          await database.transaction(async (tx) => {
+            await tx.transaction(async (nested) => {
+              await nested.run('INSERT INTO contract_nested_rollback VALUES (?)', ['nested']);
+            });
+            throw failure;
+          });
+        } catch (error) {
+          caught = error;
+        }
+        expect(caught).toBe(failure);
+        expect(await database.all('SELECT * FROM contract_nested_rollback')).toEqual([]);
+      });
+    });
+
+    it('keeps unrelated root writes outside a rolled back transaction', async () => {
+      await withDatabase(options, async (database) => {
+        await database.exec('CREATE TABLE contract_root_exclusion (value TEXT)');
+        const entered = createDeferred();
+        const release = createDeferred();
+        const transaction = database.transaction(async (tx) => {
+          await tx.run('INSERT INTO contract_root_exclusion VALUES (?)', ['rollback']);
+          entered.resolve();
+          await release.promise;
+          throw new Error('rollback');
+        });
+        const outcome = transaction.catch(() => undefined);
+        await entered.promise;
+        const rootWrite = database.run('INSERT INTO contract_root_exclusion VALUES (?)', ['root']);
+        release.resolve();
+        await outcome;
+        await rootWrite;
+        expect(await database.all('SELECT * FROM contract_root_exclusion')).toEqual([
+          { value: 'root' },
+        ]);
+      });
+    }, 5000);
+
+    it('never commits two incompatible decisions based on the same authoritative read', async () => {
+      await withDatabase(options, async (database) => {
+        await database.exec(
+          'CREATE TABLE contract_decision (claimed INTEGER); INSERT INTO contract_decision VALUES (0)',
+        );
+        const claim = () =>
+          database.transaction(
+            async (tx) => {
+              const row = await tx.get<{ claimed: number }>(
+                'SELECT claimed FROM contract_decision',
+              );
+              if (row?.claimed) return false;
+              const result = await tx.run(
+                'UPDATE contract_decision SET claimed = 1 WHERE claimed = 0',
+              );
+              return result.changes === 1;
+            },
+            { mode: 'immediate' },
+          );
+        const outcomes = await Promise.allSettled([claim(), claim()]);
+        for (const outcome of outcomes) {
+          if (outcome.status === 'rejected')
+            expect(outcome.reason instanceof SqlTransactionConflictError).toBe(true);
+        }
+        expect(
+          outcomes.filter((result) => result.status === 'fulfilled' && result.value),
+        ).toHaveLength(1);
+        expect(
+          (await database.run('UPDATE contract_decision SET claimed = 2 WHERE claimed = 0'))
+            .changes,
+        ).toBe(0);
+      });
+    }, 5000);
   });
 }

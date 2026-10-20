@@ -17,10 +17,10 @@ import {
   runMeltOperationRepositoryContract,
   runMeltQuoteRepositoryContract,
   runMintSwapPersistenceContract,
-} from '@cashu/coco-adapter-tests';
+} from '@cashu/coco-adapter-tests/internal';
 import { runSqlDatabaseContract } from '@cashu/coco-sql-storage/test';
-import { SqliteRepositories as Repositories } from '../index.ts';
-import type { SqliteRepositoriesOptions } from '../index.ts';
+import { SqliteRepositories as Repositories } from '../internal.ts';
+import type { SqliteRepositoriesOptions } from '../internal.ts';
 import { ExpoSqliteDb } from '../db.ts';
 
 type RunResult = { changes: number; lastInsertRowId: number; lastInsertRowid: number };

@@ -1,11 +1,11 @@
-import type { MeltMethodInputData, MeltOperationRepository } from '@cashu/coco-core/adapter';
+import type { MeltMethodInputData, MeltOperationRepository } from '@cashu/coco-core/internal';
 import {
   deserializeAmount,
   normalizeMeltMethodData,
   normalizeUnit,
   serializeAmount,
   stringifyJson,
-} from '@cashu/coco-core/adapter';
+} from '@cashu/coco-core/internal';
 import type { SqlDatabase, SqlValue } from '../index.ts';
 import { assertFieldPresent } from '../utils.ts';
 

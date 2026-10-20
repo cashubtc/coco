@@ -1,15 +1,11 @@
 import { defineConfig } from 'tsdown';
 
 export default defineConfig({
-  entry: ['./src/index.ts'],
+  entry: ['./src/index.ts', './src/internal.ts'],
   format: ['esm'],
   platform: 'neutral',
   dts: true,
   sourcemap: true,
   clean: true,
-  alias: {
-    '@cashu/coco-sql-storage': '../sql-storage/src/index.ts',
-  },
-  noExternal: ['@cashu/coco-sql-storage'],
   external: ['node:fs'],
 });

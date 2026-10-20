@@ -1,4 +1,3 @@
-import { restoreOutputProofs } from '../infra/ProofRestore.ts';
 import {
   Amount,
   OutputData,
@@ -10,6 +9,8 @@ import {
   type OutputDataLike,
   type SerializedBlindedSignature,
 } from '@cashu/cashu-ts';
+import type { Keyset } from '@core/models/Keyset.ts';
+import { restoreOutputProofs } from '../infra/ProofRestore.ts';
 import type {
   BalanceBreakdown,
   BalanceQuery,
@@ -21,7 +22,7 @@ import type {
   CoreProof,
 } from '../types';
 import type { CounterService } from './CounterService';
-import type { ProofUnitFilter } from '../repositories';
+import type { ProofUnitFilter } from '../types';
 import type { ProofRepository } from '../repositories';
 import { EventBus } from '../events/EventBus';
 import type { CoreEvents } from '../events/types';
@@ -39,7 +40,6 @@ import {
   type UnitAmount,
 } from '../amounts.ts';
 import { deserializeOutputData, mapProofToCoreProof, type SerializedOutputData } from '../utils';
-import type { Keyset } from '@core/models/Keyset.ts';
 import {
   StoredBalanceQueries,
   emptyBalanceSnapshot,

@@ -24,10 +24,8 @@ import type { CoreProof, ProofState } from '../types';
 import type { MintMethodRemoteState } from '../operations/mint/MintMethodHandler';
 import type { MintSwapPersistence } from '../operations/mintSwap/MintSwapOperationRepository.ts';
 
-export interface ProofUnitFilter {
-  unit?: string;
-  units?: string[];
-}
+import type { ProofUnitFilter } from '../types.ts';
+export type { ProofUnitFilter } from '../types.ts';
 
 export interface MintRepository {
   isTrustedMint(mintUrl: string): Promise<boolean>;

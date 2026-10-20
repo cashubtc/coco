@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
 import sqlite3 from 'sqlite3';
 import { runMigrationTests } from '@cashu/coco-adapter-tests';
 import { ensureSchemaUpTo } from '@cashu/coco-sql-storage';
-import { SqliteRepositories, SqliteDb } from '../index.ts';
+import { SqliteRepositories, SqliteDb } from '../internal.ts';
 
 async function createRepositories() {
   const database = new sqlite3.Database(':memory:');

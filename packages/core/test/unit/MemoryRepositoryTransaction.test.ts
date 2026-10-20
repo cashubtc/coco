@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import {
   runKeysetRepositoryContract,
   runRepositoryTransactionContract,
-} from '@cashu/coco-adapter-tests';
+} from '@cashu/coco-adapter-tests/internal';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 
 async function createRepositories() {

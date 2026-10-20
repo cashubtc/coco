@@ -6,7 +6,7 @@ import {
   ExpoSqliteRepositories,
   ExpoSqliteDb,
   type ExpoSqliteRepositoriesOptions,
-} from '../index.ts';
+} from '../internal.ts';
 
 type RunResult = { changes: number; lastInsertRowId: number; lastInsertRowid: number };
 

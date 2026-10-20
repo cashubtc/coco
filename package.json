@@ -28,7 +28,7 @@
   },
   "scripts": {
     "build": "bun scripts/build.ts build",
-    "build:test:core": "bun run --filter='@cashu/coco-core' build && bun run --filter='@cashu/coco-adapter-tests' build",
+    "build:test:core": "bun run --filter='@cashu/coco-core' build && bun run --filter='@cashu/coco-sql-storage' build && bun run --filter='@cashu/coco-adapter-tests' build",
     "typecheck": "bun scripts/build.ts typecheck",
     "test:coverage:core": "bun run build:test:core && bun test scripts/scope-core-coverage.test.ts && bun test packages/core/test/unit --coverage --coverage-reporter=lcov --coverage-dir=coverage/core && bun scripts/scope-core-coverage.ts coverage/core/lcov.info .",
     "docs:dev": "vitepress dev packages/docs",
@@ -36,6 +36,7 @@
     "docs:preview": "vitepress preview packages/docs",
     "security:release-age": "bun scripts/check-release-age.ts",
     "format": "prettier . --write",
-    "format:check": "prettier . --check"
+    "format:check": "prettier . --check",
+    "test:storage-consumer": "bun test scripts/storage-consumer.test.ts"
   }
 }

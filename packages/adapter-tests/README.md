@@ -1,7 +1,11 @@
 # @cashu/coco-adapter-tests
 
 This package exports reusable test helpers that verify whether a storage adapter
-conforms to the `Repositories` contract from `@cashu/coco-core`.
+conforms to the `Repositories` internal contract from `@cashu/coco-core/internal`.
+
+This entire package is internal. It has **no compatibility or versioning guarantees, including
+patch/minor releases**. Use matching Coco release versions. Independent SQLite driver authors should
+use the supported `@cashu/coco-sql-storage/test` conformance suite instead.
 
 ## Install
 
@@ -20,7 +24,7 @@ import {
   runRepositoryTransactionContract,
   runKeypairAllocationContract,
   runAuthSessionRepositoryContract,
-} from '@cashu/coco-adapter-tests';
+} from '@cashu/coco-adapter-tests/internal';
 import { MyAdapterRepositories } from './src';
 
 runRepositoryTransactionContract(

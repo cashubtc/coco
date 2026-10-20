@@ -5,7 +5,7 @@ import {
   type LegacyMintQuoteRepository,
   type MintMethodRemoteState,
   type MintQuote,
-} from '@cashu/coco-core/adapter';
+} from '@cashu/coco-core/internal';
 import type { IdbDb } from '../lib/db.ts';
 
 type LegacyMintQuoteRow = {

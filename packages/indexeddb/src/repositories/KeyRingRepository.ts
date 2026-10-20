@@ -1,5 +1,5 @@
 import Dexie from 'dexie';
-import type { KeyRingRepository, Keypair, KeypairPurpose } from '@cashu/coco-core/adapter';
+import type { KeyRingRepository, Keypair, KeypairPurpose } from '@cashu/coco-core/internal';
 import type { IdbDb } from '../lib/db.ts';
 import { hexToBytes, bytesToHex } from '../utils.ts';
 

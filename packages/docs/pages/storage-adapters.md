@@ -5,12 +5,11 @@ your runtime, initialize it, and pass it to `initializeCoco`.
 
 ```ts
 import { initializeCoco } from '@cashu/coco-core';
-import { SqliteRepositories } from '@cashu/coco-sqlite';
+import { createSqliteStorage } from '@cashu/coco-sqlite';
 
-const repo = new SqliteRepositories({ database: db });
-await repo.init();
+const storage = createSqliteStorage({ database: db });
 const coco = await initializeCoco({
-  repo,
+  storage,
   seedGetter,
   // other params
 });
@@ -33,24 +32,28 @@ reproduce deterministic keys created after that snapshot when the same Wallet Se
 applications must avoid exposing post-snapshot quote keys or rotate to a new seed/allocation
 namespace.
 
-## SQLite adapter public API
+## Storage contract
 
-The SQLite adapter packages share the same public shape. Import
-`SqliteRepositories` from the package that matches your runtime, open the
-database with that runtime's SQLite driver, and pass the already-opened database
-instance through the `database` option.
+Factories return opaque handles with `init(): Promise<void>`. `initializeCoco` calls it automatically.
+The supported advanced path is `await storage.init(); new Manager(storage, seedGetter)`; construction
+performs wiring only. See [the v3 migration guide](../starting/migrating-from-v2.md).
 
-Your application owns the database lifecycle. The Coco adapter creates schema
-and runs migrations when you call `repo.init()`, but it does not open or close
-the underlying database.
+SQLite factories borrow caller-opened connections; callers close them after all work completes.
+IndexedDB owns its connection and supplies `storage.close()`, which releases it without deleting data.
+`Manager.dispose()` does not close storage. Successful initialization means opening and migrations
+have completed, including IndexedDB opening failures being reported at initialization time.
 
-The public SQLite adapter packages expose the repository aggregate and its
-option type. Migration helpers, database wrapper classes, and individual
-repository classes are internal implementation details.
+The SQL runtime packages accept `{ database, mintSwap? }`. Repository methods, classes and schema
+helpers are internal. Match release versions across Coco-owned storage packages and core. Internal
+entry points have no compatibility or versioning guarantees, even across patch/minor releases.
+
+Independent SQLite runtime authors can use `@cashu/coco-sql-storage` and its `/test` conformance suite.
+See [the driver contract](https://github.com/cashubtc/coco/blob/master/packages/sql-storage/README.md).
+This does not imply PostgreSQL support or support for runtimes lacking interactive atomic transactions.
 
 ## @cashu/coco-indexeddb
 
-Implements Repositories using the IndexedDB Browser API.
+Creates opaque storage using the IndexedDB Browser API.
 
 Installation:
 
@@ -62,11 +65,11 @@ Usage:
 
 ```ts
 import { initializeCoco } from '@cashu/coco-core';
-import { IndexedDbRepositories } from '@cashu/coco-indexeddb';
+import { createIndexedDbStorage } from '@cashu/coco-indexeddb';
 
-const repo = new IndexedDbRepositories({ name: 'your-db-name' });
+const storage = createIndexedDbStorage({ name: 'your-db-name' });
 const coco = await initializeCoco({
-  repo,
+  storage,
   seedGetter,
 });
 ```
@@ -85,22 +88,18 @@ Usage:
 
 ```ts
 import { initializeCoco } from '@cashu/coco-core';
-import { SqliteRepositories } from '@cashu/coco-expo-sqlite';
+import { createSqliteStorage } from '@cashu/coco-expo-sqlite';
 import { openDatabaseAsync } from 'expo-sqlite';
 
 // Open the Expo SQLite database in your application
 const db = await openDatabaseAsync('coco-demo.db');
 // Pass the already-opened database to the storage implementation
-const repo = new SqliteRepositories({ database: db });
+const storage = createSqliteStorage({ database: db });
 const coco = await initializeCoco({
-  repo,
+  storage,
   seedGetter,
 });
 ```
-
-`ExpoSqliteRepositories` and `ExpoSqliteRepositoriesOptions` are available as
-soft-migration aliases for `SqliteRepositories` and
-`SqliteRepositoriesOptions`.
 
 ## @cashu/coco-sqlite
 
@@ -115,15 +114,15 @@ Usage:
 
 ```ts
 import { initializeCoco } from '@cashu/coco-core';
-import { SqliteRepositories } from '@cashu/coco-sqlite';
+import { createSqliteStorage } from '@cashu/coco-sqlite';
 import Database from 'better-sqlite3';
 
 // Open the better-sqlite3 database in your application
 const db = new Database('./test.db');
 // Pass the already-opened database to the storage implementation
-const repo = new SqliteRepositories({ database: db });
+const storage = createSqliteStorage({ database: db });
 const coco = await initializeCoco({
-  repo,
+  storage,
   seedGetter,
 });
 ```
@@ -142,15 +141,15 @@ Usage:
 
 ```ts
 import { initializeCoco } from '@cashu/coco-core';
-import { SqliteRepositories } from '@cashu/coco-sqlite-bun';
+import { createSqliteStorage } from '@cashu/coco-sqlite-bun';
 import { Database } from 'bun:sqlite';
 
 // Open the bun:sqlite database in your application
 const db = new Database('./test.db');
 // Pass the already-opened database to the storage implementation
-const repo = new SqliteRepositories({ database: db });
+const storage = createSqliteStorage({ database: db });
 const coco = await initializeCoco({
-  repo,
+  storage,
   seedGetter,
 });
 ```

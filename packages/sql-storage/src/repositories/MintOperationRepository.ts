@@ -1,5 +1,5 @@
-import type { MintOperationRepository } from '@cashu/coco-core/adapter';
-import { deserializeAmount, serializeAmount, stringifyJson } from '@cashu/coco-core/adapter';
+import type { MintOperationRepository } from '@cashu/coco-core/internal';
+import { deserializeAmount, serializeAmount, stringifyJson } from '@cashu/coco-core/internal';
 import type { SqlDatabase, SqlValue } from '../index.ts';
 
 type MintOperation = NonNullable<Awaited<ReturnType<MintOperationRepository['getById']>>>;

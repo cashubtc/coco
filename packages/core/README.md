@@ -2,7 +2,7 @@
 
 Modular, storage-agnostic core for working with Cashu mints and wallets.
 
-- **Storage-agnostic**: Repositories are interfaces; bring your own persistence.
+- **Storage selection**: Choose opaque storage; compatible SQLite runtimes can supply a public driver.
 - **Typed Event Bus**: Subscribe to mint, proof, quote, and counter events with strong types.
 - **High-level APIs**: `MintApi`, `WalletApi`, `AuthApi`, `PaymentRequestsApi`,
   `QuoteApi`, `HistoryApi`, `KeyRingApi`, and `manager.ops.*` for common flows.
@@ -20,15 +20,12 @@ core package, for example `@cashu/coco-sqlite`, `@cashu/coco-indexeddb`, or
 
 ## Entry points
 
-`@cashu/coco-core` publishes three stable import surfaces. Pick the narrowest
+`@cashu/coco-core` publishes two stable import surfaces. Pick the narrowest
 one that matches what you are building:
 
 ```ts
 // App and React usage
 import { initializeCoco, Amount, type Manager } from '@cashu/coco-core';
-
-// Storage adapter implementations and adapter contract tests
-import { type Repositories, serializeAmount } from '@cashu/coco-core/adapter';
 
 // Plugin authors
 import type { Plugin, PluginExtensions } from '@cashu/coco-core/plugin';
@@ -36,9 +33,6 @@ import type { Plugin, PluginExtensions } from '@cashu/coco-core/plugin';
 
 - Use the package root for app-facing wallet setup, manager APIs, public models,
   errors, amount helpers, events, logging, and config boundary types.
-- Use `@cashu/coco-core/adapter` when you are writing persistence adapters or
-  adapter contract tests. Repository contracts, persisted operation/domain
-  shapes, and serialization helpers live there.
 - Use `@cashu/coco-core/plugin` when you are writing extensions. Plugin
   lifecycle types, extension augmentation types, plugin service keys, and plugin
   errors live there.
@@ -79,16 +73,16 @@ implementation details. They are not app-facing root API.
 ## Quick start
 
 ```ts
-import { initializeCoco, MemoryRepositories, ConsoleLogger } from '@cashu/coco-core';
+import { initializeCoco, createMemoryStorage, ConsoleLogger } from '@cashu/coco-core';
 
 // Provide a deterministic 64-byte seed for wallet key derivation
 const seedGetter = async () => seed;
 
-const repos = new MemoryRepositories();
+const storage = createMemoryStorage();
 const logger = new ConsoleLogger('example', { level: 'info' });
 
 const manager = await initializeCoco({
-  repo: repos,
+  storage,
   seedGetter,
   logger,
 });
@@ -175,9 +169,9 @@ await manager.disableProofStateWatcher();
 
 ### initializeCoco options
 
-`initializeCoco` sets up repositories, plugins, watchers, and processors for you. You can configure it via `CocoConfig`:
+`initializeCoco` sets up storage, plugins, watchers, and processors for you. You can configure it via `CocoConfig`:
 
-- `repo`: `Repositories` implementation (required)
+- `storage`: `CocoStorage` from a storage factory (required)
 - `seedGetter`: async seed provider (required)
 - `logger`: optional logger (defaults to `NullLogger`)
 - `webSocketFactory`: optional WebSocket factory
@@ -188,7 +182,7 @@ await manager.disableProofStateWatcher();
   and tune intervals
 - `subscriptions`: polling intervals for hybrid WebSocket + polling (`slowPollingIntervalMs`, `fastPollingIntervalMs`)
 
-If you prefer manual wiring, construct `Manager` directly and call `initPlugins()` before enabling watchers/processors.
+For advanced manual startup, await `storage.init()`, construct `Manager` directly and call `initPlugins()` before enabling watchers/processors.
 
 ## Architecture
 
@@ -196,7 +190,7 @@ If you prefer manual wiring, construct `Manager` directly and call `initPlugins(
   `quotes`, `paymentRequests`, `ops`, `history`, and `keyring` APIs plus watcher
   and processor helpers.
 - `initializeCoco` wires the manager from a `CocoConfig`, including
-  repositories, seed access, logging, subscriptions, plugins, watchers, and
+  storage, seed access, logging, subscriptions, plugins, watchers, and
   processors.
 - `manager.ops.*` is the supported surface for recoverable send, receive, mint,
   and melt lifecycles.
@@ -208,7 +202,7 @@ If you prefer manual wiring, construct `Manager` directly and call `initPlugins(
 ### Storage
 
 Initialize Coco with the built-in storage adapter for your runtime. The package root also exports
-`MemoryRepositories` for in-memory tests and examples. See [Storage Adapters](../docs/pages/storage-adapters.md)
+`createMemoryStorage` for in-memory tests and examples. See [Storage Adapters](../docs/pages/storage-adapters.md)
 for setup and storage-security guidance.
 
 ## Public API surface
@@ -436,8 +430,9 @@ const quotePlugin: Plugin<['quotes']> = {
 ### Using plugins
 
 ```ts
-// Pass plugins at construction
-const manager = new Manager(repos, seedGetter, logger, undefined, [myPlugin]);
+// Pass plugins at construction after storage is ready
+await storage.init();
+const manager = new Manager(storage, seedGetter, logger, undefined, [myPlugin]);
 
 // Or register later
 manager.use(myPlugin);
@@ -456,7 +451,7 @@ await manager.dispose();
 From the package root (`@cashu/coco-core`), for app and React usage:
 
 - `Manager`, `initializeCoco`, `CocoConfig`
-- `MemoryRepositories`
+- `createMemoryStorage`, `CocoStorage`, `ProofUnitFilter`
 - Public APIs including `MintApi`, `WalletApi`, `AuthApi`, `PaymentRequestsApi`,
   `QuoteApi`, and the operation-oriented APIs
 - Public models, errors, API inputs/results, and operation result types
@@ -468,12 +463,6 @@ From the package root (`@cashu/coco-core`), for app and React usage:
 - Amount/unit helpers and intentional `@cashu/cashu-ts` re-exports such as `Amount`
 - Config boundary types: `WebSocketLike`, `WebSocketFactory`
 
-From the adapter subpath (`@cashu/coco-core/adapter`), for storage adapter
-implementations and adapter contract tests:
-
-- Repository contracts, transaction scope types, persisted operation/domain types, and
-  adapter serialization helpers for storage implementations
-
 From the plugin subpath (`@cashu/coco-core/plugin`), for extension authors:
 
 - Plugin author types: `Plugin`, `PluginContext`, `PluginExtensions`, `PluginEventBus`,
@@ -484,3 +473,28 @@ The package root (`@cashu/coco-core`) is the supported public import path unless
 `package.json` explicitly lists a subpath export. Documented public symbols must be
 reachable from the root or from a listed subpath. Internal barrels such as source
 folder indexes are private unless the export map and docs explicitly make them public.
+
+## Storage compatibility and manual startup
+
+`initializeCoco({ storage, seedGetter })` is the canonical, recommended startup path. It prepares
+storage, initializes plugins, reconciles legacy quotes, starts enabled background components and
+runs Operation Recovery. Disabling background components does not skip the other startup work.
+
+Advanced callers may use the supported constructor after `await storage.init()`:
+
+```ts
+const storage = createMemoryStorage();
+await storage.init();
+const manager = new Manager(storage, seedGetter);
+```
+
+Construction only wires the session; it does not initialize plugins, reconcile quotes, recover
+operations or start background components. See the [v3 migration guide](../docs/starting/migrating-from-v2.md)
+for ownership and startup responsibilities.
+
+Coco-owned storage implementation packages must match core's release version. A mismatch is rejected
+before database access. `/internal` entry points and `@cashu/coco-adapter-tests` have **no compatibility
+or versioning guarantees, even in patch and minor releases**. They are for Coco's own implementation,
+not supported extension contracts. Opacity is an API boundary, not a security boundary.
+Independent SQLite drivers use the stable `@cashu/coco-sql-storage` contract and need not share Coco's
+version. The former stable core `/adapter` path is removed in v3.

@@ -3,13 +3,13 @@ import type {
   ProofUnitFilter,
   CoreProof,
   ProofState,
-} from '@cashu/coco-core/adapter';
+} from '@cashu/coco-core/internal';
 import {
   DEFAULT_UNIT,
   deserializeAmount,
   normalizeUnit,
   serializeAmount,
-} from '@cashu/coco-core/adapter';
+} from '@cashu/coco-core/internal';
 import type { IdbDb, ProofRow } from '../lib/db.ts';
 
 function normalizeProofUnit(proof: CoreProof): string {

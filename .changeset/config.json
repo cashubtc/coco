@@ -10,7 +10,8 @@
       "@cashu/coco-sqlite",
       "@cashu/coco-sqlite-bun",
       "@cashu/coco-adapter-tests",
-      "@cashu/coco-react"
+      "@cashu/coco-react",
+      "@cashu/coco-sql-storage"
     ]
   ],
   "linked": [],

@@ -2,7 +2,7 @@ import type {
   MintSwapIdentityKind,
   MintSwapOperation,
   MintSwapOperationRepository,
-} from '@cashu/coco-core/adapter';
+} from '@cashu/coco-core/internal';
 import {
   compareMintSwapCreated,
   compareMintSwapDue,
@@ -13,7 +13,7 @@ import {
   parseMintSwapOperation,
   serializeMintSwapOperation,
   validateMintSwapTransition,
-} from '@cashu/coco-core/adapter';
+} from '@cashu/coco-core/internal';
 import Dexie from 'dexie';
 import { IdbDb, type MintSwapOperationRow } from '../lib/db.ts';
 

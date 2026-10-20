@@ -1,10 +1,11 @@
 import { Amount } from '@cashu/cashu-ts';
+import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
+import type { FinalizedReceiveOperation } from '@core/operations/receive/ReceiveOperation.ts';
+import { createStorageHandle } from '../../storageInternal.ts';
 import { NullLogger } from '../../logging/index.ts';
 import { initializeCoco, type Manager } from '../../Manager.ts';
-import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
 import { MemoryRepositories } from '../../repositories/memory/index.ts';
 import type { ReceiveOperationRepository } from '../../repositories/index.ts';
-import type { FinalizedReceiveOperation } from '@core/operations/receive/ReceiveOperation.ts';
 import type { ReceiveOperationService } from '../../operations/receive/ReceiveOperationService.ts';
 
 describe('ReceiveOperationService integration', () => {
@@ -37,13 +38,13 @@ describe('ReceiveOperationService integration', () => {
     };
 
     sender = await initializeCoco({
-      repo: senderRepos,
+      storage: createStorageHandle(() => senderRepos),
       seedGetter: makeSeedGetter(),
       ...baseConfig,
     });
 
     receiver = await initializeCoco({
-      repo: receiverRepos,
+      storage: createStorageHandle(() => receiverRepos),
       seedGetter: makeSeedGetter(),
       ...baseConfig,
     });

@@ -1,6 +1,7 @@
+import { createStorageHandle } from '@cashu/coco-core/internal';
 import { Amount } from '@cashu/cashu-ts';
 import { initializeCoco } from '@cashu/coco-core';
-import type { Repositories } from '@cashu/coco-core/adapter';
+import type { Repositories } from '@cashu/coco-core/internal';
 
 /**
  * Test runner interface for migration tests.
@@ -111,7 +112,7 @@ export type MigrationTestOptions<TRepositories extends Repositories = Repositori
  *
  * @example
  * ```typescript
- * import { runMigrationTests } from '@cashu/coco-adapter-tests';
+ * import { runMigrationTests } from '@cashu/coco-adapter-tests/internal';
  * import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
  *
  * runMigrationTests({
@@ -151,7 +152,7 @@ export function runMigrationTests<TRepositories extends Repositories = Repositor
           const seedGetter = createSeedGetter();
 
           const mgr = await initializeCoco({
-            repo: repositories,
+            storage: createStorageHandle(() => repositories),
             seedGetter,
           });
 
@@ -222,7 +223,7 @@ export function runMigrationTests<TRepositories extends Repositories = Repositor
 
           // Re-initialize (simulates app restart after update)
           const mgr2 = await initializeCoco({
-            repo: repositories,
+            storage: createStorageHandle(() => repositories),
             seedGetter,
           });
 

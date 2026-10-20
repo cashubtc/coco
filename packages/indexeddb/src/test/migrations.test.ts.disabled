@@ -1,5 +1,5 @@
 import { describe, it, beforeEach, afterEach, expect } from 'vitest';
-import { IndexedDbRepositories } from '../index.ts';
+import { IndexedDbRepositories } from '../internal.ts';
 import { initializeCoco, type Manager } from '@cashu/coco-core';
 
 /**

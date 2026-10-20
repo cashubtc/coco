@@ -64,8 +64,8 @@ justified.
 
 Expose public APIs through the entry points declared in the package's `package.json`.
 Review compatibility across the package's supported entry points, reachable public types, events and
-persisted records. Core's [documented exports](packages/core/README.md#exports) include root, adapter and
-plugin audiences; [ServiceMap](packages/core/plugins/types.ts) makes reachable plugin service contracts
+persisted records. Core's [documented exports](packages/core/README.md#exports) include root and plugin audiences; repository integration is explicitly internal. The supported
+SQLite driver contract lives in `@cashu/coco-sql-storage`. [ServiceMap](packages/core/plugins/types.ts) makes reachable plugin service contracts
 compatibility-sensitive. An internal refactor can affect those contracts without changing root exports.
 
 Preserve support for ordinary records written by older releases until an explicit migration or

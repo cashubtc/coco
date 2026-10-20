@@ -1,4 +1,4 @@
-import type { MeltQuoteRepository } from '@cashu/coco-core/adapter';
+import type { MeltQuoteRepository } from '@cashu/coco-core/internal';
 import {
   deserializeAmount,
   deserializeBlindedSignatures,
@@ -6,9 +6,9 @@ import {
   QuoteIdentityConflictError,
   serializeAmount,
   serializeBlindedSignatures,
-} from '@cashu/coco-core/adapter';
-import type { MeltQuote } from '@cashu/coco-core/adapter';
-import type { QuoteIdentity } from '@cashu/coco-core/adapter';
+} from '@cashu/coco-core/internal';
+import type { MeltQuote } from '@cashu/coco-core/internal';
+import type { QuoteIdentity } from '@cashu/coco-core/internal';
 import type { IdbDb, MeltQuoteRow } from '../lib/db.ts';
 
 function rowToQuote(row: MeltQuoteRow): MeltQuote {

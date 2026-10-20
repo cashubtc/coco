@@ -18,7 +18,7 @@
     "README.md"
   ],
   "exports": {
-    ".": {
+    "./internal": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     }
@@ -28,7 +28,7 @@
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
-    "@cashu/coco-core": "^2.0.0",
+    "@cashu/coco-core": "2.0.0",
     "typescript": "^5",
     "@cashu/cashu-ts": "5.0.0-rc.4"
   },

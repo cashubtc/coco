@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { initializeCoco, toAmount, type Manager } from '@cashu/coco-core';
-import { SqliteRepositories } from '@cashu/coco-sqlite-bun';
+import { createSqliteStorage } from '@cashu/coco-sqlite-bun';
 
 import { AdministrativeCredential, loadClientCredential } from './credentials.js';
 import { buildFallbackHandler, buildRoutes, createRouteHandlers } from './routes';
@@ -270,9 +270,9 @@ describe('routes', () => {
     // Real core against an in-memory database: proves the workspace decoder does not
     // discard the NUT-10 condition and that core classifies it as an enforceable P2PK
     // lock. This test gates the removal of cocod's former creqB/NUT-10 rejections.
-    const repo = new SqliteRepositories({ database: new Database(':memory:') });
+    const storage = createSqliteStorage({ database: new Database(':memory:') });
     const manager = await initializeCoco({
-      repo,
+      storage,
       seedGetter: async () => new Uint8Array(64).fill(7),
     });
     try {

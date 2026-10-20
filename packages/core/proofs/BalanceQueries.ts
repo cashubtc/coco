@@ -8,9 +8,9 @@ import type {
   BalancesByMintAndUnit,
   BalancesByUnit,
 } from '@core/types.ts';
-import type { ProofUnitFilter } from '@core/repositories/index.ts';
 import { DEFAULT_UNIT, normalizeUnit, normalizeUnitList } from '@core/amounts.ts';
 import { ProofValidationError } from '@core/models/Error.ts';
+import type { ProofUnitFilter } from '../types.ts';
 
 export function emptyBalanceSnapshot(unit: string = DEFAULT_UNIT): BalanceSnapshot {
   const normalizedUnit = normalizeUnit(unit, { defaultUnit: DEFAULT_UNIT });

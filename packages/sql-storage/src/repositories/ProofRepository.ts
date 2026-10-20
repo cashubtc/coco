@@ -7,9 +7,9 @@ import {
   type ProofUnitFilter,
   type CoreProof,
   type ProofState,
-} from '@cashu/coco-core/adapter';
+} from '@cashu/coco-core/internal';
 import type { SqlDatabase, SqlValue } from '../index.ts';
-import { getUnixTimeSeconds } from '../utils.ts';
+import { getUnixTimeSeconds, sqlParameterLimit } from '../utils.ts';
 
 interface ProofRow {
   mintUrl: string;
@@ -25,8 +25,6 @@ interface ProofRow {
   createdByOperationId: string | null;
 }
 
-const MAX_PROOF_SECRET_LOOKUP_BATCH_SIZE = 900;
-
 const PROOF_COLUMNS =
   'mintUrl, id, unit, amount, secret, C, dleqJson, witnessJson, state, usedByOperationId, createdByOperationId';
 
@@ -38,18 +36,6 @@ function getUnitFilter(filter?: ProofUnitFilter): string[] | undefined {
   const units = [...(filter?.units ?? []), ...(filter?.unit ? [filter.unit] : [])];
   if (units.length === 0) return undefined;
   return Array.from(new Set(units.map((unit) => normalizeUnit(unit))));
-}
-
-function appendUnitFilter(sql: string, params: SqlValue[], filter?: ProofUnitFilter): string {
-  const units = getUnitFilter(filter);
-  if (!units || units.length === 0) return sql;
-  if (units.length === 1) {
-    const [unit] = units as [string];
-    params.push(unit);
-    return `${sql} AND unit = ?`;
-  }
-  params.push(...units);
-  return `${sql} AND unit IN (${units.map(() => '?').join(', ')})`;
 }
 
 function rowToProof(r: ProofRow): CoreProof {
@@ -117,59 +103,62 @@ export class SqliteProofRepository implements ProofRepository {
     });
   }
 
+  private async queryProofs(
+    sql: string,
+    fixed: SqlValue[],
+    filter?: ProofUnitFilter,
+  ): Promise<CoreProof[]> {
+    const units = getUnitFilter(filter);
+    if (!units?.length) return (await this.db.all<ProofRow>(sql, fixed)).map(rowToProof);
+    const batchSize = sqlParameterLimit(this.db) - fixed.length;
+    const proofs: CoreProof[] = [];
+    for (let i = 0; i < units.length; i += batchSize) {
+      const batch = units.slice(i, i + batchSize);
+      const rows = await this.db.all<ProofRow>(
+        `${sql} AND unit IN (${batch.map(() => '?').join(', ')})`,
+        [...fixed, ...batch],
+      );
+      proofs.push(...rows.map(rowToProof));
+    }
+    return proofs;
+  }
+
   async getReadyProofs(mintUrl: string, filter?: ProofUnitFilter): Promise<CoreProof[]> {
-    const params: SqlValue[] = [mintUrl];
-    const rows = await this.db.all<ProofRow>(
-      appendUnitFilter(
-        `SELECT ${PROOF_COLUMNS} FROM coco_cashu_proofs WHERE mintUrl = ? AND state = 'ready'`,
-        params,
-        filter,
-      ),
-      params,
+    return this.queryProofs(
+      `SELECT ${PROOF_COLUMNS} FROM coco_cashu_proofs WHERE mintUrl = ? AND state = 'ready'`,
+      [mintUrl],
+      filter,
     );
-    return rows.map(rowToProof);
   }
 
   async getInflightProofs(mintUrls?: string[], filter?: ProofUnitFilter): Promise<CoreProof[]> {
-    if (!mintUrls || mintUrls.length === 0) {
-      const params: SqlValue[] = [];
-      const rows = await this.db.all<ProofRow>(
-        appendUnitFilter(
-          `SELECT ${PROOF_COLUMNS} FROM coco_cashu_proofs WHERE state = 'inflight'`,
-          params,
+    const sql = `SELECT ${PROOF_COLUMNS} FROM coco_cashu_proofs WHERE state = 'inflight'`;
+    if (!mintUrls?.length) return this.queryProofs(sql, [], filter);
+    const unique = [...new Set(mintUrls.map((url) => url.trim()).filter(Boolean))];
+    const units = getUnitFilter(filter);
+    const batchSize = units?.length
+      ? Math.floor(sqlParameterLimit(this.db) / 2)
+      : sqlParameterLimit(this.db);
+    const proofs: CoreProof[] = [];
+    for (let i = 0; i < unique.length; i += batchSize) {
+      const batch = unique.slice(i, i + batchSize);
+      proofs.push(
+        ...(await this.queryProofs(
+          `${sql} AND mintUrl IN (${batch.map(() => '?').join(', ')})`,
+          batch,
           filter,
-        ),
-        params,
+        )),
       );
-      return rows.map(rowToProof);
     }
-    const mintUrlList = mintUrls.map((url) => url.trim()).filter((url) => url.length > 0);
-    if (mintUrlList.length === 0) return [];
-    const uniqueMintUrls = Array.from(new Set(mintUrlList));
-    const placeholders = uniqueMintUrls.map(() => '?').join(', ');
-    const params: SqlValue[] = uniqueMintUrls;
-    const rows = await this.db.all<ProofRow>(
-      appendUnitFilter(
-        `SELECT ${PROOF_COLUMNS} FROM coco_cashu_proofs WHERE state = 'inflight' AND mintUrl IN (${placeholders})`,
-        params,
-        filter,
-      ),
-      params,
-    );
-    return rows.map(rowToProof);
+    return proofs;
   }
 
   async getAllReadyProofs(filter?: ProofUnitFilter): Promise<CoreProof[]> {
-    const params: SqlValue[] = [];
-    const rows = await this.db.all<ProofRow>(
-      appendUnitFilter(
-        `SELECT ${PROOF_COLUMNS} FROM coco_cashu_proofs WHERE state = 'ready'`,
-        params,
-        filter,
-      ),
-      params,
+    return this.queryProofs(
+      `SELECT ${PROOF_COLUMNS} FROM coco_cashu_proofs WHERE state = 'ready'`,
+      [],
+      filter,
     );
-    return rows.map(rowToProof);
   }
 
   async getProofsByKeysetId(
@@ -177,16 +166,11 @@ export class SqliteProofRepository implements ProofRepository {
     keysetId: string,
     filter?: ProofUnitFilter,
   ): Promise<CoreProof[]> {
-    const params: SqlValue[] = [mintUrl, keysetId];
-    const rows = await this.db.all<ProofRow>(
-      appendUnitFilter(
-        `SELECT ${PROOF_COLUMNS} FROM coco_cashu_proofs WHERE mintUrl = ? AND id = ? AND state = 'ready'`,
-        params,
-        filter,
-      ),
-      params,
+    return this.queryProofs(
+      `SELECT ${PROOF_COLUMNS} FROM coco_cashu_proofs WHERE mintUrl = ? AND id = ? AND state = 'ready'`,
+      [mintUrl, keysetId],
+      filter,
     );
-    return rows.map(rowToProof);
   }
 
   async setProofState(mintUrl: string, secrets: string[], state: ProofState): Promise<void> {
@@ -291,8 +275,9 @@ export class SqliteProofRepository implements ProofRepository {
     const uniqueSecrets = Array.from(new Set(secrets));
     const proofsBySecret = new Map<string, CoreProof>();
 
-    for (let i = 0; i < uniqueSecrets.length; i += MAX_PROOF_SECRET_LOOKUP_BATCH_SIZE) {
-      const secretBatch = uniqueSecrets.slice(i, i + MAX_PROOF_SECRET_LOOKUP_BATCH_SIZE);
+    const batchSize = sqlParameterLimit(this.db) - 1;
+    for (let i = 0; i < uniqueSecrets.length; i += batchSize) {
+      const secretBatch = uniqueSecrets.slice(i, i + batchSize);
       const placeholders = secretBatch.map(() => '?').join(', ');
       const rows = await this.db.all<ProofRow>(
         `SELECT ${PROOF_COLUMNS} FROM coco_cashu_proofs WHERE mintUrl = ? AND secret IN (${placeholders})`,
@@ -319,16 +304,11 @@ export class SqliteProofRepository implements ProofRepository {
   }
 
   async getAvailableProofs(mintUrl: string, filter?: ProofUnitFilter): Promise<CoreProof[]> {
-    const params: SqlValue[] = [mintUrl];
-    const rows = await this.db.all<ProofRow>(
-      appendUnitFilter(
-        `SELECT ${PROOF_COLUMNS} FROM coco_cashu_proofs WHERE mintUrl = ? AND state = 'ready' AND usedByOperationId IS NULL`,
-        params,
-        filter,
-      ),
-      params,
+    return this.queryProofs(
+      `SELECT ${PROOF_COLUMNS} FROM coco_cashu_proofs WHERE mintUrl = ? AND state = 'ready' AND usedByOperationId IS NULL`,
+      [mintUrl],
+      filter,
     );
-    return rows.map(rowToProof);
   }
 
   async getReservedProofs(): Promise<CoreProof[]> {

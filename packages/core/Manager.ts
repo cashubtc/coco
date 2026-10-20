@@ -1,4 +1,6 @@
 import type { OutputDataCreator } from '@cashu/cashu-ts';
+import type { CocoStorage } from './storage.ts';
+import { resolveStorage } from './storageInternal.ts';
 import { StoredMintQueries } from './mints/MintMetadata.ts';
 import { StoredBalanceQueries, type BalanceQueries } from './proofs/BalanceQueries.ts';
 import { CashuSendRemote } from './infra/handlers/send/CashuSendRemote.ts';
@@ -90,8 +92,8 @@ import { KeypairP2pkSigner } from './keypairs/P2pkSigner.ts';
  * Configuration options for initializing the Coco Cashu manager
  */
 export interface CocoConfig {
-  /** Repository implementations for data persistence */
-  repo: Repositories;
+  /** Opaque persistence from a Coco storage factory. */
+  storage: CocoStorage;
   /** Function that returns the wallet seed as Uint8Array */
   seedGetter: () => Promise<Uint8Array>;
   /** Optional logger instance (defaults to NullLogger) */
@@ -201,9 +203,10 @@ export class CocoInitializationError extends Error {
  * @returns A fully initialized Manager instance
  */
 export async function initializeCoco(config: CocoConfig): Promise<Manager> {
-  await config.repo.init();
+  resolveStorage(config.storage);
+  await config.storage.init();
   const coco = new Manager(
-    config.repo,
+    config.storage,
     config.seedGetter,
     config.logger,
     config.webSocketFactory,
@@ -330,8 +333,9 @@ export class Manager {
   private disposed = false;
   private disposePromise?: Promise<void>;
   private readonly outputDataCreator?: OutputDataCreator;
+  /** Advanced manual startup. Await storage.init() first; initializeCoco is recommended. */
   constructor(
-    repositories: Repositories,
+    storage: CocoStorage,
     seedGetter: () => Promise<Uint8Array>,
     logger?: Logger,
     webSocketFactory?: WebSocketFactory,
@@ -341,6 +345,7 @@ export class Manager {
     subscriptions?: CocoConfig['subscriptions'],
     outputDataCreator?: OutputDataCreator,
   ) {
+    const repositories = resolveStorage(storage);
     this.logger = logger ?? new NullLogger();
     this.eventBus = this.createEventBus();
     this.outputDataCreator = outputDataCreator;

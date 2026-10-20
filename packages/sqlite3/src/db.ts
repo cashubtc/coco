@@ -1,3 +1,4 @@
+import { SqliteDriverErrors } from '@cashu/coco-sql-storage/internal';
 import { statSync } from 'node:fs';
 import type { Database } from 'better-sqlite3';
 import type {
@@ -46,6 +47,7 @@ interface SqliteDbRootState {
   readonly databaseIdentity: string | Database;
   /** Promise chain used to serialize concurrent transactions */
   transactionQueue: Promise<void>;
+  errors: SqliteDriverErrors;
   /** Unique identifier for the currently active transaction scope (null if no transaction) */
   currentScope: symbol | null;
   /** Current nesting depth of transactions (1 = top-level, 2+ = nested) */
@@ -77,6 +79,7 @@ export class SqliteDb implements SqlDatabase {
         db: optionsOrRoot.database,
         databaseIdentity: getDatabaseIdentity(optionsOrRoot.database),
         transactionQueue: Promise.resolve(),
+        errors: new SqliteDriverErrors(),
         currentScope: null,
         scopeDepth: 0,
         pendingTransactionCount: 0,
@@ -113,20 +116,24 @@ export class SqliteDb implements SqlDatabase {
     if (this.shouldWaitForTransaction()) {
       await this.waitForActiveTransaction();
     }
-    this.root.db.exec(sql);
+    return this.root.errors.execute(async () => {
+      this.root.db.exec(sql);
+    });
   }
 
   async run(sql: string, params: SqlParams = []): Promise<SqliteRunResult> {
     if (this.shouldWaitForTransaction()) {
       await this.waitForActiveTransaction();
     }
-    const result = this.root.db.prepare(sql).run(...params);
-    const lastInsertRowId = Number(result.lastInsertRowid);
-    return {
-      lastID: lastInsertRowId,
-      lastInsertRowId,
-      changes: result.changes,
-    };
+    return this.root.errors.execute(async () => {
+      const result = this.root.db.prepare(sql).run(...params);
+      const lastInsertRowId = Number(result.lastInsertRowid);
+      return {
+        lastID: lastInsertRowId,
+        lastInsertRowId,
+        changes: result.changes,
+      };
+    });
   }
 
   async get<Row extends object = Record<string, unknown>>(
@@ -136,7 +143,9 @@ export class SqliteDb implements SqlDatabase {
     if (this.shouldWaitForTransaction()) {
       await this.waitForActiveTransaction();
     }
-    return this.root.db.prepare(sql).get(...params) as Row | undefined;
+    return this.root.errors.execute(async () => {
+      return this.root.db.prepare(sql).get(...params) as Row | undefined;
+    });
   }
 
   async all<Row extends object = Record<string, unknown>>(
@@ -146,7 +155,9 @@ export class SqliteDb implements SqlDatabase {
     if (this.shouldWaitForTransaction()) {
       await this.waitForActiveTransaction();
     }
-    return this.root.db.prepare(sql).all(...params) as Row[];
+    return this.root.errors.execute(async () => {
+      return this.root.db.prepare(sql).all(...params) as Row[];
+    });
   }
 
   /**
@@ -230,7 +241,11 @@ export class SqliteDb implements SqlDatabase {
       // Register before awaiting BEGIN so another local connection sees this attempt.
       activeTransactions.set(root.databaseIdentity, localTransactions + 1);
       registeredTransaction = true;
-      await scopedDb.exec(options?.mode === 'immediate' ? 'BEGIN IMMEDIATE' : 'BEGIN');
+      try {
+        await scopedDb.exec(options?.mode === 'immediate' ? 'BEGIN IMMEDIATE' : 'BEGIN');
+      } catch (error) {
+        throw root.errors.afterRollback(error);
+      }
 
       try {
         // Execute user code within the transaction
@@ -239,13 +254,14 @@ export class SqliteDb implements SqlDatabase {
         await scopedDb.exec('COMMIT');
         return result;
       } catch (error) {
-        // Error - rollback the transaction
         try {
           await scopedDb.exec('ROLLBACK');
-        } catch {
-          // Ignore rollback errors (e.g., if transaction already rolled back)
+        } catch (rollbackError) {
+          throw new Error('SQLite rollback failed; transaction outcome is uncertain', {
+            cause: new AggregateError([error, rollbackError]),
+          });
         }
-        throw error;
+        throw root.errors.afterRollback(error);
       }
     } finally {
       if (previousBusyTimeout !== undefined) {

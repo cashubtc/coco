@@ -3,7 +3,7 @@ import type {
   MintSwapOperation,
   MintSwapOperationRepository,
   MintSwapOperationState,
-} from '@cashu/coco-core/adapter';
+} from '@cashu/coco-core/internal';
 import {
   compareMintSwapCreated,
   compareMintSwapDue,
@@ -14,7 +14,7 @@ import {
   parseMintSwapOperation,
   serializeMintSwapOperation,
   validateMintSwapTransition,
-} from '@cashu/coco-core/adapter';
+} from '@cashu/coco-core/internal';
 import type { SqlDatabase, SqlParams } from '../index.ts';
 
 interface MintSwapOperationRow {

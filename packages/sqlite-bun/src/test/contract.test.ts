@@ -19,10 +19,10 @@ import {
   runMeltOperationRepositoryContract,
   runMeltQuoteRepositoryContract,
   runMintSwapPersistenceContract,
-} from '@cashu/coco-adapter-tests';
-import { RepositoryTransactionConflictError } from '@cashu/coco-core/adapter';
+} from '@cashu/coco-adapter-tests/internal';
+import { RepositoryTransactionConflictError } from '@cashu/coco-core/internal';
 import { runSqlDatabaseContract } from '@cashu/coco-sql-storage/test';
-import { SqliteRepositories as Repositories } from '../index.ts';
+import { SqliteRepositories as Repositories } from '../internal.ts';
 import { SqliteDb } from '../db.ts';
 
 async function createRepositories() {

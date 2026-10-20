@@ -1,8 +1,11 @@
 import { describe, it, beforeEach, afterEach, expect as bunExpect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { runIntegrationTests, type IntegrationTestRunner } from '@cashu/coco-adapter-tests';
-import { SqliteRepositories } from '../index.ts';
+import {
+  runIntegrationTests,
+  type IntegrationTestRunner,
+} from '@cashu/coco-adapter-tests/internal';
 import { ConsoleLogger, type Logger } from '@cashu/coco-core';
+import { SqliteRepositories } from '../internal.ts';
 
 // Cast bun's expect to match the adapter-tests expectation type
 const expect = bunExpect as unknown as IntegrationTestRunner['expect'];

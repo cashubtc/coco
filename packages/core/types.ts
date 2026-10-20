@@ -58,3 +58,9 @@ export interface CoreProof extends Proof {
    */
   createdByOperationId?: string;
 }
+
+/** Select proofs in one or more units. */
+export interface ProofUnitFilter {
+  unit?: string;
+  units?: string[];
+}

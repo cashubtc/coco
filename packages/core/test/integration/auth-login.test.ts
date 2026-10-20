@@ -1,3 +1,4 @@
+import { describe, it, expect, beforeAll } from 'bun:test';
 /**
  * Tier B — Automated auth integration test.
  *
@@ -14,7 +15,7 @@
  * Run:
  *   ./scripts/auth_mint/test-auth-integration.sh
  */
-import { describe, it, expect, beforeAll } from 'bun:test';
+import { createStorageHandle } from '../../storageInternal.ts';
 import { initializeCoco, type Manager } from '../../Manager';
 import { MemoryRepositories } from '../../repositories/memory';
 
@@ -71,7 +72,7 @@ describe('Auth Login (automated — password grant)', () => {
     await repositories.init();
 
     mgr = await initializeCoco({
-      repo: repositories,
+      storage: createStorageHandle(() => repositories),
       seedGetter: async () => new Uint8Array(32),
       watchers: {
         mintOperationWatcher: { disabled: true },
@@ -98,7 +99,7 @@ describe('Auth Login (automated — password grant)', () => {
   it('restore session after restart', async () => {
     // Create a new Manager with the same repository
     const mgr2 = await initializeCoco({
-      repo: repositories,
+      storage: createStorageHandle(() => repositories),
       seedGetter: async () => new Uint8Array(32),
       watchers: {
         mintOperationWatcher: { disabled: true },

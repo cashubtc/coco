@@ -48,7 +48,7 @@ function SendButton() {
 export function App() {
   return (
     <CocoCashuProvider
-      config={{ repo, seedGetter }}
+      config={{ storage, seedGetter }}
       fallback={<div>Loading wallet...</div>}
       errorFallback={<div>Wallet failed to load.</div>}
     >

@@ -2,8 +2,8 @@
 
 import { describe, expect, it } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import type { Mint } from '@cashu/coco-core/adapter';
-import { ensureSchemaUpTo } from '../index.ts';
+import type { Mint } from '@cashu/coco-core/internal';
+import { ensureSchemaUpTo } from '../internal.ts';
 import { SqliteMintRepository } from '../repositories/MintRepository.ts';
 import { createBunSqlDatabase } from './bunSqlDatabase.ts';
 

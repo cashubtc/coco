@@ -3,14 +3,14 @@ import type {
   SendOperation,
   SendOperationState,
   SendMethod,
-} from '@cashu/coco-core/adapter';
+} from '@cashu/coco-core/internal';
 import {
   deserializeAmount,
   deserializeToken,
   normalizeUnit,
   serializeAmount,
   stringifyJson,
-} from '@cashu/coco-core/adapter';
+} from '@cashu/coco-core/internal';
 import type { IdbDb, SendOperationRow } from '../lib/db.ts';
 import { getUnixTimeSeconds } from '../lib/db.ts';
 import { assertFieldPresent } from '../utils.ts';

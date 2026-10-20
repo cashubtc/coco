@@ -64,3 +64,12 @@ export function isSqliteTransactionConflict(error: unknown): boolean {
     message.includes('database is busy')
   );
 }
+
+/** Validate once at storage construction; also used by internal repository tests. */
+export function sqlParameterLimit(database: { readonly maxParameters?: number }): number {
+  const limit = database.maxParameters ?? 999;
+  if (!Number.isSafeInteger(limit) || limit < 32) {
+    throw new Error('SqlDatabase.maxParameters must be a safe integer of at least 32');
+  }
+  return limit;
+}

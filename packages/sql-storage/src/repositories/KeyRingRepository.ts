@@ -1,4 +1,4 @@
-import type { KeyRingRepository, Keypair, KeypairPurpose } from '@cashu/coco-core/adapter';
+import type { KeyRingRepository, Keypair, KeypairPurpose } from '@cashu/coco-core/internal';
 import type { SqlDatabase } from '../index.ts';
 import { hexToBytes, bytesToHex } from '../utils.ts';
 

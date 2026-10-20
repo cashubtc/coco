@@ -18,9 +18,9 @@ import {
   runMeltQuoteRepositoryContract,
   createMintSwapFixtures,
   runMintSwapPersistenceContract,
-} from '@cashu/coco-adapter-tests';
-import { MintSwapIdentityConflictError } from '@cashu/coco-core/adapter';
-import { IndexedDbRepositories } from '../index.ts';
+} from '@cashu/coco-adapter-tests/internal';
+import { MintSwapIdentityConflictError } from '@cashu/coco-core/internal';
+import { IndexedDbRepositories } from '../internal.ts';
 
 let dbCounter = 0;
 

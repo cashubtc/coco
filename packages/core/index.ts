@@ -16,7 +16,8 @@ export type {
 export type { CoreEvents } from './events/types.ts';
 export type { EventHandler } from './events/EventBus.ts';
 export { type Logger, ConsoleLogger } from './logging/index.ts';
-export { MemoryRepositories } from './repositories/memory/MemoryRepositories.ts';
+export { createMemoryStorage, type CocoStorage } from './storage.ts';
+export type { ProofUnitFilter } from './types.ts';
 export type {
   DefaultSendMethodData,
   P2pkSendMethodData,

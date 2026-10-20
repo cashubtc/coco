@@ -1,7 +1,7 @@
 import { describe, it, beforeEach, afterEach, expect } from 'vitest';
-import { runIntegrationTests } from '@cashu/coco-adapter-tests';
-import { IndexedDbRepositories } from '../index.ts';
+import { runIntegrationTests } from '@cashu/coco-adapter-tests/internal';
 import { ConsoleLogger, type Logger } from '@cashu/coco-core';
+import { IndexedDbRepositories } from '../internal.ts';
 
 const mintUrl = import.meta.env.VITE_MINT_URL || 'http://localhost:3338';
 const customUnit = import.meta.env.VITE_CUSTOM_UNIT;

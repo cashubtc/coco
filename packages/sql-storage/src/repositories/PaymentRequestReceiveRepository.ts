@@ -6,8 +6,8 @@ import type {
   PaymentRequestReceiveOperationRepository,
   PaymentRequestReceiveState,
   PaymentRequestReceiveTransport,
-} from '@cashu/coco-core/adapter';
-import { deserializeAmount, serializeAmount } from '@cashu/coco-core/adapter';
+} from '@cashu/coco-core/internal';
+import { deserializeAmount, serializeAmount } from '@cashu/coco-core/internal';
 import type { SqlDatabase, SqlValue } from '../index.ts';
 import { getUnixTimeSeconds } from '../utils.ts';
 

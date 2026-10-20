@@ -47,7 +47,7 @@ Pass plugins to `initializeCoco()` via the `plugins` config option:
 import { initializeCoco } from '@cashu/coco-core';
 
 const manager = await initializeCoco({
-  repo,
+  storage,
   seedGetter,
   plugins: [myPlugin],
 });
@@ -149,7 +149,7 @@ After initialization, access the extension via `manager.ext`:
 
 ```ts
 const manager = await initializeCoco({
-  repo,
+  storage,
   seedGetter,
   plugins: [myPlugin],
 });
@@ -284,7 +284,7 @@ This ensures that `manager.ext` contains all registered extensions before the ma
 If you instantiate `Manager` directly instead of using `initializeCoco()`, you must call `initPlugins()` manually:
 
 ```ts
-const manager = new Manager(repositories, seedGetter, logger, webSocketFactory, [myPlugin]);
+const manager = new Manager(storage, seedGetter, logger, webSocketFactory, [myPlugin]);
 
 // Required for plugins to initialize and extensions to be available
 await manager.initPlugins();

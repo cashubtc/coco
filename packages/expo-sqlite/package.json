@@ -16,13 +16,16 @@
   ],
   "devDependencies": {
     "@cashu/coco-adapter-tests": "2.0.0",
-    "@cashu/coco-sql-storage": "2.0.0",
     "@types/node": "^25.0.9"
   },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./internal": {
+      "types": "./dist/internal.d.ts",
+      "import": "./dist/internal.js"
     }
   },
   "dependencies": {},
@@ -35,6 +38,7 @@
     "@cashu/cashu-ts": "5.0.0-rc.4",
     "typescript": "^5",
     "expo-sqlite": "*",
-    "@cashu/coco-core": "2.0.0"
+    "@cashu/coco-core": "2.0.0",
+    "@cashu/coco-sql-storage": "2.0.0"
   }
 }

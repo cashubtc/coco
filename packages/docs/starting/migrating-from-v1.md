@@ -1,5 +1,8 @@
 # Migrating from v1
 
+> This historical guide targets v2. For current storage setup, continue with
+> [Migrating from v2 to v3](./migrating-from-v2.md).
+
 This release is a v2 compatibility cut. It changes several user-facing
 boundaries that v1 applications, React apps, plugins, and custom storage
 adapters may depend on:

@@ -1,5 +1,8 @@
 # Migrating from Alpha
 
+> This historical guide targets v2. For current storage setup, continue with
+> [Migrating from v2 to v3](./migrating-from-v2.md).
+
 This guide is for teams that tested Coco during the `coco-cashu-*` alpha phase
 and now want to move to the current `@cashu/*` release line.
 

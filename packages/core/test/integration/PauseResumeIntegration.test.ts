@@ -1,5 +1,6 @@
 import { Amount } from '@cashu/cashu-ts';
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
+import { createStorageHandle } from '../../storageInternal.ts';
 import { initializeCoco, type Manager } from '../../Manager';
 import { MemoryRepositories } from '../../repositories/memory';
 import { NullLogger } from '../../logging';
@@ -32,7 +33,7 @@ describe('Pause/Resume Integration Test', () => {
   beforeEach(async () => {
     const repositories = new MemoryRepositories();
     manager = await initializeCoco({
-      repo: repositories,
+      storage: createStorageHandle(() => repositories),
       seedGetter,
       logger: new NullLogger(),
       // Use faster intervals for testing
@@ -163,7 +164,7 @@ describe('Pause/Resume Integration Test', () => {
     // Create new manager with some watchers disabled
     const repositories = new MemoryRepositories();
     manager = await initializeCoco({
-      repo: repositories,
+      storage: createStorageHandle(() => repositories),
       seedGetter,
       logger: new NullLogger(),
       watchers: {

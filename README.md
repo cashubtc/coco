@@ -42,7 +42,7 @@ Native via `@cashu/coco-expo-sqlite`.
 ## Packages
 
 - `@cashu/coco-core` — storage-agnostic core with services, typed event bus, and
-  in-memory repositories for testing.
+  in-memory storage for testing.
 - `@cashu/coco-react` — React hooks and providers for integrating a Coco
   `Manager` into UI code.
 - `@cashu/coco-sqlite` — Node adapter built on `better-sqlite3`.
@@ -69,7 +69,7 @@ The core exposes a minimal plugin API to hook into lifecycle events with access 
 
 ## Development
 
-This repo uses Bun workspaces. Most packages build with `tsdown`; the React
+This storage uses Bun workspaces. Most packages build with `tsdown`; the React
 package builds with `tsc -b` and Vite, and the docs site uses VitePress.
 
 ```bash

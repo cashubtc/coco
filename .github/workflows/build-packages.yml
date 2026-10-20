@@ -7,6 +7,7 @@ on:
     paths:
       - 'packages/**'
       - 'scripts/build.ts'
+      - 'scripts/storage-consumer.test.ts'
       - 'scripts/check-release-age.ts'
       - 'bun.lock'
       - 'bunfig.toml'
@@ -16,6 +17,7 @@ on:
     paths:
       - 'packages/**'
       - 'scripts/build.ts'
+      - 'scripts/storage-consumer.test.ts'
       - 'scripts/check-release-age.ts'
       - 'bun.lock'
       - 'bunfig.toml'
@@ -45,6 +47,9 @@ jobs:
 
       - name: Typecheck packages in dependency order
         run: bun run typecheck
+
+      - name: Verify built storage consumer contracts
+        run: bun run test:storage-consumer
 
       - name: Run React package tests
         run: bun run --filter='@cashu/coco-react' test

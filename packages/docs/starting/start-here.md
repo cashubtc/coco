@@ -13,7 +13,7 @@ To get started all you got to do is create a Coco `Manager` instance. This insta
 ```ts
 import { initializeCoco } from '@cashu/coco-core';
 
-const coco = await initializeCoco({ repo, seedGetter });
+const coco = await initializeCoco({ storage, seedGetter });
 
 // After initialization you can start to use your coco wallet
 const balances = await coco.wallet.balances.byMint();
@@ -34,15 +34,15 @@ import { initializeCoco, Amount, type Manager } from '@cashu/coco-core';
 Use dedicated subpaths when you build lower-level extensions:
 
 ```ts
-// Storage adapter implementations and adapter contract tests
-import { type Repositories, serializeAmount } from '@cashu/coco-core/adapter';
+// Independent SQLite runtime bindings
+import { createSqliteStorage, type SqlDatabase } from '@cashu/coco-sql-storage';
 
 // Plugin authors
 import type { Plugin, PluginExtensions } from '@cashu/coco-core/plugin';
 ```
 
-The root API is the stable app-facing surface. The adapter subpath is for
-persistence authors, and the plugin subpath is for extension authors.
+The root API is the stable application surface. The SQL package supplies the supported driver contract,
+and the plugin subpath supports extension authors. Repository implementations are internal.
 
 ## BIP-39 Seed
 
@@ -56,7 +56,7 @@ async function seedGetter(): Uint8Array {
   // e.g. reading a mnemonic from SecureStorage and converting it to a BIP-39 seed
 }
 
-const coco = await initializeCoco({ seedGetter });
+const coco = await initializeCoco({ storage, seedGetter });
 
 // Before receiving tokens, you need to add and trust the mint
 await coco.mint.addMint('https://mint.url', { trusted: true });
@@ -69,15 +69,17 @@ await coco.wallet.receive('cashuB...');
 
 ## Setting up persistence
 
-By default coco uses an in-memory store that will be lost as soon as the process finishes. As that is undesirable in most cases, coco comes with a range of [Storage Adapters](../pages/storage-adapters.md) to attach it to a database of your choice.
+Choose storage explicitly. `createMemoryStorage()` provides transient storage for tests and examples.
+For persistent Wallet data, choose from the [Storage Adapters](../pages/storage-adapters.md) to attach it to a database of your choice.
 
 ```ts
 import { initializeCoco } from '@cashu/coco-core';
-import { IndexedDbRespositories } from '@cashu/coco-indexeddb';
+import { createIndexedDbStorage } from '@cashu/coco-indexeddb';
 
-const repo = new IndexedDbRepositories({ name: 'coco' });
+const storage = createIndexedDbStorage({ name: 'coco' });
 const coco = await initializeCoco({
-  repo,
+  storage,
+  seedGetter,
 });
 
 // Add and trust a mint before performing wallet operations

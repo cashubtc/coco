@@ -1,4 +1,5 @@
 import { Amount } from '@cashu/cashu-ts';
+import { describe, it, expect, beforeAll } from 'bun:test';
 /**
  * Auth BAT integration test — automated via Keycloak password grant.
  *
@@ -14,8 +15,8 @@ import { Amount } from '@cashu/cashu-ts';
  * Run:
  *   ./scripts/auth_mint/test-auth-integration.sh
  */
-import { describe, it, expect, beforeAll } from 'bun:test';
 import type { AuthProvider } from '@cashu/cashu-ts';
+import { createStorageHandle } from '../../storageInternal.ts';
 // poolSize is verified via mgr.auth.getPoolSize() — not via AuthManager cast
 import { initializeCoco, type Manager } from '../../Manager';
 import { MemoryRepositories } from '../../repositories/memory';
@@ -93,7 +94,7 @@ describe('Auth BAT (automated — password grant)', () => {
     await repositories.init();
 
     mgr = await initializeCoco({
-      repo: repositories,
+      storage: createStorageHandle(() => repositories),
       seedGetter: async () => new Uint8Array(64),
       watchers: {
         mintOperationWatcher: { disabled: true },
@@ -131,7 +132,7 @@ describe('Auth BAT (automated — password grant)', () => {
 
   it('T3: session restore → CAT works, BAT re-mintable', async () => {
     const mgr2 = await initializeCoco({
-      repo: repositories,
+      storage: createStorageHandle(() => repositories),
       seedGetter: async () => new Uint8Array(64),
       watchers: {
         mintOperationWatcher: { disabled: true },

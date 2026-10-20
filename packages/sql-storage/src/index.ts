@@ -11,7 +11,10 @@ export interface SqlTransactionOptions {
   mode?: 'deferred' | 'immediate';
 }
 
+/** SQLite execution contract. See the package README for transaction and ownership guarantees. */
 export interface SqlDatabase {
+  /** Maximum bound values per statement, including fixed values. Defaults to 999; minimum 32. */
+  readonly maxParameters?: number;
   exec(sql: string): Promise<void>;
   run(sql: string, params?: SqlParams): Promise<SqlRunResult>;
   get<Row extends object = Record<string, unknown>>(
@@ -25,26 +28,5 @@ export interface SqlDatabase {
   transaction<T>(fn: (tx: SqlDatabase) => Promise<T>, options?: SqlTransactionOptions): Promise<T>;
 }
 
-export {
-  SqlStorageRepositories,
-  SqliteMintRepository,
-  SqliteKeyRingRepository,
-  SqliteKeysetRepository,
-  SqliteCounterRepository,
-  SqliteProofRepository,
-  SqliteMeltQuoteRepository,
-  SqliteMintQuoteRepository,
-  SqliteLegacyMintQuoteRepository,
-  SqliteHistoryRepository,
-  SqliteSendOperationRepository,
-  SqliteMeltOperationRepository,
-  SqliteAuthSessionRepository,
-  SqliteMintOperationRepository,
-  SqliteReceiveOperationRepository,
-  SqlitePaymentRequestReceiveOperationRepository,
-  SqlitePaymentRequestReceiveAttemptRepository,
-  SqliteMintSwapOperationRepository,
-} from './repositories.ts';
-export type { SqlStorageRepositoriesOptions } from './repositories.ts';
-export { ensureSchema, ensureSchemaUpTo, MIGRATIONS } from './schema.ts';
-export type { Migration } from './schema.ts';
+export { createSqliteStorage, type SqliteStorageOptions } from './storage.ts';
+export { SqlTransactionConflictError } from './SqlTransactionConflictError.ts';

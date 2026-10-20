@@ -1,4 +1,4 @@
-import type { MintQuoteRepository } from '@cashu/coco-core/adapter';
+import type { MintQuoteRepository } from '@cashu/coco-core/internal';
 import {
   applyBolt11MintQuoteStateFallback,
   deserializeAmount,
@@ -14,7 +14,7 @@ import {
   type MintMethodRemoteState,
   type MintQuote,
   type QuoteIdentity,
-} from '@cashu/coco-core/adapter';
+} from '@cashu/coco-core/internal';
 import type { IdbDb, MintQuoteRow } from '../lib/db.ts';
 
 type SerializedQuoteData = {

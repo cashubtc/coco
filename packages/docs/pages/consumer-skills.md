@@ -10,7 +10,7 @@ Use this location for workflows that help an agent work on `coco-cashu` itself, 
 
 - drafting pull request summaries
 - checking contributor-specific release steps
-- enforcing repo-specific engineering workflows
+- enforcing storage-specific engineering workflows
 
 These skills are internal project tooling. They are not the right place for assets you expect Coco consumers to discover and install for their own use.
 
@@ -34,7 +34,7 @@ skills/
     <skill-name>/
 ```
 
-This keeps installable skills separate from internal repo machinery and makes them easier to document, publish, and discover.
+This keeps installable skills separate from internal storage machinery and makes them easier to document, publish, and discover.
 
 ## Recommendation
 
@@ -45,7 +45,7 @@ Use this split consistently:
 
 That separation keeps ownership and intent clear:
 
-- hidden-ish repo automation stays under `.agents/`
+- hidden-ish storage automation stays under `.agents/`
 - public skills live in a stable, obvious path at the repository root
 
 ## Documenting Consumer Skills

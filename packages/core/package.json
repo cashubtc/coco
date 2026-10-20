@@ -24,9 +24,9 @@
       "types": "./dist/plugin.d.ts",
       "import": "./dist/plugin.js"
     },
-    "./adapter": {
-      "types": "./dist/adapter.d.ts",
-      "import": "./dist/adapter.js"
+    "./internal": {
+      "types": "./dist/internal.d.ts",
+      "import": "./dist/internal.js"
     }
   },
   "files": [
@@ -35,11 +35,11 @@
   ],
   "typesVersions": {
     "*": {
-      "adapter": [
-        "dist/adapter.d.ts"
-      ],
       "plugin": [
         "dist/plugin.d.ts"
+      ],
+      "internal": [
+        "dist/internal.d.ts"
       ]
     }
   },

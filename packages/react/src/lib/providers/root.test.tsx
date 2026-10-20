@@ -63,7 +63,7 @@ function createManagerMock(): Manager {
 
 function createConfigMock(): CocoConfig {
   return {
-    repo: {
+    storage: {
       init: vi.fn(),
     },
     seedGetter: vi.fn(),

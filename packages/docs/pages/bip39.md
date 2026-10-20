@@ -14,7 +14,7 @@ async function seedGetter(): Promise<Uint8Array> {
 }
 
 const coco = await initializeCoco({
-  repo, // See storage adapters to learn more
+  storage, // See storage adapters to learn more
   seedGetter,
 });
 ```

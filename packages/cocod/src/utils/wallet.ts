@@ -1,5 +1,5 @@
 import { initializeCoco, ConsoleLogger, type Logger, type Manager } from '@cashu/coco-core';
-import { SqliteRepositories } from '@cashu/coco-sqlite-bun';
+import { createSqliteStorage } from '@cashu/coco-sqlite-bun';
 import { Database } from 'bun:sqlite';
 import { mnemonicToSeedSync } from '@scure/bip39';
 import { NPCPlugin, type NPCAccountApi } from 'coco-cashu-plugin-npc';
@@ -48,7 +48,7 @@ export async function initializeWallet(
   const seed = mnemonicToSeedSync(mnemonic);
 
   await ensureSecretFile(DB_FILE);
-  const repo = new SqliteRepositories({ database: new Database(DB_FILE) });
+  const storage = createSqliteStorage({ database: new Database(DB_FILE) });
   const walletLogger = logger?.child?.({ component: 'coco' }) ?? logger;
   const cocoLogger = walletLogger ?? new ConsoleLogger('Coco', { level: 'info' });
   const sk = privateKeyFromSeedWords(mnemonic);
@@ -59,7 +59,7 @@ export async function initializeWallet(
     logger: cocoLogger,
   });
   const coco = await initializeCoco({
-    repo,
+    storage,
     seedGetter: async () => seed,
     logger: cocoLogger,
     plugins: [npcPlugin],

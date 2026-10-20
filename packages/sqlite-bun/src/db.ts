@@ -1,3 +1,4 @@
+import { SqliteDriverErrors } from '@cashu/coco-sql-storage/internal';
 import { statSync } from 'node:fs';
 import type { Database, Statement } from 'bun:sqlite';
 import type {
@@ -46,6 +47,7 @@ interface SqliteDbRootState {
   readonly databaseIdentity: string | Database;
   /** Promise chain used to serialize concurrent transactions */
   transactionQueue: Promise<void>;
+  errors: SqliteDriverErrors;
   /** Unique identifier for the currently active transaction scope (null if no transaction) */
   currentScope: symbol | null;
   /** Current nesting depth of transactions (1 = top-level, 2+ = nested) */
@@ -79,6 +81,7 @@ export class SqliteDb implements SqlDatabase {
         db: optionsOrRoot.database,
         databaseIdentity: getDatabaseIdentity(optionsOrRoot.database),
         transactionQueue: Promise.resolve(),
+        errors: new SqliteDriverErrors(),
         currentScope: null,
         scopeDepth: 0,
         pendingTransactionCount: 0,
@@ -130,13 +133,15 @@ export class SqliteDb implements SqlDatabase {
     if (this.shouldWaitForTransaction()) {
       await this.waitForActiveTransaction();
     }
-    return new Promise((resolve, reject) => {
-      try {
-        this.root.db.exec(sql);
-        resolve();
-      } catch (err) {
-        reject(err);
-      }
+    return this.root.errors.execute(async () => {
+      return new Promise<void>((resolve, reject) => {
+        try {
+          this.root.db.exec(sql);
+          resolve();
+        } catch (err) {
+          reject(err);
+        }
+      });
     });
   }
 
@@ -144,19 +149,21 @@ export class SqliteDb implements SqlDatabase {
     if (this.shouldWaitForTransaction()) {
       await this.waitForActiveTransaction();
     }
-    return new Promise((resolve, reject) => {
-      try {
-        const statement = this.getCachedStatement(sql);
-        const result = statement.run(...params);
-        const lastInsertRowId = Number(result.lastInsertRowid);
-        resolve({
-          lastID: lastInsertRowId,
-          lastInsertRowId,
-          changes: result.changes,
-        });
-      } catch (err) {
-        reject(err);
-      }
+    return this.root.errors.execute(async () => {
+      return new Promise((resolve, reject) => {
+        try {
+          const statement = this.getCachedStatement(sql);
+          const result = statement.run(...params);
+          const lastInsertRowId = Number(result.lastInsertRowid);
+          resolve({
+            lastID: lastInsertRowId,
+            lastInsertRowId,
+            changes: result.changes,
+          });
+        } catch (err) {
+          reject(err);
+        }
+      });
     });
   }
 
@@ -167,18 +174,20 @@ export class SqliteDb implements SqlDatabase {
     if (this.shouldWaitForTransaction()) {
       await this.waitForActiveTransaction();
     }
-    return new Promise((resolve, reject) => {
-      try {
-        const statement = this.getCachedStatement(sql);
-        const result = statement.get(...params);
-        if (result === null || result === undefined) {
-          resolve(undefined);
-          return;
+    return this.root.errors.execute(async () => {
+      return new Promise((resolve, reject) => {
+        try {
+          const statement = this.getCachedStatement(sql);
+          const result = statement.get(...params);
+          if (result === null || result === undefined) {
+            resolve(undefined);
+            return;
+          }
+          resolve(result as Row);
+        } catch (err) {
+          reject(err);
         }
-        resolve(result as Row);
-      } catch (err) {
-        reject(err);
-      }
+      });
     });
   }
 
@@ -189,14 +198,16 @@ export class SqliteDb implements SqlDatabase {
     if (this.shouldWaitForTransaction()) {
       await this.waitForActiveTransaction();
     }
-    return new Promise((resolve, reject) => {
-      try {
-        const statement = this.getCachedStatement(sql);
-        const result = statement.all(...params) as Row[];
-        resolve(result);
-      } catch (err) {
-        reject(err);
-      }
+    return this.root.errors.execute(async () => {
+      return new Promise((resolve, reject) => {
+        try {
+          const statement = this.getCachedStatement(sql);
+          const result = statement.all(...params) as Row[];
+          resolve(result);
+        } catch (err) {
+          reject(err);
+        }
+      });
     });
   }
 
@@ -286,7 +297,11 @@ export class SqliteDb implements SqlDatabase {
       // Register before awaiting BEGIN so another local connection sees this attempt.
       activeTransactions.set(root.databaseIdentity, localTransactions + 1);
       registeredTransaction = true;
-      await scopedDb.exec(options?.mode === 'immediate' ? 'BEGIN IMMEDIATE' : 'BEGIN');
+      try {
+        await scopedDb.exec(options?.mode === 'immediate' ? 'BEGIN IMMEDIATE' : 'BEGIN');
+      } catch (error) {
+        throw root.errors.afterRollback(error);
+      }
 
       try {
         // Execute user code within the transaction
@@ -295,13 +310,14 @@ export class SqliteDb implements SqlDatabase {
         await scopedDb.exec('COMMIT');
         return result;
       } catch (error) {
-        // Error - rollback the transaction
         try {
           await scopedDb.exec('ROLLBACK');
-        } catch {
-          // Ignore rollback errors (e.g., if transaction already rolled back)
+        } catch (rollbackError) {
+          throw new Error('SQLite rollback failed; transaction outcome is uncertain', {
+            cause: new AggregateError([error, rollbackError]),
+          });
         }
-        throw error;
+        throw root.errors.afterRollback(error);
       }
     } finally {
       if (previousBusyTimeout !== undefined) {

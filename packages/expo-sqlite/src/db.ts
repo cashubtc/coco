@@ -1,3 +1,4 @@
+import { SqliteDriverErrors } from '@cashu/coco-sql-storage/internal';
 // Minimal promise-based wrapper for expo-sqlite's async API
 // Consumers pass an already opened database instance
 import type { SQLiteDatabase } from 'expo-sqlite';
@@ -32,6 +33,7 @@ interface ExpoSqliteDbRootState {
   readonly db: ExpoSqliteDatabaseLike;
   /** Promise chain used to serialize concurrent transactions */
   transactionQueue: Promise<void>;
+  errors: SqliteDriverErrors;
   /** Unique identifier for the currently active transaction scope (null if no transaction) */
   currentScope: symbol | null;
   /** Current nesting depth of transactions (1 = top-level, 2+ = nested) */
@@ -64,6 +66,7 @@ export class ExpoSqliteDb implements SqlDatabase {
       this.root = {
         db: optionsOrRoot.database,
         transactionQueue: Promise.resolve(),
+        errors: new SqliteDriverErrors(),
         currentScope: null,
         scopeDepth: 0,
         pendingTransactionCount: 0,
@@ -102,17 +105,21 @@ export class ExpoSqliteDb implements SqlDatabase {
     if (this.shouldWaitForTransaction()) {
       await this.waitForActiveTransaction();
     }
-    // execAsync can run multiple statements separated by semicolons
-    await (this.operationDb as any).execAsync(sql);
+    return this.root.errors.execute(async () => {
+      // execAsync can run multiple statements separated by semicolons
+      await (this.operationDb as any).execAsync(sql);
+    });
   }
 
   async run(sql: string, params: SqlParams = []): Promise<ExpoSqliteRunResult> {
     if (this.shouldWaitForTransaction()) {
       await this.waitForActiveTransaction();
     }
-    const result = await (this.operationDb as any).runAsync(sql, ...(params ?? []));
-    const lastInsertRowId = result.lastInsertRowId ?? 0;
-    return { lastID: lastInsertRowId, lastInsertRowId, changes: result.changes ?? 0 };
+    return this.root.errors.execute(async () => {
+      const result = await (this.operationDb as any).runAsync(sql, ...(params ?? []));
+      const lastInsertRowId = result.lastInsertRowId ?? 0;
+      return { lastID: lastInsertRowId, lastInsertRowId, changes: result.changes ?? 0 };
+    });
   }
 
   async get<Row extends object = Record<string, unknown>>(
@@ -122,8 +129,10 @@ export class ExpoSqliteDb implements SqlDatabase {
     if (this.shouldWaitForTransaction()) {
       await this.waitForActiveTransaction();
     }
-    const row = await (this.operationDb as any).getFirstAsync(sql, ...(params ?? []));
-    return (row ?? undefined) as Row | undefined;
+    return this.root.errors.execute(async () => {
+      const row = await (this.operationDb as any).getFirstAsync(sql, ...(params ?? []));
+      return (row ?? undefined) as Row | undefined;
+    });
   }
 
   async all<Row extends object = Record<string, unknown>>(
@@ -133,8 +142,10 @@ export class ExpoSqliteDb implements SqlDatabase {
     if (this.shouldWaitForTransaction()) {
       await this.waitForActiveTransaction();
     }
-    const rows = await (this.operationDb as any).getAllAsync(sql, ...(params ?? []));
-    return (rows ?? []) as Row[];
+    return this.root.errors.execute(async () => {
+      const rows = await (this.operationDb as any).getAllAsync(sql, ...(params ?? []));
+      return (rows ?? []) as Row[];
+    });
   }
 
   /**
@@ -207,18 +218,24 @@ export class ExpoSqliteDb implements SqlDatabase {
 
       const runManualTransaction = async (beginStatement: string): Promise<T> => {
         const scopedDb = new ExpoSqliteDb(root, scopeToken);
-        await dbAny.execAsync(beginStatement);
+        try {
+          await scopedDb.exec(beginStatement);
+        } catch (error) {
+          throw root.errors.afterRollback(error);
+        }
         try {
           const result = await fn(scopedDb);
-          await dbAny.execAsync('COMMIT');
+          await scopedDb.exec('COMMIT');
           return result;
         } catch (error) {
           try {
-            await dbAny.execAsync('ROLLBACK');
-          } catch {
-            // Ignore rollback errors so the original transaction error is preserved.
+            await scopedDb.exec('ROLLBACK');
+          } catch (rollbackError) {
+            throw new Error('SQLite rollback failed; transaction outcome is uncertain', {
+              cause: new AggregateError([error, rollbackError]),
+            });
           }
-          throw error;
+          throw root.errors.afterRollback(error);
         }
       };
 

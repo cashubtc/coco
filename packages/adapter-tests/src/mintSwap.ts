@@ -6,8 +6,8 @@ import type {
   MintSwapOperationState,
   Repositories,
   RepositoryTransactionScope,
-} from '@cashu/coco-core/adapter';
-import { serializeMintSwapOperation } from '@cashu/coco-core/adapter';
+} from '@cashu/coco-core/internal';
+import { serializeMintSwapOperation } from '@cashu/coco-core/internal';
 import type { ContractRunner, TransactionFactory } from './index.ts';
 
 export type MintSwapContractOptions<TRepositories extends Repositories = Repositories> = {

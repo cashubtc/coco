@@ -18,11 +18,12 @@ import type {
   PaymentRequestReceiveAttemptRepository,
   PaymentRequestReceiveOperationRepository,
   MintSwapPersistence,
-} from '@cashu/coco-core/adapter';
-import { RepositoryTransactionConflictError } from '@cashu/coco-core/adapter';
+} from '@cashu/coco-core/internal';
+import { RepositoryTransactionConflictError } from '@cashu/coco-core/internal';
+import { SqlTransactionConflictError } from './SqlTransactionConflictError.ts';
 import type { SqlDatabase } from './index.ts';
 import { ensureSchema } from './schema.ts';
-import { hasSqliteTransactionConflictCode, isSqliteTransactionConflict } from './utils.ts';
+import { sqlParameterLimit } from './utils.ts';
 import { SqliteMintRepository } from './repositories/MintRepository.ts';
 import {
   SqliteKeysetRepository,
@@ -49,14 +50,6 @@ import { SqliteMintSwapOperationRepository } from './repositories/MintSwapOperat
 export interface SqlStorageRepositoriesOptions {
   database: SqlDatabase;
   mintSwap?: boolean;
-}
-
-class RepositoryTransactionCallbackFailure extends Error {
-  constructor(readonly error: unknown) {
-    super('Repository transaction callback failed');
-    this.name = 'RepositoryTransactionCallbackFailure';
-    (this as unknown as { cause?: unknown }).cause = error;
-  }
 }
 
 function createRepositoryScope(
@@ -112,6 +105,7 @@ export class SqlStorageRepositories implements Repositories {
   private readonly mintSwapEnabled: boolean;
 
   constructor(options: SqlStorageRepositoriesOptions) {
+    sqlParameterLimit(options.database);
     this.database = options.database;
     this.mintSwapEnabled = options.mintSwap ?? false;
     const repositories = createRepositoryScope(this.database, this.mintSwapEnabled);
@@ -143,23 +137,12 @@ export class SqlStorageRepositories implements Repositories {
   async withTransaction<T>(fn: (repos: RepositoryTransactionScope) => Promise<T>): Promise<T> {
     try {
       return await this.database.transaction(
-        async (txDatabase) => {
-          try {
-            return await fn(createRepositoryScope(txDatabase, this.mintSwapEnabled));
-          } catch (error) {
-            if (error instanceof RepositoryTransactionConflictError) throw error;
-            if (hasSqliteTransactionConflictCode(error)) {
-              throw new RepositoryTransactionConflictError(undefined, error);
-            }
-            throw new RepositoryTransactionCallbackFailure(error);
-          }
-        },
+        (txDatabase) => fn(createRepositoryScope(txDatabase, this.mintSwapEnabled)),
         { mode: 'immediate' },
       );
     } catch (error) {
-      if (error instanceof RepositoryTransactionCallbackFailure) throw error.error;
       if (error instanceof RepositoryTransactionConflictError) throw error;
-      if (isSqliteTransactionConflict(error)) {
+      if (error instanceof SqlTransactionConflictError) {
         throw new RepositoryTransactionConflictError(undefined, error);
       }
       throw error;

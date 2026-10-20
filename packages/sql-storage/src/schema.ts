@@ -1,4 +1,4 @@
-import { normalizeMintUrl } from '@cashu/coco-core/adapter';
+import { normalizeMintUrl } from '@cashu/coco-core/internal';
 import type { SqlDatabase } from './index.ts';
 
 export interface Migration {
@@ -1584,14 +1584,6 @@ export async function ensureSchema(db: SqlDatabase): Promise<void> {
  * Used for testing migration behavior.
  */
 export async function ensureSchemaUpTo(db: SqlDatabase, stopBeforeId?: string): Promise<void> {
-  // Ensure pragmas for current connection and create migrations tracking table
-  await db.exec(`
-    PRAGMA foreign_keys = ON;
-    PRAGMA journal_mode = WAL;
-    PRAGMA synchronous = NORMAL;
-    PRAGMA busy_timeout = 5000;
-  `);
-
   await db.exec(`
     CREATE TABLE IF NOT EXISTS coco_cashu_migrations (
       id        TEXT PRIMARY KEY,

@@ -9,7 +9,7 @@ import {
   type MeltQuote,
   type MeltQuoteRepository,
   type QuoteIdentity,
-} from '@cashu/coco-core/adapter';
+} from '@cashu/coco-core/internal';
 import type { SqlDatabase } from '../index.ts';
 
 type MeltQuoteRow = {

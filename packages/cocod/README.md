@@ -16,7 +16,7 @@ If you like simple tools: run commands in your terminal, and let the daemon hand
 
 ## Install
 
-The package is private and runs from workspace source. From the repo root:
+The package is private and runs from workspace source. From the storage root:
 
 ```bash
 bun install
@@ -166,7 +166,7 @@ does not replace the Cocod Client Credential, and forwarded identity headers are
 
 ## Development
 
-From `packages/cocod` (run `bun run build` at the repo root first):
+From `packages/cocod` (run `bun run build` at the storage root first):
 
 ```bash
 # Run CLI from source

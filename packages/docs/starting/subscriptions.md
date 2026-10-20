@@ -25,7 +25,7 @@ import { initializeCoco } from '@cashu/coco-core';
 import { WebSocket } from 'ws';
 
 const coco = await initializeCoco({
-  repo,
+  storage,
   seedGetter,
   webSocketFactory: (url) => new WebSocket(url),
 });

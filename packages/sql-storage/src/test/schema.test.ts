@@ -1,16 +1,17 @@
 /// <reference types="bun" />
 
 import { describe, expect, it } from 'bun:test';
+
 import { Database } from 'bun:sqlite';
 import { Manager } from '@cashu/coco-core';
+import { createSqliteStorage, type SqlDatabase } from '../index.ts';
 import { SqlStorageRepositories } from '../repositories.ts';
 import {
   ensureSchemaUpTo,
   MIGRATIONS,
   SqliteKeyRingRepository,
   SqliteMintQuoteRepository,
-  type SqlDatabase,
-} from '../index.ts';
+} from '../internal.ts';
 import { createBunSqlDatabase } from './bunSqlDatabase.ts';
 
 const EXPECTED_MIGRATION_IDS = [
@@ -60,10 +61,9 @@ const EXPECTED_MIGRATION_IDS = [
 ] as const;
 
 async function allocateP2pkKey(db: SqlDatabase) {
-  const manager = new Manager(
-    new SqlStorageRepositories({ database: db }),
-    async () => new Uint8Array(64),
-  );
+  const storage = createSqliteStorage({ database: db });
+  await storage.init();
+  const manager = new Manager(storage, async () => new Uint8Array(64));
   try {
     return await manager.keyring.generateKeyPair(true);
   } finally {
@@ -206,9 +206,6 @@ describe('shared SQL schema migrations', () => {
     expect(ids).toEqual(
       [...EXPECTED_MIGRATION_IDS, '012_receive_operations', '013_send_operations_method'].sort(),
     );
-
-    const busyTimeout = await db.get<{ timeout: number }>('PRAGMA busy_timeout');
-    expect(busyTimeout?.timeout).toBe(5000);
   });
 
   itWithDatabase('backfills legacy Send operation revisions to zero', async (db) => {

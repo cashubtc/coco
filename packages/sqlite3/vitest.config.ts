@@ -11,6 +11,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@cashu/coco-sql-storage/test': sqlStorageTestEntry,
+      '@cashu/coco-sql-storage/internal': `${process.cwd()}/../sql-storage/src/internal.ts`,
       '@cashu/coco-sql-storage': sqlStorageEntry,
     },
   },

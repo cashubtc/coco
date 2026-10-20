@@ -1,3 +1,4 @@
+/** INTERNAL: no compatibility or versioning guarantees, including patch/minor releases. */
 export type {
   AuthSessionRepository,
   CounterRepository,
@@ -125,3 +126,11 @@ export {
   MintSwapIdentityConflictError,
   type MintSwapIdentityKind,
 } from './operations/mintSwap/MintSwapIdentityConflictError.ts';
+
+export {
+  createStorageHandle,
+  resolveStorage,
+  assertStorageVersion,
+  storageIntegrationVersion,
+} from './storageInternal.ts';
+export { MemoryRepositories } from './repositories/memory/MemoryRepositories.ts';

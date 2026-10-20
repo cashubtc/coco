@@ -13,7 +13,7 @@ the loading state and `errorFallback` for initialization failures.
 import { CocoCashuProvider } from '@cashu/coco-react';
 
 <CocoCashuProvider
-  config={{ repo, seedGetter }}
+  config={{ storage, seedGetter }}
   fallback={<Spinner />}
   errorFallback={(error) => <InitError error={error} />}
 >

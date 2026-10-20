@@ -1,4 +1,4 @@
-import type { CounterRepository, Counter } from '@cashu/coco-core/adapter';
+import type { CounterRepository, Counter } from '@cashu/coco-core/internal';
 import type { IdbDb, CounterRow } from '../lib/db.ts';
 
 export class IdbCounterRepository implements CounterRepository {

@@ -1,20 +1,17 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
-import { SqlStorageRepositories } from '@cashu/coco-sql-storage';
-import { ExpoSqliteDb } from './db.ts';
+import type { CocoStorage } from '@cashu/coco-core';
+import { assertStorageVersion, createStorageHandle } from '@cashu/coco-core/internal';
+import { storageIntegrationVersion as sqlVersion } from '@cashu/coco-sql-storage/internal';
+import { version } from '../package.json';
+import { SqliteRepositories } from './internal.ts';
 
-export interface SqliteRepositoriesOptions {
+export interface SqliteStorageOptions {
   database: SQLiteDatabase;
   mintSwap?: boolean;
 }
-
-export class SqliteRepositories extends SqlStorageRepositories {
-  constructor(options: SqliteRepositoriesOptions) {
-    super({
-      database: new ExpoSqliteDb(options),
-      mintSwap: options.mintSwap,
-    });
-  }
+/** Borrow a caller-opened SQLite connection. The caller remains responsible for closing it. */
+export function createSqliteStorage(options: SqliteStorageOptions): CocoStorage {
+  assertStorageVersion(version);
+  assertStorageVersion(sqlVersion);
+  return createStorageHandle(() => new SqliteRepositories(options), version);
 }
-
-export type ExpoSqliteRepositoriesOptions = SqliteRepositoriesOptions;
-export { SqliteRepositories as ExpoSqliteRepositories };

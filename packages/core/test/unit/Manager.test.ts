@@ -7,6 +7,7 @@ import {
   type SerializedBlindedSignature,
 } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect, mock } from 'bun:test';
+import { createStorageHandle } from '../../storageInternal.ts';
 
 import { CocoInitializationError, initializeCoco, type CocoConfig, Manager } from '../../Manager';
 import { PaymentRequestsApi } from '../../api/PaymentRequestsApi';
@@ -28,13 +29,13 @@ import { makeOutputDataCreator } from '../fixtures/OutputDataCreator.ts';
 describe('initializeCoco', () => {
   let repositories: MemoryRepositories;
   let seedGetter: () => Promise<Uint8Array>;
-  let baseConfig: Pick<CocoConfig, 'repo' | 'seedGetter'>;
+  let baseConfig: Pick<CocoConfig, 'storage' | 'seedGetter'>;
 
   beforeEach(() => {
     repositories = new MemoryRepositories();
     seedGetter = async () => new Uint8Array(32);
     baseConfig = {
-      repo: repositories,
+      storage: createStorageHandle(() => repositories),
       seedGetter,
     };
   });
@@ -294,7 +295,7 @@ describe('initializeCoco', () => {
 
       await initializeCoco({
         ...baseConfig,
-        repo: mockRepo,
+        storage: createStorageHandle(() => mockRepo),
       });
 
       expect(initSpy).toHaveBeenCalled();
@@ -892,7 +893,11 @@ describe('initializeCoco', () => {
       await repositories.meltQuoteRepository.upsertMeltQuote(expiredOperationQuote);
       await repositories.meltOperationRepository.create(expiredOperation);
 
-      const manager = new Manager(repositories, seedGetter, new NullLogger());
+      const manager = new Manager(
+        createStorageHandle(() => repositories),
+        seedGetter,
+        new NullLogger(),
+      );
       await manager.initPlugins();
       manager.subscriptions.pause();
       manager['mintService'].isTrustedMint = mock(async () => true);
@@ -935,7 +940,11 @@ describe('initializeCoco', () => {
       await repositories.meltQuoteRepository.upsertMeltQuote(expiredOperationQuote);
       await repositories.meltOperationRepository.create(expiredOperation);
 
-      const manager = new Manager(repositories, seedGetter, new NullLogger());
+      const manager = new Manager(
+        createStorageHandle(() => repositories),
+        seedGetter,
+        new NullLogger(),
+      );
       await manager.initPlugins();
       manager.subscriptions.pause();
       manager['mintService'].isTrustedMint = mock(async () => true);

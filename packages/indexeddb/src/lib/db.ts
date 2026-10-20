@@ -1,5 +1,5 @@
 import Dexie, { type Transaction as DexieTransaction } from 'dexie';
-import type { StoredBlindedSignature } from '@cashu/coco-core/adapter';
+import type { StoredBlindedSignature } from '@cashu/coco-core/internal';
 
 export interface IdbDbOptions {
   name?: string;

@@ -1,10 +1,11 @@
 import {
   reconcileKeysetKeypairs,
   RepositoryTransactionConflictError,
-} from '@cashu/coco-core/adapter';
-import type { KeysetRepository, Keyset } from '@cashu/coco-core/adapter';
+} from '@cashu/coco-core/internal';
+import type { KeysetRepository, Keyset } from '@cashu/coco-core/internal';
+import { SqlTransactionConflictError } from '../SqlTransactionConflictError.ts';
 import type { SqlDatabase } from '../index.ts';
-import { getUnixTimeSeconds, isSqliteTransactionConflict } from '../utils.ts';
+import { getUnixTimeSeconds } from '../utils.ts';
 
 export class ScopedSqliteKeysetRepository implements KeysetRepository {
   private readonly db: Pick<SqlDatabase, 'all' | 'get' | 'run'>;
@@ -136,7 +137,7 @@ export class SqliteKeysetRepository extends ScopedSqliteKeysetRepository {
         { mode: 'immediate' },
       );
     } catch (error) {
-      if (isSqliteTransactionConflict(error)) {
+      if (error instanceof SqlTransactionConflictError) {
         throw new RepositoryTransactionConflictError(undefined, error);
       }
       throw error;

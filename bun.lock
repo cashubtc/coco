@@ -26,7 +26,7 @@
       },
       "peerDependencies": {
         "@cashu/cashu-ts": "5.0.0-rc.4",
-        "@cashu/coco-core": "^2.0.0",
+        "@cashu/coco-core": "2.0.0",
         "typescript": "^5",
       },
     },
@@ -76,12 +76,12 @@
       "version": "2.0.0",
       "devDependencies": {
         "@cashu/coco-adapter-tests": "2.0.0",
-        "@cashu/coco-sql-storage": "2.0.0",
         "@types/node": "^25.0.9",
       },
       "peerDependencies": {
         "@cashu/cashu-ts": "5.0.0-rc.4",
         "@cashu/coco-core": "2.0.0",
+        "@cashu/coco-sql-storage": "2.0.0",
         "expo-sqlite": "*",
         "typescript": "^5",
       },
@@ -145,12 +145,12 @@
       "version": "2.0.0",
       "devDependencies": {
         "@cashu/coco-adapter-tests": "2.0.0",
-        "@cashu/coco-sql-storage": "2.0.0",
         "@types/node": "^25.0.9",
       },
       "peerDependencies": {
         "@cashu/cashu-ts": "5.0.0-rc.4",
         "@cashu/coco-core": "2.0.0",
+        "@cashu/coco-sql-storage": "2.0.0",
         "typescript": "^5",
       },
     },
@@ -163,13 +163,13 @@
       },
       "devDependencies": {
         "@cashu/coco-adapter-tests": "2.0.0",
-        "@cashu/coco-sql-storage": "2.0.0",
         "@types/node": "^25.0.9",
         "vitest": "^2.1.9",
       },
       "peerDependencies": {
         "@cashu/cashu-ts": "5.0.0-rc.4",
         "@cashu/coco-core": "2.0.0",
+        "@cashu/coco-sql-storage": "2.0.0",
         "typescript": "^5",
       },
     },

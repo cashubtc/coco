@@ -48,7 +48,7 @@ import { CocoCashuProvider } from '@cashu/coco-react';
 export function App() {
   return (
     <CocoCashuProvider
-      config={{ repo, seedGetter }}
+      config={{ storage, seedGetter }}
       fallback={<div>Loading wallet...</div>}
       errorFallback={<div>Failed</div>}
     >
