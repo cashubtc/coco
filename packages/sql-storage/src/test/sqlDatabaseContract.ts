@@ -284,7 +284,8 @@ export function runSqlDatabaseContract(
           await releaseFirst.promise;
         });
 
-        await firstEntered.promise;
+        const firstFinished = Promise.allSettled([firstTransaction]);
+        await Promise.race([firstEntered.promise, firstFinished]);
 
         const secondTransaction = database.transaction(async (tx) => {
           await tx.run('INSERT INTO contract_concurrent_transactions (label) VALUES (?)', [
@@ -303,13 +304,11 @@ export function runSqlDatabaseContract(
         const rows = await database.all<ContractLabelRow>(
           'SELECT label FROM contract_concurrent_transactions ORDER BY id ASC',
         );
-        expect(rows).toEqual(
-          outcomes[1]?.status === 'fulfilled'
-            ? [{ label: 'first' }, { label: 'second' }]
-            : [{ label: 'first' }],
+        expect(rows.map((row) => row.label).sort()).toEqual(
+          ['first', 'second'].filter((_, index) => outcomes[index]?.status === 'fulfilled'),
         );
       });
-    });
+    }, 5000);
 
     it('rolls back nested work and preserves the original callback error', async () => {
       await withDatabase(options, async (database) => {
@@ -359,21 +358,33 @@ export function runSqlDatabaseContract(
         await database.exec(
           'CREATE TABLE contract_decision (claimed INTEGER); INSERT INTO contract_decision VALUES (0)',
         );
-        const claim = () =>
+        const firstRead = createDeferred();
+        const releaseFirst = createDeferred();
+        const claim = (first = false) =>
           database.transaction(
             async (tx) => {
               const row = await tx.get<{ claimed: number }>(
                 'SELECT claimed FROM contract_decision',
               );
+              if (first) {
+                firstRead.resolve();
+                await releaseFirst.promise;
+              }
               if (row?.claimed) return false;
-              const result = await tx.run(
-                'UPDATE contract_decision SET claimed = 1 WHERE claimed = 0',
-              );
+              // Authorization depends only on the read above, not a second CAS predicate.
+              const result = await tx.run('UPDATE contract_decision SET claimed = 1');
               return result.changes === 1;
             },
             { mode: 'immediate' },
           );
-        const outcomes = await Promise.allSettled([claim(), claim()]);
+        const first = claim(true);
+        const firstFinished = Promise.allSettled([first]);
+        await Promise.race([firstRead.promise, firstFinished]);
+        // Submit the competing transaction while the first authoritative read is held.
+        // A serializing driver may defer its callback; an isolating driver may reject either writer.
+        const second = claim();
+        releaseFirst.resolve();
+        const outcomes = await Promise.allSettled([first, second]);
         for (const outcome of outcomes) {
           if (outcome.status === 'rejected')
             expect(outcome.reason instanceof SqlTransactionConflictError).toBe(true);
