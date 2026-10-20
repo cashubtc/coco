@@ -161,6 +161,36 @@ describe('SendOpsApi', () => {
     );
   });
 
+  it('prepare forwards a caller-supplied operation ID to init', async () => {
+    await api.prepare({
+      mintUrl,
+      amount: Amount.from(20),
+      operationId: 'caller-op-1',
+    });
+
+    expect(sendOperationService.init).toHaveBeenCalledWith(
+      mintUrl,
+      {
+        amount: Amount.from(20),
+        unit: 'sat',
+      },
+      {
+        method: 'default',
+        methodData: {},
+        operationId: 'caller-op-1',
+      },
+    );
+  });
+
+  it('prepare omits the operation ID from init options when the caller does not supply one', async () => {
+    await api.prepare({ mintUrl, amount: Amount.from(20) });
+
+    const initOptions = (sendOperationService.init as unknown as ReturnType<typeof mock>).mock
+      .calls[0]?.[2];
+    expect(initOptions).toEqual({ method: 'default', methodData: {} });
+    expect(Object.keys(initOptions ?? {})).not.toContain('operationId');
+  });
+
   it('execute re-reads operation objects before executing', async () => {
     const staleOperation: SendOperation = {
       ...preparedOperation,

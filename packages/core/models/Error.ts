@@ -143,6 +143,16 @@ export class SendOperationConflictError extends Error {
   }
 }
 
+/**
+ * Caller-supplied operation ID was invalid (blank, empty, or had surrounding whitespace).
+ */
+export class InvalidOperationIdError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvalidOperationIdError';
+  }
+}
+
 export class AuthSessionError extends Error {
   readonly mintUrl: string;
   constructor(mintUrl: string, message?: string, cause?: unknown) {
