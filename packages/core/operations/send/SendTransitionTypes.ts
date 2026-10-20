@@ -20,19 +20,46 @@ export interface PrepareSendInput {
   forceSwap: boolean;
   /** Randomized outputs fixed during preflight and reused across transaction retries. */
   fixedSendOutputs?: readonly OutputDataLike[];
+  /**
+   * Set when the operation ID was caller-supplied, which makes it idempotent: an existing
+   * `prepared` operation with the same intent is joined instead of rejected.
+   *
+   * The marker is passed explicitly so the transition never parses operation identity.
+   */
+  joinable?: boolean;
 }
 
-export interface PrepareSendResult {
-  operation: PreparedSendOperation;
-  reservation: {
-    mintUrl: string;
-    operationId: string;
-    secrets: string[];
-    amount: Amount;
-    unit: string;
-  };
-  counter?: { mintUrl: string; keysetId: string; counter: number };
+export interface PrepareSendReservation {
+  mintUrl: string;
+  operationId: string;
+  secrets: string[];
+  amount: Amount;
+  unit: string;
 }
+
+/** Counter advance committed by a creating prepare. Absent when a prepare joins an existing one. */
+export interface PrepareSendCounter {
+  mintUrl: string;
+  keysetId: string;
+  counter: number;
+}
+
+/**
+ * Creating prepares reserve proofs; joining prepares return the already-committed operation and
+ * reserve nothing, so `reservation` is non-null exactly when the outcome is `created`.
+ */
+export type PrepareSendResult =
+  | {
+      operation: PreparedSendOperation;
+      outcome: 'created';
+      reservation: PrepareSendReservation;
+      counter?: PrepareSendCounter;
+    }
+  | {
+      operation: PreparedSendOperation;
+      outcome: 'joined';
+      reservation: null;
+    };
 
 export interface ExecuteExactSendInput {
   operationId: string;
@@ -172,7 +199,7 @@ export interface BeginSendReclaimInput {
 export interface BeginSendReclaimResult {
   operation: RollingBackSendOperation;
   inputProofs: CoreProof[];
-  counter?: PrepareSendResult['counter'];
+  counter?: PrepareSendCounter;
   skippedForFees: boolean;
 }
 

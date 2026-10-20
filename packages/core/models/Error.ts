@@ -143,6 +143,26 @@ export class SendOperationConflictError extends Error {
   }
 }
 
+/**
+ * Caller-supplied operation ID was invalid (blank, empty, or had surrounding whitespace).
+ */
+export class InvalidOperationIdError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvalidOperationIdError';
+  }
+}
+
+/**
+ * Caller-supplied Send operation ID is already bound to a different intent.
+ */
+export class SendOperationIntentConflictError extends SendOperationConflictError {
+  constructor(operationId: string, message?: string) {
+    super(operationId, message ?? `Send operation ${operationId} has a different intent`);
+    this.name = 'SendOperationIntentConflictError';
+  }
+}
+
 export class AuthSessionError extends Error {
   readonly mintUrl: string;
   constructor(mintUrl: string, message?: string, cause?: unknown) {
