@@ -1025,7 +1025,7 @@ export class Manager {
       mintScopedLock,
     });
     const walletRestoreService = new WalletRestoreService(
-      new ReceiveOpsApi(receiveOperationService),
+      receiveOperationService,
       transactionRunner,
       this.mintRequestProvider,
       walletRestoreLogger,

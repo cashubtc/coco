@@ -10,5 +10,5 @@ pending and uneconomic skips.
 preserves all keyset outcomes and available Receive operation IDs. Amounts stay precise and scoped
 to each keyset's unit. Callers explicitly typing the old `Promise<void>` return must update that
 annotation. The plugin-reachable `walletRestoreService.sweepKeyset()` now returns a keyset result;
-internal service construction takes the public Receive methods in place of ProofService and
+internal service construction takes ReceiveOperationService's public workflow methods in place of ProofService and
 WalletService dependencies. No persisted format or Receive lifecycle API changes are introduced.

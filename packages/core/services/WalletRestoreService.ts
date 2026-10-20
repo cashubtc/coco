@@ -1,6 +1,6 @@
 import { type Proof, Mint, Wallet, sumProofs, type OutputDataCreator } from '@cashu/cashu-ts';
 import { mapProofToCoreProof, normalizeMintUrl } from '@core/utils';
-import type { ReceiveOpsApi } from '../api/ReceiveOpsApi.ts';
+import type { ReceiveOperationService } from '../operations/receive/ReceiveOperationService.ts';
 import type { SweepKeysetResult, SweepKeysetSummary } from '../models/Sweep.ts';
 import type { CoreTransactionRunner } from '../transactions/CoreTransaction.ts';
 import type { EventBus, CoreEvents } from '../events/index.ts';
@@ -21,7 +21,10 @@ export class WalletRestoreService {
   private readonly restoreStartCounter = 0;
 
   constructor(
-    private readonly receive: Pick<ReceiveOpsApi, 'prepare' | 'execute' | 'get'>,
+    private readonly receive: Pick<
+      ReceiveOperationService,
+      'init' | 'prepare' | 'execute' | 'getOperation'
+    >,
     transactionRunner: CoreTransactionRunner,
     requestProvider: MintRequestProvider,
     logger?: Logger,
@@ -34,7 +37,7 @@ export class WalletRestoreService {
     this.outputDataCreator = outputDataCreator;
   }
 
-  /** Discover a source keyset and delegate its available value to public Receive operations. */
+  /** Discover a source keyset and delegate its available value to the Receive coordinator. */
   async sweepKeyset(
     mintUrl: string,
     keysetId: string,
@@ -85,9 +88,12 @@ export class WalletRestoreService {
       if (amount.lessThanOrEqual(fee)) {
         return { ...summary, status: 'skipped', reason: 'uneconomic', available: amount, fee };
       }
-      const prepared = await this.receive.prepare({
-        token: { mint: mintUrl, proofs: available, unit: normalizedUnit },
+      const draft = await this.receive.init({
+        mint: mintUrl,
+        proofs: available,
+        unit: normalizedUnit,
       });
+      const prepared = await this.receive.prepare(draft);
       receiveOperationId = prepared.id;
       const finalized = await this.receive.execute(prepared.id);
       return {
@@ -102,7 +108,7 @@ export class WalletRestoreService {
       if (!receiveOperationId) return { ...summary, status: 'failed', error };
       // A rejected execute may already have settled during Receive recovery.
       // Read only: Sweep never submits a replacement for an uncertain exchange.
-      const operation = await this.receive.get(receiveOperationId).catch(() => null);
+      const operation = await this.receive.getOperation(receiveOperationId).catch(() => null);
       if (operation?.state === 'finalized') {
         return {
           ...summary,

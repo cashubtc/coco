@@ -253,7 +253,7 @@ Listener failures follow the existing post-commit publication policy and do not 
 
 Remove `CounterService.overwriteCounter()` when its Restore caller moves, without retaining a
 compatibility wrapper. Receive now owns its transactional Output Allocation, and Sweep delegates
-exchanges through public Receive operations. Legacy plugin-facing ProofService allocation helpers and
+exchanges through Receive's public coordinator methods. Legacy plugin-facing ProofService allocation helpers and
 CounterService remain; migrate their remaining callers, then remove CounterService and its
 plugin-facing entry once no callers remain. These removals
 intentionally change the plugin-facing service API. Restore's migration alone does not establish

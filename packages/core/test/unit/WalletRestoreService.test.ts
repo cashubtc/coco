@@ -9,7 +9,7 @@ import {
 } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, afterEach, expect, mock } from 'bun:test';
 import { WalletRestoreService } from '../../services/WalletRestoreService';
-import type { ReceiveOpsApi } from '../../api/ReceiveOpsApi.ts';
+import type { ReceiveOperationService } from '../../operations/receive/ReceiveOperationService.ts';
 import type { PreparedReceiveOperation } from '../../operations/receive/ReceiveOperation.ts';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
@@ -35,7 +35,7 @@ describe('WalletRestoreService', () => {
   const keysetId = 'keyset-1';
   const bip39seed = new Uint8Array(64).fill(7);
 
-  let receive: Pick<ReceiveOpsApi, 'prepare' | 'execute' | 'get'>;
+  let receive: Pick<ReceiveOperationService, 'init' | 'prepare' | 'execute' | 'getOperation'>;
   let transactionRunner: RepositoryCoreTransactionRunner;
   let requestProvider: MintRequestProvider;
   let logger: Logger;
@@ -57,9 +57,10 @@ describe('WalletRestoreService', () => {
       fee: Amount.from(1),
     } as PreparedReceiveOperation;
     receive = {
+      init: mock(async () => ({ ...prepared, state: 'init' as const })),
       prepare: mock(async () => prepared),
       execute: mock(async () => ({ ...prepared, state: 'finalized' as const })),
-      get: mock(async () => ({ ...prepared, state: 'executing' as const })),
+      getOperation: mock(async () => ({ ...prepared, state: 'executing' as const })),
     };
     transactionRunner = new RepositoryCoreTransactionRunner(new MemoryRepositories());
 
@@ -209,10 +210,10 @@ describe('WalletRestoreService', () => {
       );
       Wallet.prototype.getFeesForProofs = mock(() => Amount.from(1));
       const tokens: unknown[] = [];
-      const prepare = receive.prepare;
-      receive.prepare = async (input) => {
-        tokens.push(input.token);
-        return prepare(input);
+      const init = receive.init;
+      receive.init = async (token) => {
+        tokens.push(token);
+        return init(token);
       };
 
       expect(await service.sweepKeyset(mintUrl, keysetId, bip39seed, 'USD')).toMatchObject({
@@ -282,11 +283,11 @@ describe('WalletRestoreService', () => {
       Wallet.prototype.batchRestore = mock(async () => ({ proofs: [makeProof(100, 'available')] }));
       Wallet.prototype.checkProofsStates = mock(async () => [{ state: 'UNSPENT' }] as ProofState[]);
       Wallet.prototype.getFeesForProofs = mock(() => Amount.from(1));
-      const prepared = await receive.prepare({ token: { mint: mintUrl, proofs: [] } });
+      const prepared = await receive.prepare(await receive.init({ mint: mintUrl, proofs: [] }));
       receive.execute = mock(async () => {
         throw new Error('execution rejected');
       });
-      receive.get = async () => {
+      receive.getOperation = async () => {
         if (state === 'unreadable') throw new Error('read unavailable');
         if (state === 'missing') return null;
         return { ...prepared, state };
@@ -317,26 +318,29 @@ describe('WalletRestoreService', () => {
       });
     });
 
-    it('retains known pending skips when preparation rejects without an ID', async () => {
-      Wallet.prototype.batchRestore = mock(async () => ({
-        proofs: [makeProof(16, 'available'), makeProof(8, 'pending')],
-      }));
-      Wallet.prototype.checkProofsStates = mock(
-        async () => [{ state: 'UNSPENT' }, { state: 'PENDING' }] as ProofState[],
-      );
-      Wallet.prototype.getFeesForProofs = mock(() => Amount.from(1));
-      const error = new Error('preparation rejected');
-      receive.prepare = mock(async () => {
-        throw error;
-      });
-      expect(await service.sweepKeyset(mintUrl, keysetId, bip39seed)).toEqual({
-        keysetId,
-        unit: 'sat',
-        status: 'failed',
-        error,
-        pending: { count: 1, amount: Amount.from(8) },
-      });
-    });
+    it.each(['init', 'prepare'] as const)(
+      'retains known pending skips when %s rejects',
+      async (method) => {
+        Wallet.prototype.batchRestore = mock(async () => ({
+          proofs: [makeProof(16, 'available'), makeProof(8, 'pending')],
+        }));
+        Wallet.prototype.checkProofsStates = mock(
+          async () => [{ state: 'UNSPENT' }, { state: 'PENDING' }] as ProofState[],
+        );
+        Wallet.prototype.getFeesForProofs = mock(() => Amount.from(1));
+        const error = new Error('preparation rejected');
+        receive[method] = mock(async () => {
+          throw error;
+        });
+        expect(await service.sweepKeyset(mintUrl, keysetId, bip39seed)).toEqual({
+          keysetId,
+          unit: 'sat',
+          status: 'failed',
+          error,
+          pending: { count: 1, amount: Amount.from(8) },
+        });
+      },
+    );
   });
 
   describe('restoreKeyset', () => {

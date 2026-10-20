@@ -5,9 +5,11 @@ status: accepted
 # Delegate Sweep transfers to Receive
 
 Sweep discovers proofs from a source Wallet Seed and delegates their exchange into the destination
-Wallet to Receive through its public surface. Receive owns the durable exchange and Operation
-Recovery; Sweep does not introduce a separate durable exchange lifecycle or depend on Receive's
-transaction internals.
+Wallet through the public workflow methods of `ReceiveOperationService`. `WalletRestoreService`
+receives a narrow selection of those methods directly, without depending on the application-facing
+`ReceiveOpsApi`. Coordinator calls happen outside transactions; Receive owns the durable exchange
+and Operation Recovery. Sweep does not introduce a separate durable exchange lifecycle or depend
+on Receive's transaction internals.
 
 This boundary lets Sweep adoption proceed independently of the Receive migration to
 [coordinator-owned transactions](0011-compose-wallet-transactions-in-the-owning-coordinator.md).
@@ -22,7 +24,7 @@ returns a structured result per keyset, including the pending proof count, amoun
 in different units remain separate.
 
 Swept value appears through ordinary Receive history and events. Sweep-specific origin metadata is
-outside this change, preserving reuse through the existing public Receive surface.
+outside this change, preserving reuse through Receive's existing coordinator methods.
 
 Keysets are processed independently. A failed keyset does not undo completed transfers or prevent
 attempting the remaining keysets. After processing, any failures cause Sweep to reject with an error
