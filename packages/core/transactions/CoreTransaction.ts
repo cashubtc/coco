@@ -4,6 +4,7 @@ import {
   type Repositories,
   type RepositoryTransactionScope,
   type SendOperationRepository,
+  type ReceiveOperationRepository,
   type MintOperationRepository,
   type MintQuoteRepository,
   type MeltOperationRepository,
@@ -45,6 +46,10 @@ export interface CoreTransaction {
     'getById' | 'getByQuoteId' | 'create' | 'update' | 'delete'
   >;
   readonly meltQuotes: Pick<MeltQuoteRepository, 'getMeltQuote' | 'getMeltQuoteById'>;
+  readonly receiveOperations: Pick<
+    ReceiveOperationRepository,
+    'getById' | 'create' | 'transition' | 'delete'
+  >;
   readonly sendOperations: Pick<
     SendOperationRepository,
     'getById' | 'getByMintUrl' | 'create' | 'transition' | 'delete'
@@ -117,6 +122,7 @@ export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
       keypairs: new RepositoryScopedKeypairs(repositories.keyRingRepository),
       proofs,
       outputs,
+      receiveOperations: repositories.receiveOperationRepository,
       sendOperations: repositories.sendOperationRepository,
     });
     return scoped;

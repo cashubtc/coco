@@ -1602,6 +1602,20 @@ const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_coco_cashu_proofs_createdByOp ON coco_cashu_proofs(createdByOperationId) WHERE createdByOperationId IS NOT NULL;
     `,
   },
+  {
+    id: '044_receive_operation_revision',
+    // Older development builds used another migration id for this column. Retain their data.
+    run: async (db) => {
+      const columns = await db.all<{ name: string }>(
+        'PRAGMA table_info(coco_cashu_receive_operations)',
+      );
+      if (!columns.some((column) => column.name === 'revision')) {
+        await db.exec(
+          'ALTER TABLE coco_cashu_receive_operations ADD COLUMN revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0)',
+        );
+      }
+    },
+  },
 ];
 
 // Export for testing

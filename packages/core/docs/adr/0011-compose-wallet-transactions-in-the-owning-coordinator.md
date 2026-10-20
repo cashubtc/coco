@@ -86,10 +86,10 @@ After that commit, trust revocation cannot interrupt the authorized request or i
 source payment may have succeeded before its observation was persisted. Recovery retains all exact
 request and ownership checks, never restores trust, and never blindly redispatches source payment.
 
-Send, Mint, Melt, the dormant Mint Swap coordinator, KeyRing, and mint metadata refresh use this model.
+Send, Mint, Melt, Receive, the dormant Mint Swap coordinator, KeyRing, and mint metadata refresh use this model.
 Mint Swap composes exact child preparation, authorization, and settlement through the same runner
 scope. It requires shared child locks in one effect-driving Coco Session; runtime activation and
-enforcement remain #419. Legacy Receive, legacy public Mint Swap orchestration, Payment Request Receive
+enforcement remain #419. Legacy public Mint Swap orchestration, Payment Request Receive
 parent/attempt/child atomicity, and MintService add/forced-update/trust/delete paths remain for their
 owning migrations.
 Consistent fail-fast rejection of nested transactions remains follow-up work and must distinguish

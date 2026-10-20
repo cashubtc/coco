@@ -229,6 +229,7 @@ export interface SendOperationRow {
 }
 
 export interface ReceiveOperationRow {
+  revision?: number;
   id: string;
   mintUrl: string;
   unit?: string | null;

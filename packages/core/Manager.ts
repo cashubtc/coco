@@ -35,6 +35,7 @@ import {
 import { SendOperationService } from './operations/send/SendOperationService';
 import { MeltOperationService } from './operations/melt/MeltOperationService';
 import { MintOperationService } from './operations/mint/MintOperationService';
+import { CashuReceiveRemote } from './infra/handlers/receive/CashuReceiveRemote.ts';
 import { ReceiveOperationService } from './operations/receive/ReceiveOperationService';
 import { MintScopedLock } from './operations/MintScopedLock';
 import {
@@ -1020,18 +1021,18 @@ export class Manager {
     const tokenService = new TokenService(mintService, tokenLogger);
 
     const receiveOperationLogger = this.getChildLogger('ReceiveOperationService');
-    const receiveOperationService = new ReceiveOperationService(
-      repositories.receiveOperationRepository,
-      repositories.proofRepository,
-      proofService,
-      mintService,
-      walletService,
-      this.mintAdapter,
-      tokenService,
-      this.eventBus,
-      receiveOperationLogger,
+    const receiveOperationService = new ReceiveOperationService({
+      operations: repositories.receiveOperationRepository,
+      transactionRunner,
+      mintQueries: repositories.mintRepository,
+      mintMetadataRefresh: mintService,
+      signer: p2pkSigner,
+      loadSeed: () => seedService.getSeed(),
+      remote: new CashuReceiveRemote(this.mintAdapter, this.mintRequestProvider),
+      eventBus: this.eventBus,
+      logger: receiveOperationLogger,
       mintScopedLock,
-    );
+    });
     const receiveOperationRepository = repositories.receiveOperationRepository;
     const paymentRequestReceiveOperationRepository =
       repositories.paymentRequestReceiveOperationRepository;

@@ -483,9 +483,9 @@ Before completing a change involving Wallet persistence, operation coordination,
 
 ## Migration and Verification
 
-Send, Mint, Melt, and Restore transitions, the dormant Mint Swap coordinator, KeyRing mutations,
+Send, Mint, Melt, Receive, and Restore transitions, the dormant Mint Swap coordinator, KeyRing mutations,
 and mint metadata refresh use coordinator-owned transactions.
-Legacy Receive, legacy public Mint Swap orchestration, Payment Request Receive parent/attempt/child
+Legacy public Mint Swap orchestration, Payment Request Receive parent/attempt/child
 atomicity, and MintService add/forced-update/trust/delete paths remain for their owning migrations.
 Those migrations should reuse domain capabilities and branded transitions, rather than add domain gateways.
 Runtime rejection of nested Wallet transactions remains nonuniform: IndexedDB rejects ambient
