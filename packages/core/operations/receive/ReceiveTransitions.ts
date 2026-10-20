@@ -13,56 +13,59 @@ import type { CoreProof } from '@core/types.ts';
 import { getSecretsFromSerializedOutputData } from '@core/utils.ts';
 import type {
   PrepareReceiveInput,
+  PrepareReceiveResult,
   ReceiveOperationInput,
   ClaimReceiveRecoveryInput,
   ApplyReceiveResultInput,
   FailReceiveInput,
-  AppliedReceiveResult,
+  ApplyReceiveResult,
 } from './ReceiveTransitionTypes.ts';
 import type { CoreTransaction } from '../../transactions/CoreTransaction.ts';
 import { defineTransition } from '../../transactions/Transition.ts';
 
 /** Persist the exact signed request and its output allocation in the caller’s scope. */
-export const prepareReceive = defineTransition(async (tx, input: PrepareReceiveInput) => {
-  const stored = await tx.receiveOperations.getById(input.operation.id);
-  if (stored && stored.state !== 'init') throw new ReceiveOperationConflictError(stored.id);
-  // A legacy init row, when present, is authoritative over a caller's draft.
-  const operation = stored ?? input.operation;
-  if (
-    operation.inputProofs.length === 0 ||
-    new Set(operation.inputProofs.map((proof) => proof.secret)).size !==
-      operation.inputProofs.length ||
-    operation.inputProofs.some((proof) => !proof.secret || Amount.from(proof.amount).isZero()) ||
-    !sumProofs(operation.inputProofs).equals(operation.amount)
-  )
-    throw new ProofValidationError('Receive operation has invalid input proofs');
-  await tx.mintMetadata.assertTrusted(operation.mintUrl);
-  const fee = await tx.proofs.getFee(operation.mintUrl, operation.unit, operation.inputProofs);
-  if (operation.amount.lessThanOrEqual(fee)) {
-    throw new ProofValidationError('Receive amount is not sufficient after fees');
-  }
-  const allocation = await tx.outputs.allocate({
-    mintUrl: operation.mintUrl,
-    unit: operation.unit,
-    activeKeys: input.activeKeys,
-    seed: input.seed,
-    keepAmount: operation.amount.subtract(fee),
-    sendAmount: Amount.zero(),
-  });
-  if (!allocation.counter) throw new ProofValidationError('Receive outputs were not allocated');
-  const prepared: PreparedReceiveOperation = {
-    ...operation,
-    state: 'prepared',
-    fee,
-    outputData: allocation.outputData,
-    revision: stored ? (stored.revision ?? 0) + 1 : 0,
-    updatedAt: input.updatedAt,
-  };
-  assertRequest(prepared);
-  if (stored) await transitionReceive(tx, stored, prepared);
-  else await tx.receiveOperations.create(prepared);
-  return { operation: prepared, counter: allocation.counter };
-});
+export const prepareReceive = defineTransition(
+  async (tx, input: PrepareReceiveInput): Promise<PrepareReceiveResult> => {
+    const stored = await tx.receiveOperations.getById(input.operation.id);
+    if (stored && stored.state !== 'init') throw new ReceiveOperationConflictError(stored.id);
+    // A legacy init row, when present, is authoritative over a caller's draft.
+    const operation = stored ?? input.operation;
+    if (
+      operation.inputProofs.length === 0 ||
+      new Set(operation.inputProofs.map((proof) => proof.secret)).size !==
+        operation.inputProofs.length ||
+      operation.inputProofs.some((proof) => !proof.secret || Amount.from(proof.amount).isZero()) ||
+      !sumProofs(operation.inputProofs).equals(operation.amount)
+    )
+      throw new ProofValidationError('Receive operation has invalid input proofs');
+    await tx.mintMetadata.assertTrusted(operation.mintUrl);
+    const fee = await tx.proofs.getFee(operation.mintUrl, operation.unit, operation.inputProofs);
+    if (operation.amount.lessThanOrEqual(fee)) {
+      throw new ProofValidationError('Receive amount is not sufficient after fees');
+    }
+    const allocation = await tx.outputs.allocate({
+      mintUrl: operation.mintUrl,
+      unit: operation.unit,
+      activeKeys: input.activeKeys,
+      seed: input.seed,
+      keepAmount: operation.amount.subtract(fee),
+      sendAmount: Amount.zero(),
+    });
+    if (!allocation.counter) throw new ProofValidationError('Receive outputs were not allocated');
+    const prepared: PreparedReceiveOperation = {
+      ...operation,
+      state: 'prepared',
+      fee,
+      outputData: allocation.outputData,
+      revision: stored ? (stored.revision ?? 0) + 1 : 0,
+      updatedAt: input.updatedAt,
+    };
+    assertRequest(prepared);
+    if (stored) await transitionReceive(tx, stored, prepared);
+    else await tx.receiveOperations.create(prepared);
+    return { operation: prepared, counter: allocation.counter };
+  },
+);
 
 /** Authorize the first remote submission from the persisted prepared request. */
 export const beginReceiveExecution = defineTransition(
@@ -105,7 +108,7 @@ export const claimReceiveRecovery = defineTransition(
 
 /** Reconcile issuance and finalize together; incomplete evidence leaves the request unchanged. */
 export const applyReceiveResult = defineTransition(
-  async (tx, input: ApplyReceiveResultInput): Promise<AppliedReceiveResult | null> => {
+  async (tx, input: ApplyReceiveResultInput): Promise<ApplyReceiveResult | null> => {
     const current = await requireReceive(tx, input.operationId);
     if (current.state !== 'executing' && current.state !== 'finalized')
       throw new ReceiveOperationConflictError(current.id);

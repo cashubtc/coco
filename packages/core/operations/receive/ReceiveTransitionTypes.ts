@@ -33,12 +33,12 @@ export interface FailReceiveInput extends ClaimReceiveRecoveryInput {
   error: string;
 }
 
-export interface PreparedReceiveResult {
+export interface PrepareReceiveResult {
   operation: PreparedReceiveOperation;
   counter: Counter;
 }
 
-export interface AppliedReceiveResult {
+export interface ApplyReceiveResult {
   operation: FinalizedReceiveOperation;
   changed: boolean;
   savedProofs: CoreProof[];

@@ -53,7 +53,7 @@ import {
   cancelReceive,
   cleanupReceiveInit,
 } from './ReceiveTransitions.ts';
-import type { AppliedReceiveResult } from './ReceiveTransitionTypes.ts';
+import type { ApplyReceiveResult } from './ReceiveTransitionTypes.ts';
 
 // Request-validation failures prove non-effect only on the first submission, before any recovery
 // claimant can replay it. Pending, already-spent, already-signed, and unknown errors do not.
@@ -468,7 +468,7 @@ export class ReceiveOperationService {
     }
   }
 
-  private publishApplied(publications: Publications, result: AppliedReceiveResult) {
+  private publishApplied(publications: Publications, result: ApplyReceiveResult) {
     if (!result.changed) return;
     const byKeyset = new Map<string, typeof result.savedProofs>();
     for (const proof of result.savedProofs) {
