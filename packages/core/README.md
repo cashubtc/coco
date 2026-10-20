@@ -290,10 +290,21 @@ those details are derived from canonical quote storage.
 - `balances.total(scope?: { mintUrls?: string[]; units?: string[]; trustedOnly?: boolean }): Promise<BalanceSnapshot>`
 - `balances.totalByUnit(scope?: { mintUrls?: string[]; units?: string[]; trustedOnly?: boolean }): Promise<BalancesByUnit>`
 - `restore(mintUrl: string, options?: { units?: string[] }): Promise<void>`
-- `sweep(mintUrl: string, bip39seed: Uint8Array, options?: { units?: string[] }): Promise<void>`
+- `sweep(mintUrl: string, bip39seed: Uint8Array, options?: { units?: string[] }): Promise<SweepReport>`
 - `decodeToken(tokenString: string, mintUrl?: string): Promise<Token>`
 - `encodeToken(token: Token, opts?: { removeDleq?: boolean }): string`
 - `encodePaymentRequest(paymentRequest: PaymentRequest, version?: 'creqA' | 'creqB'): string`
+
+Sweep returns `{ mintUrl, keysets }`. Each keyset result identifies its `keysetId` and `unit`,
+with status `transferred`, `noop`, `skipped`, `failed`, or `unresolved`. Pending observations are
+reported as `pending: { count, amount }`; skips distinguish `pending` from `uneconomic`.
+A transferred result includes `received`, `fee`, and `receiveOperationId`. All amounts are cashu-ts
+`Amount` values in that result's unit. Discovery failures may have no pending observations.
+
+If any keyset fails or remains unresolved, `SweepError.report` contains every outcome, including
+successful transfers. Inspect its Receive IDs through `ops.receive` before retrying. Receive owns
+exchange recovery and ordinary Receive history; Sweep does not resume unvisited keysets after
+restart or deduplicate a later sweep against unresolved exchanges. See the [Sweep guide](../docs/pages/bip39.md#sweep).
 
 ### AuthApi
 

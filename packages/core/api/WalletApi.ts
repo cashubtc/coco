@@ -15,6 +15,9 @@ import type { ReceiveOperationService } from '../operations/receive/ReceiveOpera
 import type { Logger } from '../logging/Logger.ts';
 import type { BalanceQueries } from '../proofs/BalanceQueries.ts';
 import { WalletBalancesApi } from './WalletBalancesApi.ts';
+import { SweepError } from '../models/Error.ts';
+import type { SweepReport } from '../models/Sweep.ts';
+import { normalizeMintUrl } from '../utils.ts';
 import { DEFAULT_UNIT, normalizeUnit, normalizeUnitList } from '../amounts.ts';
 
 export interface WalletRestoreOptions {
@@ -109,11 +112,20 @@ export class WalletApi {
   }
 
   /**
-   * Sweeps a mint by sweeping each keyset and adds the swept proofs to the wallet
+   * Exchange a source Wallet Seed's available proofs through ordinary Receive operations.
+   * Keysets are independent; pending and uneconomic value are reported as skips.
+   * @returns Per-keyset outcomes, with amounts scoped to each keyset's unit.
+   * @throws {SweepError} After all keysets are attempted, if any failed or remain unresolved.
+   * The error carries the complete report. Inspect unresolved Receive IDs before retrying.
    * @param mintUrl - The URL of the mint to sweep
    * @param bip39seed - The BIP39 seed of the wallet to sweep
    */
-  async sweep(mintUrl: string, bip39seed: Uint8Array, options?: WalletSweepOptions) {
+  async sweep(
+    mintUrl: string,
+    bip39seed: Uint8Array,
+    options?: WalletSweepOptions,
+  ): Promise<SweepReport> {
+    mintUrl = normalizeMintUrl(mintUrl);
     this.logger?.info('Starting sweep', { mintUrl });
     const mint = await this.mintService.addMintByUrl(mintUrl, { trusted: true });
     this.logger?.debug('Mint fetched for sweep', {
@@ -121,23 +133,27 @@ export class WalletApi {
       keysetCount: mint.keysets.length,
     });
     const unitFilter = this.getUnitFilter(options?.units);
-    const failedKeysetIds: { [keysetId: string]: Error } = {};
+    const report: SweepReport = { mintUrl, keysets: [] };
     for (const { keyset, unit } of this.getUnitScopedKeysets(mint.keysets, unitFilter)) {
       try {
-        await this.walletRestoreService.sweepKeyset(mintUrl, keyset.id, bip39seed, unit);
-      } catch (error) {
-        this.logger?.error('Keyset restore failed', { mintUrl, keysetId: keyset.id, unit, error });
-        failedKeysetIds[keyset.id] = error as Error;
+        report.keysets.push(
+          await this.walletRestoreService.sweepKeyset(mintUrl, keyset.id, bip39seed, unit),
+        );
+      } catch (cause) {
+        report.keysets.push({
+          keysetId: keyset.id,
+          unit,
+          status: 'failed',
+          error: cause instanceof Error ? cause : new Error(String(cause)),
+        });
       }
     }
-    if (Object.keys(failedKeysetIds).length > 0) {
-      this.logger?.error('Restore completed with failures', {
-        mintUrl,
-        failedKeysetIds: Object.keys(failedKeysetIds),
-      });
-      throw new Error('Failed to restore some keysets');
+    if (
+      report.keysets.some((result) => result.status === 'failed' || result.status === 'unresolved')
+    ) {
+      throw new SweepError(report);
     }
-    this.logger?.info('Restore completed successfully', { mintUrl });
+    return report;
   }
 
   /**

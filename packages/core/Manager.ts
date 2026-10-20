@@ -978,15 +978,6 @@ export class Manager {
       this.outputDataCreator,
       balanceQueries,
     );
-    const walletRestoreService = new WalletRestoreService(
-      proofService,
-      transactionRunner,
-      walletService,
-      this.mintRequestProvider,
-      walletRestoreLogger,
-      this.outputDataCreator,
-      this.eventBus,
-    );
 
     // One shared instance across every counter-consuming operation service so that
     // send, receive, melt, and mint serialize their per-mint deterministic-output
@@ -1033,6 +1024,14 @@ export class Manager {
       logger: receiveOperationLogger,
       mintScopedLock,
     });
+    const walletRestoreService = new WalletRestoreService(
+      new ReceiveOpsApi(receiveOperationService),
+      transactionRunner,
+      this.mintRequestProvider,
+      walletRestoreLogger,
+      this.outputDataCreator,
+      this.eventBus,
+    );
     const receiveOperationRepository = repositories.receiveOperationRepository;
     const paymentRequestReceiveOperationRepository =
       repositories.paymentRequestReceiveOperationRepository;

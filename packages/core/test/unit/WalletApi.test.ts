@@ -8,7 +8,8 @@ import { ProofService } from '../../services/ProofService';
 import { WalletRestoreService } from '../../services/WalletRestoreService';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
-import { UnknownMintError } from '../../models/Error';
+import type { SweepKeysetResult } from '../../models/Sweep.ts';
+import { SweepError, UnknownMintError } from '../../models/Error';
 import { getEncodedToken, OutputData, PaymentRequest } from '@cashu/cashu-ts';
 import type { Proof } from '@cashu/cashu-ts';
 import type { ReceiveOperationService } from '../../operations/receive/ReceiveOperationService';
@@ -431,7 +432,11 @@ describe('WalletApi - Trust Enforcement', () => {
           { id: 'usd-keyset', unit: 'USD' },
         ],
       }));
-      mockWalletRestoreService.sweepKeyset = mock(async () => {});
+      mockWalletRestoreService.sweepKeyset = mock(async () => ({
+        keysetId: 'usd-keyset',
+        unit: 'usd',
+        status: 'noop',
+      }));
 
       await walletApi.sweep(testMintUrl, bip39seed, { units: ['USD'] });
 
@@ -442,6 +447,72 @@ describe('WalletApi - Trust Enforcement', () => {
         bip39seed,
         'usd',
       );
+    });
+  });
+
+  describe('sweep reports', () => {
+    it('keeps all keyset outcomes after failures and preserves units and operation references', async () => {
+      mockMintService.addMintByUrl.mockResolvedValue({
+        keysets: [
+          { id: 'first', unit: 'sat' },
+          { id: 'bad', unit: 'sat' },
+          { id: 'pending', unit: 'usd' },
+          { id: 'uncertain', unit: 'sat' },
+          { id: 'last', unit: 'usd' },
+        ],
+      });
+      const cause = new Error('discovery unavailable');
+      const outcomes: SweepKeysetResult[] = [
+        {
+          keysetId: 'first',
+          unit: 'sat',
+          status: 'transferred',
+          receiveOperationId: 'receive-1',
+          received: Amount.from(9),
+          fee: Amount.from(1),
+        },
+        { keysetId: 'bad', unit: 'sat', status: 'failed', error: cause },
+        {
+          keysetId: 'pending',
+          unit: 'usd',
+          status: 'skipped',
+          reason: 'pending',
+          pending: { count: 1, amount: Amount.from(8) },
+        },
+        {
+          keysetId: 'uncertain',
+          unit: 'sat',
+          status: 'unresolved',
+          receiveOperationId: 'receive-2',
+          error: new Error('connection lost'),
+        },
+        {
+          keysetId: 'last',
+          unit: 'usd',
+          status: 'transferred',
+          receiveOperationId: 'receive-3',
+          received: Amount.from(19),
+          fee: Amount.from(1),
+        },
+      ];
+      mockWalletRestoreService.sweepKeyset = mock(async (_mint: string, id: string) => {
+        if (id === 'bad') throw cause;
+        return outcomes.find((outcome) => outcome.keysetId === id);
+      });
+      let failure: unknown;
+      try {
+        await walletApi.sweep(`${testMintUrl}/`, new Uint8Array(64));
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toBeInstanceOf(SweepError);
+      expect((failure as SweepError).report).toEqual({ mintUrl: testMintUrl, keysets: outcomes });
+      expect((failure as SweepError).cause).toBe(cause);
+    });
+
+    it('returns an empty report when no units match', async () => {
+      const result = await walletApi.sweep(testMintUrl, new Uint8Array(64), { units: [] });
+      expect(result).toEqual({ mintUrl: testMintUrl, keysets: [] });
     });
   });
 

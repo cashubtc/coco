@@ -9,12 +9,12 @@ import {
 } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, afterEach, expect, mock } from 'bun:test';
 import { WalletRestoreService } from '../../services/WalletRestoreService';
-import type { ProofService } from '../../services/ProofService';
+import type { ReceiveOpsApi } from '../../api/ReceiveOpsApi.ts';
+import type { PreparedReceiveOperation } from '../../operations/receive/ReceiveOperation.ts';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
 import { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
-import type { WalletService } from '../../services/WalletService';
 import type { MintRequestProvider } from '../../infra/MintRequestProvider';
 import type { Logger } from '../../logging/Logger';
 import { makeOutputDataCreator } from '../fixtures/OutputDataCreator.ts';
@@ -35,9 +35,8 @@ describe('WalletRestoreService', () => {
   const keysetId = 'keyset-1';
   const bip39seed = new Uint8Array(64).fill(7);
 
-  let proofService: ProofService;
+  let receive: Pick<ReceiveOpsApi, 'prepare' | 'execute' | 'get'>;
   let transactionRunner: RepositoryCoreTransactionRunner;
-  let walletService: WalletService;
   let requestProvider: MintRequestProvider;
   let logger: Logger;
   let service: WalletRestoreService;
@@ -51,35 +50,18 @@ describe('WalletRestoreService', () => {
     }) as unknown as Proof;
 
   beforeEach(() => {
-    // Mock ProofService
-    proofService = {
-      getProofsByKeysetId: mock(() => Promise.resolve([])),
-      createOutputsAndIncrementCounters: mock(() =>
-        Promise.resolve({
-          keep: [],
-          send: [{ amount: Amount.from(100), counter: 1, id: keysetId }],
-        }),
-      ),
-      saveProofs: mock(() => Promise.resolve()),
-    } as unknown as ProofService;
-
+    const prepared = {
+      id: 'receive-1',
+      state: 'prepared',
+      amount: Amount.from(100),
+      fee: Amount.from(1),
+    } as PreparedReceiveOperation;
+    receive = {
+      prepare: mock(async () => prepared),
+      execute: mock(async () => ({ ...prepared, state: 'finalized' as const })),
+      get: mock(async () => ({ ...prepared, state: 'executing' as const })),
+    };
     transactionRunner = new RepositoryCoreTransactionRunner(new MemoryRepositories());
-
-    // Mock WalletService
-    walletService = {
-      getWalletWithActiveKeysetId: mock(() =>
-        Promise.resolve({
-          wallet: {
-            send: mock(() =>
-              Promise.resolve({
-                send: [makeProof(100, 'send-proof')],
-                keep: [],
-              }),
-            ),
-          },
-        }),
-      ),
-    } as unknown as WalletService;
 
     // Mock Logger
     logger = {
@@ -98,13 +80,7 @@ describe('WalletRestoreService', () => {
     // by stubbing loadMint on the Wallet prototype.
     (Wallet.prototype as any).loadMint = mock(() => Promise.resolve());
 
-    service = new WalletRestoreService(
-      proofService,
-      transactionRunner,
-      walletService,
-      requestProvider,
-      logger,
-    );
+    service = new WalletRestoreService(receive, transactionRunner, requestProvider, logger);
   });
 
   describe('sweepKeyset', () => {
@@ -166,9 +142,8 @@ describe('WalletRestoreService', () => {
         };
       });
       service = new WalletRestoreService(
-        proofService,
+        receive,
         transactionRunner,
-        walletService,
         requestProvider,
         logger,
         creator,
@@ -194,221 +169,172 @@ describe('WalletRestoreService', () => {
       expect(restoreRequest).toHaveBeenCalledWith({ outputs: [output.blindedMessage] });
     });
 
-    it('should successfully sweep a keyset with ready proofs', async () => {
-      const proofs = [makeProof(50, 'proof1'), makeProof(50, 'proof2')];
+    it('reports pending source value without creating an exchange', async () => {
+      Wallet.prototype.batchRestore = mock(async () => ({ proofs: [makeProof(8, 'pending')] }));
+      Wallet.prototype.checkProofsStates = mock(async () => [{ state: 'PENDING' } as ProofState]);
+      Wallet.prototype.getFeesForProofs = mock(() => Amount.zero());
 
-      // Mock Wallet methods
-      const mockBatchRestore = mock(() => Promise.resolve({ proofs }));
-      const mockCheckProofsStates = mock(() =>
-        Promise.resolve([{ state: 'UNSPENT' } as ProofState, { state: 'UNSPENT' } as ProofState]),
-      );
-      const mockGetFeesForProofs = mock(() => Amount.from(1));
+      const result = await service.sweepKeyset(mintUrl, keysetId, bip39seed, 'USD');
 
-      Wallet.prototype.batchRestore = mockBatchRestore;
-      Wallet.prototype.checkProofsStates = mockCheckProofsStates;
-      Wallet.prototype.getFeesForProofs = mockGetFeesForProofs;
-
-      await service.sweepKeyset(mintUrl, keysetId, bip39seed);
-
-      expect(mockBatchRestore).toHaveBeenCalledTimes(1);
-      expect(mockCheckProofsStates).toHaveBeenCalledTimes(1);
-      expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalledWith(mintUrl, {
-        keep: { amount: Amount.zero(), unit: 'sat' },
-        send: { amount: Amount.from(99), unit: 'sat' }, // 50 + 50 - 1 fee
-      });
-      expect(proofService.saveProofs).toHaveBeenCalledTimes(1);
-      expect(logger.info).toHaveBeenCalledWith('Keyset sweep completed', {
-        mintUrl,
+      expect(result).toEqual({
         keysetId,
-        readyProofs: 2,
-        spentProofs: 0,
-        sweptAmount: Amount.from(100),
-        fee: Amount.from(1),
+        unit: 'usd',
+        status: 'skipped',
+        reason: 'pending',
+        pending: { count: 1, amount: Amount.from(8) },
       });
+      expect(receive.prepare).not.toHaveBeenCalled();
     });
 
-    it('should sweep with a unit-scoped wallet and persist swept proofs with that unit', async () => {
-      const proofs = [makeProof(50, 'proof1'), makeProof(50, 'proof2')];
+    it.each([null, [], [{ state: 'UNKNOWN' }], [null]].map((states) => [states]))(
+      'rejects malformed proof-state observations %j',
+      async (states) => {
+        Wallet.prototype.batchRestore = mock(async () => ({ proofs: [makeProof(8, 'source')] }));
+        Wallet.prototype.checkProofsStates = mock(async () => states as ProofState[]);
+        await expect(service.sweepKeyset(mintUrl, keysetId, bip39seed)).rejects.toThrow(
+          'Malformed state check',
+        );
+        expect(receive.prepare).not.toHaveBeenCalled();
+      },
+    );
 
-      Wallet.prototype.batchRestore = mock(() => Promise.resolve({ proofs }));
-      Wallet.prototype.checkProofsStates = mock(() =>
-        Promise.resolve([{ state: 'UNSPENT' } as ProofState, { state: 'UNSPENT' } as ProofState]),
+    it('exchanges only available inputs and can sweep formerly pending value later', async () => {
+      const available = makeProof(16, 'available');
+      const pending = makeProof(8, 'pending');
+      const spent = makeProof(4, 'spent');
+      Wallet.prototype.batchRestore = mock(async () => ({ proofs: [available, pending, spent] }));
+      let observations = ['UNSPENT', 'PENDING', 'SPENT'];
+      Wallet.prototype.checkProofsStates = mock(async () =>
+        observations.map((state) => ({ state }) as ProofState),
       );
       Wallet.prototype.getFeesForProofs = mock(() => Amount.from(1));
+      const tokens: unknown[] = [];
+      const prepare = receive.prepare;
+      receive.prepare = async (input) => {
+        tokens.push(input.token);
+        return prepare(input);
+      };
 
-      await service.sweepKeyset(mintUrl, keysetId, bip39seed, 'USD');
-
-      expect(walletService.getWalletWithActiveKeysetId).toHaveBeenCalledWith(mintUrl, 'usd');
-      expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalledWith(mintUrl, {
-        keep: { amount: Amount.zero(), unit: 'usd' },
-        send: { amount: Amount.from(99), unit: 'usd' },
+      expect(await service.sweepKeyset(mintUrl, keysetId, bip39seed, 'USD')).toMatchObject({
+        status: 'transferred',
+        unit: 'usd',
+        pending: { count: 1, amount: Amount.from(8) },
       });
-
-      const savedProofsCall = (proofService.saveProofs as any).mock.calls[0];
-      expect(savedProofsCall[0]).toBe(mintUrl);
-      expect(savedProofsCall[1].map((proof: { unit: string }) => proof.unit)).toEqual(['usd']);
+      observations = ['SPENT', 'UNSPENT', 'SPENT'];
+      expect(await service.sweepKeyset(mintUrl, keysetId, bip39seed, 'USD')).toMatchObject({
+        status: 'transferred',
+        pending: { count: 0, amount: Amount.zero() },
+      });
+      expect(tokens).toEqual([
+        { mint: mintUrl, proofs: [available], unit: 'usd' },
+        { mint: mintUrl, proofs: [pending], unit: 'usd' },
+      ]);
     });
 
-    it('should return early when no proofs are found', async () => {
-      const mockBatchRestore = mock(() => Promise.resolve({ proofs: [] }));
-      Wallet.prototype.batchRestore = mockBatchRestore;
-
-      await service.sweepKeyset(mintUrl, keysetId, bip39seed);
-
-      expect(mockBatchRestore).toHaveBeenCalledTimes(1);
-      expect(logger.warn).toHaveBeenCalledWith('No proofs to sweep', { mintUrl, keysetId });
-      expect(proofService.saveProofs).not.toHaveBeenCalled();
+    it.each([0, 1])('reports empty and fully spent discoveries as no-ops (%i)', async (count) => {
+      Wallet.prototype.batchRestore = mock(async () => ({
+        proofs: count ? [makeProof(8, 'spent')] : [],
+      }));
+      Wallet.prototype.checkProofsStates = mock(async () => [{ state: 'SPENT' } as ProofState]);
+      expect(await service.sweepKeyset(mintUrl, keysetId, bip39seed)).toMatchObject({
+        status: 'noop',
+      });
+      expect(receive.prepare).not.toHaveBeenCalled();
     });
 
-    it('should return early when all proofs are spent', async () => {
-      const proofs = [makeProof(50, 'proof1'), makeProof(50, 'proof2')];
+    it.each([8, 9])(
+      'reports value that does not cover fees as an uneconomic skip (fee %i)',
+      async (fee) => {
+        Wallet.prototype.batchRestore = mock(async () => ({
+          proofs: [makeProof(8, 'small'), makeProof(4, 'pending')],
+        }));
+        Wallet.prototype.checkProofsStates = mock(
+          async () => [{ state: 'UNSPENT' }, { state: 'PENDING' }] as ProofState[],
+        );
+        Wallet.prototype.getFeesForProofs = mock(() => Amount.from(fee));
+        expect(await service.sweepKeyset(mintUrl, keysetId, bip39seed)).toMatchObject({
+          status: 'skipped',
+          reason: 'uneconomic',
+          available: Amount.from(8),
+          fee: Amount.from(fee),
+          pending: { count: 1, amount: Amount.from(4) },
+        });
+        expect(receive.prepare).not.toHaveBeenCalled();
+      },
+    );
 
-      const mockBatchRestore = mock(() => Promise.resolve({ proofs }));
-      const mockCheckProofsStates = mock(() =>
-        Promise.resolve([{ state: 'SPENT' } as ProofState, { state: 'SPENT' } as ProofState]),
+    it('preserves pending amounts beyond the safe integer range', async () => {
+      const proof = { ...makeProof(1, 'large'), amount: Amount.from('9007199254740993') };
+      Wallet.prototype.batchRestore = mock(async () => ({ proofs: [proof] }));
+      Wallet.prototype.checkProofsStates = mock(async () => [{ state: 'PENDING' }] as ProofState[]);
+      const result = await service.sweepKeyset(mintUrl, keysetId, bip39seed);
+      expect(result.pending?.amount.toString()).toBe('9007199254740993');
+    });
+
+    it.each([
+      'finalized',
+      'rolled_back',
+      'prepared',
+      'executing',
+      'missing',
+      'unreadable',
+    ] as const)('classifies rejected execution using public Receive state %s', async (state) => {
+      Wallet.prototype.batchRestore = mock(async () => ({ proofs: [makeProof(100, 'available')] }));
+      Wallet.prototype.checkProofsStates = mock(async () => [{ state: 'UNSPENT' }] as ProofState[]);
+      Wallet.prototype.getFeesForProofs = mock(() => Amount.from(1));
+      const prepared = await receive.prepare({ token: { mint: mintUrl, proofs: [] } });
+      receive.execute = mock(async () => {
+        throw new Error('execution rejected');
+      });
+      receive.get = async () => {
+        if (state === 'unreadable') throw new Error('read unavailable');
+        if (state === 'missing') return null;
+        return { ...prepared, state };
+      };
+      const result = await service.sweepKeyset(mintUrl, keysetId, bip39seed);
+      expect(result.status).toBe(
+        state === 'finalized' ? 'transferred' : state === 'rolled_back' ? 'failed' : 'unresolved',
       );
-
-      Wallet.prototype.batchRestore = mockBatchRestore;
-      Wallet.prototype.checkProofsStates = mockCheckProofsStates;
-
-      await service.sweepKeyset(mintUrl, keysetId, bip39seed);
-
-      expect(logger.warn).toHaveBeenCalledWith('No ready proofs to sweep, all spent', {
-        mintUrl,
-        keysetId,
-        spentCount: 2,
-      });
-      expect(proofService.saveProofs).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ receiveOperationId: prepared.id });
+      if (result.status === 'transferred') expect(result.received).toEqual(Amount.from(99));
     });
 
-    it('should handle mixed spent and ready proofs', async () => {
-      const proofs = [makeProof(50, 'proof1'), makeProof(50, 'proof2'), makeProof(25, 'proof3')];
-
-      const mockBatchRestore = mock(() => Promise.resolve({ proofs }));
-      const mockCheckProofsStates = mock(() =>
-        Promise.resolve([
-          { state: 'SPENT' } as ProofState,
-          { state: 'UNSPENT' } as ProofState,
-          { state: 'UNSPENT' } as ProofState,
-        ]),
+    it('retains pending skips if fee preflight fails after discovery', async () => {
+      Wallet.prototype.batchRestore = mock(async () => ({
+        proofs: [makeProof(16, 'available'), makeProof(8, 'pending')],
+      }));
+      Wallet.prototype.checkProofsStates = mock(
+        async () => [{ state: 'UNSPENT' }, { state: 'PENDING' }] as ProofState[],
       );
-      const mockGetFeesForProofs = mock(() => Amount.from(1));
-
-      Wallet.prototype.batchRestore = mockBatchRestore;
-      Wallet.prototype.checkProofsStates = mockCheckProofsStates;
-      Wallet.prototype.getFeesForProofs = mockGetFeesForProofs;
-
-      await service.sweepKeyset(mintUrl, keysetId, bip39seed);
-
-      expect(logger.debug).toHaveBeenCalledWith('Checked proof states', {
-        mintUrl,
-        keysetId,
-        ready: 2,
-        spent: 1,
+      const error = new Error('unknown fee');
+      Wallet.prototype.getFeesForProofs = mock(() => {
+        throw error;
       });
-      expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalledWith(mintUrl, {
-        keep: { amount: Amount.zero(), unit: 'sat' },
-        send: { amount: Amount.from(74), unit: 'sat' }, // 50 + 25 - 1 fee
-      });
-      expect(proofService.saveProofs).toHaveBeenCalledTimes(1);
-      expect(logger.info).toHaveBeenCalledWith('Keyset sweep completed', {
-        mintUrl,
-        keysetId,
-        readyProofs: 2,
-        spentProofs: 1,
-        sweptAmount: Amount.from(75),
-        fee: Amount.from(1),
+      expect(await service.sweepKeyset(mintUrl, keysetId, bip39seed)).toMatchObject({
+        status: 'failed',
+        error,
+        pending: { count: 1, amount: Amount.from(8) },
       });
     });
 
-    it('should throw when state check returns malformed data', async () => {
-      const proofs = [makeProof(50, 'proof1'), makeProof(50, 'proof2')];
-
-      const mockBatchRestore = mock(() => Promise.resolve({ proofs }));
-      const mockCheckProofsStates = mock(() =>
-        Promise.resolve([{ state: 'UNSPENT' } as ProofState]),
-      ); // Wrong length
-
-      Wallet.prototype.batchRestore = mockBatchRestore;
-      Wallet.prototype.checkProofsStates = mockCheckProofsStates;
-
-      expect(service.sweepKeyset(mintUrl, keysetId, bip39seed)).rejects.toThrow(
-        'Malformed state check',
+    it('retains known pending skips when preparation rejects without an ID', async () => {
+      Wallet.prototype.batchRestore = mock(async () => ({
+        proofs: [makeProof(16, 'available'), makeProof(8, 'pending')],
+      }));
+      Wallet.prototype.checkProofsStates = mock(
+        async () => [{ state: 'UNSPENT' }, { state: 'PENDING' }] as ProofState[],
       );
-      expect(logger.error).toHaveBeenCalledWith('Malformed state check', {
-        mintUrl,
-        keysetId,
-        statesLength: 1,
-        proofsLength: 2,
+      Wallet.prototype.getFeesForProofs = mock(() => Amount.from(1));
+      const error = new Error('preparation rejected');
+      receive.prepare = mock(async () => {
+        throw error;
       });
-    });
-
-    it('should throw when state check returns non-array', async () => {
-      const proofs = [makeProof(50, 'proof1')];
-
-      const mockBatchRestore = mock(() => Promise.resolve({ proofs }));
-      const mockCheckProofsStates = mock(() => Promise.resolve(null as unknown as ProofState[]));
-
-      Wallet.prototype.batchRestore = mockBatchRestore;
-      Wallet.prototype.checkProofsStates = mockCheckProofsStates;
-
-      expect(service.sweepKeyset(mintUrl, keysetId, bip39seed)).rejects.toThrow(
-        'Malformed state check',
-      );
-    });
-
-    it('should return early when sweep total is negative', async () => {
-      const proofs = [makeProof(5, 'proof1')];
-
-      const mockBatchRestore = mock(() => Promise.resolve({ proofs }));
-      const mockCheckProofsStates = mock(() =>
-        Promise.resolve([{ state: 'UNSPENT' } as ProofState]),
-      );
-      // Mock a negative fee to create a negative total (edge case scenario)
-      const mockGetFeesForProofs = mock(() => Amount.from(10));
-
-      Wallet.prototype.batchRestore = mockBatchRestore;
-      Wallet.prototype.checkProofsStates = mockCheckProofsStates;
-      Wallet.prototype.getFeesForProofs = mockGetFeesForProofs;
-
-      await service.sweepKeyset(mintUrl, keysetId, bip39seed);
-
-      expect(logger.warn).toHaveBeenCalledWith('Sweep amount is less than fee', {
-        mintUrl,
+      expect(await service.sweepKeyset(mintUrl, keysetId, bip39seed)).toEqual({
         keysetId,
-        amount: Amount.from(5),
-        fee: Amount.from(10),
-      });
-      expect(proofService.saveProofs).not.toHaveBeenCalled();
-    });
-
-    it('should log debug messages at key stages', async () => {
-      const proofs = [makeProof(50, 'proof1')];
-
-      const mockBatchRestore = mock(() => Promise.resolve({ proofs }));
-      const mockCheckProofsStates = mock(() =>
-        Promise.resolve([{ state: 'UNSPENT' } as ProofState]),
-      );
-      const mockGetFeesForProofs = mock(() => Amount.from(1));
-
-      Wallet.prototype.batchRestore = mockBatchRestore;
-      Wallet.prototype.checkProofsStates = mockCheckProofsStates;
-      Wallet.prototype.getFeesForProofs = mockGetFeesForProofs;
-
-      await service.sweepKeyset(mintUrl, keysetId, bip39seed);
-
-      expect(logger.debug).toHaveBeenCalledWith('Sweeping keyset', { mintUrl, keysetId });
-      expect(logger.debug).toHaveBeenCalledWith('Proofs found for sweep', {
-        mintUrl,
-        keysetId,
-        count: 1,
-      });
-      expect(logger.debug).toHaveBeenCalledWith('Sweep calculation', {
-        mintUrl,
-        keysetId,
-        amount: Amount.from(50),
-        fee: Amount.from(1),
-        total: Amount.from(49),
+        unit: 'sat',
+        status: 'failed',
+        error,
+        pending: { count: 1, amount: Amount.from(8) },
       });
     });
   });
@@ -426,9 +352,8 @@ describe('WalletRestoreService', () => {
       });
       bus.on('proofs:saved', saved);
       const restored = new WalletRestoreService(
-        proofService,
+        receive,
         new RepositoryCoreTransactionRunner(repositories),
-        walletService,
         requestProvider,
         logger,
         undefined,
@@ -464,9 +389,8 @@ describe('WalletRestoreService', () => {
         });
         bus.on('proofs:state-changed', changed);
         const restored = new WalletRestoreService(
-          proofService,
+          receive,
           new RepositoryCoreTransactionRunner(repositories),
-          walletService,
           requestProvider,
           logger,
           undefined,
@@ -497,9 +421,8 @@ describe('WalletRestoreService', () => {
       const repositories = new MemoryRepositories();
       await repositories.init();
       const restored = new WalletRestoreService(
-        proofService,
+        receive,
         new RepositoryCoreTransactionRunner(repositories),
-        walletService,
         requestProvider,
       );
       for (const states of [[], [{ state: 'UNKNOWN' }]]) {
