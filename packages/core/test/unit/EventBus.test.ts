@@ -84,4 +84,79 @@ describe('EventBus', () => {
     expect(onError).toHaveBeenCalledWith({ event: 'message', payload: 'hello', error: failure });
     expect(sibling).not.toHaveBeenCalled();
   });
+  it('lets a running listener finish but suppresses later and pre-aborted delivery', async () => {
+    const bus = new EventBus<Events>();
+    const controller = new AbortController();
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const sibling = mock(() => {});
+    const first = mock(async () => {
+      await blocked;
+    });
+    bus.on('message', first);
+    bus.on('message', sibling);
+    const emission = bus.emit('message', 'hello', { signal: controller.signal });
+    controller.abort();
+    release();
+    await emission;
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(sibling).not.toHaveBeenCalled();
+    await bus.emit('message', 'hello', { signal: controller.signal });
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(sibling).not.toHaveBeenCalled();
+  });
+  it.each([
+    { throwOnError: false, failFast: false },
+    { throwOnError: true, failFast: false },
+    { throwOnError: true, failFast: true },
+  ])('preserves running listener failures after abort (%j)', async (options) => {
+    const onError = mock<NonNullable<EventBusOptions<Events>['onError']>>(() => {});
+    const bus = new EventBus<Events>({ onError });
+    const controller = new AbortController();
+    const gate = Promise.withResolvers<void>();
+    const failure = new Error('listener failed after cancellation');
+    const sibling = mock(() => {});
+    bus.on('message', async () => {
+      await gate.promise;
+      throw failure;
+    });
+    bus.on('message', sibling);
+    const result = bus
+      .emit('message', 'hello', { ...options, signal: controller.signal })
+      .catch((error: unknown) => error);
+    controller.abort();
+    gate.resolve();
+    const error = await result;
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith({ event: 'message', payload: 'hello', error: failure });
+    expect(sibling).not.toHaveBeenCalled();
+    if (!options.throwOnError) expect(error).toBeUndefined();
+    else if (options.failFast) expect(error).toBe(failure);
+    else {
+      expect(error).toBeInstanceOf(AggregateError);
+      expect((error as AggregateError).errors).toEqual([failure]);
+    }
+  });
+
+  it('retains earlier collected failures when a later listener aborts delivery', async () => {
+    const bus = new EventBus<Events>({ throwOnError: true });
+    const controller = new AbortController();
+    const failure = new Error('earlier listener');
+    const sibling = mock(() => {});
+    bus.on('message', () => {
+      throw failure;
+    });
+    bus.on('message', () => {
+      controller.abort();
+    });
+    bus.on('message', sibling);
+    const error = await bus
+      .emit('message', 'hello', { signal: controller.signal })
+      .catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).errors).toEqual([failure]);
+    expect(sibling).not.toHaveBeenCalled();
+  });
 });

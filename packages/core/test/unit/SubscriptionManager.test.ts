@@ -436,6 +436,35 @@ describe('SubscriptionManager pause/resume', () => {
     expect(callback).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])(
+    'keeps a shared subscription when its original subscriber leaves (paused: %s)',
+    async (paused) => {
+      const mintUrl = 'https://mint.example.com';
+      if (paused) subManager.pause();
+      const firstCallback = mock(() => {});
+      const secondCallback = mock(() => {});
+      const first = await subManager.subscribe(mintUrl, 'proof_state', ['proof'], firstCallback);
+      const second = await subManager.subscribe(mintUrl, 'proof_state', ['proof'], secondCallback);
+      expect(second.subId).toBe(first.subId);
+      await first.unsubscribe();
+      expect(
+        mockTransport.sentMessages.filter((request) => request.method === 'unsubscribe'),
+      ).toHaveLength(0);
+      mockTransport.triggerMessage(mintUrl, {
+        jsonrpc: '2.0',
+        method: 'subscribe',
+        params: { subId: first.subId, payload: { Y: 'proof', state: 'SPENT' } },
+      });
+      await Promise.resolve();
+      expect(firstCallback).not.toHaveBeenCalled();
+      expect(secondCallback).toHaveBeenCalledTimes(1);
+      await second.unsubscribe();
+      expect(
+        mockTransport.sentMessages.filter((request) => request.method === 'unsubscribe'),
+      ).toHaveLength(1);
+    },
+  );
+
   it('logs a synchronous callback failure and delivers to sibling subscribers', async () => {
     const mintUrl = 'https://mint.example.com';
     const callbackError = new Error('callback failed');
@@ -503,5 +532,91 @@ describe('SubscriptionManager pause/resume', () => {
 
     const messagesAfterClose = mockTransport.sentMessages.slice(messageCountAfterClose);
     expect(messagesAfterClose.some((message) => message.method === 'subscribe')).toBe(true);
+  });
+});
+
+describe('proof subscription membership', () => {
+  it('shrinks only its own interests when another listener shares the original group', async () => {
+    const transport = new MockTransport();
+    const manager = new SubscriptionManager(transport, createMockMintAdapter());
+    const mint = 'https://mint.test';
+    const owned = mock(() => {});
+    const sibling = mock(() => {});
+    const group = await manager.subscribeProofStates(mint, ['A', 'B'], owned);
+    const shared = await manager.subscribe(mint, 'proof_state', ['A', 'B'], sibling);
+    try {
+      await group.removeFilters(['A']);
+      const requests = transport.sentMessages.filter((r) => r.method === 'subscribe');
+      expect(requests).toHaveLength(2);
+      expect(requests[1]!.params).toMatchObject({ filters: ['B'] });
+      expect(transport.sentMessages.filter((r) => r.method === 'unsubscribe')).toHaveLength(0);
+      transport.triggerMessage(mint, {
+        method: 'subscribe',
+        params: { subId: shared.subId, payload: { Y: 'A', state: 'SPENT' } },
+      });
+      expect(sibling).toHaveBeenCalledTimes(1);
+      expect(owned).not.toHaveBeenCalled();
+      transport.triggerMessage(mint, {
+        method: 'subscribe',
+        params: { subId: requests[1]!.params.subId, payload: { Y: 'B', state: 'PENDING' } },
+      });
+      expect(owned).toHaveBeenCalledTimes(1);
+      await group.unsubscribe();
+      transport.triggerMessage(mint, {
+        method: 'subscribe',
+        params: { subId: shared.subId, payload: { Y: 'B', state: 'SPENT' } },
+      });
+      expect(sibling).toHaveBeenCalledTimes(2);
+    } finally {
+      await group.unsubscribe();
+      await shared.unsubscribe();
+      manager.closeAll();
+    }
+  });
+
+  it('drains a replacement acquired during shutdown and suppresses its callbacks', async () => {
+    const transport = new MockTransport();
+    const manager = new SubscriptionManager(transport, createMockMintAdapter());
+    const mint = 'https://mint.test';
+    const callback = mock(() => {});
+    const group = await manager.subscribeProofStates(mint, ['A', 'B'], callback);
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const subscribe = manager.subscribe.bind(manager);
+    manager.subscribe = async (...args) => {
+      const acquired = await subscribe(...args);
+      entered.resolve();
+      await release.promise;
+      return acquired;
+    };
+    try {
+      const removing = group.removeFilters(['A']);
+      await entered.promise;
+      let stopped = false;
+      const stopping = group.unsubscribe().then(() => {
+        stopped = true;
+      });
+      const replacement = transport.sentMessages.filter((r) => r.method === 'subscribe')[1]!;
+      transport.triggerMessage(mint, {
+        method: 'subscribe',
+        params: { subId: replacement.params.subId, payload: { Y: 'B', state: 'SPENT' } },
+      });
+      expect(callback).not.toHaveBeenCalled();
+      expect(stopped).toBe(false);
+      release.resolve();
+      await Promise.all([removing, stopping]);
+      expect(transport.sentMessages.map((r) => r.method)).toEqual([
+        'subscribe',
+        'unsubscribe',
+        'subscribe',
+        'unsubscribe',
+      ]);
+      await group.removeFilters(['B']);
+      expect(transport.sentMessages).toHaveLength(4);
+    } finally {
+      release.resolve();
+      await group.unsubscribe();
+      manager.closeAll();
+    }
   });
 });

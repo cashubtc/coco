@@ -18,10 +18,17 @@ Initially, re-running Restore provides reconciliation: eligible pending proofs r
 `PENDING`, become ready on `UNSPENT`, and become spent on `SPENT`. Current local state and operation
 ownership are rechecked inside the keyset transaction before applying an observation.
 
-Automatic pending-proof watching is deferred to a separate change. That work must account for
-subscription acquisition, replacement subscriptions, overlapping notifications, and shutdown,
-including event publication through called services. This migration leaves the existing inflight
-watcher and EventBus lifecycle unchanged.
+Automatic reconciliation uses a dedicated internal PendingProofWatcherService under Manager's
+existing proof-state watcher setting. It watches only unowned pending proofs at trusted mints,
+leaving Send and Melt observation under their existing coordinators. Subscription keys are reserved
+before acquisition, revalidated after acquisition, and removed before publishing state changes.
+Mint observations queue through local commit and recheck state and ownership in that transaction.
+
+Shutdown invalidates callbacks, releases subscriptions acquired during shutdown, and drains local
+writes. Post-commit publication stays outside that drain: a cancellation signal stops delivery before
+the next event listener, while already-running application listeners may finish or await shutdown.
+This avoids extending cancellation through Send/Melt services. The legacy inflight watcher's
+lifecycle remains unchanged.
 
 Preserve existing balance semantics: pending proofs, like inflight proofs, contribute to none of
 `spendable`, `reserved`, or `total` until they become ready. Separate pending balance reporting is

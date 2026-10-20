@@ -2681,6 +2681,41 @@ export async function runProofRepositoryContract(
   const { describe, it, expect } = runner;
 
   describe('ProofRepository contract', () => {
+    it('finds pending proofs across mints and units without filtering ownership', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const first = createDummyProof({ secret: 'pending-sat', state: 'pending' });
+        const second = createDummyProof({
+          secret: 'pending-usd',
+          state: 'pending',
+          unit: 'usd',
+          mintUrl: 'https://other-mint.test',
+          usedByOperationId: 'melt',
+        });
+        await repositories.proofRepository.saveProofs(first.mintUrl, [
+          first,
+          createDummyProof({ secret: 'ready', state: 'ready' }),
+          createDummyProof({ secret: 'inflight', state: 'inflight' }),
+          createDummyProof({ secret: 'spent', state: 'spent' }),
+        ]);
+        await repositories.proofRepository.saveProofs(second.mintUrl, [second]);
+        const pending = await repositories.proofRepository.getPendingProofs();
+        expect(
+          pending
+            .map((proof) => proof.secret)
+            .sort()
+            .join(','),
+        ).toBe('pending-sat,pending-usd');
+        const owned = pending.find((proof) => proof.secret === second.secret);
+        expect(owned?.unit).toBe('usd');
+        expect(owned?.usedByOperationId).toBe('melt');
+        await repositories.proofRepository.setProofState(first.mintUrl, [first.secret], 'ready');
+        expect(await repositories.proofRepository.getPendingProofs()).toHaveLength(1);
+      } finally {
+        await dispose();
+      }
+    });
+
     it('persists pending proofs across units and excludes them from available and inflight proofs', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {

@@ -106,6 +106,37 @@ describe('initializeCoco', () => {
     },
   } satisfies Pick<CocoConfig, 'watchers' | 'processors'>;
 
+  it('stops pending proof watching when disabled during enable', async () => {
+    const manager = await initializeCoco({ ...baseConfig, ...disabledRuntime });
+    try {
+      await seedOutputCreatorMint();
+      const pending: CoreProof = {
+        mintUrl,
+        id: keysetId,
+        amount: Amount.from(1),
+        unit: 'sat',
+        secret: 'restore-pending',
+        C: 'signature',
+        state: 'pending',
+      };
+      await repositories.proofRepository.saveProofs(mintUrl, [pending]);
+      const unsubscribe = mock(async () => {});
+      const subscribe = mock(async () => ({ subId: 'pending', unsubscribe }));
+      manager.subscriptions.subscribe = subscribe;
+      await Promise.all([
+        manager.enableProofStateWatcher({ watchExistingInflightOnStart: false }),
+        manager.disableProofStateWatcher(),
+      ]);
+      expect(subscribe).not.toHaveBeenCalled();
+      await manager.enableProofStateWatcher({ watchExistingInflightOnStart: false });
+      expect(subscribe).toHaveBeenCalledTimes(1);
+      await manager.disableProofStateWatcher();
+      expect(unsubscribe).toHaveBeenCalledTimes(1);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
   function makeOutput(marker: string, id = keysetId): OutputDataLike {
     return {
       blindedMessage: { amount: Amount.from(1), id, B_: marker },

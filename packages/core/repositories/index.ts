@@ -65,6 +65,8 @@ export interface CounterRepository {
 }
 
 export interface ProofRepository {
+  /** All mint-held pending proofs, across mints and units (including operation-owned proofs). */
+  getPendingProofs(): Promise<CoreProof[]>;
   saveProofs(mintUrl: string, proofs: CoreProof[]): Promise<void>;
   getReadyProofs(mintUrl: string, filter?: ProofUnitFilter): Promise<CoreProof[]>;
   /**

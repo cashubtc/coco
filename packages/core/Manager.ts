@@ -82,7 +82,11 @@ import {
   mintQuoteToMethodSnapshot,
 } from './models/MintQuote.ts';
 import { assessMintQuoteClaimability } from './models/MintQuoteClaimability.ts';
-import { RepositoryCoreTransactionRunner } from './transactions/CoreTransaction.ts';
+import {
+  RepositoryCoreTransactionRunner,
+  type CoreTransactionRunner,
+} from './transactions/CoreTransaction.ts';
+import { PendingProofWatcherService } from './services/watchers/PendingProofWatcherService.ts';
 import { KeypairDerivation } from './keypairs/KeypairDerivation.ts';
 import { KeypairP2pkSigner } from './keypairs/P2pkSigner.ts';
 
@@ -301,6 +305,8 @@ export class Manager {
   private legacyMintQuoteRepository: LegacyMintQuoteRepository;
   private quoteLifecycle: QuoteLifecycle;
   private proofStateWatcher?: ProofStateWatcherService;
+  private pendingProofWatcher?: PendingProofWatcherService;
+  private transactionRunner: CoreTransactionRunner;
   private historyService: HistoryService;
   private seedService: SeedService;
   private counterService: CounterService;
@@ -363,6 +369,7 @@ export class Manager {
       for (const p of plugins) this.pluginHost.use(p);
     }
     const core = this.buildCoreServices(repositories, seedGetter);
+    this.transactionRunner = core.transactionRunner;
     this.mintService = core.mintService;
     this.walletService = core.walletService;
     this.proofService = core.proofService;
@@ -640,13 +647,23 @@ export class Manager {
       { watchExistingInflightOnStart: options?.watchExistingInflightOnStart ?? true },
     );
     this.proofStateWatcher.setSendOperationService(this.sendOperationService);
-    await this.proofStateWatcher.start();
+    this.pendingProofWatcher = new PendingProofWatcherService(
+      this.subscriptions,
+      this.mintService,
+      this.proofRepository,
+      this.transactionRunner,
+      this.eventBus,
+      this.getChildLogger('PendingProofWatcherService'),
+    );
+    await Promise.all([this.proofStateWatcher.start(), this.pendingProofWatcher.start()]);
   }
 
   async disableProofStateWatcher(): Promise<void> {
-    if (!this.proofStateWatcher) return;
-    await this.proofStateWatcher.stop();
-    this.proofStateWatcher = undefined;
+    const inflight = this.proofStateWatcher;
+    const pending = this.pendingProofWatcher;
+    await Promise.all([inflight?.stop(), pending?.stop()]);
+    if (this.proofStateWatcher === inflight) this.proofStateWatcher = undefined;
+    if (this.pendingProofWatcher === pending) this.pendingProofWatcher = undefined;
   }
 
   async recoverPendingMintOperations(): Promise<void> {
@@ -884,6 +901,7 @@ export class Manager {
     repositories: Repositories,
     seedGetter: () => Promise<Uint8Array>,
   ): {
+    transactionRunner: CoreTransactionRunner;
     mintService: MintService;
     seedService: SeedService;
     walletService: WalletService;
@@ -1137,6 +1155,7 @@ export class Manager {
     const authService = new AuthService(authSessionService, this.mintAdapter, authServiceLogger);
 
     return {
+      transactionRunner,
       mintService,
       seedService,
       walletService,

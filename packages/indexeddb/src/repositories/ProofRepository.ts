@@ -49,6 +49,14 @@ function rowToProof(r: ProofRow): CoreProof {
 }
 
 export class IdbProofRepository implements ProofRepository {
+  async getPendingProofs(): Promise<CoreProof[]> {
+    const rows = await this.db
+      .table('coco_cashu_proofs')
+      .where('state')
+      .equals('pending')
+      .toArray();
+    return rows.map(rowToProof);
+  }
   private readonly db: IdbDb;
 
   constructor(db: IdbDb) {

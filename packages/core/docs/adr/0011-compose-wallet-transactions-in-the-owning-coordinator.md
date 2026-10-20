@@ -115,6 +115,9 @@ state for Restore. This is an explicit proof-state format and public type extens
 change the single-scope transaction composition model.
 
 Initial pending-proof reconciliation happens through repeated Restore, inside its keyset transaction.
-Automatic pending-proof watching and its lifecycle changes are deferred to a separate migration.
+The dedicated pending-proof watcher additionally applies terminal mint observations through the
+shared runner and ScopedProofs, with authoritative state/ownership checks in the transaction and
+cancellable event publication after commit. It does not call operation services or reuse Restore's
+proof import path.
 
 [Transaction Design](../../../../TRANSACTION_DESIGN.md) defines the implementation and review contract.

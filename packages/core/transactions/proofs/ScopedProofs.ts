@@ -55,6 +55,7 @@ export interface MeltSendProofsInput extends Omit<OwnedProofsInput, 'ownership'>
 
 /** Proof reads and mutations within an existing transaction; never opens or commits one. */
 export interface ScopedProofs extends ProofQueries {
+  reconcilePending(mintUrl: string, secret: string, state: 'ready' | 'spent'): Promise<boolean>;
   importRestored(mintUrl: string, proofs: CoreProof[]): Promise<RestoredProofChanges>;
   saveCreated(mintUrl: string, proofs: CoreProof[]): Promise<void>;
   selectAndReserve(input: SelectAndReserveProofsInput): Promise<{
@@ -92,6 +93,24 @@ export class RepositoryScopedProofs implements ScopedProofs {
     private readonly keysets: KeysetRepository,
     private readonly selectProofs: SelectProofs = selectProofsRGLI,
   ) {}
+
+  async reconcilePending(
+    mintUrl: string,
+    secret: string,
+    state: 'ready' | 'spent',
+  ): Promise<boolean> {
+    mintUrl = normalizeMintUrl(mintUrl);
+    const proof = await this.proofs.getProofBySecret(mintUrl, secret);
+    if (
+      !proof ||
+      proof.state !== 'pending' ||
+      proof.usedByOperationId != null ||
+      proof.createdByOperationId != null
+    )
+      return false;
+    await this.proofs.setProofState(mintUrl, [secret], state);
+    return true;
+  }
 
   async importRestored(mintUrl: string, proofs: CoreProof[]): Promise<RestoredProofChanges> {
     mintUrl = normalizeMintUrl(mintUrl);

@@ -19,6 +19,12 @@ export type { UnsubscribeHandler };
 
 export type SubscriptionCallback<TPayload = unknown> = (payload: TPayload) => void | Promise<void>;
 
+export interface ProofStateSubscription {
+  /** Release only these proof interests, preserving the remaining filters and sibling listeners. */
+  removeFilters(filters: string[]): Promise<void>;
+  unsubscribe: UnsubscribeHandler;
+}
+
 export interface SubscriptionManagerOptions {
   /** Slow polling interval while WS is connected (default: 20000ms) */
   slowPollingIntervalMs?: number;
@@ -363,7 +369,8 @@ export class SubscriptionManager {
       return {
         subId,
         unsubscribe: async () => {
-          await this.unsubscribe(mintUrl, subId);
+          if (onNotification) this.removeCallback(subId, onNotification);
+          if (active.callbacks.size === 0) await this.unsubscribe(mintUrl, subId);
         },
       };
     }
@@ -387,7 +394,60 @@ export class SubscriptionManager {
     return {
       subId,
       unsubscribe: async () => {
-        await this.unsubscribe(mintUrl, subId);
+        if (onNotification) this.removeCallback(subId, onNotification);
+        if (active.callbacks.size === 0) await this.unsubscribe(mintUrl, subId);
+      },
+    };
+  }
+
+  /**
+   * Keep proof interests grouped on the wire: mints may limit subscriptions per connection.
+   * NUT-17 has no filter update command, so shrinking a group replaces its subscription.
+   * Release this caller's old handle first, so an unshared group needs only one subscription slot.
+   * The replacement's initial state snapshot and polling cover changes during that handoff.
+   */
+  async subscribeProofStates<TPayload extends { Y: string }>(
+    mintUrl: string,
+    filters: string[],
+    onNotification: SubscriptionCallback<TPayload>,
+  ): Promise<ProofStateSubscription> {
+    if (!filters.length) throw new Error('filters must be a non-empty array');
+    const remaining = new Set(filters);
+    let current: { filters: string[]; unsubscribe: UnsubscribeHandler } | undefined;
+    let tail: Promise<void> = Promise.resolve();
+    const callback: SubscriptionCallback<TPayload> = (payload) => {
+      if (remaining.has(payload.Y)) return onNotification(payload);
+    };
+    const synchronize = (): Promise<void> => {
+      const task = tail.then(async () => {
+        if (
+          current &&
+          current.filters.length === remaining.size &&
+          current.filters.every((filter) => remaining.has(filter))
+        )
+          return;
+        if (current) {
+          await current.unsubscribe();
+          current = undefined;
+        }
+        if (!remaining.size) return;
+        const nextFilters = [...remaining];
+        const next = await this.subscribe(mintUrl, 'proof_state', nextFilters, callback);
+        current = { filters: nextFilters, unsubscribe: next.unsubscribe };
+      });
+      // A failed replacement must not prevent a later removal or shutdown from releasing it.
+      tail = task.catch(() => {});
+      return task;
+    };
+    await synchronize();
+    return {
+      removeFilters: (removed) => {
+        for (const filter of removed) remaining.delete(filter);
+        return synchronize();
+      },
+      unsubscribe: () => {
+        remaining.clear();
+        return synchronize();
       },
     };
   }

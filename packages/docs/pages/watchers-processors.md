@@ -59,7 +59,23 @@ quote notifications or manual refresh after transient failures.
 
 ## ProofStateWatcher
 
-This module will check the state of proofs known to coco and update their state automatically.
+This setting enables both the outgoing Send proof watcher and an internal watcher for unowned
+pending proofs found by Restore. Pending proofs stay unavailable on `PENDING`, become ready on
+`UNSPENT`, and become spent on `SPENT`. The pending watcher scans storage on every start, including
+resume, and watches newly restored proofs through the existing WebSocket/polling transport. Only
+trusted mints are watched; operation-owned proofs remain under their operation's authority.
+Repeated proof-state polling observations allow failed local writes to retry on the next poll.
+Resolved, deleted, and wiped proofs are removed from transport interest even when other proofs in
+the same group remain pending. Proof interests stay grouped to avoid consuming a WebSocket
+subscription slot per proof; removing part of a group replaces its subscription with the remaining
+filters while preserving other listeners.
+
+`watchExistingInflightOnStart` controls only the legacy inflight scan. Pending proofs are always
+scanned when the watcher is enabled. Disable `proofStateWatcher` to disable both; explicit Restore
+can still reconcile pending proofs.
+
+Stopping the pending watcher drains subscription acquisition and local writes and cancels further
+event delivery. An application listener that has already started may finish and may await shutdown.
 
 ## Pausing and Resuming Subscriptions
 
