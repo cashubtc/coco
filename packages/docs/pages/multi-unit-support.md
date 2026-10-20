@@ -132,3 +132,6 @@ await coco.wallet.sweep(mintUrl, oldSeed, { units: ['usd'] });
 
 Legacy proofs without stored unit metadata are treated as `sat` when no keyset
 unit can be recovered.
+
+For HTTP, worker, or logging boundaries, see [Amounts and JSON](./amounts-json.md).
+Use decimal amount strings and units in app DTOs, and rehydrate with `Amount.from()`.

@@ -2,6 +2,14 @@
 
 Payment requests (NUT-18) provide a standardized way to request payments in Cashu. A payment request encodes information about the requested payment, including the amount, allowed mints, and how the tokens should be delivered.
 
+The examples use an initialized Coco Session with trusted mints. Creating a
+request does not issue tokens or create a Lightning invoice: the payer sends
+existing ecash, and the receiver claims it through a receive operation.
+
+For HTTP handlers, browser workers, or test drivers, see
+[Amounts and JSON boundaries](../pages/amounts-json.md). Send the encoded request
+across the boundary and parse it in the session that will prepare the payment.
+
 ## Reading a Payment Request
 
 To handle a payment request, first parse it using `paymentRequests.parse()`:
@@ -130,10 +138,35 @@ const request = await coco.paymentRequests.incoming.create({
   mints: ['https://mint.url'],
   description: 'Coffee',
   singleUse: true,
+  transport: { type: 'inband' },
+  encoding: 'creqB',
 });
 
 console.log(request.encodedRequest);
 ```
+
+`amount` is required and must be positive. `unit` defaults to `sat`; every
+explicitly listed mint must already be trusted by the receiving session.
+`requestId` is optional (generated when omitted); an explicit ID must be nonblank
+and unique among active requests. `description` is optional, `singleUse` defaults
+to `true`, and `encoding` defaults to `creqB`.
+
+The transport can be `{ type: 'inband' }` (also the default),
+`{ type: 'post', target: 'https://receiver.example/payments' }`, or
+`{ type: 'nostr', target: recipientPublicKey, tags: [['relays', relayUrl]] }`.
+Both `post` and `nostr` incoming transports require a registered transport
+handler plugin, including when you supply the descriptor object. The Nostr
+handler owns subscription/decryption; a post handler must integrate your HTTP
+endpoint because core does not host it. A registered handler can also construct its descriptor
+when passed `transport: 'nostr'` or `transport: 'post'`.
+
+`creqB` uses a Bech32 encoding with a 1,023-character encoded-request limit in the
+current encoder. This is a limit on the whole encoded request, not a description
+character limit: Unicode, mint URLs, and transport fields all contribute.
+Oversized requests throw `PaymentRequestError` with the encoder error as `cause`.
+Shorten the fields, or explicitly use `encoding: 'creqA'` when the payer supports
+it. Coco does not silently truncate fields or change encodings. Encoding fails
+before the incoming request is persisted.
 
 Bare incoming request amounts default to sats. For custom units, pass the
 amount and unit together or provide an explicit `unit`:
@@ -176,6 +209,66 @@ Incoming payment request creation with `nut10` is not supported yet. Receiver-si
 validation of incoming payloads against a request's `nut10` requirement is also
 out of scope for core today.
 
+## Complete Inband Round Trip
+
+This function takes two initialized sessions for separate wallets. Both trust the
+selected mint, and the payer already has sufficient spendable `sat` balance,
+including any fees. The application transports the encoded request to the payer
+and the returned payload to the receiver; passing objects directly here keeps the
+example independent of a particular HTTP or QR library.
+
+```ts
+import type { Manager } from '@cashu/coco-core';
+
+async function payAndClaim(receiver: Manager, payer: Manager, mintUrl: string) {
+  const incoming = await receiver.paymentRequests.incoming.create({
+    amount: 10,
+    unit: 'sat',
+    mints: [mintUrl],
+    description: 'Coffee',
+    singleUse: true,
+    transport: { type: 'inband' },
+    encoding: 'creqB',
+  });
+
+  const resolved = await payer.paymentRequests.parse(incoming.encodedRequest);
+  const payableMint = resolved.payableMints[0];
+  if (!payableMint) throw new Error('No trusted mint with sufficient balance');
+
+  const prepared = await payer.paymentRequests.prepare(resolved, { mintUrl: payableMint });
+  const paid = await payer.paymentRequests.execute(prepared);
+  if (paid.type !== 'inband') throw new Error('Expected inband delivery');
+
+  const payload = {
+    id: incoming.requestId,
+    mint: paid.token.mint,
+    unit: paid.token.unit ?? 'sat',
+    proofs: paid.token.proofs,
+  };
+  const claim = await receiver.paymentRequests.incoming.claimPayload(incoming.id, payload, {
+    transport: 'inband',
+    transportMessageId: paid.operation.id,
+  });
+  console.log('Request:', claim.operation.state, 'Attempt:', claim.attempt.state);
+  return claim;
+}
+```
+
+Check both the request and attempt state: a rejected claim can be returned as a
+recorded `rejected` attempt instead of throwing. Store the incoming operation ID
+for `incoming.get(id)`, `incoming.cancel(id, reason)`, and later UI refreshes.
+`incoming.list({ state: 'active' })` finds active requests. The request ID carried
+in the payload (`requestId`) is distinct from the local incoming operation `id`.
+For payloads routed by their embedded request ID, use `incoming.ingestPayload()`.
+
+Incoming request claims deduplicate redelivered payloads. This is separate from
+[raw token receive preparation](../pages/receive-operations.md#repeated-tokens-and-failed-execution),
+which can create another attempt for a previously completed token. A successful
+outgoing inband execution means the token is ready to deliver, not that the
+receiver has claimed it. HTTP execution posts the token object to the target;
+your endpoint must associate it with the incoming request and construct/claim a
+`PaymentRequestPayload` with its required unit and request ID as appropriate.
+
 ## Specifying the Amount
 
 If the payment request doesn't include an amount, you must provide one:
@@ -185,7 +278,7 @@ If the payment request doesn't include an amount, you must provide one:
 const transaction = await coco.paymentRequests.prepare(prepared, { mintUrl });
 const result = await coco.paymentRequests.execute(transaction);
 
-// Override or provide amount
+// Provide an amount when omitted, or repeat the exact requested amount
 const customTx = await coco.paymentRequests.prepare(prepared, { mintUrl, amount: 100 });
 const customResult = await coco.paymentRequests.execute(customTx);
 ```
@@ -227,6 +320,27 @@ For P2PK requests, do not choose from `allowedMints` directly. Use
 
 ## Error Handling
 
+Malformed encoded requests and incoming encoding failures throw the exported
+`PaymentRequestError`, preserving low-level decoder/encoder failures in `cause`.
+Other validation paths retain their domain errors: invalid numeric amounts can
+throw `AmountError`, and invalid units can throw `UnitValidationError`. Raw token
+and key import validation use their own errors. Catch `unknown` at your app
+boundary instead of assuming every rejection has one constructor or message.
+
+```ts
+import { PaymentRequestError } from '@cashu/coco-core';
+
+try {
+  await coco.paymentRequests.parse(paymentRequest);
+} catch (error) {
+  if (error instanceof PaymentRequestError) {
+    console.error(error.message, error.cause);
+  } else {
+    console.error(error instanceof Error ? error.message : String(error));
+  }
+}
+```
+
 Payment request operations can throw errors in several cases:
 
 ```ts
@@ -243,7 +357,7 @@ try {
   // - Insufficient balance
   // - Unsupported or malformed NUT-10 requirement
   // - Selected mint does not advertise NUT-11 for a P2PK request
-  console.error('Payment failed:', error.message);
+  console.error('Payment failed:', error instanceof Error ? error.message : error);
 }
 ```
 

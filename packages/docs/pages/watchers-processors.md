@@ -103,6 +103,14 @@ This feature is designed for scenarios where:
 
 ### Important Notes
 
-- Both methods are idempotent - calling them multiple times has no adverse effects
+- Repeated `pauseSubscriptions()` calls are no-ops while paused and emit only one
+  `subscriptions:paused` event.
+- `resumeSubscriptions()` deliberately re-establishes connections even when already
+  resumed, for example after an OS network interruption. Every call on a live
+  session emits `subscriptions:resumed`; it is not an event no-op. The event is
+  emitted before transport and watcher restart completes; await the method for
+  restart completion. Watcher/processor enabling avoids duplicate instances.
+- Deduplicate app lifecycle transitions if repeated foreground notifications should
+  not trigger reconnects. A disposed session cannot be resumed.
 - Subscriptions created while paused will be automatically activated when resumed
 - The resume operation ensures everything is running properly, even if connections were torn down by the OS

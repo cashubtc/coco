@@ -52,6 +52,7 @@ export default defineConfig({
           { text: 'Bip39', link: '/pages/bip39' },
           { text: 'KeyRing (P2PK)', link: '/pages/keyring' },
           { text: 'Multi-Unit Support', link: '/pages/multi-unit-support' },
+          { text: 'Amounts and JSON', link: '/pages/amounts-json' },
           { text: 'Watchers & Processors', link: '/pages/watchers-processors' },
           { text: 'Send Operations', link: '/pages/send-operations' },
           { text: 'Receive Operations', link: '/pages/receive-operations' },
