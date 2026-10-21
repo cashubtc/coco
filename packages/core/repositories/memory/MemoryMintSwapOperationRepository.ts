@@ -6,6 +6,8 @@ import {
 import type { MintSwapOperationRepository } from '../../operations/mintSwap/MintSwapOperationRepository.ts';
 import { parseMintSwapOperation } from '../../operations/mintSwap/parseMintSwapOperation.ts';
 import { validateMintSwapTransition } from '../../operations/mintSwap/validateMintSwapTransition.ts';
+import { MintSwapIdentityConflictError } from '../../operations/mintSwap/MintSwapIdentityConflictError.ts';
+import { COPY_MEMORY_REPOSITORY_STATE } from './MemoryRepositoryTransaction.ts';
 
 function quoteKey(quote: MintSwapOperation['sourceQuote']): string {
   return JSON.stringify([quote.mintUrl, quote.method, quote.quoteId]);
@@ -16,9 +18,9 @@ function compareCreated(a: MintSwapOperation, b: MintSwapOperation): number {
 }
 
 /**
- * Dormant, standalone memory implementation. Every mutation runs synchronously to completion,
+ * Opt-in memory implementation. Every mutation runs synchronously to completion,
  * without an await between validation, uniqueness checks, and writes. This is the repository's
- * own serialization boundary; it makes no cross-repository Wallet rollback guarantee.
+ * standalone serialization boundary. MemoryRepositories also binds it to the Wallet snapshot.
  */
 export class MemoryMintSwapOperationRepository implements MintSwapOperationRepository {
   private readonly operations = new Map<string, MintSwapOperation>();
@@ -27,20 +29,34 @@ export class MemoryMintSwapOperationRepository implements MintSwapOperationRepos
   private readonly sourceChildren = new Set<string>();
   private readonly destinationChildren = new Set<string>();
 
+  [COPY_MEMORY_REPOSITORY_STATE](source: MemoryMintSwapOperationRepository): void {
+    this.operations.clear();
+    for (const [id, operation] of source.operations)
+      this.operations.set(id, parseMintSwapOperation(operation));
+    for (const key of [
+      'sourceQuotes',
+      'destinationQuotes',
+      'sourceChildren',
+      'destinationChildren',
+    ] as const) {
+      this[key].clear();
+      for (const value of source[key]) this[key].add(value);
+    }
+  }
+
   async create(operation: MintSwapOperation): Promise<void> {
     const parsed = parseMintSwapOperation(operation);
     if (parsed.revision !== 0) throw new TypeError('Mint Swap creation requires revision zero');
     const sourceQuote = quoteKey(parsed.sourceQuote);
     const destinationQuote = quoteKey(parsed.destinationQuote);
-    if (this.operations.has(parsed.id)) throw new Error('Mint Swap parent identity already exists');
-    if (this.sourceQuotes.has(sourceQuote))
-      throw new Error('Mint Swap source quote already exists');
+    if (this.operations.has(parsed.id)) throw new MintSwapIdentityConflictError('parent');
+    if (this.sourceQuotes.has(sourceQuote)) throw new MintSwapIdentityConflictError('source_quote');
     if (this.destinationQuotes.has(destinationQuote))
-      throw new Error('Mint Swap destination quote already exists');
+      throw new MintSwapIdentityConflictError('destination_quote');
     if (this.sourceChildren.has(parsed.sourceOperationId))
-      throw new Error('Mint Swap source child already exists');
+      throw new MintSwapIdentityConflictError('source_child');
     if (this.destinationChildren.has(parsed.destinationOperationId))
-      throw new Error('Mint Swap destination child already exists');
+      throw new MintSwapIdentityConflictError('destination_child');
 
     this.operations.set(parsed.id, parsed);
     this.sourceQuotes.add(sourceQuote);

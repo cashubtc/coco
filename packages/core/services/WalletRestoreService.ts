@@ -1,23 +1,16 @@
-import {
-  type Proof,
-  Mint,
-  Wallet,
-  sumProofs,
-  type OutputConfig,
-  type OutputDataCreator,
-} from '@cashu/cashu-ts';
-import { mapProofToCoreProof } from '@core/utils';
-import type { ProofService } from './ProofService';
-import type { CounterService } from './CounterService';
+import { type Proof, Mint, Wallet, sumProofs, type OutputDataCreator } from '@cashu/cashu-ts';
+import { mapProofToCoreProof, normalizeMintUrl } from '@core/utils';
+import type { ReceiveOperationService } from '../operations/receive/ReceiveOperationService.ts';
+import type { SweepKeysetResult, SweepKeysetSummary } from '../models/Sweep.ts';
+import type { CoreTransactionRunner } from '../transactions/CoreTransaction.ts';
+import type { EventBus, CoreEvents } from '../events/index.ts';
+import { applyRestoreResult } from '../operations/restore/RestoreTransitions.ts';
 import type { Logger } from '../logging/Logger.ts';
-import type { WalletService } from './WalletService.ts';
 import type { MintRequestProvider } from '../infra/MintRequestProvider.ts';
 import { DEFAULT_UNIT, normalizeUnit } from '../amounts.ts';
 
 export class WalletRestoreService {
-  private readonly proofService: ProofService;
-  private readonly counterService: CounterService;
-  private readonly walletService: WalletService;
+  private readonly transactionRunner: CoreTransactionRunner;
   private readonly requestProvider: MintRequestProvider;
   private readonly logger?: Logger;
   private readonly outputDataCreator?: OutputDataCreator;
@@ -28,175 +21,125 @@ export class WalletRestoreService {
   private readonly restoreStartCounter = 0;
 
   constructor(
-    proofService: ProofService,
-    counterService: CounterService,
-    walletService: WalletService,
+    private readonly receive: Pick<
+      ReceiveOperationService,
+      'init' | 'prepare' | 'execute' | 'getOperation'
+    >,
+    transactionRunner: CoreTransactionRunner,
     requestProvider: MintRequestProvider,
     logger?: Logger,
     outputDataCreator?: OutputDataCreator,
+    private readonly eventBus?: EventBus<CoreEvents>,
   ) {
-    this.proofService = proofService;
-    this.counterService = counterService;
-    this.walletService = walletService;
+    this.transactionRunner = transactionRunner;
     this.requestProvider = requestProvider;
     this.logger = logger;
     this.outputDataCreator = outputDataCreator;
   }
 
+  /**
+   * Discover a source keyset and delegate its available value to the Receive coordinator.
+   * Returns a result for discovery and exchange failures; callers must inspect its status.
+   * Invalid mint URLs or units reject before discovery starts.
+   */
   async sweepKeyset(
     mintUrl: string,
     keysetId: string,
     bip39seed: Uint8Array,
     unit = DEFAULT_UNIT,
-  ): Promise<void> {
+  ): Promise<SweepKeysetResult> {
+    mintUrl = normalizeMintUrl(mintUrl);
     const normalizedUnit = normalizeUnit(unit, { defaultUnit: DEFAULT_UNIT });
-    this.logger?.debug('Sweeping keyset', { mintUrl, keysetId });
-    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
-      mintUrl,
-      normalizedUnit,
-    );
-    const requestFn = this.requestProvider.getRequestFn(mintUrl);
-    const sweepWallet = new Wallet(new Mint(mintUrl, { customRequest: requestFn }), {
-      bip39seed,
-      unit: normalizedUnit,
-      outputDataCreator: this.outputDataCreator,
-    });
-    await sweepWallet.loadMint();
-
-    const { proofs } = await sweepWallet.batchRestore({
-      gapLimit: this.restoreGapLimit,
-      batchSize: this.restoreBatchSize,
-      counter: this.restoreStartCounter,
-      keysetId,
-      filterSpent: false,
-    });
-
-    if (proofs.length === 0) {
-      this.logger?.warn('No proofs to sweep', { mintUrl, keysetId });
-      return;
-    }
-
-    this.logger?.debug('Proofs found for sweep', {
-      mintUrl,
-      keysetId,
-      count: proofs.length,
-    });
-
-    const states = await sweepWallet.checkProofsStates(proofs);
-    if (!Array.isArray(states) || states.length !== proofs.length) {
-      this.logger?.error('Malformed state check', {
-        mintUrl,
+    const summary: SweepKeysetSummary = { keysetId, unit: normalizedUnit };
+    let receiveOperationId: string | undefined;
+    try {
+      const sweepWallet = new Wallet(
+        new Mint(mintUrl, { customRequest: this.requestProvider.getRequestFn(mintUrl) }),
+        { bip39seed, unit: normalizedUnit, outputDataCreator: this.outputDataCreator },
+      );
+      await sweepWallet.loadMint();
+      const { proofs } = await sweepWallet.batchRestore({
+        gapLimit: this.restoreGapLimit,
+        batchSize: this.restoreBatchSize,
+        counter: this.restoreStartCounter,
         keysetId,
-        statesLength: (states as unknown as { length?: number })?.length,
-        proofsLength: proofs.length,
+        filterSpent: false,
       });
-      throw new Error('Malformed state check');
-    }
-    const checkedProofs: { spent: Proof[]; ready: Proof[] } = { spent: [], ready: [] };
-    for (const [index, state] of states.entries()) {
-      if (!proofs[index]) {
-        this.logger?.error('Proof not found', { mintUrl, keysetId, index });
-        throw new Error('Proof not found');
+      const states = proofs.length ? await sweepWallet.checkProofsStates(proofs) : [];
+      if (
+        !Array.isArray(states) ||
+        states.length !== proofs.length ||
+        states.some((state) => !state || !['UNSPENT', 'PENDING', 'SPENT'].includes(state.state))
+      ) {
+        throw new Error('Malformed state check');
       }
-      if (state.state === 'SPENT') {
-        checkedProofs.spent.push(proofs[index]);
-      } else {
-        checkedProofs.ready.push(proofs[index]);
+      const available: Proof[] = [];
+      const pending: Proof[] = [];
+      for (const [index, state] of states.entries()) {
+        if (state.state === 'UNSPENT') available.push(proofs[index]!);
+        if (state.state === 'PENDING') pending.push(proofs[index]!);
       }
-    }
-
-    this.logger?.debug('Checked proof states', {
-      mintUrl,
-      keysetId,
-      ready: checkedProofs.ready.length,
-      spent: checkedProofs.spent.length,
-    });
-
-    if (checkedProofs.ready.length === 0) {
-      this.logger?.warn('No ready proofs to sweep, all spent', {
-        mintUrl,
-        keysetId,
-        spentCount: checkedProofs.spent.length,
+      summary.pending = { count: pending.length, amount: sumProofs(pending) };
+      if (!available.length) {
+        return pending.length
+          ? { ...summary, status: 'skipped', reason: 'pending' }
+          : { ...summary, status: 'noop' };
+      }
+      // Preflight only decides whether this is an economic transfer. Receive owns
+      // authoritative fees, output allocation, settlement, and recovery.
+      const amount = sumProofs(available);
+      const fee = sweepWallet.getFeesForProofs(available);
+      if (amount.lessThanOrEqual(fee)) {
+        return { ...summary, status: 'skipped', reason: 'uneconomic', available: amount, fee };
+      }
+      const draft = await this.receive.init({
+        mint: mintUrl,
+        proofs: available,
+        unit: normalizedUnit,
       });
-      return;
+      const prepared = await this.receive.prepare(draft);
+      receiveOperationId = prepared.id;
+      const finalized = await this.receive.execute(prepared.id);
+      return {
+        ...summary,
+        status: 'transferred',
+        receiveOperationId,
+        received: finalized.amount.subtract(finalized.fee),
+        fee: finalized.fee,
+      };
+    } catch (cause) {
+      const error = cause instanceof Error ? cause : new Error(String(cause));
+      if (!receiveOperationId) return { ...summary, status: 'failed', error };
+      // A rejected execute may already have settled during Receive recovery.
+      // Read only: Sweep never submits a replacement for an uncertain exchange.
+      const operation = await this.receive.getOperation(receiveOperationId).catch(() => null);
+      if (operation?.state === 'finalized') {
+        return {
+          ...summary,
+          status: 'transferred',
+          receiveOperationId,
+          received: operation.amount.subtract(operation.fee),
+          fee: operation.fee,
+        };
+      }
+      return {
+        ...summary,
+        status: operation?.state === 'rolled_back' ? 'failed' : 'unresolved',
+        receiveOperationId,
+        error,
+      };
     }
-
-    const sweepFee = sweepWallet.getFeesForProofs(checkedProofs.ready);
-    const sweepAmount = sumProofs(checkedProofs.ready);
-
-    if (sweepAmount.lessThanOrEqual(sweepFee)) {
-      this.logger?.warn('Sweep amount is less than fee', {
-        mintUrl,
-        keysetId,
-        amount: sweepAmount,
-        fee: sweepFee,
-      });
-      return;
-    }
-
-    const sweepTotalAmount = sweepAmount.subtract(sweepFee);
-
-    this.logger?.debug('Sweep calculation', {
-      mintUrl,
-      keysetId,
-      amount: sweepAmount,
-      fee: sweepFee,
-      total: sweepTotalAmount,
-    });
-
-    const outputAmounts = {
-      keep: { amount: sweepTotalAmount.subtract(sweepTotalAmount), unit: normalizedUnit },
-      send: { amount: sweepTotalAmount, unit: normalizedUnit },
-    };
-    const outputResults = await this.proofService.createOutputsAndIncrementCounters(
-      mintUrl,
-      outputAmounts,
-    );
-    const outputConfig: OutputConfig = {
-      send: { type: 'custom', data: outputResults.send },
-      keep: { type: 'custom', data: outputResults.keep },
-    };
-    const { send, keep } = await wallet.send(
-      sweepTotalAmount,
-      checkedProofs.ready,
-      undefined,
-      outputConfig,
-    );
-    await this.proofService.saveProofs(
-      mintUrl,
-      mapProofToCoreProof(mintUrl, 'ready', [...keep, ...send], { unit: normalizedUnit }),
-    );
-
-    this.logger?.info('Keyset sweep completed', {
-      mintUrl,
-      keysetId,
-      readyProofs: checkedProofs.ready.length,
-      spentProofs: checkedProofs.spent.length,
-      sweptAmount: sweepAmount,
-      fee: sweepFee,
-    });
   }
 
-  /**
-   * Restore and persist proofs for a single keyset.
-   * Enforces the invariant: restored proofs must be >= previously stored proofs.
-   * Throws on any validation or persistence error. No transactions are used here.
-   */
+  /** Restore a keyset additively, committing discovered proofs and its counter together. */
   async restoreKeyset(
     mintUrl: string,
     wallet: Wallet,
     keysetId: string,
     unit = DEFAULT_UNIT,
   ): Promise<void> {
+    mintUrl = normalizeMintUrl(mintUrl);
     const normalizedUnit = normalizeUnit(unit, { defaultUnit: DEFAULT_UNIT });
-    this.logger?.debug('Restoring keyset', { mintUrl, keysetId });
-    const oldProofs = await this.proofService.getProofsByKeysetId(mintUrl, keysetId);
-    this.logger?.debug('Existing proofs before restore', {
-      mintUrl,
-      keysetId,
-      count: oldProofs.length,
-    });
-
     const { proofs, lastCounterWithSignature } = await wallet.batchRestore({
       gapLimit: this.restoreGapLimit,
       batchSize: this.restoreBatchSize,
@@ -204,78 +147,65 @@ export class WalletRestoreService {
       keysetId,
       filterSpent: false,
     });
-
-    if (proofs.length === 0) {
-      this.logger?.warn('No proofs to restore', { mintUrl, keysetId });
-      return;
-    }
-
-    this.logger?.info('Batch restore result', {
-      mintUrl,
-      keysetId,
-      restored: proofs.length,
-      lastCounterWithSignature,
-    });
-
-    // Hard requirement: restored proofs must be >= previously stored proofs
-    if (oldProofs.length > proofs.length) {
-      this.logger?.warn('Restored fewer proofs than previously stored', {
-        mintUrl,
-        keysetId,
-        previous: oldProofs.length,
-        restored: proofs.length,
-      });
-      throw new Error('Restored less proofs than expected.');
-    }
-
-    const states = await wallet.checkProofsStates(proofs);
-    if (!Array.isArray(states) || states.length !== proofs.length) {
-      this.logger?.error('Malformed state check', {
-        mintUrl,
-        keysetId,
-        statesLength: (states as unknown as { length?: number })?.length,
-        proofsLength: proofs.length,
-      });
+    // All remote work completes before opening the local transaction.
+    const states = proofs.length ? await wallet.checkProofsStates(proofs) : [];
+    if (
+      !Array.isArray(states) ||
+      states.length !== proofs.length ||
+      states.some((state) => !state || !['UNSPENT', 'PENDING', 'SPENT'].includes(state.state))
+    ) {
       throw new Error('Malformed state check');
     }
-
-    const checkedProofs: { spent: Proof[]; ready: Proof[] } = { spent: [], ready: [] };
-    for (const [index, state] of states.entries()) {
-      if (!proofs[index]) {
-        this.logger?.error('Proof not found', { mintUrl, keysetId, index });
-        throw new Error('Proof not found');
-      }
-      if (state.state === 'SPENT') {
-        checkedProofs.spent.push(proofs[index]);
-      } else {
-        checkedProofs.ready.push(proofs[index]);
-      }
-    }
-
-    this.logger?.debug('Checked proof states', {
-      mintUrl,
-      keysetId,
-      ready: checkedProofs.ready.length,
-      spent: checkedProofs.spent.length,
-    });
-
-    const newCounter = lastCounterWithSignature ? lastCounterWithSignature + 1 : 0;
-
-    await this.counterService.overwriteCounter(mintUrl, keysetId, newCounter);
-    this.logger?.debug('Requested counter overwrite for keyset', {
-      mintUrl,
-      keysetId,
-      counter: newCounter,
-    });
-
-    await this.proofService.saveProofs(
-      mintUrl,
-      mapProofToCoreProof(mintUrl, 'ready', checkedProofs.ready, { unit: normalizedUnit }),
+    const candidates = proofs.flatMap((proof, index) =>
+      mapProofToCoreProof(
+        mintUrl,
+        states[index]!.state === 'UNSPENT'
+          ? 'ready'
+          : states[index]!.state === 'PENDING'
+            ? 'pending'
+            : 'spent',
+        [proof],
+        { unit: normalizedUnit },
+      ),
     );
-    this.logger?.info('Saved restored proofs for keyset', {
-      mintUrl,
-      keysetId,
-      total: checkedProofs.ready.length + checkedProofs.spent.length,
-    });
+    const nextCounter = lastCounterWithSignature == null ? 0 : lastCounterWithSignature + 1;
+    if (
+      lastCounterWithSignature != null &&
+      (!Number.isSafeInteger(lastCounterWithSignature) || lastCounterWithSignature < 0)
+    ) {
+      throw new Error('Invalid restored output counter');
+    }
+    const result = await this.transactionRunner.run((tx) =>
+      tx.perform(applyRestoreResult, {
+        mintUrl,
+        keysetId,
+        proofs: candidates,
+        nextCounter,
+      }),
+    );
+    if (result.counter) await this.publishCommittedEvent('counter:updated', result.counter);
+    if (result.inserted.length)
+      await this.publishCommittedEvent('proofs:saved', {
+        mintUrl,
+        keysetId,
+        proofs: result.inserted,
+      });
+    for (const proof of result.updated)
+      await this.publishCommittedEvent('proofs:state-changed', {
+        mintUrl,
+        secrets: [proof.secret],
+        state: proof.state,
+      });
+  }
+
+  private async publishCommittedEvent<E extends keyof CoreEvents>(
+    event: E,
+    payload: CoreEvents[E],
+  ): Promise<void> {
+    try {
+      await this.eventBus?.emit(event, payload, { throwOnError: true });
+    } catch (error) {
+      this.logger?.warn('Restore committed but event delivery failed', { event, error });
+    }
   }
 }

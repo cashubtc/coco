@@ -22,6 +22,7 @@ import type { Mint } from '../models/Mint';
 import type { SendOperation, SendOperationState } from '../operations/send/SendOperation';
 import type { CoreProof, ProofState } from '../types';
 import type { MintMethodRemoteState } from '../operations/mint/MintMethodHandler';
+import type { MintSwapPersistence } from '../operations/mintSwap/MintSwapOperationRepository.ts';
 
 export interface ProofUnitFilter {
   unit?: string;
@@ -30,7 +31,10 @@ export interface ProofUnitFilter {
 
 export interface MintRepository {
   isTrustedMint(mintUrl: string): Promise<boolean>;
+  /** Look up a single mint by URL, throwing if it doesn't exist. */
   getMintByUrl(mintUrl: string): Promise<Mint>;
+  /** Look up a single mint by URL, returning `null` instead of throwing when it doesn't exist. */
+  findMintByUrl(mintUrl: string): Promise<Mint | null>;
   getAllMints(): Promise<Mint[]>;
   getAllTrustedMints(): Promise<Mint[]>;
   addNewMint(mint: Mint): Promise<void>;
@@ -43,7 +47,14 @@ export interface MintRepository {
 export interface KeysetRepository {
   getKeysetsByMintUrl(mintUrl: string): Promise<Keyset[]>;
   getKeysetById(mintUrl: string, id: string): Promise<Keyset | null>;
+  /** Atomically updates metadata while preserving keys; creates an empty-key row if absent. */
   updateKeyset(keyset: Omit<Keyset, 'keypairs' | 'updatedAt'>): Promise<void>;
+  /**
+   * Stores a keyset and its keys. A keyset id commits to its keys (NUT-02), so keys already
+   * stored for this id are kept and incoming keys only backfill a keyset recorded without them.
+   * Atomically rejects a write that would replace stored keys with different ones, including
+   * concurrent root writes. Inside a transaction, uses the supplied scope.
+   */
   addKeyset(keyset: Omit<Keyset, 'updatedAt'>): Promise<void>;
   deleteKeyset(mintUrl: string, keysetId: string): Promise<void>;
 }
@@ -231,6 +242,17 @@ export interface SendOperationRepository {
   /** Update an existing send operation */
   update(operation: SendOperation): Promise<void>;
 
+  /**
+   * Conditionally replace an operation when its state and revision still match.
+   * Implementations persist `next` with `expectedRevision + 1` and return false on contention.
+   */
+  transition(input: {
+    operationId: string;
+    expectedState: SendOperationState;
+    expectedRevision: number;
+    next: SendOperation;
+  }): Promise<boolean>;
+
   /** Get a send operation by ID */
   getById(id: string): Promise<SendOperation | null>;
 
@@ -251,7 +273,7 @@ export interface MeltOperationRepository {
   /** Create a new melt operation */
   create(operation: MeltOperation): Promise<void>;
 
-  /** Update an existing melt operation */
+  /** Update an existing melt operation, preserving the supplied updatedAt (adapter precision applies). */
   update(operation: MeltOperation): Promise<void>;
 
   /** Get a melt operation by ID */
@@ -286,7 +308,7 @@ export interface MintOperationRepository {
   /** Create a new mint operation */
   create(operation: MintOperation): Promise<void>;
 
-  /** Update an existing mint operation */
+  /** Update an existing mint operation, preserving the supplied updatedAt (adapter timestamp precision applies). */
   update(operation: MintOperation): Promise<void>;
 
   /** Get a mint operation by ID */
@@ -314,6 +336,14 @@ export interface ReceiveOperationRepository {
 
   /** Update an existing receive operation */
   update(operation: ReceiveOperation): Promise<void>;
+
+  /** Atomically compare state/revision and replace the record, incrementing revision once. */
+  transition(input: {
+    operationId: string;
+    expectedState: ReceiveOperationState;
+    expectedRevision: number;
+    next: ReceiveOperation;
+  }): Promise<boolean>;
 
   /** Get a receive operation by ID */
   getById(id: string): Promise<ReceiveOperation | null>;
@@ -379,6 +409,8 @@ interface RepositoriesBase {
   receiveOperationRepository: ReceiveOperationRepository;
   paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
   paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
+  /** Mint Swap persistence participates in every Wallet transaction; runtime activation is separate. */
+  mintSwap: MintSwapPersistence;
 }
 
 export interface Repositories extends RepositoriesBase {

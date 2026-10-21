@@ -1,3 +1,5 @@
+import { prepareProofsForReceiving } from '../proofs/ProofPreparation.ts';
+import { restoreOutputProofs } from '../infra/ProofRestore.ts';
 import {
   Amount,
   OutputData,
@@ -34,12 +36,16 @@ import {
   DEFAULT_UNIT,
   assertSameUnit,
   normalizeUnit,
-  normalizeUnitList,
   normalizeUnitAmount,
   type UnitAmount,
 } from '../amounts.ts';
 import { deserializeOutputData, mapProofToCoreProof, type SerializedOutputData } from '../utils';
 import type { Keyset } from '@core/models/Keyset.ts';
+import {
+  StoredBalanceQueries,
+  emptyBalanceSnapshot,
+  type BalanceQueries,
+} from '../proofs/BalanceQueries.ts';
 
 function countBlankOutputsForAmount(amount: Amount): number {
   const value = amount.toBigInt();
@@ -59,6 +65,7 @@ export class ProofService {
   private readonly seedService: SeedService;
   private readonly logger?: Logger;
   private readonly outputDataCreator: OutputDataCreator;
+  private readonly balanceQueries: BalanceQueries;
   constructor(
     counterService: CounterService,
     proofRepository: ProofRepository,
@@ -69,6 +76,7 @@ export class ProofService {
     logger?: Logger,
     eventBus?: EventBus<CoreEvents>,
     outputDataCreator?: OutputDataCreator,
+    balanceQueries?: BalanceQueries,
   ) {
     this.counterService = counterService;
     this.walletService = walletService;
@@ -79,6 +87,7 @@ export class ProofService {
     this.logger = logger;
     this.eventBus = eventBus;
     this.outputDataCreator = outputDataCreator ?? OutputData;
+    this.balanceQueries = balanceQueries ?? new StoredBalanceQueries(proofRepository, mintService);
   }
 
   /**
@@ -363,7 +372,7 @@ export class ProofService {
       throw new ProofValidationError('mintUrl is required');
     }
     const balance = await this.getBalancesByMint({ mintUrls: [mintUrl] });
-    return this.snapshotToBreakdown(balance[mintUrl] ?? this.emptyBalanceSnapshot());
+    return this.snapshotToBreakdown(balance[mintUrl] ?? emptyBalanceSnapshot());
   }
 
   /**
@@ -393,83 +402,11 @@ export class ProofService {
    * @returns An object mapping mint URLs to their balances
    */
   async getBalancesByMint(scope?: BalanceQuery): Promise<BalancesByMint> {
-    const unit = this.getSingleBalanceUnit(scope, 'getBalancesByMint');
-    if (unit === undefined) {
-      return {};
-    }
-    const balancesByMintAndUnit = await this.getBalancesByMintAndUnit({
-      ...scope,
-      units: [unit],
-    });
-
-    return Object.fromEntries(
-      Object.entries(balancesByMintAndUnit).map(([mintUrl, balancesByUnit]) => [
-        mintUrl,
-        balancesByUnit[unit] ?? this.emptyBalanceSnapshot(unit),
-      ]),
-    );
+    return this.balanceQueries.getBalancesByMint(scope);
   }
 
   async getBalancesByMintAndUnit(scope?: BalanceQuery): Promise<BalancesByMintAndUnit> {
-    const requestedMintUrls = scope?.mintUrls ? Array.from(new Set(scope.mintUrls)) : undefined;
-    const requestedUnits = normalizeUnitList(scope?.units);
-    if (requestedUnits && requestedUnits.length === 0) {
-      return {};
-    }
-    const trustedMintUrls = scope?.trustedOnly
-      ? new Set((await this.mintService.getAllTrustedMints()).map((mint) => mint.mintUrl))
-      : undefined;
-    const balances: BalancesByMintAndUnit = {};
-    const scopedMintUrls = requestedMintUrls?.filter(
-      (mintUrl) => !trustedMintUrls || trustedMintUrls.has(mintUrl),
-    );
-    const proofFilter = requestedUnits ? { units: requestedUnits } : undefined;
-    const proofs = scopedMintUrls
-      ? (
-          await Promise.all(
-            scopedMintUrls.map((mintUrl) =>
-              this.proofRepository.getReadyProofs(mintUrl, proofFilter),
-            ),
-          )
-        ).flat()
-      : trustedMintUrls
-        ? (
-            await Promise.all(
-              Array.from(trustedMintUrls).map((mintUrl) =>
-                this.proofRepository.getReadyProofs(mintUrl, proofFilter),
-              ),
-            )
-          ).flat()
-        : await this.getAllReadyProofs(proofFilter);
-
-    for (const proof of proofs) {
-      const mintUrl = proof.mintUrl;
-      if (trustedMintUrls && !trustedMintUrls.has(mintUrl)) {
-        continue;
-      }
-
-      const unit = normalizeUnit(proof.unit, { defaultUnit: DEFAULT_UNIT });
-      const balancesForMint = balances[mintUrl] ?? (balances[mintUrl] = {});
-      const balance = balancesForMint[unit] || this.emptyBalanceSnapshot(unit);
-      if (proof.usedByOperationId) {
-        balance.reserved = balance.reserved.add(proof.amount);
-      } else {
-        balance.spendable = balance.spendable.add(proof.amount);
-      }
-      balance.total = balance.spendable.add(balance.reserved);
-      balancesForMint[unit] = balance;
-    }
-
-    if (scopedMintUrls && requestedUnits) {
-      for (const mintUrl of scopedMintUrls) {
-        const balancesForMint = balances[mintUrl] ?? (balances[mintUrl] = {});
-        for (const unit of requestedUnits) {
-          balancesForMint[unit] ??= this.emptyBalanceSnapshot(unit);
-        }
-      }
-    }
-
-    return balances;
+    return this.balanceQueries.getBalancesByMintAndUnit(scope);
   }
 
   /**
@@ -477,51 +414,15 @@ export class ProofService {
    * @returns A single balance snapshot with spendable, reserved, and total amounts
    */
   async getBalanceTotal(scope?: BalanceQuery): Promise<BalanceSnapshot> {
-    const unit = this.getSingleBalanceUnit(scope, 'getBalanceTotal');
-    if (unit === undefined) {
-      return this.emptyBalanceSnapshot();
-    }
-    const balances = await this.getBalancesByMint(scope);
-    return Object.values(balances).reduce<BalanceSnapshot>(
-      (total, balance) => ({
-        spendable: total.spendable.add(balance.spendable),
-        reserved: total.reserved.add(balance.reserved),
-        total: total.total.add(balance.total),
-        unit,
-      }),
-      this.emptyBalanceSnapshot(unit),
-    );
+    return this.balanceQueries.getBalanceTotal(scope);
   }
 
   async getBalancesByUnit(scope?: BalanceQuery): Promise<BalancesByUnit> {
-    return this.getBalanceTotalByUnit(scope);
+    return this.balanceQueries.getBalanceTotalByUnit(scope);
   }
 
   async getBalanceTotalByUnit(scope?: BalanceQuery): Promise<BalancesByUnit> {
-    const requestedUnits = normalizeUnitList(scope?.units);
-    if (requestedUnits && requestedUnits.length === 0) {
-      return {};
-    }
-    const balancesByMintAndUnit = await this.getBalancesByMintAndUnit(scope);
-    const totals: BalancesByUnit = {};
-
-    for (const balancesByUnit of Object.values(balancesByMintAndUnit)) {
-      for (const [unit, balance] of Object.entries(balancesByUnit)) {
-        const total = totals[unit] ?? this.emptyBalanceSnapshot(unit);
-        total.spendable = total.spendable.add(balance.spendable);
-        total.reserved = total.reserved.add(balance.reserved);
-        total.total = total.total.add(balance.total);
-        totals[unit] = total;
-      }
-    }
-
-    if (requestedUnits) {
-      for (const unit of requestedUnits) {
-        totals[unit] ??= this.emptyBalanceSnapshot(unit);
-      }
-    }
-
-    return totals;
+    return this.balanceQueries.getBalanceTotalByUnit(scope);
   }
 
   /**
@@ -572,35 +473,6 @@ export class ProofService {
         this.snapshotToBreakdown(balance),
       ]),
     );
-  }
-
-  private getSingleBalanceUnit(
-    scope: BalanceQuery | undefined,
-    caller: string,
-  ): string | undefined {
-    const units = normalizeUnitList(scope?.units);
-    if (!units) {
-      return DEFAULT_UNIT;
-    }
-    if (units.length === 0) {
-      return undefined;
-    }
-    if (units.length > 1) {
-      throw new ProofValidationError(
-        `${caller} cannot aggregate multiple units; use getBalanceTotalByUnit or getBalancesByMintAndUnit`,
-      );
-    }
-    return units[0]!;
-  }
-
-  private emptyBalanceSnapshot(unit = DEFAULT_UNIT): BalanceSnapshot {
-    const normalizedUnit = normalizeUnit(unit, { defaultUnit: DEFAULT_UNIT });
-    return {
-      spendable: Amount.zero(),
-      reserved: Amount.zero(),
-      total: Amount.zero(),
-      unit: normalizedUnit,
-    };
   }
 
   private snapshotToBreakdown(balance: BalanceSnapshot): BalanceBreakdown {
@@ -834,70 +706,7 @@ export class ProofService {
   }
 
   async prepareProofsForReceiving(proofs: Proof[]): Promise<Proof[]> {
-    this.logger?.debug('Preparing proofs for receiving', { totalProofs: proofs.length });
-
-    const preparedProofs = [...proofs];
-    let regularProofCount = 0;
-    let p2pkProofCount = 0;
-
-    for (let i = 0; i < preparedProofs.length; i++) {
-      const proof = preparedProofs[i];
-      if (!proof) continue;
-
-      // Try to parse as P2PK proof
-      let parsedSecret: [string, { nonce: string; data: string; tags: string[][] }];
-      try {
-        parsedSecret = JSON.parse(proof.secret);
-      } catch (parseError) {
-        // Not a JSON secret (regular proof), skip P2PK processing
-        this.logger?.debug('Regular proof detected, skipping P2PK processing', {
-          proofIndex: i,
-        });
-        regularProofCount++;
-        continue;
-      }
-
-      // Check if it's a P2PK proof
-      if (parsedSecret[0] !== 'P2PK') {
-        this.logger?.error('Unsupported locking script type', {
-          proofIndex: i,
-          scriptType: parsedSecret[0],
-        });
-        throw new ProofValidationError('Only P2PK locking scripts are supported');
-      }
-
-      // Validate multisig is not used
-      const additionalKeysTag = parsedSecret[1].tags?.find((tag) => tag[0] === 'pubkeys');
-      if (additionalKeysTag && additionalKeysTag[1] && additionalKeysTag[1].length > 0) {
-        this.logger?.error('Multisig P2PK proof detected', { proofIndex: i });
-        throw new ProofValidationError('Multisig is not supported');
-      }
-
-      // Sign the proof - if this fails, we abort the entire operation
-      try {
-        preparedProofs[i] = await this.signer.signProof(proof, parsedSecret[1].data);
-        this.logger?.debug('P2PK proof signed successfully', {
-          proofIndex: i,
-          recipient: parsedSecret[1].data,
-        });
-        p2pkProofCount++;
-      } catch (error) {
-        this.logger?.error('Failed to sign P2PK proof for receiving', {
-          proofIndex: i,
-          recipient: parsedSecret[1].data,
-          error,
-        });
-        throw error;
-      }
-    }
-
-    this.logger?.info('Proofs prepared for receiving', {
-      totalProofs: proofs.length,
-      regularProofs: regularProofCount,
-      p2pkProofs: p2pkProofCount,
-    });
-
-    return preparedProofs;
+    return prepareProofsForReceiving(proofs, this.signer);
   }
 
   async createBlankOutputs(mintUrl: string, intent: UnitAmount): Promise<OutputDataLike[]> {
@@ -1029,68 +838,9 @@ export class ProofService {
     const unit = normalizeUnit(options.unit);
     const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl, unit);
 
-    // Deserialize OutputData
-    const outputData = deserializeOutputData(serializedOutputData);
-    const allOutputs = [...outputData.keep, ...outputData.send];
-
-    if (allOutputs.length === 0) {
-      return [];
-    }
-
-    // Build blinded messages for restore request
-    const blindedMessages = allOutputs.map((o) => o.blindedMessage);
-
-    // Fetch keysets needed to unblind restored signatures
     const { keysets } = await this.mintService.ensureUpdatedMint(mintUrl);
-    const keysetMap: { [id: string]: Keyset } = {};
-    keysets.forEach((ks) => {
-      keysetMap[ks.id] = ks;
-    });
-
-    // Call mint restore endpoint
-    const restoreResult = await wallet.mint.restore({ outputs: blindedMessages });
-
-    // Match signatures back to outputs and unblind to construct proofs
-    const restoredProofs: Proof[] = [];
-    for (let i = 0; i < restoreResult.outputs.length; i++) {
-      const output = allOutputs.find((o) => o.blindedMessage.B_ === restoreResult.outputs[i]?.B_);
-      const signature = restoreResult.signatures[i];
-      if (output && signature) {
-        const keyset = keysetMap[signature.id];
-        if (!keyset) {
-          this.logger?.warn('Missing keyset for restored signature', { id: signature.id });
-          continue;
-        }
-        assertSameUnit(
-          normalizeUnit(keyset.unit, { defaultUnit: DEFAULT_UNIT }),
-          unit,
-          'Restored proof keyset',
-        );
-        restoredProofs.push(
-          output.toProof(signature, { id: keyset.id, keys: keyset.keypairs as Keys }),
-        );
-      }
-    }
-
-    if (restoredProofs.length === 0) {
-      this.logger?.debug('No proofs found to restore', { mintUrl });
-      return [];
-    }
-
-    // Check which proofs are still unspent
-    const proofStates = await wallet.checkProofsStates(restoredProofs);
-    const unspentProofs = restoredProofs.filter((_, index) => {
-      const state = proofStates[index];
-      return state && state.state === 'UNSPENT';
-    });
-
-    if (unspentProofs.length === 0) {
-      this.logger?.debug('All restored proofs are already spent', {
-        mintUrl,
-        totalRestored: restoredProofs.length,
-      });
-      return [];
-    }
+    const unspentProofs = await restoreOutputProofs(wallet, keysets, unit, serializedOutputData);
+    if (unspentProofs.length === 0) return [];
 
     if (options?.persistRecoveredProofs !== false) {
       await this.saveProofs(
@@ -1105,9 +855,7 @@ export class ProofService {
     this.logger?.info('Recovered proofs from output data', {
       mintUrl,
       unit,
-      totalRestored: restoredProofs.length,
       unspentCount: unspentProofs.length,
-      spentCount: restoredProofs.length - unspentProofs.length,
       persisted: options?.persistRecoveredProofs !== false,
     });
 

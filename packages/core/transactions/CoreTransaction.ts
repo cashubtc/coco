@@ -1,29 +1,64 @@
-import type { Repositories, RepositoryTransactionScope } from '@core/repositories';
-import { RepositoryTransactionConflictError } from '@core/repositories';
+import { OutputData, type OutputDataCreator } from '@cashu/cashu-ts';
 import {
-  RepositoryKeypairCommands,
-  type ScopedKeypairCommands,
-} from './scoped/keypairs/ScopedKeypairCommands.ts';
-import { TransactionLifetime } from './scoped/TransactionLifetime.ts';
+  RepositoryTransactionConflictError,
+  type Repositories,
+  type RepositoryTransactionScope,
+  type SendOperationRepository,
+  type ReceiveOperationRepository,
+  type MintOperationRepository,
+  type MintQuoteRepository,
+  type MeltOperationRepository,
+  type MeltQuoteRepository,
+} from '@core/repositories';
+import {
+  RepositoryScopedMintMetadata,
+  type ScopedMintMetadata,
+} from './mints/ScopedMintMetadata.ts';
+import { RepositoryScopedProofs, type ScopedProofs } from './proofs/ScopedProofs.ts';
+import { RepositoryScopedOutputs, type ScopedOutputs } from './outputs/ScopedOutputs.ts';
+import { RepositoryScopedKeypairs, type ScopedKeypairs } from './keypairs/ScopedKeypairs.ts';
+import { TransactionLifetime } from './TransactionLifetime.ts';
+import { getTransitionBody, type Transition } from './Transition.ts';
+import type { MintSwapOperationRepository } from '../operations/mintSwap/MintSwapOperationRepository.ts';
 
 /**
- * Scoped commands sharing one adapter transaction attempt. Await mutations sequentially unless
+ * Scoped capabilities sharing one adapter transaction attempt. Await mutations sequentially unless
  * their independence is established; lifetime tracking does not serialize conflicting work.
  */
 export interface CoreTransaction {
-  readonly keypairs: ScopedKeypairCommands;
+  perform<O>(transition: Transition<void, O>): Promise<O>;
+  perform<I, O>(transition: Transition<I, O>, input: I): Promise<O>;
+  readonly mintMetadata: ScopedMintMetadata;
+  readonly keypairs: ScopedKeypairs;
+  readonly proofs: ScopedProofs;
+  readonly outputs: ScopedOutputs;
+  readonly mintSwapOperations: Pick<
+    MintSwapOperationRepository,
+    'getById' | 'create' | 'transition'
+  >;
+  readonly mintOperations: Pick<
+    MintOperationRepository,
+    'getById' | 'getByQuoteId' | 'create' | 'update' | 'delete'
+  >;
+  readonly mintQuotes: Pick<MintQuoteRepository, 'getMintQuote'>;
+  readonly meltOperations: Pick<
+    MeltOperationRepository,
+    'getById' | 'getByQuoteId' | 'create' | 'update' | 'delete'
+  >;
+  readonly meltQuotes: Pick<MeltQuoteRepository, 'getMeltQuote' | 'getMeltQuoteById'>;
+  readonly receiveOperations: Pick<
+    ReceiveOperationRepository,
+    'getById' | 'create' | 'transition' | 'delete'
+  >;
+  readonly sendOperations: Pick<
+    SendOperationRepository,
+    'getById' | 'getByMintUrl' | 'create' | 'transition' | 'delete'
+  >;
 }
 
+/** Injected into coordinators; each invocation resolves only after its local work commits. */
 export interface CoreTransactionRunner {
-  run<T>(work: (transaction: CoreTransaction) => Promise<T>): Promise<T>;
-}
-
-type TransactionModuleFactory = (repositories: RepositoryTransactionScope) => CoreTransaction;
-
-function createTransactionModules(repositories: RepositoryTransactionScope): CoreTransaction {
-  return {
-    keypairs: new RepositoryKeypairCommands(repositories.keyRingRepository),
-  };
+  run<T>(work: (tx: CoreTransaction) => Promise<T>): Promise<T>;
 }
 
 const MAX_TRANSACTION_ATTEMPTS = 3;
@@ -32,16 +67,16 @@ const MAX_TRANSACTION_ATTEMPTS = 3;
 export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
   constructor(
     private readonly repositories: Repositories,
-    private readonly createModules: TransactionModuleFactory = createTransactionModules,
+    private readonly outputDataCreator: OutputDataCreator = OutputData,
   ) {}
 
-  async run<T>(work: (transaction: CoreTransaction) => Promise<T>): Promise<T> {
+  async run<T>(work: (tx: CoreTransaction) => Promise<T>): Promise<T> {
     for (let attempt = 1; ; attempt++) {
       try {
         return await this.repositories.withTransaction((repositories) => {
           const lifetime = new TransactionLifetime();
           return lifetime.run(() =>
-            work(lifetime.bind(this.createModules(lifetime.bind(repositories)))),
+            work(this.createTransaction(lifetime.bind(repositories), lifetime)),
           );
         });
       } catch (error) {
@@ -55,5 +90,41 @@ export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
         await new Promise((resolve) => setTimeout(resolve, attempt * 5));
       }
     }
+  }
+
+  private createTransaction(
+    repositories: RepositoryTransactionScope,
+    lifetime: TransactionLifetime,
+  ): CoreTransaction {
+    const mintMetadata = new RepositoryScopedMintMetadata(
+      repositories.mintRepository,
+      repositories.keysetRepository,
+    );
+    const proofs = new RepositoryScopedProofs(
+      repositories.proofRepository,
+      repositories.keysetRepository,
+    );
+    const outputs = new RepositoryScopedOutputs(
+      repositories.counterRepository,
+      repositories.keysetRepository,
+      this.outputDataCreator,
+    );
+    const scoped: CoreTransaction = lifetime.bind({
+      // The proxy binds methods to the raw object; bodies must receive the bound scope instead.
+      perform: <I, O>(transition: Transition<I, O>, input?: I): Promise<O> =>
+        getTransitionBody(transition)(scoped, input as I),
+      mintOperations: repositories.mintOperationRepository,
+      mintQuotes: repositories.mintQuoteRepository,
+      meltOperations: repositories.meltOperationRepository,
+      meltQuotes: repositories.meltQuoteRepository,
+      mintSwapOperations: repositories.mintSwap.operationRepository,
+      mintMetadata,
+      keypairs: new RepositoryScopedKeypairs(repositories.keyRingRepository),
+      proofs,
+      outputs,
+      receiveOperations: repositories.receiveOperationRepository,
+      sendOperations: repositories.sendOperationRepository,
+    });
+    return scoped;
   }
 }

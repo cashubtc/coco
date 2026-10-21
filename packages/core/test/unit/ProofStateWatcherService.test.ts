@@ -366,6 +366,14 @@ describe('ProofStateWatcherService', () => {
     );
     const getProofsBySecrets = mock(async () => [makeProof({ secret, state: 'spent' })]);
     const finalize = mock(async () => {});
+    const recordProofSpent = mock(async (operationId: string, observedSecret: string) => {
+      await bus.emit('proofs:state-changed', {
+        mintUrl: mintUrlA,
+        secrets: [observedSecret],
+        state: 'spent',
+      });
+      return operationId === 'send-op-1';
+    });
     const getOperation = mock(async () => ({
       id: 'send-op-1',
       state: 'pending',
@@ -398,7 +406,11 @@ describe('ProofStateWatcherService', () => {
       new NullLogger(),
       { watchExistingInflightOnStart: false },
     );
-    watcher.setSendOperationService({ getOperation, finalize } as unknown as SendOperationService);
+    watcher.setSendOperationService({
+      getOperation,
+      finalize,
+      recordProofSpent,
+    } as unknown as SendOperationService);
 
     await watcher.start();
     await watcher.watchProof(mintUrlA, [secret]);
@@ -406,9 +418,12 @@ describe('ProofStateWatcherService', () => {
 
     await subscriptionCallback!({ Y: yHexBySecret.get(secret)!, state: 'SPENT' });
 
-    expect(setProofState).toHaveBeenCalledTimes(1);
+    expect(setProofState).not.toHaveBeenCalled();
+    expect(recordProofSpent).toHaveBeenCalledTimes(1);
+    expect(recordProofSpent).toHaveBeenCalledWith('send-op-1', secret);
     expect(unsubscribe).toHaveBeenCalledTimes(1);
-    expect(getProofBySecret).toHaveBeenCalledTimes(1);
+    // Once for subscription routing and once for the post-commit event listener.
+    expect(getProofBySecret).toHaveBeenCalledTimes(2);
     expect(getProofBySecret).toHaveBeenCalledWith(mintUrlA, secret);
     expect(getProofsBySecrets).toHaveBeenCalledTimes(1);
     expect(getProofsBySecrets).toHaveBeenCalledWith(mintUrlA, [secret]);

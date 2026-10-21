@@ -1,14 +1,17 @@
 import { Amount } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect, mock } from 'bun:test';
+import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
+import { MintRequestProvider } from '../../infra/MintRequestProvider.ts';
+import { createMintMetadataRefreshDependencies } from '../fixtures/MintMetadataRefresh.ts';
 import { MintService } from '../../services/MintService';
-import { ProofValidationError } from '../../models/Error';
-import { MemoryMintRepository } from '../../repositories/memory/MemoryMintRepository';
-import { MemoryKeysetRepository } from '../../repositories/memory/MemoryKeysetRepository';
+import { KeysetVerificationError, ProofValidationError } from '../../models/Error';
+import type { MemoryMintRepository } from '../../repositories/memory/MemoryMintRepository';
+import type { MemoryKeysetRepository } from '../../repositories/memory/MemoryKeysetRepository';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { Mint } from '../../models/Mint';
 import type { MintInfo } from '../../types';
-import type { MintAdapter } from '../../infra/MintAdapter';
+import { MintAdapter } from '../../infra/MintAdapter';
 
 describe('MintService', () => {
   const testMintUrl = 'https://mint.test';
@@ -51,21 +54,29 @@ describe('MintService', () => {
   };
 
   beforeEach(() => {
-    mintRepo = new MemoryMintRepository();
-    keysetRepo = new MemoryKeysetRepository();
+    const repositories = new MemoryRepositories();
+    mintRepo = repositories.mintRepository as MemoryMintRepository;
+    keysetRepo = repositories.keysetRepository as MemoryKeysetRepository;
     eventBus = new EventBus<CoreEvents>();
 
     // Create mock MintAdapter
-    mockAdapter = {
+    mockAdapter = Object.assign(new MintAdapter(new MintRequestProvider()), {
       fetchMintInfo: mock(() => Promise.resolve(mockMintInfo)),
       fetchKeysets: mock(() => Promise.resolve({ keysets: mockKeysets })),
       fetchKeysForId: mock(() => Promise.resolve(mockKeys)),
       checkMintQuote: mock(() => Promise.resolve({})),
       checkMeltQuoteState: mock(() => Promise.resolve({})),
       checkProofStates: mock(() => Promise.resolve([])),
-    } as unknown as MintAdapter;
+    });
 
-    service = new MintService(mintRepo, keysetRepo, mockAdapter, undefined, eventBus);
+    service = new MintService(
+      mintRepo,
+      keysetRepo,
+      mockAdapter,
+      createMintMetadataRefreshDependencies(repositories),
+      undefined,
+      eventBus,
+    );
   });
 
   describe('trust management', () => {
@@ -784,6 +795,28 @@ describe('MintService', () => {
       expect(result.mint.mintUrl).toBe(testMintUrl);
       expect(result.mint.trusted).toBe(false);
       expect(result.keysets.length).toBeGreaterThan(0);
+    });
+
+    it('does not update cached keyset metadata that its stored keys cannot verify', async () => {
+      await service.addMintByUrl(testMintUrl);
+      mockAdapter.fetchKeysets = mock(async () => ({
+        keysets: [{ ...mockKeysets[0]!, unit: 'usd', input_fee_ppk: 21 }],
+      }));
+      mockAdapter.fetchKeysForId = mock(async () => {
+        throw new KeysetVerificationError(
+          testMintUrl,
+          mockKeysets[0]!.id,
+          'advertised metadata does not derive the stored keyset id',
+        );
+      });
+
+      const result = await service.updateMintData(testMintUrl);
+
+      const stored = await keysetRepo.getKeysetById(testMintUrl, mockKeysets[0]!.id);
+      expect(stored?.unit).toBe('sat');
+      expect(stored?.feePpk).toBe(0);
+      expect(result.keysets.find((keyset) => keyset.id === mockKeysets[0]!.id)?.unit).toBe('sat');
+      expect(mockAdapter.fetchKeysForId).toHaveBeenCalledTimes(1);
     });
   });
 

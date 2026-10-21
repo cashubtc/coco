@@ -1506,6 +1506,116 @@ const MIGRATIONS: readonly Migration[] = [
       GROUP BY purpose;
     `,
   },
+  {
+    id: '039_send_operation_revision',
+    sql: `
+      ALTER TABLE coco_cashu_send_operations
+        ADD COLUMN revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0);
+    `,
+  },
+  {
+    id: '040_send_execution_memo',
+    sql: `
+      ALTER TABLE coco_cashu_send_operations
+        ADD COLUMN executionMemo TEXT;
+    `,
+  },
+  {
+    id: '041_send_reclaim_data',
+    sql: `ALTER TABLE coco_cashu_send_operations ADD COLUMN reclaimDataJson TEXT;`,
+  },
+  {
+    id: '042_mint_swap_operations',
+    sql: `
+      CREATE TABLE coco_cashu_mint_swap_operations (
+        id TEXT PRIMARY KEY,
+        state TEXT NOT NULL CHECK (state IN (
+          'preparing', 'prepared', 'source_pending', 'destination_funded',
+          'destination_pending', 'completed', 'cancelled', 'failed', 'needs_attention'
+        )),
+        revision INTEGER NOT NULL CHECK (revision >= 0),
+        nextAttemptAt INTEGER,
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL,
+        sourceQuoteMintUrl TEXT NOT NULL,
+        sourceQuoteMethod TEXT NOT NULL,
+        sourceQuoteId TEXT NOT NULL,
+        destinationQuoteMintUrl TEXT NOT NULL,
+        destinationQuoteMethod TEXT NOT NULL,
+        destinationQuoteId TEXT NOT NULL,
+        sourceOperationId TEXT NOT NULL,
+        destinationOperationId TEXT NOT NULL,
+        recordJson TEXT NOT NULL
+      );
+
+      CREATE UNIQUE INDEX ux_coco_cashu_mint_swap_source_quote
+        ON coco_cashu_mint_swap_operations(
+          sourceQuoteMintUrl, sourceQuoteMethod, sourceQuoteId
+        );
+      CREATE UNIQUE INDEX ux_coco_cashu_mint_swap_destination_quote
+        ON coco_cashu_mint_swap_operations(
+          destinationQuoteMintUrl, destinationQuoteMethod, destinationQuoteId
+        );
+      CREATE UNIQUE INDEX ux_coco_cashu_mint_swap_source_child
+        ON coco_cashu_mint_swap_operations(sourceOperationId);
+      CREATE UNIQUE INDEX ux_coco_cashu_mint_swap_destination_child
+        ON coco_cashu_mint_swap_operations(destinationOperationId);
+      CREATE INDEX idx_coco_cashu_mint_swap_state_revision
+        ON coco_cashu_mint_swap_operations(state, revision);
+      CREATE INDEX idx_coco_cashu_mint_swap_state_due
+        ON coco_cashu_mint_swap_operations(state, nextAttemptAt, createdAt, id);
+    `,
+  },
+  {
+    id: '043_pending_proofs',
+    sql: `
+      ALTER TABLE coco_cashu_proofs RENAME TO coco_cashu_proofs_before_pending;
+      CREATE TABLE coco_cashu_proofs (
+        mintUrl   TEXT NOT NULL,
+        id        TEXT NOT NULL,
+        unit      TEXT NOT NULL DEFAULT 'sat',
+        amount    TEXT NOT NULL,
+        secret    TEXT NOT NULL,
+        C         TEXT NOT NULL,
+        dleqJson  TEXT,
+        witnessJson   TEXT,
+        state     TEXT NOT NULL CHECK (state IN ('inflight', 'pending', 'ready', 'spent')),
+        createdAt INTEGER NOT NULL,
+        usedByOperationId TEXT,
+        createdByOperationId TEXT,
+        PRIMARY KEY (mintUrl, secret)
+      );
+
+      INSERT INTO coco_cashu_proofs (
+        mintUrl, id, unit, amount, secret, C, dleqJson, witnessJson, state, createdAt,
+        usedByOperationId, createdByOperationId
+      ) SELECT mintUrl, id, unit, amount, secret, C, dleqJson, witnessJson, state, createdAt,
+        usedByOperationId, createdByOperationId FROM coco_cashu_proofs_before_pending;
+      DROP TABLE coco_cashu_proofs_before_pending;
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_proofs_state ON coco_cashu_proofs(state);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_proofs_mint_state ON coco_cashu_proofs(mintUrl, state);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_proofs_mint_id_state ON coco_cashu_proofs(mintUrl, id, state);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_proofs_mint_unit_state ON coco_cashu_proofs(mintUrl, unit, state);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_proofs_mint_unit_id_state ON coco_cashu_proofs(mintUrl, unit, id, state);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_proofs_unit_state ON coco_cashu_proofs(unit, state);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_proofs_usedByOp ON coco_cashu_proofs(usedByOperationId) WHERE usedByOperationId IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_proofs_createdByOp ON coco_cashu_proofs(createdByOperationId) WHERE createdByOperationId IS NOT NULL;
+    `,
+  },
+  {
+    id: '044_receive_operation_revision',
+    // Older development builds used another migration id for this column. Retain their data.
+    run: async (db) => {
+      const columns = await db.all<{ name: string }>(
+        'PRAGMA table_info(coco_cashu_receive_operations)',
+      );
+      if (!columns.some((column) => column.name === 'revision')) {
+        await db.exec(
+          'ALTER TABLE coco_cashu_receive_operations ADD COLUMN revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0)',
+        );
+      }
+    },
+  },
 ];
 
 // Export for testing

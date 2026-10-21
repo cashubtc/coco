@@ -4,14 +4,17 @@ import type { PendingMintOperation } from '@core/operations/mint';
 import { MintQuoteValidationError } from '../../../models/Error';
 
 type ReusableMintQuoteResponse = MintQuoteBolt12Response | MintQuoteOnchainResponse;
-type ReusablePendingMintOperation = PendingMintOperation<'bolt12' | 'onchain'>;
+type ReusableQuoteOperation = Pick<
+  PendingMintOperation<'bolt12' | 'onchain'>,
+  'method' | 'quoteId' | 'request' | 'unit' | 'pubkey'
+>;
 
 /**
  * Returns a validation error when a reusable quote response is not attributable to an operation.
  */
 export function getReusableMintQuoteValidationError(
   quote: ReusableMintQuoteResponse,
-  operation: ReusablePendingMintOperation,
+  operation: ReusableQuoteOperation,
 ): Error | null {
   const identityLabel = operation.method === 'bolt12' ? 'BOLT12' : 'onchain';
   const quoteLabel = operation.method === 'bolt12' ? 'BOLT12' : 'Onchain';

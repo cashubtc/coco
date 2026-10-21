@@ -1,15 +1,7 @@
 /**
- * State machine for receive operations:
- *
- * init ──► prepared ──► executing ──► finalized
- *   │         │            │
- *   └─────────┴────────────┴──► rolled_back
- *
- * - init: Operation created, token decoded/validated
- * - prepared: Fees calculated, outputs created, ready to execute
- * - executing: Receive in progress (mint interaction)
- * - finalized: Proofs saved, operation complete
- * - rolled_back: Operation failed or aborted before completion
+ * Durable lifecycle: prepared → executing → finalized (or rolled_back after proven non-effect).
+ * Preparation atomically commits signed inputs, outputs, and counter allocation.
+ * `init` is an in-memory draft; persisted legacy init rows remain readable for upgrade recovery.
  */
 export type ReceiveOperationState = 'init' | 'prepared' | 'executing' | 'finalized' | 'rolled_back';
 
@@ -40,6 +32,9 @@ export type ReceiveOperationSource =
 interface ReceiveOperationBase {
   /** Unique identifier for this operation */
   id: string;
+
+  /** Monotonic persistence revision; absent on legacy records and interpreted as zero. */
+  revision?: number;
 
   /** The mint URL for this operation */
   mintUrl: string;

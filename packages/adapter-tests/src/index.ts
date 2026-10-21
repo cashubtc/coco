@@ -20,6 +20,7 @@ import {
   type KeypairPurpose,
   type Keypair,
   DerivationIndexExhaustedError,
+  KeysetKeysConflictError,
   QuoteIdentityConflictError,
   RepositoryTransactionConflictError,
 } from '@cashu/coco-core/adapter';
@@ -247,6 +248,266 @@ export function runKeypairAllocationContract(
             2,
             expect,
           );
+        } finally {
+          await dispose();
+        }
+      });
+    }
+  });
+}
+
+export async function runKeysetRepositoryContract(
+  options: ContractOptions,
+  runner: ContractRunner,
+): Promise<void> {
+  const { describe, it, expect } = runner;
+
+  describe('keyset repository contract', () => {
+    for (const empty of [false, true]) {
+      for (const shared of [false, true]) {
+        if (shared && !options.createSharedRepositories) continue;
+        it(`preserves keys across concurrent metadata and key writes (empty: ${empty}, shared: ${shared})`, async () => {
+          const { first, second, dispose } = shared
+            ? await options.createSharedRepositories!()
+            : await options.createRepositories().then(({ repositories, dispose }) => ({
+                first: repositories,
+                second: repositories,
+                dispose,
+              }));
+          try {
+            const keyset = { ...createDummyKeyset(), keypairs: { '1': '02aa' }, active: false };
+            if (empty) await first.keysetRepository.updateKeyset(keyset);
+            const writes = [
+              () => first.keysetRepository.updateKeyset(keyset),
+              () => second.keysetRepository.addKeyset(keyset),
+            ];
+            const results = await Promise.allSettled(writes.map((write) => write()));
+            expect(results.some((result) => result.status === 'fulfilled')).toBe(true);
+            for (const [index, result] of results.entries()) {
+              if (result.status === 'rejected') {
+                // Independent SQL writers may reject contention; retry only after both settle.
+                expect(shared).toBe(true);
+                expect(result.reason?.name).toBe(RepositoryTransactionConflictError.name);
+                await writes[index]!();
+              }
+            }
+            const stored = await first.keysetRepository.getKeysetById(keyset.mintUrl, keyset.id);
+            expect(stored?.keypairs['1']).toBe(keyset.keypairs['1']);
+            expect(stored?.active).toBe(false);
+            await expectThrowsNamed(
+              () => second.keysetRepository.addKeyset({ ...keyset, keypairs: { '1': '02ff' } }),
+              KeysetKeysConflictError.name,
+              expect,
+            );
+          } finally {
+            await dispose();
+          }
+        });
+      }
+    }
+
+    for (const empty of [false, true]) {
+      for (const transactional of [false, true]) {
+        for (const shared of [false, true]) {
+          if (shared && !options.createSharedRepositories) continue;
+          it(`rejects conflicting concurrent keysets (empty: ${empty}, transaction: ${transactional}, shared: ${shared})`, async () => {
+            const fixture = shared
+              ? await options.createSharedRepositories!()
+              : await options.createRepositories().then(({ repositories, dispose }) => ({
+                  first: repositories,
+                  second: repositories,
+                  dispose,
+                }));
+            const { first, second, dispose } = fixture;
+            try {
+              const keyset = createDummyKeyset();
+              if (empty) await first.keysetRepository.updateKeyset(keyset);
+              const candidates = [
+                { ...keyset, keypairs: { '1': '02aa' }, active: true, feePpk: 1 },
+                { ...keyset, keypairs: { '1': '02ff' }, active: false, feePpk: 2 },
+              ];
+              const results = await Promise.allSettled(
+                [first, second].map((repositories, index) =>
+                  transactional
+                    ? repositories.withTransaction((scope) =>
+                        scope.keysetRepository.addKeyset(candidates[index]!),
+                      )
+                    : repositories.keysetRepository.addKeyset(candidates[index]!),
+                ),
+              );
+              expect(results.filter((result) => result.status === 'fulfilled').length).toBe(1);
+              expect(results.filter((result) => result.status === 'rejected').length).toBe(1);
+              const rejected = results.find((result) => result.status === 'rejected');
+              expect(
+                rejected?.status === 'rejected' &&
+                  [KeysetKeysConflictError.name, RepositoryTransactionConflictError.name].includes(
+                    rejected.reason?.name,
+                  ),
+              ).toBe(true);
+              const winner =
+                candidates[results.findIndex((result) => result.status === 'fulfilled')]!;
+              const stored = await first.keysetRepository.getKeysetById(keyset.mintUrl, keyset.id);
+              expect(stored?.keypairs['1']).toBe(winner.keypairs['1']);
+              expect(stored?.active).toBe(winner.active);
+              expect(stored?.feePpk).toBe(winner.feePpk);
+              await second.keysetRepository.addKeyset(winner);
+            } finally {
+              await dispose();
+            }
+          });
+        }
+      }
+    }
+
+    it('allows concurrent identical keys and preserves keys on a metadata-only write', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const keyset = { ...createDummyKeyset(), keypairs: { '1': '02aa' } };
+        await Promise.all([
+          repositories.keysetRepository.addKeyset(keyset),
+          repositories.keysetRepository.addKeyset(keyset),
+        ]);
+        await repositories.withTransaction(async (scope) => {
+          await scope.keysetRepository.addKeyset({ ...keyset, keypairs: {}, active: false });
+          await scope.keysetRepository.addKeyset({ ...keyset, active: false });
+        });
+        const stored = await repositories.keysetRepository.getKeysetById(keyset.mintUrl, keyset.id);
+        expect(stored?.keypairs['1']).toBe('02aa');
+        expect(stored?.active).toBe(false);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('rolls back the full transaction when a keyset write conflicts', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const keyset = createDummyKeyset();
+        await expectThrowsNamed(
+          () =>
+            repositories.withTransaction(async (scope) => {
+              await scope.mintRepository.addOrUpdateMint(createDummyMint());
+              await scope.keysetRepository.addKeyset({ ...keyset, keypairs: { '1': '02aa' } });
+              await scope.keysetRepository.addKeyset({ ...keyset, keypairs: { '1': '02ff' } });
+            }),
+          KeysetKeysConflictError.name,
+          expect,
+        );
+        expect(await repositories.keysetRepository.getKeysetById(keyset.mintUrl, keyset.id)).toBe(
+          null,
+        );
+        expect((await repositories.mintRepository.getAllMints()).length).toBe(0);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('keeps stored keys when a keyset is written again', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const keyset = createDummyKeyset();
+        const keys = { '1': '02aa', '2': '02bb' };
+        await repositories.keysetRepository.addKeyset({ ...keyset, keypairs: keys });
+
+        // A keyset id commits to its keys (NUT-02), so re-writing the same keys is a no-op
+        // that still refreshes the metadata around them.
+        await repositories.keysetRepository.addKeyset({
+          ...keyset,
+          keypairs: { '2': '02bb', '1': '02aa' },
+          active: false,
+          feePpk: 4,
+        });
+
+        const stored = await repositories.keysetRepository.getKeysetById(keyset.mintUrl, keyset.id);
+        expect(stored?.keypairs['1']).toBe('02aa');
+        expect(stored?.keypairs['2']).toBe('02bb');
+        expect(stored?.active).toBe(false);
+        expect(stored?.feePpk).toBe(4);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('rejects a write that would replace stored keys with different keys', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const keyset = createDummyKeyset();
+        await repositories.keysetRepository.addKeyset({ ...keyset, keypairs: { '1': '02aa' } });
+
+        await expectThrowsNamed(
+          () => repositories.keysetRepository.addKeyset({ ...keyset, keypairs: { '1': '02ff' } }),
+          KeysetKeysConflictError.name,
+          expect,
+        );
+
+        const stored = await repositories.keysetRepository.getKeysetById(keyset.mintUrl, keyset.id);
+        expect(stored?.keypairs['1']).toBe('02aa');
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('backfills keys onto a keyset recorded without them', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const keyset = createDummyKeyset();
+        const { keypairs: _ignored, updatedAt: _updatedAt, ...metadata } = keyset;
+        await repositories.keysetRepository.updateKeyset(metadata);
+        await repositories.keysetRepository.addKeyset({ ...keyset, keypairs: { '1': '02aa' } });
+
+        const stored = await repositories.keysetRepository.getKeysetById(keyset.mintUrl, keyset.id);
+        expect(stored?.keypairs['1']).toBe('02aa');
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('does not let concurrent writers replace the winning keyset keys', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const keyset = createDummyKeyset();
+        const results = await Promise.all([
+          settle(
+            repositories.keysetRepository.addKeyset({
+              ...keyset,
+              keypairs: { '1': '02aa' },
+            }),
+          ),
+          settle(
+            repositories.keysetRepository.addKeyset({
+              ...keyset,
+              keypairs: { '1': '02ff' },
+            }),
+          ),
+        ]);
+
+        expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+        const rejected = results.find((result) => result.status === 'rejected');
+        expect(
+          rejected?.status === 'rejected' && rejected.reason instanceof Error
+            ? rejected.reason.name
+            : undefined,
+        ).toBe(KeysetKeysConflictError.name);
+        const stored = await repositories.keysetRepository.getKeysetById(keyset.mintUrl, keyset.id);
+        expect(stored?.keypairs['1'] === '02aa' || stored?.keypairs['1'] === '02ff').toBe(true);
+      } finally {
+        await dispose();
+      }
+    });
+
+    if (options.createSharedRepositories) {
+      it('reconciles keyset keys across independent roots sharing one store', async () => {
+        const { first, second, dispose } = await options.createSharedRepositories!();
+        try {
+          const keyset = createDummyKeyset();
+          const results = await Promise.all([
+            settle(first.keysetRepository.addKeyset({ ...keyset, keypairs: { '1': '02aa' } })),
+            settle(second.keysetRepository.addKeyset({ ...keyset, keypairs: { '1': '02ff' } })),
+          ]);
+
+          expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+          const stored = await first.keysetRepository.getKeysetById(keyset.mintUrl, keyset.id);
+          expect(stored?.keypairs['1'] === '02aa' || stored?.keypairs['1'] === '02ff').toBe(true);
         } finally {
           await dispose();
         }
@@ -1165,6 +1426,26 @@ export async function runMintOperationRepositoryContract(
       }
     });
 
+    it('preserves the coordinator timestamp when updating mint operations', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = createDummyMintOperation({ createdAt: 1000, updatedAt: 1000 });
+        await repositories.mintOperationRepository.create(operation);
+        await repositories.withTransaction(async ({ mintOperationRepository }) => {
+          await mintOperationRepository.update({
+            ...operation,
+            state: 'executing',
+            updatedAt: 2000,
+          });
+        });
+        expect((await repositories.mintOperationRepository.getById(operation.id))?.updatedAt).toBe(
+          2000,
+        );
+      } finally {
+        await dispose();
+      }
+    });
+
     it('preserves null quote expiries for pending operations', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {
@@ -1787,6 +2068,163 @@ export async function runReceiveOperationRepositoryContract(
   const { describe, it, expect } = runner;
 
   describe('ReceiveOperationRepository contract', () => {
+    it('conditionally advances Receive state with monotonic revisions and unchanged request data', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = {
+          ...createDummyReceiveOperation(),
+          state: 'prepared' as const,
+          fee: Amount.from(1),
+          outputData: { keep: [], send: [] },
+        };
+        const repository = repositories.receiveOperationRepository;
+        await repository.create(operation);
+        expect((await repository.getById(operation.id))?.revision).toBe(0);
+        const executing = {
+          ...operation,
+          state: 'executing' as const,
+          revision: 99,
+          updatedAt: 2000,
+        };
+        expect(
+          await repository.transition({
+            operationId: operation.id,
+            expectedState: 'prepared',
+            expectedRevision: 1,
+            next: executing,
+          }),
+        ).toBe(false);
+        expect(
+          await repository.transition({
+            operationId: operation.id,
+            expectedState: 'prepared',
+            expectedRevision: 0,
+            next: executing,
+          }),
+        ).toBe(true);
+        expect(
+          await repository.transition({
+            operationId: operation.id,
+            expectedState: 'prepared',
+            expectedRevision: 0,
+            next: executing,
+          }),
+        ).toBe(false);
+        const stored = await repository.getById(operation.id);
+        expect(stored?.revision).toBe(1);
+        expect(JSON.stringify(stored?.inputProofs)).toBe(JSON.stringify(operation.inputProofs));
+        expect(stored?.state).toBe('executing');
+        await expectThrows(
+          () =>
+            repository.transition({
+              operationId: operation.id,
+              expectedState: 'executing',
+              expectedRevision: 1,
+              next: { ...executing, id: 'different' },
+            }),
+          expect,
+        );
+        expect((await repository.getById(operation.id))?.revision).toBe(1);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('isolates nested Receive request data on every write and read', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = {
+          ...createDummyReceiveOperation(),
+          state: 'prepared' as const,
+          fee: Amount.from(1),
+          outputData: { keep: [], send: [] },
+          source: {
+            type: 'payment-request' as const,
+            requestOperationId: 'parent',
+            attemptId: 'attempt',
+            transport: 'inband' as const,
+          },
+        };
+        operation.inputProofs[0]!.dleq = { e: 'e', s: 's', r: 'r' };
+        const repository = repositories.receiveOperationRepository;
+        await repository.create(operation);
+        operation.inputProofs[0]!.secret = 'changed';
+        operation.inputProofs[0]!.dleq!.e = 'changed';
+        operation.source.requestOperationId = 'changed';
+        const reads = [
+          (await repository.getById(operation.id))!,
+          (await repository.getByState('prepared'))[0]!,
+          (await repository.getByMintUrl(operation.mintUrl))[0]!,
+          (await repository.getByPaymentRequestAttemptId('attempt'))!,
+        ];
+        for (const snapshot of reads) {
+          expect(snapshot.inputProofs[0]!.secret).toBe('receive-secret-1');
+          expect(snapshot.inputProofs[0]!.dleq!.e).toBe('e');
+          snapshot.inputProofs[0]!.dleq!.e = 'changed again';
+        }
+        expect((await repository.getById(operation.id))!.inputProofs[0]!.dleq!.e).toBe('e');
+        const next = {
+          ...reads[0]!,
+          state: 'executing' as const,
+          fee: Amount.from(1),
+          outputData: { keep: [], send: [] },
+        };
+        await repository.transition({
+          operationId: operation.id,
+          expectedState: 'prepared',
+          expectedRevision: 0,
+          next,
+        });
+        next.inputProofs[0]!.secret = 'changed after transition';
+        const pending = (await repository.getPending())[0]!;
+        expect(pending.inputProofs[0]!.secret).toBe('receive-secret-1');
+        pending.inputProofs[0]!.secret = 'changed pending snapshot';
+        expect((await repository.getById(operation.id))!.inputProofs[0]!.secret).toBe(
+          'receive-secret-1',
+        );
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('rolls back a Receive transition with its counter allocation', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = createDummyReceiveOperation();
+        await repositories.receiveOperationRepository.create(operation);
+        await expectThrows(
+          () =>
+            repositories.withTransaction(async (scope) => {
+              await scope.counterRepository.setCounter(operation.mintUrl, 'receive-keyset', 3);
+              await scope.receiveOperationRepository.transition({
+                operationId: operation.id,
+                expectedState: 'init',
+                expectedRevision: 0,
+                next: {
+                  ...operation,
+                  state: 'prepared',
+                  fee: Amount.from(1),
+                  outputData: { keep: [], send: [] },
+                },
+              });
+              throw new Error('abort Receive transaction');
+            }),
+          expect,
+        );
+        expect((await repositories.receiveOperationRepository.getById(operation.id))?.state).toBe(
+          'init',
+        );
+        expect(
+          (await repositories.receiveOperationRepository.getById(operation.id))?.revision,
+        ).toBe(0);
+        expect(
+          await repositories.counterRepository.getCounter(operation.mintUrl, 'receive-keyset'),
+        ).toBe(null);
+      } finally {
+        await dispose();
+      }
+    });
+
     it('rehydrates persisted input proof amounts', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {
@@ -2095,6 +2533,103 @@ export async function runSendOperationRepositoryContract(
         await dispose();
       }
     });
+
+    it('keeps nested Send request data independent of caller-owned objects', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = createDummyPreparedSendOperation({ id: 'immutable-send-request' });
+        const original = JSON.stringify(operation);
+        await repositories.sendOperationRepository.create(operation);
+        operation.inputProofSecrets.push('caller-mutation');
+        const read = await repositories.sendOperationRepository.getById(operation.id);
+        if (!read || read.state !== 'prepared') throw new Error('Missing prepared Send');
+        expect(read.inputProofSecrets.includes('caller-mutation')).toBe(false);
+        read.inputProofSecrets.push('query-mutation');
+        const stored = await repositories.sendOperationRepository.getById(operation.id);
+        expect(
+          JSON.stringify(stored && 'inputProofSecrets' in stored ? stored.inputProofSecrets : []),
+        ).toBe(JSON.stringify(JSON.parse(original).inputProofSecrets));
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('preserves the separate reclaim output plan through create, update, and transition', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const original = createDummyPreparedSendOperation({ id: 'send-reclaim-plan' });
+        const reclaimData = {
+          inputProofSecrets: ['reclaim-input'],
+          outputData: { keep: [], send: [] },
+        };
+        const operation: SendOperation = { ...original, state: 'rolling_back', reclaimData };
+        await repositories.sendOperationRepository.create(operation);
+        let stored = await repositories.sendOperationRepository.getById(operation.id);
+        expect(JSON.stringify(stored!.reclaimData)).toBe(JSON.stringify(reclaimData));
+        expect(
+          JSON.stringify(stored && 'outputData' in stored ? stored.outputData : undefined),
+        ).toBe(JSON.stringify(original.outputData));
+        await repositories.sendOperationRepository.update({ ...operation, error: 'interrupted' });
+        stored = await repositories.sendOperationRepository.getById(operation.id);
+        expect(JSON.stringify(stored!.reclaimData)).toBe(JSON.stringify(reclaimData));
+        expect(
+          await repositories.sendOperationRepository.transition({
+            operationId: operation.id,
+            expectedState: 'rolling_back',
+            expectedRevision: stored!.revision ?? 0,
+            next: { ...operation, state: 'rolled_back' },
+          }),
+        ).toBe(true);
+        stored = await repositories.sendOperationRepository.getById(operation.id);
+        expect(JSON.stringify(stored!.reclaimData)).toBe(JSON.stringify(reclaimData));
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('normalizes legacy revisions and allows only one conditional transition winner', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const prepared = createDummyPreparedSendOperation({
+          id: 'send-cas',
+          revision: undefined,
+        });
+        await repositories.sendOperationRepository.create(prepared);
+
+        const legacy = await repositories.sendOperationRepository.getById(prepared.id);
+        expect(legacy?.revision).toBe(0);
+
+        const next = {
+          ...prepared,
+          state: 'executing',
+          updatedAt: 1234,
+          executionMemo: 'persisted before transport',
+        } as SendOperation;
+        const winners = await Promise.all([
+          repositories.sendOperationRepository.transition({
+            operationId: prepared.id,
+            expectedState: 'prepared',
+            expectedRevision: 0,
+            next,
+          }),
+          repositories.sendOperationRepository.transition({
+            operationId: prepared.id,
+            expectedState: 'prepared',
+            expectedRevision: 0,
+            next,
+          }),
+        ]);
+        expect(winners.filter(Boolean)).toHaveLength(1);
+
+        const stored = await repositories.sendOperationRepository.getById(prepared.id);
+        expect(stored?.state).toBe('executing');
+        expect(stored?.revision).toBe(1);
+        expect(stored?.updatedAt).toBe(1000);
+        expect(stored?.executionMemo).toBe('persisted before transport');
+      } finally {
+        await dispose();
+      }
+    });
   });
 }
 
@@ -2105,6 +2640,22 @@ export async function runMeltOperationRepositoryContract(
   const { describe, it, expect } = runner;
 
   describe('MeltOperationRepository contract', () => {
+    it('preserves the coordinator timestamp when updating melt operations', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = createDummyMeltOperation({ createdAt: 1000, updatedAt: 1000 });
+        await repositories.meltOperationRepository.create(operation);
+        await repositories.withTransaction(async ({ meltOperationRepository }) => {
+          await meltOperationRepository.update({ ...operation, updatedAt: 2000 });
+        });
+        expect((await repositories.meltOperationRepository.getById(operation.id))?.updatedAt).toBe(
+          2000,
+        );
+      } finally {
+        await dispose();
+      }
+    });
+
     it('round-trips custom-unit init melt operations', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {
@@ -2287,6 +2838,84 @@ export async function runProofRepositoryContract(
   const { describe, it, expect } = runner;
 
   describe('ProofRepository contract', () => {
+    it('persists pending proofs across units and excludes them from available and inflight proofs', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const proof = createDummyProof({ secret: 'pending', state: 'pending' });
+        const other = createDummyProof({ secret: 'other', state: 'pending', unit: 'usd' });
+        await repositories.proofRepository.saveProofs(proof.mintUrl, [proof, other]);
+        for (const expected of [proof, other]) {
+          const stored = await repositories.proofRepository.getProofBySecret(
+            expected.mintUrl,
+            expected.secret,
+          );
+          expect(stored?.state).toBe('pending');
+          expect(stored?.unit).toBe(expected.unit);
+          expect(stored?.amount.equals(expected.amount)).toBe(true);
+        }
+        expect(await repositories.proofRepository.getAvailableProofs(proof.mintUrl)).toHaveLength(
+          0,
+        );
+        expect(await repositories.proofRepository.getInflightProofs()).toHaveLength(0);
+        await repositories.proofRepository.setProofState(proof.mintUrl, [proof.secret], 'ready');
+        const available = await repositories.proofRepository.getAvailableProofs(proof.mintUrl);
+        expect(available).toHaveLength(1);
+        expect(available[0]!.secret).toBe(proof.secret);
+        expect(available[0]!.state).toBe('ready');
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('preserves request material across metadata mutations and caller-owned snapshots', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const proof = {
+          ...createDummyProof(),
+          dleq: { e: 'e', s: 's', r: 'r' },
+          witness: '{"signatures":["signature"]}',
+        };
+        const material = (value: CoreProof) =>
+          JSON.stringify({
+            id: value.id,
+            amount: value.amount,
+            secret: value.secret,
+            C: value.C,
+            dleq: value.dleq,
+            witness: value.witness,
+          });
+        const expected = material(proof);
+        await repositories.proofRepository.saveProofs(proof.mintUrl, [proof]);
+        proof.dleq.e = 'caller-mutation';
+        const queried = await repositories.proofRepository.getProofBySecret(
+          proof.mintUrl,
+          proof.secret,
+        );
+        expect(material(queried!)).toBe(expected);
+        queried!.dleq!.s = 'query-mutation';
+        await repositories.proofRepository.reserveProofs(
+          proof.mintUrl,
+          [proof.secret],
+          'request-owner',
+        );
+        await repositories.proofRepository.setProofState(proof.mintUrl, [proof.secret], 'inflight');
+        await repositories.proofRepository.setCreatedByOperation(
+          proof.mintUrl,
+          [proof.secret],
+          'creator',
+        );
+        await repositories.proofRepository.setProofState(proof.mintUrl, [proof.secret], 'spent');
+        await repositories.proofRepository.releaseProofs(proof.mintUrl, [proof.secret]);
+        const stored = await repositories.proofRepository.getProofBySecret(
+          proof.mintUrl,
+          proof.secret,
+        );
+        expect(material(stored!)).toBe(expected);
+      } finally {
+        await dispose();
+      }
+    });
+
     it('returns matches for a mint', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {
@@ -2443,3 +3072,8 @@ export type { IntegrationTestRunner, IntegrationTestOptions } from './integratio
 // export type { MigrationTestRunner, MigrationTestOptions } from './migrations.ts';
 export { createFakeInvoice } from 'fake-bolt11';
 export type { FakeInvoiceOptions } from 'fake-bolt11';
+export {
+  createMintSwapFixtures,
+  runMintSwapPersistenceContract,
+  type MintSwapContractOptions,
+} from './mintSwap.ts';

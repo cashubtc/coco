@@ -45,7 +45,7 @@ export class MemoryProofRepository implements ProofRepository {
       }
     }
     for (const p of normalizedProofs) {
-      map.set(p.secret, { ...p, mintUrl });
+      map.set(p.secret, cloneMemoryValue({ ...p, mintUrl }));
     }
   }
 
@@ -54,7 +54,7 @@ export class MemoryProofRepository implements ProofRepository {
     const unitFilter = getUnitFilter(filter);
     return Array.from(map.values())
       .filter((p) => p.state === 'ready' && matchesUnit(p, unitFilter))
-      .map((p) => ({ ...p }));
+      .map((p) => cloneMemoryValue(p));
   }
 
   async getInflightProofs(mintUrls?: string[], filter?: ProofUnitFilter): Promise<CoreProof[]> {
@@ -64,7 +64,7 @@ export class MemoryProofRepository implements ProofRepository {
       for (const map of this.proofsByMint.values()) {
         for (const p of map.values()) {
           if (p.state === 'inflight' && matchesUnit(p, unitFilter)) {
-            all.push({ ...p });
+            all.push(cloneMemoryValue(p));
           }
         }
       }
@@ -79,7 +79,7 @@ export class MemoryProofRepository implements ProofRepository {
       if (!map) continue;
       for (const p of map.values()) {
         if (p.state === 'inflight' && matchesUnit(p, unitFilter)) {
-          results.push({ ...p });
+          results.push(cloneMemoryValue(p));
         }
       }
     }
@@ -92,7 +92,7 @@ export class MemoryProofRepository implements ProofRepository {
     for (const map of this.proofsByMint.values()) {
       for (const p of map.values()) {
         if (p.state === 'ready' && matchesUnit(p, unitFilter)) {
-          all.push({ ...p });
+          all.push(cloneMemoryValue(p));
         }
       }
     }
@@ -109,7 +109,7 @@ export class MemoryProofRepository implements ProofRepository {
     const results: CoreProof[] = [];
     for (const p of map.values()) {
       if (p.state === 'ready' && p.id === keysetId && matchesUnit(p, unitFilter)) {
-        results.push({ ...p });
+        results.push(cloneMemoryValue(p));
       }
     }
     return results;
@@ -187,7 +187,7 @@ export class MemoryProofRepository implements ProofRepository {
   async getProofBySecret(mintUrl: string, secret: string): Promise<CoreProof | null> {
     const map = this.getMintMap(mintUrl);
     const proof = map.get(secret);
-    return proof ? { ...proof } : null;
+    return proof ? cloneMemoryValue(proof) : null;
   }
 
   async getProofsBySecrets(mintUrl: string, secrets: string[]): Promise<CoreProof[]> {
@@ -202,7 +202,7 @@ export class MemoryProofRepository implements ProofRepository {
     for (const secret of uniqueSecrets) {
       const proof = map.get(secret);
       if (proof) {
-        proofs.push({ ...proof });
+        proofs.push(cloneMemoryValue(proof));
       }
     }
 
@@ -214,7 +214,7 @@ export class MemoryProofRepository implements ProofRepository {
     const results: CoreProof[] = [];
     for (const p of map.values()) {
       if (p.usedByOperationId === operationId || p.createdByOperationId === operationId) {
-        results.push({ ...p });
+        results.push(cloneMemoryValue(p));
       }
     }
     return results;
@@ -225,7 +225,7 @@ export class MemoryProofRepository implements ProofRepository {
     const unitFilter = getUnitFilter(filter);
     return Array.from(map.values())
       .filter((p) => p.state === 'ready' && !p.usedByOperationId && matchesUnit(p, unitFilter))
-      .map((p) => ({ ...p }));
+      .map((p) => cloneMemoryValue(p));
   }
 
   async getReservedProofs(): Promise<CoreProof[]> {
@@ -233,7 +233,7 @@ export class MemoryProofRepository implements ProofRepository {
     for (const map of this.proofsByMint.values()) {
       for (const p of map.values()) {
         if (p.state === 'ready' && p.usedByOperationId) {
-          all.push({ ...p });
+          all.push(cloneMemoryValue(p));
         }
       }
     }

@@ -290,10 +290,23 @@ those details are derived from canonical quote storage.
 - `balances.total(scope?: { mintUrls?: string[]; units?: string[]; trustedOnly?: boolean }): Promise<BalanceSnapshot>`
 - `balances.totalByUnit(scope?: { mintUrls?: string[]; units?: string[]; trustedOnly?: boolean }): Promise<BalancesByUnit>`
 - `restore(mintUrl: string, options?: { units?: string[] }): Promise<void>`
-- `sweep(mintUrl: string, bip39seed: Uint8Array, options?: { units?: string[] }): Promise<void>`
+- `sweep(mintUrl: string, bip39seed: Uint8Array, options?: { units?: string[] }): Promise<SweepReport>`
 - `decodeToken(tokenString: string, mintUrl?: string): Promise<Token>`
 - `encodeToken(token: Token, opts?: { removeDleq?: boolean }): string`
 - `encodePaymentRequest(paymentRequest: PaymentRequest, version?: 'creqA' | 'creqB'): string`
+
+Sweep returns `{ mintUrl, keysets }`. Each keyset result identifies its `keysetId` and `unit`,
+with status `transferred`, `noop`, `skipped`, `failed`, or `unresolved`. Pending observations are
+reported as `pending: { count, amount }`; skips distinguish `pending` from `uneconomic`.
+A transferred result includes `received`, `fee`, and `receiveOperationId`. All amounts are cashu-ts
+`Amount` values in that result's unit. Discovery failures may have no pending observations.
+
+Sweep returns the complete report even when all keysets fail or remain unresolved. Callers must
+inspect every status; a resolved call does not imply a successful transfer. Input validation and
+mint setup failures still reject before keyset processing.
+Inspect unresolved Receive IDs through `ops.receive` before retrying. Receive owns
+exchange recovery and ordinary Receive history; Sweep does not resume unvisited keysets after
+restart or deduplicate a later sweep against unresolved exchanges. See the [Sweep guide](../docs/pages/bip39.md#sweep).
 
 ### AuthApi
 
@@ -309,7 +322,7 @@ those details are derived from canonical quote storage.
 ### PaymentRequestsApi
 
 - `parse(paymentRequest: string): Promise<ResolvedPaymentRequest>`
-- `prepare(request: ResolvedPaymentRequest, options: { mintUrl: string; amount?: AmountLike }): Promise<PreparedPaymentRequest>`
+- `prepare(request: ResolvedPaymentRequest, options: { mintUrl: string; amount?: UnitAmountLike }): Promise<PreparedPaymentRequest>`
 - `execute(transaction: PreparedPaymentRequest): Promise<PaymentRequestExecutionResult>`
 - `incoming.create(input: CreateIncomingPaymentRequestInput): Promise<PaymentRequestReceiveOperation>`
 
@@ -390,7 +403,7 @@ include:
 
 - **Purpose**: Extend the core by hooking into lifecycle events with access only to the services you declare.
 - **Lifecycle hooks**: `onInit` (after services are created), `onReady` (after APIs are built), `onDispose` (on shutdown).
-- **Cleanup**: Hooks must return a cleanup function (sync or async), similar to React’s `useEffect`.
+- **Cleanup**: `onInit` and `onReady` may return a cleanup function (sync or async). Return cleanup for resources acquired by the hook, such as subscriptions; hooks that acquire no resources can return nothing. `onDispose` may complete synchronously or asynchronously.
 
 ### Types
 
@@ -448,7 +461,8 @@ await manager.dispose();
 
 ### Error handling
 
-- Errors thrown in `onInit`, `onReady`, and `onDispose` are caught. Hook errors are logged with the plugin name; a failure during plugin boot is also logged by the injected `Logger`.
+- Ordinary errors thrown in `onInit` or `onReady` are caught and logged to the console with the plugin name. Extension registration conflicts propagate as `ExtensionRegistrationError`.
+- During plugin disposal, all `onDispose` hooks and registered cleanup functions are attempted. Failures are collected and disposal rejects with an `AggregateError`; `manager.dispose()` propagates that failure.
 
 ## Exports
 

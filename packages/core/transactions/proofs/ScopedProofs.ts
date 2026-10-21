@@ -1,0 +1,441 @@
+import { selectProofsRGLI, sumProofs, Amount, type SelectProofs } from '@cashu/cashu-ts';
+import { normalizeUnit } from '@core/amounts.ts';
+import { ProofValidationError } from '@core/models/Error.ts';
+import { createKeyChain } from '@core/proofs/KeysetSelection.ts';
+import type { ProofQueries } from '@core/proofs/ProofQueries.ts';
+import { selectProofInputs, calculateProofFee } from '@core/proofs/ProofSelection.ts';
+import type { KeysetRepository, ProofRepository } from '@core/repositories';
+import type { CoreProof } from '@core/types.ts';
+import { normalizeMintUrl } from '@core/utils.ts';
+
+export interface RestoredProofChanges {
+  inserted: CoreProof[];
+  updated: CoreProof[];
+}
+
+const MELT_SWAP_THRESHOLD_NUMERATOR = 11;
+const MELT_SWAP_THRESHOLD_DENOMINATOR = 10;
+
+export interface OwnedProofsInput {
+  mintUrl: string;
+  unit: string;
+  operationId: string;
+  secrets: string[];
+  state: CoreProof['state'] | readonly CoreProof['state'][];
+  ownership?: 'used' | 'created';
+}
+
+export interface SelectAndReserveProofsInput {
+  mintUrl: string;
+  unit: string;
+  operationId: string;
+  amount: Amount;
+  forceSwap: boolean;
+}
+
+export interface SelectAndReserveForMeltInput {
+  mintUrl: string;
+  unit: string;
+  operationId: string;
+  /** Canonical quote amount plus the selected fee reserve. */
+  amount: Amount;
+  /** Pre-swap send amount that also funds the input fee of the later Melt request. */
+  swapAmount: Amount;
+}
+
+export interface MeltSendProofPlan {
+  secret: string;
+  id: string;
+  amount: Amount;
+}
+
+export interface MeltSendProofsInput extends Omit<OwnedProofsInput, 'ownership'> {
+  outputs: readonly MeltSendProofPlan[];
+}
+
+/** Proof reads and mutations within an existing transaction; never opens or commits one. */
+export interface ScopedProofs extends ProofQueries {
+  importRestored(mintUrl: string, proofs: CoreProof[]): Promise<RestoredProofChanges>;
+  saveCreated(mintUrl: string, proofs: CoreProof[]): Promise<void>;
+  selectAndReserve(input: SelectAndReserveProofsInput): Promise<{
+    proofs: CoreProof[];
+    fee: Amount;
+    needsSwap: boolean;
+  }>;
+  selectAndReserveForMelt(input: SelectAndReserveForMeltInput): Promise<{
+    proofs: CoreProof[];
+    inputAmount: Amount;
+    inputFee: Amount;
+    needsSwap: boolean;
+  }>;
+  getFee(mintUrl: string, unit: string, proofs: readonly Pick<CoreProof, 'id'>[]): Promise<Amount>;
+  /** Save issuance evidence without resetting later spending, reservations, or origin metadata. */
+  reconcileIssued(input: {
+    mintUrl: string;
+    unit: string;
+    operationId: string;
+    proofs: CoreProof[];
+  }): Promise<{ savedProofs: CoreProof[]; spentSecrets: string[] }>;
+  getOwned(input: OwnedProofsInput): Promise<CoreProof[]>;
+  /**
+   * Read a persisted pre-swap send plan. Legacy outputs may lack usedByOperationId, but must be
+   * created by this operation, match the exact send allocation, and have no competing owner.
+   */
+  getMeltSendProofs(input: MeltSendProofsInput): Promise<CoreProof[]>;
+  markInflight(input: Omit<OwnedProofsInput, 'state'>): Promise<void>;
+  /** The owning transition must establish that these inputs were never submitted or shared. */
+  releaseUnsubmitted(input: Omit<OwnedProofsInput, 'state' | 'ownership'>): Promise<void>;
+  settleSpend(input: OwnedProofsInput & { outputs: CoreProof[] }): Promise<void>;
+  recordSpent(input: Omit<OwnedProofsInput, 'state'>): Promise<void>;
+  recordMeltSendSpent(input: Omit<MeltSendProofsInput, 'state'>): Promise<void>;
+  releaseMeltSendUnsubmitted(input: Omit<MeltSendProofsInput, 'state'>): Promise<void>;
+  releaseOwned(mintUrl: string, operationId: string, secrets: string[]): Promise<void>;
+}
+
+/** Reusable reservation and settlement rules within the owning operation's adapter scope. */
+export class RepositoryScopedProofs implements ScopedProofs {
+  constructor(
+    private readonly proofs: ProofRepository,
+    private readonly keysets: KeysetRepository,
+    private readonly selectProofs: SelectProofs = selectProofsRGLI,
+  ) {}
+
+  async importRestored(mintUrl: string, proofs: CoreProof[]): Promise<RestoredProofChanges> {
+    mintUrl = normalizeMintUrl(mintUrl);
+    if (
+      new Set(proofs.map((proof) => proof.secret)).size !== proofs.length ||
+      proofs.some(
+        (proof) =>
+          proof.mintUrl !== mintUrl ||
+          !['ready', 'pending', 'spent'].includes(proof.state) ||
+          proof.usedByOperationId != null ||
+          proof.createdByOperationId != null,
+      )
+    ) {
+      throw new ProofValidationError('Invalid restored proof identities');
+    }
+    const existing = new Map(
+      (
+        await this.proofs.getProofsBySecrets(
+          mintUrl,
+          proofs.map((proof) => proof.secret),
+        )
+      ).map((proof) => [proof.secret, proof]),
+    );
+    const inserted: CoreProof[] = [];
+    const updated: CoreProof[] = [];
+    for (const incoming of proofs) {
+      const stored = existing.get(incoming.secret);
+      if (stored) {
+        if (
+          stored.id !== incoming.id ||
+          !stored.amount.equals(incoming.amount) ||
+          stored.C !== incoming.C ||
+          stored.unit !== incoming.unit
+        ) {
+          throw new ProofValidationError('Conflicting proof already exists for restored output');
+        }
+        // Only unowned mint-held proofs can be released without an operation's decision.
+        if (
+          stored.state === 'pending' &&
+          stored.usedByOperationId == null &&
+          stored.createdByOperationId == null &&
+          incoming.state !== 'pending'
+        ) {
+          await this.proofs.setProofState(mintUrl, [stored.secret], incoming.state);
+          updated.push({ ...stored, state: incoming.state });
+        }
+      } else if (incoming.state !== 'spent') {
+        inserted.push(incoming);
+      }
+    }
+    if (inserted.length) await this.proofs.saveProofs(mintUrl, inserted);
+    return { inserted, updated };
+  }
+
+  async saveCreated(mintUrl: string, proofs: CoreProof[]): Promise<void> {
+    const existing = await this.proofs.getProofsBySecrets(
+      mintUrl,
+      proofs.map((proof) => proof.secret),
+    );
+    for (const stored of existing) {
+      const incoming = proofs.find((proof) => proof.secret === stored.secret)!;
+      if (
+        stored.id !== incoming.id ||
+        !stored.amount.equals(incoming.amount) ||
+        stored.C !== incoming.C ||
+        stored.unit !== incoming.unit ||
+        (stored.createdByOperationId != null &&
+          stored.createdByOperationId !== incoming.createdByOperationId)
+      ) {
+        throw new ProofValidationError('Conflicting proof already exists for minted output');
+      }
+    }
+    // Existing proofs may already be spent or reserved by a later operation. Never reset them.
+    const secrets = new Set(existing.map((proof) => proof.secret));
+    await this.proofs.saveProofs(
+      mintUrl,
+      proofs.filter((proof) => !secrets.has(proof.secret)),
+    );
+  }
+
+  async selectAndReserve(input: SelectAndReserveProofsInput) {
+    const available = await this.proofs.getAvailableProofs(input.mintUrl, { unit: input.unit });
+    const keysets = await this.keysets.getKeysetsByMintUrl(input.mintUrl);
+    const selected = selectProofInputs(
+      input,
+      available,
+      createKeyChain(input.mintUrl, input.unit, keysets),
+      this.selectProofs,
+      input.forceSwap,
+    );
+    const secrets = selected.proofs.map((proof) => proof.secret);
+    if (new Set(secrets).size !== secrets.length) {
+      throw new ProofValidationError('Proof selection contains duplicate inputs');
+    }
+    await this.proofs.reserveProofs(input.mintUrl, secrets, input.operationId);
+    return { ...selected, proofs: selected.proofs as CoreProof[] };
+  }
+
+  async selectAndReserveForMelt(input: SelectAndReserveForMeltInput) {
+    const available = await this.proofs.getAvailableProofs(input.mintUrl, { unit: input.unit });
+    const keysets = await this.keysets.getKeysetsByMintUrl(input.mintUrl);
+    const initial = selectProofInputs(
+      input,
+      available,
+      createKeyChain(input.mintUrl, input.unit, keysets),
+      this.selectProofs,
+      true,
+    );
+    const initialAmount = sumProofs(initial.proofs);
+    const needsSwap = initialAmount.greaterThanOrEqual(
+      input.amount.scaledBy(MELT_SWAP_THRESHOLD_NUMERATOR, MELT_SWAP_THRESHOLD_DENOMINATOR),
+    );
+    let selected = initial;
+    if (needsSwap) {
+      try {
+        selected = selectProofInputs(
+          { ...input, amount: input.swapAmount },
+          available,
+          createKeyChain(input.mintUrl, input.unit, keysets),
+          this.selectProofs,
+          true,
+        );
+      } catch (error) {
+        if (error instanceof ProofValidationError) {
+          throw new ProofValidationError('Melt amount is not sufficient after fees');
+        }
+        throw error;
+      }
+    }
+    const proofs = selected.proofs as CoreProof[];
+    const secrets = proofs.map((proof) => proof.secret);
+    if (new Set(secrets).size !== secrets.length) {
+      throw new ProofValidationError('Melt proof selection contains duplicate inputs');
+    }
+    await this.proofs.reserveProofs(input.mintUrl, secrets, input.operationId);
+    const inputAmount = sumProofs(proofs);
+    return {
+      proofs,
+      inputAmount,
+      inputFee: selected.fee,
+      needsSwap,
+    };
+  }
+
+  async getFee(
+    mintUrl: string,
+    unit: string,
+    proofs: readonly Pick<CoreProof, 'id'>[],
+  ): Promise<Amount> {
+    return calculateProofFee(
+      proofs,
+      createKeyChain(mintUrl, unit, await this.keysets.getKeysetsByMintUrl(mintUrl)),
+    );
+  }
+
+  async reconcileIssued(input: {
+    mintUrl: string;
+    unit: string;
+    operationId: string;
+    proofs: CoreProof[];
+  }) {
+    const existing = await this.proofs.getProofsBySecrets(
+      input.mintUrl,
+      input.proofs.map((proof) => proof.secret),
+    );
+    const bySecret = new Map(existing.map((proof) => [proof.secret, proof]));
+    const savedProofs: CoreProof[] = [];
+    const spentSecrets: string[] = [];
+    if (new Set(input.proofs.map((proof) => proof.secret)).size !== input.proofs.length) {
+      throw new ProofValidationError('Duplicate issued proofs');
+    }
+    for (const proof of input.proofs) {
+      if (
+        proof.mintUrl !== input.mintUrl ||
+        normalizeUnit(proof.unit) !== normalizeUnit(input.unit)
+      ) {
+        throw new ProofValidationError('Issued proof has a different mint or unit');
+      }
+      const stored = bySecret.get(proof.secret);
+      if (!stored) {
+        if (proof.createdByOperationId !== input.operationId || proof.usedByOperationId != null) {
+          throw new ProofValidationError('Invalid new issued proof ownership');
+        }
+        savedProofs.push(proof);
+      } else {
+        // Witnesses/DLEQ may differ after a later spend or Restore; the signed value must match.
+        if (
+          stored.id !== proof.id ||
+          stored.C !== proof.C ||
+          !Amount.from(stored.amount).equals(proof.amount) ||
+          stored.mintUrl !== input.mintUrl ||
+          normalizeUnit(stored.unit) !== normalizeUnit(input.unit) ||
+          (stored.createdByOperationId != null && stored.createdByOperationId !== input.operationId)
+        ) {
+          throw new ProofValidationError('Issued proof conflicts with persisted proof');
+        }
+        if (proof.state === 'spent' && stored.state !== 'spent') spentSecrets.push(proof.secret);
+      }
+    }
+    if (savedProofs.length) await this.proofs.saveProofs(input.mintUrl, savedProofs);
+    if (spentSecrets.length) await this.proofs.setProofState(input.mintUrl, spentSecrets, 'spent');
+    return { savedProofs, spentSecrets };
+  }
+
+  async getOwned(input: OwnedProofsInput): Promise<CoreProof[]> {
+    if (new Set(input.secrets).size !== input.secrets.length) {
+      throw new ProofValidationError('Operation contains duplicate input proofs');
+    }
+    const stored = await this.proofs.getProofsBySecrets(input.mintUrl, input.secrets);
+    const bySecret = new Map(stored.map((proof) => [proof.secret, proof]));
+    return input.secrets.map((secret) => {
+      const proof = bySecret.get(secret);
+      const owner =
+        input.ownership === 'created' ? proof?.createdByOperationId : proof?.usedByOperationId;
+      if (
+        !proof ||
+        owner !== input.operationId ||
+        !(Array.isArray(input.state)
+          ? input.state.includes(proof.state)
+          : proof.state === input.state) ||
+        proof.mintUrl !== input.mintUrl ||
+        normalizeUnit(proof.unit) !== normalizeUnit(input.unit)
+      ) {
+        throw new ProofValidationError(`Proof ${secret} is not ${input.state} and operation-owned`);
+      }
+      return proof;
+    });
+  }
+
+  async getMeltSendProofs(input: MeltSendProofsInput): Promise<CoreProof[]> {
+    if (
+      new Set(input.secrets).size !== input.secrets.length ||
+      input.outputs.length !== input.secrets.length
+    ) {
+      throw new ProofValidationError('Melt send plan contains duplicate or missing proofs');
+    }
+    const expectedBySecret = new Map(input.outputs.map((output) => [output.secret, output]));
+    if (expectedBySecret.size !== input.outputs.length) {
+      throw new ProofValidationError('Melt send plan contains duplicate outputs');
+    }
+    const stored = await this.proofs.getProofsBySecrets(input.mintUrl, input.secrets);
+    const bySecret = new Map(stored.map((proof) => [proof.secret, proof]));
+    return input.secrets.map((secret) => {
+      const proof = bySecret.get(secret);
+      const expected = expectedBySecret.get(secret);
+      const hasAllowedState =
+        proof != null &&
+        (Array.isArray(input.state)
+          ? input.state.includes(proof.state)
+          : proof.state === input.state);
+      const hasExactIdentity =
+        proof != null &&
+        expected != null &&
+        proof.id === expected.id &&
+        proof.amount.equals(expected.amount) &&
+        proof.mintUrl === input.mintUrl &&
+        normalizeUnit(proof.unit) === normalizeUnit(input.unit) &&
+        proof.createdByOperationId === input.operationId;
+      const hasAllowedOwnership =
+        proof?.usedByOperationId === input.operationId || proof?.usedByOperationId == null;
+      if (!proof || !hasAllowedState || !hasExactIdentity || !hasAllowedOwnership) {
+        throw new ProofValidationError(
+          `Proof ${secret} does not match the operation's persisted Melt send plan`,
+        );
+      }
+      return proof;
+    });
+  }
+
+  async markInflight(input: Omit<OwnedProofsInput, 'state'>): Promise<void> {
+    const proofs = await this.getOwned({ ...input, state: 'ready' });
+    if (
+      proofs.some(
+        (proof) => proof.usedByOperationId != null && proof.usedByOperationId !== input.operationId,
+      )
+    ) {
+      throw new ProofValidationError('Cannot mark proofs reserved by another operation inflight');
+    }
+    await this.proofs.setProofState(input.mintUrl, input.secrets, 'inflight');
+  }
+
+  async releaseUnsubmitted(input: Omit<OwnedProofsInput, 'state' | 'ownership'>): Promise<void> {
+    await this.getOwned({ ...input, state: ['ready', 'inflight'] });
+    await this.proofs.setProofState(input.mintUrl, input.secrets, 'ready');
+    await this.proofs.releaseProofs(input.mintUrl, input.secrets);
+  }
+
+  async settleSpend(input: OwnedProofsInput & { outputs: CoreProof[] }): Promise<void> {
+    await this.getOwned(input);
+    for (const proof of input.outputs) {
+      if (
+        proof.mintUrl !== input.mintUrl ||
+        normalizeUnit(proof.unit) !== normalizeUnit(input.unit)
+      ) {
+        throw new ProofValidationError('Settlement outputs have a different mint or unit');
+      }
+    }
+    await this.proofs.saveProofs(input.mintUrl, input.outputs);
+    await this.proofs.setProofState(input.mintUrl, input.secrets, 'spent');
+  }
+
+  async recordSpent(input: Omit<OwnedProofsInput, 'state'>): Promise<void> {
+    await this.getOwned({ ...input, state: 'inflight' });
+    await this.proofs.setProofState(input.mintUrl, input.secrets, 'spent');
+  }
+
+  async recordMeltSendSpent(input: Omit<MeltSendProofsInput, 'state'>): Promise<void> {
+    await this.getMeltSendProofs({ ...input, state: 'inflight' });
+    await this.proofs.setProofState(input.mintUrl, input.secrets, 'spent');
+  }
+
+  async releaseMeltSendUnsubmitted(input: Omit<MeltSendProofsInput, 'state'>): Promise<void> {
+    await this.getMeltSendProofs({ ...input, state: ['ready', 'inflight'] });
+    await this.proofs.setProofState(input.mintUrl, input.secrets, 'ready');
+    await this.proofs.releaseProofs(input.mintUrl, input.secrets);
+  }
+
+  async releaseOwned(mintUrl: string, operationId: string, secrets: string[]): Promise<void> {
+    const stored = await this.proofs.getProofsBySecrets(mintUrl, secrets);
+    if (
+      stored.length !== new Set(secrets).size ||
+      stored.some((proof) => proof.usedByOperationId !== operationId)
+    ) {
+      throw new ProofValidationError('Cannot release proofs owned by another operation');
+    }
+    await this.proofs.releaseProofs(mintUrl, secrets);
+  }
+
+  getProofsByOperationId(mintUrl: string, operationId: string) {
+    return this.proofs.getProofsByOperationId(mintUrl, operationId);
+  }
+
+  getProofsBySecrets(mintUrl: string, secrets: string[]) {
+    return this.proofs.getProofsBySecrets(mintUrl, secrets);
+  }
+
+  getReservedProofs() {
+    return this.proofs.getReservedProofs();
+  }
+}

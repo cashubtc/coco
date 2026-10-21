@@ -5,13 +5,14 @@ import type {
 } from '@cashu/coco-core/adapter';
 import { deserializeAmount, serializeAmount } from '@cashu/coco-core/adapter';
 import type { SqlDatabase, SqlValue } from '../index.ts';
-import { getUnixTimeSeconds, assertFieldPresent } from '../utils.ts';
+import { assertFieldPresent } from '../utils.ts';
 
 function getOperationUnit(op: ReceiveOperation): string {
   return (op as ReceiveOperation & { unit?: string }).unit ?? 'sat';
 }
 
 interface ReceiveOperationRow {
+  revision: number;
   id: string;
   mintUrl: string;
   unit: string | null;
@@ -39,6 +40,7 @@ function parseInputProofs(inputProofsJson: string | null): ReceiveOperation['inp
 function rowToOperation(row: ReceiveOperationRow): ReceiveOperation {
   const base = {
     id: row.id,
+    revision: row.revision ?? 0,
     mintUrl: row.mintUrl,
     unit: row.unit ?? 'sat',
     amount: deserializeAmount(row.amount),
@@ -90,6 +92,7 @@ function operationToParams(op: ReceiveOperation): SqlValue[] {
       JSON.stringify(op.inputProofs),
       null,
       op.source ? JSON.stringify(op.source) : null,
+      op.revision ?? 0,
     ];
   }
 
@@ -106,6 +109,7 @@ function operationToParams(op: ReceiveOperation): SqlValue[] {
     JSON.stringify(op.inputProofs),
     op.outputData ? JSON.stringify(op.outputData) : null,
     op.source ? JSON.stringify(op.source) : null,
+    op.revision ?? 0,
   ];
 }
 
@@ -128,56 +132,32 @@ export class SqliteReceiveOperationRepository implements ReceiveOperationReposit
     const params = operationToParams(operation);
     await this.db.run(
       `INSERT INTO coco_cashu_receive_operations
-        (id, mintUrl, unit, amount, state, createdAt, updatedAt, error, fee, inputProofsJson, outputDataJson, sourceJson)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (id, mintUrl, unit, amount, state, createdAt, updatedAt, error, fee, inputProofsJson, outputDataJson, sourceJson, revision)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       params,
     );
   }
 
   async update(operation: ReceiveOperation): Promise<void> {
-    const exists = await this.db.get<{ id: string }>(
-      'SELECT id FROM coco_cashu_receive_operations WHERE id = ? LIMIT 1',
-      [operation.id],
+    const params = operationToParams({ ...operation, updatedAt: Date.now() });
+    const result = await this.db.run(
+      `UPDATE coco_cashu_receive_operations SET mintUrl = ?, unit = ?, amount = ?, state = ?, createdAt = ?, updatedAt = ?, error = ?, fee = ?, inputProofsJson = ?, outputDataJson = ?, sourceJson = ?, revision = ? WHERE id = ?`,
+      [...params.slice(1), operation.id],
     );
-    if (!exists) {
-      throw new Error(`ReceiveOperation with id ${operation.id} not found`);
-    }
+    if (result.changes === 0) throw new Error(`ReceiveOperation with id ${operation.id} not found`);
+  }
 
-    const updatedAtSeconds = getUnixTimeSeconds();
-
-    if (operation.state === 'init') {
-      await this.db.run(
-        `UPDATE coco_cashu_receive_operations
-         SET state = ?, updatedAt = ?, error = ?, unit = ?, inputProofsJson = ?, sourceJson = ?
-         WHERE id = ?`,
-        [
-          operation.state,
-          updatedAtSeconds,
-          operation.error ?? null,
-          getOperationUnit(operation),
-          JSON.stringify(operation.inputProofs),
-          operation.source ? JSON.stringify(operation.source) : null,
-          operation.id,
-        ],
-      );
-    } else {
-      await this.db.run(
-        `UPDATE coco_cashu_receive_operations
-         SET state = ?, updatedAt = ?, error = ?, unit = ?, fee = ?, inputProofsJson = ?, outputDataJson = ?, sourceJson = ?
-         WHERE id = ?`,
-        [
-          operation.state,
-          updatedAtSeconds,
-          operation.error ?? null,
-          getOperationUnit(operation),
-          serializeAmount(operation.fee),
-          JSON.stringify(operation.inputProofs),
-          operation.outputData ? JSON.stringify(operation.outputData) : null,
-          operation.source ? JSON.stringify(operation.source) : null,
-          operation.id,
-        ],
-      );
-    }
+  async transition(
+    input: Parameters<ReceiveOperationRepository['transition']>[0],
+  ): Promise<boolean> {
+    if (input.next.id !== input.operationId)
+      throw new Error('Receive operation transition cannot change the operation id');
+    const params = operationToParams({ ...input.next, revision: input.expectedRevision + 1 });
+    const result = await this.db.run(
+      `UPDATE coco_cashu_receive_operations SET mintUrl = ?, unit = ?, amount = ?, state = ?, createdAt = ?, updatedAt = ?, error = ?, fee = ?, inputProofsJson = ?, outputDataJson = ?, sourceJson = ?, revision = ? WHERE id = ? AND state = ? AND revision = ?`,
+      [...params.slice(1), input.operationId, input.expectedState, input.expectedRevision],
+    );
+    return result.changes === 1;
   }
 
   async getById(id: string): Promise<ReceiveOperation | null> {

@@ -1,10 +1,11 @@
+import { reconcileKeysetKeypairs } from '@cashu/coco-core/adapter';
 import type { KeysetRepository, Keyset } from '@cashu/coco-core/adapter';
 import type { IdbDb, KeysetRow } from '../lib/db.ts';
 
-export class IdbKeysetRepository implements KeysetRepository {
-  private readonly db: IdbDb;
+export class ScopedIdbKeysetRepository implements KeysetRepository {
+  private readonly db: Pick<IdbDb, 'table'>;
 
-  constructor(db: IdbDb) {
+  constructor(db: Pick<IdbDb, 'table'>) {
     this.db = db;
   }
 
@@ -44,39 +45,27 @@ export class IdbKeysetRepository implements KeysetRepository {
     } satisfies Keyset;
   }
 
-  async updateKeyset(keyset: Omit<Keyset, 'keypairs' | 'updatedAt'>): Promise<void> {
-    const existing = (await (this.db as any)
-      .table('coco_cashu_keysets')
-      .get([keyset.mintUrl, keyset.id])) as KeysetRow | undefined;
-    const now = Math.floor(Date.now() / 1000);
-    if (!existing) {
-      await (this.db as any).table('coco_cashu_keysets').put({
-        mintUrl: keyset.mintUrl,
-        id: keyset.id,
-        unit: keyset.unit,
-        keypairs: JSON.stringify({}),
-        active: keyset.active ? 1 : 0,
-        feePpk: keyset.feePpk,
-        updatedAt: now,
-      } satisfies KeysetRow);
-      return;
-    }
-    await (this.db as any).table('coco_cashu_keysets').put({
-      ...existing,
-      unit: keyset.unit,
-      active: keyset.active ? 1 : 0,
-      feePpk: keyset.feePpk,
-      updatedAt: now,
-    } as KeysetRow);
+  updateKeyset(keyset: Omit<Keyset, 'keypairs' | 'updatedAt'>): Promise<void> {
+    return this.addKeyset({ ...keyset, keypairs: {} });
   }
 
   async addKeyset(keyset: Omit<Keyset, 'updatedAt'>): Promise<void> {
     const now = Math.floor(Date.now() / 1000);
+    const existing = (await (this.db as any)
+      .table('coco_cashu_keysets')
+      .get([keyset.mintUrl, keyset.id])) as KeysetRow | undefined;
     const row: KeysetRow = {
       mintUrl: keyset.mintUrl,
       id: keyset.id,
       unit: keyset.unit,
-      keypairs: JSON.stringify(keyset.keypairs ?? {}),
+      keypairs: JSON.stringify(
+        reconcileKeysetKeypairs(
+          keyset.mintUrl,
+          keyset.id,
+          existing?.keypairs ? JSON.parse(existing.keypairs) : undefined,
+          keyset.keypairs ?? {},
+        ),
+      ),
       active: keyset.active ? 1 : 0,
       feePpk: keyset.feePpk,
       updatedAt: now,
@@ -86,5 +75,18 @@ export class IdbKeysetRepository implements KeysetRepository {
 
   async deleteKeyset(mintUrl: string, keysetId: string): Promise<void> {
     await (this.db as any).table('coco_cashu_keysets').delete([mintUrl, keysetId]);
+  }
+}
+
+/** Root writes own a transaction; scoped repositories reuse their caller's transaction. */
+export class IdbKeysetRepository extends ScopedIdbKeysetRepository {
+  constructor(private readonly database: IdbDb) {
+    super(database);
+  }
+
+  override addKeyset(keyset: Omit<Keyset, 'updatedAt'>): Promise<void> {
+    return this.database.runTransaction('rw', ['coco_cashu_keysets'], (transaction) =>
+      new ScopedIdbKeysetRepository(transaction).addKeyset(keyset),
+    );
   }
 }

@@ -151,7 +151,7 @@ export interface ProofRow {
   C: string;
   dleqJson?: string | null;
   witness?: string | null;
-  state: 'inflight' | 'ready' | 'spent';
+  state: 'inflight' | 'pending' | 'ready' | 'spent';
   createdAt: number;
   usedByOperationId?: string | null;
   createdByOperationId?: string | null;
@@ -214,7 +214,10 @@ export interface SendOperationRow {
     | 'rolled_back';
   createdAt: number;
   updatedAt: number;
+  revision?: number;
   error?: string | null;
+  executionMemo?: string | null;
+  reclaimDataJson?: string | null;
   method: string;
   methodDataJson: string;
   needsSwap?: number | null;
@@ -226,6 +229,7 @@ export interface SendOperationRow {
 }
 
 export interface ReceiveOperationRow {
+  revision?: number;
   id: string;
   mintUrl: string;
   unit?: string | null;
@@ -338,4 +342,31 @@ export interface MintOperationRow {
   lastObservedRemoteStateAt?: number | null;
   terminalFailureJson?: string | null;
   outputDataJson?: string | null;
+}
+
+export interface MintSwapOperationRow {
+  id: string;
+  state:
+    | 'preparing'
+    | 'prepared'
+    | 'source_pending'
+    | 'destination_funded'
+    | 'destination_pending'
+    | 'completed'
+    | 'cancelled'
+    | 'failed'
+    | 'needs_attention';
+  revision: number;
+  nextAttemptAt?: number;
+  createdAt: number;
+  updatedAt: number;
+  sourceQuoteMintUrl: string;
+  sourceQuoteMethod: string;
+  sourceQuoteId: string;
+  destinationQuoteMintUrl: string;
+  destinationQuoteMethod: string;
+  destinationQuoteId: string;
+  sourceOperationId: string;
+  destinationOperationId: string;
+  recordJson: string;
 }
