@@ -21,7 +21,7 @@ import {
   applyMintResult,
   prepareMint,
 } from '../../../../core/operations/mint/MintTransitions.ts';
-import { MintSwapIntentConflictError } from '../../../../core/operations/mintSwap/MintSwapValidation.ts';
+import { MintSwapIntentConflictError } from '../../../../core/operations/mintSwap/MintSwapErrors.ts';
 import { defineTransition } from '../../../../core/transactions/Transition.ts';
 import { RepositoryCoreTransactionRunner } from '../../../../core/transactions/CoreTransaction.ts';
 import { overrideTransactions } from '../../../../core/test/overrideTransactions.ts';
