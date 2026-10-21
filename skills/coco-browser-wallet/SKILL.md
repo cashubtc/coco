@@ -7,14 +7,15 @@ description: Integrate Coco wallets into browser apps. Use for IndexedDB persist
 
 ## Load the shared workflow
 
-Before implementing, load `coco-wallet` for Wallet identity, public APIs, mint trust, amounts,
-wallet flows, Operation Recovery, and common verification. Resolve it through the agent's installed
-skill catalog or its [sibling entry point](../coco-wallet/SKILL.md). If already loaded, continue
-that workflow with the browser requirements below.
+Before implementing, confirm that `coco-wallet` is available through the agent's installed skill
+catalog or its [sibling entry point](../coco-wallet/SKILL.md). If it is missing, tell the operator
+that `coco-wallet` is required and stop before implementing wallet behavior. Ask the operator to
+provide the complete skill, including its references, from the same Coco revision as this skill.
+Do not fetch or install the dependency automatically.
 
-Install both skills from the same Coco revision. If `coco-wallet` is missing, obtain its complete
-`skills/coco-wallet/` folder, including references, from that revision before implementing wallet
-behavior. A reference to another skill does not install it automatically.
+When available, load `coco-wallet` for Wallet identity, public APIs, mint trust, amounts, wallet
+flows, Operation Recovery, and common verification. If already loaded, continue that workflow
+with the browser requirements below.
 
 ## Browser packages and bootstrap
 
