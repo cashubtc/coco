@@ -14,8 +14,8 @@ behavior lives in one general skill; platform skills add runtime-specific setup 
 skill explicitly loads that shared workflow and supplies the browser requirements. The general
 skill routes to separate references for ecash send, ecash receive, BOLT11, BOLT12, onchain,
 payment requests, P2PK, Restore, Sweep, and mint authentication. Agents load only the requested
-flows; wallet basics and quote-lifecycle rules each have one shared reference. React guidance
-belongs to the browser skill.
+flows; wallet basics, background-service policies, and quote-lifecycle rules each have a shared
+reference. React guidance belongs to the browser skill.
 
 Both skills work with the app's existing framework and package manager and direct the agent to
 check installed API versions and peer dependencies. Browser apps use `@cashu/coco-core` and

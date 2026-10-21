@@ -78,18 +78,19 @@ error state, and session ownership prevents duplicate initialization or abandone
 Read [Wallet basics](references/wallet-basics.md) for shared mint trust, amount, balance, and
 history rules. Then load only the references for the requested features:
 
-| Task                                                  | Reference                                          |
-| ----------------------------------------------------- | -------------------------------------------------- |
-| Send an ecash token                                   | [Send ecash](references/ecash-send.md)             |
-| Receive an ecash token                                | [Receive ecash](references/ecash-receive.md)       |
-| Mint or melt using a BOLT11 invoice                   | [BOLT11](references/bolt11.md)                     |
-| Mint or melt using a BOLT12 offer                     | [BOLT12](references/bolt12.md)                     |
-| Mint from an onchain deposit or melt to an address    | [Onchain](references/onchain.md)                   |
-| Pay or create a Cashu payment request                 | [Payment requests](references/payment-requests.md) |
-| Send or receive locked ecash, or manage spending keys | [P2PK](references/p2pk.md)                         |
-| Import Wallet Recovery Material or reconstruct proofs | [Wallet Import and Restore](references/restore.md) |
-| Transfer another Wallet Seed's funds into this Wallet | [Sweep](references/sweep.md)                       |
-| Authenticate with a mint or restore its login session | [Mint authentication](references/auth.md)          |
+| Task                                                   | Reference                                                |
+| ------------------------------------------------------ | -------------------------------------------------------- |
+| Send an ecash token                                    | [Send ecash](references/ecash-send.md)                   |
+| Receive an ecash token                                 | [Receive ecash](references/ecash-receive.md)             |
+| Mint or melt using a BOLT11 invoice                    | [BOLT11](references/bolt11.md)                           |
+| Mint or melt using a BOLT12 offer                      | [BOLT12](references/bolt12.md)                           |
+| Mint from an onchain deposit or melt to an address     | [Onchain](references/onchain.md)                         |
+| Pay or create a Cashu payment request                  | [Payment requests](references/payment-requests.md)       |
+| Send or receive locked ecash, or manage spending keys  | [P2PK](references/p2pk.md)                               |
+| Import Wallet Recovery Material or reconstruct proofs  | [Wallet Import and Restore](references/restore.md)       |
+| Transfer another Wallet Seed's funds into this Wallet  | [Sweep](references/sweep.md)                             |
+| Authenticate with a mint or restore its login session  | [Mint authentication](references/auth.md)                |
+| Configure background progress or diagnose stalled work | [Background services](references/background-services.md) |
 
 Each payment-method reference loads [Shared mint and melt lifecycle](references/quote-operations.md).
 Read that common reference once when implementing a mint or melt; the method files add their

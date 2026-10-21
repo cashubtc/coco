@@ -17,6 +17,17 @@ the Known Mint and Wallet records; it does not cancel or reverse existing operat
 existing work through its operation API and surface any trust requirement instead of silently
 restoring trust. For a mint requiring login, also read [Mint authentication](auth.md).
 
+## Background progress
+
+Coco starts its watchers and processors by default. Quote watchers observe and persist mint
+state; processors advance quote-backed operations from those observations. The proof-state
+watcher tracks inflight proofs, including recipient claims of outgoing tokens. A payment
+observation and a finalized wallet operation are separate milestones: render completion from
+the operation's persisted state.
+
+When changing defaults, controlling background work, or diagnosing stalled operations, read
+[Background services](background-services.md).
+
 ## Amounts, balances, and history
 
 For APIs accepting `UnitAmountLike`, such as `ops.send.prepare()` and `quotes.mint.create()`,
