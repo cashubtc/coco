@@ -51,8 +51,10 @@ owning browser tab or implement explicit coordination; Coco events alone do not 
 another tab's UI.
 
 Keep seed and bearer-token values out of URLs and server props. `localStorageSeedGetter()` from
-`@cashu/coco-react` is an opt-in demo helper, unsuitable for real funds. It requires Web Locks in
-a secure browser context and does not create a mnemonic backup.
+`@cashu/coco-react` stores the seed unencrypted in localStorage, where JavaScript running on the
+same origin can read or replace it. Choose this helper or another seed-storage approach based on
+the app's security requirements. The helper requires Web Locks in a secure browser context and
+does not create a mnemonic backup; provide a recovery flow appropriate to the app.
 
 For React lifecycle and hook wiring, read [React integration](references/react.md).
 

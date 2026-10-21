@@ -43,7 +43,7 @@ unlock/import error, not new-wallet creation.
 
 Keep a stable database paired with that Wallet, with separate databases for different Wallets.
 Surface storage failures; clearing the database or falling back to memory loses durable state.
-For real funds, integrate the app's protected seed storage and recovery flow. Keep seeds,
+Choose seed storage and a recovery flow that meet the app's security requirements. Keep seeds,
 recovery material, and bearer tokens out of logs and analytics.
 
 Built-in adapters, including IndexedDB, store proofs and other wallet secrets unencrypted at rest.
@@ -138,5 +138,5 @@ using mocks or a designated test mint and test funds:
 Also complete the platform skill's runtime checks when one applies.
 
 **Done when:** the requested flows pass relevant checks and the handoff names any untested live-mint
-behavior or unfinished seed-storage/recovery integration. Demo secret storage is not production
-readiness.
+behavior or unfinished seed-storage/recovery integration, including how the selected storage
+approach meets the app's security requirements.
