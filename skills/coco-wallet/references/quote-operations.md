@@ -14,6 +14,9 @@ A mint supporting one direction or method need not support another.
 Create canonical quotes with `coco.quotes.mint.create()` or `coco.quotes.melt.create()`, then pass
 the quote to the matching operation's `prepare()`. Quote lookups and refresh take
 `{ mintUrl, quoteId }`. Keep the operation ID separately for its execution, history, and recovery.
+Use `quotes.mint.listPending()` / `quotes.melt.listPending()` to rediscover observed quotes after
+restart, with an optional `{ method }` filter. Then load their associated operations; a quote
+without a local claim must not disappear just because the operation list is empty.
 
 ## Mint completion
 

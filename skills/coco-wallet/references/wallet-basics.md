@@ -12,6 +12,11 @@ be added with `{ trusted: true }`. Discover the selection with `getAllTrustedMin
 Trust is an explicit user decision before wallet operations. A mint URL supplied by a token, QR
 code, or payment request is not approval to trust it.
 
+For revocation, call `coco.mint.untrustMint(mintUrl)` and refresh the selection. Revocation retains
+the Known Mint and Wallet records; it does not cancel or reverse existing operations. Reconcile
+existing work through its operation API and surface any trust requirement instead of silently
+restoring trust. For a mint requiring login, also read [Mint authentication](auth.md).
+
 ## Amounts, balances, and history
 
 For APIs accepting `UnitAmountLike`, such as `ops.send.prepare()` and `quotes.mint.create()`,

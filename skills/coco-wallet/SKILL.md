@@ -58,6 +58,18 @@ Give session initialization one owner and share its promise across concurrent ca
 that finishes initializing after its owner has gone away. Use the platform's lifecycle and
 coordination mechanisms to enforce ownership.
 
+On initialization failure, inspect `CocoInitializationError` from `@cashu/coco-core` when present.
+Its `cleanupState: 'confirmed'` means the partially initialized session was disposed; fix the
+underlying error before retrying through the same owner. With `'unconfirmed'`, stop replacement
+initialization against that Wallet store until the old runtime has been terminated or cleanup
+has otherwise been established. Preserve the database and recovery material. Storage initialization
+can also fail before a session exists, so handle ordinary errors as well.
+
+For temporary suspension, await `coco.pauseSubscriptions()` and later
+`coco.resumeSubscriptions()`. Pause stops background observation and processing; it does not
+dispose the session or prevent explicit API calls. Gate app actions separately when suspending.
+Final shutdown uses `dispose()`; a disposed session cannot be resumed.
+
 **Done when:** restarting opens the same Wallet and database, unavailable storage has a visible
 error state, and session ownership prevents duplicate initialization or abandoned sessions.
 
@@ -76,6 +88,8 @@ history rules. Then load only the references for the requested features:
 | Pay or create a Cashu payment request                 | [Payment requests](references/payment-requests.md) |
 | Send or receive locked ecash, or manage spending keys | [P2PK](references/p2pk.md)                         |
 | Import Wallet Recovery Material or reconstruct proofs | [Wallet Import and Restore](references/restore.md) |
+| Transfer another Wallet Seed's funds into this Wallet | [Sweep](references/sweep.md)                       |
+| Authenticate with a mint or restore its login session | [Mint authentication](references/auth.md)          |
 
 Each payment-method reference loads [Shared mint and melt lifecycle](references/quote-operations.md).
 Read that common reference once when implementing a mint or melt; the method files add their

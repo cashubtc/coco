@@ -13,8 +13,9 @@ behavior lives in one general skill; platform skills add runtime-specific setup 
 `coco-wallet` can be used on its own with the target runtime's adapter documentation. The browser
 skill explicitly loads that shared workflow and supplies the browser requirements. The general
 skill routes to separate references for ecash send, ecash receive, BOLT11, BOLT12, onchain,
-payment requests, P2PK, and Restore. Agents load only the requested flows; wallet basics and
-quote-lifecycle rules each have one shared reference. React guidance belongs to the browser skill.
+payment requests, P2PK, Restore, Sweep, and mint authentication. Agents load only the requested
+flows; wallet basics and quote-lifecycle rules each have one shared reference. React guidance
+belongs to the browser skill.
 
 Both skills work with the app's existing framework and package manager and direct the agent to
 check installed API versions and peer dependencies. Browser apps use `@cashu/coco-core` and

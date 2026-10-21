@@ -9,7 +9,7 @@ Wallet's lifetime.
 Let the provider own initialization and disposal when the React subtree owns the session:
 
 ```tsx
-import type { CocoConfig } from '@cashu/coco-core';
+import { CocoInitializationError, type CocoConfig } from '@cashu/coco-core';
 import { CocoCashuProvider } from '@cashu/coco-react';
 import type { ReactNode } from 'react';
 
@@ -18,7 +18,13 @@ export function WalletRoot({ config, children }: { config: CocoConfig; children:
     <CocoCashuProvider
       config={config}
       fallback={<p>Opening wallet…</p>}
-      errorFallback={<p>Could not open this wallet. Unlock it and retry.</p>}
+      errorFallback={(error) => (
+        <p>
+          {error instanceof CocoInitializationError && error.cleanupState === 'unconfirmed'
+            ? 'Wallet cleanup is incomplete. End the previous runtime before reopening this wallet.'
+            : 'Could not open this wallet. Resolve the reported error before retrying.'}
+        </p>
+      )}
     >
       {children}
     </CocoCashuProvider>
@@ -30,6 +36,12 @@ Pass `{ repo: new IndexedDbRepositories({ name: walletDatabaseName }), seedGette
 stable client bootstrap as `config`. The provider calls `initializeCoco()`. Its config is
 initial-only: intentionally remount with a new React `key` when changing Wallets, coordinating
 teardown through the session owner.
+
+The error fallback does not retry initialization. Apply the shared skill's cleanup-state rules
+before offering a remount/retry action, and surface the error through the app's diagnostic UI
+without exposing wallet secrets. Provider unmount starts asynchronous disposal but exposes no
+awaitable teardown handle. When switching Wallets or closing IndexedDB requires confirmed teardown,
+use the app-owned session path below so the owner can await `dispose()` before closing the database.
 
 If the app already owns an initialized Coco Session, pass `manager={coco}` instead of `config`.
 The app retains responsibility for calling `dispose()` in that mode. Choose one ownership path
