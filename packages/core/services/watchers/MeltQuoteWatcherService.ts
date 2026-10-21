@@ -216,6 +216,13 @@ export class MeltQuoteWatcherService {
     };
   }
 
+  /** Includes subscription startup so background coordinators do not start a second poll. */
+  isWatchingQuote(quote: { mintUrl: string; method: string; quoteId: string }): boolean {
+    return (
+      this.running && this.watchRecordByKey.has(toKey(quote.mintUrl, quote.method, quote.quoteId))
+    );
+  }
+
   isRunning(): boolean {
     return this.running;
   }
