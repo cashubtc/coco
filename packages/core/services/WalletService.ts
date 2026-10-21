@@ -9,6 +9,7 @@ import {
   type AuthProvider,
   type OutputDataCreator,
 } from '@cashu/cashu-ts';
+import { publishOrDefer, type DeferPublication } from '../events/DeferredPublication.ts';
 import type { MintService } from './MintService';
 import type { Logger } from '../logging/Logger.ts';
 import type { SeedService } from './SeedService.ts';
@@ -48,7 +49,7 @@ export class WalletService {
     this.outputDataCreator = outputDataCreator;
   }
 
-  async getWallet(mintUrl: string, unit: string): Promise<Wallet> {
+  async getWallet(mintUrl: string, unit: string, defer?: DeferPublication): Promise<Wallet> {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new Error('mintUrl is required');
     }
@@ -72,16 +73,26 @@ export class WalletService {
     const existing = this.inFlight.get(cacheKey);
     if (existing) return existing;
 
-    const promise = this.buildWallet(normalizedMintUrl, normalizedUnit).finally(() => {
+    // The shared build must settle before listeners run: a listener may need a coordinator
+    // that is itself awaiting this wallet. Publication belongs to the initiating caller.
+    const publications: Array<() => Promise<void>> = [];
+    const promise = this.buildWallet(normalizedMintUrl, normalizedUnit, (publish) =>
+      publications.push(publish),
+    ).finally(() => {
       this.inFlight.delete(cacheKey);
     });
     this.inFlight.set(cacheKey, promise);
-    return promise;
+    try {
+      return await promise;
+    } finally {
+      for (const publish of publications) await publishOrDefer(publish, defer);
+    }
   }
 
   async getWalletWithActiveKeysetId(
     mintUrl: string,
     unit: string,
+    defer?: DeferPublication,
   ): Promise<{
     wallet: Wallet;
     keysetId: string;
@@ -90,7 +101,7 @@ export class WalletService {
     unit: string;
   }> {
     const normalizedUnit = normalizeUnit(unit);
-    const wallet = await this.getWallet(mintUrl, normalizedUnit);
+    const wallet = await this.getWallet(mintUrl, normalizedUnit, defer);
     const keyset = wallet.keyChain.getCheapestKeyset();
     const mintKeys = keyset.toMintKeys();
     const mintKeyset = keyset.toMintKeyset();
@@ -174,10 +185,14 @@ export class WalletService {
     return normalizeUnit(unit || DEFAULT_UNIT, { defaultUnit: DEFAULT_UNIT });
   }
 
-  private async buildWallet(mintUrl: string, unit: string): Promise<Wallet> {
+  private async buildWallet(
+    mintUrl: string,
+    unit: string,
+    defer?: DeferPublication,
+  ): Promise<Wallet> {
     const normalizedMintUrl = normalizeMintUrl(mintUrl);
     const normalizedUnit = normalizeUnit(unit);
-    const { mint, keysets } = await this.mintService.ensureUpdatedMint(normalizedMintUrl);
+    const { mint, keysets } = await this.mintService.ensureUpdatedMint(normalizedMintUrl, defer);
 
     const validKeysets = keysets.filter(
       (keyset) =>
