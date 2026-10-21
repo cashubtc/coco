@@ -38,12 +38,14 @@ import {
   assertMintSwapIntent,
   initialMintSwapRetry,
   invoiceHash,
-  MintSwapInvariantError,
   normalizeMintSwapIntent,
   type MintSwapIntent,
 } from './MintSwapValidation.ts';
-import { MintSwapDebitCapError } from './MintSwapDebitCapError.ts';
-import { MintSwapIdentityConflictError } from './MintSwapIdentityConflictError.ts';
+import {
+  MintSwapDebitCapError,
+  MintSwapIdentityConflictError,
+  MintSwapInvariantError,
+} from './MintSwapErrors.ts';
 import {
   createMintSwap,
   prepareMintSwap,
