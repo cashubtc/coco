@@ -61,9 +61,24 @@ const result = await coco.paymentRequests.incoming.claimPayload(request.id, enco
 ```
 
 Requests are active immediately. Retain `request.id` and a stable transport message ID for
-redelivery; Coco validates and deduplicates payloads through the incoming request flow. Resume
-with `incoming.get(id)` / `incoming.list()`. Use `incoming.cancel(id)` to stop accepting future
-payloads; cancellation is not reversal of previously received value.
+redelivery; Coco validates and deduplicates payloads through the incoming request flow. Inspect
+`result.attempt.state`: a resolved `claimPayload()` can return a `rejected` attempt with an
+`error`. Report payment received only for a `finalized` attempt. A reusable request can remain
+active after a successful claim; the request's state is distinct from each attempt's outcome.
+
+Use `incoming.get(id)` / `incoming.list()` to reload requests. These reads do not recover
+interrupted attempts or their child Receive Operations. If a claim throws after its Receive
+Operation reaches `prepared` or `executing`, Coco retains the attempt for recovery; redelivery
+can then throw `OperationInProgressError` instead of retrying the receive. Reconcile through
+`await coco.paymentRequests.incoming.recovery.run()`, then reload the request and inspect the
+existing attempt through deduplicated redelivery. This recovery runs at startup and can also
+be invoked without restarting; it reconciles attempts, child Receive Operations,
+and request completion. Recovery returning does not guarantee finalization: keep unresolved
+attempts pending rather than treating an exception as a definite rejection or creating a new
+payment.
+
+Use `incoming.cancel(id)` to stop accepting future payloads; cancellation is not reversal of
+previously received value.
 
 Nostr receiving also requires a transport plugin to create the descriptor and ingest payloads.
 Incoming request creation with `nut10` and receiver-side enforcement of that requirement are not
@@ -71,7 +86,8 @@ supported by core. Payer-side P2PK requirements are supported: read [P2PK](p2pk.
 parsed request carries one.
 
 **Done when:** the chosen mint and amount satisfy the request, delivery and settlement are shown
-separately, and redelivered payloads or lost delivery responses do not create duplicate payments.
+separately, rejected attempts are distinguished from finalized claims, and interrupted attempts
+can be reconciled without creating duplicate payments.
 
 See [Payment Requests](https://cashubtc.github.io/coco/starting/payment-requests) for transport
 integration details.
