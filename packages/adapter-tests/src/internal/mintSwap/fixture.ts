@@ -237,6 +237,8 @@ export async function mintSwapFixture(
         requests.push('source-quote');
         return saveSource('UNPAID');
       }) as MintSwapOperationServiceDependencies['quoteLifecycle']['createMeltQuote'],
+      getMintQuote: (url, method, id) =>
+        repositories.mintQuoteRepository.getMintQuote(url, method, id),
       getMeltQuote: (url, method, id) =>
         repositories.meltQuoteRepository.getMeltQuote(url, method, id),
       refreshMeltQuote: async () => {

@@ -1,4 +1,4 @@
-import { Amount, type MintQuoteBolt11Response } from '@cashu/cashu-ts';
+import { Amount, RateLimitError, type MintQuoteBolt11Response } from '@cashu/cashu-ts';
 import { bytesToHex } from '@noble/curves/utils.js';
 import { assertSameUnit } from '@core/amounts';
 import type {
@@ -32,7 +32,12 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
     const { amount, locked, ownedPubkey } = ctx.createQuoteData;
     const shouldLock = locked === true || ownedPubkey !== undefined;
     if (shouldLock) {
-      await ctx.mintService.assertNutSupported(ctx.mintUrl, 20, 'locked BOLT11 mint quote');
+      await ctx.mintService.assertNutSupported(
+        ctx.mintUrl,
+        20,
+        'locked BOLT11 mint quote',
+        ctx.deferPublication,
+      );
     }
     const lockPubkey =
       shouldLock && !ownedPubkey
@@ -84,7 +89,7 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
         return { status: 'ALREADY_ISSUED' };
       }
       if (ctx.operation.pubkey) {
-        if (err instanceof MintOperationError) {
+        if (err instanceof MintOperationError || err instanceof RateLimitError) {
           throw err;
         }
         const errorMessage = err instanceof Error ? err.message : String(err);
@@ -97,38 +102,41 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
 
   async recoverExecuting(ctx: RecoverExecutingContext<'bolt11'>): Promise<RecoverExecutingResult> {
     const { mintUrl, quoteId } = ctx.operation;
-    let remoteQuote: MintQuoteBolt11Response;
-    try {
-      remoteQuote = await ctx.mintAdapter.checkMintQuote(mintUrl, 'bolt11', quoteId);
-    } catch (error) {
-      ctx.logger?.warn('Failed to check mint quote state during recovery', {
-        mintUrl,
-        quoteId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return {
-        status: 'UNRESOLVED',
-        error: error instanceof Error ? error.message : String(error),
-      };
+    let remoteQuote: MintQuoteBolt11Response | undefined;
+    if (!ctx.observedQuote) {
+      try {
+        remoteQuote = await ctx.mintAdapter.checkMintQuote(mintUrl, 'bolt11', quoteId);
+      } catch (error) {
+        ctx.logger?.warn('Failed to check mint quote state during recovery', {
+          mintUrl,
+          quoteId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return {
+          status: 'UNRESOLVED',
+          error: error instanceof Error ? error.message : String(error),
+          retryAfterMs: error instanceof RateLimitError ? error.retryAfterMs : undefined,
+        };
+      }
     }
-
-    if (!hasSameMintQuoteOwnership('bolt11', remoteQuote.pubkey, ctx.operation.pubkey)) {
+    const observed = ctx.observedQuote ?? remoteQuote!;
+    if (!hasSameMintQuoteOwnership('bolt11', observed.pubkey, ctx.operation.pubkey)) {
       return {
         status: 'UNRESOLVED',
         error: 'Recovered BOLT11 mint operation has mismatched NUT-20 quote ownership',
       };
     }
-
     try {
-      this.assertQuoteMatchesOperation(remoteQuote, ctx.operation);
+      this.assertQuoteMatchesOperation(observed, ctx.operation);
     } catch (error) {
       return {
         status: 'UNRESOLVED',
         error: error instanceof Error ? error.message : String(error),
       };
     }
-    const quote = mintQuoteObservationFromBolt11Response(mintUrl, remoteQuote);
-    await ctx.recordQuoteSnapshot(remoteQuote);
+    const quote =
+      ctx.observedQuote ?? mintQuoteObservationFromBolt11Response(mintUrl, remoteQuote!);
+    if (remoteQuote) await ctx.recordQuoteSnapshot(remoteQuote);
 
     const assessment = assessMintQuoteClaimability(quote, {
       ...ctx.localClaimabilityFacts,
@@ -183,6 +191,7 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
           return {
             status: 'UNRESOLVED',
             error: err instanceof Error ? err.message : String(err),
+            retryAfterMs: err instanceof RateLimitError ? err.retryAfterMs : undefined,
           };
         }
       }
@@ -201,6 +210,7 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
       return {
         status: 'UNRESOLVED',
         error: error instanceof Error ? error.message : String(error),
+        retryAfterMs: error instanceof RateLimitError ? error.retryAfterMs : undefined,
       };
     }
   }
@@ -238,7 +248,7 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
   }
 
   private assertQuoteMatchesOperation(
-    quote: MintQuoteBolt11Response,
+    quote: Pick<MintQuoteBolt11Response, 'quote' | 'request' | 'unit' | 'amount' | 'pubkey'>,
     operation: Pick<
       PendingMintOperation<'bolt11'>,
       'quoteId' | 'request' | 'unit' | 'amount' | 'pubkey'

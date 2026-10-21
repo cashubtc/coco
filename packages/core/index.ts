@@ -142,5 +142,6 @@ export {
 export { parseMintSwapOperation } from './operations/mintSwap/parseMintSwapOperation.ts';
 export {
   MintSwapIdentityConflictError,
+  MintSwapIntentConflictError,
   type MintSwapIdentityKind,
 } from './operations/mintSwap/MintSwapErrors.ts';
