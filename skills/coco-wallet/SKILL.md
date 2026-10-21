@@ -35,11 +35,13 @@ public APIs available in those versions.
 
 ## 2. Establish Wallet identity and the session
 
-Supply the same BIP39-derived seed bytes from `seedGetter: () => Promise<Uint8Array>` for every
-access to one Wallet. Coco does not persist the seed. Use the app's creation/import and unlock
-flow; persist recovery material before first use and preserve the mnemonic-to-seed derivation,
-including any passphrase. A missing or unreadable secret for an existing Wallet is an
-unlock/import error, not new-wallet creation.
+Supply the same 64-byte `Uint8Array` from `seedGetter: () => Promise<Uint8Array>` for every access
+to one Wallet. Coco validates the seed's type and length; it does not require a particular
+derivation method or persist the seed. BIP39 is the recommended standard for mnemonic-based
+wallets. When using it, preserve the mnemonic-to-seed derivation, including any passphrase.
+Use the app's creation/import and unlock flow; persist recovery material before first use. A
+missing or unreadable secret for an existing Wallet is an unlock/import error, not new-wallet
+creation.
 
 Keep a stable database paired with that Wallet, with separate databases for different Wallets.
 Surface storage failures; clearing the database or falling back to memory loses durable state.
