@@ -30,6 +30,12 @@ export interface CocoConfig {
     };
   };
   processors?: {
+    mintSwapOperationProcessor?: {
+      disabled?: boolean;
+      processIntervalMs?: number;
+      sweepIntervalMs?: number;
+      batchSize?: number;
+    };
     mintOperationProcessor?: {
       disabled?: boolean;
       processIntervalMs?: number;
@@ -54,6 +60,13 @@ export interface CocoConfig {
 - outputDataCreator (optional): A session-wide strategy used only to construct Cashu output material. See [Custom output construction](#custom-output-construction).
 - watchers (optional): Can be used to disable or configure the available watchers. See [Watchers & Processors](./watchers-processors.md) for more information
 - processors (optional): Can be used to disable or configure the available processors. See [Watchers & Processors](./watchers-processors.md) for more information
+
+The Mint Swap API is always available. `processors.mintSwapOperationProcessor` controls automatic
+recovery and defaults to enabled, including on restart with unfinished swaps. Setting `disabled: true`
+skips automatic parent startup/resume passes and timers; all explicit commands remain available,
+including preparation, execution, `ops.mintSwap.refresh(id)` and `ops.mintSwap.recovery.run()`. Generic Mint/Melt
+recovery keeps its own existing configuration. Scan defaults are `processIntervalMs: 1000`,
+`sweepIntervalMs: 30000`, and `batchSize: 25`; durable retry deadlines remain authoritative.
 
 ## Custom output construction
 
