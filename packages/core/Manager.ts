@@ -65,7 +65,7 @@ import {
   HistoryApi,
   KeyRingApi,
   AuthApi,
-  OpsApi,
+  type OpsApi,
   SendOpsApi,
   ReceiveOpsApi,
   MeltOpsApi,
@@ -1194,7 +1194,7 @@ export class Manager {
     const receive = new ReceiveOpsApi(this.receiveOperationService);
     const mintOps = new MintOpsApi(this.mintOperationService);
     const melt = new MeltOpsApi(this.meltOperationService);
-    const ops = new OpsApi(send, receive, mintOps, melt);
+    const ops: OpsApi = { send, receive, mint: mintOps, melt };
     const quotes = new QuoteApi(this.quoteLifecycle);
     const auth = new AuthApi(this.authService);
     const paymentRequests = new PaymentRequestsApi(

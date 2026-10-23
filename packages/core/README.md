@@ -232,6 +232,18 @@ for setup and storage-security guidance.
 
 ### OpsApi
 
+`manager.ops` is a plain object typed as `OpsApi`. Import `OpsApi` with `import type`.
+The runtime `OpsApi` constructor has been removed. If you previously grouped existing
+operation interfaces with `new OpsApi(send, receive, mint, melt)`, use an object instead:
+
+```ts
+import type { OpsApi } from '@cashu/coco-core';
+
+const ops: OpsApi = { send, receive, mint, melt };
+```
+
+Use `manager.ops` directly when working with a Coco Session.
+
 - `send`: `prepare`, `execute`, `get`, `listPrepared`, `listInFlight`,
   `refresh`, `cancel`, `reclaim`, plus `recovery` and `diagnostics`
 - `receive`: `prepare`, `execute`, `get`, `listPrepared`, `listInFlight`,
