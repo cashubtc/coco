@@ -27,7 +27,6 @@ console.log('New public key:', publicKeyHex);
 // Generate with access to the secret key
 const keypair = await coco.keyring.generateKeyPair(true);
 console.log('Public key:', keypair.publicKeyHex);
-console.log('Secret key:', keypair.secretKey); // Uint8Array(32)
 ```
 
 ::: warning
@@ -139,7 +138,8 @@ try {
   const result = await coco.wallet.receive(token);
   console.log('Successfully received P2PK token:', result.amount);
 } catch (error) {
-  console.error('Failed to receive token:', error.message);
+  const message = error instanceof Error ? error.message : String(error);
+  console.error('Failed to receive token:', message);
   // This might fail if you don't have the required keypair
 }
 ```
@@ -188,7 +188,8 @@ when the same seed is reused.
 try {
   await coco.wallet.receive(p2pkToken);
 } catch (error) {
-  if (error.message.includes('Key pair not found')) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes('Key pair not found')) {
     console.error("You don't have the required keypair to spend this token");
     // You might need to import the keypair or ask the sender to unlock it
   }
@@ -197,7 +198,8 @@ try {
 try {
   await coco.keyring.addKeyPair(invalidKey);
 } catch (error) {
-  if (error.message.includes('must be exactly 32 bytes')) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes('must be exactly 32 bytes')) {
     console.error('Invalid secret key size');
   }
 }
