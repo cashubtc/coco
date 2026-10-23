@@ -353,37 +353,40 @@ describe('MeltQuoteWatcherService', () => {
     await watcher.stop();
   });
 
-  it('refreshes full quote data for state-only PAID payloads before stopping', async () => {
-    const existing = makeBolt11Quote({ state: 'PENDING' });
-    const refreshMeltQuote = mock(async () =>
-      makeBolt11Quote({ state: 'PAID', payment_preimage: 'preimage' }),
-    );
-    const recordMeltQuoteObservation = mock(async (quote: MeltQuote) => quote);
-    const watcher = makeWatcher({
-      quoteLifecycle: makeQuoteLifecycle({
-        getMeltQuote: mock(async () => existing),
-        refreshMeltQuote,
-        recordMeltQuoteObservation,
-      }),
-      options: { watchExistingPendingQuotesOnStart: false },
-    });
+  it.each(['PAID', { quote: quoteId, state: 'PAID' }])(
+    'refreshes full quote data for partial PAID payload %j before stopping',
+    async (payload) => {
+      const existing = makeBolt11Quote({ state: 'PENDING' });
+      const refreshMeltQuote = mock(async () =>
+        makeBolt11Quote({ state: 'PAID', payment_preimage: 'preimage' }),
+      );
+      const recordMeltQuoteObservation = mock(async (quote: MeltQuote) => quote);
+      const watcher = makeWatcher({
+        quoteLifecycle: makeQuoteLifecycle({
+          getMeltQuote: mock(async () => existing),
+          refreshMeltQuote,
+          recordMeltQuoteObservation,
+        }),
+        options: { watchExistingPendingQuotesOnStart: false },
+      });
 
-    await watcher.start();
-    await bus.emit('melt-quote:updated', {
-      mintUrl,
-      method: 'bolt11',
-      quoteId,
-      quote: existing,
-    });
+      await watcher.start();
+      await bus.emit('melt-quote:updated', {
+        mintUrl,
+        method: 'bolt11',
+        quoteId,
+        quote: existing,
+      });
 
-    await callbacks[0]?.('PAID');
+      await callbacks[0]?.(payload);
 
-    expect(refreshMeltQuote).toHaveBeenCalledWith(mintUrl, 'bolt11', quoteId);
-    expect(recordMeltQuoteObservation).not.toHaveBeenCalled();
-    expect(unsubscribe).toHaveBeenCalledTimes(1);
+      expect(refreshMeltQuote).toHaveBeenCalledWith(mintUrl, 'bolt11', quoteId);
+      expect(recordMeltQuoteObservation).not.toHaveBeenCalled();
+      expect(unsubscribe).toHaveBeenCalledTimes(1);
 
-    await watcher.stop();
-  });
+      await watcher.stop();
+    },
+  );
 
   it('keeps a shared watch until canonical and operation interest are both removed', async () => {
     const quote = makeBolt11Quote();
