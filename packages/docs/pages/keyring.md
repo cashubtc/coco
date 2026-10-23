@@ -128,15 +128,22 @@ from the request.
 
 ### Receiving P2PK Tokens
 
-When you receive a P2PK token, Coco automatically handles the signature verification if you have the corresponding keypair:
+When you receive a P2PK token, Coco signs the spending conditions using the corresponding keypairs in your KeyRing. Use the receive operation lifecycle to review the amount and fee before execution:
 
 ```ts
 // The token is locked to one of your public keys
 const token = 'cashuA...'; // P2PK token
 
 try {
-  const result = await coco.wallet.receive(token);
-  console.log('Successfully received P2PK token:', result.amount);
+  const prepared = await coco.ops.receive.prepare({ token });
+  // Retain prepared.id; review prepared.amount, prepared.unit, and prepared.fee.
+  // After user confirmation:
+  const result = await coco.ops.receive.execute(prepared.id);
+  console.log('Successfully received P2PK token:', {
+    amount: result.amount.toString(),
+    fee: result.fee.toString(),
+    unit: result.unit,
+  });
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
   console.error('Failed to receive token:', message);
@@ -186,7 +193,9 @@ when the same seed is reused.
 
 ```ts
 try {
-  await coco.wallet.receive(p2pkToken);
+  const prepared = await coco.ops.receive.prepare({ token: p2pkToken });
+  // Review the amount and fee, then obtain confirmation before executing.
+  await coco.ops.receive.execute(prepared.id);
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
   if (message.includes('Key pair not found')) {
