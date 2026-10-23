@@ -113,7 +113,10 @@ conflicting proof identity. A proof-count comparison cannot establish completene
 Only actual committed insertions, state changes, and counter advances publish update events.
 
 [ADR-0012](0012-distinguish-mint-held-pending-proofs.md) additionally accepts a local `pending` proof
-state for Restore. This is an explicit proof-state format and public type extension; it does not
+state for Restore and mint-held Melt inputs. Melt authorization and pre-swap checkpoints persist
+pending inputs within the owning operation's transaction; release and settlement remain its
+responsibility, with legacy inflight inputs accepted during recovery.
+This is an explicit proof-state format and public type extension; it does not
 change the single-scope transaction composition model.
 
 Initial pending-proof reconciliation happens through repeated Restore, inside its keyset transaction.

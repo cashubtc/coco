@@ -188,6 +188,12 @@ if (operation.state === 'finalized') {
 
 `refresh` queries the mint for the quote state when the operation is pending, performs any needed finalize or rollback work, and returns the latest stored operation. Refresh the operation, not only the quote, when you need local proof state and change proofs to advance.
 
+Melt inputs use the local proof state `pending` from execution authorization until settlement or
+verified non-payment, including after an ambiguous response. The Melt Operation retains ownership:
+an `UNSPENT` proof notification or repeated Restore cannot release these inputs. Recovery also
+supports older Melt records whose inputs use `inflight`. Pending inputs contribute to none of the
+spendable, reserved, or total balances; outgoing Send proofs continue to use `inflight`.
+
 The operation returned by `refresh()` already includes settlement details when the melt has finalized:
 
 ```ts

@@ -454,7 +454,7 @@ export function runMintSwapCoordinatorContract(
           expect(
             (await fixture.repositories.proofRepository.getProofBySecret(sourceUrl, 'original'))
               ?.state,
-          ).toBe('inflight');
+          ).toBe('pending');
           expect(
             (
               await fixture.repositories.meltQuoteRepository.getMeltQuote(
@@ -728,7 +728,7 @@ export function runMintSwapCoordinatorContract(
       ).toBe('PAID');
       expect(
         (await fixture.repositories.proofRepository.getProofBySecret(sourceUrl, 'original'))?.state,
-      ).toBe('inflight');
+      ).toBe('pending');
       expect((await fixture.service().cancel('swap')).state).toBe('source_pending');
       expect(
         (await fixture.repositories.proofRepository.getProofBySecret(sourceUrl, 'original'))
@@ -842,7 +842,7 @@ export function runMintSwapCoordinatorContract(
         expect(
           (await fixture.repositories.proofRepository.getProofBySecret(sourceUrl, 'original'))
             ?.state,
-        ).toBe(waitingFor === 'source settlement' ? 'inflight' : 'spent');
+        ).toBe(waitingFor === 'source settlement' ? 'pending' : 'spent');
         fixture.dependencies.quoteLifecycle.refreshMintQuote = refreshDestination;
         fixture.setSourceState('PAID');
         fixture.setDestinationState('ISSUED');
@@ -922,7 +922,7 @@ export function runMintSwapCoordinatorContract(
       expect((await fixture.service().execute('swap')).state).toBe('source_pending');
       expect(
         (await fixture.repositories.proofRepository.getProofBySecret(sourceUrl, 'original'))?.state,
-      ).toBe('inflight');
+      ).toBe('pending');
       expect((await fixture.service().reconcile('swap')).state).toBe('destination_pending');
       expect(fixture.requests.filter((request) => request === 'lost-melt')).toHaveLength(1);
       expect(fixture.requests).toContain('observe-source');
@@ -969,7 +969,7 @@ export function runMintSwapCoordinatorContract(
         expect(stored).toHaveLength(context.inputProofs.length);
         expect(
           stored.every(
-            (proof) => proof.state === 'inflight' && proof.usedByOperationId === 'source-child',
+            (proof) => proof.state === 'pending' && proof.usedByOperationId === 'source-child',
           ),
         ).toBe(true);
         return melt(context);
@@ -1037,7 +1037,7 @@ export function runMintSwapCoordinatorContract(
         expect(retained).toHaveLength(sendSecrets.length);
         expect(
           retained.every(
-            (proof) => proof.state === 'inflight' && proof.usedByOperationId === source.id,
+            (proof) => proof.state === 'pending' && proof.usedByOperationId === source.id,
           ),
         ).toBe(true);
 
@@ -1680,7 +1680,7 @@ export function runMintSwapCoordinatorContract(
             ?.state,
         ).toBe(interruption === 'delayed PAID settlement' ? 'PENDING' : 'UNPAID');
         const original = await repositories.proofRepository.getProofBySecret(sourceUrl, 'original');
-        expect(original?.state).toBe('inflight');
+        expect(original?.state).toBe('pending');
         expect(original?.usedByOperationId).toBe('source-child');
         for (const mintUrl of [sourceUrl, destinationUrl])
           await repositories.mintRepository.setMintTrusted(mintUrl, false);
@@ -1775,7 +1775,7 @@ export function runMintSwapCoordinatorContract(
           sourceUrl,
           'original',
         );
-        expect(proof?.state).toBe(state === 'PENDING' ? 'inflight' : 'ready');
+        expect(proof?.state).toBe(state === 'PENDING' ? 'pending' : 'ready');
         expect(proof?.usedByOperationId).toBe(state === 'PENDING' ? 'source-child' : undefined);
         expect(await fixture.repositories.mintRepository.isTrustedMint(sourceUrl)).toBe(false);
       });

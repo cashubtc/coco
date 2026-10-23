@@ -232,9 +232,12 @@ local proofs.
 Add a local `pending` proof state for newly restored proofs observed as remotely `PENDING`, so they
 remain unavailable without being confused with an unclaimed Send token. Existing operation-owned
 proofs retain their local state and ownership. A pending proof may become ready after a fresh
-`UNSPENT` observation only if authoritative local checks still permit release. Melt inputs continue
-to use `inflight` in this migration; moving them to `pending` is follow-up work with operation-owned
-release rules. Once this Restore PR is opened, open a linked follow-up issue for that Melt migration.
+`UNSPENT` observation only if authoritative local checks still permit release. Melt authorization
+records inputs as `pending` together with execution; its pre-swap checkpoint spends the original
+inputs and saves operation-owned pending Melt inputs atomically. Only the owning Melt Operation
+releases them after verified non-payment or settles them after payment. Ambiguous outcomes retain
+the exact request, output plans, and ownership. Recovery also accepts legacy `inflight` Melt inputs;
+no bulk rewrite is required. Send proof semantics remain unchanged.
 See [ADR-0012](packages/core/docs/adr/0012-distinguish-mint-held-pending-proofs.md).
 
 Re-running Restore reconciles eligible pending records: fresh observations leave them pending on

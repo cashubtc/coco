@@ -4,7 +4,7 @@ status: accepted
 
 # Distinguish mint-held pending proofs from unclaimed sends
 
-Add a local `pending` proof state for newly restored proofs whose mint reports `PENDING`. Local
+Use a local `pending` proof state for mint-held Melt inputs and newly restored proofs whose mint reports `PENDING`. Local
 `inflight` also represents outgoing Send tokens that a recipient can still claim while the mint
 reports `UNSPENT`; treating both cases identically would either strand restored proofs or make
 outstanding Send tokens spendable again. Restore implements this distinction.
@@ -27,6 +27,13 @@ Preserve existing balance semantics: pending proofs, like inflight proofs, contr
 `spendable`, `reserved`, or `total` until they become ready. Separate pending balance reporting is
 outside this migration.
 
-Melt inputs retain `inflight` in this PR. Once the Restore PR is opened, create a linked follow-up
-issue to move Melt inputs to `pending`, preserving the Melt Operation's authority over release and
-settlement. Mint observation alone must not bypass an owning operation's recovery rules.
+Melt authorization records its inputs as `pending` in the same transaction that records execution,
+before submitting either a pre-swap or direct Melt request. A successful pre-swap spends its original
+inputs and persists its exact Melt inputs as operation-owned `pending` proofs in one transaction.
+Ambiguous outcomes retain those proofs, their ownership, and the exact persisted request.
+
+Only the owning Melt Operation may release these inputs after verified non-payment or settle them
+after payment. An `UNSPENT` proof observation alone cannot release them, including during repeated
+Restore. Existing persisted Melt inputs using `inflight` remain recoverable without a bulk rewrite;
+legacy pre-swap outputs without reservation ownership still require their exact output plan and
+creator to match. Outgoing Send proofs continue to use `inflight`.
