@@ -27,7 +27,6 @@ console.log('New public key:', publicKeyHex);
 // Generate with access to the secret key
 const keypair = await coco.keyring.generateKeyPair(true);
 console.log('Public key:', keypair.publicKeyHex);
-console.log('Secret key:', keypair.secretKey); // Uint8Array(32)
 ```
 
 ::: warning
@@ -129,17 +128,25 @@ from the request.
 
 ### Receiving P2PK Tokens
 
-When you receive a P2PK token, Coco automatically handles the signature verification if you have the corresponding keypair:
+When you receive a P2PK token, Coco signs the spending conditions using the corresponding keypairs in your KeyRing. Use the receive operation lifecycle to review the amount and fee before execution:
 
 ```ts
 // The token is locked to one of your public keys
 const token = 'cashuA...'; // P2PK token
 
 try {
-  const result = await coco.wallet.receive(token);
-  console.log('Successfully received P2PK token:', result.amount);
+  const prepared = await coco.ops.receive.prepare({ token });
+  // Retain prepared.id; review prepared.amount, prepared.unit, and prepared.fee.
+  // After user confirmation:
+  const result = await coco.ops.receive.execute(prepared.id);
+  console.log('Successfully received P2PK token:', {
+    amount: result.amount.toString(),
+    fee: result.fee.toString(),
+    unit: result.unit,
+  });
 } catch (error) {
-  console.error('Failed to receive token:', error.message);
+  const message = error instanceof Error ? error.message : String(error);
+  console.error('Failed to receive token:', message);
   // This might fail if you don't have the required keypair
 }
 ```
@@ -186,9 +193,12 @@ when the same seed is reused.
 
 ```ts
 try {
-  await coco.wallet.receive(p2pkToken);
+  const prepared = await coco.ops.receive.prepare({ token: p2pkToken });
+  // Review the amount and fee, then obtain confirmation before executing.
+  await coco.ops.receive.execute(prepared.id);
 } catch (error) {
-  if (error.message.includes('Key pair not found')) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes('Key pair not found')) {
     console.error("You don't have the required keypair to spend this token");
     // You might need to import the keypair or ask the sender to unlock it
   }
@@ -197,7 +207,8 @@ try {
 try {
   await coco.keyring.addKeyPair(invalidKey);
 } catch (error) {
-  if (error.message.includes('must be exactly 32 bytes')) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes('must be exactly 32 bytes')) {
     console.error('Invalid secret key size');
   }
 }
