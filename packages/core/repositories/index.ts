@@ -409,7 +409,7 @@ interface RepositoriesBase {
   receiveOperationRepository: ReceiveOperationRepository;
   paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
   paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
-  /** Mint Swap persistence participates in every Wallet transaction; runtime activation is separate. */
+  /** Mint Swap persistence participates in every Wallet transaction. */
   mintSwap: MintSwapPersistence;
 }
 

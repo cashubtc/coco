@@ -6,7 +6,7 @@ import {
 import type { MintSwapOperationRepository } from '../../operations/mintSwap/MintSwapOperationRepository.ts';
 import { parseMintSwapOperation } from '../../operations/mintSwap/parseMintSwapOperation.ts';
 import { validateMintSwapTransition } from '../../operations/mintSwap/validateMintSwapTransition.ts';
-import { MintSwapIdentityConflictError } from '../../operations/mintSwap/MintSwapIdentityConflictError.ts';
+import { MintSwapIdentityConflictError } from '../../operations/mintSwap/MintSwapErrors.ts';
 import { COPY_MEMORY_REPOSITORY_STATE } from './MemoryRepositoryTransaction.ts';
 
 function quoteKey(quote: MintSwapOperation['sourceQuote']): string {
