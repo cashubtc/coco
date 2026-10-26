@@ -24,6 +24,154 @@ describe('Mint Swap automatic recovery', () => {
     return value;
   }
 
+  it('registers future-deadline parents and rebinds ownership without touching retry evidence', async () => {
+    const fixture = await mintSwapFixture(new MemoryRepositories());
+    await fixture.create();
+    await fixture.prepare();
+    await fixture.runner.run((tx) =>
+      tx.perform(beginMintSwapSource, { ...fixture.preparation, now: 1001 }),
+    );
+    await fixture.runner.run((tx) =>
+      tx.perform(deferMintSwap, {
+        id: 'swap',
+        now: 1002,
+        random: 0.5,
+        retryAfter: Date.now() + 1_000_000,
+        error: { category: 'transient', code: 'remote_unavailable' },
+      }),
+    );
+    const before = await fixture.repositories.mintSwap.operationRepository.getById('swap');
+    const mint = { registerInterest: mock(async () => {}), removeInterest: mock(async () => {}) };
+    const melt = { registerInterest: mock(async () => {}), removeInterest: mock(async () => {}) };
+    const service = { reconcileInBackground: mock(async () => {}) };
+    const runtime = processor(
+      service,
+      fixture.repositories.mintSwap.operationRepository,
+      fixture.events,
+      undefined,
+      {},
+      {
+        mint,
+        melt,
+        source: fixture.repositories.meltOperationRepository,
+        destination: fixture.repositories.mintOperationRepository,
+      },
+    );
+    await runtime.start();
+    expect(mint.registerInterest).toHaveBeenCalledWith({
+      ...before!.destinationQuote,
+      owner: { kind: 'mint-swap', id: 'swap', recovery: true },
+    });
+    expect(melt.registerInterest).toHaveBeenCalledTimes(1);
+    expect(service.reconcileInBackground).not.toHaveBeenCalled();
+    await runtime.setInterestRegistrars({ melt });
+    expect(mint.removeInterest).toHaveBeenCalledTimes(1);
+    await runtime.setInterestRegistrars({ mint, melt });
+    expect(mint.registerInterest).toHaveBeenCalledTimes(2);
+    expect(await fixture.repositories.mintSwap.operationRepository.getById('swap')).toEqual(before);
+    await runtime.stop();
+    expect(mint.removeInterest).toHaveBeenCalledTimes(2);
+    expect(melt.removeInterest).toHaveBeenCalledTimes(1);
+  });
+
+  it('rebuilds recovery permission from current children when a watcher is enabled', async () => {
+    const fixture = await mintSwapFixture(new MemoryRepositories());
+    await fixture.create();
+    await fixture.prepare();
+    const mint = { registerInterest: mock(async () => {}), removeInterest: mock(async () => {}) };
+    const service = { reconcileInBackground: mock(async () => {}) };
+    const runtime = processor(
+      service,
+      fixture.repositories.mintSwap.operationRepository,
+      fixture.events,
+      undefined,
+      { processIntervalMs: 60_000 },
+      {
+        mint,
+        source: fixture.repositories.meltOperationRepository,
+        destination: fixture.repositories.mintOperationRepository,
+      },
+    );
+    await runtime.start();
+    const parent = await fixture.repositories.mintSwap.operationRepository.getById('swap');
+    expect(mint.registerInterest).toHaveBeenLastCalledWith({
+      ...parent!.destinationQuote,
+      owner: { kind: 'mint-swap', id: 'swap', recovery: false },
+    });
+    await runtime.setInterestRegistrars({});
+    // Ordinary child execution can authorize the exact child while parent hints are lost.
+    await fixture.runner.run((tx) =>
+      tx.perform(beginMeltExecution, {
+        operationId: 'source-child',
+        now: 1001,
+      }),
+    );
+    await runtime.setInterestRegistrars({ mint });
+    expect(mint.registerInterest).toHaveBeenLastCalledWith({
+      ...parent!.destinationQuote,
+      owner: { kind: 'mint-swap', id: 'swap', recovery: true },
+    });
+    expect(service.reconcileInBackground).toHaveBeenCalledTimes(1);
+    expect(await fixture.repositories.mintSwap.operationRepository.getById('swap')).toEqual(parent);
+  });
+
+  it('releases partially registered ownership after subscription startup fails', async () => {
+    const repo = new MemoryRepositories();
+    const parent = mintSwapFixtures().prepared;
+    await repo.mintSwap.operationRepository.create(parent);
+    const mint = {
+      registerInterest: mock(async () => {
+        throw new Error('subscription startup failed');
+      }),
+      removeInterest: mock(async () => {}),
+    };
+    const runtime = processor(
+      { reconcileInBackground: mock(async () => {}) },
+      repo.mintSwap.operationRepository,
+      new EventBus<CoreEvents>(),
+      undefined,
+      {},
+      { mint },
+    );
+    await runtime.start();
+    await runtime.stop();
+    expect(mint.removeInterest).toHaveBeenCalledWith({
+      kind: 'mint-swap',
+      id: parent.id,
+      recovery: false,
+    });
+  });
+
+  it('removes interests acquired while stop is draining registration', async () => {
+    const repo = new MemoryRepositories();
+    await repo.mintSwap.operationRepository.create(mintSwapFixtures().prepared);
+    const entered = deferred();
+    const release = deferred();
+    const mint = {
+      registerInterest: mock(async () => {
+        entered.resolve();
+        await release.promise;
+      }),
+      removeInterest: mock(async () => {}),
+    };
+    const service = { reconcileInBackground: mock(async () => {}) };
+    const runtime = processor(
+      service,
+      repo.mintSwap.operationRepository,
+      new EventBus<CoreEvents>(),
+      undefined,
+      {},
+      { mint },
+    );
+    const starting = runtime.start();
+    await entered.promise;
+    const stopping = runtime.stop();
+    release.resolve();
+    await Promise.all([starting, stopping]);
+    expect(mint.removeInterest).toHaveBeenCalledTimes(1);
+    expect(service.reconcileInBackground).not.toHaveBeenCalled();
+  });
+
   it('visits the complete eligible snapshot past a failing first batch', async () => {
     const repo = new MemoryRepositories();
     for (let index = 0; index < 60; index++) {

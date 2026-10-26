@@ -88,10 +88,6 @@ describe('Mint Swap real runtime boundaries', () => {
     const sourceCheck = spyOn(MintAdapter.prototype, 'checkMeltQuote').mockImplementation(
       async () => sourceResponse(),
     );
-    // PollingTransport uses the state method; both paths hit the same protocol counter.
-    spyOn(MintAdapter.prototype, 'checkMeltQuoteState').mockImplementation(
-      async (url, id) => (await sourceCheck(url, id)).state,
-    );
     const destinationCheck = spyOn(MintAdapter.prototype, 'checkMintQuote').mockImplementation(
       (async () => destinationResponse()) as MintAdapter['checkMintQuote'],
     );
@@ -147,6 +143,118 @@ describe('Mint Swap real runtime boundaries', () => {
       },
     };
   }
+
+  for (const kind of ['mint', 'melt'] as const) {
+    it(`drains an already-disabling ${kind} watcher before Manager disposal completes`, async () => {
+      const { manager } = await setup();
+      const entered = deferred();
+      const release = deferred();
+      const subscribe = manager.subscriptions.subscribe.bind(manager.subscriptions);
+      spyOn(manager.subscriptions, 'subscribe').mockImplementation(async (...args) => {
+        const subscription = await subscribe(...args);
+        return {
+          ...subscription,
+          unsubscribe: async () => {
+            entered.resolve();
+            await release.promise;
+            await subscription.unsubscribe();
+          },
+        };
+      });
+      if (kind === 'mint') await manager.enableMintOperationWatcher();
+      else await manager.enableMeltQuoteWatcher();
+      const disabling =
+        kind === 'mint' ? manager.disableMintOperationWatcher() : manager.disableMeltQuoteWatcher();
+      await within(entered.promise);
+      let disposed = false;
+      const disposal = manager.dispose().then(() => {
+        disposed = true;
+      });
+      // Allow queued lifecycle microtasks to finish while unsubscribe is held at the boundary.
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      const completedBeforeCleanup = disposed;
+      release.resolve();
+      await within(Promise.all([disabling, disposal]));
+      expect(completedBeforeCleanup).toBe(false);
+    });
+  }
+
+  it('rebuilds exact parent observations after Manager closes an untrusted mint', async () => {
+    const env = await setup();
+    const { manager, runtime, repo, fixture } = env;
+    env.setSourceState('PENDING');
+    await manager.ops.mintSwap.execute('swap');
+    await runtime.mintSwapOperationService.reconcileInBackground('swap');
+    const before = await manager.ops.mintSwap.get('swap');
+    await manager.enableMintOperationWatcher();
+    await manager.enableMeltQuoteWatcher();
+    await manager.enableMintSwapOperationProcessor({ processIntervalMs: 60_000 });
+    expect(await manager.ops.mintSwap.get('swap')).toEqual(before);
+    await manager.mint.untrustMint(fixture.parent.sourceMintUrl);
+    await manager.mint.untrustMint(fixture.parent.destinationMintUrl);
+    const subscriptions = manager.subscriptions as unknown as {
+      subscriptions: Map<string, { mintUrl: string; filters: string[] }>;
+    };
+    const active = [...subscriptions.subscriptions.values()];
+    expect(
+      active.some(
+        (sub) =>
+          sub.mintUrl === fixture.parent.sourceMintUrl && sub.filters.includes('source-quote'),
+      ),
+    ).toBe(true);
+    expect(
+      active.some(
+        (sub) =>
+          sub.mintUrl === fixture.parent.destinationMintUrl &&
+          sub.filters.includes('destination-quote'),
+      ),
+    ).toBe(true);
+    const observed = await runtime.quoteLifecycle.checkMintQuotesForPolling('bolt11', [
+      { mintUrl: fixture.parent.destinationMintUrl, quoteId: 'destination-quote' },
+      { mintUrl: fixture.parent.destinationMintUrl, quoteId: 'unrelated' },
+    ]);
+    expect(
+      observed.outcomes.find((value) => value.identity.quoteId === 'destination-quote')?.status,
+    ).toBe('updated');
+    expect(observed.outcomes.find((value) => value.identity.quoteId === 'unrelated')?.status).toBe(
+      'failed',
+    );
+    expect(
+      (await repo.mintRepository.getMintByUrl(fixture.parent.destinationMintUrl))?.trusted,
+    ).toBe(false);
+    await manager.disableMintSwapOperationProcessor();
+    await expect(
+      runtime.quoteLifecycle.checkMintQuotesForPolling('bolt11', [
+        { mintUrl: fixture.parent.destinationMintUrl, quoteId: 'destination-quote' },
+      ]),
+    ).rejects.toThrow('not trusted');
+  });
+
+  it('advances from watcher-committed destination accounting without another parent quote check', async () => {
+    const env = await setup();
+    const { manager, runtime, sourceCheck, destinationCheck, repo } = env;
+    await manager.ops.mintSwap.execute('swap');
+    expect((await manager.ops.mintSwap.get('swap'))?.state).toBe('destination_pending');
+    await runtime.mintSwapOperationService.reconcileInBackground('swap');
+    const observed = deferred();
+    manager.on('mint-quote:updated', ({ quote }) => {
+      if (quote.quoteId === 'destination-quote' && quote.amountIssued.equals(8)) observed.resolve();
+    });
+    await manager.enableMintOperationWatcher();
+    await manager.enableMintSwapOperationProcessor({ processIntervalMs: 5 });
+    await within(observed.promise);
+    sourceCheck.mockClear();
+    destinationCheck.mockClear();
+    const completed = deferred();
+    manager.on('mint-swap:updated', ({ state }) => {
+      if (state === 'completed') completed.resolve();
+    });
+    spyOn(Date, 'now').mockReturnValue(30_000);
+    await within(completed.promise);
+    expect((await repo.mintSwap.operationRepository.getById('swap'))?.state).toBe('completed');
+    expect(sourceCheck).not.toHaveBeenCalled();
+    expect(destinationCheck).not.toHaveBeenCalled();
+  });
 
   for (const event of [
     'melt-quote:updated',
@@ -344,16 +452,23 @@ describe('Mint Swap real runtime boundaries', () => {
     });
   }
 
-  it('recovers directly when watchers are disabled', async () => {
-    const { manager, runtime, setSourceState, sourceCheck } = await setup();
+  it('does not replace disabled watchers with periodic quote checks', async () => {
+    const { manager, runtime, setSourceState, sourceCheck, destinationCheck } = await setup();
     setSourceState('PENDING');
     await manager.ops.mintSwap.execute('swap');
-    spyOn(Date, 'now').mockReturnValue(30_000);
     setSourceState('PAID');
     sourceCheck.mockClear();
-    await runtime.mintSwapOperationService.reconcileInBackground('swap');
-    expect(sourceCheck).toHaveBeenCalledTimes(1);
+    destinationCheck.mockClear();
+    for (const now of [30_000, 90_000, 300_000]) {
+      spyOn(Date, 'now').mockReturnValue(now);
+      await runtime.mintSwapOperationService.reconcileInBackground('swap');
+      expect((await manager.ops.mintSwap.get('swap'))?.state).toBe('source_pending');
+    }
+    expect(sourceCheck).not.toHaveBeenCalled();
+    expect(destinationCheck).not.toHaveBeenCalled();
+    expect((await manager.ops.mintSwap.refresh('swap')).state).toBe('destination_pending');
     expect((await manager.ops.mintSwap.refresh('swap')).state).toBe('completed');
+    expect(sourceCheck).toHaveBeenCalled();
   });
 
   for (const observationTiming of ['during payment', 'after payment'] as const) {
@@ -430,7 +545,7 @@ describe('Mint Swap real runtime boundaries', () => {
             return;
           }
           expect((await manager.ops.mintSwap.get('swap'))?.state).toBe(
-            remoteState === 'PAID' ? 'destination_pending' : 'failed',
+            remoteState === 'PAID' ? 'destination_funded' : 'failed',
           );
           expect((await repo.meltOperationRepository.getById('source-child'))?.state).toBe(
             remoteState === 'PAID' ? 'finalized' : 'rolled_back',
@@ -440,8 +555,10 @@ describe('Mint Swap real runtime boundaries', () => {
             ['original'],
           );
           expect(proof?.state).toBe(remoteState === 'PAID' ? 'spent' : 'ready');
-          if (remoteState === 'PAID')
+          if (remoteState === 'PAID') {
+            expect((await manager.ops.mintSwap.refresh('swap')).state).toBe('destination_pending');
             expect((await manager.ops.mintSwap.refresh('swap')).state).toBe('completed');
+          }
         } finally {
           pollResponse.resolve(oldResponse);
           await manager.disableMeltQuoteWatcher();

@@ -93,8 +93,13 @@ Session per Wallet store. Existing host/session guards retain their scope; Core 
 universal cross-process singleton. Coco packages are intended to be used with lock-step versioning,
 so the Mint Swap API has no feature activation gate. Initial source payment requires an explicit
 `execute` call. The parent processor is enabled by default and can be disabled without restricting
-explicit commands. It observes prepared children without initiating their payment and respects durable retry
-deadlines. Parent update hints are captured in the owning transaction and published after commit and
+explicit commands. It registers interests in the existing Mint/Melt watchers and consumes committed
+canonical quote updates without initiating prepared source payment. Interests are rebuilt independently
+of durable retry deadlines. A disabled watcher does not recruit a replacement parent quote poller;
+bounded startup/explicit recovery and necessary recovery effects remain available. Source proof release
+still requires fresh positive `UNPAID` confirmation under the shared child lock. Authorized recovery
+interests permit observation of exact quotes after trust revocation, without restoring mint trust.
+Parent update hints are captured in the owning transaction and published after commit and
 lock release; local polling and complete active sweeps tolerate lost hints. No outbox or new schema
 is introduced. Manager orders pause/resume changes and drains admitted lifecycle and parent work on
 disposal. An observation timeout only ends waiting; it does not change the persisted operation.

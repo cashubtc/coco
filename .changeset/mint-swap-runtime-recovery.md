@@ -14,4 +14,9 @@ existing session guards. One effect-driving Coco Session per Wallet store remain
 Order overlapping pause/resume requests and drain admitted lifecycle work before Manager disposal
 completes.
 
-Defer committed quote and metadata events until coordinator locks are released, reuse active watcher observations during background recovery, and preserve mint-provided retry delays. Fix a security issue in runtime diagnostics.
+Defer committed quote and metadata events until coordinator locks are released, register independent parent interests with shared quote watchers, and preserve mint-provided retry delays. Fix a security issue in runtime diagnostics.
+
+Keep exact recovery observations available after trust revocation. Disabling a quote watcher stops
+ongoing observation without making the parent a replacement poller. Preserve bounded startup and
+explicit recovery, fresh source non-payment confirmation, and durable retry deadlines. Requeue failed
+Melt polling opportunities at the existing cadence while their subscriptions remain active.

@@ -81,11 +81,22 @@ recovery, set `processors.mintSwapOperationProcessor.disabled: true`. That skips
 startup/resume passes and timers while keeping preparation, execution, reads, cancellation and
 explicit recovery available. Ordinary Mint/Melt recovery retains its own configuration.
 The processor options `processIntervalMs` (1000), `sweepIntervalMs` (30000) and `batchSize` (25)
-control scanning, not persisted retry/backoff policy. Background recovery consumes canonical quote
-updates while an existing watcher observes that quote. An `UNPAID` source observation requires a
-fresh check before recovery can release inputs. When no watcher covers a quote, recovery checks
-it directly; explicit `refresh(id)` still performs a remote check. Mint-provided Retry-After
-delays survive issuance and recovery and set a lower bound on the next automatic attempt.
+control scanning, not persisted retry/backoff policy. The processor registers parent-owned quote
+interests with the existing Mint/Melt watchers, including parents whose recovery deadline is still
+in the future. Watchers commit canonical quote observations; the parent then coordinates eligible
+recovery using those observations and shared child locks. Exact authorized recovery interests
+remain observable after trust revocation without trusting the mint again.
+
+Disabling a watcher stops ongoing observation, not parent coordination or explicit recovery.
+Periodic parent scans do not replace a disabled watcher with quote polling. Bounded startup
+recovery and explicit `refresh(id)` / `recovery.run()` can still make target-isolated checks;
+automatic startup recovery respects processor configuration and persisted due times. Necessary
+operation recovery effects remain available. Before releasing source inputs on `UNPAID`, recovery
+requires fresh confirmation under the shared source child lock, whether or not a watcher is enabled.
+If new routine quote evidence is needed, the parent remains recoverable until observation resumes
+or a caller supplies it through refresh/recovery. Re-enabling watchers rebuilds parent interests
+without resetting retry deadlines. Mint-provided Retry-After delays remain a lower bound on the next
+automatic attempt.
 
 `cancel(id)` records intent and returns the actual state. An ambiguous source can remain pending;
 a paid source recovers forward. Cancellation can still incur a completed pre-swap fee. A

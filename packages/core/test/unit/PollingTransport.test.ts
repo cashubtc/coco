@@ -113,6 +113,40 @@ describe('PollingTransport scheduler wake-ups', () => {
     timer.callback();
   }
 
+  it('requeues a failed Melt observation at the existing cadence and honors pause/unsubscribe', async () => {
+    const adapter = createMockMintAdapter();
+    const melt = mock(async () => {
+      throw new Error('offline');
+    });
+    adapter.checkMeltQuote = melt as MintAdapter['checkMeltQuote'];
+    transport.closeAll();
+    transport = new PollingTransport(adapter, { intervalMs: 20 });
+    transport.send(mintUrl, {
+      jsonrpc: '2.0',
+      method: 'subscribe',
+      params: { kind: 'bolt11_melt_quote', subId: 'melt', filters: ['quote'] },
+      id: 1,
+    });
+    await settle();
+    expect(melt).toHaveBeenCalledTimes(1);
+    fireNextTimer(1020);
+    await settle();
+    expect(melt).toHaveBeenCalledTimes(2);
+    transport.pause();
+    now = 1040;
+    await settle();
+    expect(melt).toHaveBeenCalledTimes(2);
+    transport.send(mintUrl, {
+      jsonrpc: '2.0',
+      method: 'unsubscribe',
+      params: { subId: 'melt' },
+      id: 2,
+    });
+    transport.resume();
+    await settle();
+    expect(melt).toHaveBeenCalledTimes(2);
+  });
+
   it('re-arms an early timer without polling before the deadline', async () => {
     subscribeToQuotes(transport, mintUrl, 'bolt11', 'sub', ['quote']);
     await settle();

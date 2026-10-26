@@ -94,11 +94,6 @@ export interface MintSwapOperationServiceDependencies {
   meltHandlerProvider: MeltHandlerProvider;
   mintAdapter: MintAdapter;
   loadSeed(): Promise<Uint8Array>;
-  /** Background attempts consume canonical observations while an existing watcher owns polling. */
-  isQuoteWatched?(
-    kind: 'mint' | 'melt',
-    quote: { mintUrl: string; method: 'bolt11'; quoteId: string },
-  ): boolean;
   /** Same instances must be injected into ordinary child services in the effect-driving session. */
   sourceOperationLock: OperationIdLock;
   destinationOperationLock: OperationIdLock;
@@ -253,7 +248,7 @@ export class MintSwapOperationService {
   }
 
   /** Skip busy work and recheck durable eligibility after acquiring the parent lock. */
-  async reconcileInBackground(id: string): Promise<void> {
+  async reconcileInBackground(id: string, startup = false): Promise<void> {
     try {
       await this.withParent(
         id,
@@ -269,7 +264,7 @@ export class MintSwapOperationService {
             this.dependencies.destinationOperationLock.isLocked(parent.destinationOperationId)
           )
             return;
-          await this.recoverParent(parent, true);
+          await this.recoverParent(parent, !startup);
         },
         false,
       );
@@ -547,6 +542,7 @@ export class MintSwapOperationService {
         const source = await this.dependencies.sourceQueries.getById(parent.sourceOperationId);
         if (source?.state === 'executing' || source?.state === 'pending') {
           const quote = await this.observeSource(parent, background);
+          if (!quote) return this.defer(parent);
           const originalsUnspent =
             source.needsSwap && source.state === 'executing'
               ? await this.recoverPreSwap(parent, source, quote)
@@ -690,6 +686,7 @@ export class MintSwapOperationService {
       // Paid source value must remain redeemable through this persisted quote and output plan.
       // The scoped authorization below validates funding and ownership without restoring trust.
       const observedQuote = await this.observeDestination(parent, background);
+      if (!observedQuote) return parent;
       let now = this.now();
       parent = await this.commit(parent.id, (tx) =>
         tx.perform(reconcileMintSwap, { id: parent.id, now }),
@@ -837,12 +834,15 @@ export class MintSwapOperationService {
       : undefined;
   }
 
-  private async observeSource(parent: MintSwapOperation, background: boolean): Promise<MeltQuote> {
+  private async observeSource(
+    parent: MintSwapOperation,
+    background: boolean,
+  ): Promise<MeltQuote | null> {
     const { mintUrl, method, quoteId } = parent.sourceQuote;
-    if (background && this.dependencies.isQuoteWatched?.('melt', parent.sourceQuote)) {
+    if (background) {
       const quote = await this.dependencies.quoteLifecycle.getMeltQuote(mintUrl, method, quoteId);
       // Releasing source inputs requires a fresh check after the payment attempt has settled.
-      if (quote && quote.state !== 'UNPAID') return quote;
+      if (!quote || quote.state !== 'UNPAID') return quote;
     }
     return this.dependencies.quoteLifecycle.refreshMeltQuote(
       mintUrl,
@@ -854,9 +854,9 @@ export class MintSwapOperationService {
 
   private async observeDestination(parent: MintSwapOperation, background: boolean) {
     const { mintUrl, method, quoteId } = parent.destinationQuote;
-    if (background && this.dependencies.isQuoteWatched?.('mint', parent.destinationQuote)) {
+    if (background) {
       const quote = await this.dependencies.quoteLifecycle.getMintQuote(mintUrl, method, quoteId);
-      if (quote) return quote;
+      return quote;
     }
     return this.dependencies.quoteLifecycle.refreshMintQuote(
       mintUrl,

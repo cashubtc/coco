@@ -12,11 +12,20 @@ import type { SubscriptionKind } from '@core/infra/SubscriptionProtocol.ts';
 import type { MintQuote } from '../../models/MintQuote.ts';
 import { assessMintQuoteClaimability } from '../../models/MintQuoteClaimability.ts';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
+import { normalizeMintUrl } from '../../utils.ts';
+import {
+  QuoteWatchInterests,
+  canonicalQuoteOwner,
+  quoteWatchKey,
+  type QuoteWatchOwner,
+  type QuoteWatchInterest,
+  type QuoteWatchIdentity,
+} from './QuoteWatchInterests.ts';
 
 type QuoteKey = string; // `${mintUrl}::${method}::${quoteId}`
 
 function toKey(mintUrl: string, method: string, quoteId: string): QuoteKey {
-  return `${mintUrl}::${method}::${quoteId}`;
+  return quoteWatchKey({ mintUrl, method: method as MintMethod, quoteId });
 }
 
 interface MintQuoteWatchPolicy<M extends MintMethod = MintMethod> {
@@ -58,6 +67,7 @@ interface QuoteWatchRecord {
   method: MintMethod;
   quoteId: string;
   subscriptionKind: SubscriptionKind;
+  start?: Promise<void>;
   stop?: UnsubscribeHandler;
 }
 
@@ -71,9 +81,13 @@ export class MintOperationWatcherService {
   private readonly options: MintOperationWatcherOptions;
 
   private running = false;
+  private stopping?: Promise<void>;
+  private readonly interests = new QuoteWatchInterests();
+  private readonly work = new Set<Promise<unknown>>();
   private watchRecordByKey = new Map<QuoteKey, QuoteWatchRecord>();
   private offQuoteUpdated?: () => void;
   private offPending?: () => void;
+  private offEnded: Array<() => void> = [];
   private offUntrusted?: () => void;
 
   constructor(
@@ -97,11 +111,41 @@ export class MintOperationWatcherService {
     };
   }
 
-  /** Includes subscription startup so background coordinators do not start a second poll. */
-  isWatchingQuote(quote: { mintUrl: string; method: string; quoteId: string }): boolean {
-    return (
-      this.running && this.watchRecordByKey.has(toKey(quote.mintUrl, quote.method, quote.quoteId))
+  /** Exact recovery permission used by shared polling as well as watcher admission. */
+  hasRecoveryInterest(quote: QuoteWatchIdentity): boolean {
+    return this.running && this.interests.hasRecovery(quoteWatchKey(quote));
+  }
+
+  private own<T>(work: Promise<T>): Promise<T> {
+    this.work.add(work);
+    void work.then(
+      () => this.work.delete(work),
+      () => this.work.delete(work),
     );
+    return work;
+  }
+
+  async registerInterest(interest: QuoteWatchInterest): Promise<void> {
+    await this.own(this.watchMintQuotes([interest], interest.owner));
+  }
+
+  async removeInterest(owner: QuoteWatchOwner): Promise<void> {
+    for (const key of this.interests.keysFor(owner)) {
+      this.interests.remove(key, owner);
+      const record = this.watchRecordByKey.get(key);
+      if (!this.interests.hasAny(key)) {
+        await this.stopWatching(key);
+      } else if (record && !this.interests.hasRecovery(key)) {
+        const trusted = await this.mintService.isTrustedMint(record.mintUrl);
+        // Registration can add a recovery owner while the trust read is pending.
+        if (
+          !trusted &&
+          !this.interests.hasRecovery(key) &&
+          this.watchRecordByKey.get(key) === record
+        )
+          await this.stopWatching(key);
+      }
+    }
   }
 
   isRunning(): boolean {
@@ -109,16 +153,22 @@ export class MintOperationWatcherService {
   }
 
   async start(): Promise<void> {
+    // A concurrent stop wins; a later explicit start can acquire a new set of resources.
+    if (this.stopping) {
+      await this.stopping;
+      return;
+    }
     if (this.running) return;
     this.running = true;
     this.logger?.info('MintOperationWatcherService started');
 
     this.offPending = this.bus.on('mint-op:pending', async ({ operation }) => {
+      if (!this.running) return;
       if (operation.state !== 'pending') return;
       if (!operation.quoteId) return;
 
       try {
-        await this.watchOperations([operation as PendingMintOperation]);
+        await this.own(this.watchOperations([operation as PendingMintOperation]));
       } catch (err) {
         this.logger?.error('Failed to start watching pending mint operation', {
           operationId: operation.id,
@@ -130,17 +180,19 @@ export class MintOperationWatcherService {
     });
 
     this.offQuoteUpdated = this.bus.on('mint-quote:updated', async ({ quote }) => {
+      if (!this.running) return;
       const policy = this.getPolicy(quote.method);
       if (!policy) return;
 
       const key = toKey(quote.mintUrl, quote.method, quote.quoteId);
       if (assessMintQuoteClaimability(quote).status === 'complete') {
-        await this.stopWatching(key);
+        this.interests.remove(key, canonicalQuoteOwner);
+        await this.own(this.stopWatching(key));
         return;
       }
 
       try {
-        await this.watchMintQuotes([quote]);
+        await this.own(this.watchMintQuotes([quote]));
       } catch (err) {
         this.logger?.error('Failed to start watching canonical mint quote', {
           mintUrl: quote.mintUrl,
@@ -150,10 +202,19 @@ export class MintOperationWatcherService {
       }
     });
 
+    for (const event of ['mint-op:finalized', 'mint-op:failed'] as const) {
+      this.offEnded.push(
+        this.bus.on(event, ({ operationId }) => {
+          if (!this.running) return;
+          return this.own(this.removeInterest({ kind: 'operation', id: operationId }));
+        }),
+      );
+    }
+
     // Stop watching operations when mint is untrusted
     this.offUntrusted = this.bus.on('mint:untrusted', async ({ mintUrl }) => {
       try {
-        await this.stopWatchingMint(mintUrl);
+        await this.own(this.handleMintUntrusted(mintUrl));
       } catch (err) {
         this.logger?.error('Failed to stop watching mint operations on untrust', { mintUrl, err });
       }
@@ -208,8 +269,19 @@ export class MintOperationWatcherService {
     }
   }
 
-  async stop(): Promise<void> {
-    if (!this.running) return;
+  stop(): Promise<void> {
+    if (this.stopping) return this.stopping;
+    if (!this.running) return Promise.resolve();
+    const stopping = this.stopOwnedResources();
+    this.stopping = stopping;
+    const finished = () => {
+      if (this.stopping === stopping) this.stopping = undefined;
+    };
+    void stopping.then(finished, finished);
+    return stopping;
+  }
+
+  private async stopOwnedResources(): Promise<void> {
     this.running = false;
 
     if (this.offQuoteUpdated) {
@@ -242,125 +314,135 @@ export class MintOperationWatcherService {
       }
     }
 
+    for (const off of this.offEnded) off();
+    this.offEnded = [];
     const keys = Array.from(this.watchRecordByKey.keys());
     for (const key of keys) {
       await this.stopWatching(key);
     }
+    while (this.work.size) await Promise.allSettled([...this.work]);
+    this.interests.clear();
     this.logger?.info('MintOperationWatcherService stopped');
   }
 
   private async watchOperations(operations: PendingMintOperation[]): Promise<void> {
     if (!this.running) return;
-    if (operations.length === 0) return;
-
-    const uniqueByQuote = new Map<QuoteKey, WatchableMintQuote>();
     for (const operation of operations) {
-      if (!operation.quoteId || !this.getPolicy(operation.method)) {
-        continue;
-      }
-      const key = toKey(operation.mintUrl, operation.method, operation.quoteId);
-      uniqueByQuote.set(key, {
-        mintUrl: operation.mintUrl,
-        method: operation.method,
-        quoteId: operation.quoteId,
+      this.interests.add(toKey(operation.mintUrl, operation.method, operation.quoteId), {
+        kind: 'operation',
+        id: operation.id,
       });
     }
-
-    await this.watchMintQuotes(Array.from(uniqueByQuote.values()));
+    await this.watchMintQuotes(operations);
   }
 
-  private async watchMintQuotes(quotes: WatchableMintQuote[]): Promise<void> {
+  private async watchMintQuotes(
+    quotes: WatchableMintQuote[],
+    owner: QuoteWatchOwner = canonicalQuoteOwner,
+  ): Promise<void> {
     if (!this.running) return;
-    if (quotes.length === 0) return;
-
-    const byGroup = new Map<string, WatchableMintQuote[]>();
-    for (const quote of quotes) {
+    const groups = new Map<string, QuoteWatchRecord[]>();
+    const starts = new Set<Promise<void>>();
+    // Reserve records before any await so concurrent owners join the same batch/startup.
+    for (const input of quotes) {
+      const quote = { ...input, mintUrl: normalizeMintUrl(input.mintUrl) };
       const policy = this.getPolicy(quote.method);
       if (!policy) continue;
-
       const key = toKey(quote.mintUrl, quote.method, quote.quoteId);
-      if (this.watchRecordByKey.get(key)?.stop) continue;
-
-      const groupKey = `${quote.mintUrl}::${policy.subscriptionKind}`;
-      let group = byGroup.get(groupKey);
-      if (!group) {
-        group = [];
-        byGroup.set(groupKey, group);
-      }
-      group.push(quote);
-    }
-
-    for (const mintQuotes of byGroup.values()) {
-      const first = mintQuotes[0];
-      if (!first) continue;
-
-      const mintUrl = first.mintUrl;
-      const policy = this.getPolicy(first.method);
-      if (!policy) continue;
-
-      const trusted = await this.mintService.isTrustedMint(mintUrl);
-      if (!trusted) {
-        this.logger?.debug('Skipping watch for untrusted mint', { mintUrl });
+      this.interests.add(key, owner);
+      const existing = this.watchRecordByKey.get(key);
+      if (existing) {
+        if (existing.start && owner.kind !== 'canonical') starts.add(existing.start);
         continue;
       }
-
-      const chunks: WatchableMintQuote[][] = [];
-      for (let i = 0; i < mintQuotes.length; i += 100) {
-        chunks.push(mintQuotes.slice(i, i + 100));
+      const record = this.ensureWatchRecord(quote);
+      const groupKey = `${quote.mintUrl}::${policy.subscriptionKind}`;
+      let group = groups.get(groupKey);
+      if (!group) groups.set(groupKey, (group = []));
+      group.push(record);
+    }
+    for (const group of groups.values()) {
+      for (let index = 0; index < group.length; index += 100) {
+        const batch = group.slice(index, index + 100);
+        const start = this.own(Promise.resolve().then(() => this.startBatch(batch)));
+        for (const record of batch) record.start = start;
+        starts.add(start);
       }
+    }
+    await Promise.all(starts);
+  }
 
-      for (const batch of chunks) {
-        const quoteIds = batch.map((quote) => quote.quoteId);
-        const records: QuoteWatchRecord[] = [];
-        for (const quote of batch) {
-          records.push(this.ensureWatchRecord(quote));
+  private current(record: QuoteWatchRecord): boolean {
+    return (
+      this.running &&
+      this.watchRecordByKey.get(toKey(record.mintUrl, record.method, record.quoteId)) === record
+    );
+  }
+
+  private async startBatch(batch: QuoteWatchRecord[]): Promise<void> {
+    let unsubscribe: UnsubscribeHandler | undefined;
+    const active: QuoteWatchRecord[] = [];
+    try {
+      for (const record of batch) {
+        if (!this.current(record)) continue;
+        const key = toKey(record.mintUrl, record.method, record.quoteId);
+        const trusted = await this.mintService.isTrustedMint(record.mintUrl);
+        if (!this.current(record)) continue;
+        if (!trusted && !this.interests.hasRecovery(key)) {
+          await this.stopWatching(key);
+          continue;
         }
-
-        let unsubscribe: UnsubscribeHandler | undefined;
-        let subId: string | undefined;
-        try {
-          const subscription = await this.subs.subscribe<MintMethodQuoteSnapshot>(
-            mintUrl,
-            policy.subscriptionKind,
-            quoteIds,
-            async (payload) => {
-              await this.handleSubscriptionPayload(mintUrl, policy.subscriptionKind, payload);
-            },
+        const quote = await this.quoteLifecycle.getMintQuote(
+          record.mintUrl,
+          record.method,
+          record.quoteId,
+        );
+        if (!this.current(record)) continue;
+        if (quote && assessMintQuoteClaimability(quote).status === 'complete') {
+          this.interests.remove(key, canonicalQuoteOwner);
+          await this.stopWatching(key);
+          continue;
+        }
+        active.push(record);
+      }
+      const records = active.filter((record) => this.current(record));
+      if (!records.length) return;
+      const first = records[0]!;
+      const subscription = await this.subs.subscribe<MintMethodQuoteSnapshot>(
+        first.mintUrl,
+        first.subscriptionKind,
+        records.map((record) => record.quoteId),
+        async (payload) => {
+          const record = records.find(
+            (candidate) =>
+              this.current(candidate) &&
+              this.getPolicy(candidate.method)?.getPayloadQuoteId(payload as never) ===
+                candidate.quoteId,
           );
-          subId = subscription.subId;
-          unsubscribe = subscription.unsubscribe;
-        } catch (err) {
-          for (const record of records) {
-            this.watchRecordByKey.delete(toKey(record.mintUrl, record.method, record.quoteId));
+          if (record) await this.own(this.handleSubscriptionPayload(record, payload));
+        },
+      );
+      unsubscribe = subscription.unsubscribe;
+      const remaining = new Set(records);
+      let stopped = false;
+      for (const record of records) {
+        record.stop = async () => {
+          remaining.delete(record);
+          if (!remaining.size && !stopped) {
+            stopped = true;
+            await unsubscribe?.();
           }
-          throw err;
-        }
-
-        let didUnsubscribe = false;
-        const remaining = new Set(quoteIds);
-        const groupUnsubscribeOnce: UnsubscribeHandler = async () => {
-          if (didUnsubscribe) return;
-          didUnsubscribe = true;
-          await unsubscribe?.();
         };
-
-        for (const record of records) {
-          const key = toKey(record.mintUrl, record.method, record.quoteId);
-          const perKeyStop: UnsubscribeHandler = async () => {
-            if (remaining.has(record.quoteId)) remaining.delete(record.quoteId);
-            if (remaining.size === 0) {
-              await groupUnsubscribeOnce();
-            }
-          };
-          record.stop = perKeyStop;
-        }
-
-        this.logger?.debug('Watching mint quote batch', {
-          mintUrl,
-          subId,
-          count: batch.length,
-        });
       }
+      for (const record of records) if (!this.current(record)) await record.stop?.();
+    } catch (error) {
+      for (const record of batch) {
+        if (this.current(record))
+          await this.stopWatching(toKey(record.mintUrl, record.method, record.quoteId));
+      }
+      throw error;
+    } finally {
+      for (const record of batch) record.start = undefined;
     }
   }
 
@@ -390,80 +472,58 @@ export class MintOperationWatcherService {
   }
 
   private async handleSubscriptionPayload(
-    mintUrl: string,
-    subscriptionKind: SubscriptionKind,
+    record: QuoteWatchRecord,
     payload: MintMethodQuoteSnapshot,
   ): Promise<void> {
-    const record = this.findRecordForPayload(mintUrl, subscriptionKind, payload);
-    if (!record) return;
-
-    const policy = this.getPolicy(record.method);
-    if (!policy) return;
-
-    const methodPayload = payload as MintMethodQuoteSnapshot<typeof record.method>;
-    const quoteId = policy.getPayloadQuoteId(methodPayload);
-    if (!quoteId) return;
-
-    const key = toKey(mintUrl, record.method, quoteId);
+    if (!this.current(record)) return;
     try {
       const quote = await this.quoteLifecycle.recordMintQuoteSnapshot(
-        mintUrl,
+        record.mintUrl,
         record.method,
-        methodPayload,
+        payload,
       );
-      if (assessMintQuoteClaimability(quote).status === 'complete') {
-        await this.stopWatching(key);
+      if (this.current(record) && assessMintQuoteClaimability(quote).status === 'complete') {
+        this.interests.remove(quoteWatchKey(record), canonicalQuoteOwner);
+        await this.stopWatching(toKey(record.mintUrl, record.method, record.quoteId));
       }
-    } catch (err) {
+    } catch (error) {
       this.logger?.error('Failed to persist mint quote update from remote update', {
-        mintUrl,
+        mintUrl: record.mintUrl,
         method: record.method,
-        errorName: err instanceof Error ? err.name : typeof err,
+        errorName: error instanceof Error ? error.name : typeof error,
       });
     }
-  }
-
-  private findRecordForPayload(
-    mintUrl: string,
-    subscriptionKind: SubscriptionKind,
-    payload: MintMethodQuoteSnapshot,
-  ): QuoteWatchRecord | undefined {
-    for (const record of this.watchRecordByKey.values()) {
-      if (record.mintUrl !== mintUrl || record.subscriptionKind !== subscriptionKind) {
-        continue;
-      }
-
-      const policy = this.getPolicy(record.method);
-      const quoteId = policy?.getPayloadQuoteId(
-        payload as MintMethodQuoteSnapshot<typeof record.method>,
-      );
-      if (quoteId === record.quoteId) {
-        return record;
-      }
-    }
-
-    return undefined;
   }
 
   private async stopWatching(key: QuoteKey): Promise<void> {
     const record = this.watchRecordByKey.get(key);
     if (!record) return;
+    this.watchRecordByKey.delete(key);
     try {
       await record.stop?.();
     } catch (err) {
       this.logger?.warn('Unsubscribe watcher failed', { key, err });
-    } finally {
-      this.watchRecordByKey.delete(key);
     }
+  }
+
+  private async handleMintUntrusted(mintUrl: string): Promise<void> {
+    const normalized = normalizeMintUrl(mintUrl);
+    const recovery = [...this.watchRecordByKey]
+      .filter(([key, record]) => record.mintUrl === normalized && this.interests.hasRecovery(key))
+      .map(([, record]) => record);
+    // Manager closes all transports on untrust. Retire those stale handles and rebuild
+    // only exact recovery observations, including quotes formerly inside a shared batch.
+    await this.stopWatchingMint(normalized);
+    if (this.running) await this.watchMintQuotes(recovery);
   }
 
   async stopWatchingMint(mintUrl: string): Promise<void> {
     this.logger?.info('Stopping all quote watchers for mint', { mintUrl });
-    const prefix = `${mintUrl}::`;
+    const normalizedMint = normalizeMintUrl(mintUrl);
     const keysToStop: QuoteKey[] = [];
 
-    for (const key of this.watchRecordByKey.keys()) {
-      if (key.startsWith(prefix)) {
+    for (const [key, record] of this.watchRecordByKey) {
+      if (record.mintUrl === normalizedMint) {
         keysToStop.push(key);
       }
     }

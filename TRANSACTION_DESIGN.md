@@ -365,8 +365,15 @@ protects its hosted session, and React's initialization guard applies per provid
 Coco uses lock-step package versioning, so the Mint Swap API has no feature activation gate.
 Initial source payment requires an explicit `execute` call. The Mint Swap processor is enabled by
 default and can be disabled independently without restricting explicit commands. It honors
-persisted due times and periodically observes prepared parents without authorizing their source.
-Its callbacks only request later scans. Explicit refresh/recovery can request immediate observation.
+persisted due times and registers exact parent quote interests with the existing Mint/Melt watchers,
+including parents whose due time is still ahead. Prepared observation never authorizes payment.
+Watchers commit canonical observations; parent callbacks only request later coordination scans.
+Disabling a watcher does not introduce replacement polling in the parent. Bounded startup recovery
+respects automatic eligibility; explicit refresh/recovery can request immediate observation.
+Necessary operation recovery effects remain available. Fresh positive `UNPAID` confirmation under
+the shared source lock remains required before releasing inputs, independently of watcher state.
+Exact authorized recovery interests can survive trust revocation, including Manager's transport
+closure and shared Mint polling admission; unrelated untrusted quotes gain no permission.
 Manager serializes pause/resume changes and drains admitted lifecycle and parent work on disposal.
 A local observation timeout only ends waiting; it does not change the persisted operation.
 

@@ -351,6 +351,19 @@ function mergePaidMeltQuoteSettlement(existing: MeltQuote, incoming: MeltQuote):
 }
 
 export interface QuoteLifecycleDeps {
+  /**
+   * @internal Permits background observation of an exact Mint Quote needed for recovery.
+   *
+   * Polling normally requires a trusted mint. If trust is revoked after a Mint Swap's
+   * source payment is authorized, recovery must still observe its persisted destination
+   * quote. Manager supplies a live lookup of the watcher's registered recovery interests
+   * to allow that specific mint URL, method and quote ID through the polling trust check.
+   *
+   * This permits quote observation only; payment and issuance authorization remain with
+   * the operation coordinators. It does not restore mint trust or admit unrelated quotes.
+   * Omitting this dependency preserves the normal trusted-mint polling policy.
+   */
+  hasMintRecoveryInterest?: (method: MintMethod, identity: QuoteIdentity) => boolean;
   mintHandlerProvider: MintHandlerProvider;
   meltHandlerProvider: MeltHandlerProvider;
   mintQuoteRepository: MintQuoteRepository;
@@ -366,6 +379,9 @@ export interface QuoteLifecycleDeps {
 }
 
 export class QuoteLifecycle {
+  private readonly hasMintRecoveryInterest: NonNullable<
+    QuoteLifecycleDeps['hasMintRecoveryInterest']
+  >;
   private readonly mintHandlerProvider: MintHandlerProvider;
   private readonly meltHandlerProvider: MeltHandlerProvider;
   private readonly mintQuoteRepository: MintQuoteRepository;
@@ -385,6 +401,7 @@ export class QuoteLifecycle {
   private readonly batchUnavailablePollingMethodsByMint = new Map<string, Set<MintMethod>>();
 
   constructor(deps: QuoteLifecycleDeps) {
+    this.hasMintRecoveryInterest = deps.hasMintRecoveryInterest ?? (() => false);
     this.mintHandlerProvider = deps.mintHandlerProvider;
     this.meltHandlerProvider = deps.meltHandlerProvider;
     this.mintQuoteRepository = deps.mintQuoteRepository;
@@ -622,10 +639,33 @@ export class QuoteLifecycle {
         new MintQuoteValidationError(`Unsupported built-in mint quote polling method ${method}`),
       );
     }
-    if (!(await this.mintService.isTrustedMint(mintUrl))) {
-      throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
-    }
+    const trusted = await this.mintService.isTrustedMint(mintUrl);
+    // Apply the recovery exception per quote: a mixed batch must not admit unrelated
+    // quotes merely because one quote at this untrusted mint needs recovery.
+    const allowed = normalizedIdentities.filter(
+      (identity) => trusted || this.hasMintRecoveryInterest(method, identity),
+    );
+    if (!allowed.length) throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
+    const rejected = normalizedIdentities.filter((identity) => !allowed.includes(identity));
+    const result = await this.checkAdmittedMintQuotesForPolling(method, allowed);
+    return {
+      outcomes: [
+        ...result.outcomes,
+        ...failedMintQuotePollingResult(
+          rejected,
+          'validation',
+          new UnknownMintError(`Mint ${mintUrl} is not trusted`),
+        ).outcomes,
+      ],
+      responseFailures: result.responseFailures,
+    };
+  }
 
+  private async checkAdmittedMintQuotesForPolling(
+    method: MintMethod,
+    normalizedIdentities: QuoteIdentity[],
+  ): Promise<MintQuotePollingResult> {
+    const mintUrl = normalizedIdentities[0]!.mintUrl;
     let useBatch: boolean;
     try {
       useBatch =
@@ -636,6 +676,17 @@ export class QuoteLifecycle {
         normalizedIdentities,
         classifyMintQuotePollingFailure(error),
         error,
+      );
+    }
+    // Metadata lookup can yield while an owner is removed or trust changes.
+    if (
+      !(await this.mintService.isTrustedMint(mintUrl)) &&
+      !normalizedIdentities.every((identity) => this.hasMintRecoveryInterest(method, identity))
+    ) {
+      return failedMintQuotePollingResult(
+        normalizedIdentities,
+        'validation',
+        new UnknownMintError(`Mint ${mintUrl} is not trusted`),
       );
     }
     if (!useBatch && normalizedIdentities.length > 1) {
