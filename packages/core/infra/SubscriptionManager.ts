@@ -232,10 +232,13 @@ export class SubscriptionManager {
     payload: unknown,
     normalizedPayload?: unknown,
   ): Promise<void> {
-    let deliveredPayload = payload;
-    if (active.kind === 'bolt11_mint_quote' && normalizedPayload !== undefined) {
-      deliveredPayload = normalizedPayload;
-    } else if (active.kind === 'bolt11_mint_quote') {
+    // Melt polling already crossed the adapter boundary. Preserve Amount values in its change
+    // signatures, just as BOLT11 mint polling preserves its normalized accounting fields.
+    const useNormalizedPayload =
+      normalizedPayload !== undefined &&
+      (active.kind === 'bolt11_mint_quote' || active.kind.endsWith('_melt_quote'));
+    let deliveredPayload = useNormalizedPayload ? normalizedPayload : payload;
+    if (active.kind === 'bolt11_mint_quote' && normalizedPayload === undefined) {
       const quoteId =
         payload &&
         typeof payload === 'object' &&

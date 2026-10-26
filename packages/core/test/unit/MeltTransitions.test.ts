@@ -9,7 +9,7 @@ import {
   type Wallet,
 } from '@cashu/cashu-ts';
 import { Database } from 'bun:sqlite';
-import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import { SqlStorageRepositories } from '../../../sql-storage/src/repositories.ts';
 import { SqliteDb } from '../../../sqlite-bun/src/db.ts';
 import { EventBus } from '../../events/EventBus.ts';
@@ -17,8 +17,10 @@ import type { CoreEvents } from '../../events/types.ts';
 import { ProofValidationError } from '../../models/Error.ts';
 import { MeltHandlerProvider } from '../../infra/handlers/melt/MeltHandlerProvider.ts';
 import { MeltBolt11Handler } from '../../infra/handlers/melt/MeltBolt11Handler.ts';
-import type { MintAdapter } from '../../infra/MintAdapter.ts';
-import type { SubscriptionManager } from '../../infra/SubscriptionManager.ts';
+import { MeltBolt12Handler } from '../../infra/handlers/melt/MeltBolt12Handler.ts';
+import { MintAdapter } from '../../infra/MintAdapter.ts';
+import { PollingTransport } from '../../infra/PollingTransport.ts';
+import { SubscriptionManager } from '../../infra/SubscriptionManager.ts';
 import {
   meltQuoteFromBolt11Response,
   meltQuoteFromBolt12Response,
@@ -400,11 +402,42 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
     );
   });
 
-  it.each(['omitted', 'empty', 'nonempty'] as const)(
-    'finalizes a full PAID notification with %s change before the HTTP PENDING response',
-    async (changeKind) => {
+  it.each(
+    (['bolt11', 'bolt12'] as const).flatMap((method) =>
+      (['subscription', 'polling'] as const).flatMap((delivery) =>
+        (['omitted', 'empty', 'nonempty'] as const).map(
+          (changeKind) => [method, delivery, changeKind] as const,
+        ),
+      ),
+    ),
+  )(
+    'finalizes a PAID %s %s notification with %s change before the HTTP PENDING response',
+    async (method, delivery, changeKind) => {
+      const quoteId = method === 'bolt11' ? 'quote-1' : 'quote-bolt12';
+      const request = method === 'bolt11' ? 'lnbc1test' : 'lno1offer';
+      if (method === 'bolt12') {
+        await repositories.meltQuoteRepository.upsertMeltQuote(
+          meltQuoteFromBolt12Response(mintUrl, {
+            quote: quoteId,
+            request,
+            amount: Amount.from(8),
+            fee_reserve: Amount.from(2),
+            unit: 'sat',
+            expiry: 9_999_999_999,
+            state: 'UNPAID',
+            payment_preimage: null,
+          }),
+        );
+      }
       await saveReadyProof(10);
-      const prepared = await runner.run((tx) => tx.perform(prepareMelt, input()));
+      const prepared = await runner.run((tx) =>
+        tx.perform(
+          prepareMelt,
+          method === 'bolt11'
+            ? input()
+            : { ...input(), method, quoteId, methodData: { offer: request } },
+        ),
+      );
       expect(prepared.operation.needsSwap).toBe(false);
       const changeOutput = deserializeOutputData(prepared.operation.changeOutputData).keep[0]!;
       // The fixture's public key for amount 1 is the generator (private scalar 1).
@@ -422,7 +455,7 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
       const bus = new EventBus<CoreEvents>();
       let notify: ((payload: unknown) => Promise<void>) | undefined;
       const unsubscribe = mock(async () => {});
-      const subscriptions = {
+      const directSubscriptions = {
         subscribe: async (
           _url: string,
           _kind: string,
@@ -459,29 +492,59 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
           unit: 'sat',
         }),
       } satisfies Pick<WalletService, 'getWalletWithActiveKeysetId'>;
-      const checkMeltQuote = mock(async () => {
-        throw new Error('A complete notification must not need a refresh');
+      const response = {
+        quote: quoteId,
+        request,
+        amount: Amount.from(8),
+        fee_reserve: Amount.from(2),
+        unit: 'sat',
+        expiry: 9_999_999_999,
+        state: 'PAID' as const,
+        payment_preimage: 'preimage',
+        ...(changeKind === 'omitted' ? {} : { change }),
+      };
+      let releasePoll!: () => void;
+      const pollReady = new Promise<void>((resolve) => {
+        releasePoll = resolve;
       });
-      const customMeltBolt11 = mock(async () => {
-        expect(notify).toBeDefined();
+      const checkMeltQuote = mock(async () => {
+        if (delivery !== 'polling') throw new Error('A notification must not need a refresh');
+        await pollReady;
+        return response;
+      });
+      let resolvePaid!: () => void;
+      const paidObserved = new Promise<void>((resolve) => {
+        resolvePaid = resolve;
+      });
+      const customMelt = mock(async () => {
         expect((await repositories.meltOperationRepository.getById('melt-1'))?.state).toBe(
           'executing',
         );
-        await notify!({
-          quote: 'quote-1',
-          request: 'lnbc1test',
-          amount: '8',
-          fee_reserve: '2',
-          unit: 'sat',
-          expiry: 9_999_999_999,
-          state: 'PAID',
-          payment_preimage: 'preimage',
-          ...(changeKind === 'omitted' ? {} : { change }),
-        });
+        if (delivery === 'polling') {
+          releasePoll();
+          await paidObserved;
+        } else {
+          expect(notify).toBeDefined();
+          await notify!(response);
+        }
         return { state: 'PENDING' as const };
       });
-      const mintAdapter = { checkMeltQuote, customMeltBolt11 } as unknown as MintAdapter;
-      const handlerProvider = new MeltHandlerProvider({ bolt11: new MeltBolt11Handler() });
+      const mintAdapter = {
+        checkMeltQuote,
+        checkMeltQuoteBolt12: checkMeltQuote,
+        checkMeltQuoteState: MintAdapter.prototype.checkMeltQuoteState,
+        checkMeltQuoteBolt12State: MintAdapter.prototype.checkMeltQuoteBolt12State,
+        customMeltBolt11: customMelt,
+        customMeltBolt12: customMelt,
+      } as unknown as MintAdapter;
+      const polling = new PollingTransport(mintAdapter);
+      const pollingSubscriptions = new SubscriptionManager(polling, mintAdapter);
+      const unsubscribePolling = spyOn(pollingSubscriptions, 'unsubscribe');
+      const subscriptions = delivery === 'polling' ? pollingSubscriptions : directSubscriptions;
+      const handlerProvider = new MeltHandlerProvider({
+        bolt11: new MeltBolt11Handler(),
+        bolt12: new MeltBolt12Handler(),
+      });
       const quoteLifecycle = new QuoteLifecycle({
         mintHandlerProvider: {} as QuoteLifecycleDeps['mintHandlerProvider'],
         meltHandlerProvider: handlerProvider,
@@ -519,13 +582,16 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
       bus.on('melt-op:finalized', finalized);
       await watcher.start();
       await processor.start();
+      const offPaid = bus.on('melt-quote:updated', ({ quote }) => {
+        if (quote.state === 'PAID') resolvePaid();
+      });
       try {
         // Keep the quote watched while the operation is executing, before pending interest exists.
         await watcher.registerOperationInterest({
           operationId: 'melt-1',
           mintUrl,
-          method: 'bolt11',
-          quoteId: 'quote-1',
+          method,
+          quoteId,
         });
         const result = await service.execute('melt-1');
         expect(result.state).toBe('finalized');
@@ -545,16 +611,25 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
         } else {
           expect(savedChange).toBeNull();
         }
-        const canonical = await quoteLifecycle.getMeltQuote(mintUrl, 'bolt11', 'quote-1');
+        const canonical = await quoteLifecycle.getMeltQuote(mintUrl, method, quoteId);
         expect(canonical?.state).toBe('PAID');
         expect(canonical?.change).toEqual(change);
-        expect(customMeltBolt11).toHaveBeenCalledTimes(1);
-        expect(checkMeltQuote).not.toHaveBeenCalled();
-        expect(unsubscribe).toHaveBeenCalledTimes(1);
+        expect(customMelt).toHaveBeenCalledTimes(1);
+        if (delivery === 'polling') {
+          expect(checkMeltQuote).toHaveBeenCalledTimes(1);
+          expect(checkMeltQuote).toHaveBeenCalledWith(mintUrl, quoteId);
+          expect(unsubscribePolling).toHaveBeenCalledTimes(1);
+        } else {
+          expect(checkMeltQuote).not.toHaveBeenCalled();
+          expect(unsubscribe).toHaveBeenCalledTimes(1);
+        }
         expect(finalized).toHaveBeenCalledTimes(1);
       } finally {
         await processor.stop();
         await watcher.stop();
+        pollingSubscriptions.closeAll();
+        unsubscribePolling.mockRestore();
+        offPaid();
       }
     },
   );

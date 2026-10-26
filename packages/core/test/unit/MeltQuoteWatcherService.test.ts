@@ -126,9 +126,7 @@ describe('MeltQuoteWatcherService', () => {
         _mintUrl: string,
         _kind: string,
         _filters: string[],
-        next: (
-          payload: MeltQuoteBolt11Response | MeltQuoteOnchainResponse | string,
-        ) => Promise<void>,
+        next: (payload: MeltQuoteBolt11Response | MeltQuoteOnchainResponse) => Promise<void>,
       ) => {
         callbacks.push(next as (payload: unknown) => Promise<void>);
         return { subId: `sub-${callbacks.length}`, unsubscribe };
@@ -289,104 +287,36 @@ describe('MeltQuoteWatcherService', () => {
     await watcher.stop();
   });
 
-  it('records polling state payloads without mutating proofs or operations', async () => {
-    const existing = makeBolt11Quote({ state: 'PENDING' });
-    const getMeltQuote = mock(async () => existing);
-    const recordMeltQuoteObservation = mock(async (quote: MeltQuote) => quote);
-    const forbiddenMutation = mock(async () => {
-      throw new Error('proof or operation mutation is out of scope');
-    });
+  it.each([
+    'PAID',
+    'UNPAID',
+    { quote: quoteId, state: 'PAID' },
+    { quote: quoteId, state: 'UNPAID' },
+  ])('ignores malformed notification payload %j without refreshing', async (payload) => {
+    const quoteLifecycle = makeQuoteLifecycle();
     const watcher = makeWatcher({
-      quoteLifecycle: makeQuoteLifecycle({
-        getMeltQuote,
-        recordMeltQuoteObservation,
-      }),
+      quoteLifecycle,
       options: { watchExistingPendingQuotesOnStart: false },
     });
 
     await watcher.start();
-    await bus.emit('melt-quote:updated', {
-      mintUrl,
-      method: 'bolt11',
-      quoteId,
-      quote: existing,
-    });
-
-    await callbacks[0]?.('UNPAID');
-
-    expect(getMeltQuote).toHaveBeenCalledWith(mintUrl, 'bolt11', quoteId);
-    expect(recordMeltQuoteObservation).toHaveBeenCalledWith(
-      expect.objectContaining({ quoteId, state: 'UNPAID' }),
-    );
-    expect(forbiddenMutation).not.toHaveBeenCalled();
-
-    await watcher.stop();
-  });
-
-  it('records quote-id state object payloads through the state observation path', async () => {
-    const existing = makeBolt11Quote({ state: 'PENDING' });
-    const getMeltQuote = mock(async () => existing);
-    const recordMeltQuoteObservation = mock(async (quote: MeltQuote) => quote);
-    const watcher = makeWatcher({
-      quoteLifecycle: makeQuoteLifecycle({
-        getMeltQuote,
-        recordMeltQuoteObservation,
-      }),
-      options: { watchExistingPendingQuotesOnStart: false },
-    });
-
-    await watcher.start();
-    await bus.emit('melt-quote:updated', {
-      mintUrl,
-      method: 'bolt11',
-      quoteId,
-      quote: existing,
-    });
-
-    await callbacks[0]?.({ quote: quoteId, state: 'UNPAID' });
-
-    expect(getMeltQuote).toHaveBeenCalledWith(mintUrl, 'bolt11', quoteId);
-    expect(recordMeltQuoteObservation).toHaveBeenCalledWith(
-      expect.objectContaining({ quoteId, state: 'UNPAID' }),
-    );
-
-    await watcher.stop();
-  });
-
-  it.each(['PAID', { quote: quoteId, state: 'PAID' }])(
-    'refreshes full quote data for partial PAID payload %j before stopping',
-    async (payload) => {
-      const existing = makeBolt11Quote({ state: 'PENDING' });
-      const refreshMeltQuote = mock(async () =>
-        makeBolt11Quote({ state: 'PAID', payment_preimage: 'preimage' }),
-      );
-      const recordMeltQuoteObservation = mock(async (quote: MeltQuote) => quote);
-      const watcher = makeWatcher({
-        quoteLifecycle: makeQuoteLifecycle({
-          getMeltQuote: mock(async () => existing),
-          refreshMeltQuote,
-          recordMeltQuoteObservation,
-        }),
-        options: { watchExistingPendingQuotesOnStart: false },
-      });
-
-      await watcher.start();
-      await bus.emit('melt-quote:updated', {
+    try {
+      await watcher.registerOperationInterest({
+        operationId: 'melt-op-1',
         mintUrl,
         method: 'bolt11',
         quoteId,
-        quote: existing,
       });
-
       await callbacks[0]?.(payload);
 
-      expect(refreshMeltQuote).toHaveBeenCalledWith(mintUrl, 'bolt11', quoteId);
-      expect(recordMeltQuoteObservation).not.toHaveBeenCalled();
-      expect(unsubscribe).toHaveBeenCalledTimes(1);
-
+      expect(quoteLifecycle.recordMeltQuoteObservation).not.toHaveBeenCalled();
+      expect(quoteLifecycle.getMeltQuote).not.toHaveBeenCalled();
+      expect(quoteLifecycle.refreshMeltQuote).not.toHaveBeenCalled();
+      expect(unsubscribe).not.toHaveBeenCalled();
+    } finally {
       await watcher.stop();
-    },
-  );
+    }
+  });
 
   it('keeps a shared watch until canonical and operation interest are both removed', async () => {
     const quote = makeBolt11Quote();
@@ -552,9 +482,7 @@ describe('MeltQuoteWatcherService', () => {
         _mintUrl: string,
         _kind: string,
         _filters: string[],
-        next: (
-          payload: MeltQuoteBolt11Response | MeltQuoteOnchainResponse | string,
-        ) => Promise<void>,
+        next: (payload: MeltQuoteBolt11Response | MeltQuoteOnchainResponse) => Promise<void>,
       ) => {
         callbacks.push(next as (payload: unknown) => Promise<void>);
         return new Promise<{ subId: string; unsubscribe: () => Promise<void> }>((resolve) => {
@@ -597,9 +525,7 @@ describe('MeltQuoteWatcherService', () => {
         _mintUrl: string,
         _kind: string,
         _filters: string[],
-        next: (
-          payload: MeltQuoteBolt11Response | MeltQuoteOnchainResponse | string,
-        ) => Promise<void>,
+        next: (payload: MeltQuoteBolt11Response | MeltQuoteOnchainResponse) => Promise<void>,
       ) => {
         const subId = `sub-${callbacks.length + 1}`;
         callbacks.push(next as (payload: unknown) => Promise<void>);

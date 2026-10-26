@@ -67,7 +67,7 @@ function isMeltQuoteState(value: unknown): value is MeltQuote['state'] {
   return value === 'UNPAID' || value === 'PENDING' || value === 'PAID';
 }
 
-function hasFullMeltQuotePayload(method: MeltMethod, payload: unknown): boolean {
+function hasMeltQuotePayload(method: MeltMethod, payload: unknown): boolean {
   if (typeof payload !== 'object' || payload === null) {
     return false;
   }
@@ -478,14 +478,20 @@ export class MeltQuoteWatcherService {
   ): Promise<void> {
     const key = toKey(record.mintUrl, record.method, record.quoteId);
     const policy = this.getPolicy(record.method);
-    const payloadQuoteId = policy.getPayloadQuoteId(payload);
-    if (payloadQuoteId && payloadQuoteId !== record.quoteId) {
+    if (
+      !hasMeltQuotePayload(record.method, payload) ||
+      policy.getPayloadQuoteId(payload) !== record.quoteId
+    ) {
       return;
     }
 
     try {
-      const quote = await this.recordSubscriptionObservation(record, payload);
-      if (!quote) return;
+      const quote = await this.quoteLifecycle.recordMeltQuoteObservation(
+        policy.toCanonicalQuote(
+          record.mintUrl,
+          payload as MeltMethodQuoteSnapshot<typeof record.method>,
+        ),
+      );
 
       if (quote.state === 'PAID') {
         await this.stopWatching(key);
@@ -506,58 +512,6 @@ export class MeltQuoteWatcherService {
         err,
       });
     }
-  }
-
-  private async recordSubscriptionObservation(
-    record: QuoteWatchRecord,
-    payload: unknown,
-  ): Promise<MeltQuote | undefined> {
-    const policy = this.getPolicy(record.method);
-
-    if (hasFullMeltQuotePayload(record.method, payload) && policy.getPayloadQuoteId(payload)) {
-      return this.quoteLifecycle.recordMeltQuoteObservation(
-        policy.toCanonicalQuote(
-          record.mintUrl,
-          payload as MeltMethodQuoteSnapshot<typeof record.method>,
-        ),
-      );
-    }
-
-    const payloadState = isMeltQuoteState(payload) ? payload : this.getObjectPayloadState(payload);
-    if (!payloadState) {
-      return undefined;
-    }
-
-    if (payloadState === 'PAID') {
-      return this.quoteLifecycle.refreshMeltQuote(record.mintUrl, record.method, record.quoteId);
-    }
-
-    const existing = await this.quoteLifecycle.getMeltQuote(
-      record.mintUrl,
-      record.method,
-      record.quoteId,
-    );
-    if (!existing) {
-      return undefined;
-    }
-
-    const now = Date.now();
-    return this.quoteLifecycle.recordMeltQuoteObservation({
-      ...existing,
-      state: payloadState as never,
-      lastObservedRemoteState: payloadState as never,
-      lastObservedRemoteStateAt: now,
-      updatedAt: now,
-    } as MeltQuote);
-  }
-
-  private getObjectPayloadState(payload: unknown): MeltQuote['state'] | undefined {
-    if (typeof payload !== 'object' || payload === null) {
-      return undefined;
-    }
-
-    const state = (payload as { state?: unknown }).state;
-    return isMeltQuoteState(state) ? state : undefined;
   }
 
   private async stopWatching(key: QuoteKey): Promise<void> {
