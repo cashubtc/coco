@@ -10,9 +10,10 @@ boundary when it avoids worsening that boundary and reports relevant deviations.
 does not require migrating its whole module. Follow the owning design's migration scope.
 
 For domain changes, follow [domain routing](docs/agents/domain.md) for vocabulary and relevant ADRs.
-Distinguish an accepted design from its implementation status: an ADR can constrain future work without
-proving that a feature already exists. Resolve conflicts explicitly rather than copying a legacy example
-or treating a stale comment as the contract.
+ADRs describe the architecture established by merged changes. Merge an ADR or glossary change that
+depends on new behavior with the implementation that establishes it. Keep unimplemented proposals in
+the issue tracker. Resolve conflicts explicitly rather than copying a legacy example or treating a
+stale comment as the contract.
 
 ## Package boundaries
 
