@@ -356,6 +356,34 @@ export class MeltOperationService {
     }
   }
 
+  /**
+   * Advance from canonical persisted evidence without observing the mint. Background processors
+   * use this path; explicit payment checks retain their remote refresh behavior.
+   */
+  async advancePendingOperation(operationId: string): Promise<PendingCheckResult> {
+    const releaseLock = await this.operationIdLock.acquire(operationId);
+    try {
+      const operation = await this.requireOperation(operationId);
+      if (operation.state !== 'pending') return 'stay_pending';
+      const quote = await this.dependencies.quoteLifecycle.getMeltQuote(
+        operation.mintUrl,
+        operation.method,
+        operation.quoteId,
+      );
+      if (quote?.state === 'PAID' && Array.isArray(quote.change)) {
+        await this.applyPaid(operation, quote);
+        return 'finalize';
+      }
+      if (quote?.state === 'UNPAID' && quote.lastObservedRemoteStateAt !== undefined) {
+        await this.releaseAfterNonPayment(operation, quote, 'Canonical quote is UNPAID');
+        return 'rollback';
+      }
+      return 'stay_pending';
+    } finally {
+      releaseLock();
+    }
+  }
+
   async recoverPendingOperations(): Promise<void> {
     if (this.recoveryLock) throw new Error('Recovery is already in progress');
     let releaseRecovery!: () => void;

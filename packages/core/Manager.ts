@@ -128,7 +128,7 @@ export interface CocoConfig {
     /** Proof state watcher (enabled by default) */
     proofStateWatcher?: {
       disabled?: boolean;
-      /** When enabled, scan existing inflight proofs on start (default: true) */
+      /** Scan existing inflight proofs and pending Sends on start (default: true). */
       watchExistingInflightOnStart?: boolean;
     };
     /** Melt quote watcher (enabled by default) */
@@ -151,11 +151,13 @@ export interface CocoConfig {
       maxRetries?: number;
       baseRetryDelayMs?: number;
       initialEnqueueDelayMs?: number;
+      /** Automatically claim cached and newly observed Mint Quote value (default: true). */
       autoClaimMintQuotes?: boolean;
     };
     /** Melt settlement processor (enabled by default) */
     meltSettlementProcessor?: {
       disabled?: boolean;
+      /** Discover pending Melts from persisted evidence; live listeners remain enabled. */
       initializeExistingPendingOperationsOnStart?: boolean;
     };
   };

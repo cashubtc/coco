@@ -34,6 +34,53 @@ describe('ProofStateWatcherService', () => {
     bus = new EventBus<CoreEvents>();
   });
 
+  it('drains acquisition and unsubscribes a late subscription before stopping', async () => {
+    let releaseSubscription!: (subscription: {
+      subId: string;
+      unsubscribe: () => Promise<void>;
+    }) => void;
+    let enteredSubscription!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      enteredSubscription = resolve;
+    });
+    const unsubscribe = mock(async () => {});
+    const subscribe = mock(
+      () =>
+        new Promise<{ subId: string; unsubscribe: () => Promise<void> }>((resolve) => {
+          releaseSubscription = resolve;
+          enteredSubscription();
+        }),
+    );
+    const watcher = new ProofStateWatcherService(
+      { subscribe } as unknown as SubscriptionManager,
+      { isTrustedMint: async () => true } as unknown as MintService,
+      {} as ProofService,
+      {} as ProofRepository,
+      bus,
+      undefined,
+      { watchExistingInflightOnStart: false },
+    );
+    await watcher.start();
+    const watching = watcher.watchProof(mintUrlA, ['late-proof']);
+    await entered;
+    // Overlapping discovery must not acquire another subscription for the same proof.
+    await watcher.watchProof(mintUrlA, ['late-proof']);
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    let didStop = false;
+    const stopping = watcher.stop();
+    expect(watcher.stop()).toBe(stopping);
+    const stopped = stopping.then(() => {
+      didStop = true;
+    });
+    await Promise.resolve();
+    expect(didStop).toBe(false);
+    releaseSubscription({ subId: 'late-subscription', unsubscribe });
+    await Promise.all([watching, stopped]);
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    await watcher.watchProof(mintUrlA, ['after-stop']);
+    expect(subscribe).toHaveBeenCalledTimes(1);
+  });
+
   it('bootstraps inflight proofs on start by default', async () => {
     const checkInflightProofs = mock(async () => {});
     const inflightProofs = [

@@ -109,6 +109,8 @@ export class MeltSettlementProcessor {
   private interestRegistrar?: OperationInterestRegistrar;
 
   private running = false;
+  private generation = 0;
+  private stopping?: Promise<void>;
   private offPending?: () => void;
   private offQuoteUpdated?: () => void;
   private offFinalized?: () => void;
@@ -119,6 +121,8 @@ export class MeltSettlementProcessor {
   private readonly registeredOperationInterestIds = new Set<string>();
   private readonly scheduledInitialCheckOperationIds = new Set<string>();
   private readonly inFlightChecks = new Set<Promise<void>>();
+  private readonly registrations = new Set<Promise<unknown>>();
+  private readonly initialCheckTimers = new Set<ReturnType<typeof setTimeout>>();
 
   constructor(
     meltOperations: MeltOperationService,
@@ -166,8 +170,10 @@ export class MeltSettlementProcessor {
   }
 
   async start(): Promise<void> {
+    if (this.stopping) await this.stopping;
     if (this.running) return;
     this.running = true;
+    this.generation++;
     this.logger?.info('MeltSettlementProcessor started');
 
     this.offPending = this.bus.on('melt-op:pending', async ({ operation }) => {
@@ -209,10 +215,24 @@ export class MeltSettlementProcessor {
     }
   }
 
-  async stop(): Promise<void> {
-    if (!this.running) return;
+  stop(): Promise<void> {
+    if (this.stopping) return this.stopping;
+    if (!this.running) return Promise.resolve();
     this.running = false;
+    const task = this.finishStop();
+    this.stopping = task;
+    void task.then(
+      () => {
+        this.stopping = undefined;
+      },
+      () => {
+        this.stopping = undefined;
+      },
+    );
+    return task;
+  }
 
+  private async finishStop(): Promise<void> {
     const unsubscribe = (off: (() => void) | undefined) => {
       try {
         off?.();
@@ -228,6 +248,12 @@ export class MeltSettlementProcessor {
     this.offQuoteUpdated = undefined;
     this.offFinalized = undefined;
     this.offRolledBack = undefined;
+
+    for (const timer of this.initialCheckTimers) clearTimeout(timer);
+    this.initialCheckTimers.clear();
+    while (this.registrations.size > 0) {
+      await Promise.allSettled(Array.from(this.registrations));
+    }
 
     while (this.inFlightChecks.size > 0) {
       await Promise.allSettled(Array.from(this.inFlightChecks));
@@ -245,14 +271,15 @@ export class MeltSettlementProcessor {
   }
 
   private async initializeExistingPendingOperations(): Promise<void> {
+    const generation = this.generation;
     try {
       const operations = await this.meltOperations.getPendingOperations();
-      if (!this.running) {
+      if (!this.running || generation !== this.generation) {
         return;
       }
 
       for (const operation of operations) {
-        if (!this.running) {
+        if (!this.running || generation !== this.generation) {
           return;
         }
         if (isPendingMeltOperation(operation)) {
@@ -264,7 +291,17 @@ export class MeltSettlementProcessor {
     }
   }
 
-  private async registerOperationInterest(operation: PendingMeltOperation): Promise<void> {
+  private registerOperationInterest(operation: PendingMeltOperation): Promise<void> {
+    const task = this.addOperationInterest(operation);
+    this.registrations.add(task);
+    void task.then(
+      () => this.registrations.delete(task),
+      () => this.registrations.delete(task),
+    );
+    return task;
+  }
+
+  private async addOperationInterest(operation: PendingMeltOperation): Promise<void> {
     if (!this.running) {
       return;
     }
@@ -291,13 +328,8 @@ export class MeltSettlementProcessor {
     }
 
     if (this.interestRegistrar) {
-      const registered = await this.registerOperationWatchInterest(operationInterest);
-      if (!registered) {
-        if (added) {
-          this.interests.remove(operation.id);
-        }
-        return;
-      }
+      // Observation registration failure must not suppress cached-evidence progression.
+      await this.registerOperationWatchInterest(operationInterest);
     }
 
     if (!this.running || !this.interests.has(operation.id)) {
@@ -337,20 +369,37 @@ export class MeltSettlementProcessor {
     }
   }
 
-  private async registerOperationWatchInterest(
-    operation: OperationQuoteInterest,
-  ): Promise<boolean> {
+  private registerOperationWatchInterest(operation: OperationQuoteInterest): Promise<boolean> {
+    const task = this.acquireOperationWatchInterest(operation);
+    this.registrations.add(task);
+    void task.then(
+      () => this.registrations.delete(task),
+      () => this.registrations.delete(task),
+    );
+    return task;
+  }
+
+  private async acquireOperationWatchInterest(operation: OperationQuoteInterest): Promise<boolean> {
     if (!this.interestRegistrar) {
       return true;
     }
 
+    const registrar = this.interestRegistrar;
     try {
-      await this.interestRegistrar.registerOperationInterest({
+      await registrar.registerOperationInterest({
         operationId: operation.id,
         mintUrl: operation.mintUrl,
         method: operation.method,
         quoteId: operation.quoteId,
       });
+      if (
+        !this.running ||
+        this.interestRegistrar !== registrar ||
+        !this.interests.has(operation.id)
+      ) {
+        await this.removeOperationWatchInterest(registrar, operation.id);
+        return false;
+      }
       this.registeredOperationInterestIds.add(operation.id);
       return true;
     } catch (err) {
@@ -371,7 +420,8 @@ export class MeltSettlementProcessor {
     }
 
     this.scheduledInitialCheckOperationIds.add(operationId);
-    setTimeout(() => {
+    const timer = setTimeout(() => {
+      this.initialCheckTimers.delete(timer);
       this.scheduledInitialCheckOperationIds.delete(operationId);
 
       if (!this.running || !this.interests.has(operationId)) {
@@ -381,6 +431,7 @@ export class MeltSettlementProcessor {
       // Pending events are emitted before MeltOperationService releases its per-operation lock.
       void this.checkInterestedOperation(operationId, context);
     }, 0);
+    this.initialCheckTimers.add(timer);
   }
 
   private async removeRegisteredOperationInterest(operationId: string): Promise<void> {
@@ -413,6 +464,7 @@ export class MeltSettlementProcessor {
     operationId: string,
     quote: { mintUrl: string; method: MeltMethod; quoteId: string },
   ): Promise<void> {
+    if (!this.running) return Promise.resolve();
     const context = {
       mintUrl: normalizeMintUrl(quote.mintUrl),
       method: quote.method,
@@ -447,12 +499,12 @@ export class MeltSettlementProcessor {
     let nextContext: OperationCheckContext | undefined = initialContext;
 
     try {
-      while (nextContext) {
+      while (nextContext && this.running) {
         const context = nextContext;
         nextContext = undefined;
 
         try {
-          await this.meltOperations.checkPendingOperation(operationId);
+          await this.meltOperations.advancePendingOperation(operationId);
         } catch (err) {
           this.logger?.warn('Failed to settle pending melt operation', {
             operationId,

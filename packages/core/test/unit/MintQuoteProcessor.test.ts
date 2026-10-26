@@ -69,13 +69,16 @@ describe('MintOperationProcessor', () => {
       async getMintQuoteClaimability() {
         return { status: 'claimable' };
       },
-      async claimPendingMintQuotes() {
-        startupClaimCalls++;
+      async getPendingOperations() {
         return [];
       },
     } as unknown as MintOperationService;
 
     mockQuoteLifecycle = {
+      async getPendingMintQuotes() {
+        startupClaimCalls++;
+        return [];
+      },
       async getMintQuote() {
         return makeBolt11Quote('quote-2', true);
       },
@@ -307,11 +310,49 @@ describe('MintOperationProcessor', () => {
     expect(claimCalls).toEqual([]);
   });
 
-  it('claims pending mint quotes through the common startup path', async () => {
+  it('discovers pending mint quotes on startup', async () => {
     await processor.start();
     await processor.waitForCompletion();
 
     expect(startupClaimCalls).toBe(1);
+  });
+
+  it('does not start claims after a startup discovery finishes during stop', async () => {
+    let releaseDiscovery!: (quotes: ReturnType<typeof makeBolt11Quote>[]) => void;
+    mockQuoteLifecycle.getPendingMintQuotes = () =>
+      new Promise((resolve) => {
+        releaseDiscovery = resolve;
+      });
+    await processor.start();
+    const stopped = processor.stop();
+    releaseDiscovery([makeBolt11Quote('late-startup', true)]);
+    await stopped;
+    expect(claimCalls).toEqual([]);
+  });
+
+  it('keeps explicit requeue processing enabled when automatic claiming is disabled', async () => {
+    processor = new MintOperationProcessor(
+      mockMintOperationService,
+      mockQuoteLifecycle,
+      bus,
+      undefined,
+      {
+        autoClaimMintQuotes: false,
+        initialEnqueueDelayMs: 0,
+      },
+    );
+    await processor.start();
+    await bus.emit('mint-op:requeue', {
+      mintUrl: 'https://mint.test',
+      operationId: 'explicit-requeue',
+      operation: {
+        id: 'explicit-requeue',
+        method: 'bolt11',
+      } as CoreEvents['mint-op:requeue']['operation'],
+    });
+    await processor.waitForCompletion();
+    expect(finalizeCalls).toEqual(['explicit-requeue']);
+    expect(startupClaimCalls).toBe(0);
   });
 
   it('can disable automatic mint quote claiming', async () => {
