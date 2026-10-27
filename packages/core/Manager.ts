@@ -560,6 +560,11 @@ export class Manager {
     this.mintOperationProcessor = undefined;
   }
 
+  /**
+   * Enable quote observation and attach pending-operation interests. Operation-owned interests
+   * are accepted synchronously; their subscription setup may still be pending when this resolves.
+   * Setup errors are reported by the watcher and do not block cached-evidence progression.
+   */
   async enableMeltQuoteWatcher(options?: {
     watchExistingPendingQuotesOnStart?: boolean;
   }): Promise<void> {
@@ -592,6 +597,7 @@ export class Manager {
     this.meltQuoteWatcher = undefined;
   }
 
+  /** Enable cached-evidence progression without waiting for operation quote subscriptions. */
   async enableMeltSettlementProcessor(options?: {
     initializeExistingPendingOperationsOnStart?: boolean;
   }): Promise<boolean> {

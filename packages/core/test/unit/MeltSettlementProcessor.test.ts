@@ -11,7 +11,7 @@ import type {
   RolledBackMeltOperation,
 } from '../../operations/melt/MeltOperation.ts';
 import type { MeltOperationService } from '../../operations/melt/MeltOperationService.ts';
-import type { MeltQuoteWatcherService } from '../../services/watchers/MeltQuoteWatcherService.ts';
+import { MeltQuoteWatcherService } from '../../services/watchers/MeltQuoteWatcherService.ts';
 import { MeltSettlementProcessor } from '../../services/watchers/MeltSettlementProcessor.ts';
 
 describe('MeltSettlementProcessor', () => {
@@ -109,7 +109,7 @@ describe('MeltSettlementProcessor', () => {
     bus = new EventBus<CoreEvents>();
     advancePendingOperation = mock(async () => 'stay_pending');
     getPendingOperations = mock(async () => []);
-    registerOperationInterest = mock(async () => {});
+    registerOperationInterest = mock(() => {});
     removeOperationInterest = mock(async () => {});
     warn = mock(() => {});
     logger = {
@@ -128,6 +128,7 @@ describe('MeltSettlementProcessor', () => {
       {
         interestRegistrar: {
           registerOperationInterest,
+          retryFailedOperationInterests: mock(() => {}),
           removeOperationInterest,
         } as unknown as MeltQuoteWatcherService,
       },
@@ -413,7 +414,9 @@ describe('MeltSettlementProcessor', () => {
 
   it('retries registration after registrar registration fails', async () => {
     const err = new Error('watch unavailable');
-    registerOperationInterest.mockRejectedValueOnce(err);
+    registerOperationInterest.mockImplementationOnce(() => {
+      throw err;
+    });
     await processor.start();
 
     await emitPending();
@@ -496,36 +499,90 @@ describe('MeltSettlementProcessor', () => {
     await flushDeferredInitialChecks();
   });
 
-  it('releases watcher interest acquired during stop before stop resolves', async () => {
-    let releaseRegistration!: () => void;
-    let enteredRegistration!: () => void;
-    const entered = new Promise<void>((resolve) => {
-      enteredRegistration = resolve;
-    });
-    registerOperationInterest.mockImplementationOnce(
+  it('waits for watcher-owned cleanup after synchronously withdrawing interest', async () => {
+    let releaseRemoval!: () => void;
+    removeOperationInterest.mockImplementationOnce(
       () =>
         new Promise<void>((resolve) => {
-          releaseRegistration = resolve;
-          enteredRegistration();
+          releaseRemoval = resolve;
         }),
     );
     await processor.start();
-    const pending = emitPending();
-    await entered;
+    await emitPending();
     let didStop = false;
     const stopped = processor.stop().then(() => {
       didStop = true;
     });
-    await Promise.resolve();
+    expect(removeOperationInterest).toHaveBeenCalledWith('melt-op-1');
+    await new Promise<void>((resolve) => setImmediate(resolve));
     expect(didStop).toBe(false);
-    releaseRegistration();
-    await Promise.all([pending, stopped]);
-    expect(removeOperationInterest).toHaveBeenCalledTimes(1);
+    releaseRemoval();
+    await stopped;
     expect(advancePendingOperation).not.toHaveBeenCalled();
   });
 
+  it('advances cached evidence without waiting for watcher-owned setup', async () => {
+    let resolveTrust!: (trusted: boolean) => void;
+    const trust = new Promise<boolean>((resolve) => {
+      resolveTrust = resolve;
+    });
+    const subscribe = mock(async () => ({ subId: 'test', unsubscribe: async () => {} }));
+    const watcher = new MeltQuoteWatcherService(
+      { subscribe } as unknown as ConstructorParameters<typeof MeltQuoteWatcherService>[0],
+      { isTrustedMint: () => trust } as unknown as ConstructorParameters<
+        typeof MeltQuoteWatcherService
+      >[1],
+      {} as ConstructorParameters<typeof MeltQuoteWatcherService>[2],
+      bus,
+      logger,
+      { watchExistingPendingQuotesOnStart: false },
+    );
+    await watcher.start();
+    await processor.setInterestRegistrar(watcher);
+    await processor.start();
+    await emitPending();
+    await flushDeferredInitialChecks();
+    expect(advancePendingOperation).toHaveBeenCalledWith('melt-op-1');
+    expect(subscribe).not.toHaveBeenCalled();
+    const stopping = processor.stop();
+    resolveTrust(true);
+    await stopping;
+    expect(subscribe).not.toHaveBeenCalled();
+    await watcher.stop();
+  });
+
+  it('registers a replacement immediately while old registrar cleanup is pending', async () => {
+    await processor.start();
+    await emitPending();
+    let resolveRemoval!: () => void;
+    removeOperationInterest.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveRemoval = resolve;
+        }),
+    );
+    const replacement = {
+      registerOperationInterest: mock(() => {}),
+      retryFailedOperationInterests: mock(() => {}),
+      removeOperationInterest: mock(async () => {}),
+    };
+    const rebinding = processor.setInterestRegistrar(replacement);
+    expect(replacement.registerOperationInterest).toHaveBeenCalledTimes(1);
+    await emitPending();
+    expect(replacement.registerOperationInterest).toHaveBeenCalledTimes(2);
+    resolveRemoval();
+    await rebinding;
+    expect(replacement.removeOperationInterest).not.toHaveBeenCalled();
+    await processor.setInterestRegistrar(replacement);
+    expect(replacement.retryFailedOperationInterests).toHaveBeenCalledTimes(1);
+    expect(replacement.registerOperationInterest).toHaveBeenCalledTimes(2);
+    await processor.stop();
+  });
+
   it('evaluates cached evidence even when observation registration fails', async () => {
-    registerOperationInterest.mockRejectedValueOnce(new Error('observation unavailable'));
+    registerOperationInterest.mockImplementationOnce(() => {
+      throw new Error('observation unavailable');
+    });
     await processor.start();
     await emitPending();
     await flushDeferredInitialChecks();

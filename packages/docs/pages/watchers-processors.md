@@ -64,6 +64,20 @@ observations, and emits canonical `melt-quote:updated` events. It also keeps ope
 interest active for pending melt operations, including expired quotes, until settlement finalizes or
 rolls back.
 
+The Melt processor declares operation-owned observation interest synchronously. The watcher owns
+asynchronous trust checks and subscription setup; registration means local acceptance, not readiness
+or remote subscription acceptance. Enabling either owner can therefore return while setup for those
+operation-owned interests is still pending. Cached-evidence progression does not wait for setup.
+
+Setup failures are logged with quote and operation context. There is no new retry loop: another
+pending-operation declaration can retry failed or skipped setup, while enabling the same running
+watcher again retries failed setup only. An untrusted skip is not retried by that enable call.
+
+Removing operation interest withdraws it immediately and waits for any cleanup it requires. Canonical
+and other operation interests keep shared watches active. Stopping or untrusting the watcher
+invalidates affected records before waiting for acquisition and unsubscribe cleanup, including records
+already being retired. Old acquisitions and callbacks cannot take ownership of replacement watches.
+
 ## MeltSettlementProcessor
 
 This module reacts to canonical melt quote update events for interested pending melt operations and
