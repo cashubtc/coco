@@ -1,5 +1,5 @@
-import { MintSwapChildOperationError } from '../../models/Error.ts';
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
+import { MintSwapChildOperationError } from '../../models/Error.ts';
 import { initializeCoco, Manager, type CocoConfig } from '../../Manager.ts';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 import { MemoryMintSwapOperationRepository } from '../../repositories/memory/MemoryMintSwapOperationRepository.ts';
@@ -268,9 +268,18 @@ describe('Mint Swap Manager runtime', () => {
     });
     const execution = manager.ops.mintSwap.execute('swap');
     await entered.promise;
-    await expect(meltService.execute('source-child')).rejects.toBeInstanceOf(
-      MintSwapChildOperationError,
-    );
+    for (const command of [
+      () => meltService.execute('source-child'),
+      () => meltService.finalize('source-child'),
+      () => meltService.rollback('source-child'),
+      () => meltService.checkPendingOperation('source-child'),
+      () => manager.ops.melt.finalize('source-child'),
+    ]) {
+      await expect(command()).rejects.toMatchObject({
+        name: 'MintSwapChildOperationError',
+        parentOperationId: 'swap',
+      });
+    }
     release.resolve();
     await execution;
     expect(fixture.requests.filter((request) => request === 'melt')).toHaveLength(1);

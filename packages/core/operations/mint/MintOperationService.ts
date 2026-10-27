@@ -1,5 +1,5 @@
-import { assertStandaloneOperation, findMintSwapOwner } from '../mintSwap/MintSwapOwnership.ts';
 import { Amount, type Proof } from '@cashu/cashu-ts';
+import { assertStandaloneOperation, findMintSwapOwner } from '../mintSwap/MintSwapOwnership.ts';
 import type { MintOperationRepository, ProofRepository } from '../../repositories';
 import type {
   ExecutingMintOperation,

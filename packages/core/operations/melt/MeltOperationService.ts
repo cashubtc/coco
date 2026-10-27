@@ -1,6 +1,6 @@
-import { assertStandaloneOperation, findMintSwapOwner } from '../mintSwap/MintSwapOwnership.ts';
 import { Amount, type Proof, type SerializedBlindedSignature } from '@cashu/cashu-ts';
 import { unblindMeltChange } from './MeltChange.ts';
+import { assertStandaloneOperation, findMintSwapOwner } from '../mintSwap/MintSwapOwnership.ts';
 import type { MeltOperationRepository, ProofRepository } from '../../repositories';
 import type {
   ExecutingMeltOperation,
@@ -292,6 +292,7 @@ export class MeltOperationService {
     effectiveFee?: Amount;
     finalizedData?: MeltMethodFinalizedData;
   }> {
+    await this.assertStandalone(operationId);
     const releaseLock = await this.operationIdLock.acquire(operationId);
     try {
       const current = await this.requireOperation(operationId);
@@ -317,6 +318,7 @@ export class MeltOperationService {
   }
 
   async rollback(operationId: string, reason = 'Rolled back'): Promise<void> {
+    await this.assertStandalone(operationId);
     const releaseLock = await this.operationIdLock.acquire(operationId);
     try {
       const operation = await this.requireOperation(operationId);
@@ -346,6 +348,7 @@ export class MeltOperationService {
   }
 
   async checkPendingOperation(operationId: string): Promise<PendingCheckResult> {
+    await this.assertStandalone(operationId);
     const releaseLock = await this.operationIdLock.acquire(operationId);
     try {
       const operation = await this.requireOperation(operationId);

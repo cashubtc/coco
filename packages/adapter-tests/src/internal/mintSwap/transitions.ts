@@ -1,4 +1,3 @@
-import { mintSwapFixtures } from '../../../../core/test/fixtures/MintSwap.ts';
 import { Amount } from '@cashu/cashu-ts';
 import { mintSwapFixture, sourceUrl, destinationUrl, keys, outputProofs } from './fixture.ts';
 import {
@@ -22,6 +21,7 @@ import {
   applyMintResult,
   prepareMint,
 } from '../../../../core/operations/mint/MintTransitions.ts';
+import { mintSwapFixtures } from '../../../../core/test/fixtures/MintSwap.ts';
 import { MintSwapIntentConflictError } from '../../../../core/operations/mintSwap/MintSwapErrors.ts';
 import { defineTransition } from '../../../../core/transactions/Transition.ts';
 import { RepositoryCoreTransactionRunner } from '../../../../core/transactions/CoreTransaction.ts';
