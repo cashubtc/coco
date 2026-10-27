@@ -102,7 +102,8 @@ logical ownership while preserving shared owners. A disabled watcher does not re
 parent quote poller. Startup uses sufficient cached evidence first, retaining a bounded recovery
 fallback for unresolved evidence until #559 separates startup repair. Explicit recovery and necessary
 recovery effects remain available. Source proof release
-still requires fresh positive `UNPAID` confirmation under the shared child lock. Authorized recovery
+still requires fresh positive `UNPAID` confirmation under the shared child lock, including when the
+ordinary Melt processor advances the child independently. Authorized recovery
 interests permit observation of exact quotes after trust revocation, without restoring mint trust.
 Parent update hints are captured in the owning transaction and published after commit and
 lock release; local polling and complete active sweeps tolerate lost hints. No outbox or new schema

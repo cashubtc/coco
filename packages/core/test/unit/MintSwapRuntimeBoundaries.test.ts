@@ -550,6 +550,57 @@ describe('Mint Swap real runtime boundaries', () => {
     expect(sourceCheck).toHaveBeenCalled();
   });
 
+  for (const parentEnabled of [false, true]) {
+    for (const remoteState of ['PAID', 'PENDING', 'UNPAID', 'UNAVAILABLE'] as const) {
+      it(`confirms pending source release through ordinary Melt processing (parent=${parentEnabled}, remote=${remoteState})`, async () => {
+        const env = await setup();
+        const { manager, runtime, repo, fixture, sourceCheck } = env;
+        env.setSourceState('UNPAID');
+        const earlierResponse = env.sourceResponse();
+        env.setSourceState('PENDING');
+        await manager.ops.mintSwap.execute('swap');
+        expect((await repo.meltOperationRepository.getById('source-child'))?.state).toBe('pending');
+        if (parentEnabled)
+          await manager.enableMintSwapOperationProcessor({ processIntervalMs: 60_000 });
+        spyOn(Date, 'now').mockReturnValue(11_000);
+        await runtime.quoteLifecycle.recordMeltQuoteObservation(
+          meltQuoteFromBolt11Response(fixture.parent.sourceMintUrl, earlierResponse),
+        );
+        const before = await repo.proofRepository.getProofsBySecrets(fixture.parent.sourceMintUrl, [
+          'original',
+        ]);
+        const confirmation = deferred();
+        sourceCheck.mockClear();
+        sourceCheck.mockImplementation(async () => {
+          confirmation.resolve();
+          if (remoteState === 'UNAVAILABLE') throw new Error('Confirmation unavailable');
+          env.setSourceState(remoteState);
+          return env.sourceResponse();
+        });
+        await manager.enableMeltSettlementProcessor();
+        await within(confirmation.promise);
+        // The public stop drains the admitted check, including canonical commit and settlement.
+        await manager.disableMeltSettlementProcessor();
+        expect(sourceCheck).toHaveBeenCalledTimes(1);
+        const child = await repo.meltOperationRepository.getById('source-child');
+        const proofs = await repo.proofRepository.getProofsBySecrets(fixture.parent.sourceMintUrl, [
+          'original',
+        ]);
+        if (remoteState === 'PAID') {
+          expect(child?.state).toBe('finalized');
+          expect(proofs[0]?.state).toBe('spent');
+        } else if (remoteState === 'UNPAID') {
+          expect(child?.state).toBe('rolled_back');
+          expect(proofs[0]?.state).toBe('ready');
+          expect(proofs[0]?.usedByOperationId).toBeUndefined();
+        } else {
+          expect(child?.state).toBe('pending');
+          expect(proofs).toEqual(before);
+        }
+      });
+    }
+  }
+
   for (const observationTiming of ['during payment', 'after payment'] as const) {
     for (const remoteState of ['PAID', 'UNPAID', 'UNAVAILABLE'] as const) {
       it(`confirms source non-payment when a watcher response arrives ${observationTiming} and the source is ${remoteState}`, async () => {

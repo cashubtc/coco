@@ -313,7 +313,9 @@ records each remote quote observation before calling `applyMeltPending`, `applyM
 `releaseMeltAfterNonPayment`. Paid settlement validates NUT-08 change against the persisted output
 plan and atomically saves change, spends the exact Melt inputs, and finalizes the operation.
 
-Only fresh positive `UNPAID` evidence permits release. Prepared cancellation is safe because no
+Only fresh positive `UNPAID` evidence permits release. Background Melt progression consumes cached
+PAID settlement evidence, but confirms nonpayment under the shared operation lock before release.
+This applies equally to standalone operations and Mint Swap source children. Prepared cancellation is safe because no
 remote effect was authorized. Timeouts, transport errors, malformed responses, incomplete pre-swap
 restoration, and contradictory proof/quote observations retain operation-owned value and use
 `deferMeltRecovery`. Recovery restores remote output candidates outside transactions, then passes

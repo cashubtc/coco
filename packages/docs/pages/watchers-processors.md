@@ -90,7 +90,9 @@ eligibility. Waiting quotes and incomplete cached PAID change leave operations p
 matching PAID observations normalize omitted change to empty change at the observation boundary;
 incomplete stored evidence must be enriched by a valid observation or explicit refresh. Settlement
 still validates quote identity and proof ownership through the operation service and may fetch
-metadata to unblind change.
+metadata to unblind change. Before releasing inputs from UNPAID evidence, it confirms nonpayment
+under the shared operation lock. This narrow safety check also applies to ordinary processing of a
+Mint Swap source child; it does not add polling for pending or incomplete quotes.
 
 `initializeExistingPendingOperationsOnStart: false` skips startup discovery while preserving listeners
 for newly pending operations and subsequent quote observations.

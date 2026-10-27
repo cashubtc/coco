@@ -268,9 +268,10 @@ describe.each(['memory', 'sqlite'] as const)('background progression (%s)', (ada
   }
 
   it.each(['PAID', 'UNPAID'] as const)(
-    'advances cached %s Melt evidence without observation',
+    'advances cached %s Melt evidence with confirmation only for nonpayment',
     async (state) => {
       await seedMelt(state);
+      meltState = state;
       await coco.enableMeltSettlementProcessor();
       await finishMeltChecks();
       expect((await coco.ops.melt.get('melt-op'))?.state).toBe(
@@ -279,7 +280,7 @@ describe.each(['memory', 'sqlite'] as const)('background progression (%s)', (ada
       expect((await repo.proofRepository.getProofBySecret(mintUrl, 'melt-input'))?.state).toBe(
         state === 'PAID' ? 'spent' : 'ready',
       );
-      expect(requests).toEqual([]);
+      expect(requests).toEqual(state === 'PAID' ? [] : ['/v1/melt/quote/bolt11/melt']);
     },
   );
 
