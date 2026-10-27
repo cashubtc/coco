@@ -23,19 +23,9 @@ Custom storage adapters are a supported extension path. Implement `Repositories`
 `initializeCoco({ repo, seedGetter })`, just as with a supplied adapter. You can use this path for
 an independently implemented PostgreSQL adapter or another storage system.
 
-Starting with **v3**, repository interfaces, transaction scopes, and repository-only helper types
-and functions are **unstable**: incompatible changes are allowed in minor or major releases,
-require adapter migration notes, and are forbidden in patch releases. This is not a retroactive
-change to v2's compatibility policy.
-
-The supplied adapters' constructors, configuration, initialization, and normal `initializeCoco`
-usage retain normal semantic versioning guarantees. Shared public models, Wallet APIs, events,
-and plugin service interfaces retain those guarantees even when referenced by repositories or
-re-exported through `/adapter`. Direct repository method use follows the unstable contract.
-
-Independent adapter authors should declare compatible Coco versions and run the relevant
-`@cashu/coco-adapter-tests` suites against their backend before widening that range. Transaction,
-durability, persisted-data compatibility, and recovery requirements still apply. See the full
+Starting with **v3**, the repository implementation contract is **unstable** across minor releases.
+Normal setup and use of the supplied adapters retain semantic versioning guarantees. Before building
+or upgrading a custom adapter, read the
 [repository compatibility policy](https://github.com/cashubtc/coco/blob/master/packages/core/README.md#repository-compatibility).
 
 ## Security

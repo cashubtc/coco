@@ -213,13 +213,11 @@ Published packages are versioned with Changesets. If your PR changes runtime
 behavior, public types, package exports, or documentation for a published package,
 you should usually include a changeset unless a maintainer tells you otherwise.
 
-The [repository compatibility policy](packages/core/README.md#repository-compatibility) takes effect
-in v3 through a major release. From v3 onward, an incompatible change confined to the repository
-implementation contract needs at least a minor changeset, never a patch. Include an adapter migration
-note in the changeset naming the affected interfaces, the required implementation changes, and any
-persistence migration needed (or state that none is needed). Changes that also break shared public
-models, app APIs, or plugin service contracts still require a major release. Update the supplied
-adapters and relevant conformance coverage together with each contract change.
+For repository contract changes, choose the changeset bump using the
+[compatibility policy](packages/core/README.md#repository-compatibility). Put required adapter migration
+notes in the changeset: name the affected interfaces, implementation changes, and persistence migration
+(or state that none is needed). Update the supplied adapters and relevant conformance coverage together
+with each contract change.
 
 Stable and prerelease npm publishes validate and publish the tagged commit.
 Package versions and changelogs must be committed before the GitHub Release is

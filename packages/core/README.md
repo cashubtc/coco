@@ -80,6 +80,8 @@ continue to satisfy the documented repository semantics. Compatibility with pers
 is assessed separately; changing an interface does not by itself permit dropping existing data or
 operation recovery support.
 
+See [ADR-0013](docs/adr/0013-keep-custom-adapters-with-scoped-compatibility.md) for the rationale.
+
 ## Protocol Support
 
 - [x] NUT-00
