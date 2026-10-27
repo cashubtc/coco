@@ -4,6 +4,7 @@ import {
   type MintQuoteOnchainResponse,
 } from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it, mock, type Mock } from 'bun:test';
+import { deferred } from '../fixtures/MintSwapRuntime.ts';
 import { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
 import {
@@ -33,6 +34,13 @@ describe('MintOperationWatcherService', () => {
   let callback:
     | ((payload: MintQuoteBolt11Response | MintQuoteOnchainResponse | any) => Promise<void>)
     | undefined;
+
+  const waitForSubscribeCalls = async (count: number) => {
+    for (let attempt = 0; attempt < 50 && subscribe.mock.calls.length < count; attempt++) {
+      await Promise.resolve();
+    }
+    expect(subscribe).toHaveBeenCalledTimes(count);
+  };
 
   const makePendingOperation = (): PendingMintOperation => ({
     id: 'mint-op-1',
@@ -158,11 +166,12 @@ describe('MintOperationWatcherService', () => {
 
   const makeQuoteLifecycle = (
     overrides: Partial<
-      Pick<QuoteLifecycle, 'getPendingMintQuotes' | 'recordMintQuoteSnapshot'>
+      Pick<QuoteLifecycle, 'getPendingMintQuotes' | 'getMintQuote' | 'recordMintQuoteSnapshot'>
     > = {},
   ): QuoteLifecycle =>
     ({
       getPendingMintQuotes: mock(async () => []),
+      getMintQuote: mock(async () => null),
       recordMintQuoteSnapshot: mock(async () => makeBolt11Quote()),
       ...overrides,
     }) as unknown as QuoteLifecycle;
@@ -203,6 +212,153 @@ describe('MintOperationWatcherService', () => {
         return { subId: 'sub-1', unsubscribe };
       },
     );
+  });
+
+  it('keeps recovery observation registered while another owner removal awaits trust', async () => {
+    const entered = deferred();
+    const release = deferred();
+    let removing = false;
+    const watcher = makeWatcher({
+      mintService: {
+        isTrustedMint: async () => {
+          if (!removing) return true;
+          entered.resolve();
+          await release.promise;
+          return false;
+        },
+      } as unknown as MintService,
+    });
+    await watcher.start();
+    const identity = { mintUrl, method: 'bolt11' as const, quoteId };
+    const first = { kind: 'mint-swap' as const, id: 'first', recovery: true };
+    const next = { kind: 'mint-swap' as const, id: 'next', recovery: true };
+    await watcher.registerInterest({ ...identity, owner: { kind: 'canonical', id: 'canonical' } });
+    await watcher.registerInterest({ ...identity, owner: first });
+    removing = true;
+    const removal = watcher.removeInterest(first);
+    await entered.promise;
+    await watcher.registerInterest({ ...identity, owner: next });
+    release.resolve();
+    await removal;
+    try {
+      expect(unsubscribe).not.toHaveBeenCalled();
+      await waitForSubscribeCalls(1);
+      expect(subscribe).toHaveBeenCalledTimes(1);
+      expect(watcher.hasRecoveryInterest(identity)).toBe(true);
+    } finally {
+      await watcher.stop();
+    }
+  });
+
+  it('makes overlapping stop calls wait for the same subscription cleanup', async () => {
+    const entered = deferred();
+    const release = deferred();
+    unsubscribe.mockImplementation(async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    const watcher = makeWatcher();
+    await watcher.start();
+    await watcher.registerInterest({
+      mintUrl,
+      method: 'bolt11',
+      quoteId,
+      owner: { kind: 'mint-swap', id: 'parent', recovery: true },
+    });
+    await waitForSubscribeCalls(1);
+    const first = watcher.stop();
+    await entered.promise;
+    let secondFinished = false;
+    const second = watcher.stop().then(() => {
+      secondFinished = true;
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    const finishedBeforeCleanup = secondFinished;
+    release.resolve();
+    await Promise.all([first, second]);
+    expect(finishedBeforeCleanup).toBe(false);
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('joins a canonical batch without adding a singleton or removing its other owners', async () => {
+    const watcher = makeWatcher({
+      quoteLifecycle: makeQuoteLifecycle({
+        getPendingMintQuotes: async () => [
+          makeBolt11Quote(),
+          { ...makeBolt11Quote(), quoteId: 'second' },
+        ],
+      }),
+    });
+    await watcher.start();
+    const owner = { kind: 'mint-swap' as const, id: 'parent', recovery: true };
+    await watcher.registerInterest({ mintUrl: `${mintUrl}/`, method: 'bolt11', quoteId, owner });
+    await watcher.registerInterest({ mintUrl, method: 'bolt11', quoteId, owner });
+    await waitForSubscribeCalls(1);
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    expect(subscribe.mock.calls[0]![2]).toEqual([quoteId, 'second']);
+    await watcher.removeInterest(owner);
+    expect(unsubscribe).not.toHaveBeenCalled();
+    await watcher.stop();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('cleans late subscription acquisition and coalesces concurrent owners', async () => {
+    let resolveStart!: (value: { subId: string; unsubscribe: typeof unsubscribe }) => void;
+    let entered!: () => void;
+    const arrival = new Promise<void>((resolve) => (entered = resolve));
+    subscribe.mockImplementation(async () => {
+      entered();
+      return new Promise((resolve) => (resolveStart = resolve));
+    });
+    const watcher = makeWatcher();
+    await watcher.start();
+    const interest = {
+      mintUrl,
+      method: 'bolt11' as const,
+      quoteId,
+      owner: { kind: 'mint-swap' as const, id: 'parent', recovery: true },
+    };
+    const first = watcher.registerInterest(interest);
+    await arrival;
+    const second = watcher.registerInterest({
+      ...interest,
+      owner: { ...interest.owner, id: 'other' },
+    });
+    let stopped = false;
+    const stopping = watcher.stop().then(() => (stopped = true));
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+    resolveStart({ subId: 'late', unsubscribe });
+    await Promise.all([first, second, stopping]);
+    await waitForSubscribeCalls(1);
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    expect(watcher.hasRecoveryInterest(interest)).toBe(false);
+  });
+
+  it('does not restart a completed quote when an owner refreshes its interest', async () => {
+    const complete = {
+      ...makeBolt11Quote(),
+      state: 'ISSUED' as const,
+      amountPaid: Amount.from(10),
+      amountIssued: Amount.from(10),
+    };
+    const watcher = makeWatcher({
+      quoteLifecycle: makeQuoteLifecycle({ getMintQuote: async () => complete }),
+    });
+    await watcher.start();
+    const interest = {
+      mintUrl,
+      method: 'bolt11' as const,
+      quoteId,
+      owner: { kind: 'mint-swap' as const, id: 'parent', recovery: true },
+    };
+    await watcher.registerInterest(interest);
+    await watcher.registerInterest(interest);
+    expect(subscribe).not.toHaveBeenCalled();
+    await watcher.removeInterest(interest.owner);
+    await watcher.stop();
   });
 
   it('watches existing pending canonical mint quotes on startup', async () => {
@@ -432,7 +588,9 @@ describe('MintOperationWatcherService', () => {
       operation,
     });
 
+    await waitForSubscribeCalls(1);
     expect(subscribe).toHaveBeenCalledTimes(1);
+    await waitForSubscribeCalls(1);
     if (!callback) {
       throw new Error('Expected watcher subscription callback');
     }
@@ -484,6 +642,7 @@ describe('MintOperationWatcherService', () => {
       operation,
     });
 
+    await waitForSubscribeCalls(1);
     if (!callback) {
       throw new Error('Expected watcher subscription callback');
     }
@@ -549,6 +708,7 @@ describe('MintOperationWatcherService', () => {
       operation,
     });
 
+    await waitForSubscribeCalls(1);
     if (!callback) {
       throw new Error('Expected watcher subscription callback');
     }
@@ -599,6 +759,7 @@ describe('MintOperationWatcherService', () => {
       operation,
     });
 
+    await waitForSubscribeCalls(1);
     if (!callback) {
       throw new Error('Expected watcher subscription callback');
     }
@@ -642,6 +803,7 @@ describe('MintOperationWatcherService', () => {
       quote,
     });
 
+    await waitForSubscribeCalls(1);
     expect(subscribe).toHaveBeenCalledTimes(1);
 
     await watcher.stop();
@@ -665,6 +827,7 @@ describe('MintOperationWatcherService', () => {
       operation,
     });
 
+    await waitForSubscribeCalls(1);
     if (!callback) {
       throw new Error('Expected watcher subscription callback');
     }
@@ -705,6 +868,7 @@ describe('MintOperationWatcherService', () => {
     });
 
     await watcher.start();
+    await waitForSubscribeCalls(1);
     if (!callback) {
       throw new Error('Expected watcher subscription callback');
     }
@@ -741,6 +905,7 @@ describe('MintOperationWatcherService', () => {
     });
 
     await watcher.start();
+    await waitForSubscribeCalls(1);
     if (!callback) {
       throw new Error('Expected watcher subscription callback');
     }
@@ -783,6 +948,7 @@ describe('MintOperationWatcherService', () => {
       operation,
     });
 
+    await waitForSubscribeCalls(1);
     if (!callback) {
       throw new Error('Expected watcher subscription callback');
     }
@@ -823,6 +989,7 @@ describe('MintOperationWatcherService', () => {
       operation,
     });
 
+    await waitForSubscribeCalls(1);
     if (!callback) {
       throw new Error('Expected watcher subscription callback');
     }
@@ -862,6 +1029,7 @@ describe('MintOperationWatcherService', () => {
       operation,
     });
 
+    await waitForSubscribeCalls(1);
     if (!callback) {
       throw new Error('Expected watcher subscription callback');
     }
@@ -893,6 +1061,7 @@ describe('MintOperationWatcherService', () => {
     });
 
     await watcher.start();
+    await waitForSubscribeCalls(1);
     expect(subscribe).toHaveBeenCalledTimes(1);
 
     await bus.emit('mint-op:finalized', {
@@ -953,6 +1122,7 @@ describe('MintOperationWatcherService', () => {
 
     await watcher.start();
 
+    await waitForSubscribeCalls(1);
     expect(subscribe).toHaveBeenCalledTimes(1);
 
     await bus.emit('mint-op:finalized', {
@@ -984,6 +1154,7 @@ describe('MintOperationWatcherService', () => {
     });
 
     await watcher.start();
+    await waitForSubscribeCalls(1);
     expect(subscribe).toHaveBeenCalledTimes(1);
 
     await bus.emit('mint-op:failed', {
@@ -1009,6 +1180,7 @@ describe('MintOperationWatcherService', () => {
     });
 
     await watcher.start();
+    await waitForSubscribeCalls(1);
     expect(subscribe).toHaveBeenCalledTimes(1);
 
     await bus.emit('mint-op:executing', {
@@ -1042,6 +1214,7 @@ describe('MintOperationWatcherService', () => {
       operationId: operation.id,
       operation,
     });
+    await waitForSubscribeCalls(1);
     expect(subscribe).toHaveBeenCalledTimes(1);
 
     await bus.emit('mint-quote:updated', {
@@ -1070,6 +1243,7 @@ describe('MintOperationWatcherService', () => {
       operationId: operation.id,
       operation,
     });
+    await waitForSubscribeCalls(1);
     expect(subscribe).toHaveBeenCalledTimes(1);
 
     await bus.emit('mint:untrusted', { mintUrl });
@@ -1091,6 +1265,7 @@ describe('MintOperationWatcherService', () => {
     });
 
     await watcher.start();
+    await waitForSubscribeCalls(1);
     expect(subscribe).toHaveBeenCalledTimes(1);
 
     await bus.emit('mint-op:executing', {
@@ -1139,6 +1314,7 @@ describe('MintOperationWatcherService', () => {
       operation,
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitForSubscribeCalls(1);
     expect(subscribe).toHaveBeenCalledTimes(1);
 
     await emitOperationEvent(operation);
@@ -1146,6 +1322,7 @@ describe('MintOperationWatcherService', () => {
     releaseSubscribe?.();
     await pendingEmit;
 
+    await waitForSubscribeCalls(1);
     expect(subscribe).toHaveBeenCalledTimes(1);
     expect(unsubscribe).not.toHaveBeenCalled();
 

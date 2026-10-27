@@ -1,3 +1,4 @@
+import type { MintSwapOperationState } from '../operations/mintSwap/MintSwapOperation.ts';
 import type { Token } from '@cashu/cashu-ts';
 import type { MeltMethod, MeltOperation } from '@core/operations/melt';
 import type {
@@ -18,6 +19,12 @@ import type { SendOperation } from '../operations/send/SendOperation';
 import type { CoreProof, ProofState } from '../types';
 
 export interface CoreEvents {
+  /** Best-effort post-commit hint. Reload the operation; hints may be lost or reordered. */
+  'mint-swap:updated': {
+    operationId: string;
+    revision: number;
+    state: MintSwapOperationState;
+  };
   'mint:added': { mint: Mint; keysets: Keyset[] };
   'mint:updated': { mint: Mint; keysets: Keyset[] };
   'mint:metadata-refreshed': { mintUrl: string };

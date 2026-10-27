@@ -38,6 +38,14 @@ import { MintOperationService } from './operations/mint/MintOperationService';
 import { CashuReceiveRemote } from './infra/handlers/receive/CashuReceiveRemote.ts';
 import { ReceiveOperationService } from './operations/receive/ReceiveOperationService';
 import { MintScopedLock } from './operations/MintScopedLock';
+import { OperationIdLock } from './operations/OperationIdLock.ts';
+import { MintSwapOperationService } from './operations/mintSwap/MintSwapOperationService.ts';
+import type { MintSwapOperationRepository } from './operations/mintSwap/MintSwapOperationRepository.ts';
+import {
+  MintSwapOperationProcessor,
+  validateMintSwapProcessorOptions,
+  type MintSwapOperationProcessorOptions,
+} from './services/watchers/MintSwapOperationProcessor.ts';
 import {
   SubscriptionManager,
   type WebSocketFactory,
@@ -70,6 +78,7 @@ import {
   ReceiveOpsApi,
   MeltOpsApi,
   MintOpsApi,
+  MintSwapOpsApi,
   QuoteApi,
   PaymentRequestsApi,
 } from './api';
@@ -86,6 +95,16 @@ import { assessMintQuoteClaimability } from './models/MintQuoteClaimability.ts';
 import { RepositoryCoreTransactionRunner } from './transactions/CoreTransaction.ts';
 import { KeypairDerivation } from './keypairs/KeypairDerivation.ts';
 import { KeypairP2pkSigner } from './keypairs/P2pkSigner.ts';
+
+export type { MintSwapOperationProcessorOptions } from './services/watchers/MintSwapOperationProcessor.ts';
+
+function validateMintSwapProcessorConfiguration(
+  processor?: MintSwapOperationProcessorOptions & { disabled?: boolean },
+): void {
+  if (processor?.disabled !== undefined && typeof processor.disabled !== 'boolean')
+    throw new TypeError('mintSwapOperationProcessor.disabled must be boolean');
+  validateMintSwapProcessorOptions(processor ?? {});
+}
 
 /**
  * Configuration options for initializing the Coco Cashu manager
@@ -144,6 +163,8 @@ export interface CocoConfig {
    * - Provide options to customize behavior
    */
   processors?: {
+    /** Automatic recovery of persisted swaps; enabled by default. Explicit commands remain available. */
+    mintSwapOperationProcessor?: MintSwapOperationProcessorOptions & { disabled?: boolean };
     /** Mint operation processor (enabled by default) */
     mintOperationProcessor?: {
       disabled?: boolean;
@@ -204,6 +225,7 @@ export class CocoInitializationError extends Error {
  * @returns A fully initialized Manager instance
  */
 export async function initializeCoco(config: CocoConfig): Promise<Manager> {
+  validateMintSwapProcessorConfiguration(config.processors?.mintSwapOperationProcessor);
   await config.repo.init();
   const coco = new Manager(
     config.repo,
@@ -264,6 +286,11 @@ export async function initializeCoco(config: CocoConfig): Promise<Manager> {
     // Recover any pending mint operations from previous session
     await coco.recoverPendingMintOperations();
 
+    // Recover persisted swaps by default unless automatic parent recovery is disabled.
+    const mintSwapProcessor = config.processors?.mintSwapOperationProcessor;
+    if (!mintSwapProcessor?.disabled)
+      await coco.enableMintSwapOperationProcessor(mintSwapProcessor);
+
     return coco;
   } catch (error) {
     try {
@@ -299,6 +326,10 @@ export class Manager {
   readonly subscriptions: SubscriptionManager;
   private mintOperationWatcher?: MintOperationWatcherService;
   private mintOperationProcessor?: MintOperationProcessor;
+  private mintSwapOperationProcessor?: MintSwapOperationProcessor;
+  private mintSwapOperationService: MintSwapOperationService;
+  private mintSwapOperationRepository: MintSwapOperationRepository;
+  private readonly mintSwapDisposal = new AbortController();
   private meltQuoteWatcher?: MeltQuoteWatcherService;
   private meltSettlementProcessor?: MeltSettlementProcessor;
   private legacyMintQuoteRepository: LegacyMintQuoteRepository;
@@ -326,6 +357,7 @@ export class Manager {
   private balanceQueries: BalanceQueries;
   private readonly pluginHost: PluginHost = new PluginHost();
   private subscriptionsPaused = false;
+  private subscriptionLifecycle: Promise<void> = Promise.resolve();
   private originalWatcherConfig: CocoConfig['watchers'];
   private originalProcessorConfig: CocoConfig['processors'];
   private readonly mintRequestProvider: MintRequestProvider;
@@ -344,6 +376,8 @@ export class Manager {
     subscriptions?: CocoConfig['subscriptions'],
     outputDataCreator?: OutputDataCreator,
   ) {
+    validateMintSwapProcessorConfiguration(processors?.mintSwapOperationProcessor);
+    this.mintSwapOperationRepository = repositories.mintSwap.operationRepository;
     this.logger = logger ?? new NullLogger();
     this.eventBus = this.createEventBus();
     this.outputDataCreator = outputDataCreator;
@@ -390,6 +424,7 @@ export class Manager {
     this.authSessionService = core.authSessionService;
     this.authService = core.authService;
     this.mintOperationService = core.mintOperationService;
+    this.mintSwapOperationService = core.mintSwapOperationService;
     this.mintOperationRepository = core.mintOperationRepository;
     this.proofRepository = repositories.proofRepository;
     this.balanceQueries = core.balanceQueries;
@@ -484,6 +519,13 @@ export class Manager {
   private async disposeOwnedResources(): Promise<void> {
     this.disposed = true;
     this.subscriptionsPaused = true;
+    this.mintSwapDisposal.abort(new Error('Mint Swap runtime is disposed'));
+    await Promise.all([
+      this.disableMintSwapOperationProcessor(),
+      this.mintSwapOperationService.dispose(),
+      // An admitted resume may still be acquiring resources or publishing lifecycle events.
+      this.subscriptionLifecycle,
+    ]);
 
     await this.disableMintOperationWatcher();
     await this.disableProofStateWatcher();
@@ -501,12 +543,51 @@ export class Manager {
     return this.eventBus.off(event, handler);
   }
 
+  /** Start persisted-swap recovery; options are validated and applied on each fresh start. */
+  async enableMintSwapOperationProcessor(
+    options?: MintSwapOperationProcessorOptions,
+  ): Promise<boolean> {
+    if (this.disposed || this.subscriptionsPaused) return false;
+    if (!this.mintSwapOperationProcessor) {
+      this.mintSwapOperationProcessor = new MintSwapOperationProcessor(
+        this.mintSwapOperationService,
+        this.mintSwapOperationRepository,
+        this.eventBus,
+        this.getChildLogger('MintSwapOperationProcessor'),
+        options ?? this.originalProcessorConfig?.mintSwapOperationProcessor,
+        {
+          mint: this.mintOperationWatcher,
+          melt: this.meltQuoteWatcher,
+          source: this.meltOperationRepository,
+          destination: this.mintOperationRepository,
+        },
+      );
+    }
+    const processor = this.mintSwapOperationProcessor;
+    if (processor.isRunning()) return false;
+    await processor.start();
+    return processor.isRunning();
+  }
+
+  /** Stop automatic parent recovery. Explicit commands and generic children retain their policy. */
+  async disableMintSwapOperationProcessor(): Promise<void> {
+    const processor = this.mintSwapOperationProcessor;
+    await processor?.stop();
+    // Retain the instance while draining so overlapping starts cannot bypass its stop.
+    if (this.mintSwapOperationProcessor === processor) this.mintSwapOperationProcessor = undefined;
+  }
+
+  /** Enable observation; parent-owned subscription setup may still be pending on return. */
   async enableMintOperationWatcher(options?: {
     watchExistingPendingOnStart?: boolean;
     watchExistingPendingQuotesOnStart?: boolean;
   }): Promise<void> {
     if (this.disposed) return;
-    if (this.mintOperationWatcher?.isRunning()) return;
+    if (this.mintOperationWatcher) {
+      if (!this.mintOperationWatcher.isRunning()) await this.mintOperationWatcher.stop();
+      else this.mintOperationWatcher.retryFailedInterests();
+      return;
+    }
     const watcherLogger = this.logger.child
       ? this.logger.child({ module: 'MintOperationWatcherService' })
       : this.logger;
@@ -523,12 +604,20 @@ export class Manager {
       },
     );
     await this.mintOperationWatcher.start();
+    await this.rebindMintSwapObservation();
   }
 
   async disableMintOperationWatcher(): Promise<void> {
     if (!this.mintOperationWatcher) return;
-    await this.mintOperationWatcher.stop();
-    this.mintOperationWatcher = undefined;
+    const watcher = this.mintOperationWatcher;
+    const stopping = watcher.stop();
+    try {
+      await this.rebindMintSwapObservation();
+    } finally {
+      await stopping;
+      // Keep the draining instance visible to overlapping disable/dispose calls.
+      if (this.mintOperationWatcher === watcher) this.mintOperationWatcher = undefined;
+    }
   }
 
   async enableMintOperationProcessor(options?: {
@@ -569,8 +658,14 @@ export class Manager {
     watchExistingPendingQuotesOnStart?: boolean;
   }): Promise<void> {
     if (this.disposed) return;
-    if (this.meltQuoteWatcher?.isRunning()) {
+    if (this.meltQuoteWatcher) {
+      if (!this.meltQuoteWatcher.isRunning()) {
+        await this.meltQuoteWatcher.stop();
+        return;
+      }
       await this.meltSettlementProcessor?.setInterestRegistrar(this.meltQuoteWatcher);
+      this.meltQuoteWatcher.retryFailedInterests();
+      await this.rebindMintSwapObservation();
       return;
     }
     const watcherLogger = this.logger.child
@@ -587,14 +682,28 @@ export class Manager {
       },
     );
     await this.meltQuoteWatcher.start();
+    await this.rebindMintSwapObservation();
     await this.meltSettlementProcessor?.setInterestRegistrar(this.meltQuoteWatcher);
   }
 
   async disableMeltQuoteWatcher(): Promise<void> {
     if (!this.meltQuoteWatcher) return;
-    await this.meltSettlementProcessor?.setInterestRegistrar(undefined);
-    await this.meltQuoteWatcher.stop();
-    this.meltQuoteWatcher = undefined;
+    const watcher = this.meltQuoteWatcher;
+    const stopping = watcher.stop();
+    try {
+      await this.meltSettlementProcessor?.setInterestRegistrar(undefined);
+      await this.rebindMintSwapObservation();
+    } finally {
+      await stopping;
+      if (this.meltQuoteWatcher === watcher) this.meltQuoteWatcher = undefined;
+    }
+  }
+
+  private async rebindMintSwapObservation(): Promise<void> {
+    await this.mintSwapOperationProcessor?.setInterestRegistrars({
+      mint: this.mintOperationWatcher?.isRunning() ? this.mintOperationWatcher : undefined,
+      melt: this.meltQuoteWatcher?.isRunning() ? this.meltQuoteWatcher : undefined,
+    });
   }
 
   /** Enable cached-evidence progression without waiting for operation quote subscriptions. */
@@ -741,7 +850,22 @@ export class Manager {
     return { reconciled, skipped };
   }
 
-  async pauseSubscriptions(): Promise<void> {
+  /** Serialize pause/resume requests; final disposal closes admission and drains this queue. */
+  private changeSubscriptions(work: () => Promise<void>): Promise<void> {
+    if (this.disposed) return Promise.resolve();
+    const change = this.subscriptionLifecycle.then(async () => {
+      if (!this.disposed) await work();
+    });
+    // Report failure to its caller without poisoning later lifecycle changes or cleanup.
+    this.subscriptionLifecycle = change.catch(() => {});
+    return change;
+  }
+
+  pauseSubscriptions(): Promise<void> {
+    return this.changeSubscriptions(() => this.pauseOwnedSubscriptions());
+  }
+
+  private async pauseOwnedSubscriptions(): Promise<void> {
     if (this.subscriptionsPaused) {
       this.logger.debug('Subscriptions already paused');
       return;
@@ -751,6 +875,9 @@ export class Manager {
 
     // Pause transport layer
     this.subscriptions.pause();
+
+    // Close parent scheduling before detaching its observation resources.
+    await this.disableMintSwapOperationProcessor();
 
     // Disable watchers
     await this.disableMintOperationWatcher();
@@ -765,7 +892,11 @@ export class Manager {
     await this.eventBus.emit('subscriptions:paused', undefined);
   }
 
-  async resumeSubscriptions(): Promise<void> {
+  resumeSubscriptions(): Promise<void> {
+    return this.changeSubscriptions(() => this.resumeOwnedSubscriptions());
+  }
+
+  private async resumeOwnedSubscriptions(): Promise<void> {
     if (this.disposed) {
       this.logger.debug('Cannot resume subscriptions after manager disposal');
       return;
@@ -805,6 +936,9 @@ export class Manager {
     }
 
     await this.recoverPendingMintOperations();
+    const mintSwapProcessor = this.originalProcessorConfig?.mintSwapOperationProcessor;
+    if (!mintSwapProcessor?.disabled)
+      await this.enableMintSwapOperationProcessor(mintSwapProcessor);
 
     this.logger.info('Subscriptions resumed');
   }
@@ -853,7 +987,8 @@ export class Manager {
     const eventLogger = this.getChildLogger('EventBus');
     return new EventBus<CoreEvents>({
       onError: (args) => {
-        eventLogger.error('Event handler error', args);
+        // Keep listener-failure diagnostics bounded.
+        eventLogger.error('Event handler failed', { event: args.event });
       },
     });
   }
@@ -922,6 +1057,7 @@ export class Manager {
     authSessionService: AuthSessionService;
     authService: AuthService;
     mintOperationService: MintOperationService;
+    mintSwapOperationService: MintSwapOperationService;
     mintOperationRepository: MintOperationRepository;
     balanceQueries: BalanceQueries;
   } {
@@ -996,6 +1132,8 @@ export class Manager {
     // send, receive, melt, and mint serialize their per-mint deterministic-output
     // derivation against each other. Passing separate instances would break that.
     const mintScopedLock = new MintScopedLock();
+    const sourceOperationLock = new OperationIdLock();
+    const destinationOperationLock = new OperationIdLock();
 
     const sendOperationLogger = this.getChildLogger('SendOperationService');
     const sendHandlerProvider = new SendHandlerProvider({
@@ -1064,6 +1202,10 @@ export class Manager {
       bolt12: new MintBolt12Handler(keyRingService),
     });
     const quoteLifecycle = new QuoteLifecycle({
+      // Read the current watcher's ownership so disabling or replacing it immediately
+      // removes its old recovery permissions from QuoteLifecycle's polling trust check.
+      hasMintRecoveryInterest: (method, identity) =>
+        this.mintOperationWatcher?.hasRecoveryInterest({ ...identity, method }) ?? false,
       mintHandlerProvider,
       meltHandlerProvider,
       mintQuoteRepository: repositories.mintQuoteRepository,
@@ -1091,6 +1233,7 @@ export class Manager {
       eventBus: this.eventBus,
       logger: meltOperationLogger,
       mintScopedLock,
+      operationIdLock: sourceOperationLock,
     });
     const meltOperationRepository = repositories.meltOperationRepository;
 
@@ -1108,8 +1251,29 @@ export class Manager {
       eventBus: this.eventBus,
       logger: mintOperationLogger,
       mintScopedLock,
+      operationIdLock: destinationOperationLock,
     });
     const mintOperationRepository = repositories.mintOperationRepository;
+    const mintSwapOperationService = new MintSwapOperationService({
+      transactionRunner,
+      parentQueries: this.mintSwapOperationRepository,
+      sourceQueries: repositories.meltOperationRepository,
+      destinationQueries: repositories.mintOperationRepository,
+      proofQueries: repositories.proofRepository,
+      mintService,
+      walletService,
+      keyRingService,
+      quoteLifecycle,
+      mintHandlerProvider,
+      meltHandlerProvider,
+      mintAdapter: this.mintAdapter,
+      loadSeed: () => seedService.getSeed(),
+      sourceOperationLock,
+      destinationOperationLock,
+      mintScopedLock,
+      eventBus: this.eventBus,
+      logger: this.getChildLogger('MintSwapOperationService'),
+    });
 
     const historyService = new HistoryService(
       repositories.historyRepository,
@@ -1174,6 +1338,7 @@ export class Manager {
       authSessionService,
       authService,
       mintOperationService,
+      mintSwapOperationService,
       mintOperationRepository,
       balanceQueries,
     };
@@ -1207,7 +1372,12 @@ export class Manager {
     const receive = new ReceiveOpsApi(this.receiveOperationService);
     const mintOps = new MintOpsApi(this.mintOperationService);
     const melt = new MeltOpsApi(this.meltOperationService);
-    const ops = new OpsApi(send, receive, mintOps, melt);
+    const mintSwap = new MintSwapOpsApi(
+      this.mintSwapOperationService,
+      this.eventBus,
+      this.mintSwapDisposal.signal,
+    );
+    const ops = new OpsApi(send, receive, mintOps, melt, mintSwap);
     const quotes = new QuoteApi(this.quoteLifecycle);
     const auth = new AuthApi(this.authService);
     const paymentRequests = new PaymentRequestsApi(

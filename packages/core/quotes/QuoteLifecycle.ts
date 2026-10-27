@@ -1,4 +1,5 @@
 import { Amount, type AmountLike } from '@cashu/cashu-ts';
+import { publishOrDefer, type DeferPublication } from '../events/DeferredPublication.ts';
 import type { UnitAmount } from '../amounts.ts';
 import { DEFAULT_UNIT, normalizeUnit, normalizeUnitAmount } from '../amounts.ts';
 import type { EventBus } from '../events/EventBus';
@@ -350,6 +351,19 @@ function mergePaidMeltQuoteSettlement(existing: MeltQuote, incoming: MeltQuote):
 }
 
 export interface QuoteLifecycleDeps {
+  /**
+   * @internal Permits background observation of an exact Mint Quote needed for recovery.
+   *
+   * Polling normally requires a trusted mint. If trust is revoked after a Mint Swap's
+   * source payment is authorized, recovery must still observe its persisted destination
+   * quote. Manager supplies a live lookup of the watcher's registered recovery interests
+   * to allow that specific mint URL, method and quote ID through the polling trust check.
+   *
+   * This permits quote observation only; payment and issuance authorization remain with
+   * the operation coordinators. It does not restore mint trust or admit unrelated quotes.
+   * Omitting this dependency preserves the normal trusted-mint polling policy.
+   */
+  hasMintRecoveryInterest?: (method: MintMethod, identity: QuoteIdentity) => boolean;
   mintHandlerProvider: MintHandlerProvider;
   meltHandlerProvider: MeltHandlerProvider;
   mintQuoteRepository: MintQuoteRepository;
@@ -365,6 +379,9 @@ export interface QuoteLifecycleDeps {
 }
 
 export class QuoteLifecycle {
+  private readonly hasMintRecoveryInterest: NonNullable<
+    QuoteLifecycleDeps['hasMintRecoveryInterest']
+  >;
   private readonly mintHandlerProvider: MintHandlerProvider;
   private readonly meltHandlerProvider: MeltHandlerProvider;
   private readonly mintQuoteRepository: MintQuoteRepository;
@@ -384,6 +401,7 @@ export class QuoteLifecycle {
   private readonly batchUnavailablePollingMethodsByMint = new Map<string, Set<MintMethod>>();
 
   constructor(deps: QuoteLifecycleDeps) {
+    this.hasMintRecoveryInterest = deps.hasMintRecoveryInterest ?? (() => false);
     this.mintHandlerProvider = deps.mintHandlerProvider;
     this.meltHandlerProvider = deps.meltHandlerProvider;
     this.mintQuoteRepository = deps.mintQuoteRepository;
@@ -447,7 +465,10 @@ export class QuoteLifecycle {
     };
   }
 
-  private async refreshResolvedMintQuote(existingQuote: MintQuote): Promise<MintQuote> {
+  private async refreshResolvedMintQuote(
+    existingQuote: MintQuote,
+    defer?: DeferPublication,
+  ): Promise<MintQuote> {
     const handler = this.mintHandlerProvider.get(existingQuote.method);
     const refreshed = await handler.fetchRemoteQuote({
       ...this.buildDeps(),
@@ -456,31 +477,41 @@ export class QuoteLifecycle {
 
     const { quote, remoteStateChanged } =
       await this.resolveAndPersistMintQuoteObservation(refreshed);
-    await this.emitMintQuoteUpdatedIfNeeded(quote, remoteStateChanged);
+    await this.emitMintQuoteUpdatedIfNeeded(quote, remoteStateChanged, defer);
     return quote;
   }
 
-  private async refreshResolvedMeltQuote(existingQuote: MeltQuote): Promise<MeltQuote> {
+  private async refreshResolvedMeltQuote(
+    existingQuote: MeltQuote,
+    defer?: DeferPublication,
+  ): Promise<MeltQuote> {
     const handler = this.meltHandlerProvider.get(existingQuote.method);
     const refreshed = await handler.fetchRemoteQuote({
       ...this.buildDeps(),
       quote: existingQuote,
     });
 
-    const quote = await this.recordMeltQuoteObservation(refreshed);
+    const quote = await this.recordMeltQuoteObservation(refreshed, defer);
     return quote;
   }
 
-  async createMintQuote(mintUrl: string, intent: UnitAmount, method?: 'bolt11'): Promise<MintQuote>;
+  async createMintQuote(
+    mintUrl: string,
+    intent: UnitAmount,
+    method?: 'bolt11',
+    defer?: DeferPublication,
+  ): Promise<MintQuote>;
   async createMintQuote<M extends MintMethod>(
     mintUrl: string,
     method: M,
     createQuoteData: MintMethodCreateQuoteData<M>,
+    defer?: DeferPublication,
   ): Promise<MintQuote<M>>;
   async createMintQuote(
     mintUrl: string,
     methodOrIntent: MintMethod | UnitAmount,
     createQuoteDataOrMethod?: MintMethodCreateQuoteData | 'bolt11',
+    defer?: DeferPublication,
   ): Promise<MintQuote> {
     const method =
       typeof methodOrIntent === 'string'
@@ -510,14 +541,15 @@ export class QuoteLifecycle {
       throw new ProofValidationError('Amount must be a positive number');
     }
 
-    await this.mintService.assertMethodUnitSupported(mintUrl, 4, method, parsed ?? unit);
-    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl, unit);
+    await this.mintService.assertMethodUnitSupported(mintUrl, 4, method, parsed ?? unit, defer);
+    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl, unit, defer);
 
     const handler = this.mintHandlerProvider.get(method);
     const quote = await handler.createQuote({
       ...this.buildDeps(),
       mintUrl,
       createQuoteData,
+      deferPublication: defer,
       wallet,
     } as any);
 
@@ -531,12 +563,16 @@ export class QuoteLifecycle {
       amount: getMintQuoteAmount(persistedQuote)?.toString(),
       unit: persistedQuote.unit,
     });
-    await this.eventBus.emit('mint-quote:updated', {
-      mintUrl: persistedQuote.mintUrl,
-      method: persistedQuote.method,
-      quoteId: persistedQuote.quoteId,
-      quote: persistedQuote,
-    });
+    await publishOrDefer(
+      () =>
+        this.eventBus.emit('mint-quote:updated', {
+          mintUrl: persistedQuote.mintUrl,
+          method: persistedQuote.method,
+          quoteId: persistedQuote.quoteId,
+          quote: persistedQuote,
+        }),
+      defer,
+    );
     return persistedQuote;
   }
 
@@ -603,10 +639,33 @@ export class QuoteLifecycle {
         new MintQuoteValidationError(`Unsupported built-in mint quote polling method ${method}`),
       );
     }
-    if (!(await this.mintService.isTrustedMint(mintUrl))) {
-      throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
-    }
+    const trusted = await this.mintService.isTrustedMint(mintUrl);
+    // Apply the recovery exception per quote: a mixed batch must not admit unrelated
+    // quotes merely because one quote at this untrusted mint needs recovery.
+    const allowed = normalizedIdentities.filter(
+      (identity) => trusted || this.hasMintRecoveryInterest(method, identity),
+    );
+    if (!allowed.length) throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
+    const rejected = normalizedIdentities.filter((identity) => !allowed.includes(identity));
+    const result = await this.checkAdmittedMintQuotesForPolling(method, allowed);
+    return {
+      outcomes: [
+        ...result.outcomes,
+        ...failedMintQuotePollingResult(
+          rejected,
+          'validation',
+          new UnknownMintError(`Mint ${mintUrl} is not trusted`),
+        ).outcomes,
+      ],
+      responseFailures: result.responseFailures,
+    };
+  }
 
+  private async checkAdmittedMintQuotesForPolling(
+    method: MintMethod,
+    normalizedIdentities: QuoteIdentity[],
+  ): Promise<MintQuotePollingResult> {
+    const mintUrl = normalizedIdentities[0]!.mintUrl;
     let useBatch: boolean;
     try {
       useBatch =
@@ -617,6 +676,17 @@ export class QuoteLifecycle {
         normalizedIdentities,
         classifyMintQuotePollingFailure(error),
         error,
+      );
+    }
+    // Metadata lookup can yield while an owner is removed or trust changes.
+    if (
+      !(await this.mintService.isTrustedMint(mintUrl)) &&
+      !normalizedIdentities.every((identity) => this.hasMintRecoveryInterest(method, identity))
+    ) {
+      return failedMintQuotePollingResult(
+        normalizedIdentities,
+        'validation',
+        new UnknownMintError(`Mint ${mintUrl} is not trusted`),
       );
     }
     if (!useBatch && normalizedIdentities.length > 1) {
@@ -904,13 +974,18 @@ export class QuoteLifecycle {
     return snapshot;
   }
 
-  async refreshMintQuote(mintUrl: string, method: MintMethod, quoteId: string): Promise<MintQuote> {
+  async refreshMintQuote(
+    mintUrl: string,
+    method: MintMethod,
+    quoteId: string,
+    defer?: DeferPublication,
+  ): Promise<MintQuote> {
     const existingQuote = await this.mintQuoteRepository.getMintQuote(mintUrl, method, quoteId);
     if (!existingQuote) {
       throw new Error(`Mint quote ${quoteId} for ${method} at ${mintUrl} was not found`);
     }
 
-    return this.refreshResolvedMintQuote(existingQuote);
+    return this.refreshResolvedMintQuote(existingQuote, defer);
   }
 
   async refreshMintQuoteById(identity: QuoteIdentity): Promise<MintQuote> {
@@ -1270,13 +1345,14 @@ export class QuoteLifecycle {
     mintUrl: string,
     method: MintMethod,
     snapshot: MintMethodQuoteSnapshot,
+    defer?: DeferPublication,
   ): Promise<MintQuote> {
     const { quote, remoteStateChanged } = await this.resolveAndPersistMintQuoteSnapshot(
       mintUrl,
       method,
       snapshot,
     );
-    await this.emitMintQuoteUpdatedIfNeeded(quote, remoteStateChanged);
+    await this.emitMintQuoteUpdatedIfNeeded(quote, remoteStateChanged, defer);
     return quote;
   }
 
@@ -1312,6 +1388,7 @@ export class QuoteLifecycle {
     method: M,
     methodData: MeltMethodInputData<M>,
     unit = DEFAULT_UNIT,
+    defer?: DeferPublication,
   ): Promise<MeltQuote<M>> {
     const normalizedUnit = normalizeUnit(unit, { defaultUnit: DEFAULT_UNIT });
     const trusted = await this.mintService.isTrustedMint(mintUrl);
@@ -1328,10 +1405,11 @@ export class QuoteLifecycle {
       throw new ProofValidationError('Amount must be a positive number');
     }
 
-    await this.mintService.assertMethodUnitSupported(mintUrl, 5, method, normalizedUnit);
+    await this.mintService.assertMethodUnitSupported(mintUrl, 5, method, normalizedUnit, defer);
     const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
       mintUrl,
       normalizedUnit,
+      defer,
     );
 
     const handler = this.meltHandlerProvider.get(method);
@@ -1348,7 +1426,7 @@ export class QuoteLifecycle {
       );
     }
 
-    return (await this.recordMeltQuoteObservation(quote)) as MeltQuote<M>;
+    return (await this.recordMeltQuoteObservation(quote, defer)) as MeltQuote<M>;
   }
 
   getMeltQuote(mintUrl: string, method: MeltMethod, quoteId: string): Promise<MeltQuote | null> {
@@ -1363,13 +1441,18 @@ export class QuoteLifecycle {
     return this.meltQuoteRepository.getPendingMeltQuotes(method);
   }
 
-  async refreshMeltQuote(mintUrl: string, method: MeltMethod, quoteId: string): Promise<MeltQuote> {
+  async refreshMeltQuote(
+    mintUrl: string,
+    method: MeltMethod,
+    quoteId: string,
+    defer?: DeferPublication,
+  ): Promise<MeltQuote> {
     const existingQuote = await this.meltQuoteRepository.getMeltQuote(mintUrl, method, quoteId);
     if (!existingQuote) {
       throw new Error(`Melt quote ${quoteId} for ${method} at ${mintUrl} was not found`);
     }
 
-    return this.refreshResolvedMeltQuote(existingQuote);
+    return this.refreshResolvedMeltQuote(existingQuote, defer);
   }
 
   async refreshMeltQuoteById(identity: QuoteIdentity): Promise<MeltQuote> {
@@ -1452,7 +1535,10 @@ export class QuoteLifecycle {
    * Records a canonical melt quote observation and emits `melt-quote:updated` only when storage
    * changed meaningfully.
    */
-  async recordMeltQuoteObservation(canonicalQuote: MeltQuote): Promise<MeltQuote> {
+  async recordMeltQuoteObservation(
+    canonicalQuote: MeltQuote,
+    defer?: DeferPublication,
+  ): Promise<MeltQuote> {
     const observationKey = JSON.stringify([
       normalizeMintUrl(canonicalQuote.mintUrl),
       canonicalQuote.method,
@@ -1467,7 +1553,7 @@ export class QuoteLifecycle {
       release();
     }
     const { quote, remoteQuoteChanged } = observation;
-    await this.emitMeltQuoteUpdatedIfNeeded(quote, remoteQuoteChanged);
+    await this.emitMeltQuoteUpdatedIfNeeded(quote, remoteQuoteChanged, defer);
     return quote;
   }
 
@@ -1541,17 +1627,22 @@ export class QuoteLifecycle {
   private async emitMintQuoteUpdatedIfNeeded(
     quote: MintQuote,
     remoteStateChanged: boolean,
+    defer?: DeferPublication,
   ): Promise<void> {
     if (!remoteStateChanged) {
       return;
     }
 
-    await this.eventBus.emit('mint-quote:updated', {
-      mintUrl: quote.mintUrl,
-      method: quote.method,
-      quoteId: quote.quoteId,
-      quote,
-    });
+    await publishOrDefer(
+      () =>
+        this.eventBus.emit('mint-quote:updated', {
+          mintUrl: quote.mintUrl,
+          method: quote.method,
+          quoteId: quote.quoteId,
+          quote,
+        }),
+      defer,
+    );
   }
 
   private async persistCanonicalMeltQuote(canonicalQuote: MeltQuote): Promise<MeltQuote> {
@@ -1561,17 +1652,22 @@ export class QuoteLifecycle {
   private async emitMeltQuoteUpdatedIfNeeded(
     quote: MeltQuote,
     remoteQuoteChanged: boolean,
+    defer?: DeferPublication,
   ): Promise<void> {
     if (!remoteQuoteChanged) {
       return;
     }
 
-    await this.eventBus.emit('melt-quote:updated', {
-      mintUrl: quote.mintUrl,
-      method: quote.method,
-      quoteId: quote.quoteId,
-      quote,
-    });
+    await publishOrDefer(
+      () =>
+        this.eventBus.emit('melt-quote:updated', {
+          mintUrl: quote.mintUrl,
+          method: quote.method,
+          quoteId: quote.quoteId,
+          quote,
+        }),
+      defer,
+    );
   }
 
   private async assertMintQuoteCapabilities(quote: MintQuote): Promise<void> {

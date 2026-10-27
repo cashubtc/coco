@@ -287,8 +287,8 @@ reservation. Only a definitive non-issuance result permits failure. Recovery and
 share settlement. Events follow commit, and listener failures do not replay issuance. Repositories
 preserve coordinator-supplied timestamps, subject to existing adapter precision.
 
-The dormant Mint Swap coordinator calls `tx.perform(prepareMint, destinationInput)` with its
-predetermined child ID and compose additional local transitions before returning. Its remote quote creation and
+The Mint Swap coordinator calls `tx.perform(prepareMint, destinationInput)` with its
+predetermined child ID and composes additional local transitions before returning. Its remote quote creation and
 metadata/seed preflight still occur outside the transaction. Melt supplies the corresponding source
 side through `prepareMelt`.
 
@@ -328,8 +328,8 @@ counter changes roll back together. Their remote effects still occur only after 
 
 The internal `MintSwapOperationService` composes the existing Mint and Melt transitions with
 branded parent transitions. Required `tx.mintSwapOperations` is bound to the same adapter transaction
-in Memory and all persistent adapters without a feature option. The coordinator is not wired into
-Manager or public APIs. Adapter migrations own persisted format changes.
+in Memory and all persistent adapters without a feature option. Manager wires the coordinator into
+the public Mint Swap API and recovery processor. Adapter migrations own persisted format changes.
 
 Locked destination quote creation follows an independent committed NUT-20 key allocation. Quote
 creation and metadata refresh intentionally survive later preparation failure. Parent preparation
@@ -358,8 +358,38 @@ and owned proof evidence in the same scope that reserves destination claimable v
 
 One effect-driving Coco Session per Wallet store is required. Shared child operation locks coordinate
 ordinary child services with the parent; parent revisions do not fence network effects across
-independent sessions. Runtime enforcement and activation belong to #419. Child change snapshots are
-captured within each attempt and published after commit and lock release, so reentrant listeners
+independent sessions. Manager shares these locks with the coordinator and reuses existing host/session
+lifecycle guards; Core does not introduce a universal process lock. Cocod's state-directory lease
+protects its hosted session, and React's initialization guard applies per provider.
+
+Coco uses lock-step package versioning, so the Mint Swap API has no feature activation gate.
+Initial source payment requires an explicit `execute` call. The Mint Swap processor is enabled by
+default and can be disabled independently without restricting explicit commands. It honors
+persisted due times and registers exact parent quote interests with the existing Mint/Melt watchers,
+including parents whose due time is still ahead. Ordinary operation and parent interests use the same
+synchronous declaration contract: local acceptance does not promise subscription readiness. Watchers
+own trust checks, acquisition, setup diagnostics, failure retries on existing triggers, and late cleanup.
+Parent scans install routing and declare all interests without awaiting acquisition; retired cleanup
+also stays outside the progression queue. Withdrawal revokes logical ownership synchronously while its
+returned promise drains required physical cleanup. Parent stop and watcher stop retain their drain
+guarantees. Shared owners cannot remove one another's interests or revive retired records.
+Prepared observation never authorizes payment.
+Watchers commit canonical observations; parent callbacks only request later coordination scans.
+Disabling a watcher does not introduce replacement polling in the parent. Normal scans use cached
+canonical evidence. Startup also uses complete paid source evidence and sufficient funded-destination
+accounting before considering remote recovery. As a temporary migration boundary, startup still falls
+back to bounded recovery for unresolved evidence, including fresh accounting for an already-authorized
+destination; it respects automatic eligibility and retry deadlines. Issue #559 moves and narrows that
+repair responsibility. Explicit refresh/recovery retains immediate observation.
+Necessary operation recovery effects remain available. Fresh positive `UNPAID` confirmation under
+the shared source lock remains required before releasing inputs, independently of watcher state.
+Exact authorized recovery interests can survive trust revocation, including Manager's transport
+closure and shared Mint polling admission; unrelated untrusted quotes gain no permission.
+Manager serializes pause/resume changes and drains admitted lifecycle and parent work on disposal.
+A local observation timeout only ends waiting; it does not change the persisted operation.
+
+Parent and child change snapshots are captured within each attempt and published after commit and
+lock release, so reentrant listeners
 cannot deadlock on the coordinator's child locks. Delivery remains best effort, without an outbox.
 
 ## Files and Dependencies
@@ -485,10 +515,10 @@ Before completing a change involving Wallet persistence, operation coordination,
 
 ## Migration and Verification
 
-Send, Mint, Melt, Receive, and Restore transitions, the dormant Mint Swap coordinator, KeyRing mutations,
+Send, Mint, Melt, Receive, and Restore transitions, the Mint Swap coordinator, KeyRing mutations,
 and mint metadata refresh use coordinator-owned transactions.
-Legacy public Mint Swap orchestration, Payment Request Receive parent/attempt/child
-atomicity, and MintService add/forced-update/trust/delete paths remain for their owning migrations.
+Payment Request Receive parent/attempt/child atomicity and MintService add/forced-update/trust/delete
+paths remain for their owning migrations.
 Those migrations should reuse domain capabilities and branded transitions, rather than add domain gateways.
 Runtime rejection of nested Wallet transactions remains nonuniform: IndexedDB rejects ambient
 transactions, while Memory/SQLite root calls may queue behind an outer caller awaiting them. Do not

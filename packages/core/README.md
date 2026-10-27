@@ -47,6 +47,82 @@ Concrete services, operation service classes, handler providers, transport
 internals, `PluginHost`, and individual memory repository classes are
 implementation details. They are not app-facing root API.
 
+## Mint Swap operations
+
+Mint Swap moves an exact sat amount between two distinct trusted mints using BOLT11. Its API is
+available without feature configuration:
+
+```ts
+const manager = await initializeCoco({
+  repo: repos,
+  seedGetter,
+});
+const operation = await manager.ops.mintSwap.prepare({
+  id: 'caller-stable-swap-id',
+  sourceMintUrl: 'https://source.example',
+  destinationMintUrl: 'https://destination.example',
+  destinationAmount: { amount: 100, unit: 'sat' },
+  sourceDebitCap: { amount: 110, unit: 'sat' },
+});
+// Inspect operation.state and, when prepared, its sourceDebitBounds before approving payment.
+if (operation.state === 'prepared') await manager.ops.mintSwap.execute(operation.id);
+const outcome = await manager.ops.mintSwap.waitForOutcome(operation.id, { timeoutMs: 30_000 });
+```
+
+The persisted operation is authoritative. Reusing an ID requires the same normalized intent.
+Preparation does not pay; `execute` explicitly authorizes the initial source payment. `get` and
+`listActive` read locally. `refresh(id)` and `recovery.run()` reconcile existing work, including
+finishing persisted preparation, without paying an untouched prepared source. They may recover
+already-authorized source work and redeem funded destination value.
+
+Coco packages are intended to be used with lock-step versioning; Mint Swap has no separate API
+activation flag. Automatic parent recovery is enabled by default. To use only explicit parent
+recovery, set `processors.mintSwapOperationProcessor.disabled: true`. That skips automatic parent
+startup/resume passes and timers while keeping preparation, execution, reads, cancellation and
+explicit recovery available. Ordinary Mint/Melt recovery retains its own configuration.
+The processor options `processIntervalMs` (1000), `sweepIntervalMs` (30000) and `batchSize` (25)
+control scanning, not persisted retry/backoff policy. The processor registers parent-owned quote
+interests with the existing Mint/Melt watchers, including parents whose recovery deadline is still
+in the future. Watchers commit canonical quote observations; the parent then coordinates eligible
+recovery using those observations and shared child locks. Exact authorized recovery interests
+remain observable after trust revocation without trusting the mint again.
+
+Parent and ordinary operation interests are accepted synchronously. Watchers own asynchronous
+subscription setup and its diagnostics, so slow or failed setup does not block cached parent
+progression. Enabling a watcher can resolve while operation-owned setup is pending. Removing an
+interest revokes its permission immediately and waits for required cleanup; other owners retain theirs.
+Disabling a watcher stops ongoing observation, not parent coordination or explicit recovery.
+Periodic parent scans do not replace a disabled watcher with quote polling. Bounded startup
+recovery and explicit `refresh(id)` / `recovery.run()` can still make target-isolated checks;
+automatic startup recovery respects processor configuration and persisted due times. Necessary
+operation recovery effects remain available. Before releasing source inputs on `UNPAID`, recovery
+requires fresh confirmation under the shared source child lock, whether or not a watcher is enabled.
+If new routine quote evidence is needed, the parent remains recoverable until observation resumes
+or a caller supplies it through refresh/recovery. Re-enabling watchers rebuilds parent interests
+without resetting retry deadlines. Mint-provided Retry-After delays remain a lower bound on the next
+automatic attempt.
+
+`cancel(id)` records intent and returns the actual state. An ambiguous source can remain pending;
+a paid source recovers forward. Cancellation can still incur a completed pre-swap fee. A
+`needs_attention` outcome requires inspection and is not successful settlement. A waiter timeout
+only ends observation; it never cancels, executes or recovers the swap. Waiters support `signal`
+and `pollIntervalMs`, and reject on disposal, a missing operation or a read failure.
+The timeout includes a final local read. Disposal drains admitted commands and pause/resume work
+before completing.
+
+`mint-swap:updated` carries `{ operationId, revision, state }` after commit and lock release.
+Quote and metadata updates committed by a parent command are also published after its locks are
+released, so listeners can await a refresh of that parent.
+Hints can be lost, duplicated by application delivery, or arrive out of order; reload and retain
+the newest revision. Waiters keep polling even without events. Lifecycle requests should be made
+outside awaited operation or lifecycle event listeners, so a listener does not await shutdown of its own work.
+
+Use one effect-driving Coco Session per Wallet store. Manager shares child locks with ordinary
+Mint/Melt services; Core does not enforce a universal cross-process singleton. Reuse host session
+guards (such as Cocod's state-directory lease); React initialization guards apply per provider.
+Generic child APIs remain independently usable, so use the parent API for cross-mint payment policy.
+History projection and React Mint Swap hooks are outside this slice.
+
 ## Protocol Support
 
 - [x] NUT-00

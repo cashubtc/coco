@@ -163,3 +163,16 @@ This feature is designed for scenarios where:
 - Both methods are idempotent - calling them multiple times has no adverse effects
 - Subscriptions created while paused will be automatically activated when resumed
 - The resume operation ensures everything is running properly, even if connections were torn down by the OS
+
+### Shared Mint Swap observation
+
+Mint Swap parents declare interests in the existing Mint and Melt quote watchers. These use the same
+synchronous local acceptance contract as ordinary operation interests; setup and failure diagnostics
+belong to the watcher. Parent progression from cached evidence does not await subscription acquisition.
+Disabling the parent withdraws its interests while preserving ordinary owners, and waits for required
+cleanup. Watcher enable calls may finish while operation-owned acquisition is still pending.
+
+Normal parent scans use cached evidence. Startup prefers sufficient cached evidence but currently
+retains bounded recovery for unresolved observations and already-authorized destination accounting.
+The separate repair-only migration is tracked in #559. Explicit refresh/recovery remains available,
+and source proof release still requires fresh nonpayment confirmation under the shared child lock.

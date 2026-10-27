@@ -1,4 +1,5 @@
 import { Amount, RateLimitError, type Proof } from '@cashu/cashu-ts';
+import type { DeferPublication } from '../../events/DeferredPublication.ts';
 import type { CoreTransaction, CoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
 import type { MintSwapOperationRepository } from './MintSwapOperationRepository.ts';
 import type {
@@ -14,6 +15,7 @@ import type { MintHandlerProvider } from '../../infra/handlers/mint/MintHandlerP
 import type { MeltHandlerProvider } from '../../infra/handlers/melt/MeltHandlerProvider.ts';
 import type { MintAdapter } from '../../infra/MintAdapter.ts';
 import type { Logger } from '../../logging/Logger.ts';
+import { NullLogger } from '../../logging/NullLogger.ts';
 import type { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
 import type { MintSwapOperation } from './MintSwapOperation.ts';
@@ -38,12 +40,14 @@ import {
   assertMintSwapIntent,
   initialMintSwapRetry,
   invoiceHash,
-  MintSwapInvariantError,
   normalizeMintSwapIntent,
   type MintSwapIntent,
 } from './MintSwapValidation.ts';
-import { MintSwapDebitCapError } from './MintSwapDebitCapError.ts';
-import { MintSwapIdentityConflictError } from './MintSwapIdentityConflictError.ts';
+import {
+  MintSwapDebitCapError,
+  MintSwapIdentityConflictError,
+  MintSwapInvariantError,
+} from './MintSwapErrors.ts';
 import {
   createMintSwap,
   prepareMintSwap,
@@ -58,7 +62,12 @@ import {
   flagMintSwapAttention,
 } from './MintSwapTransitions.ts';
 
+// Startup retains the bounded recovery fallback until #559 moves repair to its own owner.
+// Ordinary scans consume cached observations; explicit commands retain immediate refresh.
+type ObservationPolicy = 'cached' | 'startup' | 'refresh';
+
 interface ChildSnapshot {
+  parent: MintSwapOperation | null;
   source: MeltOperation | null;
   destination: MintOperation | null;
   proofs: CoreProof[];
@@ -79,6 +88,7 @@ export interface MintSwapOperationServiceDependencies {
     | 'createMintQuote'
     | 'createMeltQuote'
     | 'getMeltQuote'
+    | 'getMintQuote'
     | 'refreshMeltQuote'
     | 'refreshMintQuote'
     | 'recordMeltQuoteObservation'
@@ -99,18 +109,20 @@ export interface MintSwapOperationServiceDependencies {
 }
 
 /**
- * Dormant internal coordinator. Requires one effect-driving Coco Session per Wallet store.
+ * Internal coordinator. Requires one effect-driving Coco Session per Wallet store.
  * Child locks are shared with standalone processors; durable guards make local writes atomic,
- * but do not fence remote effects across independently running sessions. Runtime activation is #419.
+ * but do not fence remote effects across independently running sessions.
  */
 export class MintSwapOperationService {
   private readonly parentLock = new OperationIdLock();
   private readonly now: () => number;
   private readonly random: () => number;
-  private readonly committedChanges = new Map<
-    string,
-    Array<{ before: ChildSnapshot; after: ChildSnapshot }>
-  >();
+  private disposed = false;
+  private readonly work = new Set<Promise<unknown>>();
+  private disposePromise?: Promise<void>;
+  // Existing handlers can log remote payloads. Parent diagnostics use only bounded local hints.
+  private readonly handlerLogger = new NullLogger();
+  private readonly committedPublications = new Map<string, Array<() => Promise<void>>>();
 
   constructor(private readonly dependencies: MintSwapOperationServiceDependencies) {
     this.now = dependencies.now ?? Date.now;
@@ -143,6 +155,7 @@ export class MintSwapOperationService {
             locked: true,
             ownedPubkey: key.publicKeyHex,
           },
+          this.deferPublication(intent.id),
         );
         if (destination.pubkey !== key.publicKeyHex)
           throw new MintSwapInvariantError('quote_identity', 'quote_conflict', 'destination');
@@ -151,6 +164,7 @@ export class MintSwapOperationService {
           'bolt11',
           { invoice: destination.request },
           'sat',
+          this.deferPublication(intent.id),
         );
         const now = this.now();
         const candidate = {
@@ -177,9 +191,7 @@ export class MintSwapOperationService {
           retry: initialMintSwapRetry('preparing', now),
         };
         try {
-          parent = await this.dependencies.transactionRunner.run((tx) =>
-            tx.perform(createMintSwap, candidate),
-          );
+          parent = await this.commit(intent.id, (tx) => tx.perform(createMintSwap, candidate));
         } catch (error) {
           if (!(error instanceof MintSwapIdentityConflictError) || error.kind !== 'parent')
             throw error;
@@ -239,37 +251,86 @@ export class MintSwapOperationService {
     return this.withParent(id, async () => this.recoverParent(await this.requireParent(id)));
   }
 
-  /** Startup scans include prepared parents so independently advanced children are adopted. */
-  async recoverActive(): Promise<void> {
-    for (const parent of await this.dependencies.parentQueries.listActive()) {
-      if (parent.state === 'needs_attention') continue;
-      try {
-        await this.reconcile(parent.id);
-      } catch (error) {
-        // Shared child services can own this attempt; leave it for the next scan.
-        if (!(error instanceof OperationInProgressError)) throw error;
-      }
+  /** Skip busy work and recheck durable eligibility after acquiring the parent lock. */
+  async reconcileInBackground(id: string, startup = false): Promise<void> {
+    try {
+      await this.withParent(
+        id,
+        async () => {
+          const parent = await this.requireParent(id);
+          const due =
+            isMintSwapAutomaticState(parent.state) &&
+            parent.retry.nextAttemptAt !== null &&
+            parent.retry.nextAttemptAt <= this.now();
+          if (parent.state !== 'prepared' && !due) return;
+          if (
+            this.dependencies.sourceOperationLock.isLocked(parent.sourceOperationId) ||
+            this.dependencies.destinationOperationLock.isLocked(parent.destinationOperationId)
+          )
+            return;
+          await this.recoverParent(parent, startup ? 'startup' : 'cached');
+        },
+        false,
+      );
+    } catch (error) {
+      if (!(error instanceof OperationInProgressError)) throw error;
     }
   }
 
-  async recoverDue(limit = 25): Promise<void> {
-    const dueAt = this.now();
-    for (const candidate of await this.dependencies.parentQueries.listDue(dueAt, limit)) {
-      try {
-        await this.withParent(candidate.id, async () => {
-          const current = await this.requireParent(candidate.id);
-          if (
-            !isMintSwapAutomaticState(current.state) ||
-            current.retry.nextAttemptAt === null ||
-            current.retry.nextAttemptAt > dueAt
-          )
-            return;
-          await this.recoverParent(current);
-        });
-      } catch (error) {
-        if (!(error instanceof OperationInProgressError)) throw error;
-      }
+  getOperation(id: string): Promise<MintSwapOperation | null> {
+    return this.own(() => this.dependencies.parentQueries.getById(id));
+  }
+
+  listActive(): Promise<MintSwapOperation[]> {
+    return this.own(() => this.dependencies.parentQueries.listActive());
+  }
+
+  /** Close admission and drain complete commands, including preflight and event publication. */
+  dispose(): Promise<void> {
+    if (!this.disposePromise) {
+      this.disposed = true;
+      this.disposePromise = Promise.allSettled([...this.work]).then(() => {});
     }
+    return this.disposePromise;
+  }
+
+  /** Startup scans include prepared parents so independently advanced children are adopted. */
+  async recoverActive(): Promise<void> {
+    return this.own(async () => {
+      for (const parent of await this.dependencies.parentQueries.listActive()) {
+        if (this.disposed) break;
+        if (parent.state === 'needs_attention') continue;
+        try {
+          await this.reconcile(parent.id);
+        } catch (error) {
+          // Shared child services can own this attempt; leave it for the next scan.
+          if (!(error instanceof OperationInProgressError)) throw error;
+        }
+      }
+    });
+  }
+
+  async recoverDue(limit = 25): Promise<void> {
+    return this.own(async () => {
+      const dueAt = this.now();
+      for (const candidate of await this.dependencies.parentQueries.listDue(dueAt, limit)) {
+        if (this.disposed) break;
+        try {
+          await this.withParent(candidate.id, async () => {
+            const current = await this.requireParent(candidate.id);
+            if (
+              !isMintSwapAutomaticState(current.state) ||
+              current.retry.nextAttemptAt === null ||
+              current.retry.nextAttemptAt > dueAt
+            )
+              return;
+            await this.recoverParent(current);
+          });
+        } catch (error) {
+          if (!(error instanceof OperationInProgressError)) throw error;
+        }
+      }
+    });
   }
 
   private async prepareParent(parent: MintSwapOperation): Promise<MintSwapOperation> {
@@ -328,9 +389,11 @@ export class MintSwapOperationService {
     }
     const source = await this.dependencies.mintService.refreshAndCommitIfStale(
       parent.sourceMintUrl,
+      this.deferPublication(parent.id),
     );
     const destination = await this.dependencies.mintService.refreshAndCommitIfStale(
       parent.destinationMintUrl,
+      this.deferPublication(parent.id),
     );
     if (
       !(
@@ -374,12 +437,13 @@ export class MintSwapOperationService {
       const { wallet } = await this.dependencies.walletService.getWalletWithActiveKeysetId(
         source.mintUrl,
         source.unit,
+        this.deferPublication(parent.id),
       );
       const result = await handler.swap({
         operation: source,
         wallet,
         inputProofs: inputs,
-        logger: this.dependencies.logger,
+        logger: this.handlerLogger,
       });
       const now = this.now();
       const checkpoint = await this.commit(parent.id, (tx) =>
@@ -427,7 +491,7 @@ export class MintSwapOperationService {
       operation: source,
       inputProofs: inputs,
       mintAdapter: this.dependencies.mintAdapter,
-      logger: this.dependencies.logger,
+      logger: this.handlerLogger,
     });
     const existing = await this.dependencies.quoteLifecycle.getMeltQuote(
       source.mintUrl,
@@ -437,19 +501,25 @@ export class MintSwapOperationService {
     if (!existing || existing.method !== 'bolt11')
       throw new MintSwapInvariantError('quote_identity', 'quote_missing', 'source');
     const now = this.now();
-    const quote = await this.dependencies.quoteLifecycle.recordMeltQuoteObservation({
-      ...existing,
-      state: result.status,
-      change: result.change,
-      payment_preimage: result.finalizedData?.preimage,
-      lastObservedRemoteState: result.status,
-      lastObservedRemoteStateAt: now,
-      updatedAt: now,
-    });
+    const quote = await this.dependencies.quoteLifecycle.recordMeltQuoteObservation(
+      {
+        ...existing,
+        state: result.status,
+        change: result.change,
+        payment_preimage: result.finalizedData?.preimage,
+        lastObservedRemoteState: result.status,
+        lastObservedRemoteStateAt: now,
+        updatedAt: now,
+      },
+      this.deferPublication(parent.id),
+    );
     await this.applySourceObservation(parent, operation, quote, false);
   }
 
-  private async recoverParent(parent: MintSwapOperation): Promise<MintSwapOperation> {
+  private async recoverParent(
+    parent: MintSwapOperation,
+    observation: ObservationPolicy = 'refresh',
+  ): Promise<MintSwapOperation> {
     const startingState = parent.state;
     const startingRetryCount = parent.retry.attemptCount;
     if (isMintSwapTerminalState(parent.state) || parent.state === 'needs_attention') return parent;
@@ -463,11 +533,7 @@ export class MintSwapOperationService {
       if (parent.state === 'prepared' || parent.state === 'source_pending') {
         const source = await this.dependencies.sourceQueries.getById(parent.sourceOperationId);
         if (source?.state === 'rolled_back') {
-          await this.dependencies.quoteLifecycle.refreshMeltQuote(
-            parent.sourceMintUrl,
-            'bolt11',
-            parent.sourceQuote.quoteId,
-          );
+          await this.observeSource(parent, observation);
           const observedAt = this.now();
           parent = await this.commit(parent.id, (tx) =>
             tx.perform(reconcileMintSwap, { id: parent.id, now: observedAt }),
@@ -479,11 +545,8 @@ export class MintSwapOperationService {
         // Recover the authorized child regardless of current trust; never redispatch payment here.
         const source = await this.dependencies.sourceQueries.getById(parent.sourceOperationId);
         if (source?.state === 'executing' || source?.state === 'pending') {
-          const quote = await this.dependencies.quoteLifecycle.refreshMeltQuote(
-            parent.sourceMintUrl,
-            'bolt11',
-            parent.sourceQuote.quoteId,
-          );
+          const quote = await this.observeSource(parent, observation);
+          if (!quote) return this.defer(parent);
           const originalsUnspent =
             source.needsSwap && source.state === 'executing'
               ? await this.recoverPreSwap(parent, source, quote)
@@ -496,7 +559,7 @@ export class MintSwapOperationService {
     } finally {
       release();
     }
-    parent = await this.recoverDestination(await this.requireParent(parent.id));
+    parent = await this.recoverDestination(await this.requireParent(parent.id), observation);
     const alreadyScheduled =
       parent.state === startingState
         ? parent.retry.attemptCount > startingRetryCount
@@ -525,6 +588,7 @@ export class MintSwapOperationService {
     const { wallet } = await this.dependencies.walletService.getWalletWithActiveKeysetId(
       operation.mintUrl,
       operation.unit,
+      this.deferPublication(parent.id),
     );
     const originals = await this.dependencies.proofQueries.getProofsBySecrets(
       operation.mintUrl,
@@ -538,7 +602,10 @@ export class MintSwapOperationService {
         throw new MintSwapInvariantError('source_settlement', 'settlement_mismatch', 'source');
       return true;
     }
-    const metadata = await this.dependencies.mintService.refreshAndCommitIfStale(operation.mintUrl);
+    const metadata = await this.dependencies.mintService.refreshAndCommitIfStale(
+      operation.mintUrl,
+      this.deferPublication(parent.id),
+    );
     const restored = await restoreOutputProofs(
       wallet,
       metadata.keysets,
@@ -570,6 +637,7 @@ export class MintSwapOperationService {
       if (!Array.isArray(quote.change)) throw new Error('Source settlement change is incomplete');
       const metadata = await this.dependencies.mintService.refreshAndCommitIfStale(
         operation.mintUrl,
+        this.deferPublication(parent.id),
       );
       changeProofs = unblindMeltChange(operation, quote.change, metadata.keysets);
     }
@@ -609,7 +677,10 @@ export class MintSwapOperationService {
     return result;
   }
 
-  private async recoverDestination(parent: MintSwapOperation): Promise<MintSwapOperation> {
+  private async recoverDestination(
+    parent: MintSwapOperation,
+    observation: ObservationPolicy = 'refresh',
+  ): Promise<MintSwapOperation> {
     if (parent.state !== 'destination_funded' && parent.state !== 'destination_pending')
       return parent;
     const release = await this.dependencies.destinationOperationLock.acquire(
@@ -618,11 +689,8 @@ export class MintSwapOperationService {
     try {
       // Paid source value must remain redeemable through this persisted quote and output plan.
       // The scoped authorization below validates funding and ownership without restoring trust.
-      await this.dependencies.quoteLifecycle.refreshMintQuote(
-        parent.destinationMintUrl,
-        'bolt11',
-        parent.destinationQuote.quoteId,
-      );
+      const observedQuote = await this.observeDestination(parent, observation);
+      if (!observedQuote) return parent;
       let now = this.now();
       parent = await this.commit(parent.id, (tx) =>
         tx.perform(reconcileMintSwap, { id: parent.id, now }),
@@ -646,19 +714,22 @@ export class MintSwapOperationService {
       const { wallet } = await this.dependencies.walletService.getWalletWithActiveKeysetId(
         operation.mintUrl,
         operation.unit,
+        this.deferPublication(parent.id),
       );
       const context = {
         operation,
         wallet,
         mintAdapter: this.dependencies.mintAdapter,
-        logger: this.dependencies.logger,
+        logger: this.handlerLogger,
       };
       let proofs: Proof[];
       if (newlyAuthorized) {
         const result = await handler.execute(context);
         if (result.status === 'FAILED') throw new Error('Destination issuance remains unresolved');
         proofs =
-          result.status === 'ISSUED' ? result.proofs : await this.restoreDestination(operation);
+          result.status === 'ISSUED'
+            ? result.proofs
+            : await this.restoreDestination(parent, operation);
       } else {
         const siblings = await this.dependencies.destinationQueries.getByQuoteId(
           operation.mintUrl,
@@ -667,12 +738,14 @@ export class MintSwapOperationService {
         );
         const result = await handler.recoverExecuting({
           ...context,
-          restoreOutputs: () => this.restoreDestination(operation),
+          observedQuote: observedQuote.method === 'bolt11' ? observedQuote : undefined,
+          restoreOutputs: () => this.restoreDestination(parent, operation),
           recordQuoteSnapshot: async (snapshot) => {
             await this.dependencies.quoteLifecycle.recordMintQuoteSnapshot(
               operation.mintUrl,
               'bolt11',
               snapshot,
+              this.deferPublication(parent.id),
             );
           },
           localClaimabilityFacts: {
@@ -688,7 +761,10 @@ export class MintSwapOperationService {
         });
         if (result.status === 'REJECTED')
           throw new MintSwapInvariantError('child_identity', 'child_conflict', 'destination');
-        if (result.status !== 'ISSUED') return parent;
+        if (result.status !== 'ISSUED') {
+          const retryAfter = this.retryDeadline(result.retryAfterMs);
+          return retryAfter === undefined ? parent : this.defer(parent, true, retryAfter);
+        }
         proofs = result.proofs;
       }
       now = this.now();
@@ -704,11 +780,18 @@ export class MintSwapOperationService {
     }
   }
 
-  private async restoreDestination(operation: ExecutingMintOperation): Promise<Proof[]> {
-    const metadata = await this.dependencies.mintService.refreshAndCommitIfStale(operation.mintUrl);
+  private async restoreDestination(
+    parent: MintSwapOperation,
+    operation: ExecutingMintOperation,
+  ): Promise<Proof[]> {
+    const metadata = await this.dependencies.mintService.refreshAndCommitIfStale(
+      operation.mintUrl,
+      this.deferPublication(parent.id),
+    );
     const { wallet } = await this.dependencies.walletService.getWalletWithActiveKeysetId(
       operation.mintUrl,
       operation.unit,
+      this.deferPublication(parent.id),
     );
     return restoreOutputProofs(wallet, metadata.keysets, operation.unit, operation.outputData);
   }
@@ -718,6 +801,9 @@ export class MintSwapOperationService {
     error: unknown,
     allowRejection = false,
   ): Promise<MintSwapOperation> {
+    // A child can become busy after a background eligibility check. Contention is not a retry
+    // failure and must not rewrite the parent's durable backoff or evidence.
+    if (error instanceof OperationInProgressError) throw error;
     const now = this.now();
     if (error instanceof MintSwapInvariantError)
       return this.commit(id, (tx) => tx.perform(flagMintSwapAttention, { id, now, error }));
@@ -740,13 +826,57 @@ export class MintSwapOperationService {
         }),
       );
     // No raw error payload is persisted: it may contain protocol secrets.
-    const retryAfter =
-      error instanceof RateLimitError &&
-      Number.isFinite(error.retryAfterMs) &&
-      error.retryAfterMs! >= 0
-        ? now + Math.ceil(error.retryAfterMs!)
-        : undefined;
+    const retryAfter = this.retryDeadline(
+      error instanceof RateLimitError ? error.retryAfterMs : undefined,
+    );
     return this.defer(parent, true, retryAfter);
+  }
+
+  private retryDeadline(retryAfterMs: number | undefined): number | undefined {
+    return retryAfterMs !== undefined && Number.isFinite(retryAfterMs) && retryAfterMs >= 0
+      ? this.now() + Math.ceil(retryAfterMs)
+      : undefined;
+  }
+
+  private async observeSource(
+    parent: MintSwapOperation,
+    observation: ObservationPolicy,
+  ): Promise<MeltQuote | null> {
+    const { mintUrl, method, quoteId } = parent.sourceQuote;
+    if (observation !== 'refresh') {
+      const quote = await this.dependencies.quoteLifecycle.getMeltQuote(mintUrl, method, quoteId);
+      if (quote?.state === 'PAID' && Array.isArray(quote.change)) return quote;
+      // Releasing source inputs requires a fresh check after the payment attempt has settled.
+      if (observation === 'cached' && (!quote || quote.state !== 'UNPAID')) return quote;
+    }
+    return this.dependencies.quoteLifecycle.refreshMeltQuote(
+      mintUrl,
+      method,
+      quoteId,
+      this.deferPublication(parent.id),
+    );
+  }
+
+  private async observeDestination(parent: MintSwapOperation, observation: ObservationPolicy) {
+    const { mintUrl, method, quoteId } = parent.destinationQuote;
+    if (observation !== 'refresh') {
+      const quote = await this.dependencies.quoteLifecycle.getMintQuote(mintUrl, method, quoteId);
+      if (observation === 'cached') return quote;
+      // A fully funded quote is enough to advance a pending destination. An already-authorized
+      // destination still needs startup recovery's fresh accounting after a lost issuance result.
+      if (
+        parent.state === 'destination_funded' &&
+        quote?.amountPaid.greaterThanOrEqual(parent.destinationAmount)
+      )
+        return quote;
+      if (quote?.amountIssued.greaterThanOrEqual(parent.destinationAmount)) return quote;
+    }
+    return this.dependencies.quoteLifecycle.refreshMintQuote(
+      mintUrl,
+      method,
+      quoteId,
+      this.deferPublication(parent.id),
+    );
   }
 
   private async defer(parent: MintSwapOperation, ambiguous = false, retryAfter?: number) {
@@ -776,33 +906,53 @@ export class MintSwapOperationService {
     return parent;
   }
 
-  private async withParent<T>(id: string, work: () => Promise<T>): Promise<T> {
-    while (this.parentLock.isLocked(id)) await this.parentLock.waitForUnlock(id);
+  private own<T>(work: () => Promise<T>): Promise<T> {
+    if (this.disposed) return Promise.reject(new Error('Mint Swap runtime is disposed'));
+    const promise = work();
+    this.work.add(promise);
+    void promise.then(
+      () => this.work.delete(promise),
+      () => this.work.delete(promise),
+    );
+    return promise;
+  }
+
+  private withParent<T>(id: string, work: () => Promise<T>, wait = true): Promise<T> {
+    return this.own(() => this.runWithParent(id, work, wait));
+  }
+
+  private async runWithParent<T>(id: string, work: () => Promise<T>, wait: boolean): Promise<T> {
+    if (wait) while (this.parentLock.isLocked(id)) await this.parentLock.waitForUnlock(id);
     const release = await this.parentLock.acquire(id);
-    const changes: Array<{ before: ChildSnapshot; after: ChildSnapshot }> = [];
-    this.committedChanges.set(id, changes);
+    const publications: Array<() => Promise<void>> = [];
+    this.committedPublications.set(id, publications);
     try {
       return await work();
     } finally {
-      this.committedChanges.delete(id);
+      this.committedPublications.delete(id);
       release();
       // Listeners may call a child API and wait for its lock. Flush after the operation's locks
       // are released, using the snapshots captured at each successful commit.
-      for (const change of changes) await this.publishChanges(change.before, change.after);
+      for (const publish of publications) await publish();
     }
+  }
+
+  private deferPublication(id: string): DeferPublication {
+    const publications = this.committedPublications.get(id)!;
+    return (publish) => publications.push(publish);
   }
 
   private async emit<E extends keyof CoreEvents>(event: E, payload: CoreEvents[E]) {
     try {
       await this.dependencies.eventBus.emit(event, payload, { throwOnError: true });
     } catch {
-      this.dependencies.logger?.warn('Mint Swap child event listener failed after commit', {
+      this.dependencies.logger?.warn('Mint Swap event listener failed after commit', {
         event,
       });
     }
   }
 
-  /** Capture child/proof changes in the owning attempt; publish only its committed snapshot. */
+  /** Capture parent/child/proof changes in the owning attempt; publish only its committed snapshot. */
   private async commit<T>(id: string, work: (tx: CoreTransaction) => Promise<T>): Promise<T> {
     const committed = await this.dependencies.transactionRunner.run(async (tx) => {
       const before = await this.childSnapshot(tx, id);
@@ -810,13 +960,15 @@ export class MintSwapOperationService {
       const after = await this.childSnapshot(tx, id);
       return { result, before, after };
     });
-    this.committedChanges.get(id)!.push({ before: committed.before, after: committed.after });
+    this.committedPublications
+      .get(id)!
+      .push(() => this.publishChanges(committed.before, committed.after));
     return committed.result;
   }
 
   private async childSnapshot(tx: CoreTransaction, id: string): Promise<ChildSnapshot> {
     const parent = await tx.mintSwapOperations.getById(id);
-    if (!parent) throw new Error('Mint Swap was not found');
+    if (!parent) return { parent: null, source: null, destination: null, proofs: [], counters: [] };
     const source = await tx.meltOperations.getById(parent.sourceOperationId);
     const destination = await tx.mintOperations.getById(parent.destinationOperationId);
     const sourceSecrets =
@@ -861,10 +1013,23 @@ export class MintSwapOperationService {
         if (counter) counters.push(counter);
       }
     }
-    return { source, destination, proofs: [...sourceProofs, ...destinationProofs], counters };
+    return {
+      parent,
+      source,
+      destination,
+      proofs: [...sourceProofs, ...destinationProofs],
+      counters,
+    };
   }
 
   private async publishChanges(before: ChildSnapshot, after: ChildSnapshot) {
+    if (after.parent && before.parent?.revision !== after.parent.revision) {
+      await this.emit('mint-swap:updated', {
+        operationId: after.parent.id,
+        revision: after.parent.revision,
+        state: after.parent.state,
+      });
+    }
     for (const counter of after.counters) {
       if (
         !before.counters.some(

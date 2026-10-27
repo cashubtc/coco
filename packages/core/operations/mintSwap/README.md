@@ -1,9 +1,13 @@
-# Mint Swap coordinator — slice 4
+# Mint Swap coordinator and runtime
 
-This internal module implements the persisted parent lifecycle on the current coordinator-owned
-transaction design. It is deliberately absent from package entry points and Manager wiring. The
-existing public Mint Swap path is unchanged. #419 owns runtime/API activation and shared-session
-wiring; #420 owns parent history, React, and user documentation.
+This internal coordinator composes the persisted parent lifecycle through the shared Wallet
+transaction runner. Manager wires it to `ops.mintSwap`, shared child locks and the independently
+configured recovery processor. The coordinator itself stays outside package entry points. See the
+[public API contract](../../README.md#mint-swap-operations). Parent history and React hooks remain #420.
+
+The API is always available; initial source payment requires an explicit `execute` call.
+Automatic parent recovery is enabled by default. The processor setting can disable automatic
+parent startup/resume passes and timers while leaving all explicit commands available.
 
 `prepare(intent)` requires a stable parent ID, distinct trusted source/destination mints, a positive
 exact receive amount in sat, and an optional conservative source debit cap. It allocates a committed
@@ -20,7 +24,33 @@ normal parent state edges.
 The coordinator requires the same source and destination `OperationIdLock` instances used by their
 ordinary child services, and the shared `MintScopedLock`. Locks are acquired outside transactions.
 Only one Coco Session may drive effects for a Wallet store. These locks do not provide cross-process
-remote fencing. Multiple read-only sessions remain a separate host concern.
+remote fencing. Cocod and React keep their existing host/session guards; no new universal lock
+provider is required. Ordinary child commands can still advance their exact operation independently.
+
+The processor uses a 1-second due cadence and a 30-second complete active sweep, yielding every 25
+attempts. Complete sweeps observe prepared parents and visit the entire eligible snapshot so a busy
+prefix cannot starve the tail. Eligibility is rechecked under the parent lock. Events coalesce into
+later scans, never inline reconciliation or retry-deadline changes. Stop invalidates callbacks and
+drains current work; Manager disposal also drains admitted parent commands and aborts local waiters.
+Parent quote interests use the same synchronous local declaration contract as ordinary operations.
+Routing and all declarations are installed before progression without awaiting subscription setup.
+Watchers own trust checks, acquisition failures, and late cleanup. Withdrawal revokes permission
+immediately; parent stop and watcher stop wait for required cleanup, including late acquisition.
+Repeated declarations and explicit watcher enable can retry failed setup without a new retry loop.
+
+Normal scans consume cached canonical evidence. Startup prefers complete paid source evidence and
+sufficient destination funding/completion accounting, but retains bounded recovery for unresolved
+observations and an already-authorized destination's accounting. This is a temporary split: #559 moves
+and narrows startup repair. Explicit refresh/recovery still observes immediately. Fresh source UNPAID
+confirmation under the shared child lock remains required before releasing inputs.
+
+Manager orders overlapping pause/resume requests and drains admitted lifecycle changes on disposal.
+Do not await a lifecycle change from an awaited operation/lifecycle listener whose work it must drain.
+
+`mint-swap:updated` is a minimal committed `{ operationId, revision, state }` hint, including initial
+creation and same-state metadata changes. It is best effort and may reorder under reentrant listeners.
+The outcome waiter uses local reads, read-subscribe-read, polling and a final timeout read. It never
+performs remote recovery; timeout and attention are distinct from successful completion.
 
 ## Economic evidence
 
@@ -72,7 +102,7 @@ All 39 original scenarios remain in the shared suites. Core runs the Memory case
 run in their adapter packages. The SQL adapter CI jobs explicitly include `mintSwapComposition.test.ts`;
 the IndexedDB job already runs every browser test file through `test:browser`.
 
-## Local verification
+## Recorded slice 4 verification (before runtime activation)
 
 - Workspace build and typecheck passed.
 - Full Core unit suite: 1,953 passed, including 66 shared Mint Swap cases.
@@ -83,7 +113,7 @@ the IndexedDB job already runs every browser test file through `test:browser`.
   cases per browser).
 - Formatting and `git diff --check` passed.
 
-The current verification runs select the deterministic contract and composition suites. They do not
+Those verification runs selected the deterministic contract and composition suites. They do not
 exercise native Expo devices or live Mint Swap payments. An earlier broad IndexedDB run encountered
 68 live-mint integration failures because `http://localhost:3338` was unreachable; those tests were
 not rerun as part of this coverage expansion.

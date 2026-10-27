@@ -41,11 +41,10 @@ import {
   assertMintSwapIntent,
   invoiceHash,
   meltPlanAmounts,
-  MintSwapInvariantError,
   scheduleMintSwapRetry,
   stopMintSwap,
 } from './MintSwapValidation.ts';
-import { MintSwapDebitCapError } from './MintSwapDebitCapError.ts';
+import { MintSwapDebitCapError, MintSwapInvariantError } from './MintSwapErrors.ts';
 
 async function requireParent(tx: CoreTransaction, id: string): Promise<MintSwapOperation> {
   const operation = await tx.mintSwapOperations.getById(id);
