@@ -1,4 +1,4 @@
-import { Amount } from '@cashu/cashu-ts';
+import { Amount, RateLimitError } from '@cashu/cashu-ts';
 import { bytesToHex } from '@noble/curves/utils.js';
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
 import { OutputData, type MintQuoteBolt11Response, type Wallet } from '@cashu/cashu-ts';
@@ -256,6 +256,7 @@ describe('MintBolt11Handler', () => {
         mintUrl,
         20,
         'locked BOLT11 mint quote',
+        undefined,
       );
       expect(keyRingService.generateMintQuoteKeyPair).toHaveBeenCalledTimes(1);
       expect(wallet.createLockedMintQuote).toHaveBeenCalledWith(Amount.from(10), quotePubkey);
@@ -283,6 +284,7 @@ describe('MintBolt11Handler', () => {
         mintUrl,
         20,
         'locked BOLT11 mint quote',
+        undefined,
       );
       expect(wallet.createLockedMintQuote).not.toHaveBeenCalled();
     });
@@ -371,6 +373,30 @@ describe('MintBolt11Handler', () => {
   });
 
   describe('recoverExecuting', () => {
+    it.each(['observation', 'issuance', 'restoration'] as const)(
+      'preserves Retry-After when %s is rate limited',
+      async (stage) => {
+        const error = new RateLimitError('rate limited', 120_000);
+        const context = buildRecoverContext();
+        if (stage === 'observation') {
+          (mintAdapter.checkMintQuote as Mock<any>).mockRejectedValueOnce(error);
+        } else if (stage === 'issuance') {
+          (wallet.mintProofsBolt11 as Mock<any>).mockRejectedValueOnce(error);
+        } else {
+          (wallet.mintProofsBolt11 as Mock<any>).mockRejectedValueOnce(
+            new MintOperationError(20002, 'Already issued'),
+          );
+          context.restoreOutputs = async () => {
+            throw error;
+          };
+        }
+        expect(await handler.recoverExecuting(context)).toMatchObject({
+          status: 'UNRESOLVED',
+          retryAfterMs: 120_000,
+        });
+      },
+    );
+
     it('returns a terminal result when the mint rejects issuance with quote expired', async () => {
       const result = await handler.recoverExecuting(buildRecoverContext());
 

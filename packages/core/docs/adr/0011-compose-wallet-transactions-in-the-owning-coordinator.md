@@ -76,8 +76,8 @@ transactions. Their commits intentionally survive later caller failure. Only app
 observations publish events; older observations and timestamp ties retain the first committed
 snapshot. Coordinator dependencies remain acyclic.
 
-Mint Swap persistence is a required part of every Wallet transaction scope, independently of runtime
-activation. Adapter migrations govern persisted model changes. Funded Mint Swap redemption derives
+Mint Swap persistence is a required part of every Wallet transaction scope. Adapter migrations
+govern persisted model changes. Funded Mint Swap redemption derives
 authority from the persisted paid parent and exact child, quote, and proof evidence checked in the
 same scope as the Mint Quote Reservation. It can recover paid value after trust revocation; ordinary
 Mint execution retains its trust gate. Both paths compose the same reservation transition and exact-output settlement.
@@ -86,14 +86,29 @@ After that commit, trust revocation cannot interrupt the authorized request or i
 source payment may have succeeded before its observation was persisted. Recovery retains all exact
 request and ownership checks, never restores trust, and never blindly redispatches source payment.
 
-Send, Mint, Melt, Receive, the dormant Mint Swap coordinator, KeyRing, and mint metadata refresh use this model.
+Send, Mint, Melt, Receive, the Mint Swap coordinator, KeyRing, and mint metadata refresh use this model.
 Mint Swap composes exact child preparation, authorization, and settlement through the same runner
-scope. It requires shared child locks in one effect-driving Coco Session; runtime activation and
-enforcement remain #419. Legacy public Mint Swap orchestration, Payment Request Receive
-parent/attempt/child atomicity, and MintService add/forced-update/trust/delete paths remain for their
+scope. Manager shares its child locks with ordinary Mint/Melt services in one effect-driving Coco
+Session per Wallet store. Existing host/session guards retain their scope; Core does not add a
+universal cross-process singleton. Coco packages are intended to be used with lock-step versioning,
+so the Mint Swap API has no feature activation gate. Initial source payment requires an explicit
+`execute` call. The parent processor is enabled by default and can be disabled without restricting
+explicit commands. It registers interests in the existing Mint/Melt watchers and consumes committed
+canonical quote updates without initiating prepared source payment. Interests are rebuilt independently
+of durable retry deadlines. A disabled watcher does not recruit a replacement parent quote poller;
+bounded startup/explicit recovery and necessary recovery effects remain available. Source proof release
+still requires fresh positive `UNPAID` confirmation under the shared child lock. Authorized recovery
+interests permit observation of exact quotes after trust revocation, without restoring mint trust.
+Parent update hints are captured in the owning transaction and published after commit and
+lock release; local polling and complete active sweeps tolerate lost hints. No outbox or new schema
+is introduced. Manager orders pause/resume changes and drains admitted lifecycle and parent work on
+disposal. An observation timeout only ends waiting; it does not change the persisted operation.
+Payment Request Receive parent/attempt/child atomicity and MintService
+add/forced-update/trust/delete paths remain for their
 owning migrations.
 Consistent fail-fast rejection of nested transactions remains follow-up work and must distinguish
-nesting from legitimate concurrent calls. There are no public API or persisted-format changes.
+nesting from legitimate concurrent calls. Mint Swap runtime adds public APIs/configuration/events;
+it does not change the persisted parent format.
 
 The Restore migration adds an explicit exception
 to the public API compatibility policy: move Restore directly to scoped monotonic advancement and
