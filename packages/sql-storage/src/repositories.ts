@@ -22,8 +22,12 @@ import type {
 import { RepositoryTransactionConflictError } from '@cashu/coco-core/adapter';
 import type { SqlDatabase } from './index.ts';
 import { ensureSchema } from './schema.ts';
+import { hasSqliteTransactionConflictCode, isSqliteTransactionConflict } from './utils.ts';
 import { SqliteMintRepository } from './repositories/MintRepository.ts';
-import { SqliteKeysetRepository } from './repositories/KeysetRepository.ts';
+import {
+  SqliteKeysetRepository,
+  ScopedSqliteKeysetRepository,
+} from './repositories/KeysetRepository.ts';
 import { SqliteKeyRingRepository } from './repositories/KeyRingRepository.ts';
 import { SqliteCounterRepository } from './repositories/CounterRepository.ts';
 import { SqliteProofRepository } from './repositories/ProofRepository.ts';
@@ -44,7 +48,6 @@ import { SqliteMintSwapOperationRepository } from './repositories/MintSwapOperat
 
 export interface SqlStorageRepositoriesOptions {
   database: SqlDatabase;
-  mintSwap?: boolean;
 }
 
 class RepositoryTransactionCallbackFailure extends Error {
@@ -55,44 +58,12 @@ class RepositoryTransactionCallbackFailure extends Error {
   }
 }
 
-function getSqliteErrorCode(error: unknown): string {
-  if (typeof error !== 'object' || error === null) return '';
-  if ('code' in error) return String((error as { code?: unknown }).code).toUpperCase();
-  if ('errno' in error) return String((error as { errno?: unknown }).errno).toUpperCase();
-  return '';
-}
-
-function hasSqliteTransactionConflictCode(error: unknown): boolean {
-  const code = getSqliteErrorCode(error);
-  return (
-    code === '5' ||
-    code === '6' ||
-    code.startsWith('SQLITE_BUSY') ||
-    code.startsWith('SQLITE_LOCKED')
-  );
-}
-
-function isSqliteTransactionConflict(error: unknown): boolean {
-  if (hasSqliteTransactionConflictCode(error)) return true;
-
-  const message =
-    error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
-  return (
-    message.includes('database is locked') ||
-    message.includes('database table is locked') ||
-    message.includes('database is busy')
-  );
-}
-
-function createRepositoryScope(
-  database: SqlDatabase,
-  mintSwapEnabled: boolean,
-): RepositoryTransactionScope {
+function createRepositoryScope(database: SqlDatabase): RepositoryTransactionScope {
   return {
     mintRepository: new SqliteMintRepository(database),
     keyRingRepository: new SqliteKeyRingRepository(database),
     counterRepository: new SqliteCounterRepository(database),
-    keysetRepository: new SqliteKeysetRepository(database),
+    keysetRepository: new ScopedSqliteKeysetRepository(database),
     proofRepository: new SqliteProofRepository(database),
     meltQuoteRepository: new SqliteMeltQuoteRepository(database),
     mintQuoteRepository: new SqliteMintQuoteRepository(database),
@@ -109,9 +80,7 @@ function createRepositoryScope(
     paymentRequestReceiveAttemptRepository: new SqlitePaymentRequestReceiveAttemptRepository(
       database,
     ),
-    ...(mintSwapEnabled
-      ? { mintSwap: { operationRepository: new SqliteMintSwapOperationRepository(database) } }
-      : {}),
+    mintSwap: { operationRepository: new SqliteMintSwapOperationRepository(database) },
   };
 }
 
@@ -132,18 +101,16 @@ export class SqlStorageRepositories implements Repositories {
   readonly receiveOperationRepository: ReceiveOperationRepository;
   readonly paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
   readonly paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
-  readonly mintSwap?: MintSwapPersistence;
-  readonly database: SqlDatabase;
-  private readonly mintSwapEnabled: boolean;
+  readonly mintSwap: MintSwapPersistence;
+  private readonly database: SqlDatabase;
 
   constructor(options: SqlStorageRepositoriesOptions) {
     this.database = options.database;
-    this.mintSwapEnabled = options.mintSwap ?? false;
-    const repositories = createRepositoryScope(this.database, this.mintSwapEnabled);
+    const repositories = createRepositoryScope(this.database);
     this.mintRepository = repositories.mintRepository;
     this.keyRingRepository = new SqliteKeyRingRepository(this.database);
     this.counterRepository = repositories.counterRepository;
-    this.keysetRepository = repositories.keysetRepository;
+    this.keysetRepository = new SqliteKeysetRepository(this.database);
     this.proofRepository = repositories.proofRepository;
     this.meltQuoteRepository = repositories.meltQuoteRepository;
     this.mintQuoteRepository = repositories.mintQuoteRepository;
@@ -170,7 +137,7 @@ export class SqlStorageRepositories implements Repositories {
       return await this.database.transaction(
         async (txDatabase) => {
           try {
-            return await fn(createRepositoryScope(txDatabase, this.mintSwapEnabled));
+            return await fn(createRepositoryScope(txDatabase));
           } catch (error) {
             if (error instanceof RepositoryTransactionConflictError) throw error;
             if (hasSqliteTransactionConflictCode(error)) {

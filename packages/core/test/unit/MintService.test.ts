@@ -4,7 +4,7 @@ import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories
 import { MintRequestProvider } from '../../infra/MintRequestProvider.ts';
 import { createMintMetadataRefreshDependencies } from '../fixtures/MintMetadataRefresh.ts';
 import { MintService } from '../../services/MintService';
-import { ProofValidationError } from '../../models/Error';
+import { KeysetVerificationError, ProofValidationError } from '../../models/Error';
 import type { MemoryMintRepository } from '../../repositories/memory/MemoryMintRepository';
 import type { MemoryKeysetRepository } from '../../repositories/memory/MemoryKeysetRepository';
 import { EventBus } from '../../events/EventBus';
@@ -795,6 +795,28 @@ describe('MintService', () => {
       expect(result.mint.mintUrl).toBe(testMintUrl);
       expect(result.mint.trusted).toBe(false);
       expect(result.keysets.length).toBeGreaterThan(0);
+    });
+
+    it('does not update cached keyset metadata that its stored keys cannot verify', async () => {
+      await service.addMintByUrl(testMintUrl);
+      mockAdapter.fetchKeysets = mock(async () => ({
+        keysets: [{ ...mockKeysets[0]!, unit: 'usd', input_fee_ppk: 21 }],
+      }));
+      mockAdapter.fetchKeysForId = mock(async () => {
+        throw new KeysetVerificationError(
+          testMintUrl,
+          mockKeysets[0]!.id,
+          'advertised metadata does not derive the stored keyset id',
+        );
+      });
+
+      const result = await service.updateMintData(testMintUrl);
+
+      const stored = await keysetRepo.getKeysetById(testMintUrl, mockKeysets[0]!.id);
+      expect(stored?.unit).toBe('sat');
+      expect(stored?.feePpk).toBe(0);
+      expect(result.keysets.find((keyset) => keyset.id === mockKeysets[0]!.id)?.unit).toBe('sat');
+      expect(mockAdapter.fetchKeysForId).toHaveBeenCalledTimes(1);
     });
   });
 

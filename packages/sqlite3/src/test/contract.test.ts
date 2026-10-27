@@ -8,6 +8,7 @@ import {
   runKeypairAllocationContract,
   allocateKeypairForTest,
   runAuthSessionRepositoryContract,
+  runKeysetRepositoryContract,
   runProofRepositoryContract,
   runMintOperationRepositoryContract,
   runMintQuoteRepositoryContract,
@@ -30,18 +31,6 @@ import { SqliteDb } from '../db.ts';
 async function createRepositories() {
   const rawDatabase = new Database(':memory:');
   const repositories = new Repositories({ database: rawDatabase });
-  await repositories.init();
-  return {
-    repositories,
-    dispose: async () => {
-      rawDatabase.close();
-    },
-  };
-}
-
-async function createMintSwapRepositories() {
-  const rawDatabase = new Database(':memory:');
-  const repositories = new Repositories({ database: rawDatabase, mintSwap: true });
   await repositories.init();
   return {
     repositories,
@@ -229,16 +218,15 @@ describe('synchronous SQLite contention', () => {
 
 runMintSwapPersistenceContract(
   {
-    createRepositories: createMintSwapRepositories,
-    createDisabledRepositories: createRepositories,
+    createRepositories,
   },
   { describe, it, expect },
 );
 
 describe('Mint Swap create error classification', () => {
   it('does not relabel an unrelated SQL failure when an identity already exists', async () => {
-    const { repositories, rawDatabase, dispose } = await createMintSwapRepositories();
-    const repository = repositories.mintSwap!.operationRepository;
+    const { repositories, rawDatabase, dispose } = await createRepositories();
+    const repository = repositories.mintSwap.operationRepository;
     const operation = createMintSwapFixtures('sql-create-failure').preparing;
     try {
       await repository.create(operation);
@@ -268,6 +256,10 @@ describe('Mint Swap create error classification', () => {
 runAuthSessionRepositoryContract({ createRepositories }, { describe, it, expect });
 
 runProofRepositoryContract({ createRepositories }, { describe, it, expect });
+runKeysetRepositoryContract(
+  { createRepositories, createSharedRepositories },
+  { describe, it, expect },
+);
 
 runMintOperationRepositoryContract({ createRepositories }, { describe, it, expect });
 
@@ -285,27 +277,30 @@ runPaymentRequestReceiveRepositoryContract({ createRepositories }, { describe, i
 
 describe('hydration corruption guard', () => {
   it('throws when send operation has prepared state but null financial fields', async () => {
-    const { repositories, dispose } = await createRepositories();
+    const { repositories, rawDatabase, dispose } = await createRepositories();
     try {
-      await (repositories as any).db.run(
-        `INSERT INTO coco_cashu_send_operations
+      rawDatabase
+        .prepare(
+          `INSERT INTO coco_cashu_send_operations
            (id, mintUrl, amount, unit, state, createdAt, updatedAt, method, methodDataJson, needsSwap, fee, inputAmount)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          'corrupt-send',
-          'https://mint.test',
-          '100',
-          'sat',
-          'prepared',
-          0,
-          0,
-          'default',
-          '{}',
-          0,
-          null,
-          null,
-        ],
-      );
+        )
+        .run(
+          ...[
+            'corrupt-send',
+            'https://mint.test',
+            '100',
+            'sat',
+            'prepared',
+            0,
+            0,
+            'default',
+            '{}',
+            0,
+            null,
+            null,
+          ],
+        );
 
       let threw = false;
       try {
@@ -321,14 +316,17 @@ describe('hydration corruption guard', () => {
   });
 
   it('throws when receive operation has prepared state but null fee', async () => {
-    const { repositories, dispose } = await createRepositories();
+    const { repositories, rawDatabase, dispose } = await createRepositories();
     try {
-      await (repositories as any).db.run(
-        `INSERT INTO coco_cashu_receive_operations
+      rawDatabase
+        .prepare(
+          `INSERT INTO coco_cashu_receive_operations
            (id, mintUrl, amount, unit, state, createdAt, updatedAt, fee, inputProofsJson)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ['corrupt-receive', 'https://mint.test', '100', 'sat', 'prepared', 0, 0, null, '[]'],
-      );
+        )
+        .run(
+          ...['corrupt-receive', 'https://mint.test', '100', 'sat', 'prepared', 0, 0, null, '[]'],
+        );
 
       let threw = false;
       try {
@@ -344,28 +342,31 @@ describe('hydration corruption guard', () => {
   });
 
   it('throws when melt operation has prepared state but null financial fields', async () => {
-    const { repositories, dispose } = await createRepositories();
+    const { repositories, rawDatabase, dispose } = await createRepositories();
     try {
-      await (repositories as any).db.run(
-        `INSERT INTO coco_cashu_melt_operations
+      rawDatabase
+        .prepare(
+          `INSERT INTO coco_cashu_melt_operations
            (id, mintUrl, state, createdAt, updatedAt, method, methodDataJson, quoteId, amount, fee_reserve, swap_fee, needsSwap, inputAmount)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          'corrupt-melt',
-          'https://mint.test',
-          'prepared',
-          0,
-          0,
-          'bolt11',
-          '{"invoice":"lnbc1test"}',
-          'q1',
-          null,
-          null,
-          null,
-          0,
-          null,
-        ],
-      );
+        )
+        .run(
+          ...[
+            'corrupt-melt',
+            'https://mint.test',
+            'prepared',
+            0,
+            0,
+            'bolt11',
+            '{"invoice":"lnbc1test"}',
+            'q1',
+            null,
+            null,
+            null,
+            0,
+            null,
+          ],
+        );
 
       let threw = false;
       try {

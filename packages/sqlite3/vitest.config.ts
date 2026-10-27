@@ -10,6 +10,7 @@ const sqlStorageTestEntry = `${process.cwd()}/../sql-storage/src/test/index.ts`;
 export default defineConfig({
   resolve: {
     alias: {
+      '@core': `${process.cwd()}/../core`,
       '@cashu/coco-sql-storage/test': sqlStorageTestEntry,
       '@cashu/coco-sql-storage': sqlStorageEntry,
     },

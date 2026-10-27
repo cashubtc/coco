@@ -47,7 +47,14 @@ export interface MintRepository {
 export interface KeysetRepository {
   getKeysetsByMintUrl(mintUrl: string): Promise<Keyset[]>;
   getKeysetById(mintUrl: string, id: string): Promise<Keyset | null>;
+  /** Atomically updates metadata while preserving keys; creates an empty-key row if absent. */
   updateKeyset(keyset: Omit<Keyset, 'keypairs' | 'updatedAt'>): Promise<void>;
+  /**
+   * Stores a keyset and its keys. A keyset id commits to its keys (NUT-02), so keys already
+   * stored for this id are kept and incoming keys only backfill a keyset recorded without them.
+   * Atomically rejects a write that would replace stored keys with different ones, including
+   * concurrent root writes. Inside a transaction, uses the supplied scope.
+   */
   addKeyset(keyset: Omit<Keyset, 'updatedAt'>): Promise<void>;
   deleteKeyset(mintUrl: string, keysetId: string): Promise<void>;
 }
@@ -266,7 +273,7 @@ export interface MeltOperationRepository {
   /** Create a new melt operation */
   create(operation: MeltOperation): Promise<void>;
 
-  /** Update an existing melt operation */
+  /** Update an existing melt operation, preserving the supplied updatedAt (adapter precision applies). */
   update(operation: MeltOperation): Promise<void>;
 
   /** Get a melt operation by ID */
@@ -301,7 +308,7 @@ export interface MintOperationRepository {
   /** Create a new mint operation */
   create(operation: MintOperation): Promise<void>;
 
-  /** Update an existing mint operation */
+  /** Update an existing mint operation, preserving the supplied updatedAt (adapter timestamp precision applies). */
   update(operation: MintOperation): Promise<void>;
 
   /** Get a mint operation by ID */
@@ -329,6 +336,14 @@ export interface ReceiveOperationRepository {
 
   /** Update an existing receive operation */
   update(operation: ReceiveOperation): Promise<void>;
+
+  /** Atomically compare state/revision and replace the record, incrementing revision once. */
+  transition(input: {
+    operationId: string;
+    expectedState: ReceiveOperationState;
+    expectedRevision: number;
+    next: ReceiveOperation;
+  }): Promise<boolean>;
 
   /** Get a receive operation by ID */
   getById(id: string): Promise<ReceiveOperation | null>;
@@ -394,8 +409,8 @@ interface RepositoriesBase {
   receiveOperationRepository: ReceiveOperationRepository;
   paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
   paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
-  /** Dormant feature capability, exposed only by adapters configured for Mint Swap persistence. */
-  mintSwap?: MintSwapPersistence;
+  /** Mint Swap persistence participates in every Wallet transaction; runtime activation is separate. */
+  mintSwap: MintSwapPersistence;
 }
 
 export interface Repositories extends RepositoriesBase {

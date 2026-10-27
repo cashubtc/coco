@@ -13,7 +13,10 @@ import type {
 } from '@core/services';
 import type { ReceiveOperationService } from '../operations/receive/ReceiveOperationService';
 import type { Logger } from '../logging/Logger.ts';
+import type { BalanceQueries } from '../proofs/BalanceQueries.ts';
 import { WalletBalancesApi } from './WalletBalancesApi.ts';
+import type { SweepReport } from '../models/Sweep.ts';
+import { normalizeMintUrl } from '../utils.ts';
 import { DEFAULT_UNIT, normalizeUnit, normalizeUnitList } from '../amounts.ts';
 
 export interface WalletRestoreOptions {
@@ -50,6 +53,7 @@ export class WalletApi {
     receiveOperationService: ReceiveOperationService,
     tokenService: TokenService,
     logger?: Logger,
+    balanceQueries?: BalanceQueries,
   ) {
     this.mintService = mintService;
     this.walletService = walletService;
@@ -58,7 +62,7 @@ export class WalletApi {
     this.receiveOperationService = receiveOperationService;
     this.tokenService = tokenService;
     this.logger = logger;
-    this.balances = new WalletBalancesApi(proofService);
+    this.balances = new WalletBalancesApi(balanceQueries ?? proofService);
   }
 
   /**
@@ -107,47 +111,54 @@ export class WalletApi {
   }
 
   /**
-   * Sweeps a mint by sweeping each keyset and adds the swept proofs to the wallet
+   * Exchange a source Wallet Seed's available proofs through ordinary Receive operations.
+   * Keysets are independent; pending and uneconomic value are reported as skips.
+   * @returns All per-keyset outcomes, even if every keyset fails or remains unresolved.
+   * Callers must inspect the report; resolution does not imply a successful transfer.
+   * Amounts are scoped to each keyset's unit. Inspect unresolved Receive IDs before retrying.
+   * @throws If input validation or mint setup fails before keyset processing.
    * @param mintUrl - The URL of the mint to sweep
    * @param bip39seed - The BIP39 seed of the wallet to sweep
    */
-  async sweep(mintUrl: string, bip39seed: Uint8Array, options?: WalletSweepOptions) {
+  async sweep(
+    mintUrl: string,
+    bip39seed: Uint8Array,
+    options?: WalletSweepOptions,
+  ): Promise<SweepReport> {
+    mintUrl = normalizeMintUrl(mintUrl);
+    const unitFilter = this.getUnitFilter(options?.units);
     this.logger?.info('Starting sweep', { mintUrl });
     const mint = await this.mintService.addMintByUrl(mintUrl, { trusted: true });
     this.logger?.debug('Mint fetched for sweep', {
       mintUrl,
       keysetCount: mint.keysets.length,
     });
-    const unitFilter = this.getUnitFilter(options?.units);
-    const failedKeysetIds: { [keysetId: string]: Error } = {};
+    const report: SweepReport = { mintUrl, keysets: [] };
     for (const { keyset, unit } of this.getUnitScopedKeysets(mint.keysets, unitFilter)) {
       try {
-        await this.walletRestoreService.sweepKeyset(mintUrl, keyset.id, bip39seed, unit);
-      } catch (error) {
-        this.logger?.error('Keyset restore failed', { mintUrl, keysetId: keyset.id, unit, error });
-        failedKeysetIds[keyset.id] = error as Error;
+        report.keysets.push(
+          await this.walletRestoreService.sweepKeyset(mintUrl, keyset.id, bip39seed, unit),
+        );
+      } catch (cause) {
+        report.keysets.push({
+          keysetId: keyset.id,
+          unit,
+          status: 'failed',
+          error: cause instanceof Error ? cause : new Error(String(cause)),
+        });
       }
     }
-    if (Object.keys(failedKeysetIds).length > 0) {
-      this.logger?.error('Restore completed with failures', {
-        mintUrl,
-        failedKeysetIds: Object.keys(failedKeysetIds),
-      });
-      throw new Error('Failed to restore some keysets');
-    }
-    this.logger?.info('Restore completed successfully', { mintUrl });
+    return report;
   }
 
   /**
    * Decode a token string into a Token object.
-   * If mintUrl is provided, decodes token with mint keysets (supports all token formats).
-   * If no mintUrl, attempts to decode using wallet's known keysets (may fail for some token formats).
-   *
-   * Note: For reliable decoding of all token formats, provide a mintUrl.
+   * Uses the provided mint URL or extracts it from the token metadata, then loads
+   * that mint's keysets through TokenService for decoding and unit resolution.
    *
    * @param tokenString - The encoded token string to decode
-   * @param mintUrl - Optional mint URL to use for decoding (provides access to mint keysets for decoding)
-   * @returns The decoded Token or array of Proofs
+   * @param mintUrl - Optional mint URL to use instead of the token metadata's mint
+   * @returns The decoded Token
    */
   async decodeToken(tokenString: string, mintUrl?: string): Promise<Token> {
     if (mintUrl) {

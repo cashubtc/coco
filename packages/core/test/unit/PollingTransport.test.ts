@@ -2,6 +2,7 @@ import { Amount } from '@cashu/cashu-ts';
 import { describe, it, expect, beforeEach, afterEach, mock, spyOn } from 'bun:test';
 import { PollingTransport } from '../../infra/PollingTransport';
 import type { MintAdapter } from '../../infra/MintAdapter';
+import type { TransportMessageEvent } from '../../infra/RealTimeTransport.ts';
 import { NullLogger } from '../../logging';
 import { mintQuoteFromBolt11Fixture as mintQuoteFromBolt11Response } from '../normalizedMintQuoteFixtures.ts';
 import type { QuoteIdentity } from '../../models/QuoteIdentity.ts';
@@ -42,7 +43,7 @@ function subscribeToQuotes(
 const createMockMintAdapter = (): MintAdapter =>
   ({
     checkMintQuote: mock(() => Promise.resolve({})),
-    checkMeltQuoteState: mock(() => Promise.resolve({})),
+    checkMeltQuote: mock(() => Promise.resolve({})),
     checkProofStates: mock(() => Promise.resolve([])),
   }) as unknown as MintAdapter;
 
@@ -52,7 +53,7 @@ const createDelayedMockMintAdapter = (delayMs: number): MintAdapter =>
     checkMintQuote: mock(
       () => new Promise((resolve) => setTimeout(() => resolve({ state: 'PAID' }), delayMs)),
     ),
-    checkMeltQuoteState: mock(() => Promise.resolve({})),
+    checkMeltQuote: mock(() => Promise.resolve({})),
     checkProofStates: mock(() => Promise.resolve([])),
   }) as unknown as MintAdapter;
 
@@ -338,6 +339,54 @@ describe('PollingTransport per-mint intervals', () => {
 describe('PollingTransport subscription kinds', () => {
   const mintUrl = 'https://mint.example.com';
 
+  it.each(['bolt11', 'bolt12'] as const)(
+    'polls %s Melt Quotes without discarding response fields',
+    async (method) => {
+      const response = {
+        quote: 'melt-quote-1',
+        request: method === 'bolt11' ? 'lnbc1test' : 'lno1offer',
+        amount: Amount.from(10),
+        unit: 'sat',
+        fee_reserve: Amount.from(2),
+        expiry: 9_999_999_999,
+        state: 'PENDING' as const,
+        payment_preimage: null,
+      };
+      const checkMeltQuote = mock(async () => response);
+      const checkMeltQuoteBolt12 = mock(async () => response);
+      const adapter = { checkMeltQuote, checkMeltQuoteBolt12 } as unknown as MintAdapter;
+      const transport = new PollingTransport(adapter);
+      const notification = new Promise<TransportMessageEvent>((resolve) => {
+        transport.on(mintUrl, 'message', (event: TransportMessageEvent) => {
+          const message = JSON.parse(String(event.data));
+          if (message.method !== 'subscribe') return;
+          resolve(event);
+        });
+      });
+
+      try {
+        transport.send(mintUrl, {
+          jsonrpc: '2.0',
+          method: 'subscribe',
+          params: { kind: `${method}_melt_quote`, subId: 'melt-sub-1', filters: [response.quote] },
+          id: 1,
+        });
+        const event = await notification;
+        const message = JSON.parse(String(event.data));
+        expect(message.params.payload).toEqual(JSON.parse(JSON.stringify(response)));
+        expect(event.normalizedPayload).toBe(response);
+
+        const check = method === 'bolt11' ? checkMeltQuote : checkMeltQuoteBolt12;
+        const unusedCheck = method === 'bolt11' ? checkMeltQuoteBolt12 : checkMeltQuote;
+        expect(check).toHaveBeenCalledWith(mintUrl, response.quote);
+        expect(check).toHaveBeenCalledTimes(1);
+        expect(unusedCheck).not.toHaveBeenCalled();
+      } finally {
+        transport.closeAll();
+      }
+    },
+  );
+
   it('polls onchain mint quotes with checkMintQuote', async () => {
     const checkMintQuote = mock(() =>
       Promise.resolve({
@@ -352,7 +401,7 @@ describe('PollingTransport subscription kinds', () => {
     );
     const adapter = {
       checkMintQuote,
-      checkMeltQuoteState: mock(() => Promise.resolve({})),
+      checkMeltQuote: mock(() => Promise.resolve({})),
       checkProofStates: mock(() => Promise.resolve([])),
     } as unknown as MintAdapter;
     const transport = new PollingTransport(adapter, { intervalMs: 5000 }, new NullLogger());
@@ -394,7 +443,7 @@ describe('PollingTransport subscription kinds', () => {
     );
     const adapter = {
       checkMintQuote: mock(() => Promise.resolve({})),
-      checkMeltQuoteState: mock(() => Promise.resolve({})),
+      checkMeltQuote: mock(() => Promise.resolve({})),
       checkMeltQuoteOnchain,
       checkProofStates: mock(() => Promise.resolve([])),
     } as unknown as MintAdapter;
@@ -435,7 +484,7 @@ describe('PollingTransport subscription kinds', () => {
     );
     const adapter = {
       checkMintQuote,
-      checkMeltQuoteState: mock(() => Promise.resolve({})),
+      checkMeltQuote: mock(() => Promise.resolve({})),
       checkProofStates: mock(() => Promise.resolve([])),
     } as unknown as MintAdapter;
     const transport = new PollingTransport(adapter, { intervalMs: 1 }, new NullLogger());
@@ -884,7 +933,7 @@ describe('PollingTransport proof state batching', () => {
     );
     const adapter = {
       checkMintQuote: mock(() => Promise.resolve({})),
-      checkMeltQuoteState: mock(() => Promise.resolve({})),
+      checkMeltQuote: mock(() => Promise.resolve({})),
       checkProofStates,
     } as unknown as MintAdapter;
     const transport = new PollingTransport(adapter, { intervalMs: 5000 }, new NullLogger());
@@ -911,7 +960,7 @@ describe('PollingTransport proof state batching', () => {
     );
     const adapter = {
       checkMintQuote: mock(() => Promise.resolve({})),
-      checkMeltQuoteState: mock(() => Promise.resolve({})),
+      checkMeltQuote: mock(() => Promise.resolve({})),
       checkProofStates,
     } as unknown as MintAdapter;
     const transport = new PollingTransport(adapter, { intervalMs: 5000 }, new NullLogger());
@@ -989,7 +1038,7 @@ describe('PollingTransport unsubscribe during processing', () => {
         callCount++;
         return Promise.resolve({ state: 'UNPAID' });
       }),
-      checkMeltQuoteState: mock(() => Promise.resolve({})),
+      checkMeltQuote: mock(() => Promise.resolve({})),
       checkProofStates: mock(() => Promise.resolve([])),
     } as unknown as MintAdapter;
 

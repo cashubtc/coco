@@ -16,7 +16,6 @@ import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
 import type {
   ExecutingMintOperation,
-  InitMintOperation,
   MintOperationFailure,
   PendingMintOperation,
 } from './MintOperation';
@@ -146,26 +145,20 @@ export interface FetchRemoteMintQuoteContext<
   quote: MintQuote<M>;
 }
 
-export interface PrepareContext<M extends MintMethod = MintMethod> extends BaseHandlerDeps {
-  operation: InitMintOperation<M>;
-  wallet: Wallet;
-  importedQuote?: MintMethodQuoteSnapshot<M>;
-}
-
-export interface ExecuteContext<M extends MintMethod = MintMethod> extends BaseHandlerDeps {
+export interface ExecuteContext<M extends MintMethod = MintMethod> {
   operation: ExecutingMintOperation<M>;
   wallet: Wallet;
+  mintAdapter: MintAdapter;
+  logger?: Logger;
 }
 
 export interface RecoverExecutingContext<
   M extends MintMethod = MintMethod,
-> extends BaseHandlerDeps {
-  operation: ExecutingMintOperation<M>;
-  wallet: Wallet;
-  localClaimabilityFacts: {
-    finalizedAmount: Amount;
-    reservedAmount: Amount;
-  };
+> extends ExecuteContext<M> {
+  restoreOutputs(): Promise<Proof[]>;
+  /** The coordinator persists observations before recovery advances the operation. */
+  recordQuoteSnapshot(snapshot: MintMethodQuoteSnapshot<M>): Promise<void>;
+  localClaimabilityFacts: { finalizedAmount: Amount; reservedAmount: Amount };
 }
 
 export interface PendingContext<M extends MintMethod = MintMethod> {
@@ -188,9 +181,9 @@ export type MintExecutionResult =
     };
 
 export type RecoverExecutingResult =
-  | { status: 'FINALIZED' }
-  | { status: 'TERMINAL'; error: string }
-  | { status: 'PENDING'; error?: string };
+  | { status: 'ISSUED'; proofs: Proof[] }
+  | { status: 'REJECTED'; error: string }
+  | { status: 'UNRESOLVED'; error?: string };
 
 export type PendingMintCheckCategory = 'waiting' | 'ready' | 'completed' | 'terminal';
 
@@ -225,7 +218,6 @@ export interface MintMethodHandler<M extends MintMethod = MintMethod> {
   createQuote(ctx: CreateMintQuoteContext<M>): Promise<MintQuote<M>>;
   fetchRemoteQuote(ctx: FetchRemoteMintQuoteContext<M>): Promise<MintQuote<M>>;
   validateQuoteForPrepare?(quote: MintQuote<M>): Promise<void> | void;
-  prepare(ctx: PrepareContext<M>): Promise<PendingMintOperation<M>>;
   execute(ctx: ExecuteContext<M>): Promise<MintExecutionResult>;
   recoverExecuting(ctx: RecoverExecutingContext<M>): Promise<RecoverExecutingResult>;
   checkPending(ctx: PendingContext<M>): Promise<PendingMintObservationResult<M>>;

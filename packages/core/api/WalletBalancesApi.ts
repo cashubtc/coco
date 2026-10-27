@@ -1,4 +1,4 @@
-import type { ProofService } from '@core/services';
+import type { BalanceQueries } from '@core/proofs/BalanceQueries.ts';
 import type {
   BalanceQuery,
   BalanceSnapshot,
@@ -8,29 +8,29 @@ import type {
 } from '../types';
 
 export class WalletBalancesApi {
-  private readonly proofService: ProofService;
+  private readonly balanceQueries: BalanceQueries;
 
-  constructor(proofService: ProofService) {
-    this.proofService = proofService;
+  constructor(balanceQueries: BalanceQueries) {
+    this.balanceQueries = balanceQueries;
   }
 
   async byMint(scope?: BalanceQuery): Promise<BalancesByMint> {
-    return this.proofService.getBalancesByMint(scope);
+    return this.balanceQueries.getBalancesByMint(scope);
   }
 
   async byMintAndUnit(scope?: BalanceQuery): Promise<BalancesByMintAndUnit> {
-    return this.proofService.getBalancesByMintAndUnit(scope);
+    return this.balanceQueries.getBalancesByMintAndUnit(scope);
   }
 
   async byUnit(scope?: BalanceQuery): Promise<BalancesByUnit> {
-    return this.proofService.getBalancesByUnit(scope);
+    return this.balanceQueries.getBalanceTotalByUnit(scope);
   }
 
   async total(scope?: BalanceQuery): Promise<BalanceSnapshot> {
-    return this.proofService.getBalanceTotal(scope);
+    return this.balanceQueries.getBalanceTotal(scope);
   }
 
   async totalByUnit(scope?: BalanceQuery): Promise<BalancesByUnit> {
-    return this.proofService.getBalanceTotalByUnit(scope);
+    return this.balanceQueries.getBalanceTotalByUnit(scope);
   }
 }

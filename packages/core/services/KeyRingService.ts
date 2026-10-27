@@ -1,9 +1,9 @@
 import type { Proof } from '@cashu/cashu-ts';
-import type { Logger } from '@core/logging';
-import type { Keypair, KeypairPurpose } from '@core/models/Keypair';
-import type { KeyRingTransactions } from '@core/transactions/keypairs/KeyRingTransactions.ts';
 import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { bytesToHex } from '@noble/curves/utils.js';
+import type { Logger } from '@core/logging';
+import type { Keypair, KeypairPurpose } from '@core/models/Keypair';
+import type { CoreTransactionRunner } from '../transactions/CoreTransaction.ts';
 import type { KeypairQueries } from '../keypairs/KeypairQueries.ts';
 import type { KeypairDerivation } from '../keypairs/KeypairDerivation.ts';
 import type { P2pkSigner } from '../keypairs/P2pkSigner.ts';
@@ -12,7 +12,7 @@ import { findP2pkKeyPair } from '../keypairs/P2pkKeyLookup.ts';
 export class KeyRingService {
   constructor(
     private readonly keypairQueries: KeypairQueries,
-    private readonly transactions: KeyRingTransactions,
+    private readonly transactionRunner: CoreTransactionRunner,
     private readonly derivation: KeypairDerivation,
     private readonly signer: P2pkSigner,
     private readonly logger?: Logger,
@@ -28,6 +28,11 @@ export class KeyRingService {
   }
 
   async generateMintQuoteKeyPair(): Promise<Keypair> {
+    return this.allocateAndCommitMintQuoteKeyPair();
+  }
+
+  /** Independent allocation retained even if later quote creation fails. */
+  async allocateAndCommitMintQuoteKeyPair(): Promise<Keypair> {
     return (await this.generateKeyPairForPurpose('nut20_mint_quote', {
       dumpSecretKey: true,
     })) as Keypair;
@@ -40,7 +45,7 @@ export class KeyRingService {
     },
   ): Promise<{ publicKeyHex: string } | Keypair> {
     const input = await this.derivation.prepare(purpose);
-    const keyPair = await this.transactions.allocate(input);
+    const keyPair = await this.transactionRunner.run((tx) => tx.keypairs.allocate(input));
     if (options?.dumpSecretKey) {
       return keyPair;
     }
@@ -53,18 +58,20 @@ export class KeyRingService {
       throw new Error('Secret key must be exactly 32 bytes');
     }
     const publicKeyHex = this.getPublicKeyHex(secretKey);
-    const keyPair = await this.transactions.importP2pkKey({
-      publicKeyHex,
-      secretKey,
-      purpose: 'p2pk',
-    });
+    const keyPair = await this.transactionRunner.run((tx) =>
+      tx.keypairs.importP2pk({
+        publicKeyHex,
+        secretKey,
+        purpose: 'p2pk',
+      }),
+    );
     this.logger?.debug('Key pair added', { publicKeyHex: keyPair.publicKeyHex });
     return keyPair;
   }
 
   async removeKeyPair(publicKey: string): Promise<void> {
     this.logger?.debug('Removing key pair', { publicKey });
-    await this.transactions.deleteP2pkKey(publicKey);
+    await this.transactionRunner.run((tx) => tx.keypairs.deleteP2pk(publicKey));
     this.logger?.debug('Key pair removed', { publicKey });
   }
 

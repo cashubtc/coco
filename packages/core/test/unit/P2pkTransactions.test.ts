@@ -5,7 +5,6 @@ import type { Keypair } from '../../models/Keypair.ts';
 import type { Repositories } from '../../repositories/index.ts';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
-import { CoreKeyRingTransactions } from '../../transactions/keypairs/KeyRingTransactions.ts';
 import { SqlStorageRepositories } from '../../../sql-storage/src/repositories.ts';
 import { SqliteDb } from '../../../sqlite-bun/src/db.ts';
 import { overrideTransactions } from '../overrideTransactions.ts';
@@ -23,7 +22,6 @@ describe.each(['memory', 'sqlite'] as const)('P2PK transactions with %s', (adapt
   let database: Database | undefined;
   let repositories: Repositories;
   let runner: RepositoryCoreTransactionRunner;
-  let transactions: CoreKeyRingTransactions;
 
   beforeEach(async () => {
     if (adapter === 'sqlite') {
@@ -34,7 +32,6 @@ describe.each(['memory', 'sqlite'] as const)('P2PK transactions with %s', (adapt
     }
     await repositories.init();
     runner = new RepositoryCoreTransactionRunner(repositories);
-    transactions = new CoreKeyRingTransactions(runner);
   });
 
   afterEach(() => database?.close());
@@ -44,8 +41,8 @@ describe.each(['memory', 'sqlite'] as const)('P2PK transactions with %s', (adapt
     await repositories.keyRingRepository.setLastAllocatedIndex('p2pk', 12);
 
     const results = await Promise.all([
-      transactions.importP2pkKey(importedKey),
-      transactions.importP2pkKey(importedKey),
+      runner.run((tx) => tx.keypairs.importP2pk(importedKey)),
+      runner.run((tx) => tx.keypairs.importP2pk(importedKey)),
     ]);
 
     expect(results).toEqual([legacyKeypair, legacyKeypair]);
@@ -57,8 +54,8 @@ describe.each(['memory', 'sqlite'] as const)('P2PK transactions with %s', (adapt
 
   it('deduplicates concurrent imports into an empty keyring', async () => {
     await Promise.all([
-      transactions.importP2pkKey(importedKey),
-      transactions.importP2pkKey(importedKey),
+      runner.run((tx) => tx.keypairs.importP2pk(importedKey)),
+      runner.run((tx) => tx.keypairs.importP2pk(importedKey)),
     ]);
     expect(await repositories.keyRingRepository.getAllPersistedKeyPairs('p2pk')).toHaveLength(1);
     expect(await repositories.keyRingRepository.getLastAllocatedIndex('p2pk')).toBeNull();
@@ -77,15 +74,13 @@ describe.each(['memory', 'sqlite'] as const)('P2PK transactions with %s', (adapt
     await repositories.keyRingRepository.setPersistedKeyPair(legacyKeypair);
     await repositories.keyRingRepository.setLastAllocatedIndex('p2pk', 12);
     const transactionStarted = mock(() => {});
-    const gateway = new CoreKeyRingTransactions(
-      new RepositoryCoreTransactionRunner(
-        overrideTransactions(repositories, (work) => {
-          transactionStarted();
-          return repositories.withTransaction(work);
-        }),
-      ),
+    const transactionRunner = new RepositoryCoreTransactionRunner(
+      overrideTransactions(repositories, (work) => {
+        transactionStarted();
+        return repositories.withTransaction(work);
+      }),
     );
-    await gateway.deleteP2pkKey(canonicalKey);
+    await transactionRunner.run((tx) => tx.keypairs.deleteP2pk(canonicalKey));
 
     expect(transactionStarted).toHaveBeenCalledTimes(1);
     expect(await repositories.keyRingRepository.getAllPersistedKeyPairs('p2pk')).toEqual([]);
@@ -94,19 +89,17 @@ describe.each(['memory', 'sqlite'] as const)('P2PK transactions with %s', (adapt
 
   it('returns import results only after commit and preserves them on a repeated import', async () => {
     const transactionStarted = mock(() => {});
-    const gateway = new CoreKeyRingTransactions(
-      new RepositoryCoreTransactionRunner(
-        overrideTransactions(repositories, (work) => {
-          transactionStarted();
-          return repositories.withTransaction(work);
-        }),
-      ),
+    const transactionRunner = new RepositoryCoreTransactionRunner(
+      overrideTransactions(repositories, (work) => {
+        transactionStarted();
+        return repositories.withTransaction(work);
+      }),
     );
-    const first = await gateway.importP2pkKey(importedKey);
+    const first = await transactionRunner.run((tx) => tx.keypairs.importP2pk(importedKey));
     expect(await repositories.keyRingRepository.getPersistedKeyPair(canonicalKey, 'p2pk')).toEqual(
       expect.objectContaining(first),
     );
-    const second = await gateway.importP2pkKey(importedKey);
+    const second = await transactionRunner.run((tx) => tx.keypairs.importP2pk(importedKey));
     expect(second).toEqual(expect.objectContaining(first));
     expect(transactionStarted).toHaveBeenCalledTimes(2);
   });
@@ -137,8 +130,8 @@ describe.each(['memory', 'sqlite'] as const)('P2PK transactions with %s', (adapt
   it('does not delete a mint quote key through either P2PK encoding', async () => {
     const quoteKey: Keypair = { ...importedKey, purpose: 'nut20_mint_quote' };
     await repositories.keyRingRepository.setPersistedKeyPair(quoteKey);
-    await transactions.deleteP2pkKey(legacyKey);
-    await transactions.deleteP2pkKey(canonicalKey);
+    await runner.run((tx) => tx.keypairs.deleteP2pk(legacyKey));
+    await runner.run((tx) => tx.keypairs.deleteP2pk(canonicalKey));
     expect(
       await repositories.keyRingRepository.getPersistedKeyPair(canonicalKey, 'nut20_mint_quote'),
     ).toEqual(expect.objectContaining(quoteKey));
@@ -154,7 +147,9 @@ describe.each(['memory', 'sqlite'] as const)('P2PK transactions with %s', (adapt
     await repositories.keyRingRepository.setLastAllocatedIndex('nut20_mint_quote', 12);
     await repositories.keyRingRepository.setLastAllocatedIndex('p2pk', 3);
 
-    await expect(transactions.importP2pkKey(importedKey)).rejects.toThrow(MintQuoteKeyError);
+    await expect(runner.run((tx) => tx.keypairs.importP2pk(importedKey))).rejects.toThrow(
+      MintQuoteKeyError,
+    );
 
     expect(
       await repositories.keyRingRepository.getPersistedKeyPair(canonicalKey, 'nut20_mint_quote'),

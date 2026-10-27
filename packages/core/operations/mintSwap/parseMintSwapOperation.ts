@@ -136,7 +136,7 @@ function paymentRequestHash(value: unknown): string {
     check(/^[0-9a-f]{64}$/.test(value), 'payment request hash');
     return value;
   }
-  // Adapters may hydrate a binary digest; V1 stores only its canonical hex representation.
+  // Adapters may hydrate a binary digest; the record stores only its canonical hex representation.
   check(value instanceof Uint8Array || Array.isArray(value), 'payment request hash');
   check(value.length === 32, 'payment request hash');
   const bytes: number[] = Array.from(value);
@@ -389,7 +389,7 @@ function valueNeutral(
   };
 }
 
-/** Parse a deterministic failure from the bounded V1 failure vocabulary. */
+/** Parse a deterministic failure from the bounded failure vocabulary. */
 function failure(value: unknown): MintSwapFailure {
   const record = object(value);
   fields(record, ['code']);
@@ -461,7 +461,7 @@ function attention(
 }
 
 /**
- * Hydrate V1 persisted data into a validated, independent parent snapshot.
+ * Hydrate persisted data into a validated, independent parent snapshot.
  * Validates only parent-local facts; the coordinator must verify canonical child/quote/proof records.
  * Unknown fields are rejected, including child recovery material and unbounded diagnostics.
  */
@@ -471,7 +471,6 @@ export function parseMintSwapOperation(value: unknown): MintSwapOperation {
   fields(
     record,
     [
-      'schemaVersion',
       'id',
       'revision',
       'state',
@@ -492,7 +491,6 @@ export function parseMintSwapOperation(value: unknown): MintSwapOperation {
     ],
     ['sourceDebitCap', 'cancellationRequestedAt'],
   );
-  check(record.schemaVersion === 1, 'schema version');
   const sourceMintUrl = mintUrl(record.sourceMintUrl);
   const destinationMintUrl = mintUrl(record.destinationMintUrl);
   check(sourceMintUrl !== destinationMintUrl, 'distinct mints');
@@ -509,7 +507,6 @@ export function parseMintSwapOperation(value: unknown): MintSwapOperation {
       : time(record.cancellationRequestedAt, createdAt, updatedAt, 'cancellation request time');
 
   const base = {
-    schemaVersion: 1 as const,
     id: id(record.id),
     revision: integer(record.revision, 'revision'),
     sourceMintUrl,

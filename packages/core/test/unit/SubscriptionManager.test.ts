@@ -12,7 +12,7 @@ import type { Logger } from '../../logging';
 const createMockMintAdapter = (): MintAdapter =>
   ({
     checkMintQuote: mock(() => Promise.resolve({})),
-    checkMeltQuoteState: mock(() => Promise.resolve({})),
+    checkMeltQuote: mock(() => Promise.resolve({})),
     checkProofStates: mock(() => Promise.resolve([])),
   }) as unknown as MintAdapter;
 

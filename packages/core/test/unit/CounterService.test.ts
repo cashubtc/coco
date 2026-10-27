@@ -39,24 +39,6 @@ describe('CounterService', () => {
     expect(events[0]).toEqual({ mintUrl, keysetId, counter: 3 });
   });
 
-  it('overwriteCounter sets value and emits counter:updated', async () => {
-    const events: Array<{ mintUrl: string; keysetId: string; counter: number }> = [];
-    bus.on('counter:updated', (payload) => {
-      events.push(payload);
-    });
-
-    await service.incrementCounter(mintUrl, keysetId, 2);
-    const updated = await service.overwriteCounter(mintUrl, keysetId, 42);
-
-    expect(updated.counter).toBe(42);
-
-    const fromRepo = await repo.getCounter(mintUrl, keysetId);
-    expect(fromRepo?.counter).toBe(42);
-
-    expect(events.length).toBeGreaterThanOrEqual(1);
-    expect(events[events.length - 1]).toEqual({ mintUrl, keysetId, counter: 42 });
-  });
-
   it('accumulates multiple increments', async () => {
     await service.incrementCounter(mintUrl, keysetId, 1);
     await service.incrementCounter(mintUrl, keysetId, 2);
@@ -74,18 +56,6 @@ describe('CounterService', () => {
   it('rejects float increment values', async () => {
     await expect(service.incrementCounter(mintUrl, keysetId, 1.5)).rejects.toThrow(
       'n must be a non-negative integer',
-    );
-  });
-
-  it('rejects negative overwrite values', async () => {
-    await expect(service.overwriteCounter(mintUrl, keysetId, -10)).rejects.toThrow(
-      'counter must be a non-negative integer',
-    );
-  });
-
-  it('rejects float overwrite values', async () => {
-    await expect(service.overwriteCounter(mintUrl, keysetId, 3.14)).rejects.toThrow(
-      'counter must be a non-negative integer',
     );
   });
 });

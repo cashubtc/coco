@@ -20,7 +20,12 @@ want to solve and the approach you have in mind.
 
 ## Developing coco
 
-- Requirements: Bun (CI currently runs Bun 1.2.18)
+The affected package's `package.json`, root scripts and tool configuration own commands, formatting,
+compiler settings and coverage requirements. If prose disagrees, follow executable configuration and
+flag or fix the prose.
+
+- Use Bun for workspace installation and scripts; use the version configured in the relevant
+  [CI workflow](.github/workflows).
 - Install dependencies from the repo root:
 
   ```bash
@@ -32,6 +37,9 @@ want to solve and the approach you have in mind.
   ```bash
   bunx playwright install
   ```
+
+- Before running Cocod commands, follow its [development setup](packages/cocod/README.md#development)
+  for the workspace build prerequisite and command sequence.
 
 ### Repository map
 
@@ -107,6 +115,18 @@ Please open an issue before spending time on:
 
 This helps us agree on direction before implementation.
 
+## Security fixes
+
+When a task involves a vulnerability or an uncoordinated security fix, do not
+describe the exploit in depth in anything public: PR titles or bodies, commit
+messages, review comments, or code comments. Keep the public summary high-level
+(state that a security issue was fixed) and leave out reproduction steps, proofs
+of concept, root-cause specifics, and attack paths.
+
+Until a fix has been released and disclosure has been coordinated, send the
+detailed write-up to the security contact listed under
+[Reporting a Vulnerability](SECURITY.md#reporting-a-vulnerability) in `SECURITY.md`.
+
 ## AI-assisted contributions
 
 We encourage AI use and AI-assisted contributions, especially to improve code
@@ -161,38 +181,16 @@ We commonly use scoped messages such as:
 If a change spans the whole repository rather than one package, an unscoped title
 like `chore: update release workflow` is fine.
 
-## Style guide
+## Coding standards
 
-Please follow the project guidance in `AGENTS.md`. The short version:
-
-- Use TypeScript with ESM `import` and `export`
-- Prefer `import type` for type-only imports
-- Keep formatting aligned with `.prettierrc`: 2 spaces, semicolons, 100-column lines
-- Order imports as external, then internal or alias, then relative
-- Use `PascalCase` for classes and types, `camelCase` for values and functions
-- Avoid `any` unless it is tightly scoped and justified
-- Add JSDoc for public APIs and non-obvious flows
-
-### Core and adapter conventions
-
-- Validate inputs early and return empty arrays for no-op cases when appropriate
-- Prefer domain errors from `packages/core/models/Error.ts`
-- Preserve error causes when wrapping failures
-- Use structured logging with context
-- Keep repository operations atomic and check invariants before mutating state
-- Normalize mint URLs with `normalizeMintUrl()` before persistence
-- Export public package APIs through each package `index.ts`
-
-### React package conventions
-
-- Keep hook dependency arrays correct
-- Use `useCallback` or `useMemo` when a value participates in dependencies
-- Normalize unknown caught errors with
-  `e instanceof Error ? e : new Error(String(e))`
+Before implementing or reviewing changes, use [CODING_STANDARDS.md](CODING_STANDARDS.md) for coding
+conventions, package boundaries, transaction design and behavioral guarantees.
 
 ## Testing expectations
 
 We use `bun:test` across most packages, plus Vitest for some adapter coverage.
+Use the [behavior testing standards](CODING_STANDARDS.md#test-behavior) to choose meaningful coverage
+and handle asynchronous behavior.
 
 Run `bun run test:coverage:core` for core unit coverage. Core unit and integration coverage use
 `scripts/scope-core-coverage.ts` to report only core source, excluding generated `dist/` output and
@@ -202,8 +200,6 @@ tests; adapter coverage belongs in separate adapter reports.
 - Put tests under `test/unit` or `test/integration`
 - Name test files `*.test.ts`
 - Prefer Bun `mock()` for spies and doubles
-- Keep tests deterministic and await async work explicitly
-- Add or update tests with behavior changes whenever practical
 
 For browser coverage in `packages/indexeddb`, run:
 

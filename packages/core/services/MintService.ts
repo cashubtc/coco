@@ -1,12 +1,19 @@
-import { Amount, isBlsKeyset, type AmountLike } from '@cashu/cashu-ts';
+import {
+  Amount,
+  Keyset as CashuKeyset,
+  isBlsKeyset,
+  type AmountLike,
+  type Keys,
+} from '@cashu/cashu-ts';
 import {
   MINT_REFRESH_TTL_S,
   type MintMetadata,
   type MintQueries,
 } from '@core/mints/MintMetadata.ts';
-import type { MintMetadataTransactions } from '@core/transactions/mints/MintMetadataTransactions.ts';
+import type { CoreTransactionRunner } from '../transactions/CoreTransaction.ts';
 import {
   KeysetSyncError,
+  KeysetVerificationError,
   MintFetchError,
   ProofValidationError,
   UnknownMintError,
@@ -123,7 +130,7 @@ export type TopLevelNutCapability = 11 | 20;
 /** Query and transaction dependencies of the independently committed metadata refresh action. */
 export interface MintMetadataRefreshDependencies {
   queries: MintQueries;
-  transactions: MintMetadataTransactions;
+  transactionRunner: CoreTransactionRunner;
 }
 
 export class MintService {
@@ -236,7 +243,9 @@ export class MintService {
     if (cached && cached.mint.updatedAt >= Math.floor(Date.now() / 1000) - MINT_REFRESH_TTL_S)
       return cached;
     const observation = await this.mintAdapter.fetchMintMetadata(mintUrl, cached?.keysets ?? []);
-    const result = await this.metadata.transactions.applyObservation(observation);
+    const result = await this.metadata.transactionRunner.run((tx) =>
+      tx.mintMetadata.applyObservation(observation),
+    );
     if (result.applied) {
       await this.publishCommittedEvent('mint:metadata-refreshed', { mintUrl });
       await this.publishCommittedEvent('mint:updated', result.metadata);
@@ -611,34 +620,40 @@ export class MintService {
     await Promise.all(
       keysets.map(async (ks) => {
         const existingKeyset = await this.keysetRepo.getKeysetById(mint.mintUrl, ks.id);
-        if (existingKeyset) {
-          const keysetModel: Omit<Keyset, 'keypairs' | 'updatedAt'> = {
+        try {
+          // A v2 keyset id commits to its keys and advertised metadata. Reuse cached keys only
+          // while they still derive the current entry; otherwise fetch and verify the complete
+          // keyset before allowing its unit or fee metadata to change.
+          const keypairs =
+            existingKeyset &&
+            CashuKeyset.verifyKeysetId({ ...ks, keys: existingKeyset.keypairs as Keys })
+              ? existingKeyset.keypairs
+              : await this.mintAdapter.fetchKeysForId(mint.mintUrl, ks);
+          return this.keysetRepo.addKeyset({
             mintUrl: mint.mintUrl,
             id: ks.id,
             unit: ks.unit,
+            keypairs,
             active: ks.active,
             feePpk: ks.input_fee_ppk || 0,
-          };
-          return this.keysetRepo.updateKeyset(keysetModel);
-        } else {
-          try {
-            const keysRes = await this.mintAdapter.fetchKeysForId(mint.mintUrl, ks.id);
-            return this.keysetRepo.addKeyset({
-              mintUrl: mint.mintUrl,
-              id: ks.id,
-              unit: ks.unit,
-              keypairs: keysRes,
-              active: ks.active,
-              feePpk: ks.input_fee_ppk || 0,
-            });
-          } catch (err) {
-            this.logger?.error('Failed to sync keyset', {
+          });
+        } catch (err) {
+          // Refusing one keyset's keys must not cost the Wallet the keysets that did verify.
+          if (err instanceof KeysetVerificationError) {
+            this.logger?.warn('Skipping keyset whose keys failed NUT-02 verification', {
               mintUrl: mint.mintUrl,
               keysetId: ks.id,
               err,
             });
-            throw new KeysetSyncError(mint.mintUrl, ks.id, undefined, err);
+            return;
           }
+          this.logger?.error('Failed to sync keyset', {
+            mintUrl: mint.mintUrl,
+            keysetId: ks.id,
+            err,
+          });
+          if (err instanceof KeysetSyncError) throw err;
+          throw new KeysetSyncError(mint.mintUrl, ks.id, undefined, err);
         }
       }),
     );

@@ -1,5 +1,4 @@
 import { describe, it, expect } from 'bun:test';
-import { Database } from 'bun:sqlite';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,6 +6,7 @@ import {
   runRepositoryTransactionContract,
   runKeypairAllocationContract,
   runAuthSessionRepositoryContract,
+  runKeysetRepositoryContract,
   runProofRepositoryContract,
   runMintOperationRepositoryContract,
   runMintQuoteRepositoryContract,
@@ -22,111 +22,11 @@ import { SqliteRepositories as Repositories } from '../index.ts';
 import type { SqliteRepositoriesOptions } from '../index.ts';
 import { ExpoSqliteDb } from '../db.ts';
 
-type RunResult = { changes: number; lastInsertRowId: number; lastInsertRowid: number };
-
-class BunExpoSqliteDatabaseShim {
-  private readonly db: Database;
-
-  constructor(filename = ':memory:') {
-    this.db = new Database(filename);
-  }
-
-  async execAsync(sql: string): Promise<void> {
-    const statements = sql
-      .split(';')
-      .map((statement) => statement.trim())
-      .filter(Boolean);
-
-    for (const statementSql of statements) {
-      const statement = this.db.prepare(statementSql);
-      statement.run();
-    }
-  }
-
-  async runAsync(sql: string, ...params: any[]): Promise<RunResult> {
-    const statement = this.db.prepare(sql);
-    const result = statement.run(...params) as unknown as {
-      changes?: number;
-      lastInsertRowid?: number;
-    };
-    const changes = Number(result?.changes ?? 0);
-    const lastInsertRowId = Number(result?.lastInsertRowid ?? 0);
-    return { changes, lastInsertRowId, lastInsertRowid: lastInsertRowId };
-  }
-
-  async getFirstAsync<T = unknown>(sql: string, ...params: any[]): Promise<T | null> {
-    const statement = this.db.prepare(sql);
-    const row = statement.get(...params) as T | undefined;
-    return row ?? null;
-  }
-
-  async getAllAsync<T = unknown>(sql: string, ...params: any[]): Promise<T[]> {
-    const statement = this.db.prepare(sql);
-    const rows = statement.all(...params) as T[] | undefined;
-    return rows ?? [];
-  }
-
-  async closeAsync(): Promise<void> {
-    this.db.close();
-  }
-}
-
-class WebExpoSqliteDatabaseShim extends BunExpoSqliteDatabaseShim {
-  exclusiveTransactionCalls = 0;
-  transactionCalls = 0;
-
-  async withExclusiveTransactionAsync(): Promise<void> {
-    this.exclusiveTransactionCalls++;
-    throw new Error('withExclusiveTransactionAsync is not supported on web');
-  }
-
-  async withTransactionAsync(fn: () => Promise<void>): Promise<void> {
-    this.transactionCalls++;
-    await this.execAsync('BEGIN');
-    try {
-      await fn();
-      await this.execAsync('COMMIT');
-    } catch (error) {
-      await this.execAsync('ROLLBACK');
-      throw error;
-    }
-  }
-}
-
-class NativeExpoSqliteDatabaseShim extends BunExpoSqliteDatabaseShim {
-  exclusiveTransactionCalls = 0;
-  transactionCalls = 0;
-  executedSql: string[] = [];
-
-  override async execAsync(sql: string): Promise<void> {
-    this.executedSql.push(sql);
-    await super.execAsync(sql);
-  }
-
-  async withExclusiveTransactionAsync(fn: (txn: BunExpoSqliteDatabaseShim) => Promise<void>) {
-    this.exclusiveTransactionCalls++;
-    await this.execAsync('BEGIN');
-    try {
-      await fn(this);
-      await this.execAsync('COMMIT');
-    } catch (error) {
-      await this.execAsync('ROLLBACK');
-      throw error;
-    }
-  }
-
-  async withTransactionAsync(fn: () => Promise<void>): Promise<void> {
-    this.transactionCalls++;
-    await this.execAsync('BEGIN');
-    try {
-      await fn();
-      await this.execAsync('COMMIT');
-    } catch (error) {
-      await this.execAsync('ROLLBACK');
-      throw error;
-    }
-  }
-}
+import {
+  BunExpoSqliteDatabaseShim,
+  WebExpoSqliteDatabaseShim,
+  NativeExpoSqliteDatabaseShim,
+} from './databaseShim.ts';
 
 async function createRepositories() {
   const rawDatabase = new BunExpoSqliteDatabaseShim();
@@ -136,23 +36,11 @@ async function createRepositories() {
   await repositories.init();
   return {
     repositories,
+    rawDatabase,
     dispose: async () => {
       await rawDatabase.closeAsync();
     },
   } as const;
-}
-
-async function createMintSwapRepositories() {
-  const rawDatabase = new BunExpoSqliteDatabaseShim();
-  const repositories = new Repositories({
-    database: rawDatabase as unknown as SqliteRepositoriesOptions['database'],
-    mintSwap: true,
-  });
-  await repositories.init();
-  return {
-    repositories,
-    dispose: async () => rawDatabase.closeAsync(),
-  };
 }
 
 async function createSharedRepositories() {
@@ -218,8 +106,7 @@ runKeypairAllocationContract(
 
 runMintSwapPersistenceContract(
   {
-    createRepositories: createMintSwapRepositories,
-    createDisabledRepositories: createRepositories,
+    createRepositories,
   },
   { describe, it, expect },
 );
@@ -227,6 +114,10 @@ runMintSwapPersistenceContract(
 runAuthSessionRepositoryContract({ createRepositories }, { describe, it, expect });
 
 runProofRepositoryContract({ createRepositories }, { describe, it, expect });
+runKeysetRepositoryContract(
+  { createRepositories, createSharedRepositories },
+  { describe, it, expect },
+);
 
 runMintOperationRepositoryContract({ createRepositories }, { describe, it, expect });
 
@@ -333,13 +224,13 @@ function restoreGlobalProperty(name: string, descriptor: PropertyDescriptor | un
 
 describe('hydration corruption guard', () => {
   it('throws when send operation has prepared state but null financial fields', async () => {
-    const { repositories, dispose } = await createRepositories();
+    const { repositories, rawDatabase, dispose } = await createRepositories();
     try {
-      await (repositories as any).db.run(
+      await rawDatabase.runAsync(
         `INSERT INTO coco_cashu_send_operations
            (id, mintUrl, amount, unit, state, createdAt, updatedAt, method, methodDataJson, needsSwap, fee, inputAmount)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
+        ...[
           'corrupt-send',
           'https://mint.test',
           '100',
@@ -369,13 +260,13 @@ describe('hydration corruption guard', () => {
   });
 
   it('throws when receive operation has prepared state but null fee', async () => {
-    const { repositories, dispose } = await createRepositories();
+    const { repositories, rawDatabase, dispose } = await createRepositories();
     try {
-      await (repositories as any).db.run(
+      await rawDatabase.runAsync(
         `INSERT INTO coco_cashu_receive_operations
            (id, mintUrl, amount, unit, state, createdAt, updatedAt, fee, inputProofsJson)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ['corrupt-receive', 'https://mint.test', '100', 'sat', 'prepared', 0, 0, null, '[]'],
+        ...['corrupt-receive', 'https://mint.test', '100', 'sat', 'prepared', 0, 0, null, '[]'],
       );
 
       let threw = false;
@@ -392,13 +283,13 @@ describe('hydration corruption guard', () => {
   });
 
   it('throws when melt operation has prepared state but null financial fields', async () => {
-    const { repositories, dispose } = await createRepositories();
+    const { repositories, rawDatabase, dispose } = await createRepositories();
     try {
-      await (repositories as any).db.run(
+      await rawDatabase.runAsync(
         `INSERT INTO coco_cashu_melt_operations
            (id, mintUrl, state, createdAt, updatedAt, method, methodDataJson, quoteId, amount, fee_reserve, swap_fee, needsSwap, inputAmount)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
+        ...[
           'corrupt-melt',
           'https://mint.test',
           'prepared',
