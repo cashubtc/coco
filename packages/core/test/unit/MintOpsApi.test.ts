@@ -77,6 +77,7 @@ describe('MintOpsApi', () => {
     };
 
     mintOperationService = {
+      assertStandalone: mock(async () => {}),
       prepare: mock(async () => pendingOperation),
       execute: mock(async () => finalizedOperation),
       getOperation: mock(async () => pendingOperation),

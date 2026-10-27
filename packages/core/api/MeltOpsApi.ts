@@ -30,6 +30,9 @@ export interface MeltDiagnosticsApi {
 }
 
 /**
+ * Commands reject Mint Swap children with `MintSwapChildOperationError`; use `ops.mintSwap`.
+ * Read methods include children. Generic recovery skips them.
+ *
  * Operation-oriented API for melt workflows.
  *
  * This API makes the melt lifecycle explicit so callers can prepare a payment,
@@ -179,6 +182,7 @@ export class MeltOpsApi<TSupported extends MeltMethod = DefaultSupportedMeltMeth
   }
 
   private async requireOperation(operationId: string): Promise<MeltOperation> {
+    await this.meltOperationService.assertStandalone(operationId);
     const operation = await this.meltOperationService.getOperation(operationId);
     if (!operation) {
       throw new Error(`Operation ${operationId} not found`);

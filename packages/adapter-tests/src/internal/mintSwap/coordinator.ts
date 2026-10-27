@@ -1364,13 +1364,13 @@ export function runMintSwapCoordinatorContract(
         mintScopedLock: fixture.dependencies.mintScopedLock,
       });
       expect(childService.isOperationLocked('source-child')).toBe(true);
-      const childExecution = childService.execute('source-child');
+      await expect(childService.execute('source-child')).rejects.toThrow('use ops.mintSwap');
       await expect(
         fixture.dependencies.sourceOperationLock.acquire('source-child'),
       ).rejects.toThrow();
       release();
       await execution;
-      expect((await childExecution).state).toBe('finalized');
+      expect((await childService.getOperation('source-child'))?.state).toBe('finalized');
       expect(fixture.requests.filter((request) => request === 'melt')).toHaveLength(1);
       expect(fixture.dependencies.sourceOperationLock.isLocked('source-child')).toBe(false);
     });

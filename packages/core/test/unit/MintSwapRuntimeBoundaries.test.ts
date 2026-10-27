@@ -1,3 +1,6 @@
+import { MintSwapChildOperationError } from '../../models/Error.ts';
+import { MintService } from '../../services/MintService.ts';
+import type { MintOperationService } from '../../operations/mint/MintOperationService.ts';
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import { Amount, RateLimitError, Wallet, type MintQuoteBolt11Response } from '@cashu/cashu-ts';
 import { initializeCoco, Manager } from '../../Manager.ts';
@@ -19,6 +22,7 @@ import {
 
 // Exercise the real Manager, workflows, handlers, wallets and watchers. Only protocol I/O is stubbed.
 type Runtime = {
+  mintOperationService: MintOperationService;
   mintAdapter: MintAdapter;
   quoteLifecycle: QuoteLifecycle;
   walletService: WalletService;
@@ -142,6 +146,138 @@ describe('Mint Swap real runtime boundaries', () => {
         destinationState = state;
       },
     };
+  }
+
+  it('rejects ordinary child commands and quote claims while preserving reads and parent commands', async () => {
+    const { manager, runtime, fixture, issuance, sourceCheck, destinationCheck } = await setup();
+    const commands = [
+      () => manager.ops.melt.execute('source-child'),
+      () => manager.ops.melt.cancel('source-child'),
+      () => manager.ops.melt.reclaim('source-child'),
+      () => manager.ops.melt.refresh('source-child'),
+      () => manager.ops.melt.finalize('source-child'),
+      () => manager.ops.melt.prepare({ quote: fixture.parent.sourceQuote }),
+      () => manager.ops.mint.execute('destination-child'),
+      () => manager.ops.mint.finalize('destination-child'),
+      () => manager.ops.mint.refresh('destination-child'),
+      () => manager.ops.mint.checkPayment('destination-child'),
+      () => manager.ops.mint.prepare({ quote: fixture.parent.destinationQuote, amount: 8 }),
+      () =>
+        runtime.mintOperationService.claimMintQuote(
+          'https://destination.test/',
+          'bolt11',
+          'destination-quote',
+        ),
+    ];
+    for (const command of commands) {
+      await expect(command()).rejects.toMatchObject({
+        name: 'MintSwapChildOperationError',
+        parentOperationId: 'swap',
+      });
+    }
+    expect((await manager.ops.melt.get('source-child'))?.state).toBe('prepared');
+    expect((await manager.ops.mint.listPending()).map((op) => op.id)).toContain(
+      'destination-child',
+    );
+    expect(issuance).not.toHaveBeenCalled();
+    expect(sourceCheck).not.toHaveBeenCalled();
+    expect(destinationCheck).not.toHaveBeenCalled();
+    await manager.ops.mintSwap.execute('swap');
+    expect((await manager.ops.mintSwap.refresh('swap')).state).toBe('completed');
+    // Terminal parents retain exclusive command authority.
+    for (const command of commands)
+      await expect(command()).rejects.toBeInstanceOf(MintSwapChildOperationError);
+    expect(issuance).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps pending children unchanged under ordinary processors, auto claiming and generic recovery', async () => {
+    const {
+      manager,
+      runtime,
+      fixture,
+      repo,
+      setSourceState,
+      sourceCheck,
+      destinationCheck,
+      issuance,
+      destinationResponse,
+    } = await setup();
+    setSourceState('PENDING');
+    await manager.ops.mintSwap.execute('swap');
+    const parent = await manager.ops.mintSwap.get('swap');
+    const source = await manager.ops.melt.get('source-child');
+    const destination = await manager.ops.mint.get('destination-child');
+    const proof = await repo.proofRepository.getProofBySecret('https://source.test', 'original');
+    sourceCheck.mockClear();
+    destinationCheck.mockClear();
+    setSourceState('PAID');
+    await manager.enableMintOperationProcessor({ initialEnqueueDelayMs: 0 });
+    await manager.enableMeltSettlementProcessor();
+    // The canonical quote can still be observed while ordinary advancement is excluded.
+    await runtime.quoteLifecycle.recordMintQuoteSnapshot(
+      'https://destination.test',
+      'bolt11',
+      destinationResponse(),
+    );
+    await manager.ops.mint.recovery.run();
+    await manager.ops.melt.recovery.run();
+    expect(await runtime.mintOperationService.claimPendingMintQuotes()).toEqual([]);
+    await manager.disableMintOperationProcessor();
+    await manager.disableMeltSettlementProcessor();
+    expect(await manager.ops.mintSwap.get('swap')).toEqual(parent);
+    expect(await manager.ops.melt.get('source-child')).toEqual(source);
+    expect(await manager.ops.mint.get('destination-child')).toEqual(destination);
+    expect(await repo.proofRepository.getProofBySecret('https://source.test', 'original')).toEqual(
+      proof,
+    );
+    expect(sourceCheck).not.toHaveBeenCalled();
+    expect(destinationCheck).not.toHaveBeenCalled();
+    expect(issuance).not.toHaveBeenCalled();
+    expect(await manager.ops.mint.listByQuote(fixture.parent.destinationQuote)).toHaveLength(1);
+    await manager.ops.mintSwap.refresh('swap');
+    expect((await manager.ops.mintSwap.refresh('swap')).state).toBe('completed');
+  });
+
+  for (const kind of ['mint', 'melt'] as const) {
+    it(`rechecks ${kind} quote ownership after preparation preflight`, async () => {
+      const { manager, fixture } = await setup(undefined, false);
+      const entered = deferred();
+      const release = deferred();
+      const metadata = await fixture.dependencies.mintService.refreshAndCommitIfStale(
+        kind === 'mint' ? fixture.parent.destinationMintUrl : fixture.parent.sourceMintUrl,
+      );
+      spyOn(MintService.prototype, 'refreshAndCommitIfStale').mockImplementation(async () => {
+        entered.resolve();
+        await release.promise;
+        return metadata;
+      });
+      const preparing =
+        kind === 'mint'
+          ? manager.ops.mint.prepare({ quote: fixture.parent.destinationQuote, amount: 8 })
+          : manager.ops.melt.prepare({ quote: fixture.parent.sourceQuote });
+      const outcome = preparing.then(
+        () => null,
+        (error: unknown) => error,
+      );
+      await within(entered.promise);
+      await fixture.create();
+      release.resolve();
+      expect(await outcome).toBeInstanceOf(MintSwapChildOperationError);
+      expect(await manager.ops.mint.listByQuote(fixture.parent.destinationQuote)).toEqual([]);
+      expect(await manager.ops.melt.listByQuote(fixture.parent.sourceQuote)).toEqual([]);
+    });
+
+    it(`refuses parent ownership after an ordinary ${kind} plan commits`, async () => {
+      const { manager, fixture } = await setup(undefined, false);
+      spyOn(MintService.prototype, 'refreshAndCommitIfStale').mockImplementation(
+        fixture.dependencies.mintService.refreshAndCommitIfStale,
+      );
+      if (kind === 'mint')
+        await manager.ops.mint.prepare({ quote: fixture.parent.destinationQuote, amount: 8 });
+      else await manager.ops.melt.prepare({ quote: fixture.parent.sourceQuote });
+      await expect(fixture.create()).rejects.toThrow('child_conflict');
+      expect(await manager.ops.mintSwap.get('swap')).toBeNull();
+    });
   }
 
   for (const kind of ['mint', 'melt'] as const) {

@@ -356,6 +356,28 @@ and owned proof evidence in the same scope that reserves destination claimable v
 `reserveMintQuoteForExecution`. It never restores trust or replaces output plans. Ordinary
 `beginMintExecution` still checks trust before composing that shared reservation transition.
 
+Mint Swap is the exclusive coordinator of its source Melt and destination Mint children. Ordinary
+Mint/Melt commands reject parent-owned child IDs and quote references with
+`MintSwapChildOperationError`, carrying `parentOperationId` and directing callers to `ops.mintSwap`.
+Read APIs still expose children. Ordinary processors, automatic Mint quote claiming and generic
+Mint/Melt recovery skip these children and quotes. Watchers continue recording shared canonical
+Quote Observations.
+
+Ownership is derived from immutable parent child IDs and quote references using durable reverse
+lookups, including terminal and `needs_attention` parents. It is never inferred from an active scan
+or copied to a mutable child flag. Ordinary coordinators check ownership in the same transaction as
+authorization and mutation, and before recovery effects. Parent creation rejects quotes with existing
+ordinary operations, so ownership cannot appear after ordinary effect authorization. Historical
+parents and their children need no migration; historical sibling operations on an owned quote are
+also excluded from ordinary coordination. Parent coordinators retain direct access to composable
+transitions, whose child-state and proof invariants still apply. Shared child locks remain in place.
+
+Disabling the parent processor pauses automatic child progression, including the parent's existing
+startup/resume recovery pass. Explicit parent refresh and recovery remain available. Generic child
+recovery does not route into a parent sweep or bypass this pause. The parent's existing bounded
+startup eligibility and recovery behavior are unchanged; separating startup repair from routine
+progression remains a separate migration.
+
 One effect-driving Coco Session per Wallet store is required. Shared child operation locks coordinate
 ordinary child services with the parent; parent revisions do not fence network effects across
 independent sessions. Manager shares these locks with the coordinator and reuses existing host/session
@@ -527,6 +549,6 @@ Behavior tests cover memory and persistent adapters:
 - Ambiguous remote outcomes retain exact recovery material and owned resources.
 
 Public APIs, package exports, persisted formats, and protocol behavior do not change with this
-internal composition model, except for the explicitly accepted proof-state addition and plugin-facing removals in the
+internal composition model, except for the explicitly accepted Mint Swap child-command restriction, proof-state addition, and plugin-facing removals in the
 Restore and legacy counter migration above. `CoreTransaction`, `Transition`, their helpers, and the runner remain internal implementation details.
 They must not be exported from package entry points.

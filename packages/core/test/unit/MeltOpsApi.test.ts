@@ -113,6 +113,7 @@ describe('MeltOpsApi', () => {
     };
 
     meltOperationService = {
+      assertStandalone: mock(async () => {}),
       init: mock(async () => ({ id: 'op-1' })),
       prepare: mock(async () => preparedOperation),
       execute: mock(async () => pendingOperation),

@@ -1,3 +1,4 @@
+import type { MintQuoteRef, MeltQuoteRef } from '../../models/QuoteIdentity.ts';
 import type { MintSwapOperation, MintSwapOperationState } from './MintSwapOperation.ts';
 
 /**
@@ -13,6 +14,13 @@ export interface MintSwapOperationRepository {
   create(operation: MintSwapOperation): Promise<void>;
   /** Hydrate through the parser and return an independent snapshot. */
   getById(id: string): Promise<MintSwapOperation | null>;
+  /** Durable ownership, including terminal and needs_attention parents; return independent snapshots. */
+  getByChild(kind: 'mint' | 'melt', operationId: string): Promise<MintSwapOperation | null>;
+  /** Normalize the mint URL; ownership survives completion and does not depend on child presence. */
+  getByQuote(
+    kind: 'mint' | 'melt',
+    quote: MintQuoteRef | MeltQuoteRef,
+  ): Promise<MintSwapOperation | null>;
   /**
    * Atomically match ID/state/revision. A missing row or stale guard returns false without mutation.
    * On a match, assign expectedRevision + 1 regardless of next.revision, then parse and validate

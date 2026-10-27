@@ -202,6 +202,25 @@ export const createMintSwap = defineTransition<PreparingMintSwapOperation, MintS
       return current;
     }
     await quotes(tx, input);
+    // Ownership cannot be acquired after an ordinary coordinator has allocated a plan or
+    // authorized effects. The inverse race is rejected by its scoped ownership check.
+    if (
+      (await tx.meltOperations.getByQuoteId(input.sourceQuote.mintUrl, input.sourceQuote.quoteId))
+        .length
+    ) {
+      throw new MintSwapInvariantError('child_identity', 'child_conflict', 'source');
+    }
+    if (
+      (
+        await tx.mintOperations.getByQuoteId(
+          input.destinationQuote.mintUrl,
+          input.destinationQuote.method,
+          input.destinationQuote.quoteId,
+        )
+      ).length
+    ) {
+      throw new MintSwapInvariantError('child_identity', 'child_conflict', 'destination');
+    }
     await tx.mintSwapOperations.create(input);
     return input;
   },

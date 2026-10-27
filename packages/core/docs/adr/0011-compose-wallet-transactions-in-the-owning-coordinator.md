@@ -110,6 +110,17 @@ Consistent fail-fast rejection of nested transactions remains follow-up work and
 nesting from legitimate concurrent calls. Mint Swap runtime adds public APIs/configuration/events;
 it does not change the persisted parent format.
 
+Mint Swap now exclusively coordinates its children. This revises the earlier permission for
+independent ordinary child commands: they reject with `MintSwapChildOperationError` and the parent
+ID, while reads and shared quote observation remain available. Ordinary processors, quote claiming
+and generic recovery skip owned children and quotes. Durable reverse lookups include terminal and
+`needs_attention` parents; coordinator transaction guards and parent creation checks protect both
+orderings of an ownership race. Composable transitions retain their existing authority contract for
+parent composition. No persisted format changes or ownership flags are introduced.
+Disabling the parent processor also pauses automatic child progression; explicit parent recovery
+remains available. Its existing startup eligibility is preserved pending a separate repair migration.
+The [Transaction Design](../../../../TRANSACTION_DESIGN.md) owns the detailed contract.
+
 The Restore migration adds an explicit exception
 to the public API compatibility policy: move Restore directly to scoped monotonic advancement and
 remove plugin-facing `overwriteCounter()`, without first reworking CounterService. After migrating

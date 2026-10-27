@@ -57,7 +57,17 @@ describe('Mint Swap runtime persistent restart', () => {
           repo,
           seedGetter: fixture.dependencies.loadSeed,
           ...mintSwapRuntimeConfig,
+          processors: {
+            mintOperationProcessor: {},
+            meltSettlementProcessor: {},
+            mintSwapOperationProcessor: { disabled: true },
+          },
         });
+        expect(await manager.ops.mintSwap.get('swap')).toEqual(original);
+        expect((await manager.ops.melt.get('source-child'))?.state).toBe('pending');
+        expect(fixture.requests).toEqual([]);
+        await expect(manager.ops.melt.refresh('source-child')).rejects.toThrow('use ops.mintSwap');
+        await manager.enableMintSwapOperationProcessor();
         const recovered = await manager.ops.mintSwap.get('swap');
         expect(recovered?.state).toBe(paid ? 'completed' : 'cancelled');
         expect(recovered?.sourceOperationId).toBe(original?.sourceOperationId);

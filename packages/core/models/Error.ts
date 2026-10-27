@@ -209,3 +209,13 @@ export class QuoteIdentityConflictError extends Error {
     this.methods = [...methods];
   }
 }
+
+/** Ordinary child commands must be routed through their durable Mint Swap parent. */
+export class MintSwapChildOperationError extends Error {
+  constructor(readonly parentOperationId: string) {
+    super(
+      `This operation or quote belongs to Mint Swap ${parentOperationId}; use ops.mintSwap with that parent ID.`,
+    );
+    this.name = 'MintSwapChildOperationError';
+  }
+}

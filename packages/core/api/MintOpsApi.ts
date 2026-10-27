@@ -31,6 +31,9 @@ export interface MintDiagnosticsApi {
 }
 
 /**
+ * Commands reject Mint Swap children with `MintSwapChildOperationError`; use `ops.mintSwap`.
+ * Read methods include children. Generic recovery skips them.
+ *
  * Operation-oriented API for quote-backed mint workflows.
  *
  * This API makes the mint lifecycle explicit so callers can move a canonical
@@ -129,6 +132,7 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
   }
 
   private async requireOperation(operationId: string): Promise<MintOperation> {
+    await this.mintOperationService.assertStandalone(operationId);
     const operation = await this.mintOperationService.getOperation(operationId);
     if (!operation) {
       throw new Error(`Operation ${operationId} not found`);

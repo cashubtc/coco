@@ -269,6 +269,7 @@ export class MeltSettlementProcessor {
       return;
     }
 
+    if (!(await this.meltOperations.isStandalone(operation.id)) || !this.running) return;
     const mintUrl = normalizeMintUrl(operation.mintUrl);
     const operationInterest = {
       id: operation.id,
@@ -452,6 +453,7 @@ export class MeltSettlementProcessor {
         nextContext = undefined;
 
         try {
+          if (!(await this.meltOperations.isStandalone(operationId))) return;
           await this.meltOperations.checkPendingOperation(operationId);
         } catch (err) {
           this.logger?.warn('Failed to settle pending melt operation', {

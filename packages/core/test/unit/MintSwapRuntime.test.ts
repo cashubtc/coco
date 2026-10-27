@@ -1,3 +1,4 @@
+import { MintSwapChildOperationError } from '../../models/Error.ts';
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import { initializeCoco, Manager, type CocoConfig } from '../../Manager.ts';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
@@ -242,7 +243,7 @@ describe('Mint Swap Manager runtime', () => {
     expect(active).toHaveBeenCalledTimes(2);
   });
 
-  it('shares source locks with plugin-reachable Melt execution', async () => {
+  it('rejects ordinary Melt execution while the parent holds the source lock', async () => {
     let meltService!: MeltOperationService;
     const { manager, fixture } = await setup({
       automatic: false,
@@ -267,18 +268,15 @@ describe('Mint Swap Manager runtime', () => {
     });
     const execution = manager.ops.mintSwap.execute('swap');
     await entered.promise;
-    let childFinished = false;
-    const child = meltService.execute('source-child').then(() => {
-      childFinished = true;
-    });
-    await Promise.resolve();
-    expect(childFinished).toBe(false);
+    await expect(meltService.execute('source-child')).rejects.toBeInstanceOf(
+      MintSwapChildOperationError,
+    );
     release.resolve();
-    await Promise.all([execution, child]);
+    await execution;
     expect(fixture.requests.filter((request) => request === 'melt')).toHaveLength(1);
   });
 
-  it('shares destination locks while parent issuance overlaps an ordinary Mint command', async () => {
+  it('rejects an ordinary Mint command while parent issuance holds the destination lock', async () => {
     let mintService!: MintOperationService;
     const { manager, fixture } = await setup({
       automatic: false,
@@ -306,18 +304,13 @@ describe('Mint Swap Manager runtime', () => {
     );
     const execution = manager.ops.mintSwap.execute('swap');
     await entered.promise;
-    let childFinished = false;
-    const child = mintService.execute('destination-child').then((operation) => {
-      childFinished = true;
-      return operation;
-    });
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    const childFinishedBeforeParent = childFinished;
+    await expect(mintService.execute('destination-child')).rejects.toBeInstanceOf(
+      MintSwapChildOperationError,
+    );
     release.resolve();
-    const [parent, destination] = await Promise.all([execution, child]);
-    expect(childFinishedBeforeParent).toBe(false);
+    const parent = await execution;
     expect(parent.state).toBe('completed');
-    expect(destination.state).toBe('finalized');
+    expect((await manager.ops.mint.get('destination-child'))?.state).toBe('finalized');
     expect(issuance).toHaveBeenCalledTimes(1);
   });
 

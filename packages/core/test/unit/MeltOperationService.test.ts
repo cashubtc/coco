@@ -106,6 +106,8 @@ describe('MeltOperationService coordinator', () => {
       transactionRunner: {
         run: mock(async (work: any) =>
           work({
+            mintSwapOperations: { getByChild: async () => null, getByQuote: async () => null },
+            meltOperations: { getById: async () => current },
             perform: async (transition: unknown, input: any) => {
               performed.push(transition);
               transitionInputs.push(input);
