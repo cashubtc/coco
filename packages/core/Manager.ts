@@ -646,6 +646,11 @@ export class Manager {
     await this.proofStateWatcher.start();
   }
 
+  /**
+   * Stop proof observation and release subscriptions, including acquisitions in progress.
+   * Already-started notification processing and operation checks may finish and publish events
+   * after this resolves. Safe to await from a proof or Send event listener.
+   */
   async disableProofStateWatcher(): Promise<void> {
     if (!this.proofStateWatcher) return;
     await this.proofStateWatcher.stop();

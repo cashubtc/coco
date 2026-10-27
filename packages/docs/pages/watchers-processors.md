@@ -89,8 +89,20 @@ tokenless P2PK Sends whose output proof rows were not retained. Legacy completio
 original input metadata and exact output allocation; it does not fabricate proofs or a token.
 
 `watchExistingInflightOnStart: false` skips the startup proof and Send scan. Live proof events and newly
-pending Sends remain observed while the watcher runs. Stopping the watcher drains owned work and
-releases subscriptions, including those acquired during shutdown.
+pending Sends remain observed while the watcher runs.
+
+`await coco.disableProofStateWatcher()` stops accepting new notifications and discovery work, cancels
+pending discovery timers, and releases subscriptions, including those acquired during shutdown. It
+waits for subscription acquisition and cleanup, but does not wait for already-started notification
+processing or operation checks. These calls can finish Wallet updates and publish events after the
+watcher stops. An event listener can therefore await `disableProofStateWatcher()` without waiting on
+its own completion. A restarted watcher does not resume discovery or accept subscription callbacks
+from its previous run.
+
+The same proof-watcher behavior applies when `coco.dispose()` disables it. Neither method cancels
+already-started proof updates or Send completion; shutdown is not a completion barrier for those
+operations. Keep caller-owned storage available while such work finishes. Other watchers and
+processors retain their own shutdown behavior.
 
 ## Pausing and Resuming Subscriptions
 

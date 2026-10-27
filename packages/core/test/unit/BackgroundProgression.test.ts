@@ -570,6 +570,37 @@ describe.each(['memory', 'sqlite'] as const)('background progression (%s)', (ada
     expect(requests).toEqual(['/v1/checkstate']);
   });
 
+  it.each(['disableProofStateWatcher', 'dispose'] as const)(
+    'allows an awaited Send completion listener to call %s',
+    async (stop) => {
+      await coco.enableProofStateWatcher({ watchExistingInflightOnStart: false });
+      await repo.proofRepository.saveProofs(mintUrl, [
+        {
+          id: keysetId,
+          amount: Amount.from(1),
+          C: keys['1'],
+          secret: 'stop-on-completion',
+          mintUrl,
+          unit: 'sat',
+          state: 'ready',
+        },
+      ]);
+      const operation = await coco.ops.send.prepare({ mintUrl, amount: 1 });
+      const completed = new Promise<void>((resolve) => {
+        coco.on('send:finalized', async () => {
+          await coco[stop]();
+          resolve();
+        });
+      });
+
+      await coco.ops.send.execute(operation.id);
+      await completed;
+
+      expect((await coco.ops.send.get(operation.id))?.state).toBe('finalized');
+      expect(requests).toEqual(['/v1/checkstate']);
+    },
+  );
+
   it('discovers legacy tokenless P2PK Sends without retained output proof rows', async () => {
     const output = OutputData.createDeterministicData(Amount.from(1), seed, 0, {
       id: keysetId,
