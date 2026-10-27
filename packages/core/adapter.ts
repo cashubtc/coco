@@ -124,4 +124,4 @@ export {
 export {
   MintSwapIdentityConflictError,
   type MintSwapIdentityKind,
-} from './operations/mintSwap/MintSwapIdentityConflictError.ts';
+} from './operations/mintSwap/MintSwapErrors.ts';

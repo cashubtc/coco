@@ -383,7 +383,10 @@ export class PollingTransport implements RealTimeTransport {
       this.requeueOpportunity(mintUrl, s, opportunity);
     } catch (err) {
       this.logger?.error('Polling task error', { mintUrl, err });
-      if (this.getMintQuoteMethod(task.kind) && this.mintQuotePolling) {
+      if (
+        (this.getMintQuoteMethod(task.kind) && this.mintQuotePolling) ||
+        task.kind.endsWith('_melt_quote')
+      ) {
         this.requeueOpportunity(mintUrl, s, opportunity);
       }
     } finally {

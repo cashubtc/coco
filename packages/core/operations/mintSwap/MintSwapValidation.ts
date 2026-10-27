@@ -2,7 +2,6 @@ import { Amount } from '@cashu/cashu-ts';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
 import type {
-  MintSwapAttention,
   MintSwapOperation,
   MintSwapRetryError,
   MintSwapRetryState,
@@ -11,6 +10,7 @@ import { isMintSwapAutomaticState } from './MintSwapOperation.ts';
 import { parseMintSwapOperation } from './parseMintSwapOperation.ts';
 import type { PreparedOrLaterOperation } from '../melt/MeltOperation.ts';
 import { normalizeMintUrl } from '../../utils.ts';
+import { MintSwapIntentConflictError, MintSwapInvariantError } from './MintSwapErrors.ts';
 
 export interface MintSwapIntent {
   id: string;
@@ -41,13 +41,6 @@ export function normalizeMintSwapIntent(input: MintSwapIntent): MintSwapIntent {
   return intent;
 }
 
-export class MintSwapIntentConflictError extends Error {
-  constructor() {
-    super('Mint Swap ID belongs to a different intent');
-    this.name = 'MintSwapIntentConflictError';
-  }
-}
-
 export function assertMintSwapIntent(operation: MintSwapOperation, intent: MintSwapIntent): void {
   if (
     operation.id !== intent.id ||
@@ -57,32 +50,6 @@ export function assertMintSwapIntent(operation: MintSwapOperation, intent: MintS
     operation.sourceDebitCap?.toString() !== intent.sourceDebitCap?.toString()
   )
     throw new MintSwapIntentConflictError();
-}
-
-export class MintSwapInvariantError extends Error {
-  constructor(
-    readonly invariant: MintSwapAttention['invariant'],
-    readonly code: MintSwapAttention['evidence']['code'],
-    readonly leg: 'source' | 'destination',
-  ) {
-    super(`Mint Swap ${leg} ${invariant}: ${code}`);
-    this.name = 'MintSwapInvariantError';
-  }
-  evidence(now: number): MintSwapAttention {
-    return {
-      reason: [
-        'child_missing',
-        'quote_missing',
-        'key_missing',
-        'outputs_missing',
-        'proofs_missing',
-      ].includes(this.code)
-        ? 'missing_recovery_material'
-        : 'contradictory_evidence',
-      invariant: this.invariant,
-      evidence: { code: this.code, leg: this.leg, observedAt: now },
-    };
-  }
 }
 
 export function invoiceHash(request: string): string {
