@@ -3,7 +3,7 @@ import { describe, it, beforeEach, expect } from 'bun:test';
 import { KeyRingService } from '../../services/KeyRingService.ts';
 import { SeedService } from '../../services/SeedService.ts';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
-import { DerivationIndexExhaustedError } from '../../models/Error.ts';
+import { DerivationIndexExhaustedError, MintQuoteKeyError } from '../../models/Error.ts';
 import { bytesToHex } from '@noble/curves/utils.js';
 import { schnorr, secp256k1 } from '@noble/curves/secp256k1.js';
 import type { Proof } from '@cashu/cashu-ts';
@@ -472,6 +472,21 @@ describe('KeyRingService', () => {
       expect(imported.derivationIndex).toBe(7);
       expect(await service.getAllKeyPairs()).toHaveLength(1);
     });
+
+    it.each([1, 6])(
+      'preserves a mint quote key when importing secret scalar %s',
+      async (scalar) => {
+        const secretKey = Uint8Array.from([...new Uint8Array(31), scalar]);
+        const publicKeyHex = bytesToHex(secp256k1.getPublicKey(secretKey, true));
+        await repo.setPersistedKeyPair({ publicKeyHex, secretKey, purpose: 'nut20_mint_quote' });
+        const original = await service.getMintQuoteKeyPair(publicKeyHex);
+
+        await expect(service.addKeyPair(secretKey)).rejects.toThrow(MintQuoteKeyError);
+
+        expect(await service.getMintQuoteKeyPair(publicKeyHex)).toEqual(original);
+        expect(await service.getAllKeyPairs()).toEqual([]);
+      },
+    );
 
     it('rejects secret key that is not 32 bytes', async () => {
       const invalidKey = new Uint8Array(31); // Wrong length

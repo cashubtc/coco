@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { MintQuoteKeyError } from '../../models/Error.ts';
 import type { Keypair } from '../../models/Keypair.ts';
 import type { Repositories } from '../../repositories/index.ts';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
@@ -141,5 +142,42 @@ describe.each(['memory', 'sqlite'] as const)('P2PK transactions with %s', (adapt
     expect(
       await repositories.keyRingRepository.getPersistedKeyPair(canonicalKey, 'nut20_mint_quote'),
     ).toEqual(expect.objectContaining(quoteKey));
+  });
+
+  it('rejects an import that would overwrite a mint quote key', async () => {
+    const quoteKey: Keypair = {
+      ...importedKey,
+      purpose: 'nut20_mint_quote',
+      derivationIndex: 7,
+    };
+    await repositories.keyRingRepository.setPersistedKeyPair(quoteKey);
+    await repositories.keyRingRepository.setLastAllocatedIndex('nut20_mint_quote', 12);
+    await repositories.keyRingRepository.setLastAllocatedIndex('p2pk', 3);
+
+    await expect(transactions.importP2pkKey(importedKey)).rejects.toThrow(MintQuoteKeyError);
+
+    expect(
+      await repositories.keyRingRepository.getPersistedKeyPair(canonicalKey, 'nut20_mint_quote'),
+    ).toEqual(quoteKey);
+    expect(await repositories.keyRingRepository.getAllPersistedKeyPairs('p2pk')).toEqual([]);
+    expect(await repositories.keyRingRepository.getLastAllocatedIndex('nut20_mint_quote')).toBe(12);
+    expect(await repositories.keyRingRepository.getLastAllocatedIndex('p2pk')).toBe(3);
+  });
+
+  it('rejects a conflicting import after a quote key allocation in the same transaction', async () => {
+    await expect(
+      runner.run(async (scope) => {
+        await scope.keypairs.allocate({
+          purpose: 'nut20_mint_quote',
+          derive: () => ({ publicKeyHex: canonicalKey, secretKey: importedKey.secretKey }),
+        });
+        await scope.keypairs.importP2pk(importedKey);
+      }),
+    ).rejects.toThrow(MintQuoteKeyError);
+
+    expect(await repositories.keyRingRepository.getAllPersistedKeyPairs()).toEqual([]);
+    expect(
+      await repositories.keyRingRepository.getLastAllocatedIndex('nut20_mint_quote'),
+    ).toBeNull();
   });
 });

@@ -25,6 +25,7 @@ export class KeyRingApi {
    * Adds an existing keypair using its canonical compressed public key. If the same secret is
    * already stored under coco's legacy public key encoding, returns that existing keypair.
    * @param secretKey - The 32-byte secret key as Uint8Array
+   * @throws {MintQuoteKeyError} If importing would overwrite a stored mint quote key.
    */
   async addKeyPair(secretKey: Uint8Array): Promise<Keypair> {
     return this.keyRingService.addKeyPair(secretKey);

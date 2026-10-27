@@ -65,6 +65,9 @@ and the canonical compressed encoding as aliases for the same P2PK key. Existing
 keep their stored public key encoding and derivation metadata; imports do not create a duplicate
 row for the other alias.
 
+If a new import would overwrite a stored NUT-20 mint quote key, `addKeyPair()` rejects with
+`MintQuoteKeyError` and leaves the existing key unchanged.
+
 ### Retrieving Keypairs
 
 ```ts

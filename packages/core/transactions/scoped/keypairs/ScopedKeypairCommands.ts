@@ -1,5 +1,5 @@
 import type { Keypair } from '@core/models/Keypair';
-import { DerivationIndexExhaustedError } from '@core/models/Error';
+import { DerivationIndexExhaustedError, MintQuoteKeyError } from '@core/models/Error';
 import type { KeyRingRepository } from '@core/repositories';
 import type { AllocateKeypairInput } from '../../../keypairs/types.ts';
 import { findP2pkKeyPair } from '../../../keypairs/P2pkKeyLookup.ts';
@@ -40,6 +40,12 @@ export class RepositoryKeypairCommands implements ScopedKeypairCommands {
   async importP2pk(keypair: Keypair): Promise<Keypair> {
     const existing = await findP2pkKeyPair(this.repository, keypair.publicKeyHex);
     if (existing) return existing;
+
+    // Public keys identify rows across purposes, so a P2PK-only lookup cannot authorize a write.
+    const stored = await this.repository.getPersistedKeyPair(keypair.publicKeyHex);
+    if (stored && (stored.purpose ?? 'p2pk') !== 'p2pk') {
+      throw new MintQuoteKeyError('Cannot import a P2PK key that is already used by a mint quote');
+    }
     await this.repository.setPersistedKeyPair(keypair);
     return keypair;
   }
