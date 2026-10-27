@@ -8,6 +8,9 @@ repository-only helper types and functions may change incompatibly in minor or m
 patch releases preserve compatibility. Every incompatible change requires an adapter migration note.
 This policy does not apply retroactively to v2.
 
+Repository interfaces and repository-only helpers expose the warning and policy link in TSDoc
+for editor import hovers. Shared public types remain outside this exception.
+
 Adapter migration: no interface, runtime, or persisted-data migration is required by this change.
 Independent adapter authors should declare the Coco versions they support and run the relevant
 `@cashu/coco-adapter-tests` suites against their backend before expanding that range; do not assume

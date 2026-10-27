@@ -65,6 +65,12 @@ function canRequestCancellation(state: MintSwapOperationState): boolean {
  * The repository must first match the current state/revision and assign current revision + 1.
  * Local timestamps must be clamped by the writer against the previous persisted update time.
  *
+ * @remarks
+ * Unstable repository contract starting with v3: minor or major releases may introduce
+ * breaking changes with adapter migration notes. Patch releases preserve compatibility.
+ *
+ * @see {@link https://github.com/cashubtc/coco/blob/master/packages/core/README.md#repository-compatibility | Repository compatibility policy}
+ *
  * @throws {TypeError} When either record is invalid or the transition violates a parent invariant.
  */
 export function validateMintSwapTransition(
