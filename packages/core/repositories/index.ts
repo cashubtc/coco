@@ -413,6 +413,12 @@ interface RepositoriesBase {
   mintSwap: MintSwapPersistence;
 }
 
+/**
+ * Public extension contract for supplied and custom storage adapters.
+ * Starting with v3, repository interfaces may change incompatibly in minor or major releases,
+ * with adapter migration notes. Patch releases preserve compatibility. Shared public domain
+ * models retain normal semantic versioning guarantees; see README.md#repository-compatibility.
+ */
 export interface Repositories extends RepositoriesBase {
   init(): Promise<void>;
 
@@ -428,6 +434,7 @@ export interface Repositories extends RepositoriesBase {
   withTransaction<T>(fn: (repos: RepositoryTransactionScope) => Promise<T>): Promise<T>;
 }
 
+/** Follows the unstable repository compatibility policy starting with v3, like `Repositories`. */
 export type RepositoryTransactionScope = RepositoriesBase;
 
 export { RepositoryTransactionConflictError } from './RepositoryTransactionError.ts';
