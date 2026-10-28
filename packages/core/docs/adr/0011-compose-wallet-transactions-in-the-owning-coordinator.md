@@ -117,8 +117,11 @@ and generic recovery skip owned children and quotes. Durable reverse lookups inc
 `needs_attention` parents; coordinator transaction guards and parent creation checks protect both
 orderings of an ownership race. Composable transitions retain their existing authority contract for
 parent composition. No persisted format changes or ownership flags are introduced.
-Disabling the parent processor also pauses automatic child progression; explicit parent recovery
-remains available. Its existing startup eligibility is preserved pending a separate repair migration.
+Exclusivity lasts while the parent can act. Children of terminal or `needs_attention` parents return
+to ordinary resolution, so a stopped swap cannot strand reserved proofs or paid quotes; ordinary
+coordination still never authorizes their source payment.
+Disabling the parent processor also pauses automatic progression of active parents' children;
+explicit parent recovery remains available. Its existing startup eligibility is preserved pending a separate repair migration.
 The [Transaction Design](../../../../TRANSACTION_DESIGN.md) owns the detailed contract.
 
 The Restore migration adds an explicit exception

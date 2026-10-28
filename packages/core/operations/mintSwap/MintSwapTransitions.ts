@@ -10,7 +10,7 @@ import type {
   MintSwapFailure,
   MintSwapRetryError,
 } from './MintSwapOperation.ts';
-import { isMintSwapTerminalState } from './MintSwapOperation.ts';
+import { isMintSwapQuiescentState } from './MintSwapOperation.ts';
 import {
   prepareMelt,
   beginMeltExecution,
@@ -70,7 +70,7 @@ async function save(
 }
 
 function quiescent(operation: MintSwapOperation) {
-  return isMintSwapTerminalState(operation.state) || operation.state === 'needs_attention';
+  return isMintSwapQuiescentState(operation.state);
 }
 
 async function quotes(tx: CoreTransaction, parent: MintSwapOperation) {

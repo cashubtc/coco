@@ -257,3 +257,8 @@ export function isMintSwapAutomaticState(state: MintSwapOperationState): boolean
 export function isMintSwapTerminalState(state: MintSwapOperationState): boolean {
   return state === 'completed' || state === 'cancelled' || state === 'failed';
 }
+
+/** Terminal and needs_attention parents have no outgoing transitions and never act again. */
+export function isMintSwapQuiescentState(state: MintSwapOperationState): boolean {
+  return isMintSwapTerminalState(state) || state === 'needs_attention';
+}

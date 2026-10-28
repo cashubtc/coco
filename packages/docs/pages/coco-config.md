@@ -65,8 +65,9 @@ The Mint Swap API is always available. `processors.mintSwapOperationProcessor` c
 recovery and defaults to enabled, including on restart with unfinished swaps. Setting `disabled: true`
 skips automatic parent startup/resume passes and timers; all explicit commands remain available,
 including preparation, execution, `ops.mintSwap.refresh(id)` and `ops.mintSwap.recovery.run()`. Generic Mint/Melt
-recovery skips Mint Swap children; ordinary processors and automatic quote claiming also leave
-their progression to the parent. Shared watchers continue recording quote observations. Scan defaults are `processIntervalMs: 1000`,
+recovery skips children of active Mint Swaps; ordinary processors and automatic quote claiming also
+leave their progression to the parent. Once a swap is terminal or `needs_attention`, ordinary
+recovery resolves its children without authorizing source payment. Shared watchers continue recording quote observations. Scan defaults are `processIntervalMs: 1000`,
 `sweepIntervalMs: 30000`, and `batchSize: 25`; durable retry deadlines remain authoritative.
 
 ## Custom output construction

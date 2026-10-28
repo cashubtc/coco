@@ -31,8 +31,10 @@ export interface MintDiagnosticsApi {
 }
 
 /**
- * Commands reject Mint Swap children with `MintSwapChildOperationError`; use `ops.mintSwap`.
- * Read methods include children. Generic recovery skips them.
+ * While a Mint Swap is active, commands reject its destination child and quote with
+ * `MintSwapChildOperationError`; use `ops.mintSwap`. Once the parent stops (terminal or
+ * `needs_attention`), commands and recovery may resolve the child and claim its quote.
+ * Read methods include children.
  *
  * Operation-oriented API for quote-backed mint workflows.
  *
@@ -132,7 +134,7 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
   }
 
   private async requireOperation(operationId: string): Promise<MintOperation> {
-    await this.mintOperationService.assertStandalone(operationId);
+    await this.mintOperationService.assertCanResolve(operationId);
     const operation = await this.mintOperationService.getOperation(operationId);
     if (!operation) {
       throw new Error(`Operation ${operationId} not found`);

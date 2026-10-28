@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import { Amount, RateLimitError, Wallet, type MintQuoteBolt11Response } from '@cashu/cashu-ts';
 import { MintSwapChildOperationError } from '../../models/Error.ts';
+import { MintSwapInvariantError } from '../../operations/mintSwap/MintSwapErrors.ts';
+import { flagMintSwapAttention } from '../../operations/mintSwap/MintSwapTransitions.ts';
 import { MintService } from '../../services/MintService.ts';
 import type { MintOperationService } from '../../operations/mint/MintOperationService.ts';
 import { initializeCoco, Manager } from '../../Manager.ts';
@@ -95,7 +97,7 @@ describe('Mint Swap real runtime boundaries', () => {
     const destinationCheck = spyOn(MintAdapter.prototype, 'checkMintQuote').mockImplementation(
       (async () => destinationResponse()) as MintAdapter['checkMintQuote'],
     );
-    spyOn(MintAdapter.prototype, 'customMeltBolt11').mockImplementation(async () =>
+    const melt = spyOn(MintAdapter.prototype, 'customMeltBolt11').mockImplementation(async () =>
       sourceResponse(),
     );
     const issuance = spyOn(Wallet.prototype, 'mintProofsBolt11').mockImplementation(async () => {
@@ -135,6 +137,7 @@ describe('Mint Swap real runtime boundaries', () => {
       repo,
       fixture,
       issuance,
+      melt,
       sourceCheck,
       destinationCheck,
       sourceResponse,
@@ -184,10 +187,85 @@ describe('Mint Swap real runtime boundaries', () => {
     expect(destinationCheck).not.toHaveBeenCalled();
     await manager.ops.mintSwap.execute('swap');
     expect((await manager.ops.mintSwap.refresh('swap')).state).toBe('completed');
-    // Terminal parents retain exclusive command authority.
-    for (const command of commands)
-      await expect(command()).rejects.toBeInstanceOf(MintSwapChildOperationError);
+    // A stopped parent releases resolution, but never authorizes another source payment.
+    await expect(
+      manager.ops.melt.prepare({ quote: fixture.parent.sourceQuote }),
+    ).rejects.toMatchObject({ parentOperationId: 'swap', parentStopped: true });
+    expect((await manager.ops.melt.refresh('source-child')).state).toBe('finalized');
+    expect((await manager.ops.mint.refresh('destination-child')).state).toBe('finalized');
+    expect(
+      await runtime.mintOperationService.claimMintQuote(
+        'https://destination.test/',
+        'bolt11',
+        'destination-quote',
+      ),
+    ).toEqual([]);
     expect(issuance).toHaveBeenCalledTimes(1);
+  });
+
+  it('releases reserved source proofs of a stopped parent without authorizing payment', async () => {
+    const { manager, repo, fixture, melt } = await setup();
+    const reserved = await repo.proofRepository.getProofBySecret('https://source.test', 'original');
+    expect(reserved?.usedByOperationId).toBe('source-child');
+    // Contradictory canonical evidence stops the parent before source authorization.
+    const quote = await repo.meltQuoteRepository.getMeltQuote(
+      'https://source.test',
+      'bolt11',
+      'source-quote',
+    );
+    await repo.meltQuoteRepository.upsertMeltQuote({ ...quote!, request: 'lnbc1contradiction' });
+    expect((await manager.ops.mintSwap.execute('swap')).state).toBe('needs_attention');
+    expect((await manager.ops.melt.get('source-child'))?.state).toBe('prepared');
+    for (const command of [
+      () => manager.ops.melt.execute('source-child'),
+      () => manager.ops.melt.prepare({ quote: fixture.parent.sourceQuote }),
+    ]) {
+      await expect(command()).rejects.toMatchObject({
+        name: 'MintSwapChildOperationError',
+        parentOperationId: 'swap',
+        parentStopped: true,
+      });
+    }
+    expect(melt).not.toHaveBeenCalled();
+    await manager.ops.melt.cancel('source-child');
+    expect((await manager.ops.melt.get('source-child'))?.state).toBe('rolled_back');
+    const released = await repo.proofRepository.getProofBySecret('https://source.test', 'original');
+    expect(released?.state).toBe('ready');
+    expect(released?.usedByOperationId).toBeUndefined();
+    expect((await manager.ops.mintSwap.refresh('swap')).state).toBe('needs_attention');
+    expect(melt).not.toHaveBeenCalled();
+  });
+
+  it('settles in-flight children of a stopped parent through ordinary recovery and claiming', async () => {
+    const { manager, runtime, fixture, setSourceState, issuance, destinationResponse } =
+      await setup();
+    setSourceState('PENDING');
+    await manager.ops.mintSwap.execute('swap');
+    expect((await manager.ops.melt.get('source-child'))?.state).toBe('pending');
+    // Commit the stop exactly as the coordinator's attention handler does.
+    await fixture.runner.run((tx) =>
+      tx.perform(flagMintSwapAttention, {
+        id: 'swap',
+        now: 20_000,
+        error: new MintSwapInvariantError('source_settlement', 'settlement_mismatch', 'source'),
+      }),
+    );
+    expect((await manager.ops.mintSwap.get('swap'))?.state).toBe('needs_attention');
+    setSourceState('PAID');
+    await manager.ops.melt.recovery.run();
+    expect((await manager.ops.melt.get('source-child'))?.state).toBe('finalized');
+    await runtime.quoteLifecycle.recordMintQuoteSnapshot(
+      'https://destination.test',
+      'bolt11',
+      destinationResponse(),
+    );
+    expect(
+      (await runtime.mintOperationService.claimPendingMintQuotes()).map((op) => op.id),
+    ).toEqual(['destination-child']);
+    expect((await manager.ops.mint.get('destination-child'))?.state).toBe('finalized');
+    expect(issuance).toHaveBeenCalledTimes(1);
+    // The parent record keeps its diagnosis; it never resumes.
+    expect((await manager.ops.mintSwap.refresh('swap')).state).toBe('needs_attention');
   });
 
   it('keeps pending children unchanged under ordinary processors, auto claiming and generic recovery', async () => {

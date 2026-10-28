@@ -292,7 +292,7 @@ export class MintOperationProcessor {
     this.claimingQuotes.add(key);
     const task = (async () => {
       try {
-        if (!(await this.mintOperations.isStandalone({ mintUrl, method, quoteId }))) return;
+        if (!(await this.mintOperations.canResolve({ mintUrl, method, quoteId }))) return;
         const assessment = await this.mintOperations.getMintQuoteClaimability(
           mintUrl,
           method,
@@ -395,7 +395,7 @@ export class MintOperationProcessor {
   private async processItem(item: QueueItem): Promise<void> {
     const { mintUrl, operationId, method } = item;
 
-    if (!(await this.mintOperations.isStandalone(operationId))) return;
+    if (!(await this.mintOperations.canResolve(operationId))) return;
     const handler = this.handlers.get(method);
     if (!handler) {
       this.logger?.warn('No handler registered for mint method', {

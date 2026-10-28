@@ -120,7 +120,7 @@ describe('MeltSettlementProcessor', () => {
     };
     processor = new MeltSettlementProcessor(
       {
-        isStandalone: mock(async () => true),
+        canResolve: mock(async () => true),
         checkPendingOperation,
         getPendingOperations,
       } as unknown as MeltOperationService,

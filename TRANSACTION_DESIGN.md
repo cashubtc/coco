@@ -356,24 +356,34 @@ and owned proof evidence in the same scope that reserves destination claimable v
 `reserveMintQuoteForExecution`. It never restores trust or replaces output plans. Ordinary
 `beginMintExecution` still checks trust before composing that shared reservation transition.
 
-Mint Swap is the exclusive coordinator of its source Melt and destination Mint children. Ordinary
-Mint/Melt commands reject parent-owned child IDs and quote references with
+Mint Swap is the exclusive coordinator of its source Melt and destination Mint children while the
+parent is active. Ordinary Mint/Melt commands reject its child IDs and quote references with
 `MintSwapChildOperationError`, carrying `parentOperationId` and directing callers to `ops.mintSwap`.
 Read APIs still expose children. Ordinary processors, automatic Mint quote claiming and generic
 Mint/Melt recovery skip these children and quotes. Watchers continue recording shared canonical
 Quote Observations.
+
+A terminal or `needs_attention` parent has no outgoing transitions and never acts on its children
+again, so exclusivity ends when it stops. Its children return to ordinary resolution: generic
+recovery, ordinary processors, automatic claiming, and commands that observe, settle, release or
+issue. Ordinary coordination never authorizes a stopped parent's source payment. Melt preparation
+against its source quote and execution of its prepared source Melt reject with `parentStopped`,
+because the stop may record evidence against paying. Ordinary Melt recovery only observes and applies
+an existing outcome. Release is one-way, so a check that admits ordinary work stays valid. The parent
+commits its stop inside any child lock it holds; the record keeps that diagnosis and is not updated
+by later child resolution.
 
 Ownership is derived from immutable parent child IDs and quote references using durable reverse
 lookups, including terminal and `needs_attention` parents. It is never inferred from an active scan
 or copied to a mutable child flag. Ordinary coordinators check ownership in the same transaction as
 authorization and mutation, and before recovery effects. Parent creation rejects quotes with existing
 ordinary operations, so ownership cannot appear after ordinary effect authorization. Historical
-parents and their children need no migration; historical sibling operations on an owned quote are
-also excluded from ordinary coordination. Parent coordinators retain direct access to composable
+parents and their children need no migration; historical sibling operations on an owned quote
+follow the same parent-state rules. Parent coordinators retain direct access to composable
 transitions, whose child-state and proof invariants still apply. Shared child locks remain in place.
 
-Disabling the parent processor pauses automatic child progression, including the parent's existing
-startup/resume recovery pass. Explicit parent refresh and recovery remain available. Generic child
+Disabling the parent processor pauses automatic progression of active parents' children, including
+the parent's existing startup/resume recovery pass. Explicit parent refresh and recovery remain available. Generic child
 recovery does not route into a parent sweep or bypass this pause. The parent's existing bounded
 startup eligibility and recovery behavior are unchanged; separating startup repair from routine
 progression remains a separate migration.

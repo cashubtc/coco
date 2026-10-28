@@ -30,8 +30,11 @@ export interface MeltDiagnosticsApi {
 }
 
 /**
- * Commands reject Mint Swap children with `MintSwapChildOperationError`; use `ops.mintSwap`.
- * Read methods include children. Generic recovery skips them.
+ * While a Mint Swap is active, commands reject its source child and quote with
+ * `MintSwapChildOperationError`; use `ops.mintSwap`. Once the parent stops (terminal or
+ * `needs_attention`), refresh, cancel, reclaim, finalize and recovery may resolve the child, but
+ * `prepare` and `execute` never authorize its payment (`parentStopped` is then true).
+ * Read methods include children.
  *
  * Operation-oriented API for melt workflows.
  *
@@ -182,7 +185,7 @@ export class MeltOpsApi<TSupported extends MeltMethod = DefaultSupportedMeltMeth
   }
 
   private async requireOperation(operationId: string): Promise<MeltOperation> {
-    await this.meltOperationService.assertStandalone(operationId);
+    await this.meltOperationService.assertCanResolve(operationId);
     const operation = await this.meltOperationService.getOperation(operationId);
     if (!operation) {
       throw new Error(`Operation ${operationId} not found`);
