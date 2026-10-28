@@ -209,21 +209,3 @@ export class QuoteIdentityConflictError extends Error {
     this.methods = [...methods];
   }
 }
-
-/**
- * Ordinary child commands must be routed through an active Mint Swap parent. After the parent
- * stops, only its source payment remains rejected; `parentStopped` distinguishes that case.
- */
-export class MintSwapChildOperationError extends Error {
-  constructor(
-    readonly parentOperationId: string,
-    readonly parentStopped = false,
-  ) {
-    super(
-      parentStopped
-        ? `This operation or quote belongs to stopped Mint Swap ${parentOperationId}; its source payment cannot be authorized.`
-        : `This operation or quote belongs to Mint Swap ${parentOperationId}; use ops.mintSwap with that parent ID.`,
-    );
-    this.name = 'MintSwapChildOperationError';
-  }
-}

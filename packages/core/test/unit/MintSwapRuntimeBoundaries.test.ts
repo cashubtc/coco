@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import { Amount, RateLimitError, Wallet, type MintQuoteBolt11Response } from '@cashu/cashu-ts';
-import { MintSwapChildOperationError } from '../../models/Error.ts';
+import { MintSwapChildOperationError } from '../../operations/mintSwap/MintSwapErrors.ts';
 import { MintSwapInvariantError } from '../../operations/mintSwap/MintSwapErrors.ts';
 import { flagMintSwapAttention } from '../../operations/mintSwap/MintSwapTransitions.ts';
 import { MintService } from '../../services/MintService.ts';
@@ -314,6 +314,70 @@ describe('Mint Swap real runtime boundaries', () => {
     expect(await manager.ops.mint.listByQuote(fixture.parent.destinationQuote)).toHaveLength(1);
     await manager.ops.mintSwap.refresh('swap');
     expect((await manager.ops.mintSwap.refresh('swap')).state).toBe('completed');
+  });
+
+  it('resumes a settlement check skipped while the parent was active when it stops', async () => {
+    const { manager, runtime, repo, setSourceState, sourceCheck } = await setup();
+    await manager.enableMeltSettlementProcessor();
+    setSourceState('PENDING');
+    await manager.ops.mintSwap.execute('swap');
+    expect((await manager.ops.melt.get('source-child'))?.state).toBe('pending');
+    setSourceState('PAID');
+    // PAID is observed while the parent is active, so the processor leaves the child alone.
+    await runtime.quoteLifecycle.refreshMeltQuoteById({
+      mintUrl: 'https://source.test',
+      quoteId: 'source-quote',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect((await manager.ops.melt.get('source-child'))?.state).toBe('pending');
+    const finalized = deferred();
+    manager.on('melt-op:finalized', ({ operationId }) => {
+      if (operationId === 'source-child') finalized.resolve();
+    });
+    // The parent then stops on contradictory evidence; no later quote event reaches the processor.
+    const destination = await repo.mintQuoteRepository.getMintQuote(
+      'https://destination.test',
+      'bolt11',
+      'destination-quote',
+    );
+    if (destination?.method !== 'bolt11') throw new Error('Missing destination quote');
+    await repo.mintQuoteRepository.upsertMintQuote({ ...destination, amount: Amount.from(9) });
+    sourceCheck.mockClear();
+    expect((await manager.ops.mintSwap.refresh('swap')).state).toBe('needs_attention');
+    expect(sourceCheck).not.toHaveBeenCalled();
+    await within(finalized.promise);
+    expect((await manager.ops.melt.get('source-child'))?.state).toBe('finalized');
+  });
+
+  it('resumes a skipped destination claim when the parent stops', async () => {
+    const { manager, runtime, repo, setDestinationState, issuance, destinationResponse } =
+      await setup();
+    await manager.enableMintOperationProcessor({ initialEnqueueDelayMs: 0 });
+    setDestinationState('UNPAID');
+    await manager.ops.mintSwap.execute('swap');
+    expect((await manager.ops.mint.get('destination-child'))?.state).toBe('pending');
+    setDestinationState('PAID');
+    // The processor sees the paid quote while the parent is active and must leave it alone.
+    await runtime.quoteLifecycle.recordMintQuoteSnapshot(
+      'https://destination.test',
+      'bolt11',
+      destinationResponse(),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(issuance).not.toHaveBeenCalled();
+    const finalized = deferred();
+    manager.on('mint-op:finalized', ({ operationId }) => {
+      if (operationId === 'destination-child') finalized.resolve();
+    });
+    const source = await repo.meltQuoteRepository.getMeltQuote(
+      'https://source.test',
+      'bolt11',
+      'source-quote',
+    );
+    await repo.meltQuoteRepository.upsertMeltQuote({ ...source!, amount: Amount.from(9) });
+    expect((await manager.ops.mintSwap.refresh('swap')).state).toBe('needs_attention');
+    await within(finalized.promise);
+    expect(issuance).toHaveBeenCalledTimes(1);
   });
 
   for (const kind of ['mint', 'melt'] as const) {

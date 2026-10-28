@@ -141,6 +141,7 @@ export {
 } from './operations/mintSwap/MintSwapOperation.ts';
 export { parseMintSwapOperation } from './operations/mintSwap/parseMintSwapOperation.ts';
 export {
+  MintSwapChildOperationError,
   MintSwapIdentityConflictError,
   MintSwapIntentConflictError,
   type MintSwapIdentityKind,

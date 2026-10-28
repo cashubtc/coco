@@ -4,6 +4,7 @@ import type { Logger } from '../../logging/Logger.ts';
 import type { MeltOperationService } from '../../operations/melt/MeltOperationService.ts';
 import type { MeltOperation, PendingMeltOperation } from '../../operations/melt/MeltOperation.ts';
 import type { MeltMethod } from '../../operations/melt/MeltMethodHandler.ts';
+import { isMintSwapQuiescentState } from '../../operations/mintSwap/MintSwapOperation.ts';
 import { normalizeMintUrl } from '../../utils.ts';
 
 type QuoteKey = string; // `${mintUrl}::${method}::${quoteId}`
@@ -88,6 +89,10 @@ class MeltSettlementInterestRegistry {
     return this.quoteKeyByOperationId.has(operationId);
   }
 
+  get(operationId: string): OperationQuoteInterest | undefined {
+    return this.operationById.get(operationId);
+  }
+
   getOperationIds(mintUrl: string, method: MeltMethod, quoteId: string): string[] {
     return Array.from(this.operationIdsByQuoteKey.get(toKey(mintUrl, method, quoteId)) ?? []);
   }
@@ -113,12 +118,15 @@ export class MeltSettlementProcessor {
   private offQuoteUpdated?: () => void;
   private offFinalized?: () => void;
   private offRolledBack?: () => void;
+  private offMintSwapUpdated?: () => void;
   private readonly interests = new MeltSettlementInterestRegistry();
   private readonly inFlightOperationIds = new Set<string>();
   private readonly followUpCheckByOperationId = new Map<string, OperationCheckContext>();
   private readonly registeredOperationInterestIds = new Set<string>();
   private readonly scheduledInitialCheckOperationIds = new Set<string>();
   private readonly inFlightChecks = new Set<Promise<void>>();
+  /** Interests whose last check was skipped because an active Mint Swap coordinates them. */
+  private readonly awaitingParentStopIds = new Set<string>();
 
   constructor(
     meltOperations: MeltOperationService,
@@ -204,6 +212,11 @@ export class MeltSettlementProcessor {
       await this.removeOperationInterest(operationId);
     });
 
+    // A stopped parent emits no child or quote event, so recheck the children it was coordinating.
+    this.offMintSwapUpdated = this.bus.on('mint-swap:updated', async ({ state }) => {
+      if (isMintSwapQuiescentState(state)) await this.recheckAwaitingParentStop();
+    });
+
     if (this.options.initializeExistingPendingOperationsOnStart) {
       await this.initializeExistingPendingOperations();
     }
@@ -224,10 +237,12 @@ export class MeltSettlementProcessor {
     unsubscribe(this.offQuoteUpdated);
     unsubscribe(this.offFinalized);
     unsubscribe(this.offRolledBack);
+    unsubscribe(this.offMintSwapUpdated);
     this.offPending = undefined;
     this.offQuoteUpdated = undefined;
     this.offFinalized = undefined;
     this.offRolledBack = undefined;
+    this.offMintSwapUpdated = undefined;
 
     while (this.inFlightChecks.size > 0) {
       await Promise.allSettled(Array.from(this.inFlightChecks));
@@ -241,6 +256,7 @@ export class MeltSettlementProcessor {
     this.followUpCheckByOperationId.clear();
     this.registeredOperationInterestIds.clear();
     this.scheduledInitialCheckOperationIds.clear();
+    this.awaitingParentStopIds.clear();
     this.logger?.info('MeltSettlementProcessor stopped');
   }
 
@@ -269,7 +285,7 @@ export class MeltSettlementProcessor {
       return;
     }
 
-    if (!(await this.meltOperations.canResolve(operation.id)) || !this.running) return;
+    // Children of an active Mint Swap stay tracked so they resume when the parent stops.
     const mintUrl = normalizeMintUrl(operation.mintUrl);
     const operationInterest = {
       id: operation.id,
@@ -321,9 +337,20 @@ export class MeltSettlementProcessor {
 
     this.followUpCheckByOperationId.delete(operationId);
     this.scheduledInitialCheckOperationIds.delete(operationId);
+    this.awaitingParentStopIds.delete(operationId);
     this.logger?.debug('Removed melt settlement interest', { operationId });
 
     await this.removeRegisteredOperationInterest(operationId);
+  }
+
+  private async recheckAwaitingParentStop(): Promise<void> {
+    const checks: Promise<void>[] = [];
+    for (const operationId of Array.from(this.awaitingParentStopIds)) {
+      const interest = this.interests.get(operationId);
+      if (!this.running || !interest) continue;
+      checks.push(this.checkInterestedOperation(operationId, interest));
+    }
+    await Promise.all(checks);
   }
 
   private async registerTrackedOperationInterests(): Promise<void> {
@@ -453,8 +480,12 @@ export class MeltSettlementProcessor {
         nextContext = undefined;
 
         try {
-          if (!(await this.meltOperations.canResolve(operationId))) return;
-          await this.meltOperations.checkPendingOperation(operationId);
+          // Mark before reading ownership so a parent stop committed during the read rechecks it.
+          this.awaitingParentStopIds.add(operationId);
+          if (await this.meltOperations.canResolve(operationId)) {
+            this.awaitingParentStopIds.delete(operationId);
+            await this.meltOperations.checkPendingOperation(operationId);
+          }
         } catch (err) {
           this.logger?.warn('Failed to settle pending melt operation', {
             operationId,

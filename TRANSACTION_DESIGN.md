@@ -369,7 +369,9 @@ recovery, ordinary processors, automatic claiming, and commands that observe, se
 issue. Ordinary coordination never authorizes a stopped parent's source payment. Melt preparation
 against its source quote and execution of its prepared source Melt reject with `parentStopped`,
 because the stop may record evidence against paying. Ordinary Melt recovery only observes and applies
-an existing outcome. Release is one-way, so a check that admits ordinary work stays valid. The parent
+an existing outcome. Running ordinary processors keep tracking work they skip for an active parent and
+recheck it when `mint-swap:updated` reports a stopped parent, because the stop itself emits no child
+or quote event. Release is one-way, so a check that admits ordinary work stays valid. The parent
 commits its stop inside any child lock it holds; the record keeps that diagnosis and is not updated
 by later child resolution.
 

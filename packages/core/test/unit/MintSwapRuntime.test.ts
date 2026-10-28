@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
-import { MintSwapChildOperationError } from '../../models/Error.ts';
+import { MintSwapChildOperationError } from '../../operations/mintSwap/MintSwapErrors.ts';
 import { initializeCoco, Manager, type CocoConfig } from '../../Manager.ts';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 import { MemoryMintSwapOperationRepository } from '../../repositories/memory/MemoryMintSwapOperationRepository.ts';

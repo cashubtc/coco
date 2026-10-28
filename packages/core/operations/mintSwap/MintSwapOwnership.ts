@@ -1,6 +1,6 @@
-import { MintSwapChildOperationError } from '../../models/Error.ts';
 import type { MintQuoteRef, MeltQuoteRef } from '../../models/QuoteIdentity.ts';
 import type { CoreTransaction } from '../../transactions/CoreTransaction.ts';
+import { MintSwapChildOperationError } from './MintSwapErrors.ts';
 import { isMintSwapQuiescentState, type MintSwapOperation } from './MintSwapOperation.ts';
 
 /**
