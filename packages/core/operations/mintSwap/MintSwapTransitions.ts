@@ -69,10 +69,6 @@ async function save(
   return { ...next, revision: current.revision + 1 };
 }
 
-function quiescent(operation: MintSwapOperation) {
-  return isMintSwapQuiescentState(operation.state);
-}
-
 async function quotes(tx: CoreTransaction, parent: MintSwapOperation) {
   const source = await tx.meltQuotes.getMeltQuote(
     parent.sourceMintUrl,
@@ -465,7 +461,7 @@ export const cancelMintSwap = defineTransition<
 >(async (tx, input) => {
   let parent = await requireParent(tx, input.id);
   if (
-    quiescent(parent) ||
+    isMintSwapQuiescentState(parent.state) ||
     parent.state === 'destination_funded' ||
     parent.state === 'destination_pending'
   )
@@ -500,7 +496,7 @@ async function reconcile(
   now: number,
 ): Promise<MintSwapOperation> {
   let parent = current;
-  if (quiescent(parent)) return parent;
+  if (isMintSwapQuiescentState(parent.state)) return parent;
   try {
     if (parent.state === 'preparing') {
       const source = await tx.meltOperations.getById(parent.sourceOperationId);
@@ -770,5 +766,7 @@ export const flagMintSwapAttention = defineTransition<
   MintSwapOperation
 >(async (tx, input) => {
   const parent = await requireParent(tx, input.id);
-  return quiescent(parent) ? parent : markAttention(tx, parent, input.error, input.now);
+  return isMintSwapQuiescentState(parent.state)
+    ? parent
+    : markAttention(tx, parent, input.error, input.now);
 });

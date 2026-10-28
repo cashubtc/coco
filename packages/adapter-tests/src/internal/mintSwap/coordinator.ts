@@ -14,6 +14,7 @@ import {
   beginMintSwapDestination,
 } from '../../../../core/operations/mintSwap/MintSwapTransitions.ts';
 import { beginMintExecution } from '../../../../core/operations/mint/MintTransitions.ts';
+import { MintSwapChildOperationError } from '../../../../core/operations/mintSwap/MintSwapErrors.ts';
 import { MeltOperationService } from '../../../../core/operations/melt/MeltOperationService.ts';
 import { KeyRingService } from '../../../../core/services/KeyRingService.ts';
 import { KeypairDerivation } from '../../../../core/keypairs/KeypairDerivation.ts';
@@ -1364,7 +1365,9 @@ export function runMintSwapCoordinatorContract(
         mintScopedLock: fixture.dependencies.mintScopedLock,
       });
       expect(childService.isOperationLocked('source-child')).toBe(true);
-      await expect(childService.execute('source-child')).rejects.toThrow('use ops.mintSwap');
+      await expect(childService.execute('source-child')).rejects.toBeInstanceOf(
+        MintSwapChildOperationError,
+      );
       await expect(
         fixture.dependencies.sourceOperationLock.acquire('source-child'),
       ).rejects.toThrow();

@@ -110,6 +110,24 @@ export class MeltOperationService {
     );
   }
 
+  /**
+   * Reject commands for children and quotes of an active Mint Swap before they wait on locks.
+   * Children of a stopped parent remain resolvable.
+   */
+  async assertCanResolve(target: string | MeltQuoteRef): Promise<void> {
+    await this.dependencies.transactionRunner.run((tx) =>
+      assertOrdinaryWork(tx, 'melt', target, 'resolve'),
+    );
+  }
+
+  /** Ordinary coordination never authorizes a Mint Swap's source payment, even once it stops. */
+  private async assertCanPay(target: string | MeltQuoteRef): Promise<void> {
+    await this.dependencies.transactionRunner.run((tx) =>
+      assertOrdinaryWork(tx, 'melt', target, 'effect'),
+    );
+  }
+
+  /** Mutations recheck ownership in their own transaction; a command's entry check can go stale. */
   private runChecked<T>(
     target: string | MeltQuoteRef,
     work: (tx: CoreTransaction) => Promise<T>,
@@ -119,21 +137,6 @@ export class MeltOperationService {
       await assertOrdinaryWork(tx, 'melt', target, authority);
       return work(tx);
     });
-  }
-
-  private async assertAuthority(
-    target: string | MeltQuoteRef,
-    authority: OrdinaryChildAuthority,
-  ): Promise<void> {
-    await this.runChecked(target, async () => undefined, authority);
-  }
-
-  /**
-   * Reject commands for children and quotes of an active Mint Swap. Children of a stopped parent
-   * remain resolvable, but their source payment is never authorized here.
-   */
-  async assertCanResolve(target: string | MeltQuoteRef): Promise<void> {
-    await this.assertAuthority(target, 'resolve');
   }
 
   isOperationLocked(operationId: string): boolean {
@@ -148,13 +151,14 @@ export class MeltOperationService {
     quoteRef: MeltQuoteRef,
     options: { feeIndex?: number } = {},
   ): Promise<PreparedMeltOperation> {
-    await this.assertAuthority(quoteRef, 'effect');
+    await this.assertCanPay(quoteRef);
     const quote = await this.dependencies.quoteLifecycle.requireMeltQuoteRefForPrepare(quoteRef);
     return this.prepareResolvedQuote(quote, generateSubId(), options);
   }
 
   /** Prepares a legacy init row without creating any new intermediate init operation. */
   async prepare(operationId: string): Promise<PreparedMeltOperation> {
+    await this.assertCanPay(operationId);
     const operation = await this.requireOperation(operationId);
     if (operation.state !== 'init' || !operation.quoteId) {
       throw new Error(
@@ -236,8 +240,7 @@ export class MeltOperationService {
       if (recovered.state === 'pending' || recovered.state === 'finalized') return recovered;
       throw new Error(`Operation ${operationId} remains ${recovered.state} after recovery`);
     }
-    // Recovery above is resolution; executing a prepared Melt authorizes a new payment.
-    await this.assertAuthority(operationId, 'effect');
+    // Recovery above is resolution; executePrepared authorizes the new payment with `effect`.
     return this.executePrepared(operationId);
   }
 
@@ -800,7 +803,6 @@ export class MeltOperationService {
   }
 
   private async requireOperation(operationId: string): Promise<MeltOperation> {
-    await this.assertCanResolve(operationId);
     const operation = await this.dependencies.meltOperationQueries.getById(operationId);
     if (!operation) throw new Error(`Operation ${operationId} not found`);
     return operation;

@@ -134,9 +134,11 @@ export class MintOperationService {
     });
   }
 
-  /** Reject commands for children and quotes of an active Mint Swap; stopped parents release them. */
+  /** Reject commands for children and quotes of an active Mint Swap before they wait on locks. */
   async assertCanResolve(target: string | MintQuoteRef): Promise<void> {
-    await this.runChecked(target, async () => undefined);
+    await this.dependencies.transactionRunner.run((tx) =>
+      assertOrdinaryWork(tx, 'mint', target, 'resolve'),
+    );
   }
 
   isOperationLocked(operationId: string): boolean {
