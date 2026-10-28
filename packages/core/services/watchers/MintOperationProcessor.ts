@@ -3,6 +3,7 @@ import type { Logger } from '../../logging/Logger.ts';
 import type { MintMethod, MintOperationService } from '@core/operations/mint';
 import { MintOperationError, NetworkError } from '../../models/Error';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
+import type { MintService } from '../MintService.ts';
 
 interface QueueItem {
   mintUrl: string;
@@ -35,6 +36,7 @@ export interface MintOperationProcessorOptions {
 export class MintOperationProcessor {
   private readonly mintOperations: MintOperationService;
   private readonly quoteLifecycle: QuoteLifecycle;
+  private readonly mintService: Pick<MintService, 'isTrustedMint'>;
   private readonly bus: EventBus<CoreEvents>;
   private readonly logger?: Logger;
 
@@ -61,12 +63,14 @@ export class MintOperationProcessor {
   constructor(
     mintOperations: MintOperationService,
     quoteLifecycle: QuoteLifecycle,
+    mintService: Pick<MintService, 'isTrustedMint'>,
     bus: EventBus<CoreEvents>,
     logger?: Logger,
     options?: MintOperationProcessorOptions,
   ) {
     this.mintOperations = mintOperations;
     this.quoteLifecycle = quoteLifecycle;
+    this.mintService = mintService;
     this.bus = bus;
     this.logger = logger;
 
@@ -357,8 +361,24 @@ export class MintOperationProcessor {
         for (const interest of [...quotes, ...operations]) {
           interests.set(`${interest.mintUrl}::${interest.method}::${interest.quoteId}`, interest);
         }
+        // Startup discovery claims only for trusted mints; claiming would contact the mint.
+        const trustedByMint = new Map<string, boolean>();
         for (const interest of interests.values()) {
           if (!this.running) return;
+          let trusted = trustedByMint.get(interest.mintUrl);
+          if (trusted === undefined) {
+            trusted = await this.mintService.isTrustedMint(interest.mintUrl);
+            trustedByMint.set(interest.mintUrl, trusted);
+            if (!this.running) return;
+          }
+          if (!trusted) {
+            this.logger?.debug('Skipping pending mint quote claim for untrusted mint', {
+              mintUrl: interest.mintUrl,
+              method: interest.method,
+              quoteId: interest.quoteId,
+            });
+            continue;
+          }
           this.scheduleQuoteClaim(interest.mintUrl, interest.method, interest.quoteId);
         }
       } catch (error) {

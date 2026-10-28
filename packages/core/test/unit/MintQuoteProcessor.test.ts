@@ -6,6 +6,7 @@ import type { CoreEvents } from '../../events/types';
 import type { MintOperationService } from '../../operations/mint/MintOperationService';
 import { MintOperationError, NetworkError } from '../../models/Error';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle';
+import type { MintService } from '../../services/MintService';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -14,6 +15,8 @@ describe('MintOperationProcessor', () => {
   let processor: MintOperationProcessor;
   let mockMintOperationService: MintOperationService;
   let mockQuoteLifecycle: QuoteLifecycle;
+  let mockMintService: Pick<MintService, 'isTrustedMint'>;
+  let untrustedMints: Set<string>;
   let finalizeCalls: string[];
   let claimCalls: Array<{ mintUrl: string; method: string; quoteId: string }>;
   let startupClaimCalls: number;
@@ -47,6 +50,10 @@ describe('MintOperationProcessor', () => {
     finalizeCalls = [];
     claimCalls = [];
     startupClaimCalls = 0;
+    untrustedMints = new Set();
+    mockMintService = {
+      isTrustedMint: async (mintUrl: string) => !untrustedMints.has(mintUrl),
+    };
 
     mockMintOperationService = {
       async getOperationsForQuote(_mintUrl: string, _method: string, quoteId: string) {
@@ -87,6 +94,7 @@ describe('MintOperationProcessor', () => {
     processor = new MintOperationProcessor(
       mockMintOperationService,
       mockQuoteLifecycle,
+      mockMintService,
       bus,
       undefined,
       {
@@ -142,6 +150,7 @@ describe('MintOperationProcessor', () => {
     processor = new MintOperationProcessor(
       mockMintOperationService,
       mockQuoteLifecycle,
+      mockMintService,
       bus,
       undefined,
       {
@@ -188,6 +197,7 @@ describe('MintOperationProcessor', () => {
     processor = new MintOperationProcessor(
       mockMintOperationService,
       mockQuoteLifecycle,
+      mockMintService,
       bus,
       undefined,
       {
@@ -256,6 +266,7 @@ describe('MintOperationProcessor', () => {
     processor = new MintOperationProcessor(
       mockMintOperationService,
       mockQuoteLifecycle,
+      mockMintService,
       bus,
       undefined,
       {
@@ -288,6 +299,7 @@ describe('MintOperationProcessor', () => {
     processor = new MintOperationProcessor(
       mockMintOperationService,
       mockQuoteLifecycle,
+      mockMintService,
       bus,
       undefined,
       {
@@ -317,6 +329,26 @@ describe('MintOperationProcessor', () => {
     expect(startupClaimCalls).toBe(1);
   });
 
+  it('claims startup discoveries only for trusted mints', async () => {
+    const untrustedMint = 'https://untrusted.test';
+    untrustedMints.add(untrustedMint);
+    mockQuoteLifecycle.getPendingMintQuotes = async () => [
+      makeBolt11Quote('trusted-quote', true),
+      { ...makeBolt11Quote('untrusted-quote', true), mintUrl: untrustedMint },
+    ];
+    mockMintOperationService.getPendingOperations = async () =>
+      [
+        { mintUrl: untrustedMint, method: 'bolt11', quoteId: 'untrusted-op-quote' },
+      ] as unknown as Awaited<ReturnType<MintOperationService['getPendingOperations']>>;
+
+    await processor.start();
+    await processor.waitForCompletion();
+
+    expect(claimCalls).toEqual([
+      { mintUrl: 'https://mint.test', method: 'bolt11', quoteId: 'trusted-quote' },
+    ]);
+  });
+
   it('does not start claims after a startup discovery finishes during stop', async () => {
     let releaseDiscovery!: (quotes: ReturnType<typeof makeBolt11Quote>[]) => void;
     mockQuoteLifecycle.getPendingMintQuotes = () =>
@@ -334,6 +366,7 @@ describe('MintOperationProcessor', () => {
     processor = new MintOperationProcessor(
       mockMintOperationService,
       mockQuoteLifecycle,
+      mockMintService,
       bus,
       undefined,
       {
@@ -359,6 +392,7 @@ describe('MintOperationProcessor', () => {
     processor = new MintOperationProcessor(
       mockMintOperationService,
       mockQuoteLifecycle,
+      mockMintService,
       bus,
       undefined,
       {
@@ -451,6 +485,7 @@ describe('MintOperationProcessor', () => {
     processor = new MintOperationProcessor(
       mockMintOperationService,
       mockQuoteLifecycle,
+      mockMintService,
       bus,
       undefined,
       {
@@ -495,6 +530,7 @@ describe('MintOperationProcessor', () => {
     processor = new MintOperationProcessor(
       mockMintOperationService,
       mockQuoteLifecycle,
+      mockMintService,
       bus,
       undefined,
       {
@@ -543,6 +579,7 @@ describe('MintOperationProcessor', () => {
     processor = new MintOperationProcessor(
       mockMintOperationService,
       mockQuoteLifecycle,
+      mockMintService,
       bus,
       undefined,
       {
@@ -601,6 +638,7 @@ describe('MintOperationProcessor', () => {
     processor = new MintOperationProcessor(
       mockMintOperationService,
       mockQuoteLifecycle,
+      mockMintService,
       bus,
       undefined,
       {

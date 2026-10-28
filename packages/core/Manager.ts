@@ -635,6 +635,7 @@ export class Manager {
     this.mintOperationProcessor = new MintOperationProcessor(
       this.mintOperationService,
       this.quoteLifecycle,
+      this.mintService,
       this.eventBus,
       processorLogger,
       options,
