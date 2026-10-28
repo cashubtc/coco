@@ -20,7 +20,7 @@ core package, for example `@cashu/coco-sqlite`, `@cashu/coco-indexeddb`, or
 
 ## Entry points
 
-`@cashu/coco-core` publishes three stable import surfaces. Pick the narrowest
+`@cashu/coco-core` publishes three documented import surfaces. Pick the narrowest
 one that matches what you are building:
 
 ```ts
@@ -46,6 +46,41 @@ import type { Plugin, PluginExtensions } from '@cashu/coco-core/plugin';
 Concrete services, operation service classes, handler providers, transport
 internals, `PluginHost`, and individual memory repository classes are
 implementation details. They are not app-facing root API.
+
+## Repository compatibility
+
+Starting with **v3**, the repository implementation contract is a public, **unstable** extension
+point. This policy does not apply retroactively to v2. Custom storage adapters remain supported:
+implement `Repositories` from `@cashu/coco-core/adapter`, initialize your adapter, and pass it as
+`repo` to `initializeCoco({ repo, seedGetter })`. This includes backends beyond the supplied
+adapters, such as an independently implemented PostgreSQL adapter.
+
+The unstable contract includes the `Repositories` aggregate, individual repository interfaces and
+methods, transaction-scope interfaces, and types or helpers used exclusively to implement
+repositories. These may change incompatibly in **minor or major releases**. **Patch releases must
+preserve compatibility** with this contract. Every incompatible change must include an adapter
+migration note explaining the affected interfaces, required implementation changes, and any
+persistence migration needed.
+
+This exception is scoped by the contract, not by the import path. Shared public domain models
+(such as `CoreProof`), Wallet APIs, events, and plugin service interfaces retain normal semantic
+versioning guarantees even when repositories reference them or `/adapter` re-exports them. Their
+incompatible changes require a major release. The supplied adapters' constructors, configuration,
+initialization, and normal use through `initializeCoco` retain those guarantees too. Direct use
+of their repository methods follows the unstable repository contract.
+
+Adapter authors should declare the Coco versions they support and run the relevant
+[`@cashu/coco-adapter-tests` conformance suites](../adapter-tests/README.md) against their actual
+backend before expanding that range. Do not assume compatibility with future minor releases; for
+example, an adapter validated for the 3.2 release line can declare `>=3.2.0 <3.3.0` rather than
+`^3.2.0`. Use matching releases of core and the conformance package when validating an upgrade.
+
+Unstable signatures do not relax transaction, durability, or recovery requirements. Adapters must
+continue to satisfy the documented repository semantics. Compatibility with persisted wallet data
+is assessed separately; changing an interface does not by itself permit dropping existing data or
+operation recovery support.
+
+See [ADR-0013](docs/adr/0013-keep-custom-adapters-with-scoped-compatibility.md) for the rationale.
 
 ## Mint Swap operations
 
