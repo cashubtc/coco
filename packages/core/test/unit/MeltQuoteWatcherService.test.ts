@@ -1056,4 +1056,29 @@ describe('MeltQuoteWatcherService', () => {
     await watcher.stop();
   });
 
+  it('does not start a recovery replacement twice when declared during untrust cleanup', async () => {
+    const cleanup = deferred();
+    unsubscribe.mockImplementationOnce(() => cleanup.promise);
+    const watcher = makeWatcher({ options: { watchExistingPendingQuotesOnStart: false } });
+    await watcher.start();
+    watcher.registerInterest({
+      mintUrl,
+      method: 'bolt11',
+      quoteId,
+      owner: { kind: 'mint-swap', id: 'swap-1', recovery: true },
+    });
+    await waitForSubscribeCalls(1);
+
+    const untrusted = bus.emit('mint:untrusted', { mintUrl });
+    await flushPromises();
+    // A declaration while the old subscription closes builds the replacement record.
+    watcher.registerOperationInterest(operationInterest());
+    cleanup.resolve();
+    await untrusted;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(subscribe).toHaveBeenCalledTimes(2);
+    await watcher.stop();
+    expect(unsubscribe).toHaveBeenCalledTimes(2);
+  });
 });

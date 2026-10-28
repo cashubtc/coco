@@ -560,7 +560,10 @@ export class MeltQuoteWatcherService {
       if (!this.isActive(generation)) return;
       if (!this.interests.hasRecovery(quoteWatchKey(quote))) continue;
       const policy = this.getPolicy(quote.method);
-      await this.activateWatchRecord(this.ensureWatchRecord(quote, policy), policy);
+      const record = this.ensureWatchRecord(quote, policy);
+      // A declaration during cleanup may already have started or installed the replacement.
+      if (record.start) await record.start;
+      else if (!record.stop) await this.activateWatchRecord(record, policy);
     }
   }
 
