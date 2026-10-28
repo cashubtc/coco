@@ -128,7 +128,6 @@ describe('MeltSettlementProcessor', () => {
       {
         interestRegistrar: {
           registerOperationInterest,
-          retryFailedOperationInterests: mock(() => {}),
           removeOperationInterest,
         } as unknown as MeltQuoteWatcherService,
       },
@@ -563,7 +562,6 @@ describe('MeltSettlementProcessor', () => {
     );
     const replacement = {
       registerOperationInterest: mock(() => {}),
-      retryFailedOperationInterests: mock(() => {}),
       removeOperationInterest: mock(async () => {}),
     };
     const rebinding = processor.setInterestRegistrar(replacement);
@@ -574,7 +572,6 @@ describe('MeltSettlementProcessor', () => {
     await rebinding;
     expect(replacement.removeOperationInterest).not.toHaveBeenCalled();
     await processor.setInterestRegistrar(replacement);
-    expect(replacement.retryFailedOperationInterests).toHaveBeenCalledTimes(1);
     expect(replacement.registerOperationInterest).toHaveBeenCalledTimes(2);
     await processor.stop();
   });

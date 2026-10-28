@@ -23,7 +23,6 @@ interface OperationCheckContext {
 
 interface OperationInterestRegistrar {
   registerOperationInterest(interest: MeltQuoteOperationInterest): void;
-  retryFailedOperationInterests(): void;
   removeOperationInterest(operationId: string): Promise<void>;
 }
 
@@ -143,12 +142,12 @@ export class MeltSettlementProcessor {
     return this.running;
   }
 
-  /** @internal Rebinds the watcher that owns operation quote subscriptions. */
+  /**
+   * @internal Rebinds the watcher that owns operation quote subscriptions. Rebinding the same
+   * watcher is a no-op; that watcher's own enable path retries its failed setup.
+   */
   async setInterestRegistrar(interestRegistrar?: OperationInterestRegistrar): Promise<void> {
-    if (this.interestRegistrar === interestRegistrar) {
-      if (this.running) interestRegistrar?.retryFailedOperationInterests();
-      return;
-    }
+    if (this.interestRegistrar === interestRegistrar) return;
 
     const previousRegistrar = this.interestRegistrar;
     this.interestRegistrar = interestRegistrar;

@@ -59,10 +59,6 @@ export class QuoteWatchInterests {
     return this.byQuote.has(key);
   }
 
-  hasKind(key: string, kind: QuoteWatchOwner['kind']): boolean {
-    return this.owners(key).some((owner) => owner.kind === kind);
-  }
-
   owners(key: string): QuoteWatchOwner[] {
     return [...(this.byQuote.get(key)?.values() ?? [])];
   }

@@ -426,19 +426,27 @@ export class ProofStateWatcherService {
     if (!this.isActive(generation)) return;
     this.logger?.info('Bootstrapping inflight proof watchers');
 
-    if (this.sendOperationService) {
-      try {
-        const operations = await this.sendOperationService.getPendingOperations();
-        for (const operation of operations) {
-          if (!this.isActive(generation)) return;
-          if (operation.state === 'pending')
-            await this.discoverPendingSend(operation.id, generation);
-        }
-      } catch (err) {
-        this.logger?.warn('Failed to discover pending Sends on startup', { err });
+    // Send discovery may contact the mint per operation; do not delay inflight proof observation.
+    await Promise.all([
+      this.discoverPendingSends(generation),
+      this.watchExistingInflightProofs(generation),
+    ]);
+  }
+
+  private async discoverPendingSends(generation: number): Promise<void> {
+    if (!this.sendOperationService) return;
+    try {
+      const operations = await this.sendOperationService.getPendingOperations();
+      for (const operation of operations) {
+        if (!this.isActive(generation)) return;
+        if (operation.state === 'pending') await this.discoverPendingSend(operation.id, generation);
       }
+    } catch (err) {
+      this.logger?.warn('Failed to discover pending Sends on startup', { err });
     }
-    if (!this.isActive(generation)) return;
+  }
+
+  private async watchExistingInflightProofs(generation: number): Promise<void> {
     await this.proofs.checkInflightProofs();
     if (!this.isActive(generation)) return;
 

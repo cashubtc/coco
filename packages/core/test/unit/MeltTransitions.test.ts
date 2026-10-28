@@ -1297,7 +1297,6 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
         registerOperationInterest: ({ operationId }) => {
           registeredOperations.push(operationId);
         },
-        retryFailedOperationInterests: () => {},
         removeOperationInterest: async () => {},
       },
     });

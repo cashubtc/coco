@@ -310,10 +310,10 @@ describe('MeltQuoteWatcherService', () => {
       owners: [{ kind: 'operation', id: 'melt-op-1' }],
       err: failure,
     });
-    watcher.retryFailedOperationInterests();
+    watcher.retryFailedInterests();
     await waitForSubscribeCalls(2);
     await new Promise<void>((resolve) => setImmediate(resolve));
-    watcher.retryFailedOperationInterests();
+    watcher.retryFailedInterests();
     expect(subscribe).toHaveBeenCalledTimes(2);
     await watcher.stop();
   });
@@ -328,7 +328,7 @@ describe('MeltQuoteWatcherService', () => {
     watcher.registerOperationInterest(operationInterest());
     await new Promise<void>((resolve) => setImmediate(resolve));
     isTrustedMint.mockResolvedValue(true);
-    watcher.retryFailedOperationInterests();
+    watcher.retryFailedInterests();
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(isTrustedMint).toHaveBeenCalledTimes(1);
     expect(subscribe).not.toHaveBeenCalled();
@@ -545,13 +545,16 @@ describe('MeltQuoteWatcherService', () => {
     const bolt11Quote = makeBolt11Quote();
     const onchainQuote = makeOnchainQuote();
     const getPendingMeltQuotes = mock(async () => [bolt11Quote, onchainQuote]);
+    const getMeltQuote = mock(async () => makeBolt11Quote());
     const watcher = makeWatcher({
-      quoteLifecycle: makeQuoteLifecycle({ getPendingMeltQuotes }),
+      quoteLifecycle: makeQuoteLifecycle({ getPendingMeltQuotes, getMeltQuote }),
     });
 
     await watcher.start();
 
     expect(getPendingMeltQuotes).toHaveBeenCalledWith();
+    // Activation uses the discovered quotes instead of reading each one again.
+    expect(getMeltQuote).not.toHaveBeenCalled();
     expect(subscribe).toHaveBeenCalledWith(
       mintUrl,
       'bolt11_melt_quote',
@@ -1052,4 +1055,5 @@ describe('MeltQuoteWatcherService', () => {
 
     await watcher.stop();
   });
+
 });

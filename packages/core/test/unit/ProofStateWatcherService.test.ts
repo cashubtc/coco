@@ -228,12 +228,12 @@ describe('ProofStateWatcherService', () => {
   });
 
   it('does not resume an old startup scan after a restart', async () => {
-    let releaseScan!: (operations: []) => void;
+    let releaseScan!: (operations: { id: string; state: 'pending' }[]) => void;
     let enteredScan!: () => void;
     const entered = new Promise<void>((resolve) => {
       enteredScan = resolve;
     });
-    const firstScan = new Promise<[]>((resolve) => {
+    const firstScan = new Promise<{ id: string; state: 'pending' }[]>((resolve) => {
       releaseScan = resolve;
     });
     const getPendingOperations = mock(() => {
@@ -245,6 +245,7 @@ describe('ProofStateWatcherService', () => {
       checkedInflight = resolve;
     });
     const checkInflightProofs = mock(async () => checkedInflight());
+    const getOperation = mock(async () => undefined);
     const watcher = new ProofStateWatcherService(
       {} as SubscriptionManager,
       {} as MintService,
@@ -252,7 +253,10 @@ describe('ProofStateWatcherService', () => {
       { getInflightProofs: async () => [] } as unknown as ProofRepository,
       bus,
     );
-    watcher.setSendOperationService({ getPendingOperations } as unknown as SendOperationService);
+    watcher.setSendOperationService({
+      getPendingOperations,
+      getOperation,
+    } as unknown as SendOperationService);
     await watcher.start();
     await entered;
     await watcher.stop();
@@ -260,9 +264,12 @@ describe('ProofStateWatcherService', () => {
     await watcher.start();
     await checked;
     // Starting a new scan must not make the original scan eligible to continue.
-    releaseScan([]);
+    releaseScan([{ id: 'old-send', state: 'pending' }]);
     await firstScan;
-    expect(checkInflightProofs).toHaveBeenCalledTimes(1);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(getOperation).not.toHaveBeenCalled();
+    // Each start scans inflight proofs once; Send discovery does not delay that scan.
+    expect(checkInflightProofs).toHaveBeenCalledTimes(2);
     await watcher.stop();
   });
 
