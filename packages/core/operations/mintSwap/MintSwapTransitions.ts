@@ -10,7 +10,7 @@ import type {
   MintSwapFailure,
   MintSwapRetryError,
 } from './MintSwapOperation.ts';
-import { isMintSwapQuiescentState } from './MintSwapOperation.ts';
+import { allowsOrdinaryWork, isMintSwapQuiescentState } from './MintSwapOperation.ts';
 import {
   prepareMelt,
   beginMeltExecution,
@@ -35,6 +35,7 @@ import type {
   BeginMintSwapSourceResult,
   ApplyMintSwapSourceInput,
   BeginMintSwapDestinationResult,
+  OrdinaryChildWorkInput,
 } from './MintSwapTransitionTypes.ts';
 import {
   advanceMintSwap,
@@ -44,7 +45,11 @@ import {
   scheduleMintSwapRetry,
   stopMintSwap,
 } from './MintSwapValidation.ts';
-import { MintSwapDebitCapError, MintSwapInvariantError } from './MintSwapErrors.ts';
+import {
+  MintSwapChildOperationError,
+  MintSwapDebitCapError,
+  MintSwapInvariantError,
+} from './MintSwapErrors.ts';
 
 async function requireParent(tx: CoreTransaction, id: string): Promise<MintSwapOperation> {
   const operation = await tx.mintSwapOperations.getById(id);
@@ -770,3 +775,18 @@ export const flagMintSwapAttention = defineTransition<
     ? parent
     : markAttention(tx, parent, input.error, input.now);
 });
+
+/**
+ * Ordinary Mint and Melt coordinators perform this in the same scope as authorization or mutation.
+ * Lookups include terminal and needs_attention parents.
+ */
+export const assertOrdinaryChildWork = defineTransition<OrdinaryChildWorkInput, void>(
+  async (tx, { kind, target, authority }) => {
+    const parent =
+      typeof target === 'string'
+        ? await tx.mintSwapOperations.getByChild(kind, target)
+        : await tx.mintSwapOperations.getByQuote(kind, target);
+    if (parent && !allowsOrdinaryWork(parent, authority))
+      throw new MintSwapChildOperationError(parent.id, isMintSwapQuiescentState(parent.state));
+  },
+);

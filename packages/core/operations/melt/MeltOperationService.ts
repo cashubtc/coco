@@ -1,11 +1,7 @@
 import { Amount, type Proof, type SerializedBlindedSignature } from '@cashu/cashu-ts';
 import { unblindMeltChange } from './MeltChange.ts';
-import {
-  allowsOrdinaryWork,
-  assertOrdinaryWork,
-  findMintSwapParent,
-  type OrdinaryChildAuthority,
-} from '../mintSwap/MintSwapChildCoordination.ts';
+import { allowsOrdinaryWork, type OrdinaryChildAuthority } from '../mintSwap/MintSwapOperation.ts';
+import { assertOrdinaryChildWork } from '../mintSwap/MintSwapTransitions.ts';
 import type { MeltOperationRepository, ProofRepository } from '../../repositories';
 import type {
   ExecutingMeltOperation,
@@ -101,12 +97,12 @@ export class MeltOperationService {
   }
 
   /**
-   * Whether ordinary background work may resolve this operation or quote: true unless an active
-   * Mint Swap coordinates it. Reads remain unrestricted.
+   * Whether ordinary background work may resolve this operation: true unless an active Mint Swap
+   * coordinates it. Reads remain unrestricted.
    */
-  async canResolve(target: string | MeltQuoteRef): Promise<boolean> {
+  async canResolve(operationId: string): Promise<boolean> {
     return this.dependencies.transactionRunner.run(async (tx) =>
-      allowsOrdinaryWork(await findMintSwapParent(tx, 'melt', target), 'resolve'),
+      allowsOrdinaryWork(await tx.mintSwapOperations.getByChild('melt', operationId), 'resolve'),
     );
   }
 
@@ -114,16 +110,16 @@ export class MeltOperationService {
    * Reject commands for children and quotes of an active Mint Swap before they wait on locks.
    * Children of a stopped parent remain resolvable.
    */
-  async assertCanResolve(target: string | MeltQuoteRef): Promise<void> {
+  private async assertCanResolve(target: string | MeltQuoteRef): Promise<void> {
     await this.dependencies.transactionRunner.run((tx) =>
-      assertOrdinaryWork(tx, 'melt', target, 'resolve'),
+      tx.perform(assertOrdinaryChildWork, { kind: 'melt', target, authority: 'resolve' }),
     );
   }
 
   /** Ordinary coordination never authorizes a Mint Swap's source payment, even once it stops. */
   private async assertCanPay(target: string | MeltQuoteRef): Promise<void> {
     await this.dependencies.transactionRunner.run((tx) =>
-      assertOrdinaryWork(tx, 'melt', target, 'effect'),
+      tx.perform(assertOrdinaryChildWork, { kind: 'melt', target, authority: 'effect' }),
     );
   }
 
@@ -134,7 +130,7 @@ export class MeltOperationService {
     authority: OrdinaryChildAuthority = 'resolve',
   ): Promise<T> {
     return this.dependencies.transactionRunner.run(async (tx) => {
-      await assertOrdinaryWork(tx, 'melt', target, authority);
+      await tx.perform(assertOrdinaryChildWork, { kind: 'melt', target, authority });
       return work(tx);
     });
   }

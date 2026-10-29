@@ -18,6 +18,7 @@ import type {
   PreparedMeltOperation,
 } from '../../operations/melt/MeltOperation.ts';
 import { MeltOperationService } from '../../operations/melt/MeltOperationService.ts';
+import { assertOrdinaryChildWork } from '../../operations/mintSwap/MintSwapTransitions.ts';
 import {
   applyMeltPaidResult,
   applyMeltPending,
@@ -106,9 +107,10 @@ describe('MeltOperationService coordinator', () => {
       transactionRunner: {
         run: mock(async (work: any) =>
           work({
-            mintSwapOperations: { getByChild: async () => null, getByQuote: async () => null },
-            meltOperations: { getById: async () => current },
+            mintSwapOperations: { getByChild: async () => null },
             perform: async (transition: unknown, input: any) => {
+              // No Mint Swap coordinates these operations.
+              if (transition === assertOrdinaryChildWork) return;
               performed.push(transition);
               transitionInputs.push(input);
               if (transition === beginMeltExecution) {

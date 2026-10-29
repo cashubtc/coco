@@ -377,12 +377,13 @@ by later child resolution.
 
 The coordinating parent is derived from immutable parent child IDs and quote references using
 durable reverse lookups, including terminal and `needs_attention` parents. It is never inferred from
-an active scan or copied to a mutable child flag. Ordinary coordinators check for a parent in the
-same transaction as authorization and mutation, and before recovery effects. Parent creation rejects quotes with existing
-ordinary operations, so a parent cannot appear after ordinary effect authorization. Historical
-parents and their children need no migration; historical sibling operations on a coordinated quote
-follow the same parent-state rules. Parent coordinators retain direct access to composable
-transitions, whose child-state and proof invariants still apply. Shared child locks remain in place.
+an active scan or copied to a mutable child flag. An operation ID matches only a parent's child; a
+quote reference matches the parent's quote. Ordinary coordinators perform `assertOrdinaryChildWork`
+in the same transaction as authorization and mutation, and before recovery effects. Parent creation
+rejects quotes with existing ordinary operations, and ordinary preparation and claiming check the
+quote, so an active parent's quotes have no sibling operations and a parent cannot appear after
+ordinary effect authorization. Parent coordinators retain direct access to composable transitions,
+whose child-state and proof invariants still apply. Shared child locks remain in place.
 
 Disabling the parent processor pauses automatic progression of active parents' children, including
 the parent's existing startup/resume recovery pass. Explicit parent refresh and recovery remain available. Generic child

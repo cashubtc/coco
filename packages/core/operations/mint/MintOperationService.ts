@@ -1,9 +1,6 @@
 import { Amount, type Proof } from '@cashu/cashu-ts';
-import {
-  allowsOrdinaryWork,
-  assertOrdinaryWork,
-  findMintSwapParent,
-} from '../mintSwap/MintSwapChildCoordination.ts';
+import { allowsOrdinaryWork } from '../mintSwap/MintSwapOperation.ts';
+import { assertOrdinaryChildWork } from '../mintSwap/MintSwapTransitions.ts';
 import type { MintOperationRepository, ProofRepository } from '../../repositories';
 import type {
   ExecutingMintOperation,
@@ -119,7 +116,12 @@ export class MintOperationService {
    */
   async canResolve(target: string | MintQuoteRef): Promise<boolean> {
     return this.dependencies.transactionRunner.run(async (tx) =>
-      allowsOrdinaryWork(await findMintSwapParent(tx, 'mint', target), 'resolve'),
+      allowsOrdinaryWork(
+        typeof target === 'string'
+          ? await tx.mintSwapOperations.getByChild('mint', target)
+          : await tx.mintSwapOperations.getByQuote('mint', target),
+        'resolve',
+      ),
     );
   }
 
@@ -129,15 +131,15 @@ export class MintOperationService {
     work: (tx: CoreTransaction) => Promise<T>,
   ): Promise<T> {
     return this.dependencies.transactionRunner.run(async (tx) => {
-      await assertOrdinaryWork(tx, 'mint', target, 'resolve');
+      await tx.perform(assertOrdinaryChildWork, { kind: 'mint', target, authority: 'resolve' });
       return work(tx);
     });
   }
 
   /** Reject commands for children and quotes of an active Mint Swap before they wait on locks. */
-  async assertCanResolve(target: string | MintQuoteRef): Promise<void> {
+  private async assertCanResolve(target: string | MintQuoteRef): Promise<void> {
     await this.dependencies.transactionRunner.run((tx) =>
-      assertOrdinaryWork(tx, 'mint', target, 'resolve'),
+      tx.perform(assertOrdinaryChildWork, { kind: 'mint', target, authority: 'resolve' }),
     );
   }
 
