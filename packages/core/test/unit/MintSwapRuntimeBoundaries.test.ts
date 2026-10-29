@@ -416,6 +416,41 @@ describe('Mint Swap real runtime boundaries', () => {
     expect(issuance).toHaveBeenCalledTimes(1);
   });
 
+  it('resumes a destination quote skipped by the startup claim sweep when the parent stops', async () => {
+    const { manager, runtime, repo, setDestinationState, issuance, destinationResponse } =
+      await setup();
+    setDestinationState('UNPAID');
+    await manager.ops.mintSwap.execute('swap');
+    setDestinationState('PAID');
+    await runtime.quoteLifecycle.recordMintQuoteSnapshot(
+      'https://destination.test',
+      'bolt11',
+      destinationResponse(),
+    );
+    expect((await manager.ops.mint.get('destination-child'))?.state).toBe('pending');
+    const skips = observeSkips(
+      MintOperationService.prototype,
+      (target) => typeof target !== 'string' && target.quoteId === 'destination-quote',
+    );
+    // The startup sweep skips the paid quote, then hands it to the processor's quote claim.
+    await manager.enableMintOperationProcessor({ initialEnqueueDelayMs: 0 });
+    await within(skips(2));
+    expect(issuance).not.toHaveBeenCalled();
+    const finalized = deferred();
+    manager.on('mint-op:finalized', ({ operationId }) => {
+      if (operationId === 'destination-child') finalized.resolve();
+    });
+    const source = await repo.meltQuoteRepository.getMeltQuote(
+      'https://source.test',
+      'bolt11',
+      'source-quote',
+    );
+    await repo.meltQuoteRepository.upsertMeltQuote({ ...source!, amount: Amount.from(9) });
+    expect((await manager.ops.mintSwap.refresh('swap')).state).toBe('needs_attention');
+    await within(finalized.promise);
+    expect(issuance).toHaveBeenCalledTimes(1);
+  });
+
   for (const kind of ['mint', 'melt'] as const) {
     it(`rechecks the ${kind} quote's parent after preparation preflight`, async () => {
       const { manager, fixture } = await setup(undefined, false);

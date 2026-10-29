@@ -688,12 +688,26 @@ export class MintOperationService {
     }
   }
 
-  async claimPendingMintQuotes(options: ClaimMintQuoteOptions = {}): Promise<MintOperation[]> {
+  /**
+   * `onCoordinatedQuote` receives quotes skipped because an active Mint Swap coordinates them, so a
+   * background scheduler can resume them once the parent stops.
+   */
+  async claimPendingMintQuotes(
+    options: ClaimMintQuoteOptions = {},
+    onCoordinatedQuote?: (quote: MintQuoteRef) => void,
+  ): Promise<MintOperation[]> {
     const quotes = await this.dependencies.quoteLifecycle.getPendingMintQuotes();
     const claimed: MintOperation[] = [];
 
     for (const quote of quotes) {
-      if (!(await this.canResolve(quote))) continue;
+      if (!(await this.canResolve(quote))) {
+        onCoordinatedQuote?.({
+          mintUrl: quote.mintUrl,
+          method: quote.method,
+          quoteId: quote.quoteId,
+        });
+        continue;
+      }
       if (!(await this.dependencies.mintService.isTrustedMint(quote.mintUrl))) {
         this.dependencies.logger?.debug('Skipping pending mint quote for untrusted mint', {
           mintUrl: quote.mintUrl,

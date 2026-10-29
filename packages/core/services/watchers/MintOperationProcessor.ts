@@ -365,7 +365,11 @@ export class MintOperationProcessor {
   private schedulePendingQuoteClaims(): void {
     const task = (async () => {
       try {
-        await this.mintOperations.claimPendingMintQuotes({ autoClaimRemaining: true });
+        // The quote claim path rechecks the parent and resumes the quote once it stops.
+        await this.mintOperations.claimPendingMintQuotes(
+          { autoClaimRemaining: true },
+          ({ mintUrl, method, quoteId }) => this.scheduleQuoteClaim(mintUrl, method, quoteId),
+        );
       } catch (error) {
         this.logger?.warn('Failed to claim pending mint quotes on startup', {
           error: error instanceof Error ? error.message : String(error),
