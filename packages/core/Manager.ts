@@ -92,7 +92,10 @@ import {
   mintQuoteToMethodSnapshot,
 } from './models/MintQuote.ts';
 import { assessMintQuoteClaimability } from './models/MintQuoteClaimability.ts';
-import { RepositoryCoreTransactionRunner } from './transactions/CoreTransaction.ts';
+import {
+  RepositoryCoreTransactionRunner,
+  type CoreTransactionRunner,
+} from './transactions/CoreTransaction.ts';
 import { KeypairDerivation } from './keypairs/KeypairDerivation.ts';
 import { KeypairP2pkSigner } from './keypairs/P2pkSigner.ts';
 
@@ -355,6 +358,7 @@ export class Manager {
   private paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
   private proofRepository: Repositories['proofRepository'];
   private balanceQueries: BalanceQueries;
+  private transactionRunner: CoreTransactionRunner;
   private readonly pluginHost: PluginHost = new PluginHost();
   private subscriptionsPaused = false;
   private subscriptionLifecycle: Promise<void> = Promise.resolve();
@@ -428,6 +432,7 @@ export class Manager {
     this.mintOperationRepository = core.mintOperationRepository;
     this.proofRepository = repositories.proofRepository;
     this.balanceQueries = core.balanceQueries;
+    this.transactionRunner = core.transactionRunner;
     this.subscriptions = this.createSubscriptionManager(webSocketFactory, subscriptions);
     const apis = this.buildApis();
     this.mint = apis.mint;
@@ -752,8 +757,14 @@ export class Manager {
     this.proofStateWatcher = new ProofStateWatcherService(
       this.subscriptions,
       this.mintService,
-      this.proofService,
       this.proofRepository,
+      this.transactionRunner,
+      {
+        checkProofStates: async (mintUrl, unit, proofs) => {
+          const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl, unit);
+          return wallet.checkProofsStates(proofs);
+        },
+      },
       this.eventBus,
       watcherLogger,
       { watchExistingInflightOnStart: options?.watchExistingInflightOnStart ?? true },
@@ -1061,6 +1072,7 @@ export class Manager {
     mintSwapOperationService: MintSwapOperationService;
     mintOperationRepository: MintOperationRepository;
     balanceQueries: BalanceQueries;
+    transactionRunner: CoreTransactionRunner;
   } {
     const mintLogger = this.getChildLogger('MintService');
     const walletLogger = this.getChildLogger('WalletService');
@@ -1341,6 +1353,7 @@ export class Manager {
       mintSwapOperationService,
       mintOperationRepository,
       balanceQueries,
+      transactionRunner,
     };
   }
 

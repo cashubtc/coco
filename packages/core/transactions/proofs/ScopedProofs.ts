@@ -90,6 +90,11 @@ export interface ScopedProofs extends ProofQueries {
   recordMeltSendSpent(input: Omit<MeltSendProofsInput, 'state'>): Promise<void>;
   releaseMeltSendUnsubmitted(input: Omit<MeltSendProofsInput, 'state'>): Promise<void>;
   releaseOwned(mintUrl: string, operationId: string, secrets: string[]): Promise<void>;
+  /**
+   * Mark proofs spent only while they are still inflight and have no Owning Operation. Returns the
+   * secrets that changed; proofs that changed state or gained an owner are left untouched.
+   */
+  recordUnownedSpent(mintUrl: string, secrets: string[]): Promise<string[]>;
 }
 
 /** Reusable reservation and settlement rules within the owning operation's adapter scope. */
@@ -425,6 +430,20 @@ export class RepositoryScopedProofs implements ScopedProofs {
       throw new ProofValidationError('Cannot release proofs owned by another operation');
     }
     await this.proofs.releaseProofs(mintUrl, secrets);
+  }
+
+  async recordUnownedSpent(mintUrl: string, secrets: string[]): Promise<string[]> {
+    const stored = await this.proofs.getProofsBySecrets(mintUrl, Array.from(new Set(secrets)));
+    const spentSecrets = stored
+      .filter(
+        (proof) =>
+          proof.state === 'inflight' &&
+          proof.usedByOperationId == null &&
+          proof.createdByOperationId == null,
+      )
+      .map((proof) => proof.secret);
+    if (spentSecrets.length) await this.proofs.setProofState(mintUrl, spentSecrets, 'spent');
+    return spentSecrets;
   }
 
   getProofsByOperationId(mintUrl: string, operationId: string) {
