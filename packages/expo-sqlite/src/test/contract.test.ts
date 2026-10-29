@@ -16,6 +16,7 @@ import {
   runMeltOperationRepositoryContract,
   runMeltQuoteRepositoryContract,
   runMintSwapPersistenceContract,
+  runBatchMintPersistenceContract,
 } from '@cashu/coco-adapter-tests';
 import { runSqlDatabaseContract } from '@cashu/coco-sql-storage/test';
 import { SqliteRepositories as Repositories } from '../index.ts';
@@ -103,6 +104,8 @@ runKeypairAllocationContract(
   { createRepositories, createSharedRepositories },
   { describe, it, expect },
 );
+
+runBatchMintPersistenceContract({ createRepositories }, { describe, it, expect });
 
 runMintSwapPersistenceContract(
   {

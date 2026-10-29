@@ -17,6 +17,7 @@ import type {
   ReceiveOperationRepository,
   RepositoryTransactionScope,
   MintSwapPersistence,
+  BatchMintPersistence,
 } from '@cashu/coco-core/adapter';
 import { IdbDb, type IdbDbOptions } from './lib/db.ts';
 import { ensureSchema } from './lib/schema.ts';
@@ -39,6 +40,7 @@ import {
   IdbPaymentRequestReceiveOperationRepository,
 } from './repositories/PaymentRequestReceiveRepository.ts';
 import { IdbMintSwapOperationRepository } from './repositories/MintSwapOperationRepository.ts';
+import { IdbBatchMintOperationRepository } from './repositories/BatchMintOperationRepository.ts';
 
 export type IndexedDbRepositoriesOptions = IdbDbOptions;
 
@@ -60,6 +62,7 @@ export class IndexedDbRepositories implements Repositories {
   readonly paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
   readonly paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
   readonly mintSwap: MintSwapPersistence;
+  readonly batchMint: BatchMintPersistence;
   readonly db: IdbDb;
   private initialized = false;
 
@@ -86,6 +89,7 @@ export class IndexedDbRepositories implements Repositories {
       this.db,
     );
     this.mintSwap = { operationRepository: new IdbMintSwapOperationRepository(this.db) };
+    this.batchMint = { operationRepository: new IdbBatchMintOperationRepository(this.db) };
   }
 
   async init(): Promise<void> {
@@ -128,6 +132,7 @@ export class IndexedDbRepositories implements Repositories {
           scopedDb,
         ),
         mintSwap: { operationRepository: new IdbMintSwapOperationRepository(scopedDb) },
+        batchMint: { operationRepository: new IdbBatchMintOperationRepository(scopedDb) },
       };
       return fn(scopedRepositories);
     });
@@ -154,4 +159,5 @@ export {
   IdbPaymentRequestReceiveOperationRepository,
   IdbPaymentRequestReceiveAttemptRepository,
   IdbMintSwapOperationRepository,
+  IdbBatchMintOperationRepository,
 };

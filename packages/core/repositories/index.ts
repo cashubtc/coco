@@ -23,6 +23,7 @@ import type { SendOperation, SendOperationState } from '../operations/send/SendO
 import type { CoreProof, ProofState } from '../types';
 import type { MintMethodRemoteState } from '../operations/mint/MintMethodHandler';
 import type { MintSwapPersistence } from '../operations/mintSwap/MintSwapOperationRepository.ts';
+import type { BatchMintPersistence } from '../operations/batchMint/BatchMintOperationRepository.ts';
 
 export interface ProofUnitFilter {
   unit?: string;
@@ -558,6 +559,8 @@ interface RepositoriesBase {
   paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
   /** Mint Swap persistence participates in every Wallet transaction. */
   mintSwap: MintSwapPersistence;
+  /** Batch Mint persistence participates in every Wallet transaction. */
+  batchMint: BatchMintPersistence;
 }
 
 /**

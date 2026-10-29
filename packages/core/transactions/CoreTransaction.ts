@@ -20,6 +20,7 @@ import { RepositoryScopedKeypairs, type ScopedKeypairs } from './keypairs/Scoped
 import { TransactionLifetime } from './TransactionLifetime.ts';
 import { getTransitionBody, type Transition } from './Transition.ts';
 import type { MintSwapOperationRepository } from '../operations/mintSwap/MintSwapOperationRepository.ts';
+import type { BatchMintOperationRepository } from '../operations/batchMint/BatchMintOperationRepository.ts';
 
 /**
  * Scoped capabilities sharing one adapter transaction attempt. Await mutations sequentially unless
@@ -35,6 +36,10 @@ export interface CoreTransaction {
   readonly mintSwapOperations: Pick<
     MintSwapOperationRepository,
     'getById' | 'getByChild' | 'getByQuote' | 'create' | 'transition'
+  >;
+  readonly batchMintOperations: Pick<
+    BatchMintOperationRepository,
+    'getById' | 'listByQuote' | 'create' | 'update'
   >;
   readonly mintOperations: Pick<
     MintOperationRepository,
@@ -118,6 +123,7 @@ export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
       meltOperations: repositories.meltOperationRepository,
       meltQuotes: repositories.meltQuoteRepository,
       mintSwapOperations: repositories.mintSwap.operationRepository,
+      batchMintOperations: repositories.batchMint.operationRepository,
       mintMetadata,
       keypairs: new RepositoryScopedKeypairs(repositories.keyRingRepository),
       proofs,

@@ -33,6 +33,8 @@ import { MemorySendOperationRepository } from './MemorySendOperationRepository';
 import { MemoryMintOperationRepository } from './MemoryMintOperationRepository';
 import { MemoryMintSwapOperationRepository } from './MemoryMintSwapOperationRepository';
 import type { MintSwapPersistence } from '../../operations/mintSwap/MintSwapOperationRepository';
+import { MemoryBatchMintOperationRepository } from './MemoryBatchMintOperationRepository.ts';
+import type { BatchMintPersistence } from '../../operations/batchMint/BatchMintOperationRepository.ts';
 import { MemoryReceiveOperationRepository } from './MemoryReceiveOperationRepository';
 import {
   MemoryPaymentRequestReceiveAttemptRepository,
@@ -61,6 +63,7 @@ export class MemoryRepositories implements Repositories {
   paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
   paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
   readonly mintSwap: MintSwapPersistence;
+  readonly batchMint: BatchMintPersistence;
 
   private readonly state: MemoryRepositoryState;
   private transactionQueue: Promise<void> = Promise.resolve();
@@ -73,6 +76,9 @@ export class MemoryRepositories implements Repositories {
     this.state = createMemoryRepositoryState();
     this.mintSwap = {
       operationRepository: this.wrapRootRepository(this.state.mintSwap.operationRepository),
+    };
+    this.batchMint = {
+      operationRepository: this.wrapRootRepository(this.state.batchMint.operationRepository),
     };
     this.mintRepository = this.wrapRootRepository(this.state.mintRepository);
     this.keyRingRepository = this.wrapRootRepository(this.state.keyRingRepository);
@@ -206,6 +212,7 @@ function createMemoryRepositoryState() {
   return {
     ...repositories,
     mintSwap: { operationRepository: new MemoryMintSwapOperationRepository() },
+    batchMint: { operationRepository: new MemoryBatchMintOperationRepository() },
   };
 }
 
@@ -223,6 +230,12 @@ function copyMemoryRepositoryState(
     if (key === 'mintSwap') {
       target.mintSwap.operationRepository[COPY_MEMORY_REPOSITORY_STATE](
         source.mintSwap.operationRepository,
+      );
+      continue;
+    }
+    if (key === 'batchMint') {
+      target.batchMint.operationRepository[COPY_MEMORY_REPOSITORY_STATE](
+        source.batchMint.operationRepository,
       );
       continue;
     }

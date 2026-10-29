@@ -21,6 +21,7 @@ import {
   runMeltOperationRepositoryContract,
   runMeltQuoteRepositoryContract,
   runMintSwapPersistenceContract,
+  runBatchMintPersistenceContract,
 } from '@cashu/coco-adapter-tests';
 import { RepositoryTransactionConflictError } from '@cashu/coco-core/adapter';
 import { runSqlDatabaseContract } from '@cashu/coco-sql-storage/test';
@@ -94,6 +95,8 @@ runKeypairAllocationContract(
   { createRepositories, createSharedRepositories },
   { describe, it, expect },
 );
+
+runBatchMintPersistenceContract({ createRepositories }, { describe, it, expect });
 
 runMintSwapPersistenceContract(
   {
