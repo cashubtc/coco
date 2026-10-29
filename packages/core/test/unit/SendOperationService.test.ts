@@ -293,6 +293,13 @@ describe('SendOperationService', () => {
         subscriptions as unknown as SubscriptionManager,
         { isTrustedMint: async () => true } as unknown as MintService,
         proofRepo,
+        {
+          sendOperations: repositories.sendOperationRepository,
+          meltOperations: repositories.meltOperationRepository,
+          mintOperations: repositories.mintOperationRepository,
+          receiveOperations: repositories.receiveOperationRepository,
+          mintSwapOperations: repositories.mintSwap.operationRepository,
+        },
         { run: reconcile } as unknown as CoreTransactionRunner,
         {} as ProofStateRemote,
         eventBus,

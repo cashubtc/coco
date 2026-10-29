@@ -32,5 +32,7 @@ transaction and ownership model; it does not sandbox plugins.
 
 ## Consequences
 
-`CounterRepository` and Output Allocation through `ScopedOutputs` are unchanged. The `WalletApi`
+`CounterRepository` and Output Allocation through `ScopedOutputs` are unchanged. Ownership needs a
+live operation: once a proof's referenced operations are missing or terminal, the proof watcher
+reconciles it as unowned, as the removed `ProofService` path did. The `WalletApi`
 constructor requires `BalanceQueries` and no longer accepts a `ProofService`.

@@ -2,7 +2,12 @@ import { selectProofsRGLI, sumProofs, Amount, type SelectProofs } from '@cashu/c
 import { normalizeUnit } from '@core/amounts.ts';
 import { ProofValidationError } from '@core/models/Error.ts';
 import { createKeyChain } from '@core/proofs/KeysetSelection.ts';
-import { isUnownedProof } from '@core/proofs/OwningOperation.ts';
+import {
+  hasOperationReference,
+  resolveOwningOperation,
+  type OwningOperationCache,
+  type OwningOperationReads,
+} from '@core/proofs/OwningOperation.ts';
 import type { ProofQueries } from '@core/proofs/ProofQueries.ts';
 import { selectProofInputs, calculateProofFee } from '@core/proofs/ProofSelection.ts';
 import type { KeysetRepository, ProofRepository } from '@core/repositories';
@@ -92,8 +97,9 @@ export interface ScopedProofs extends ProofQueries {
   releaseMeltSendUnsubmitted(input: Omit<MeltSendProofsInput, 'state'>): Promise<void>;
   releaseOwned(mintUrl: string, operationId: string, secrets: string[]): Promise<void>;
   /**
-   * Mark proofs spent only while they are still inflight and have no Owning Operation. Returns the
-   * secrets that changed; proofs that changed state or gained an owner are left untouched.
+   * Mark proofs spent only while they are still inflight and have no Owning Operation, so proofs whose
+   * referenced operations are missing or terminal are included. Returns the secrets that changed;
+   * proofs that changed state or gained a live owner are left untouched.
    */
   recordUnownedSpent(mintUrl: string, secrets: string[]): Promise<string[]>;
 }
@@ -103,6 +109,7 @@ export class RepositoryScopedProofs implements ScopedProofs {
   constructor(
     private readonly proofs: ProofRepository,
     private readonly keysets: KeysetRepository,
+    private readonly operations: OwningOperationReads,
     private readonly selectProofs: SelectProofs = selectProofsRGLI,
   ) {}
 
@@ -141,8 +148,12 @@ export class RepositoryScopedProofs implements ScopedProofs {
         ) {
           throw new ProofValidationError('Conflicting proof already exists for restored output');
         }
-        // Only unowned mint-held proofs can be released without an operation's decision.
-        if (stored.state === 'pending' && isUnownedProof(stored) && incoming.state !== 'pending') {
+        // Only mint-held proofs no operation references are released without an operation's decision.
+        if (
+          stored.state === 'pending' &&
+          !hasOperationReference(stored) &&
+          incoming.state !== 'pending'
+        ) {
           await this.proofs.setProofState(mintUrl, [stored.secret], incoming.state);
           updated.push({ ...stored, state: incoming.state });
         }
@@ -430,9 +441,13 @@ export class RepositoryScopedProofs implements ScopedProofs {
 
   async recordUnownedSpent(mintUrl: string, secrets: string[]): Promise<string[]> {
     const stored = await this.proofs.getProofsBySecrets(mintUrl, Array.from(new Set(secrets)));
-    const spentSecrets = stored
-      .filter((proof) => proof.state === 'inflight' && isUnownedProof(proof))
-      .map((proof) => proof.secret);
+    const owningOperations: OwningOperationCache = new Map();
+    const spentSecrets: string[] = [];
+    for (const proof of stored) {
+      if (proof.state !== 'inflight') continue;
+      if (await resolveOwningOperation(this.operations, proof, owningOperations)) continue;
+      spentSecrets.push(proof.secret);
+    }
     if (spentSecrets.length) await this.proofs.setProofState(mintUrl, spentSecrets, 'spent');
     return spentSecrets;
   }

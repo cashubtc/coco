@@ -751,6 +751,13 @@ export class Manager {
       this.subscriptions,
       this.mintService,
       this.proofRepository,
+      {
+        sendOperations: this.sendOperationRepository,
+        meltOperations: this.meltOperationRepository,
+        mintOperations: this.mintOperationRepository,
+        receiveOperations: this.receiveOperationRepository,
+        mintSwapOperations: this.mintSwapOperationRepository,
+      },
       this.transactionRunner,
       {
         checkProofStates: async (mintUrl, unit, proofs) => {

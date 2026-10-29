@@ -145,8 +145,10 @@ The act of discovering proofs from a source Wallet Seed and exchanging their ava
 _Avoid_: Restore, Wallet Import
 
 **Owning Operation**:
-The operation a proof record references: the one that reserved it, else the one that created it.
-Only the Owning Operation decides that proof's state, so evidence about the proof goes to it.
+The operation that holds a proof, as an input it reserved or an output it created, until the
+operation releases it or finishes. The operation that reserved it takes precedence over the one that
+created it. Only the Owning Operation decides that proof's state, so evidence about the proof goes
+to it.
 _Avoid_: Proof owner, reserving operation
 
 **Pending Proof**:

@@ -103,6 +103,13 @@ export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
     const proofs = new RepositoryScopedProofs(
       repositories.proofRepository,
       repositories.keysetRepository,
+      {
+        sendOperations: repositories.sendOperationRepository,
+        meltOperations: repositories.meltOperationRepository,
+        mintOperations: repositories.mintOperationRepository,
+        receiveOperations: repositories.receiveOperationRepository,
+        mintSwapOperations: repositories.mintSwap.operationRepository,
+      },
     );
     const outputs = new RepositoryScopedOutputs(
       repositories.counterRepository,

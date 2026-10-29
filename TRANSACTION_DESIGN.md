@@ -241,7 +241,8 @@ Re-running Restore reconciles eligible pending records: fresh observations leave
 `PENDING`, release them to ready on `UNSPENT`, or mark them spent on `SPENT`. Each application
 rechecks current local state and operation ownership inside the keyset transaction. Automatic
 pending-proof watching and its subscription lifecycle are deferred to a separate change; the
-existing proof watcher continues to handle inflight proofs only.
+existing proof watcher continues to handle inflight proofs only. It treats a proof whose referenced
+operations are missing or terminal as unowned, rechecking that inside the reconciling transaction.
 
 Pending proofs are excluded from the existing `spendable`, `reserved`, and `total` balances, just as
 inflight proofs are. They contribute to those balances only after becoming ready. A separate pending

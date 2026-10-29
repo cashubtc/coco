@@ -19,6 +19,9 @@ import {
   type CoreTransactionRunner,
 } from '../../transactions/CoreTransaction.ts';
 import type { CoreProof } from '../../types.ts';
+import { createMeltOperation } from '../../operations/melt/MeltOperation.ts';
+import type { SendOperation } from '../../operations/send/SendOperation.ts';
+import type { OwningOperationReads } from '../../proofs/OwningOperation.ts';
 import type { SendOperationService } from '../../operations/send/SendOperationService.ts';
 import { NullLogger } from '../../logging/NullLogger.ts';
 import { buildYHexMapsForSecrets } from '../../utils.ts';
@@ -56,6 +59,14 @@ const pendingSend = (id: string, secrets: string[]) => ({
   inputProofSecrets: secrets,
   createdAt: 0,
   updatedAt: 0,
+});
+
+const operationReads = (repositories: Repositories): OwningOperationReads => ({
+  sendOperations: repositories.sendOperationRepository,
+  meltOperations: repositories.meltOperationRepository,
+  mintOperations: repositories.mintOperationRepository,
+  receiveOperations: repositories.receiveOperationRepository,
+  mintSwapOperations: repositories.mintSwap.operationRepository,
 });
 
 const trustedMints = () =>
@@ -126,6 +137,7 @@ describe('ProofStateWatcherService lifecycle', () => {
       subs,
       overrides.mintService ?? trustedMints(),
       overrides.proofRepository ?? repositories.proofRepository,
+      operationReads(repositories),
       overrides.runner ?? new RepositoryCoreTransactionRunner(repositories),
       overrides.remote ?? stateRemote().remote,
       bus,
@@ -439,6 +451,7 @@ describe('ProofStateWatcherService Send finalization', () => {
       {} as SubscriptionManager,
       {} as MintService,
       proofRepository,
+      {} as OwningOperationReads,
       {} as CoreTransactionRunner,
       {} as ProofStateRemote,
       bus,
@@ -621,6 +634,12 @@ describe.each(['memory', 'sqlite'] as const)(
     const stateOf = async (secret: string) =>
       (await repositories.proofRepository.getProofBySecret(mintUrlA, secret))?.state;
 
+    const seedSend = (id: string, secrets: string[], state: SendOperation['state'] = 'pending') =>
+      repositories.sendOperationRepository.create({
+        ...pendingSend(id, secrets),
+        state,
+      } as SendOperation);
+
     const sendService = (
       sends: Record<string, string[]>,
       recordProofSpent: (operationId: string, secret: string) => Promise<boolean>,
@@ -645,6 +664,7 @@ describe.each(['memory', 'sqlite'] as const)(
         input.subs,
         trustedMints(),
         repositories.proofRepository,
+        operationReads(repositories),
         input.runner ?? new RepositoryCoreTransactionRunner(repositories),
         input.remote ?? stateRemote().remote,
         bus,
@@ -661,6 +681,7 @@ describe.each(['memory', 'sqlite'] as const)(
       'completes SPENT evidence for a Send-owned proof (%s) only through the Send',
       async (ownership) => {
         const secret = 'send-owned';
+        await seedSend('send-op', [secret]);
         await repositories.proofRepository.saveProofs(mintUrlA, [
           makeProof({ secret, [ownership]: 'send-op' }),
         ]);
@@ -692,6 +713,7 @@ describe.each(['memory', 'sqlite'] as const)(
       ],
     ] as const)('makes no direct write when the Send %s', async (_label, recordProofSpent) => {
       const secret = 'send-declined';
+      await seedSend('send-op', [secret]);
       await repositories.proofRepository.saveProofs(mintUrlA, [
         makeProof({ secret, usedByOperationId: 'send-op' }),
       ]);
@@ -713,6 +735,7 @@ describe.each(['memory', 'sqlite'] as const)(
 
     it('routes startup SPENT evidence for a Send-owned proof to the Send', async () => {
       const secret = 'send-startup';
+      await seedSend('send-op', [secret]);
       await repositories.proofRepository.saveProofs(mintUrlA, [
         makeProof({ secret, usedByOperationId: 'send-op' }),
       ]);
@@ -741,7 +764,13 @@ describe.each(['memory', 'sqlite'] as const)(
       await watcher.stop();
     });
 
-    it('does not subscribe, state-check or write Melt-owned inflight proofs', async () => {
+    it('does not subscribe, state-check or write proofs a live Melt owns', async () => {
+      await repositories.meltOperationRepository.create(
+        createMeltOperation('melt-op', mintUrlA, {
+          method: 'bolt11',
+          methodData: { invoice: 'invoice' },
+        }),
+      );
       const used = makeProof({ secret: 'melt-input', usedByOperationId: 'melt-op' });
       const created = makeProof({ secret: 'melt-send', createdByOperationId: 'melt-op' });
       const unowned = makeProof({ secret: 'unowned' });
@@ -873,6 +902,7 @@ describe.each(['memory', 'sqlite'] as const)(
       'leaves an unowned proof that %s before commit untouched',
       async (_label, change, expectedState) => {
         const secret = 'raced';
+        await seedSend('send-op', [secret]);
         await repositories.proofRepository.saveProofs(mintUrlA, [makeProof({ secret })]);
         const subscriptions = recordingSubscriptions();
         const { runner, run } = countingRunner(
@@ -891,5 +921,113 @@ describe.each(['memory', 'sqlite'] as const)(
         await watcher.stop();
       },
     );
+
+    it('reconciles SPENT evidence for a proof whose referenced operation was deleted', async () => {
+      const secret = 'deleted-owner';
+      await repositories.proofRepository.saveProofs(mintUrlA, [
+        makeProof({ secret, usedByOperationId: 'deleted-send' }),
+      ]);
+      const subscriptions = recordingSubscriptions();
+      const send = sendService({}, async () => true);
+      const watcher = createWatcher({ subs: subscriptions.subs, send });
+      await watcher.start();
+      await watcher.watchProof(mintUrlA, [secret]);
+
+      expect(subscriptions.isWatched(secret)).toBe(true);
+      await subscriptions.notify(secret, 'SPENT');
+
+      expect(await stateOf(secret)).toBe('spent');
+      expect(stateChanges).toEqual([{ mintUrl: mintUrlA, secrets: [secret], state: 'spent' }]);
+      expect(send.recordProofSpent).not.toHaveBeenCalled();
+      await watcher.stop();
+    });
+
+    it('reconciles startup SPENT evidence for a proof whose referenced operation is terminal', async () => {
+      const secret = 'terminal-owner';
+      await seedSend('finalized-send', [secret], 'finalized');
+      await repositories.proofRepository.saveProofs(mintUrlA, [
+        makeProof({ secret, createdByOperationId: 'finalized-send' }),
+      ]);
+      const subscriptions = recordingSubscriptions();
+      const { remote, checkProofStates } = stateRemote({ [secret]: 'SPENT' });
+      let reconciled!: () => void;
+      const done = new Promise<void>((resolve) => (reconciled = resolve));
+      bus.on('proofs:state-changed', () => reconciled());
+      const send = sendService({}, async () => true);
+      const watcher = createWatcher({
+        subs: subscriptions.subs,
+        remote,
+        send,
+        watchExistingInflightOnStart: true,
+      });
+      await watcher.start();
+      await done;
+
+      expect(checkProofStates).toHaveBeenCalledTimes(1);
+      expect(await stateOf(secret)).toBe('spent');
+      expect(stateChanges).toEqual([{ mintUrl: mintUrlA, secrets: [secret], state: 'spent' }]);
+      expect(send.recordProofSpent).not.toHaveBeenCalled();
+      await watcher.stop();
+    });
+
+    it.each([
+      ['deleted', async () => {}],
+      ['finalized', () => seedSend('reserving-op', [], 'finalized')],
+    ] as const)(
+      'routes SPENT evidence to a live creating Send when the reserving operation is %s',
+      async (_label, seedReservingOperation) => {
+        const secret = 'dead-reserver';
+        await seedReservingOperation();
+        await seedSend('send-op', [secret]);
+        await repositories.proofRepository.saveProofs(mintUrlA, [
+          makeProof({ secret, usedByOperationId: 'reserving-op', createdByOperationId: 'send-op' }),
+        ]);
+        const subscriptions = recordingSubscriptions();
+        const { runner, run } = countingRunner(new RepositoryCoreTransactionRunner(repositories));
+        const send = sendService({ 'send-op': [secret] }, async () => true);
+        const watcher = createWatcher({ subs: subscriptions.subs, runner, send });
+        await watcher.start();
+        await watcher.watchProof(mintUrlA, [secret]);
+
+        await subscriptions.notify(secret, 'SPENT');
+
+        expect(send.recordProofSpent).toHaveBeenCalledTimes(1);
+        expect(send.recordProofSpent).toHaveBeenCalledWith('send-op', secret);
+        expect(run).not.toHaveBeenCalled();
+        expect(await stateOf(secret)).toBe('inflight');
+        await watcher.stop();
+      },
+    );
+
+    it('leaves a proof with a deleted owner that a live operation reserves before commit untouched', async () => {
+      const secret = 'reowned';
+      await seedSend('send-op', [secret]);
+      await repositories.proofRepository.saveProofs(mintUrlA, [
+        makeProof({ secret, usedByOperationId: 'deleted-send' }),
+      ]);
+      const subscriptions = recordingSubscriptions();
+      const { runner, run } = countingRunner(
+        new RepositoryCoreTransactionRunner(repositories),
+        async () => {
+          await repositories.proofRepository.releaseProofs(mintUrlA, [secret]);
+          await repositories.proofRepository.setProofState(mintUrlA, [secret], 'ready');
+          await repositories.proofRepository.reserveProofs(mintUrlA, [secret], 'send-op');
+          await repositories.proofRepository.setProofState(mintUrlA, [secret], 'inflight');
+        },
+      );
+      const watcher = createWatcher({ subs: subscriptions.subs, runner });
+      await watcher.start();
+      await watcher.watchProof(mintUrlA, [secret]);
+
+      await subscriptions.notify(secret, 'SPENT');
+
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(await repositories.proofRepository.getProofBySecret(mintUrlA, secret)).toMatchObject({
+        state: 'inflight',
+        usedByOperationId: 'send-op',
+      });
+      expect(stateChanges).toEqual([]);
+      await watcher.stop();
+    });
   },
 );
