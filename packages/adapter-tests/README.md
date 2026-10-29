@@ -3,6 +3,10 @@
 This package exports reusable test helpers that verify whether a storage adapter
 conforms to the `Repositories` contract from `@cashu/coco-core`.
 
+Use matching releases of core and this package, and run the relevant suites against your actual
+backend before expanding your adapter's supported Coco version range. See the
+[repository compatibility policy](../core/README.md#repository-compatibility) for upgrade guarantees.
+
 ## Install
 
 ```bash

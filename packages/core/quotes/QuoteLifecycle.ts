@@ -36,7 +36,6 @@ import {
 } from '../models/Error';
 import type { MeltQuoteRepository, MintQuoteRepository, ProofRepository } from '../repositories';
 import type { MintService } from '../services/MintService';
-import type { ProofService } from '../services/ProofService';
 import type { WalletService } from '../services/WalletService';
 import type { InitMeltOperation } from '../operations/melt/MeltOperation';
 import { normalizeMintUrl } from '../utils';
@@ -369,7 +368,6 @@ export interface QuoteLifecycleDeps {
   mintQuoteRepository: MintQuoteRepository;
   meltQuoteRepository: MeltQuoteRepository;
   proofRepository: ProofRepository;
-  proofService: ProofService;
   mintService: MintService;
   walletService: WalletService;
   mintAdapter: MintAdapter;
@@ -387,7 +385,6 @@ export class QuoteLifecycle {
   private readonly mintQuoteRepository: MintQuoteRepository;
   private readonly meltQuoteRepository: MeltQuoteRepository;
   private readonly proofRepository: ProofRepository;
-  private readonly proofService: ProofService;
   private readonly mintService: MintService;
   private readonly walletService: WalletService;
   private readonly mintAdapter: MintAdapter;
@@ -407,7 +404,6 @@ export class QuoteLifecycle {
     this.mintQuoteRepository = deps.mintQuoteRepository;
     this.meltQuoteRepository = deps.meltQuoteRepository;
     this.proofRepository = deps.proofRepository;
-    this.proofService = deps.proofService;
     this.mintService = deps.mintService;
     this.walletService = deps.walletService;
     this.mintAdapter = deps.mintAdapter;
@@ -456,7 +452,6 @@ export class QuoteLifecycle {
   private buildDeps() {
     return {
       proofRepository: this.proofRepository,
-      proofService: this.proofService,
       walletService: this.walletService,
       mintService: this.mintService,
       mintAdapter: this.mintAdapter,

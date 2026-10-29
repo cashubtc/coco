@@ -11,6 +11,7 @@ import { describe, it, beforeEach, expect, mock } from 'bun:test';
 import { CocoInitializationError, initializeCoco, type CocoConfig, Manager } from '../../Manager';
 import { PaymentRequestsApi } from '../../api/PaymentRequestsApi';
 import { QuoteApi } from '../../api/QuoteApi';
+import type { WalletBalancesApi } from '../../api/WalletBalancesApi';
 import type { CoreEvents } from '../../events/types';
 import type { Mint } from '../../models/Mint';
 import { meltQuoteFromBolt11Response } from '../../models/MeltQuote';
@@ -21,7 +22,7 @@ import { MemoryRepositories } from '../../repositories/memory';
 import { NullLogger } from '../../logging';
 import type { FinalizedReceiveOperation } from '../../operations/receive/ReceiveOperation';
 import type { Plugin } from '../../plugin';
-import type { ProofService, WalletService } from '../../services';
+import type { WalletService } from '../../services';
 import type { CoreProof, MintInfo } from '../../types';
 import { makeOutputDataCreator } from '../fixtures/OutputDataCreator.ts';
 
@@ -117,6 +118,20 @@ describe('initializeCoco', () => {
     };
   }
 
+  async function saveReadyProof(secret: string, amount: number): Promise<void> {
+    await repositories.proofRepository.saveProofs(mintUrl, [
+      {
+        id: keysetId,
+        amount: Amount.from(amount),
+        secret,
+        C: '02' + '11'.repeat(32),
+        mintUrl,
+        unit: 'sat',
+        state: 'ready',
+      } as CoreProof,
+    ]);
+  }
+
   describe('default behavior', () => {
     it('propagates a custom output data creator through initialized services', async () => {
       await seedOutputCreatorMint();
@@ -144,16 +159,15 @@ describe('initializeCoco', () => {
         createDeterministicData,
         createRandomData,
       });
-      let proofService: ProofService | undefined;
       let walletService: WalletService | undefined;
-      const plugin: Plugin<['proofService', 'walletService']> = {
+      const plugin: Plugin<['walletService']> = {
         name: 'output-creator-acceptance',
-        required: ['proofService', 'walletService'],
+        required: ['walletService'],
         onReady: ({ services }) => {
-          proofService = services.proofService;
           walletService = services.walletService;
         },
       };
+      await saveReadyProof('output-creator-input', 2);
 
       const manager = await initializeCoco({
         ...baseConfig,
@@ -190,17 +204,15 @@ describe('initializeCoco', () => {
       };
 
       try {
-        const outputs = await proofService!.createOutputsAndIncrementCounters(mintUrl, {
-          keep: { amount: Amount.from(1), unit: 'sat' },
-          send: { amount: Amount.zero(), unit: 'sat' },
-        });
+        const prepared = await manager.ops.send.prepare({ mintUrl, amount: 1 });
         const previews = [
           await prepareRandomMint(mintUrl, 'sat', 'quote-sat'),
           await prepareRandomMint(mintUrl, 'usd', 'quote-usd'),
           await prepareRandomMint(secondMintUrl, 'sat', 'quote-second-mint'),
         ];
 
-        expect(outputs.keep).toEqual([deterministicOutput]);
+        expect(prepared.needsSwap).toBe(true);
+        expect(createDeterministicData).toHaveBeenCalledTimes(2);
         const deterministicCall = createDeterministicData.mock.calls[0];
         expect(deterministicCall?.[0]).toEqual(Amount.from(1));
         expect(deterministicCall?.[1]).toEqual(new Uint8Array(64));
@@ -216,7 +228,7 @@ describe('initializeCoco', () => {
           randomOutputs.map((output) => output.blindedMessage),
         );
         expect(createRandomData).toHaveBeenCalledTimes(3);
-        expect(creatorReceivers).toHaveLength(4);
+        expect(creatorReceivers).toHaveLength(5);
         for (const receiver of creatorReceivers) {
           expect(receiver).toBe(outputDataCreator);
         }
@@ -234,14 +246,7 @@ describe('initializeCoco', () => {
       const createDeterministicData = mock(() => [builtInOutput]);
       const originalCreateDeterministicData = OutputData.createDeterministicData;
       OutputData.createDeterministicData = createDeterministicData;
-      let proofService: ProofService | undefined;
-      const plugin: Plugin<['proofService']> = {
-        name: 'default-output-creator-acceptance',
-        required: ['proofService'],
-        onReady: ({ services }) => {
-          proofService = services.proofService;
-        },
-      };
+      await saveReadyProof('default-output-creator-input', 2);
       let manager: Manager | undefined;
 
       try {
@@ -249,15 +254,11 @@ describe('initializeCoco', () => {
           ...baseConfig,
           ...disabledRuntime,
           seedGetter: async () => outputCreatorSeed,
-          plugins: [plugin],
         });
-        const outputs = await proofService!.createOutputsAndIncrementCounters(mintUrl, {
-          keep: { amount: Amount.from(1), unit: 'sat' },
-          send: { amount: Amount.zero(), unit: 'sat' },
-        });
+        const prepared = await manager.ops.send.prepare({ mintUrl, amount: 1 });
 
-        expect(outputs.keep).toEqual([builtInOutput]);
-        expect(createDeterministicData).toHaveBeenCalledTimes(1);
+        expect(prepared.needsSwap).toBe(true);
+        expect(createDeterministicData).toHaveBeenCalledTimes(2);
       } finally {
         OutputData.createDeterministicData = originalCreateDeterministicData;
         await manager?.dispose();
@@ -459,6 +460,53 @@ describe('initializeCoco', () => {
 
       expect(pluginQuotes).toBe(manager.quotes);
       expect(pluginQuotes).toBeInstanceOf(QuoteApi);
+
+      await manager.dispose();
+    });
+
+    it('should expose read-only wallet balances to plugins', async () => {
+      let pluginBalances: WalletBalancesApi | undefined;
+      const plugin: Plugin<['balances']> = {
+        name: 'balances-plugin',
+        required: ['balances'],
+        onReady: ({ services }) => {
+          pluginBalances = services.balances;
+        },
+      };
+      await seedOutputCreatorMint();
+      await saveReadyProof('plugin-balance-secret', 5);
+
+      const manager = await initializeCoco({
+        ...baseConfig,
+        ...disabledRuntime,
+        plugins: [plugin],
+      });
+
+      expect(pluginBalances).toBe(manager.wallet.balances);
+      expect((await pluginBalances!.total()).spendable).toEqual(Amount.from(5));
+
+      await manager.dispose();
+    });
+
+    it('should not expose proof or counter services to plugins', async () => {
+      let pluginServices: Record<string, unknown> | undefined;
+      // Untyped plugins can still name removed keys at runtime.
+      const plugin = {
+        name: 'removed-services-plugin',
+        required: ['proofService', 'counterService'],
+        onInit: ({ services }: { services: Record<string, unknown> }) => {
+          pluginServices = services;
+        },
+      } as unknown as Plugin;
+
+      const manager = await initializeCoco({
+        ...baseConfig,
+        ...disabledRuntime,
+        plugins: [plugin],
+      });
+
+      expect(pluginServices?.proofService).toBeUndefined();
+      expect(pluginServices?.counterService).toBeUndefined();
 
       await manager.dispose();
     });

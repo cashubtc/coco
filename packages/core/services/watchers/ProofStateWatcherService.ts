@@ -1,9 +1,19 @@
+import type { ProofState } from '@cashu/cashu-ts';
+import { DEFAULT_UNIT, normalizeUnit } from '@core/amounts.ts';
 import type { EventBus, CoreEvents } from '@core/events';
-import type { Logger } from '../../logging/Logger.ts';
 import type { SubscriptionManager, UnsubscribeHandler } from '@core/infra/SubscriptionManager.ts';
+import {
+  resolveOwningOperation,
+  type OwningOperation,
+  type OwningOperationCache,
+  type OwningOperationReads,
+} from '@core/proofs/OwningOperation.ts';
+import type { CoreTransactionRunner } from '@core/transactions/CoreTransaction.ts';
+import type { CoreProof } from '@core/types.ts';
+import type { Logger } from '../../logging/Logger.ts';
 import type { MintService } from '../MintService';
-import type { ProofService } from '../ProofService';
 import type { SendOperationService } from '../../operations/send/SendOperationService';
+import { recordUnownedProofsSpent } from '../../operations/proofs/ProofReconciliationTransitions.ts';
 import {
   getSendProofSecrets,
   hasPreparedData,
@@ -26,6 +36,31 @@ type ProofStateNotification = {
   witness?: unknown;
 };
 
+/** Remote proof-state checks for the startup scan. It has no Wallet persistence authority. */
+export interface ProofStateRemote {
+  checkProofStates(mintUrl: string, unit: string, proofs: CoreProof[]): Promise<ProofState[]>;
+}
+
+/**
+ * Where the watcher routes evidence for a proof: to its live Owning Operation, or to its own
+ * reconciliation when the proof is unowned. Only unowned and Send-owned proofs are watched; Melt and
+ * other live owners observe their proofs themselves.
+ */
+type EvidenceRoute = { kind: 'unowned' } | OwningOperation;
+
+type WatchableRoute = Extract<EvidenceRoute, { kind: 'unowned' | 'send' }>;
+
+type WatchableProof = { proof: CoreProof; route: WatchableRoute };
+
+function isWatchable(route: EvidenceRoute | undefined): route is WatchableRoute {
+  return route?.kind === 'unowned' || route?.kind === 'send';
+}
+
+type ProofReads = Pick<
+  ProofRepository,
+  'getInflightProofs' | 'getProofBySecret' | 'getProofsBySecrets'
+>;
+
 export interface ProofStateWatcherOptions {
   /** Scan existing inflight proofs and pending Sends on start (default: true). */
   watchExistingInflightOnStart?: boolean;
@@ -34,8 +69,10 @@ export interface ProofStateWatcherOptions {
 export class ProofStateWatcherService {
   private readonly subs: SubscriptionManager;
   private readonly mintService: MintService;
-  private readonly proofs: ProofService;
-  private readonly proofRepository: ProofRepository;
+  private readonly proofRepository: ProofReads;
+  private readonly operations: OwningOperationReads;
+  private readonly transactionRunner: CoreTransactionRunner;
+  private readonly remote: ProofStateRemote;
   private readonly bus: EventBus<CoreEvents>;
   private readonly logger?: Logger;
   private readonly options: ProofStateWatcherOptions;
@@ -59,16 +96,20 @@ export class ProofStateWatcherService {
   constructor(
     subs: SubscriptionManager,
     mintService: MintService,
-    proofs: ProofService,
-    proofRepository: ProofRepository,
+    proofRepository: ProofReads,
+    operations: OwningOperationReads,
+    transactionRunner: CoreTransactionRunner,
+    remote: ProofStateRemote,
     bus: EventBus<CoreEvents>,
     logger?: Logger,
     options: ProofStateWatcherOptions = { watchExistingInflightOnStart: true },
   ) {
     this.subs = subs;
     this.mintService = mintService;
-    this.proofs = proofs;
     this.proofRepository = proofRepository;
+    this.operations = operations;
+    this.transactionRunner = transactionRunner;
+    this.remote = remote;
     this.bus = bus;
     this.logger = logger;
     this.options = options;
@@ -200,9 +241,9 @@ export class ProofStateWatcherService {
 
     this.offSendFinalized = this.bus.on('send:finalized', ({ operationId }) =>
       this.runIfActive(generation, async () => {
-        for (const [key, owner] of this.sendOperationByProofKey) {
+        for (const [key, sendOperationId] of this.sendOperationByProofKey) {
           if (!this.isActive(generation)) return;
-          if (owner !== operationId) continue;
+          if (sendOperationId !== operationId) continue;
           this.sendOperationByProofKey.delete(key);
           await this.stopWatching(key);
         }
@@ -305,8 +346,16 @@ export class ProofStateWatcherService {
   }
 
   watchProof(mintUrl: string, secrets: string[]): Promise<void> {
+    return this.watchProofs(mintUrl, secrets, new Map());
+  }
+
+  private watchProofs(
+    mintUrl: string,
+    secrets: string[],
+    owningOperations: OwningOperationCache,
+  ): Promise<void> {
     if (!this.running) return Promise.resolve();
-    const task = this.acquireProofWatch(mintUrl, secrets, this.generation);
+    const task = this.acquireProofWatch(mintUrl, secrets, this.generation, owningOperations);
     this.acquisitionTasks.add(task);
     void task.then(
       () => this.acquisitionTasks.delete(task),
@@ -319,6 +368,7 @@ export class ProofStateWatcherService {
     mintUrl: string,
     secrets: string[],
     generation: number,
+    owningOperations: OwningOperationCache,
   ): Promise<void> {
     if (!this.isActive(generation)) return;
 
@@ -341,8 +391,10 @@ export class ProofStateWatcherService {
 
     for (const secret of toWatch) this.acquiringKeys.add(toKey(mintUrl, secret));
     try {
+      const watchable = await this.selectWatchable(mintUrl, toWatch, owningOperations);
+      if (!this.isActive(generation) || watchable.length === 0) return;
       // Compute Y hex for all secrets and build maps
-      const { secretByYHex, yHexBySecret } = buildYHexMapsForSecrets(toWatch);
+      const { secretByYHex, yHexBySecret } = buildYHexMapsForSecrets(watchable);
       const filters = Array.from(secretByYHex.keys());
 
       const { subId, unsubscribe } = await this.subs.subscribe<ProofStateNotification>(
@@ -358,24 +410,18 @@ export class ProofStateWatcherService {
             if (this.inflightByKey.has(key)) return;
             this.inflightByKey.add(key);
             try {
-              const sendOperationId = this.sendOperationService
-                ? await this.getSendOperationIdForSpentProof(mintUrl, secret)
-                : undefined;
+              const [proof] = await this.proofRepository.getProofsBySecrets(mintUrl, [secret]);
+              const route = await this.resolveRoute(mintUrl, secret, proof);
               if (!this.isActive(generation)) return;
-              const handledBySend =
-                sendOperationId && this.sendOperationService
-                  ? await this.sendOperationService.recordProofSpent(sendOperationId, secret)
-                  : false;
-              if (!handledBySend && this.isActive(generation)) {
-                await this.proofs.setProofState(mintUrl, [secret], 'spent');
-              }
-              this.logger?.info('Marked inflight proof as spent from mint notification', {
+              await this.applySpentEvidence(mintUrl, secret, route);
+              this.logger?.info('Applied SPENT evidence from mint notification', {
                 mintUrl,
                 subId,
+                route: route?.kind,
               });
               if (this.isActive(generation)) await this.stopWatching(key);
             } catch (err) {
-              this.logger?.error('Failed to mark inflight proof as spent', { mintUrl, subId, err });
+              this.logger?.error('Failed to apply SPENT evidence', { mintUrl, subId, err });
             } finally {
               if (generation === this.generation) this.inflightByKey.delete(key);
             }
@@ -400,7 +446,7 @@ export class ProofStateWatcherService {
 
       // For each secret, register a per-key stopper that shrinks the remaining set and
       // unsubscribes the group when the last filter is removed
-      for (const secret of toWatch) {
+      for (const secret of watchable) {
         const key = toKey(mintUrl, secret);
         const yHex = yHexBySecret.get(secret)!;
         const perKeyStop: UnsubscribeHandler = async () => {
@@ -446,26 +492,52 @@ export class ProofStateWatcherService {
     }
   }
 
+  /**
+   * Check inflight proofs once, then watch those still eligible. SPENT evidence for Send-owned
+   * proofs goes to the Send; unowned proofs, including those whose referenced operations are missing
+   * or terminal, are reconciled; proofs other live operations own are skipped.
+   */
   private async watchExistingInflightProofs(generation: number): Promise<void> {
-    await this.proofs.checkInflightProofs();
-    if (!this.isActive(generation)) return;
-
     const inflightProofs = await this.proofRepository.getInflightProofs();
     if (!this.isActive(generation) || inflightProofs.length === 0) return;
 
+    const owningOperations: OwningOperationCache = new Map();
+    const batches = new Map<string, { mintUrl: string; unit: string; proofs: WatchableProof[] }>();
     const byMint = new Map<string, string[]>();
     for (const proof of inflightProofs) {
       if (!proof.mintUrl || !proof.secret) continue;
+      const route = await this.resolveRoute(proof.mintUrl, proof.secret, proof, owningOperations);
+      if (!this.isActive(generation)) return;
+      if (!isWatchable(route)) continue;
+      const unit = normalizeUnit(proof.unit, { defaultUnit: DEFAULT_UNIT });
+      const batchKey = `${proof.mintUrl}::${unit}`;
+      const batch = batches.get(batchKey) ?? { mintUrl: proof.mintUrl, unit, proofs: [] };
+      batch.proofs.push({ proof, route });
+      batches.set(batchKey, batch);
       const secrets = byMint.get(proof.mintUrl) ?? [];
       secrets.push(proof.secret);
       byMint.set(proof.mintUrl, secrets);
     }
 
+    for (const { mintUrl, unit, proofs } of batches.values()) {
+      if (!this.isActive(generation)) return;
+      try {
+        await this.checkExistingProofs(mintUrl, unit, proofs, generation);
+      } catch (err) {
+        this.logger?.warn('Failed to check inflight proofs for mint', {
+          mintUrl,
+          unit,
+          count: proofs.length,
+          err,
+        });
+      }
+    }
+
     for (const [mintUrl, secrets] of byMint.entries()) {
       if (!this.isActive(generation)) return;
-      if (secrets.length === 0) continue;
       try {
-        await this.watchProof(mintUrl, secrets);
+        // Rereads proof state, since the check above may have reconciled some proofs.
+        await this.watchProofs(mintUrl, secrets, owningOperations);
       } catch (err) {
         this.logger?.warn('Failed to watch existing inflight proofs', {
           mintUrl,
@@ -474,6 +546,141 @@ export class ProofStateWatcherService {
         });
       }
     }
+  }
+
+  private async checkExistingProofs(
+    mintUrl: string,
+    unit: string,
+    proofs: WatchableProof[],
+    generation: number,
+  ): Promise<void> {
+    if (!(await this.mintService.isTrustedMint(mintUrl)) || !this.isActive(generation)) return;
+    const states = await this.remote.checkProofStates(
+      mintUrl,
+      unit,
+      proofs.map(({ proof }) => proof),
+    );
+    if (!this.isActive(generation)) return;
+    if (!Array.isArray(states) || states.length !== proofs.length) {
+      this.logger?.warn('Malformed proof state check response', {
+        mintUrl,
+        expected: proofs.length,
+        received: (states as { length?: number } | null | undefined)?.length ?? 0,
+      });
+      return;
+    }
+    const spent = proofs.filter((_proof, index) => states[index]?.state === 'SPENT');
+    const unowned = spent.filter(({ route }) => route.kind === 'unowned');
+    if (unowned.length > 0) {
+      await this.recordUnownedSpent(
+        mintUrl,
+        unowned.map(({ proof }) => proof.secret),
+      );
+    }
+    for (const { proof, route } of spent) {
+      if (route.kind !== 'send' || !this.isActive(generation)) continue;
+      try {
+        await this.applySpentEvidence(mintUrl, proof.secret, route);
+      } catch (err) {
+        this.logger?.warn('Send could not apply SPENT evidence', {
+          mintUrl,
+          operationId: route.operationId,
+          err,
+        });
+      }
+    }
+  }
+
+  /**
+   * Hand SPENT evidence to the proof's Owning Operation, or reconcile it when no operation owns it.
+   * A Send that declines or fails keeps its proofs; the watcher never writes them directly. Melt
+   * observes its own proofs; any other live owner keeps the proof untouched.
+   */
+  private async applySpentEvidence(
+    mintUrl: string,
+    secret: string,
+    route: EvidenceRoute | undefined,
+  ): Promise<void> {
+    if (route?.kind === 'unowned') {
+      await this.recordUnownedSpent(mintUrl, [secret]);
+    } else if (route?.kind === 'send') {
+      if (!this.sendOperationService) return;
+      const handled = await this.sendOperationService.recordProofSpent(route.operationId, secret);
+      if (!handled) {
+        this.logger?.debug('Send declined SPENT evidence', {
+          mintUrl,
+          operationId: route.operationId,
+        });
+      }
+    } else if (route && route.kind !== 'melt') {
+      this.logger?.warn('Left SPENT evidence for a proof another live operation owns', {
+        mintUrl,
+        operationKind: route.kind,
+        operationId: route.operationId,
+      });
+    }
+  }
+
+  /** Reconciliation for unowned proofs; the transition rechecks ownership and state in scope. */
+  private async recordUnownedSpent(mintUrl: string, secrets: string[]): Promise<void> {
+    const result = await this.transactionRunner.run((tx) =>
+      tx.perform(recordUnownedProofsSpent, { mintUrl, secrets }),
+    );
+    if (result.spentSecrets.length === 0) return;
+    this.logger?.info('Marked unowned inflight proofs as spent', {
+      mintUrl: result.mintUrl,
+      count: result.spentSecrets.length,
+    });
+    try {
+      await this.bus.emit(
+        'proofs:state-changed',
+        { mintUrl: result.mintUrl, secrets: result.spentSecrets, state: 'spent' },
+        { throwOnError: true },
+      );
+    } catch (err) {
+      this.logger?.error('Failed to publish reconciled proof states', { mintUrl, err });
+    }
+  }
+
+  /** Keep inflight proofs the watcher may act on: unowned, Send-owned or legacy Send outputs. */
+  private async selectWatchable(
+    mintUrl: string,
+    secrets: string[],
+    owningOperations: OwningOperationCache,
+  ): Promise<string[]> {
+    const stored = new Map(
+      (await this.proofRepository.getProofsBySecrets(mintUrl, secrets)).map((proof) => [
+        proof.secret,
+        proof,
+      ]),
+    );
+    const watchable: string[] = [];
+    for (const secret of secrets) {
+      const proof = stored.get(secret);
+      if (proof && proof.state !== 'inflight') continue;
+      if (isWatchable(await this.resolveRoute(mintUrl, secret, proof, owningOperations))) {
+        watchable.push(secret);
+      }
+    }
+    return watchable;
+  }
+
+  /**
+   * Resolve where evidence for a proof goes from its record's live Owning Operation. Without one,
+   * outputs discovered for a legacy tokenless Send still go to that Send.
+   */
+  private async resolveRoute(
+    mintUrl: string,
+    secret: string,
+    proof: CoreProof | null | undefined,
+    owningOperations: OwningOperationCache = new Map(),
+  ): Promise<EvidenceRoute | undefined> {
+    const owningOperation =
+      proof && (await resolveOwningOperation(this.operations, proof, owningOperations));
+    if (owningOperation) return owningOperation;
+    const legacySendId = this.sendOperationByProofKey.get(toKey(mintUrl, secret));
+    if (legacySendId) return { kind: 'send', operationId: legacySendId };
+    return proof ? { kind: 'unowned' } : undefined;
   }
 
   private async stopWatching(key: ProofKey): Promise<void> {

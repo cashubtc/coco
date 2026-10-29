@@ -7,7 +7,6 @@ import {
 import type {
   MintService,
   WalletService,
-  ProofService,
   WalletRestoreService,
   TokenService,
 } from '@core/services';
@@ -38,7 +37,6 @@ export interface WalletSweepOptions {
 export class WalletApi {
   private mintService: MintService;
   private walletService: WalletService;
-  private proofService: ProofService;
   private walletRestoreService: WalletRestoreService;
   private receiveOperationService: ReceiveOperationService;
   private readonly tokenService: TokenService;
@@ -48,21 +46,19 @@ export class WalletApi {
   constructor(
     mintService: MintService,
     walletService: WalletService,
-    proofService: ProofService,
     walletRestoreService: WalletRestoreService,
     receiveOperationService: ReceiveOperationService,
     tokenService: TokenService,
+    balanceQueries: BalanceQueries,
     logger?: Logger,
-    balanceQueries?: BalanceQueries,
   ) {
     this.mintService = mintService;
     this.walletService = walletService;
-    this.proofService = proofService;
     this.walletRestoreService = walletRestoreService;
     this.receiveOperationService = receiveOperationService;
     this.tokenService = tokenService;
     this.logger = logger;
-    this.balances = new WalletBalancesApi(balanceQueries ?? proofService);
+    this.balances = new WalletBalancesApi(balanceQueries);
   }
 
   /**

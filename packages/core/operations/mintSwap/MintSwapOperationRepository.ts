@@ -3,11 +3,26 @@ import type { MintSwapOperation, MintSwapOperationState } from './MintSwapOperat
 /**
  * Required Mint Swap persistence, bound to the active Wallet transaction's handle and lifetime.
  * A scoped handle must share parent/child/proof commit and rollback, including parent revisions.
+ *
+ * @remarks
+ * Unstable repository contract starting with v3: minor or major releases may introduce
+ * breaking changes with adapter migration notes. Patch releases preserve compatibility.
+ *
+ * @see {@link https://github.com/cashubtc/coco/blob/master/packages/core/README.md#repository-compatibility | Repository compatibility policy}
  */
 export interface MintSwapPersistence {
   operationRepository: MintSwapOperationRepository;
 }
 
+/**
+ * Persistence contract for Mint Swap Operations.
+ *
+ * @remarks
+ * Unstable repository contract starting with v3: minor or major releases may introduce
+ * breaking changes with adapter migration notes. Patch releases preserve compatibility.
+ *
+ * @see {@link https://github.com/cashubtc/coco/blob/master/packages/core/README.md#repository-compatibility | Repository compatibility policy}
+ */
 export interface MintSwapOperationRepository {
   /** Parse and create at revision zero; all five identities stay unique for all time. */
   create(operation: MintSwapOperation): Promise<void>;

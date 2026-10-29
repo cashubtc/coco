@@ -72,11 +72,9 @@ implementation wiring and is not needed to author extensions.
 | ------------------------------ | ------------------------------------------- |
 | `mintService`                  | Manage mints (add, update, trust/untrust)   |
 | `walletService`                | Low-level wallet operations                 |
-| `proofService`                 | Manage proofs (save, delete, query)         |
 | `keyRingService`               | P2PK key management                         |
 | `seedService`                  | Access the wallet seed                      |
 | `walletRestoreService`         | Restore wallet from seed                    |
-| `counterService`               | Keyset counter management                   |
 | `tokenService`                 | Token decoding and encoding helpers         |
 | `historyService`               | Transaction history                         |
 | `sendOperationService`         | Send operation lifecycle                    |
@@ -84,6 +82,7 @@ implementation wiring and is not needed to author extensions.
 | `meltOperationService`         | Melt operation lifecycle                    |
 | `mintOperationService`         | Mint operation lifecycle                    |
 | `quotes`                       | Canonical quote create/import/lookup API    |
+| `balances`                     | Read-only wallet balances                   |
 | `paymentRequestService`        | Payment request helpers                     |
 | `paymentRequestReceiveService` | Payment request receive operation lifecycle |
 | `subscriptions`                | WebSocket subscription manager              |
@@ -108,6 +107,43 @@ const externalQuotePlugin: Plugin<['quotes']> = {
   },
 };
 ```
+
+Plugins that need balances can request `balances`. It is the same read-only API as
+`manager.wallet.balances`:
+
+```ts
+import type { Plugin } from '@cashu/coco-core/plugin';
+
+const balancePlugin: Plugin<['balances']> = {
+  name: 'balance-plugin',
+  required: ['balances'],
+  onReady: async ({ services }) => {
+    const byMint = await services.balances.byMint();
+    const total = await services.balances.total({ units: ['sat'] });
+  },
+};
+```
+
+Plugins get no direct proof or counter authority. Value enters or leaves a wallet only through
+operations, so proofs always change inside an operation's transaction.
+
+## Migrating from `proofService` and `counterService`
+
+The `proofService` and `counterService` plugin keys, and the `ProofService` and `CounterService`
+classes, have been removed. Migrate as follows:
+
+- **Moving value**: use the operation services instead of writing proofs. Send with
+  `sendOperationService`, receive with `receiveOperationService`, mint with
+  `mintOperationService`, and melt with `meltOperationService`. They select, reserve, create
+  outputs and save proofs for you.
+- **Balances**: request `balances` instead of `proofService.getBalances*()`. For example,
+  `getBalancesByMint()` becomes `balances.byMint()` and `getBalanceTotal()` becomes
+  `balances.total()`. For trusted mints only, pass `{ trustedOnly: true }` and read each
+  mint's `total` or `spendable` snapshot field.
+- **Counters**: there is no replacement. Output Counters advance only inside operations and
+  Restore, so plugins can't read, increment or overwrite them.
+
+Plugins can no longer list raw proofs. Open an issue if your plugin needs that.
 
 ## Migrating history operation lookups
 

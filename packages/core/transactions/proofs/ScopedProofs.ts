@@ -2,6 +2,12 @@ import { selectProofsRGLI, sumProofs, Amount, type SelectProofs } from '@cashu/c
 import { normalizeUnit } from '@core/amounts.ts';
 import { ProofValidationError } from '@core/models/Error.ts';
 import { createKeyChain } from '@core/proofs/KeysetSelection.ts';
+import {
+  hasOperationReference,
+  resolveOwningOperation,
+  type OwningOperationCache,
+  type OwningOperationReads,
+} from '@core/proofs/OwningOperation.ts';
 import type { ProofQueries } from '@core/proofs/ProofQueries.ts';
 import { selectProofInputs, calculateProofFee } from '@core/proofs/ProofSelection.ts';
 import type { KeysetRepository, ProofRepository } from '@core/repositories';
@@ -90,6 +96,12 @@ export interface ScopedProofs extends ProofQueries {
   recordMeltSendSpent(input: Omit<MeltSendProofsInput, 'state'>): Promise<void>;
   releaseMeltSendUnsubmitted(input: Omit<MeltSendProofsInput, 'state'>): Promise<void>;
   releaseOwned(mintUrl: string, operationId: string, secrets: string[]): Promise<void>;
+  /**
+   * Mark proofs spent only while they are still inflight and have no Owning Operation, so proofs whose
+   * referenced operations are missing or terminal are included. Returns the secrets that changed;
+   * proofs that changed state or gained a live owner are left untouched.
+   */
+  recordUnownedSpent(mintUrl: string, secrets: string[]): Promise<string[]>;
 }
 
 /** Reusable reservation and settlement rules within the owning operation's adapter scope. */
@@ -97,6 +109,7 @@ export class RepositoryScopedProofs implements ScopedProofs {
   constructor(
     private readonly proofs: ProofRepository,
     private readonly keysets: KeysetRepository,
+    private readonly operations: OwningOperationReads,
     private readonly selectProofs: SelectProofs = selectProofsRGLI,
   ) {}
 
@@ -135,11 +148,10 @@ export class RepositoryScopedProofs implements ScopedProofs {
         ) {
           throw new ProofValidationError('Conflicting proof already exists for restored output');
         }
-        // Only unowned mint-held proofs can be released without an operation's decision.
+        // Only mint-held proofs no operation references are released without an operation's decision.
         if (
           stored.state === 'pending' &&
-          stored.usedByOperationId == null &&
-          stored.createdByOperationId == null &&
+          !hasOperationReference(stored) &&
           incoming.state !== 'pending'
         ) {
           await this.proofs.setProofState(mintUrl, [stored.secret], incoming.state);
@@ -425,6 +437,19 @@ export class RepositoryScopedProofs implements ScopedProofs {
       throw new ProofValidationError('Cannot release proofs owned by another operation');
     }
     await this.proofs.releaseProofs(mintUrl, secrets);
+  }
+
+  async recordUnownedSpent(mintUrl: string, secrets: string[]): Promise<string[]> {
+    const stored = await this.proofs.getProofsBySecrets(mintUrl, Array.from(new Set(secrets)));
+    const owningOperations: OwningOperationCache = new Map();
+    const spentSecrets: string[] = [];
+    for (const proof of stored) {
+      if (proof.state !== 'inflight') continue;
+      if (await resolveOwningOperation(this.operations, proof, owningOperations)) continue;
+      spentSecrets.push(proof.secret);
+    }
+    if (spentSecrets.length) await this.proofs.setProofState(mintUrl, spentSecrets, 'spent');
+    return spentSecrets;
   }
 
   getProofsByOperationId(mintUrl: string, operationId: string) {

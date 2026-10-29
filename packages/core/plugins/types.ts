@@ -3,14 +3,13 @@ import type { EventBus } from '../events/EventBus.ts';
 import type { CoreEvents } from '../events/types.ts';
 import type { Logger } from '../logging/Logger.ts';
 import type { QuoteApi } from '../api/QuoteApi.ts';
+import type { WalletBalancesApi } from '../api/WalletBalancesApi.ts';
 import type {
-  CounterService,
   HistoryService,
   KeyRingService,
   MintService,
   PaymentRequestService,
   PaymentRequestReceiveService,
-  ProofService,
   SeedService,
   TokenService,
   WalletRestoreService,
@@ -28,15 +27,16 @@ export type ServiceKey = keyof ServiceMap;
  *
  * Plugins opt into individual services by listing their keys in Plugin.required. Removing,
  * renaming, or narrowing a key in this map is a public plugin API change.
+ *
+ * Plugins get no direct proof or counter authority: value enters or leaves a Wallet only through
+ * operation services, and `balances` is read-only. See ADR-0014.
  */
 export interface ServiceMap {
   mintService: MintService;
   walletService: WalletService;
-  proofService: ProofService;
   keyRingService: KeyRingService;
   seedService: SeedService;
   walletRestoreService: WalletRestoreService;
-  counterService: CounterService;
   tokenService: TokenService;
   historyService: HistoryService;
   sendOperationService: SendOperationService;
@@ -44,6 +44,8 @@ export interface ServiceMap {
   meltOperationService: MeltOperationService;
   mintOperationService: MintOperationService;
   quotes: QuoteApi;
+  /** Read-only balances; the same API as `manager.wallet.balances`. */
+  balances: WalletBalancesApi;
   paymentRequestService: PaymentRequestService;
   paymentRequestReceiveService: PaymentRequestReceiveService;
   subscriptions: SubscriptionManager;

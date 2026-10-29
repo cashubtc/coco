@@ -1230,7 +1230,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         }
       });
 
-      it('should mark inflight proofs as spent on manual check', async () => {
+      it('should complete a claimed Send from its spent evidence', async () => {
         const sendAmount = 25;
         const preparedSend = await mgr!.ops.send.prepare({
           mintUrl,
@@ -1241,9 +1241,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         await mgr!.wallet.receive(token);
 
         const proofRepository = (mgr as any).proofRepository as Repositories['proofRepository'];
-        const proofService = (mgr as any).proofService as {
-          checkInflightProofs: () => Promise<void>;
-        };
 
         const beforeStates = await Promise.all(
           token.proofs.map((proof) => proofRepository.getProofBySecret(mintUrl, proof.secret)),
@@ -1251,8 +1248,18 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const inflightCount = beforeStates.filter((proof) => proof?.state === 'inflight').length;
         expect(inflightCount).toBeGreaterThan(0);
 
-        await proofService.checkInflightProofs();
+        // The proof watcher hands SPENT evidence for Send-owned proofs to the Send.
+        const finalized = new Promise<void>((resolve) => {
+          const off = mgr!.on('send:finalized', ({ operationId }) => {
+            if (operationId !== preparedSend.id) return;
+            off();
+            resolve();
+          });
+        });
+        await mgr!.enableProofStateWatcher();
+        await finalized;
 
+        expect((await mgr!.ops.send.get(preparedSend.id))?.state).toBe('finalized');
         const afterStates = await Promise.all(
           token.proofs.map((proof) => proofRepository.getProofBySecret(mintUrl, proof.secret)),
         );
