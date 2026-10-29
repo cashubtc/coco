@@ -1,4 +1,4 @@
-import { Amount, OutputData, type Wallet } from '@cashu/cashu-ts';
+import { Amount, OutputData, type Proof, type Wallet } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
@@ -24,7 +24,7 @@ import type {
   PendingMintOperation,
 } from '../../operations/mint/MintOperation';
 import type { ProofRepository } from '../../repositories';
-import type { KeyRingService, MintService, ProofService, WalletService } from '../../services';
+import type { KeyRingService, MintService, WalletService } from '../../services';
 import { deserializeOutputData, serializeOutputData } from '../../utils';
 
 describe('MintOnchainHandler', () => {
@@ -36,7 +36,7 @@ describe('MintOnchainHandler', () => {
   let keyRingService: KeyRingService;
   let wallet: Wallet;
   let mintAdapter: MintAdapter;
-  let proofService: ProofService;
+  let restoreOutputs: Mock<() => Promise<Proof[]>>;
   let proofRepository: ProofRepository;
   let walletService: WalletService;
   let mintService: MintService;
@@ -70,7 +70,6 @@ describe('MintOnchainHandler', () => {
     createQuoteData: { unit: 'sat' },
     wallet,
     mintAdapter,
-    proofService,
     proofRepository,
     walletService,
     mintService,
@@ -99,7 +98,6 @@ describe('MintOnchainHandler', () => {
       updatedAt: Date.now(),
     },
     mintAdapter,
-    proofService,
     proofRepository,
     walletService,
     mintService,
@@ -144,11 +142,7 @@ describe('MintOnchainHandler', () => {
     ...buildOperationContext(),
     operation: buildExecutingOperation(),
     localClaimabilityFacts,
-    restoreOutputs: () =>
-      proofService.recoverProofsFromOutputData(mintUrl, buildExecutingOperation().outputData, {
-        unit: 'sat',
-        persistRecoveredProofs: false,
-      }),
+    restoreOutputs,
     recordQuoteSnapshot: mock(async () => {}),
   });
 
@@ -195,11 +189,7 @@ describe('MintOnchainHandler', () => {
       checkMintQuote: mock(async () => remoteQuote),
     } as unknown as MintAdapter;
 
-    proofService = {
-      createOutputsAndIncrementCounters: mock(async () => ({ keep: [output], send: [] })),
-      saveProofs: mock(async () => {}),
-      recoverProofsFromOutputData: mock(async () => []),
-    } as unknown as ProofService;
+    restoreOutputs = mock(async (): Promise<Proof[]> => []);
     proofRepository = {} as ProofRepository;
     walletService = {} as WalletService;
     mintService = {} as MintService;
@@ -345,7 +335,7 @@ describe('MintOnchainHandler', () => {
   });
 
   it('recovers signed onchain outputs before retrying the mint', async () => {
-    (proofService.recoverProofsFromOutputData as Mock<any>).mockResolvedValueOnce([
+    restoreOutputs.mockResolvedValueOnce([
       {
         id: 'keyset-1',
         amount: Amount.from(10),
@@ -357,7 +347,7 @@ describe('MintOnchainHandler', () => {
     const result = await handler.recoverExecuting(buildRecoverContext());
 
     expect(result).toMatchObject({ status: 'ISSUED', proofs: expect.any(Array) });
-    expect(proofService.recoverProofsFromOutputData).toHaveBeenCalled();
+    expect(restoreOutputs).toHaveBeenCalled();
     expect(wallet.mintProofsOnchain).not.toHaveBeenCalled();
   });
 
@@ -365,7 +355,7 @@ describe('MintOnchainHandler', () => {
     const result = await handler.recoverExecuting(buildRecoverContext());
 
     expect(result).toMatchObject({ status: 'ISSUED', proofs: expect.any(Array) });
-    expect(proofService.recoverProofsFromOutputData).toHaveBeenCalled();
+    expect(restoreOutputs).toHaveBeenCalled();
     expect(wallet.mintProofsOnchain).toHaveBeenCalledWith(
       Amount.from(10),
       remoteQuote,
@@ -373,7 +363,6 @@ describe('MintOnchainHandler', () => {
       { keysetId: 'keyset-1' },
       { type: 'custom', data: [output] },
     );
-    expect(proofService.saveProofs).not.toHaveBeenCalled();
   });
 
   it('returns pending during recovery when output restore is empty and balance is unavailable', async () => {
@@ -405,21 +394,19 @@ describe('MintOnchainHandler', () => {
     (wallet.mintProofsOnchain as Mock<any>).mockImplementationOnce(async () => {
       throw new MintOperationError(20002, 'already issued');
     });
-    (proofService.recoverProofsFromOutputData as Mock<any>)
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([
-        {
-          id: 'keyset-1',
-          amount: Amount.from(10),
-          secret: 'out-1',
-          C: 'C_out_1',
-        },
-      ]);
+    restoreOutputs.mockResolvedValueOnce([]).mockResolvedValueOnce([
+      {
+        id: 'keyset-1',
+        amount: Amount.from(10),
+        secret: 'out-1',
+        C: 'C_out_1',
+      },
+    ]);
 
     const result = await handler.recoverExecuting(buildRecoverContext());
 
     expect(result).toMatchObject({ status: 'ISSUED', proofs: expect.any(Array) });
-    expect(proofService.recoverProofsFromOutputData).toHaveBeenCalledTimes(2);
+    expect(restoreOutputs).toHaveBeenCalledTimes(2);
   });
 
   it('retries funded onchain execution recovery after expiry', async () => {
@@ -432,7 +419,6 @@ describe('MintOnchainHandler', () => {
 
     expect(result).toMatchObject({ status: 'ISSUED', proofs: expect.any(Array) });
     expect(wallet.mintProofsOnchain).toHaveBeenCalled();
-    expect(proofService.saveProofs).not.toHaveBeenCalled();
   });
 
   it('fails recovery when the mint rejects onchain issuance with quote expired', async () => {
@@ -447,7 +433,6 @@ describe('MintOnchainHandler', () => {
       error: `Recovered: onchain quote ${quoteId} expired while executing mint`,
     });
     expect(wallet.mintProofsOnchain).toHaveBeenCalledTimes(1);
-    expect(proofService.saveProofs).not.toHaveBeenCalled();
   });
 
   it('leaves non-protocol expiry errors unresolved during onchain recovery', async () => {
@@ -461,7 +446,6 @@ describe('MintOnchainHandler', () => {
       status: 'UNRESOLVED',
       error: 'Authentication session expired',
     });
-    expect(proofService.saveProofs).not.toHaveBeenCalled();
   });
 
   it('reports the validated remote snapshot for a pending operation', async () => {

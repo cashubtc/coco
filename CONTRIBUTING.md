@@ -213,6 +213,12 @@ Published packages are versioned with Changesets. If your PR changes runtime
 behavior, public types, package exports, or documentation for a published package,
 you should usually include a changeset unless a maintainer tells you otherwise.
 
+For repository contract changes, choose the changeset bump using the
+[compatibility policy](packages/core/README.md#repository-compatibility). Put required adapter migration
+notes in the changeset: name the affected interfaces, implementation changes, and persistence migration
+(or state that none is needed). Update the supplied adapters and relevant conformance coverage together
+with each contract change.
+
 Stable and prerelease npm publishes validate and publish the tagged commit.
 Package versions and changelogs must be committed before the GitHub Release is
 published. See `RELEASING.md` for the maintainer release checklist.

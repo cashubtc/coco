@@ -69,6 +69,9 @@ persisted records. Core's [documented exports](packages/core/README.md#exports) 
 plugin audiences; [ServiceMap](packages/core/plugins/types.ts) makes reachable plugin service contracts
 compatibility-sensitive. An internal refactor can affect those contracts without changing root exports.
 
+Apply the [repository compatibility policy](packages/core/README.md#repository-compatibility)
+when reviewing changes to storage adapter contracts.
+
 Preserve support for ordinary records written by older releases until an explicit migration or
 breaking-change decision replaces it. Repairing an exceptional inconsistent state that an old
 implementation might have produced is a separate decision. Assess severity, plausible likelihood,

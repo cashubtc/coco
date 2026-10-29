@@ -29,6 +29,15 @@ export interface ProofUnitFilter {
   units?: string[];
 }
 
+/**
+ * Persistence contract for mints and their trust state.
+ *
+ * @remarks
+ * Unstable repository contract starting with v3: minor or major releases may introduce
+ * breaking changes with adapter migration notes. Patch releases preserve compatibility.
+ *
+ * @see {@link https://github.com/cashubtc/coco/blob/master/packages/core/README.md#repository-compatibility | Repository compatibility policy}
+ */
 export interface MintRepository {
   isTrustedMint(mintUrl: string): Promise<boolean>;
   /** Look up a single mint by URL, throwing if it doesn't exist. */
@@ -44,6 +53,15 @@ export interface MintRepository {
   deleteMint(mintUrl: string): Promise<void>;
 }
 
+/**
+ * Persistence contract for mint keysets.
+ *
+ * @remarks
+ * Unstable repository contract starting with v3: minor or major releases may introduce
+ * breaking changes with adapter migration notes. Patch releases preserve compatibility.
+ *
+ * @see {@link https://github.com/cashubtc/coco/blob/master/packages/core/README.md#repository-compatibility | Repository compatibility policy}
+ */
 export interface KeysetRepository {
   getKeysetsByMintUrl(mintUrl: string): Promise<Keyset[]>;
   getKeysetById(mintUrl: string, id: string): Promise<Keyset | null>;
@@ -59,11 +77,29 @@ export interface KeysetRepository {
   deleteKeyset(mintUrl: string, keysetId: string): Promise<void>;
 }
 
+/**
+ * Persistence contract for keyset derivation counters.
+ *
+ * @remarks
+ * Unstable repository contract starting with v3: minor or major releases may introduce
+ * breaking changes with adapter migration notes. Patch releases preserve compatibility.
+ *
+ * @see {@link https://github.com/cashubtc/coco/blob/master/packages/core/README.md#repository-compatibility | Repository compatibility policy}
+ */
 export interface CounterRepository {
   getCounter(mintUrl: string, keysetId: string): Promise<Counter | null>;
   setCounter(mintUrl: string, keysetId: string, counter: number): Promise<void>;
 }
 
+/**
+ * Persistence contract for wallet proofs.
+ *
+ * @remarks
+ * Unstable repository contract starting with v3: minor or major releases may introduce
+ * breaking changes with adapter migration notes. Patch releases preserve compatibility.
+ *
+ * @see {@link https://github.com/cashubtc/coco/blob/master/packages/core/README.md#repository-compatibility | Repository compatibility policy}
+ */
 export interface ProofRepository {
   saveProofs(mintUrl: string, proofs: CoreProof[]): Promise<void>;
   getReadyProofs(mintUrl: string, filter?: ProofUnitFilter): Promise<CoreProof[]>;
@@ -132,6 +168,12 @@ export interface ProofRepository {
  * Method-scoped APIs address the concrete storage row once the quote method is known. Adapters must
  * reject upserts that would create two mint quotes with the same `{ mintUrl, quoteId }` for
  * different methods at the same normalized mint URL. Melt quotes use a separate identity namespace.
+ *
+ * @remarks
+ * Unstable repository contract starting with v3: minor or major releases may introduce
+ * breaking changes with adapter migration notes. Patch releases preserve compatibility.
+ *
+ * @see {@link https://github.com/cashubtc/coco/blob/master/packages/core/README.md#repository-compatibility | Repository compatibility policy}
  */
 export interface MintQuoteRepository {
   /**
@@ -172,6 +214,15 @@ export interface MintQuoteRepository {
   getPendingMintQuotes(method?: string): Promise<MintQuote[]>;
 }
 
+/**
+ * Persistence contract for legacy mint quotes.
+ *
+ * @remarks
+ * Unstable repository contract starting with v3: minor or major releases may introduce
+ * breaking changes with adapter migration notes. Patch releases preserve compatibility.
+ *
+ * @see {@link https://github.com/cashubtc/coco/blob/master/packages/core/README.md#repository-compatibility | Repository compatibility policy}
+ */
 export interface LegacyMintQuoteRepository {
   getPendingLegacyMintQuotes(mintUrl?: string): Promise<MintQuote[]>;
 }
@@ -183,6 +234,12 @@ export interface LegacyMintQuoteRepository {
  * Method-scoped APIs address the concrete storage row once the quote method is known. Adapters must
  * reject upserts that would create two melt quotes with the same `{ mintUrl, quoteId }` for
  * different methods at the same normalized mint URL. Mint quotes use a separate identity namespace.
+ *
+ * @remarks
+ * Unstable repository contract starting with v3: minor or major releases may introduce
+ * breaking changes with adapter migration notes. Patch releases preserve compatibility.
+ *
+ * @see {@link https://github.com/cashubtc/coco/blob/master/packages/core/README.md#repository-compatibility | Repository compatibility policy}
  */
 export interface MeltQuoteRepository {
   /**
@@ -211,6 +268,15 @@ export interface MeltQuoteRepository {
   getPendingMeltQuotes(method?: string): Promise<MeltQuote[]>;
 }
 
+/**
+ * Persistence contract for keypairs and derivation high-water marks.
+ *
+ * @remarks
+ * Unstable repository contract starting with v3: minor or major releases may introduce
+ * breaking changes with adapter migration notes. Patch releases preserve compatibility.
+ *
+ * @see {@link https://github.com/cashubtc/coco/blob/master/packages/core/README.md#repository-compatibility | Repository compatibility policy}
+ */
 export interface KeyRingRepository {
   getPersistedKeyPair(publicKey: string, purpose?: KeypairPurpose): Promise<Keypair | null>;
   setPersistedKeyPair(keyPair: Keypair): Promise<void>;
@@ -228,13 +294,40 @@ export interface KeyRingRepository {
   setLastAllocatedIndex(purpose: KeypairPurpose, derivationIndex: number): Promise<void>;
 }
 
+/**
+ * Persistence contract for wallet history projections.
+ *
+ * @remarks
+ * Unstable repository contract starting with v3: minor or major releases may introduce
+ * breaking changes with adapter migration notes. Patch releases preserve compatibility.
+ *
+ * @see {@link https://github.com/cashubtc/coco/blob/master/packages/core/README.md#repository-compatibility | Repository compatibility policy}
+ */
 export interface HistoryProjectionRepository {
   getPaginatedHistoryEntries(limit: number, offset: number): Promise<HistoryEntry[]>;
   getHistoryEntryById(id: string): Promise<HistoryEntry | null>;
 }
 
+/**
+ * Alias for the wallet history projection persistence contract.
+ *
+ * @remarks
+ * Unstable repository contract starting with v3: minor or major releases may introduce
+ * breaking changes with adapter migration notes. Patch releases preserve compatibility.
+ *
+ * @see {@link https://github.com/cashubtc/coco/blob/master/packages/core/README.md#repository-compatibility | Repository compatibility policy}
+ */
 export type HistoryRepository = HistoryProjectionRepository;
 
+/**
+ * Persistence contract for Send Operations.
+ *
+ * @remarks
+ * Unstable repository contract starting with v3: minor or major releases may introduce
+ * breaking changes with adapter migration notes. Patch releases preserve compatibility.
+ *
+ * @see {@link https://github.com/cashubtc/coco/blob/master/packages/core/README.md#repository-compatibility | Repository compatibility policy}
+ */
 export interface SendOperationRepository {
   /** Create a new send operation */
   create(operation: SendOperation): Promise<void>;
@@ -269,6 +362,15 @@ export interface SendOperationRepository {
   delete(id: string): Promise<void>;
 }
 
+/**
+ * Persistence contract for Melt Operations.
+ *
+ * @remarks
+ * Unstable repository contract starting with v3: minor or major releases may introduce
+ * breaking changes with adapter migration notes. Patch releases preserve compatibility.
+ *
+ * @see {@link https://github.com/cashubtc/coco/blob/master/packages/core/README.md#repository-compatibility | Repository compatibility policy}
+ */
 export interface MeltOperationRepository {
   /** Create a new melt operation */
   create(operation: MeltOperation): Promise<void>;
@@ -294,6 +396,15 @@ export interface MeltOperationRepository {
   /** Delete a melt operation */
   delete(id: string): Promise<void>;
 }
+/**
+ * Persistence contract for mint authentication sessions.
+ *
+ * @remarks
+ * Unstable repository contract starting with v3: minor or major releases may introduce
+ * breaking changes with adapter migration notes. Patch releases preserve compatibility.
+ *
+ * @see {@link https://github.com/cashubtc/coco/blob/master/packages/core/README.md#repository-compatibility | Repository compatibility policy}
+ */
 export interface AuthSessionRepository {
   getSession(mintUrl: string): Promise<AuthSession | null>;
 
@@ -304,6 +415,15 @@ export interface AuthSessionRepository {
   getAllSessions(): Promise<AuthSession[]>;
 }
 
+/**
+ * Persistence contract for Mint Operations.
+ *
+ * @remarks
+ * Unstable repository contract starting with v3: minor or major releases may introduce
+ * breaking changes with adapter migration notes. Patch releases preserve compatibility.
+ *
+ * @see {@link https://github.com/cashubtc/coco/blob/master/packages/core/README.md#repository-compatibility | Repository compatibility policy}
+ */
 export interface MintOperationRepository {
   /** Create a new mint operation */
   create(operation: MintOperation): Promise<void>;
@@ -330,6 +450,15 @@ export interface MintOperationRepository {
   delete(id: string): Promise<void>;
 }
 
+/**
+ * Persistence contract for Receive Operations.
+ *
+ * @remarks
+ * Unstable repository contract starting with v3: minor or major releases may introduce
+ * breaking changes with adapter migration notes. Patch releases preserve compatibility.
+ *
+ * @see {@link https://github.com/cashubtc/coco/blob/master/packages/core/README.md#repository-compatibility | Repository compatibility policy}
+ */
 export interface ReceiveOperationRepository {
   /** Create a new receive operation */
   create(operation: ReceiveOperation): Promise<void>;
@@ -364,6 +493,15 @@ export interface ReceiveOperationRepository {
   delete(id: string): Promise<void>;
 }
 
+/**
+ * Persistence contract for Payment Request Receive Operations.
+ *
+ * @remarks
+ * Unstable repository contract starting with v3: minor or major releases may introduce
+ * breaking changes with adapter migration notes. Patch releases preserve compatibility.
+ *
+ * @see {@link https://github.com/cashubtc/coco/blob/master/packages/core/README.md#repository-compatibility | Repository compatibility policy}
+ */
 export interface PaymentRequestReceiveOperationRepository {
   create(operation: PaymentRequestReceiveOperation): Promise<void>;
   update(operation: PaymentRequestReceiveOperation): Promise<void>;
@@ -373,6 +511,15 @@ export interface PaymentRequestReceiveOperationRepository {
   list(filter?: { state?: PaymentRequestReceiveState }): Promise<PaymentRequestReceiveOperation[]>;
 }
 
+/**
+ * Persistence contract for Payment Request Receive Attempts.
+ *
+ * @remarks
+ * Unstable repository contract starting with v3: minor or major releases may introduce
+ * breaking changes with adapter migration notes. Patch releases preserve compatibility.
+ *
+ * @see {@link https://github.com/cashubtc/coco/blob/master/packages/core/README.md#repository-compatibility | Repository compatibility policy}
+ */
 export interface PaymentRequestReceiveAttemptRepository {
   create(attempt: PaymentRequestReceiveAttempt): Promise<void>;
   update(attempt: PaymentRequestReceiveAttempt): Promise<void>;
@@ -413,6 +560,15 @@ interface RepositoriesBase {
   mintSwap: MintSwapPersistence;
 }
 
+/**
+ * Public extension contract for supplied and custom storage adapters.
+ *
+ * @remarks
+ * Unstable repository contract starting with v3: minor or major releases may introduce
+ * breaking changes with adapter migration notes. Patch releases preserve compatibility.
+ *
+ * @see {@link https://github.com/cashubtc/coco/blob/master/packages/core/README.md#repository-compatibility | Repository compatibility policy}
+ */
 export interface Repositories extends RepositoriesBase {
   init(): Promise<void>;
 
@@ -428,6 +584,15 @@ export interface Repositories extends RepositoriesBase {
   withTransaction<T>(fn: (repos: RepositoryTransactionScope) => Promise<T>): Promise<T>;
 }
 
+/**
+ * Repository set bound to one Wallet transaction.
+ *
+ * @remarks
+ * Unstable repository contract starting with v3: minor or major releases may introduce
+ * breaking changes with adapter migration notes. Patch releases preserve compatibility.
+ *
+ * @see {@link https://github.com/cashubtc/coco/blob/master/packages/core/README.md#repository-compatibility | Repository compatibility policy}
+ */
 export type RepositoryTransactionScope = RepositoriesBase;
 
 export { RepositoryTransactionConflictError } from './RepositoryTransactionError.ts';
