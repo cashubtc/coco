@@ -4,7 +4,6 @@ import { describe, it, beforeEach, expect, mock } from 'bun:test';
 import { WalletApi } from '../../api/WalletApi';
 import { MintService } from '../../services/MintService';
 import { WalletService } from '../../services/WalletService';
-import { ProofService } from '../../services/ProofService';
 import { WalletRestoreService } from '../../services/WalletRestoreService';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
@@ -19,7 +18,7 @@ describe('WalletApi - Trust Enforcement', () => {
   let walletApi: WalletApi;
   let mockMintService: any;
   let mockWalletService: any;
-  let mockProofService: any;
+  let mockBalanceQueries: any;
   let mockWalletRestoreService: any;
   let eventBus: EventBus<CoreEvents>;
   let receiveOperationService: ReceiveOperationService;
@@ -105,11 +104,7 @@ describe('WalletApi - Trust Enforcement', () => {
       })),
     };
 
-    mockProofService = {
-      createOutputsAndIncrementCounters: mock(async () => ({
-        keep: makeOutputData(['out-1', 'out-2']),
-        send: [],
-      })),
+    mockBalanceQueries = {
       getBalancesByMint: mock(async () => ({
         [testMintUrl]: {
           spendable: Amount.from(10),
@@ -128,14 +123,6 @@ describe('WalletApi - Trust Enforcement', () => {
           },
         },
       })),
-      getBalancesByUnit: mock(async () => ({
-        sat: {
-          spendable: Amount.from(10),
-          reserved: Amount.from(5),
-          total: Amount.from(15),
-          unit: 'sat',
-        },
-      })),
       getBalanceTotal: mock(async () => ({
         spendable: Amount.from(10),
         reserved: Amount.from(5),
@@ -150,8 +137,6 @@ describe('WalletApi - Trust Enforcement', () => {
           unit: 'sat',
         },
       })),
-      saveProofs: mock(async () => {}),
-      prepareProofsForReceiving: mock(async (proofs: any[]) => proofs),
     };
 
     mockWalletRestoreService = {};
@@ -164,10 +149,10 @@ describe('WalletApi - Trust Enforcement', () => {
     walletApi = new WalletApi(
       mockMintService,
       mockWalletService,
-      mockProofService,
       mockWalletRestoreService,
       receiveOperationService,
       tokenService,
+      mockBalanceQueries,
     );
   });
 
@@ -187,49 +172,6 @@ describe('WalletApi - Trust Enforcement', () => {
         total: Amount.from(15),
         unit: 'sat',
       });
-    });
-
-    it('drives balances from an explicitly injected BalanceQueries, not ProofService', async () => {
-      const mockBalanceQueries = {
-        getBalancesByMint: mock(async () => ({
-          [testMintUrl]: {
-            spendable: Amount.from(20),
-            reserved: Amount.from(0),
-            total: Amount.from(20),
-            unit: 'sat',
-          },
-        })),
-        getBalancesByMintAndUnit: mock(async () => ({})),
-        getBalanceTotal: mock(async () => ({
-          spendable: Amount.from(20),
-          reserved: Amount.from(0),
-          total: Amount.from(20),
-          unit: 'sat',
-        })),
-        getBalanceTotalByUnit: mock(async () => ({})),
-      };
-
-      const walletApiWithInjectedQueries = new WalletApi(
-        mockMintService,
-        mockWalletService,
-        mockProofService,
-        mockWalletRestoreService,
-        receiveOperationService,
-        tokenService,
-        undefined,
-        mockBalanceQueries,
-      );
-
-      await expect(walletApiWithInjectedQueries.balances.byMint()).resolves.toEqual({
-        [testMintUrl]: {
-          spendable: Amount.from(20),
-          reserved: Amount.from(0),
-          total: Amount.from(20),
-          unit: 'sat',
-        },
-      });
-      expect(mockBalanceQueries.getBalancesByMint).toHaveBeenCalledTimes(1);
-      expect(mockProofService.getBalancesByMint).not.toHaveBeenCalled();
     });
 
     it('should reject tokens from untrusted mints', async () => {

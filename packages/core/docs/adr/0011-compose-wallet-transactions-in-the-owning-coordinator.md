@@ -118,12 +118,11 @@ it does not change the persisted parent format.
 
 The Restore migration adds an explicit exception
 to the public API compatibility policy: move Restore directly to scoped monotonic advancement and
-remove plugin-facing `overwriteCounter()`, without first reworking CounterService. After migrating
-the remaining legacy output allocators, remove CounterService and its plugin-facing entry. Until
-those callers migrate, Restore's scoped advancement alone cannot prevent their stale counter writes
-or make their output derivation and later counter increment one atomic Output Allocation. Receive now
+remove plugin-facing `overwriteCounter()`, without first reworking CounterService. Receive now
 owns transactional Output Allocation, and Sweep delegates exchanges through its coordinator methods.
-The legacy plugin-facing allocation helpers remain outside that migration.
+ProofService, CounterService and their plugin-facing entries have since been removed, so every
+Output Allocation goes through ScopedOutputs in its owning transaction. See
+[ADR-0014](0014-plugins-get-no-direct-proof-or-counter-authority.md).
 
 Restore commits proof import and counter advancement together per keyset. Its coordinator opens
 one transaction, and a branded transition composes ScopedProofs and ScopedOutputs within that scope.

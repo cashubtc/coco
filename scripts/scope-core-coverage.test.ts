@@ -23,14 +23,14 @@ test('keeps core hits and misses while removing imported adapters and generated 
 });
 
 test('normalizes package-relative integration paths and absolute source paths', () => {
-  const expected = record('packages/core/services/ProofService.ts');
+  const expected = record('packages/core/services/MintService.ts');
   expect(
     scopeCoreCoverage(
-      record('services/ProofService.ts') + record('../sql-storage/src/repositories.ts'),
+      record('services/MintService.ts') + record('../sql-storage/src/repositories.ts'),
       coreRoot,
     ),
   ).toBe(expected);
-  expect(scopeCoreCoverage(record(`${coreRoot}services/ProofService.ts`), coreRoot)).toBe(expected);
+  expect(scopeCoreCoverage(record(`${coreRoot}services/MintService.ts`), coreRoot)).toBe(expected);
 });
 
 test('rejects empty or malformed reports instead of uploading misleading coverage', () => {

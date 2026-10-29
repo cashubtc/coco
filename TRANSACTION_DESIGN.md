@@ -251,13 +251,13 @@ Publish proof-saved, proof-state-changed, and counter-updated events only for ac
 changes. Matching existing proofs and unchanged counters produce no duplicate update events.
 Listener failures follow the existing post-commit publication policy and do not undo the Restore.
 
-Remove `CounterService.overwriteCounter()` when its Restore caller moves, without retaining a
-compatibility wrapper. Receive now owns its transactional Output Allocation, and Sweep delegates
-exchanges through Receive's public coordinator methods. Legacy plugin-facing ProofService allocation helpers and
-CounterService remain; migrate their remaining callers, then remove CounterService and its
-plugin-facing entry once no callers remain. These removals
-intentionally change the plugin-facing service API. Restore's migration alone does not establish
-exclusive Output Allocation or prevent later stale writes by legacy counter callers.
+`CounterService.overwriteCounter()` was removed when its Restore caller moved, without a
+compatibility wrapper. Receive owns its transactional Output Allocation, and Sweep delegates
+exchanges through Receive's public coordinator methods. The removal is complete: ProofService,
+CounterService and their `proofService` and `counterService` plugin keys no longer exist, so no
+legacy caller can allocate outputs or write counters outside a coordinator-owned transaction.
+Plugins read balances through `balances` and get no proof or counter write path. See
+[ADR-0014](packages/core/docs/adr/0014-plugins-get-no-direct-proof-or-counter-authority.md).
 
 ## Mint Operations
 
@@ -541,5 +541,7 @@ Behavior tests cover memory and persistent adapters:
 
 Public APIs, package exports, persisted formats, and protocol behavior do not change with this
 internal composition model, except for the explicitly accepted proof-state addition and plugin-facing removals in the
-Restore and legacy counter migration above. `CoreTransaction`, `Transition`, their helpers, and the runner remain internal implementation details.
+Restore and legacy counter migration above. That migration is complete: ProofService and
+CounterService are removed, and plugins have no proof or counter write path
+([ADR-0014](packages/core/docs/adr/0014-plugins-get-no-direct-proof-or-counter-authority.md)). `CoreTransaction`, `Transition`, their helpers, and the runner remain internal implementation details.
 They must not be exported from package entry points.

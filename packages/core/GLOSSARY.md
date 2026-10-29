@@ -144,6 +144,12 @@ _Avoid_: Restore, restart, resume
 The act of discovering proofs from a source Wallet Seed and exchanging their available value for newly issued proofs belonging to the destination Wallet. Unlike Restore, Sweep transfers value through a mint exchange.
 _Avoid_: Restore, Wallet Import
 
+**Owning Operation**:
+The operation that holds a proof, as an input it reserved or an output it created, until the
+operation releases it or finishes. Only the Owning Operation decides that proof's state, so evidence
+about the proof goes to it.
+_Avoid_: Proof owner, reserving operation
+
 **Pending Proof**:
 A proof retained by the Wallet as unavailable while a mint-reported transaction remains unresolved.
 Its return to spendable funds depends on resolving that transaction and respecting any local

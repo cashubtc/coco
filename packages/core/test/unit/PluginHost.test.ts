@@ -1,7 +1,7 @@
 import { describe, it, beforeEach, afterEach, expect } from 'bun:test';
 import { PluginHost } from '../../plugins/PluginHost.ts';
 import { DuplicatePluginRegistrationError } from '../../plugins/types.ts';
-import type { Plugin } from '../../plugins/types.ts';
+import type { Plugin, ServiceKey } from '../../plugins/types.ts';
 
 describe('PluginHost', () => {
   let host: PluginHost;
@@ -14,10 +14,9 @@ describe('PluginHost', () => {
     services = {
       mintService: { s: 'mint' },
       walletService: { s: 'wallet' },
-      proofService: { s: 'proof' },
+      balances: { s: 'balances' },
       seedService: { s: 'seed' },
       walletRestoreService: { s: 'walletRestore' },
-      counterService: { s: 'counter' },
       historyService: { s: 'history' },
       subscriptions: { s: 'subs' },
       eventBus: { s: 'bus' },
@@ -451,5 +450,16 @@ describe('PluginHost', () => {
     await host.init(services);
     await host.ready();
     expect(host.getExtensions()).toEqual({ readyExt: { ready: true } });
+  });
+
+  it('offers read-only balances but no proof or counter services', () => {
+    const offered: ServiceKey[] = ['balances'];
+    // @ts-expect-error Plugins get no direct proof authority (ADR-0014).
+    const proofKey: ServiceKey = 'proofService';
+    // @ts-expect-error Plugins get no counter authority (ADR-0014).
+    const counterKey: ServiceKey = 'counterService';
+    expect(offered).toEqual(['balances']);
+    void proofKey;
+    void counterKey;
   });
 });
