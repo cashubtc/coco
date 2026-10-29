@@ -1,6 +1,7 @@
 import type { MintKeys } from '@cashu/cashu-ts';
 import type { CoreProof } from '../../types.ts';
-import type { MintSwapOperation } from './MintSwapOperation.ts';
+import type { MintSwapOperation, OrdinaryChildAuthority } from './MintSwapOperation.ts';
+import type { MeltQuoteRef, MintQuoteRef } from '../../models/QuoteIdentity.ts';
 import type { ExecutingMeltOperation } from '../melt/MeltOperation.ts';
 import type { ExecutingMintOperation } from '../mint/MintOperation.ts';
 import type {
@@ -36,4 +37,11 @@ export interface BeginMintSwapDestinationResult {
   operation: MintSwapOperation;
   destination?: ExecutingMintOperation;
   changed: boolean;
+}
+
+/** An operation ID matches a parent's child; a quote reference matches its quote. */
+export interface AssertOrdinaryChildWorkInput {
+  kind: 'mint' | 'melt';
+  target: string | MintQuoteRef | MeltQuoteRef;
+  authority: OrdinaryChildAuthority;
 }

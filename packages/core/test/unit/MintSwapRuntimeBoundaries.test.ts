@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import { Amount, RateLimitError, Wallet, type MintQuoteBolt11Response } from '@cashu/cashu-ts';
+import { MintSwapChildOperationError } from '../../operations/mintSwap/MintSwapErrors.ts';
+import { MintSwapInvariantError } from '../../operations/mintSwap/MintSwapErrors.ts';
+import { flagMintSwapAttention } from '../../operations/mintSwap/MintSwapTransitions.ts';
+import { MintService } from '../../services/MintService.ts';
+import { MintOperationService } from '../../operations/mint/MintOperationService.ts';
+import { MeltOperationService } from '../../operations/melt/MeltOperationService.ts';
 import { initializeCoco, Manager } from '../../Manager.ts';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 import { MintAdapter } from '../../infra/MintAdapter.ts';
@@ -19,6 +25,7 @@ import {
 
 // Exercise the real Manager, workflows, handlers, wallets and watchers. Only protocol I/O is stubbed.
 type Runtime = {
+  mintOperationService: MintOperationService;
   mintAdapter: MintAdapter;
   quoteLifecycle: QuoteLifecycle;
   walletService: WalletService;
@@ -38,6 +45,33 @@ async function within<T>(promise: Promise<T>): Promise<T> {
   } finally {
     clearTimeout(timer!);
   }
+}
+
+/**
+ * Counts ordinary background work that skipped a matching target because its parent was active.
+ * The returned function resolves once that many skips have happened.
+ */
+function observeSkips<T>(
+  service: { canResolve(target: T): Promise<boolean> },
+  matches: (target: T) => boolean,
+): (count: number) => Promise<void> {
+  let skips = 0;
+  const waiters: { count: number; resolve: () => void }[] = [];
+  const canResolve = service.canResolve;
+  spyOn(service, 'canResolve').mockImplementation(async function (this: unknown, target: T) {
+    const allowed = await canResolve.call(this, target);
+    if (!allowed && matches(target)) {
+      skips++;
+      for (const waiter of waiters) if (waiter.count <= skips) waiter.resolve();
+    }
+    return allowed;
+  });
+  return (count) => {
+    const reached = deferred();
+    waiters.push({ count, resolve: reached.resolve });
+    if (skips >= count) reached.resolve();
+    return reached.promise;
+  };
 }
 
 describe('Mint Swap real runtime boundaries', () => {
@@ -91,7 +125,7 @@ describe('Mint Swap real runtime boundaries', () => {
     const destinationCheck = spyOn(MintAdapter.prototype, 'checkMintQuote').mockImplementation(
       (async () => destinationResponse()) as MintAdapter['checkMintQuote'],
     );
-    spyOn(MintAdapter.prototype, 'customMeltBolt11').mockImplementation(async () =>
+    const melt = spyOn(MintAdapter.prototype, 'customMeltBolt11').mockImplementation(async () =>
       sourceResponse(),
     );
     const issuance = spyOn(Wallet.prototype, 'mintProofsBolt11').mockImplementation(async () => {
@@ -131,6 +165,7 @@ describe('Mint Swap real runtime boundaries', () => {
       repo,
       fixture,
       issuance,
+      melt,
       sourceCheck,
       destinationCheck,
       sourceResponse,
@@ -142,6 +177,320 @@ describe('Mint Swap real runtime boundaries', () => {
         destinationState = state;
       },
     };
+  }
+
+  it('rejects ordinary child commands and quote claims while preserving reads and parent commands', async () => {
+    const { manager, runtime, fixture, issuance, sourceCheck, destinationCheck } = await setup();
+    const commands = [
+      () => manager.ops.melt.execute('source-child'),
+      () => manager.ops.melt.cancel('source-child'),
+      () => manager.ops.melt.finalize('source-child'),
+      () => manager.ops.melt.prepare({ quote: fixture.parent.sourceQuote }),
+      () => manager.ops.mint.execute('destination-child'),
+      () => manager.ops.mint.finalize('destination-child'),
+      () => manager.ops.mint.refresh('destination-child'),
+      () => manager.ops.mint.checkPayment('destination-child'),
+      () => manager.ops.mint.prepare({ quote: fixture.parent.destinationQuote, amount: 8 }),
+      () =>
+        runtime.mintOperationService.claimMintQuote(
+          'https://destination.test/',
+          'bolt11',
+          'destination-quote',
+        ),
+    ];
+    for (const command of commands) {
+      await expect(command()).rejects.toMatchObject({
+        name: 'MintSwapChildOperationError',
+        parentOperationId: 'swap',
+      });
+    }
+    // Refreshing a prepared Melt has nothing to resolve, so it reads the child unchanged.
+    expect((await manager.ops.melt.refresh('source-child')).state).toBe('prepared');
+    expect((await manager.ops.melt.get('source-child'))?.state).toBe('prepared');
+    expect((await manager.ops.mint.listPending()).map((op) => op.id)).toContain(
+      'destination-child',
+    );
+    expect(issuance).not.toHaveBeenCalled();
+    expect(sourceCheck).not.toHaveBeenCalled();
+    expect(destinationCheck).not.toHaveBeenCalled();
+    await manager.ops.mintSwap.execute('swap');
+    expect((await manager.ops.mintSwap.refresh('swap')).state).toBe('completed');
+    // A stopped parent releases resolution, but never authorizes another source payment.
+    await expect(
+      manager.ops.melt.prepare({ quote: fixture.parent.sourceQuote }),
+    ).rejects.toMatchObject({ parentOperationId: 'swap', parentStopped: true });
+    expect((await manager.ops.melt.refresh('source-child')).state).toBe('finalized');
+    expect((await manager.ops.mint.refresh('destination-child')).state).toBe('finalized');
+    expect(
+      await runtime.mintOperationService.claimMintQuote(
+        'https://destination.test/',
+        'bolt11',
+        'destination-quote',
+      ),
+    ).toEqual([]);
+    expect(issuance).toHaveBeenCalledTimes(1);
+  });
+
+  it('releases reserved source proofs of a stopped parent without authorizing payment', async () => {
+    const { manager, repo, fixture, melt } = await setup();
+    const reserved = await repo.proofRepository.getProofBySecret('https://source.test', 'original');
+    expect(reserved?.usedByOperationId).toBe('source-child');
+    // Contradictory canonical evidence stops the parent before source authorization.
+    const quote = await repo.meltQuoteRepository.getMeltQuote(
+      'https://source.test',
+      'bolt11',
+      'source-quote',
+    );
+    await repo.meltQuoteRepository.upsertMeltQuote({ ...quote!, request: 'lnbc1contradiction' });
+    expect((await manager.ops.mintSwap.execute('swap')).state).toBe('needs_attention');
+    expect((await manager.ops.melt.get('source-child'))?.state).toBe('prepared');
+    for (const command of [
+      () => manager.ops.melt.execute('source-child'),
+      () => manager.ops.melt.prepare({ quote: fixture.parent.sourceQuote }),
+    ]) {
+      await expect(command()).rejects.toMatchObject({
+        name: 'MintSwapChildOperationError',
+        parentOperationId: 'swap',
+        parentStopped: true,
+      });
+    }
+    expect(melt).not.toHaveBeenCalled();
+    await manager.ops.melt.cancel('source-child');
+    expect((await manager.ops.melt.get('source-child'))?.state).toBe('rolled_back');
+    const released = await repo.proofRepository.getProofBySecret('https://source.test', 'original');
+    expect(released?.state).toBe('ready');
+    expect(released?.usedByOperationId).toBeUndefined();
+    expect((await manager.ops.mintSwap.refresh('swap')).state).toBe('needs_attention');
+    expect(melt).not.toHaveBeenCalled();
+  });
+
+  it('settles in-flight children of a stopped parent through ordinary recovery and claiming', async () => {
+    const { manager, runtime, fixture, setSourceState, issuance, destinationResponse } =
+      await setup();
+    setSourceState('PENDING');
+    await manager.ops.mintSwap.execute('swap');
+    expect((await manager.ops.melt.get('source-child'))?.state).toBe('pending');
+    // Commit the stop exactly as the coordinator's attention handler does.
+    await fixture.runner.run((tx) =>
+      tx.perform(flagMintSwapAttention, {
+        id: 'swap',
+        now: 20_000,
+        error: new MintSwapInvariantError('source_settlement', 'settlement_mismatch', 'source'),
+      }),
+    );
+    expect((await manager.ops.mintSwap.get('swap'))?.state).toBe('needs_attention');
+    setSourceState('PAID');
+    await manager.ops.melt.recovery.run();
+    expect((await manager.ops.melt.get('source-child'))?.state).toBe('finalized');
+    await runtime.quoteLifecycle.recordMintQuoteSnapshot(
+      'https://destination.test',
+      'bolt11',
+      destinationResponse(),
+    );
+    expect(
+      (await runtime.mintOperationService.claimPendingMintQuotes()).map((op) => op.id),
+    ).toEqual(['destination-child']);
+    expect((await manager.ops.mint.get('destination-child'))?.state).toBe('finalized');
+    expect(issuance).toHaveBeenCalledTimes(1);
+    // The parent record keeps its diagnosis; it never resumes.
+    expect((await manager.ops.mintSwap.refresh('swap')).state).toBe('needs_attention');
+  });
+
+  it('keeps pending children unchanged under ordinary processors, auto claiming and generic recovery', async () => {
+    const {
+      manager,
+      runtime,
+      fixture,
+      repo,
+      setSourceState,
+      sourceCheck,
+      destinationCheck,
+      issuance,
+      destinationResponse,
+    } = await setup();
+    setSourceState('PENDING');
+    await manager.ops.mintSwap.execute('swap');
+    const parent = await manager.ops.mintSwap.get('swap');
+    const source = await manager.ops.melt.get('source-child');
+    const destination = await manager.ops.mint.get('destination-child');
+    const proof = await repo.proofRepository.getProofBySecret('https://source.test', 'original');
+    sourceCheck.mockClear();
+    destinationCheck.mockClear();
+    setSourceState('PAID');
+    await manager.enableMintOperationProcessor({ initialEnqueueDelayMs: 0 });
+    await manager.enableMeltSettlementProcessor();
+    // The canonical quote can still be observed while ordinary advancement is excluded.
+    await runtime.quoteLifecycle.recordMintQuoteSnapshot(
+      'https://destination.test',
+      'bolt11',
+      destinationResponse(),
+    );
+    await manager.ops.mint.recovery.run();
+    await manager.ops.melt.recovery.run();
+    expect(await runtime.mintOperationService.claimPendingMintQuotes()).toEqual([]);
+    await manager.disableMintOperationProcessor();
+    await manager.disableMeltSettlementProcessor();
+    expect(await manager.ops.mintSwap.get('swap')).toEqual(parent);
+    expect(await manager.ops.melt.get('source-child')).toEqual(source);
+    expect(await manager.ops.mint.get('destination-child')).toEqual(destination);
+    expect(await repo.proofRepository.getProofBySecret('https://source.test', 'original')).toEqual(
+      proof,
+    );
+    expect(sourceCheck).not.toHaveBeenCalled();
+    expect(destinationCheck).not.toHaveBeenCalled();
+    expect(issuance).not.toHaveBeenCalled();
+    expect(await manager.ops.mint.listByQuote(fixture.parent.destinationQuote)).toHaveLength(1);
+    await manager.ops.mintSwap.refresh('swap');
+    expect((await manager.ops.mintSwap.refresh('swap')).state).toBe('completed');
+  });
+
+  it('resumes a settlement check skipped while the parent was active when it stops', async () => {
+    const { manager, runtime, repo, setSourceState, sourceCheck } = await setup();
+    await manager.enableMeltSettlementProcessor();
+    const skips = observeSkips(MeltOperationService.prototype, (id) => id === 'source-child');
+    setSourceState('PENDING');
+    await manager.ops.mintSwap.execute('swap');
+    expect((await manager.ops.melt.get('source-child'))?.state).toBe('pending');
+    // The pending child's initial check runs on a timer; let it skip so it cannot settle the child
+    // after the parent stops.
+    await within(skips(1));
+    setSourceState('PAID');
+    // PAID is observed while the parent is active, so the processor leaves the child alone.
+    await runtime.quoteLifecycle.refreshMeltQuoteById({
+      mintUrl: 'https://source.test',
+      quoteId: 'source-quote',
+    });
+    await within(skips(2));
+    expect((await manager.ops.melt.get('source-child'))?.state).toBe('pending');
+    const finalized = deferred();
+    manager.on('melt-op:finalized', ({ operationId }) => {
+      if (operationId === 'source-child') finalized.resolve();
+    });
+    // The parent then stops on contradictory evidence; no later quote event reaches the processor.
+    const destination = await repo.mintQuoteRepository.getMintQuote(
+      'https://destination.test',
+      'bolt11',
+      'destination-quote',
+    );
+    if (destination?.method !== 'bolt11') throw new Error('Missing destination quote');
+    await repo.mintQuoteRepository.upsertMintQuote({ ...destination, amount: Amount.from(9) });
+    sourceCheck.mockClear();
+    expect((await manager.ops.mintSwap.refresh('swap')).state).toBe('needs_attention');
+    expect(sourceCheck).not.toHaveBeenCalled();
+    await within(finalized.promise);
+    expect((await manager.ops.melt.get('source-child'))?.state).toBe('finalized');
+  });
+
+  it('resumes a skipped destination claim when the parent stops', async () => {
+    const { manager, runtime, repo, setDestinationState, issuance, destinationResponse } =
+      await setup();
+    await manager.enableMintOperationProcessor({ initialEnqueueDelayMs: 0 });
+    setDestinationState('UNPAID');
+    await manager.ops.mintSwap.execute('swap');
+    expect((await manager.ops.mint.get('destination-child'))?.state).toBe('pending');
+    setDestinationState('PAID');
+    // The processor sees the paid quote while the parent is active and must leave it alone.
+    const skips = observeSkips(
+      MintOperationService.prototype,
+      (target) => typeof target !== 'string' && target.quoteId === 'destination-quote',
+    );
+    await runtime.quoteLifecycle.recordMintQuoteSnapshot(
+      'https://destination.test',
+      'bolt11',
+      destinationResponse(),
+    );
+    await within(skips(1));
+    expect(issuance).not.toHaveBeenCalled();
+    const finalized = deferred();
+    manager.on('mint-op:finalized', ({ operationId }) => {
+      if (operationId === 'destination-child') finalized.resolve();
+    });
+    const source = await repo.meltQuoteRepository.getMeltQuote(
+      'https://source.test',
+      'bolt11',
+      'source-quote',
+    );
+    await repo.meltQuoteRepository.upsertMeltQuote({ ...source!, amount: Amount.from(9) });
+    expect((await manager.ops.mintSwap.refresh('swap')).state).toBe('needs_attention');
+    await within(finalized.promise);
+    expect(issuance).toHaveBeenCalledTimes(1);
+  });
+
+  it('resumes a destination quote skipped by the startup claim sweep when the parent stops', async () => {
+    const { manager, runtime, repo, setDestinationState, issuance, destinationResponse } =
+      await setup();
+    setDestinationState('UNPAID');
+    await manager.ops.mintSwap.execute('swap');
+    setDestinationState('PAID');
+    await runtime.quoteLifecycle.recordMintQuoteSnapshot(
+      'https://destination.test',
+      'bolt11',
+      destinationResponse(),
+    );
+    expect((await manager.ops.mint.get('destination-child'))?.state).toBe('pending');
+    const skips = observeSkips(
+      MintOperationService.prototype,
+      (target) => typeof target !== 'string' && target.quoteId === 'destination-quote',
+    );
+    // The startup sweep skips the paid quote, then hands it to the processor's quote claim.
+    await manager.enableMintOperationProcessor({ initialEnqueueDelayMs: 0 });
+    await within(skips(2));
+    expect(issuance).not.toHaveBeenCalled();
+    const finalized = deferred();
+    manager.on('mint-op:finalized', ({ operationId }) => {
+      if (operationId === 'destination-child') finalized.resolve();
+    });
+    const source = await repo.meltQuoteRepository.getMeltQuote(
+      'https://source.test',
+      'bolt11',
+      'source-quote',
+    );
+    await repo.meltQuoteRepository.upsertMeltQuote({ ...source!, amount: Amount.from(9) });
+    expect((await manager.ops.mintSwap.refresh('swap')).state).toBe('needs_attention');
+    await within(finalized.promise);
+    expect(issuance).toHaveBeenCalledTimes(1);
+  });
+
+  for (const kind of ['mint', 'melt'] as const) {
+    it(`rechecks the ${kind} quote's parent after preparation preflight`, async () => {
+      const { manager, fixture } = await setup(undefined, false);
+      const entered = deferred();
+      const release = deferred();
+      const metadata = await fixture.dependencies.mintService.refreshAndCommitIfStale(
+        kind === 'mint' ? fixture.parent.destinationMintUrl : fixture.parent.sourceMintUrl,
+      );
+      spyOn(MintService.prototype, 'refreshAndCommitIfStale').mockImplementation(async () => {
+        entered.resolve();
+        await release.promise;
+        return metadata;
+      });
+      const preparing =
+        kind === 'mint'
+          ? manager.ops.mint.prepare({ quote: fixture.parent.destinationQuote, amount: 8 })
+          : manager.ops.melt.prepare({ quote: fixture.parent.sourceQuote });
+      const outcome = preparing.then(
+        () => null,
+        (error: unknown) => error,
+      );
+      await within(entered.promise);
+      await fixture.create();
+      release.resolve();
+      expect(await outcome).toBeInstanceOf(MintSwapChildOperationError);
+      expect(await manager.ops.mint.listByQuote(fixture.parent.destinationQuote)).toEqual([]);
+      expect(await manager.ops.melt.listByQuote(fixture.parent.sourceQuote)).toEqual([]);
+    });
+
+    it(`refuses a parent claim after an ordinary ${kind} plan commits`, async () => {
+      const { manager, fixture } = await setup(undefined, false);
+      spyOn(MintService.prototype, 'refreshAndCommitIfStale').mockImplementation(
+        fixture.dependencies.mintService.refreshAndCommitIfStale,
+      );
+      if (kind === 'mint')
+        await manager.ops.mint.prepare({ quote: fixture.parent.destinationQuote, amount: 8 });
+      else await manager.ops.melt.prepare({ quote: fixture.parent.sourceQuote });
+      await expect(fixture.create()).rejects.toThrow('child_conflict');
+      expect(await manager.ops.mintSwap.get('swap')).toBeNull();
+    });
   }
 
   for (const kind of ['mint', 'melt'] as const) {

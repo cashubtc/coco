@@ -110,6 +110,12 @@ Consistent fail-fast rejection of nested transactions remains follow-up work and
 nesting from legitimate concurrent calls. Mint Swap runtime adds public APIs/configuration/events;
 it does not change the persisted parent format.
 
+Mint Swap now exclusively coordinates its children while it can act, revising the earlier
+permission for independent ordinary child commands. Once the parent is terminal or
+`needs_attention`, its children return to ordinary resolution, but ordinary coordination never
+authorizes their source payment. No persisted format changes are introduced. The
+[Transaction Design](../../../../TRANSACTION_DESIGN.md) owns the detailed contract.
+
 The Restore migration adds an explicit exception
 to the public API compatibility policy: move Restore directly to scoped monotonic advancement and
 remove plugin-facing `overwriteCounter()`, without first reworking CounterService. After migrating

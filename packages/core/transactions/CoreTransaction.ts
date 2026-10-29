@@ -34,7 +34,7 @@ export interface CoreTransaction {
   readonly outputs: ScopedOutputs;
   readonly mintSwapOperations: Pick<
     MintSwapOperationRepository,
-    'getById' | 'create' | 'transition'
+    'getById' | 'getByChild' | 'getByQuote' | 'create' | 'transition'
   >;
   readonly mintOperations: Pick<
     MintOperationRepository,

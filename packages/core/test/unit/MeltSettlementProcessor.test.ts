@@ -120,6 +120,7 @@ describe('MeltSettlementProcessor', () => {
     };
     processor = new MeltSettlementProcessor(
       {
+        canResolve: mock(async () => true),
         checkPendingOperation,
         getPendingOperations,
       } as unknown as MeltOperationService,
@@ -266,9 +267,6 @@ describe('MeltSettlementProcessor', () => {
     expect(checkPendingOperation).toHaveBeenCalledTimes(1);
 
     resolveCheck?.('stay_pending');
-    await Promise.resolve();
-
-    expect(checkPendingOperation).toHaveBeenCalledTimes(2);
     await first;
     expect(checkPendingOperation).toHaveBeenCalledTimes(2);
   });

@@ -31,6 +31,13 @@ export interface MintDiagnosticsApi {
 }
 
 /**
+ * While a Mint Swap is active, commands that would change its destination child or use its quote
+ * reject with `MintSwapChildOperationError`; use `ops.mintSwap`. A command called in the wrong
+ * state for the child reports that state error first, and `refresh` reads a child it has nothing to
+ * resolve for. Once the parent stops (terminal or
+ * `needs_attention`), commands and recovery may resolve the child and claim its quote.
+ * Read methods include children.
+ *
  * Operation-oriented API for quote-backed mint workflows.
  *
  * This API makes the mint lifecycle explicit so callers can move a canonical

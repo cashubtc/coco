@@ -151,7 +151,11 @@ outside awaited operation or lifecycle event listeners, so a listener does not a
 Use one effect-driving Coco Session per Wallet store. Manager shares child locks with ordinary
 Mint/Melt services; Core does not enforce a universal cross-process singleton. Reuse host session
 guards (such as Cocod's state-directory lease); React initialization guards apply per provider.
-Generic child APIs remain independently usable, so use the parent API for cross-mint payment policy.
+Mint Swap exclusively coordinates its children while it is active: ordinary Mint/Melt commands that
+would change a child or use its quote reject with `MintSwapChildOperationError`; pass its
+`parentOperationId` to `ops.mintSwap`. Reads keep returning children. Once the parent is terminal or
+`needs_attention`, its children return to ordinary resolution, but no ordinary command pays its
+source (`parentStopped: true`). See [Mint Swap Operations](https://github.com/cashubtc/coco/blob/master/TRANSACTION_DESIGN.md#mint-swap-operations).
 History projection and React Mint Swap hooks are outside this slice.
 
 ## Protocol Support
