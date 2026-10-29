@@ -49,24 +49,10 @@ import {
 import type { PrepareMintResult } from './MintTransitionTypes.ts';
 import { createKeyChain } from '../../proofs/KeysetSelection.ts';
 import { restoreOutputProofs } from '../../infra/ProofRestore.ts';
-import type { BatchMintOperation } from '../batchMint/BatchMintOperation.ts';
-import type { BatchMintOperationService } from '../batchMint/BatchMintOperationService.ts';
 
 export interface ClaimMintQuoteOptions {
   autoClaimRemaining?: boolean;
-  /**
-   * Group eligible quotes by mint, method and unit and claim each chunk within the NUT-29 batch
-   * limit as one Batch Mint Operation. Defaults to `false`; the Mint Operation Processor enables it
-   * through its `batchMintQuotes` option.
-   */
-  batchMintQuotes?: boolean;
 }
-
-/** The Batch Mint coordinator capability automatic claiming uses. */
-export type AutomaticBatchMintClaims = Pick<
-  BatchMintOperationService,
-  'execute' | 'isBatchMintUnavailable'
->;
 
 /**
  * MintOperationService orchestrates mint quote redemption as a crash-safe saga.
@@ -95,10 +81,7 @@ export class MintOperationService {
       >;
       mintService: Pick<
         MintService,
-        | 'isTrustedMint'
-        | 'assertMethodUnitSupported'
-        | 'refreshAndCommitIfStale'
-        | 'getNut29BatchMintLimit'
+        'isTrustedMint' | 'assertMethodUnitSupported' | 'refreshAndCommitIfStale'
       >;
       walletService: Pick<WalletService, 'getWalletWithActiveKeysetId'>;
       mintAdapter: MintAdapter;
@@ -106,8 +89,6 @@ export class MintOperationService {
       logger?: Logger;
       mintScopedLock?: MintScopedLock;
       operationIdLock?: OperationIdLock;
-      /** Without it, automatic claiming always uses standalone Mint Operations. */
-      batchMintOperations?: AutomaticBatchMintClaims;
     },
   ) {
     this.operationIdLock = dependencies.operationIdLock ?? new OperationIdLock();
@@ -710,7 +691,6 @@ export class MintOperationService {
   ): Promise<MintOperation[]> {
     const quotes = await this.dependencies.quoteLifecycle.getPendingMintQuotes();
     const claimed: MintOperation[] = [];
-    const batchable: MintQuoteRef[] = [];
 
     for (const quote of quotes) {
       if (!(await this.canResolve(quote))) {
@@ -728,166 +708,11 @@ export class MintOperationService {
         });
         continue;
       }
-      if (options.batchMintQuotes) {
-        batchable.push({ mintUrl: quote.mintUrl, method: quote.method, quoteId: quote.quoteId });
-        continue;
-      }
       claimed.push(
         ...(await this.claimMintQuote(quote.mintUrl, quote.method, quote.quoteId, options)),
       );
     }
 
-    if (batchable.length > 0) claimed.push(...(await this.claimMintQuotes(batchable, options)));
-    return claimed;
-  }
-
-  /**
-   * @internal Automatic claiming of several quotes. With `batchMintQuotes`, quotes that are
-   * claimable, have no nonterminal Mint Operation, and whose mint advertises NUT-29 batch minting
-   * for the method are grouped by mint, method and unit in the given order, and each chunk of two or
-   * more within the batch limit is claimed as one Batch Mint Operation. Everything else goes
-   * through `claimMintQuote`, as do the still-claimable members of a batch that was rejected or
-   * failed. Returns the Mint Operations claimed; a failure for one quote or chunk is logged and does
-   * not stop the others.
-   */
-  async claimMintQuotes(
-    refs: readonly MintQuoteRef[],
-    options: ClaimMintQuoteOptions = {},
-  ): Promise<MintOperation[]> {
-    const seen = new Set<string>();
-    const standalone: MintQuoteRef[] = [];
-    const groups = new Map<
-      string,
-      { mintUrl: string; method: MintMethod; limit: number; quoteIds: string[] }
-    >();
-    const limits = new Map<string, Promise<number>>();
-    for (const ref of refs) {
-      const target = {
-        mintUrl: normalizeMintUrl(ref.mintUrl),
-        method: ref.method,
-        quoteId: ref.quoteId,
-      };
-      const key = mintQuoteLockKey(target);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const eligibility = options.batchMintQuotes
-        ? await this.batchEligibility(target, limits)
-        : undefined;
-      if (!eligibility) {
-        standalone.push(target);
-        continue;
-      }
-      const groupKey = `${target.mintUrl}::${target.method}::${eligibility.unit}`;
-      const group = groups.get(groupKey) ?? { ...target, limit: eligibility.limit, quoteIds: [] };
-      group.quoteIds.push(target.quoteId);
-      groups.set(groupKey, group);
-    }
-
-    const claimed: MintOperation[] = [];
-    for (const { mintUrl, method, limit, quoteIds } of groups.values()) {
-      for (let start = 0; start < quoteIds.length; start += limit) {
-        const chunk = quoteIds
-          .slice(start, start + limit)
-          .map((quoteId) => ({ mintUrl, method, quoteId }));
-        claimed.push(
-          ...(chunk.length === 1
-            ? await this.claimEach(chunk, options)
-            : await this.claimBatchChunk(chunk, options)),
-        );
-      }
-    }
-    claimed.push(...(await this.claimEach(standalone, options)));
-    return claimed;
-  }
-
-  /**
-   * Informational pre-check for automatic batching; admission rereads everything under the quote
-   * locks and rejects a group whose member changed, which falls back to standalone claims.
-   */
-  private async batchEligibility(
-    ref: MintQuoteRef,
-    limits: Map<string, Promise<number>>,
-  ): Promise<{ unit: string; limit: number } | undefined> {
-    const batchMintOperations = this.dependencies.batchMintOperations;
-    if (!batchMintOperations || batchMintOperations.isBatchMintUnavailable(ref.mintUrl, ref.method))
-      return undefined;
-    try {
-      const quote = await this.dependencies.quoteLifecycle.getMintQuote(
-        ref.mintUrl,
-        ref.method,
-        ref.quoteId,
-      );
-      if (!quote) return undefined;
-      const facts = await this.readClaimFacts(ref);
-      if (facts.standaloneOperations.some((operation) => !isTerminalOperation(operation)))
-        return undefined;
-      const assessment = assessMintQuoteClaim(quote, facts);
-      if (
-        assessment.status !== 'claimable' ||
-        !assessment.claimAmount ||
-        assessment.claimAmount.isZero()
-      )
-        return undefined;
-      const limitKey = `${ref.mintUrl}::${ref.method}`;
-      let limit = limits.get(limitKey);
-      if (!limit) {
-        limit = this.dependencies.mintService.getNut29BatchMintLimit(ref.mintUrl, ref.method);
-        limits.set(limitKey, limit);
-      }
-      const resolvedLimit = await limit;
-      return resolvedLimit < 2 ? undefined : { unit: quote.unit, limit: resolvedLimit };
-    } catch (error) {
-      this.dependencies.logger?.debug('Mint quote batching eligibility could not be assessed', {
-        ...ref,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return undefined;
-    }
-  }
-
-  private async claimBatchChunk(
-    chunk: MintQuoteRef[],
-    options: ClaimMintQuoteOptions,
-  ): Promise<MintOperation[]> {
-    const { mintUrl, method } = chunk[0]!;
-    let operation: BatchMintOperation | undefined;
-    try {
-      operation = await this.dependencies.batchMintOperations!.execute({
-        mintUrl,
-        method,
-        members: chunk.map(({ quoteId }) => ({ quoteId })),
-      });
-    } catch (error) {
-      this.dependencies.logger?.warn('Automatic Batch Mint claim was not admitted', {
-        mintUrl,
-        method,
-        quoteIds: chunk.map(({ quoteId }) => quoteId),
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-    // An executing batch keeps its reservations for recovery. A rejected or failed one holds
-    // nothing, so its members are reassessed and claimed with fresh outputs of their own.
-    if (operation && operation.state !== 'failed') return [];
-    return this.claimEach(chunk, options);
-  }
-
-  private async claimEach(
-    refs: readonly MintQuoteRef[],
-    options: ClaimMintQuoteOptions,
-  ): Promise<MintOperation[]> {
-    const claimed: MintOperation[] = [];
-    for (const { mintUrl, method, quoteId } of refs) {
-      try {
-        claimed.push(...(await this.claimMintQuote(mintUrl, method, quoteId, options)));
-      } catch (error) {
-        this.dependencies.logger?.warn('Failed to claim mint quote', {
-          mintUrl,
-          method,
-          quoteId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
     return claimed;
   }
 

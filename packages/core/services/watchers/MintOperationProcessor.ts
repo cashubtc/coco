@@ -3,6 +3,8 @@ import type { Logger } from '../../logging/Logger.ts';
 import type { MintMethod, MintOperationService } from '@core/operations/mint';
 import type { MintQuoteRef } from '../../models/QuoteIdentity.ts';
 import { MintOperationError, NetworkError } from '../../models/Error';
+import { mintQuoteLockKey } from '../../operations/MintScopedLock.ts';
+import type { BatchMintQuoteClaims } from '../../operations/batchMint/BatchMintQuoteClaims.ts';
 import { isMintSwapQuiescentState } from '../../operations/mintSwap/MintSwapOperation.ts';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
 
@@ -41,6 +43,8 @@ export interface MintOperationProcessorOptions {
 
 export class MintOperationProcessor {
   private readonly mintOperations: MintOperationService;
+  /** Set only while `batchMintQuotes` is on. */
+  private readonly batchMintQuoteClaims?: BatchMintQuoteClaims;
   private readonly quoteLifecycle: QuoteLifecycle;
   private readonly bus: EventBus<CoreEvents>;
   private readonly logger?: Logger;
@@ -72,7 +76,6 @@ export class MintOperationProcessor {
   private readonly baseRetryDelayMs: number;
   private readonly initialEnqueueDelayMs: number;
   private readonly autoClaimMintQuotes: boolean;
-  private readonly batchMintQuotes: boolean;
 
   constructor(
     mintOperations: MintOperationService,
@@ -80,6 +83,8 @@ export class MintOperationProcessor {
     bus: EventBus<CoreEvents>,
     logger?: Logger,
     options?: MintOperationProcessorOptions,
+    /** Without it, every quote is claimed as a standalone Mint Operation. */
+    batchMintQuoteClaims?: BatchMintQuoteClaims,
   ) {
     this.mintOperations = mintOperations;
     this.quoteLifecycle = quoteLifecycle;
@@ -92,7 +97,8 @@ export class MintOperationProcessor {
     this.baseRetryDelayMs = options?.baseRetryDelayMs ?? 5000;
     this.initialEnqueueDelayMs = options?.initialEnqueueDelayMs ?? 500;
     this.autoClaimMintQuotes = options?.autoClaimMintQuotes ?? true;
-    this.batchMintQuotes = options?.batchMintQuotes ?? true;
+    this.batchMintQuoteClaims =
+      (options?.batchMintQuotes ?? true) ? batchMintQuoteClaims : undefined;
 
     const defaultHandler = new DefaultMintOperationHandler(mintOperations);
     for (const method of ['bolt11', 'bolt12', 'onchain']) {
@@ -332,13 +338,13 @@ export class MintOperationProcessor {
     mintUrl: string,
     method: MintMethod,
     quoteId: string,
-    collect = this.batchMintQuotes,
+    collect = this.batchMintQuoteClaims !== undefined,
   ): void {
     if (!this.autoClaimMintQuotes) {
       return;
     }
 
-    const key = `${mintUrl}::${method}::${quoteId}`;
+    const key = mintQuoteLockKey({ mintUrl, method, quoteId });
     if (this.claimingQuotes.has(key)) {
       this.quoteClaimsNeedingFollowUp.add(key);
       this.logger?.debug('Mint quote claim already in progress', {
@@ -398,11 +404,8 @@ export class MintOperationProcessor {
             this.logClaimFailure(quote, error);
           }
         }
-        if (!this.running || ready.length === 0) return;
-        await this.mintOperations.claimMintQuotes(ready, {
-          autoClaimRemaining: true,
-          batchMintQuotes: true,
-        });
+        if (!this.running || ready.length === 0 || !this.batchMintQuoteClaims) return;
+        await this.batchMintQuoteClaims.claimMintQuotes(ready);
       } catch (error) {
         this.logger?.warn('Failed to claim collected mint quotes', {
           error: error instanceof Error ? error.message : String(error),
@@ -458,10 +461,15 @@ export class MintOperationProcessor {
     this.trackClaimTask(async () => {
       try {
         // The quote claim path rechecks the parent and resumes the quote once it stops.
-        await this.mintOperations.claimPendingMintQuotes(
-          { autoClaimRemaining: true, batchMintQuotes: this.batchMintQuotes },
-          ({ mintUrl, method, quoteId }) => this.scheduleQuoteClaim(mintUrl, method, quoteId),
-        );
+        const onCoordinatedQuote = ({ mintUrl, method, quoteId }: MintQuoteRef) =>
+          this.scheduleQuoteClaim(mintUrl, method, quoteId);
+        if (this.batchMintQuoteClaims)
+          await this.batchMintQuoteClaims.claimPendingMintQuotes(onCoordinatedQuote);
+        else
+          await this.mintOperations.claimPendingMintQuotes(
+            { autoClaimRemaining: true },
+            onCoordinatedQuote,
+          );
       } catch (error) {
         this.logger?.warn('Failed to claim pending mint quotes on startup', {
           error: error instanceof Error ? error.message : String(error),
