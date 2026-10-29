@@ -110,19 +110,11 @@ Consistent fail-fast rejection of nested transactions remains follow-up work and
 nesting from legitimate concurrent calls. Mint Swap runtime adds public APIs/configuration/events;
 it does not change the persisted parent format.
 
-Mint Swap now exclusively coordinates its children. This revises the earlier permission for
-independent ordinary child commands: they reject with `MintSwapChildOperationError` and the parent
-ID, while reads and shared quote observation remain available. Ordinary processors, quote claiming
-and generic recovery skip coordinated children and quotes. Durable reverse lookups include terminal and
-`needs_attention` parents; coordinator transaction guards and parent creation checks protect both
-orderings of a parent-creation race. Composable transitions retain their existing authority contract for
-parent composition. No persisted format changes or parent flags are introduced.
-Exclusivity lasts while the parent can act. Children of terminal or `needs_attention` parents return
-to ordinary resolution, so a stopped swap cannot strand reserved proofs or paid quotes; ordinary
-coordination still never authorizes their source payment.
-Disabling the parent processor also pauses automatic progression of active parents' children;
-explicit parent recovery remains available. Its existing startup eligibility is preserved pending a separate repair migration.
-The [Transaction Design](../../../../TRANSACTION_DESIGN.md) owns the detailed contract.
+Mint Swap now exclusively coordinates its children while it can act, revising the earlier
+permission for independent ordinary child commands. Once the parent is terminal or
+`needs_attention`, its children return to ordinary resolution, but ordinary coordination never
+authorizes their source payment. No persisted format changes are introduced. The
+[Transaction Design](../../../../TRANSACTION_DESIGN.md) owns the detailed contract.
 
 The Restore migration adds an explicit exception
 to the public API compatibility policy: move Restore directly to scoped monotonic advancement and

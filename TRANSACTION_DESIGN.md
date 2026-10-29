@@ -358,38 +358,34 @@ and owned proof evidence in the same scope that reserves destination claimable v
 
 Mint Swap is the exclusive coordinator of its source Melt and destination Mint children while the
 parent is active. Ordinary Mint/Melt commands that would change a child or use its quote reject
-with `MintSwapChildOperationError`, carrying `parentOperationId` and directing callers to
-`ops.mintSwap`. A command called in the wrong state for the child reports that state error first,
-and refresh reads a child it has nothing to resolve for. Read APIs still expose children. Ordinary processors, automatic Mint quote claiming and generic
-Mint/Melt recovery skip these children and quotes. Watchers continue recording shared canonical
-Quote Observations.
+with `MintSwapChildOperationError`, carrying `parentOperationId` for `ops.mintSwap`. A command
+called in the wrong state for the child reports that state error first, and refresh reads a child
+it has nothing to resolve for. Reads and shared Quote Observations continue; ordinary processors,
+automatic Mint quote claiming and generic Mint/Melt recovery skip these children and quotes.
 
-A terminal or `needs_attention` parent has no outgoing transitions and never acts on its children
-again, so exclusivity ends when it stops. Its children return to ordinary resolution: generic
-recovery, ordinary processors, automatic claiming, and commands that observe, settle, release or
-issue. Ordinary coordination never authorizes a stopped parent's source payment. Melt preparation
-against its source quote and execution of its prepared source Melt reject with `parentStopped`,
-because the stop may record evidence against paying. Ordinary Melt recovery only observes and applies
-an existing outcome. Running ordinary processors keep tracking work they skip for an active parent and
-recheck it when `mint-swap:updated` reports a stopped parent, because the stop itself emits no child
-or quote event. Release is one-way, so a check that admits ordinary work stays valid. The parent
-commits its stop inside any child lock it holds; the record keeps that diagnosis and is not updated
-by later child resolution.
+A terminal or `needs_attention` parent never acts again, so exclusivity ends when it stops. Its
+children return to ordinary resolution: recovery, processors, claiming, and commands that observe,
+settle, release or issue. Release is one-way, so a check that admits ordinary work stays valid.
+Ordinary coordination never authorizes a stopped parent's source payment: Melt preparation against
+its source quote and execution of its prepared source reject with `parentStopped`, because the stop
+may record evidence against paying, and ordinary Melt recovery only applies an existing outcome. The
+stop emits no child or quote event, so running processors remember work they skipped and recheck it
+when `mint-swap:updated` reports a stopped parent. The parent commits its stop inside any child lock
+it holds, and its record keeps that diagnosis.
 
-The coordinating parent is derived from immutable parent child IDs and quote references using
-durable reverse lookups, including terminal and `needs_attention` parents. It is never inferred from
-an active scan or copied to a mutable child flag. An operation ID matches only a parent's child; a
-quote reference matches the parent's quote. Ordinary coordinators perform `assertOrdinaryChildWork`
-in the same transaction as authorization and mutation, and before recovery effects. Parent creation
-rejects quotes with existing ordinary operations, and ordinary preparation and claiming check the
-quote, so an active parent's quotes have no sibling operations and a parent cannot appear after
-ordinary effect authorization. Parent coordinators retain direct access to composable transitions,
-whose child-state and proof invariants still apply. Shared child locks remain in place.
+The coordinating parent comes from durable reverse lookups over immutable child IDs and quote
+references, including terminal and `needs_attention` parents; it is never inferred from an active
+scan or stored on the child. An operation ID matches only a parent's own child and a quote reference
+matches its quote. Ordinary coordinators perform `assertOrdinaryChildWork` before waiting on locks
+and again in each transaction that authorizes or mutates. Parent creation rejects quotes with
+existing ordinary operations, and ordinary preparation and claiming check the quote, so an active
+parent's quotes have no sibling operations and a parent cannot appear after ordinary effect
+authorization. Parent coordinators keep composing child transitions directly, under the shared child
+locks and the transitions' own child-state and proof invariants.
 
-Disabling the parent processor pauses automatic progression of active parents' children, including
-the parent's existing startup/resume recovery pass. Explicit parent refresh and recovery remain available. Generic child
-recovery does not route into a parent sweep or bypass this pause. The parent's existing bounded
-startup eligibility and recovery behavior are unchanged; separating startup repair from routine
+Disabling the parent processor pauses automatic progression of active parents' children along with
+the parent's existing startup/resume recovery; explicit parent refresh and recovery remain available,
+and generic child recovery does not bypass the pause. Separating startup repair from routine
 progression remains a separate migration.
 
 One effect-driving Coco Session per Wallet store is required. Shared child operation locks coordinate
