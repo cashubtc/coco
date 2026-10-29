@@ -25,7 +25,9 @@ The coordinator requires the same source and destination `OperationIdLock` insta
 ordinary child services, and the shared `MintScopedLock`. Locks are acquired outside transactions.
 Only one Coco Session may drive effects for a Wallet store. These locks do not provide cross-process
 remote fencing. Cocod and React keep their existing host/session guards; no new universal lock
-provider is required. Ordinary child commands can still advance their exact operation independently.
+provider is required. While the parent is active, it exclusively coordinates its children; see
+[Transaction Design](../../../../TRANSACTION_DESIGN.md) for how ordinary commands, processors and
+recovery treat them.
 
 The processor uses a 1-second due cadence and a 30-second complete active sweep, yielding every 25
 attempts. Complete sweeps observe prepared parents and visit the entire eligible snapshot so a busy

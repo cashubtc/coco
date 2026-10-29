@@ -103,7 +103,7 @@ parent quote poller. Startup uses sufficient cached evidence first, retaining a 
 fallback for unresolved evidence until #559 separates startup repair. Explicit recovery and necessary
 recovery effects remain available. Source proof release
 still requires fresh positive `UNPAID` confirmation under the shared child lock, including when the
-ordinary Melt processor advances the child independently. Authorized recovery
+ordinary Melt processor advances the child after its parent stops. Authorized recovery
 interests permit observation of exact quotes after trust revocation, without restoring mint trust.
 Parent update hints are captured in the owning transaction and published after commit and
 lock release; local polling and complete active sweeps tolerate lost hints. No outbox or new schema
@@ -115,6 +115,12 @@ owning migrations.
 Consistent fail-fast rejection of nested transactions remains follow-up work and must distinguish
 nesting from legitimate concurrent calls. Mint Swap runtime adds public APIs/configuration/events;
 it does not change the persisted parent format.
+
+Mint Swap now exclusively coordinates its children while it can act, revising the earlier
+permission for independent ordinary child commands. Once the parent is terminal or
+`needs_attention`, its children return to ordinary resolution, but ordinary coordination never
+authorizes their source payment. No persisted format changes are introduced. The
+[Transaction Design](../../../../TRANSACTION_DESIGN.md) owns the detailed contract.
 
 The Restore migration adds an explicit exception
 to the public API compatibility policy: move Restore directly to scoped monotonic advancement and

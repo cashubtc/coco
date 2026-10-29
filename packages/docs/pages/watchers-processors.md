@@ -91,8 +91,9 @@ matching PAID observations normalize omitted change to empty change at the obser
 incomplete stored evidence must be enriched by a valid observation or explicit refresh. Settlement
 still validates quote identity and proof ownership through the operation service and may fetch
 metadata to unblind change. Before releasing inputs from UNPAID evidence, it confirms nonpayment
-under the shared operation lock. This narrow safety check also applies to ordinary processing of a
-Mint Swap source child; it does not add polling for pending or incomplete quotes.
+under the shared operation lock. This narrow safety check also applies to a Mint Swap source child
+once its parent stops and releases it to ordinary processing; an active parent coordinates its child
+instead. It does not add polling for pending or incomplete quotes.
 
 `initializeExistingPendingOperationsOnStart: false` skips startup discovery while preserving listeners
 for newly pending operations and subsequent quote observations.

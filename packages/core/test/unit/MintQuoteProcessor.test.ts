@@ -56,6 +56,7 @@ describe('MintOperationProcessor', () => {
     };
 
     mockMintOperationService = {
+      canResolve: async () => true,
       async getOperationsForQuote(_mintUrl: string, _method: string, quoteId: string) {
         return [
           {
@@ -182,6 +183,7 @@ describe('MintOperationProcessor', () => {
 
   it('delegates sibling selection to one common quote claim', async () => {
     mockMintOperationService = {
+      canResolve: async () => true,
       async getMintQuoteClaimability() {
         return { status: 'claimable' };
       },
@@ -566,6 +568,7 @@ describe('MintOperationProcessor', () => {
     const attemptTimes: number[] = [];
 
     mockMintOperationService = {
+      canResolve: async () => true,
       async finalize(operationId: string) {
         attemptCount++;
         attemptTimes.push(Date.now());
@@ -629,6 +632,7 @@ describe('MintOperationProcessor', () => {
     let attemptCount = 0;
 
     mockMintOperationService = {
+      canResolve: async () => true,
       async finalize() {
         attemptCount++;
         throw new MintOperationError(10000, 'operation failed');

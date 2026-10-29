@@ -62,8 +62,8 @@ _Avoid_: Mint request, quote state
 
 **Mint Swap Operation**:
 A durable parent Saga that moves value between two mints by referencing one exact source Melt
-Operation and one exact destination Mint Operation. It owns cross-child progress and recovery
-evidence, but never owns or duplicates either child's state.
+Operation and one exact destination Mint Operation. It exclusively coordinates their progress and
+recovery until it stops, but never owns or duplicates either child's state.
 _Avoid_: Child operation owner, transfer operation, generic Saga
 
 **Quote Observation**:

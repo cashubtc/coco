@@ -16,6 +16,18 @@ const coco = await initializeCoco({
 });
 ```
 
+## Custom adapters and compatibility
+
+Custom storage adapters are a supported extension path. Implement `Repositories` from
+`@cashu/coco-core/adapter` for your backend, initialize it, and pass it to
+`initializeCoco({ repo, seedGetter })`, just as with a supplied adapter. You can use this path for
+an independently implemented PostgreSQL adapter or another storage system.
+
+Starting with **v3**, the repository implementation contract is **unstable** across minor releases.
+Normal setup and use of the supplied adapters retain semantic versioning guarantees. Before building
+or upgrading a custom adapter, read the
+[repository compatibility policy](https://github.com/cashubtc/coco/blob/master/packages/core/README.md#repository-compatibility).
+
 ## Security
 
 Coco's built-in storage adapters do not encrypt wallet data at rest. Stored data can include

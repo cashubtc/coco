@@ -1,5 +1,7 @@
 import { Amount, type Proof, type SerializedBlindedSignature } from '@cashu/cashu-ts';
 import { unblindMeltChange } from './MeltChange.ts';
+import { allowsOrdinaryWork, type OrdinaryChildAuthority } from '../mintSwap/MintSwapOperation.ts';
+import { assertOrdinaryChildWork } from '../mintSwap/MintSwapTransitions.ts';
 import type { MeltOperationRepository, ProofRepository } from '../../repositories';
 import type {
   ExecutingMeltOperation,
@@ -37,7 +39,7 @@ import { OperationIdLock } from '../OperationIdLock';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle';
 import { resolveOnchainMeltFeeOption, type MeltQuote } from '../../models/MeltQuote.ts';
 import type { MeltQuoteRef, QuoteIdentity } from '../../models/QuoteIdentity.ts';
-import type { CoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
+import type { CoreTransaction, CoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
 import {
   applyMeltPaidResult,
   applyMeltPending,
@@ -94,6 +96,45 @@ export class MeltOperationService {
     this.mintScopedLock = dependencies.mintScopedLock ?? new MintScopedLock();
   }
 
+  /**
+   * Whether ordinary background work may resolve this operation: true unless an active Mint Swap
+   * coordinates it. Reads remain unrestricted.
+   */
+  async canResolve(operationId: string): Promise<boolean> {
+    return this.dependencies.transactionRunner.run(async (tx) =>
+      allowsOrdinaryWork(await tx.mintSwapOperations.getByChild('melt', operationId), 'resolve'),
+    );
+  }
+
+  /**
+   * Reject commands for children and quotes of an active Mint Swap before they wait on locks.
+   * Children of a stopped parent remain resolvable.
+   */
+  private async assertCanResolve(target: string | MeltQuoteRef): Promise<void> {
+    await this.dependencies.transactionRunner.run((tx) =>
+      tx.perform(assertOrdinaryChildWork, { kind: 'melt', target, authority: 'resolve' }),
+    );
+  }
+
+  /** Ordinary coordination never authorizes a Mint Swap's source payment, even once it stops. */
+  private async assertCanPay(target: string | MeltQuoteRef): Promise<void> {
+    await this.dependencies.transactionRunner.run((tx) =>
+      tx.perform(assertOrdinaryChildWork, { kind: 'melt', target, authority: 'effect' }),
+    );
+  }
+
+  /** Mutations recheck the parent in their own transaction; a command's entry check can go stale. */
+  private runChecked<T>(
+    target: string | MeltQuoteRef,
+    work: (tx: CoreTransaction) => Promise<T>,
+    authority: OrdinaryChildAuthority = 'resolve',
+  ): Promise<T> {
+    return this.dependencies.transactionRunner.run(async (tx) => {
+      await tx.perform(assertOrdinaryChildWork, { kind: 'melt', target, authority });
+      return work(tx);
+    });
+  }
+
   isOperationLocked(operationId: string): boolean {
     return this.operationIdLock.isLocked(operationId);
   }
@@ -106,12 +147,14 @@ export class MeltOperationService {
     quoteRef: MeltQuoteRef,
     options: { feeIndex?: number } = {},
   ): Promise<PreparedMeltOperation> {
+    await this.assertCanPay(quoteRef);
     const quote = await this.dependencies.quoteLifecycle.requireMeltQuoteRefForPrepare(quoteRef);
     return this.prepareResolvedQuote(quote, generateSubId(), options);
   }
 
   /** Prepares a legacy init row without creating any new intermediate init operation. */
   async prepare(operationId: string): Promise<PreparedMeltOperation> {
+    await this.assertCanPay(operationId);
     const operation = await this.requireOperation(operationId);
     if (operation.state !== 'init' || !operation.quoteId) {
       throw new Error(
@@ -144,18 +187,21 @@ export class MeltOperationService {
       if (!activeKeys) throw new ProofValidationError('Active keyset is missing mint keys');
       const seed = await this.dependencies.loadSeed();
       const now = Date.now();
-      const result = await this.dependencies.transactionRunner.run((tx) =>
-        tx.perform(prepareMelt, {
-          operationId,
-          mintUrl: quote.mintUrl,
-          method: quote.method,
-          methodData: this.methodDataFromMeltQuote(quote, options),
-          quoteId: quote.quoteId,
-          unit: quote.unit,
-          activeKeys,
-          seed,
-          now,
-        }),
+      const result = await this.runChecked(
+        quote,
+        (tx) =>
+          tx.perform(prepareMelt, {
+            operationId,
+            mintUrl: quote.mintUrl,
+            method: quote.method,
+            methodData: this.methodDataFromMeltQuote(quote, options),
+            quoteId: quote.quoteId,
+            unit: quote.unit,
+            activeKeys,
+            seed,
+            now,
+          }),
+        'effect',
       );
       if (result.changed) {
         if (result.counter) await this.publishCommittedEvent('counter:updated', result.counter);
@@ -178,6 +224,7 @@ export class MeltOperationService {
   }
 
   async execute(operationId: string): Promise<PendingMeltOperation | FinalizedMeltOperation> {
+    await this.assertCanResolve(operationId);
     while (this.operationIdLock.isLocked(operationId)) {
       await this.operationIdLock.waitForUnlock(operationId);
     }
@@ -189,6 +236,7 @@ export class MeltOperationService {
       if (recovered.state === 'pending' || recovered.state === 'finalized') return recovered;
       throw new Error(`Operation ${operationId} remains ${recovered.state} after recovery`);
     }
+    // Recovery above is resolution; executePrepared authorizes the new payment with `effect`.
     return this.executePrepared(operationId);
   }
 
@@ -204,8 +252,10 @@ export class MeltOperationService {
         );
       }
       const authorizationNow = Date.now();
-      const authorization = await this.dependencies.transactionRunner.run((tx) =>
-        tx.perform(beginMeltExecution, { operationId, now: authorizationNow }),
+      const authorization = await this.runChecked(
+        operationId,
+        (tx) => tx.perform(beginMeltExecution, { operationId, now: authorizationNow }),
+        'effect',
       );
       if (!authorization.changed || authorization.operation.state !== 'executing') {
         throw new Error(`Melt operation ${operationId} could not be authorized`);
@@ -231,7 +281,7 @@ export class MeltOperationService {
             logger: this.dependencies.logger,
           });
           const swapAppliedAt = Date.now();
-          const applied = await this.dependencies.transactionRunner.run((tx) =>
+          const applied = await this.runChecked(executing.id, (tx) =>
             tx.perform(applyMeltSwapResult, {
               operation: executing,
               keepProofs: swapped.keep,
@@ -267,6 +317,7 @@ export class MeltOperationService {
     effectiveFee?: Amount;
     finalizedData?: MeltMethodFinalizedData;
   }> {
+    await this.assertCanResolve(operationId);
     const releaseLock = await this.operationIdLock.acquire(operationId);
     try {
       const current = await this.requireOperation(operationId);
@@ -292,12 +343,13 @@ export class MeltOperationService {
   }
 
   async rollback(operationId: string, reason = 'Rolled back'): Promise<void> {
+    await this.assertCanResolve(operationId);
     const releaseLock = await this.operationIdLock.acquire(operationId);
     try {
       const operation = await this.requireOperation(operationId);
       if (operation.state === 'prepared') {
         const now = Date.now();
-        const result = await this.dependencies.transactionRunner.run((tx) =>
+        const result = await this.runChecked(operationId, (tx) =>
           tx.perform(cancelPreparedMelt, { operationId, reason, now }),
         );
         if (result.changed) await this.publishRolledBack(result);
@@ -321,6 +373,7 @@ export class MeltOperationService {
   }
 
   async checkPendingOperation(operationId: string): Promise<PendingCheckResult> {
+    await this.assertCanResolve(operationId);
     const releaseLock = await this.operationIdLock.acquire(operationId);
     try {
       const operation = await this.requireOperation(operationId);
@@ -361,6 +414,7 @@ export class MeltOperationService {
    * nonpayment confirmation under the operation lock; explicit payment checks retain their refresh.
    */
   async advancePendingOperation(operationId: string): Promise<PendingCheckResult> {
+    await this.assertCanResolve(operationId);
     const releaseLock = await this.operationIdLock.acquire(operationId);
     try {
       const operation = await this.requireOperation(operationId);
@@ -402,11 +456,13 @@ export class MeltOperationService {
     this.recoveryLock = new Promise<void>((resolve) => (releaseRecovery = resolve));
     try {
       for (const operation of await this.dependencies.meltOperationQueries.getByState('init')) {
+        if (!(await this.canResolve(operation.id))) continue;
         await this.recoverInitOperation(operation as InitMeltOperation);
       }
       for (const operation of await this.dependencies.meltOperationQueries.getByState(
         'executing',
       )) {
+        if (!(await this.canResolve(operation.id))) continue;
         try {
           await this.recoverExecutingOperation(operation as ExecutingMeltOperation);
         } catch (error) {
@@ -417,6 +473,7 @@ export class MeltOperationService {
         }
       }
       for (const operation of await this.dependencies.meltOperationQueries.getByState('pending')) {
+        if (!(await this.canResolve(operation.id))) continue;
         try {
           await this.checkPendingOperation(operation.id);
         } catch (error) {
@@ -429,6 +486,7 @@ export class MeltOperationService {
       for (const operation of await this.dependencies.meltOperationQueries.getByState(
         'rolling_back',
       )) {
+        if (!(await this.canResolve(operation.id))) continue;
         try {
           const rolling = operation as RollingBackMeltOperation;
           const quote = await this.dependencies.quoteLifecycle.refreshMeltQuoteById({
@@ -454,6 +512,7 @@ export class MeltOperationService {
     operation: ExecutingMeltOperation,
     options: { skipLock?: boolean } = {},
   ): Promise<void> {
+    await this.assertCanResolve(operation.id);
     const releaseLock = options.skipLock
       ? undefined
       : await this.operationIdLock.acquire(operation.id);
@@ -574,7 +633,7 @@ export class MeltOperationService {
 
   private async applyPending(operation: ExecutingMeltOperation): Promise<PendingMeltOperation> {
     const now = Date.now();
-    const result = await this.dependencies.transactionRunner.run((tx) =>
+    const result = await this.runChecked(operation.id, (tx) =>
       tx.perform(applyMeltPending, { operation, now }),
     );
     if (result.operation.state !== 'pending') throw new Error('Melt did not enter pending state');
@@ -607,7 +666,7 @@ export class MeltOperationService {
           ? undefined
           : ({ preimage: quote.payment_preimage } as MeltMethodFinalizedData);
     const now = Date.now();
-    const result = await this.dependencies.transactionRunner.run((tx) =>
+    const result = await this.runChecked(operation.id, (tx) =>
       tx.perform(applyMeltPaidResult, {
         operation,
         changeProofs: proofs,
@@ -646,7 +705,7 @@ export class MeltOperationService {
       throw new Error('Fresh UNPAID evidence is required before releasing Melt proofs');
     }
     const now = Date.now();
-    const result = await this.dependencies.transactionRunner.run((tx) =>
+    const result = await this.runChecked(operation.id, (tx) =>
       tx.perform(releaseMeltAfterNonPayment, {
         operationId: operation.id,
         evidence: {
@@ -723,7 +782,7 @@ export class MeltOperationService {
       throw new Error('Pre-swap outcome remains ambiguous; restored output set is incomplete');
     }
     const swapAppliedAt = Date.now();
-    const applied = await this.dependencies.transactionRunner.run((tx) =>
+    const applied = await this.runChecked(operation.id, (tx) =>
       tx.perform(applyMeltSwapResult, {
         operation,
         keepProofs: keep,
@@ -751,7 +810,7 @@ export class MeltOperationService {
   }
 
   private async recoverInitOperation(operation: InitMeltOperation): Promise<void> {
-    const result = await this.dependencies.transactionRunner.run((tx) =>
+    const result = await this.runChecked(operation.id, (tx) =>
       tx.perform(cleanupMeltInit, operation.id),
     );
     if (result.changed && result.releasedSecrets.length > 0) {
@@ -765,7 +824,7 @@ export class MeltOperationService {
   private async defer(operationId: string, error: unknown): Promise<void> {
     try {
       const now = Date.now();
-      await this.dependencies.transactionRunner.run((tx) =>
+      await this.runChecked(operationId, (tx) =>
         tx.perform(deferMeltRecovery, {
           operationId,
           error: error instanceof Error ? error.message : String(error),

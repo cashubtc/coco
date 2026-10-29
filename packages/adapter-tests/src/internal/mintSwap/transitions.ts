@@ -21,6 +21,7 @@ import {
   applyMintResult,
   prepareMint,
 } from '../../../../core/operations/mint/MintTransitions.ts';
+import { mintSwapFixtures } from '../../../../core/test/fixtures/MintSwap.ts';
 import { MintSwapIntentConflictError } from '../../../../core/operations/mintSwap/MintSwapErrors.ts';
 import { defineTransition } from '../../../../core/transactions/Transition.ts';
 import { RepositoryCoreTransactionRunner } from '../../../../core/transactions/CoreTransaction.ts';
@@ -47,6 +48,36 @@ export function runMintSwapTransitionContract(
       await store?.dispose();
       store = undefined;
     });
+
+    for (const state of [
+      'preparing',
+      'completed',
+      'cancelled',
+      'failed',
+      'needs_attention',
+    ] as const) {
+      it(`resolves durable parents by child and quote for ${state} parents without child rows`, async () => {
+        const parent = mintSwapFixtures('historical')[state];
+        let repositories = fixture.repositories;
+        await repositories.mintSwap.operationRepository.create(parent);
+        if (options.supportsReopen) repositories = await store!.reopen!();
+        const repository = repositories.mintSwap.operationRepository;
+        for (const [kind, id, quote] of [
+          ['mint', parent.destinationOperationId, parent.destinationQuote],
+          ['melt', parent.sourceOperationId, parent.sourceQuote],
+        ] as const) {
+          expect(await repository.getByChild(kind, id)).toEqual(parent);
+          expect(
+            await repository.getByQuote(kind, { ...quote, mintUrl: quote.mintUrl + '/' }),
+          ).toEqual(parent);
+          expect(await repository.getByChild(kind, 'missing')).toBeNull();
+          expect(await repository.getByQuote(kind, { ...quote, method: 'onchain' })).toBeNull();
+          const snapshot = (await repository.getByChild(kind, id))!;
+          snapshot.retry.attemptCount = 999;
+          expect(await repository.getByChild(kind, id)).toEqual(parent);
+        }
+      });
+    }
 
     it('drains a dropped composed preparation before commit and expires captured parent methods', async () => {
       const escaped = await fixture.runner.run(async (tx) => {
