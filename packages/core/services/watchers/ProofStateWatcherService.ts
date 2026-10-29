@@ -1,7 +1,8 @@
 import type { ProofState } from '@cashu/cashu-ts';
-import { normalizeUnit } from '@core/amounts.ts';
+import { DEFAULT_UNIT, normalizeUnit } from '@core/amounts.ts';
 import type { EventBus, CoreEvents } from '@core/events';
 import type { SubscriptionManager, UnsubscribeHandler } from '@core/infra/SubscriptionManager.ts';
+import { getOwningOperationId } from '@core/proofs/OwningOperation.ts';
 import type { CoreTransactionRunner } from '@core/transactions/CoreTransaction.ts';
 import type { CoreProof } from '@core/types.ts';
 import type { Logger } from '../../logging/Logger.ts';
@@ -36,15 +37,27 @@ export interface ProofStateRemote {
 }
 
 /**
- * Who governs a watched proof's state. Send-owned evidence goes to the Send; unowned proofs are
- * reconciled by the watcher. Proofs owned by any other operation, such as Melt, are not watched.
+ * A watched proof's Owning Operation, by how the watcher routes evidence. Send-owned evidence goes to
+ * the Send; unowned proofs are reconciled by the watcher. Proofs owned by any other operation, such
+ * as Melt, are not watched.
  */
-type ProofOwner =
+type OwningOperation =
   | { kind: 'unowned' }
   | { kind: 'send'; operationId: string }
   | { kind: 'other'; operationId: string };
 
-type OwnedProof = { proof: CoreProof; owner: Exclude<ProofOwner, { kind: 'other' }> };
+type WatchableOwningOperation = Exclude<OwningOperation, { kind: 'other' }>;
+
+/** Owning Operations resolved by operation id, shared within one pass to avoid repeated Send reads. */
+type OwningOperationCache = Map<string, Promise<OwningOperation>>;
+
+type WatchableProof = { proof: CoreProof; owningOperation: WatchableOwningOperation };
+
+function isWatchable(
+  owningOperation: OwningOperation | undefined,
+): owningOperation is WatchableOwningOperation {
+  return owningOperation?.kind === 'unowned' || owningOperation?.kind === 'send';
+}
 
 type ProofReads = Pick<
   ProofRepository,
@@ -228,9 +241,9 @@ export class ProofStateWatcherService {
 
     this.offSendFinalized = this.bus.on('send:finalized', ({ operationId }) =>
       this.runIfActive(generation, async () => {
-        for (const [key, owner] of this.sendOperationByProofKey) {
+        for (const [key, sendOperationId] of this.sendOperationByProofKey) {
           if (!this.isActive(generation)) return;
-          if (owner !== operationId) continue;
+          if (sendOperationId !== operationId) continue;
           this.sendOperationByProofKey.delete(key);
           await this.stopWatching(key);
         }
@@ -333,8 +346,16 @@ export class ProofStateWatcherService {
   }
 
   watchProof(mintUrl: string, secrets: string[]): Promise<void> {
+    return this.watchProofs(mintUrl, secrets, new Map());
+  }
+
+  private watchProofs(
+    mintUrl: string,
+    secrets: string[],
+    owningOperations: OwningOperationCache,
+  ): Promise<void> {
     if (!this.running) return Promise.resolve();
-    const task = this.acquireProofWatch(mintUrl, secrets, this.generation);
+    const task = this.acquireProofWatch(mintUrl, secrets, this.generation, owningOperations);
     this.acquisitionTasks.add(task);
     void task.then(
       () => this.acquisitionTasks.delete(task),
@@ -347,6 +368,7 @@ export class ProofStateWatcherService {
     mintUrl: string,
     secrets: string[],
     generation: number,
+    owningOperations: OwningOperationCache,
   ): Promise<void> {
     if (!this.isActive(generation)) return;
 
@@ -369,7 +391,7 @@ export class ProofStateWatcherService {
 
     for (const secret of toWatch) this.acquiringKeys.add(toKey(mintUrl, secret));
     try {
-      const watchable = await this.selectWatchable(mintUrl, toWatch);
+      const watchable = await this.selectWatchable(mintUrl, toWatch, owningOperations);
       if (!this.isActive(generation) || watchable.length === 0) return;
       // Compute Y hex for all secrets and build maps
       const { secretByYHex, yHexBySecret } = buildYHexMapsForSecrets(watchable);
@@ -389,13 +411,13 @@ export class ProofStateWatcherService {
             this.inflightByKey.add(key);
             try {
               const [proof] = await this.proofRepository.getProofsBySecrets(mintUrl, [secret]);
-              const owner = await this.resolveOwner(mintUrl, secret, proof);
+              const owningOperation = await this.resolveOwningOperation(mintUrl, secret, proof);
               if (!this.isActive(generation)) return;
-              await this.applySpentEvidence(mintUrl, secret, owner);
+              await this.applySpentEvidence(mintUrl, secret, owningOperation);
               this.logger?.info('Applied SPENT evidence from mint notification', {
                 mintUrl,
                 subId,
-                owner: owner?.kind,
+                owningOperation: owningOperation?.kind,
               });
               if (this.isActive(generation)) await this.stopWatching(key);
             } catch (err) {
@@ -472,24 +494,29 @@ export class ProofStateWatcherService {
 
   /**
    * Check inflight proofs once, then watch those still eligible. SPENT evidence for Send-owned
-   * proofs goes to the Send; unowned proofs are reconciled; other owners' proofs are skipped.
+   * proofs goes to the Send; unowned proofs are reconciled; proofs other operations own are skipped.
    */
   private async watchExistingInflightProofs(generation: number): Promise<void> {
     const inflightProofs = await this.proofRepository.getInflightProofs();
     if (!this.isActive(generation) || inflightProofs.length === 0) return;
 
-    const owners = new Map<string, Promise<ProofOwner>>();
-    const batches = new Map<string, { mintUrl: string; unit: string; proofs: OwnedProof[] }>();
+    const owningOperations: OwningOperationCache = new Map();
+    const batches = new Map<string, { mintUrl: string; unit: string; proofs: WatchableProof[] }>();
     const byMint = new Map<string, string[]>();
     for (const proof of inflightProofs) {
       if (!proof.mintUrl || !proof.secret) continue;
-      const owner = await this.resolveOwner(proof.mintUrl, proof.secret, proof, owners);
+      const owningOperation = await this.resolveOwningOperation(
+        proof.mintUrl,
+        proof.secret,
+        proof,
+        owningOperations,
+      );
       if (!this.isActive(generation)) return;
-      if (owner?.kind !== 'unowned' && owner?.kind !== 'send') continue;
-      const unit = normalizeUnit(proof.unit);
+      if (!isWatchable(owningOperation)) continue;
+      const unit = normalizeUnit(proof.unit, { defaultUnit: DEFAULT_UNIT });
       const batchKey = `${proof.mintUrl}::${unit}`;
       const batch = batches.get(batchKey) ?? { mintUrl: proof.mintUrl, unit, proofs: [] };
-      batch.proofs.push({ proof, owner });
+      batch.proofs.push({ proof, owningOperation });
       batches.set(batchKey, batch);
       const secrets = byMint.get(proof.mintUrl) ?? [];
       secrets.push(proof.secret);
@@ -513,7 +540,8 @@ export class ProofStateWatcherService {
     for (const [mintUrl, secrets] of byMint.entries()) {
       if (!this.isActive(generation)) return;
       try {
-        await this.watchProof(mintUrl, secrets);
+        // Rereads proof state, since the check above may have reconciled some proofs.
+        await this.watchProofs(mintUrl, secrets, owningOperations);
       } catch (err) {
         this.logger?.warn('Failed to watch existing inflight proofs', {
           mintUrl,
@@ -527,7 +555,7 @@ export class ProofStateWatcherService {
   private async checkExistingProofs(
     mintUrl: string,
     unit: string,
-    proofs: OwnedProof[],
+    proofs: WatchableProof[],
     generation: number,
   ): Promise<void> {
     if (!(await this.mintService.isTrustedMint(mintUrl)) || !this.isActive(generation)) return;
@@ -546,21 +574,21 @@ export class ProofStateWatcherService {
       return;
     }
     const spent = proofs.filter((_proof, index) => states[index]?.state === 'SPENT');
-    const unowned = spent.filter(({ owner }) => owner.kind === 'unowned');
+    const unowned = spent.filter(({ owningOperation }) => owningOperation.kind === 'unowned');
     if (unowned.length > 0) {
       await this.recordUnownedSpent(
         mintUrl,
         unowned.map(({ proof }) => proof.secret),
       );
     }
-    for (const { proof, owner } of spent) {
-      if (owner.kind !== 'send' || !this.isActive(generation)) continue;
+    for (const { proof, owningOperation } of spent) {
+      if (owningOperation.kind !== 'send' || !this.isActive(generation)) continue;
       try {
-        await this.applySpentEvidence(mintUrl, proof.secret, owner);
+        await this.applySpentEvidence(mintUrl, proof.secret, owningOperation);
       } catch (err) {
         this.logger?.warn('Send could not apply SPENT evidence', {
           mintUrl,
-          operationId: owner.operationId,
+          operationId: owningOperation.operationId,
           err,
         });
       }
@@ -574,16 +602,19 @@ export class ProofStateWatcherService {
   private async applySpentEvidence(
     mintUrl: string,
     secret: string,
-    owner: ProofOwner | undefined,
+    owningOperation: OwningOperation | undefined,
   ): Promise<void> {
-    if (owner?.kind === 'unowned') {
+    if (owningOperation?.kind === 'unowned') {
       await this.recordUnownedSpent(mintUrl, [secret]);
-    } else if (owner?.kind === 'send' && this.sendOperationService) {
-      const handled = await this.sendOperationService.recordProofSpent(owner.operationId, secret);
+    } else if (owningOperation?.kind === 'send' && this.sendOperationService) {
+      const handled = await this.sendOperationService.recordProofSpent(
+        owningOperation.operationId,
+        secret,
+      );
       if (!handled) {
         this.logger?.debug('Send declined SPENT evidence', {
           mintUrl,
-          operationId: owner.operationId,
+          operationId: owningOperation.operationId,
         });
       }
     }
@@ -611,47 +642,52 @@ export class ProofStateWatcherService {
   }
 
   /** Keep inflight proofs the watcher may act on: unowned, Send-owned or legacy Send outputs. */
-  private async selectWatchable(mintUrl: string, secrets: string[]): Promise<string[]> {
+  private async selectWatchable(
+    mintUrl: string,
+    secrets: string[],
+    owningOperations: OwningOperationCache,
+  ): Promise<string[]> {
     const stored = new Map(
       (await this.proofRepository.getProofsBySecrets(mintUrl, secrets)).map((proof) => [
         proof.secret,
         proof,
       ]),
     );
-    const owners = new Map<string, Promise<ProofOwner>>();
     const watchable: string[] = [];
     for (const secret of secrets) {
       const proof = stored.get(secret);
       if (proof && proof.state !== 'inflight') continue;
-      const owner = await this.resolveOwner(mintUrl, secret, proof, owners);
-      if (owner?.kind === 'unowned' || owner?.kind === 'send') watchable.push(secret);
+      if (
+        isWatchable(await this.resolveOwningOperation(mintUrl, secret, proof, owningOperations))
+      ) {
+        watchable.push(secret);
+      }
     }
     return watchable;
   }
 
   /**
-   * Resolve a proof's Owning Operation: its reserving operation, else its creating operation. Legacy
-   * tokenless Sends without proof rows resolve through their discovered outputs.
+   * Resolve a proof's Owning Operation from its record. Legacy tokenless Sends without proof rows
+   * resolve through their discovered outputs.
    */
-  private async resolveOwner(
+  private async resolveOwningOperation(
     mintUrl: string,
     secret: string,
     proof: CoreProof | null | undefined,
-    owners = new Map<string, Promise<ProofOwner>>(),
-  ): Promise<ProofOwner | undefined> {
+    owningOperations: OwningOperationCache = new Map(),
+  ): Promise<OwningOperation | undefined> {
     const operationId =
-      proof?.usedByOperationId ??
-      proof?.createdByOperationId ??
+      (proof && getOwningOperationId(proof)) ??
       this.sendOperationByProofKey.get(toKey(mintUrl, secret));
     if (!operationId) return proof ? { kind: 'unowned' } : undefined;
-    let owner = owners.get(operationId);
-    if (!owner) {
-      owner = this.isSendOperation(operationId).then(
-        (isSend): ProofOwner => ({ kind: isSend ? 'send' : 'other', operationId }),
+    let owningOperation = owningOperations.get(operationId);
+    if (!owningOperation) {
+      owningOperation = this.isSendOperation(operationId).then(
+        (isSend): OwningOperation => ({ kind: isSend ? 'send' : 'other', operationId }),
       );
-      owners.set(operationId, owner);
+      owningOperations.set(operationId, owningOperation);
     }
-    return owner;
+    return owningOperation;
   }
 
   private async isSendOperation(operationId: string): Promise<boolean> {

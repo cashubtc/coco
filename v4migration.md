@@ -262,9 +262,6 @@ the implementation:
 - `packages/core/operations/mint/MintOperationService.ts:178` - `prepareNewQuote(..., amount, ...)`.
 - `packages/core/services/PaymentRequestService.ts:97` - payment request preparation
   `options.amount`.
-- `packages/core/services/ProofService.ts:140` - output creation `{ keep, send }` amounts.
-- `packages/core/services/ProofService.ts:594` - `selectProofsToSend(..., amount, ...)`.
-- `packages/core/services/ProofService.ts:724` - `createBlankOutputs(amount, ...)`.
 
 ### Public API Outputs and Domain Types
 

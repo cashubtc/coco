@@ -345,28 +345,61 @@ describe('ProofStateWatcherService lifecycle', () => {
     await repositories.proofRepository.saveProofs(mintUrlB, [
       makeProof({ mintUrl: mintUrlB, secret: 'b1' }),
     ]);
-    const watchProof: Mock<ProofStateWatcherService['watchProof']> = mock(
-      async (_mintUrl: string, _secrets: string[]) => {},
-    );
+    const subscriptions = recordingSubscriptions();
     let scanned!: () => void;
     const done = new Promise<void>((resolve) => (scanned = resolve));
-    watchProof.mockImplementation(async (mintUrl) => {
-      if (mintUrl === mintUrlB) scanned();
+    const subscribe = subscriptions.subscribe.getMockImplementation()!;
+    subscriptions.subscribe.mockImplementation(async (...args) => {
+      const result = await subscribe(...args);
+      if (args[0] === mintUrlB) scanned();
+      return result;
     });
     const { remote, checkProofStates } = stateRemote();
-    const watcher = createWatcher({} as SubscriptionManager, {
+    const watcher = createWatcher(subscriptions.subs, {
       remote,
       options: { watchExistingInflightOnStart: true },
     });
-    watcher.watchProof = watchProof;
 
     await watcher.start();
     await done;
 
     expect(checkProofStates).toHaveBeenCalledTimes(2);
-    expect(watchProof).toHaveBeenCalledTimes(2);
-    expect(watchProof.mock.calls[0]).toEqual([mintUrlA, ['a1', 'a2']]);
-    expect(watchProof.mock.calls[1]).toEqual([mintUrlB, ['b1']]);
+    expect(
+      subscriptions.subscribe.mock.calls.map(([mintUrl, , filters]) => [mintUrl, filters]),
+    ).toEqual([
+      [mintUrlA, [yOf('a1'), yOf('a2')]],
+      [mintUrlB, [yOf('b1')]],
+    ]);
+
+    await watcher.stop();
+  });
+
+  it('checks legacy unit-less inflight proofs as sat during the startup scan', async () => {
+    await repositories.proofRepository.saveProofs(mintUrlA, [makeProof({ secret: 'legacy' })]);
+    // Older records may have no unit when a repository returns them unnormalized.
+    const proofRepository = Object.create(repositories.proofRepository) as ProofRepository;
+    proofRepository.getInflightProofs = async () =>
+      (await repositories.proofRepository.getInflightProofs()).map(
+        ({ unit: _unit, ...proof }) => proof as CoreProof,
+      );
+    let reconciled!: () => void;
+    const done = new Promise<void>((resolve) => (reconciled = resolve));
+    bus.on('proofs:state-changed', async () => reconciled());
+    const { remote, checkProofStates } = stateRemote({ legacy: 'SPENT' });
+    const watcher = createWatcher({} as SubscriptionManager, {
+      remote,
+      proofRepository,
+      options: { watchExistingInflightOnStart: true },
+    });
+
+    await watcher.start();
+    await done;
+
+    expect(checkProofStates).toHaveBeenCalledTimes(1);
+    expect(checkProofStates.mock.calls[0]![1]).toBe('sat');
+    expect((await repositories.proofRepository.getProofBySecret(mintUrlA, 'legacy'))?.state).toBe(
+      'spent',
+    );
 
     await watcher.stop();
   });
