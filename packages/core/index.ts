@@ -122,10 +122,6 @@ export type {
   FailedBatchMintOperation,
   FinalizedBatchMintOperation,
 } from './operations/batchMint/BatchMintOperation.ts';
-export {
-  BatchMintAdmissionError,
-  type BatchMintAdmissionReason,
-} from './operations/batchMint/BatchMintErrors.ts';
 export type {
   MintSwapOperation,
   MintSwapOperationState,

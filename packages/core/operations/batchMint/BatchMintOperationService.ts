@@ -4,6 +4,7 @@ import type { CoreEvents } from '../../events/types.ts';
 import { restoreOutputProofs } from '../../infra/ProofRestore.ts';
 import type { Logger } from '../../logging/Logger.ts';
 import {
+  BatchMintAdmissionError,
   HttpResponseError,
   MintOperationError,
   NetworkError,
@@ -29,7 +30,6 @@ import { MintScopedLock } from '../MintScopedLock.ts';
 import { OperationIdLock } from '../OperationIdLock.ts';
 import type { MintMethod } from '../mint/MintMethodHandler.ts';
 import { assertOrdinaryChildWork } from '../mintSwap/MintSwapTransitions.ts';
-import { BatchMintAdmissionError } from './BatchMintErrors.ts';
 import type { BatchMintOperation, ExecutingBatchMintOperation } from './BatchMintOperation.ts';
 import type { BatchMintOperationRepository } from './BatchMintOperationRepository.ts';
 import type { AdmitBatchMintResult } from './BatchMintTransitionTypes.ts';

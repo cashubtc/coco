@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { BatchMintAdmissionError } from '../../operations/batchMint/BatchMintErrors.ts';
-import { MintQuoteKeyError, UnknownMintError } from '../../models/Error.ts';
+import {
+  BatchMintAdmissionError,
+  MintQuoteKeyError,
+  UnknownMintError,
+} from '../../models/Error.ts';
 import {
   createBatchMintHarness,
   foreignKey,

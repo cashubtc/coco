@@ -1,7 +1,11 @@
 import { Amount, signMintQuote } from '@cashu/cashu-ts';
 import { bytesToHex } from '@noble/curves/utils.js';
 import { normalizeUnit } from '../../amounts.ts';
-import { MintQuoteKeyError, ProofValidationError } from '../../models/Error.ts';
+import {
+  BatchMintAdmissionError,
+  MintQuoteKeyError,
+  ProofValidationError,
+} from '../../models/Error.ts';
 import { assessMintQuoteClaimability } from '../../models/MintQuoteClaimability.ts';
 import { assertOutputProofs } from '../../proofs/OutputProofs.ts';
 import type { CoreTransaction } from '../../transactions/CoreTransaction.ts';
@@ -14,7 +18,6 @@ import {
 } from '../../utils.ts';
 import { isTerminalOperation } from '../mint/MintOperation.ts';
 import { assertOrdinaryChildWork } from '../mintSwap/MintSwapTransitions.ts';
-import { BatchMintAdmissionError } from './BatchMintErrors.ts';
 import type {
   BatchMintMember,
   BatchMintOperation,

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { Amount } from '@cashu/cashu-ts';
 import { mintSwapFixture } from '../../../adapter-tests/src/internal/mintSwap/fixture.ts';
-import { BatchMintAdmissionError } from '../../operations/batchMint/BatchMintErrors.ts';
+import { BatchMintAdmissionError } from '../../models/Error.ts';
 import type { BatchMintOperation } from '../../operations/batchMint/BatchMintOperation.ts';
 import { MintSwapChildOperationError } from '../../operations/mintSwap/MintSwapErrors.ts';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
