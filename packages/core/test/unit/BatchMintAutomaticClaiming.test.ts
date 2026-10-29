@@ -2,8 +2,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { Amount } from '@cashu/cashu-ts';
 import type { BatchMintBehavior } from '../fixtures/BatchMintMint.ts';
 import { mintSwapFixtures } from '../fixtures/MintSwap.ts';
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 import {
   createBatchMintHarness,
   ownedKey,
@@ -366,21 +364,22 @@ describe('Automatic Batch Mint claiming', () => {
       await h.coco.enableMintOperationProcessor({ processIntervalMs: 20 });
       await h.coco.waitForMintOperationProcessor();
 
-      let stopped!: Promise<void>;
-      h.mint.onBatchIssued = async () => {
-        h.mint.onBatchIssued = undefined;
-        // `c` is collected for the next turn, then the processor stops mid-batch.
-        await payAndPoll('c');
-        stopped = h.coco.disableMintOperationProcessor();
-      };
+      // Resolves once the stop started mid-batch has drained the processor's owned work.
+      const stopped = new Promise<void>((resolve) => {
+        h.mint.onBatchIssued = async () => {
+          h.mint.onBatchIssued = undefined;
+          // `c` is collected for the next turn, then the processor stops mid-batch.
+          await payAndPoll('c');
+          resolve(h.coco.disableMintOperationProcessor());
+        };
+      });
       await payAndPoll('a', 'b');
-      while (!stopped) await sleep(5);
       await stopped;
-      await sleep(60);
 
       // The submitted batch completed; the collected claim for `c` was not started.
       expect(mintCalls()).toEqual([{ batch: ['a', 'b'] }]);
 
+      // The next start's sweep finds `c` still unclaimed and claims it with `d`.
       await paid('d');
       await h.coco.enableMintOperationProcessor({ processIntervalMs: 20 });
       await h.coco.waitForMintOperationProcessor();
@@ -392,13 +391,15 @@ describe('Automatic Batch Mint claiming', () => {
       await h.coco.enableMintOperationProcessor({ processIntervalMs: 50 });
       await h.coco.waitForMintOperationProcessor();
 
+      await unpaid('c');
       await payAndPoll('a', 'b');
       await h.coco.mint.untrustMint(h.mint.mintUrl);
       await h.coco.mint.trustMint(h.mint.mintUrl);
+      // `c` joins the same turn; waiting for it to be claimed waits for the whole turn to end.
+      await payAndPoll('c');
       await h.coco.waitForMintOperationProcessor();
-      await sleep(80);
 
-      expect(mintCalls()).toEqual([]);
+      expect(mintCalls()).toEqual([{ single: 'c' }]);
     });
   });
 });
