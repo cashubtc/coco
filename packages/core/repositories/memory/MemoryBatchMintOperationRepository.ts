@@ -3,7 +3,10 @@ import type {
   BatchMintOperationState,
 } from '../../operations/batchMint/BatchMintOperation.ts';
 import type { BatchMintOperationRepository } from '../../operations/batchMint/BatchMintOperationRepository.ts';
-import { assertBatchMintOperation, assertBatchMintUpdate } from '../../operations/batchMint/BatchMintValidation.ts';
+import {
+  assertBatchMintOperation,
+  assertBatchMintUpdate,
+} from '../../operations/batchMint/BatchMintValidation.ts';
 import type { QuoteIdentity } from '../../models/QuoteIdentity.ts';
 import { normalizeMintUrl } from '../../utils.ts';
 import { cloneMemoryValue, COPY_MEMORY_REPOSITORY_STATE } from './MemoryRepositoryTransaction.ts';

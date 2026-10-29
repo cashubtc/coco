@@ -268,9 +268,13 @@ ownership, and active keys inside the transaction, then persists the pending ope
 Output Allocation. New preparation does not persist an intermediate init row. Legacy init rows
 remain readable and are cleaned up through a scoped transition.
 
-`beginMintExecution` rechecks canonical quote accounting and sibling operations in the same scope
-that records executing. This creates the Mint Quote Reservation; pending operations reserve no
-balance. State checks and updates share the adapter's serialized write transaction, without relying
+`beginMintExecution` rechecks canonical quote accounting and the quote's local claim facts in the
+same scope that records executing. This creates the Mint Quote Reservation; pending operations
+reserve no balance. Every claimability decision reads those facts through the one scoped query
+`tx.mintQuoteClaims`, which counts finalized and `executing` claims from both Mint Operations and
+Batch Mint Operations; informational checks outside a transition read it in a read-only `run()`.
+Required `tx.batchMintOperations` is bound to the same adapter transaction in Memory and all
+persistent adapters, like Mint Swap persistence. State checks and updates share the adapter's serialized write transaction, without relying
 on an in-memory operation or quote lock for correctness. Standalone Mint preparation retains the
 shared mint lock for compatibility with same-session legacy output allocators; their cross-session
 counter safety remains part of the owning legacy migrations.
@@ -438,6 +442,7 @@ transactions/
   outputs/ScopedOutputs.ts                    # output allocation including counters
   keypairs/ScopedKeypairs.ts                  # keypair allocation and scoped persistence
   mints/ScopedMintMetadata.ts                 # metadata application and trust checks
+  mintQuoteClaims/ScopedMintQuoteClaims.ts    # shared local Mint Quote claim facts
 ```
 
 Names describe authority and lifetime:

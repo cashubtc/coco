@@ -17,6 +17,10 @@ import {
 import { RepositoryScopedProofs, type ScopedProofs } from './proofs/ScopedProofs.ts';
 import { RepositoryScopedOutputs, type ScopedOutputs } from './outputs/ScopedOutputs.ts';
 import { RepositoryScopedKeypairs, type ScopedKeypairs } from './keypairs/ScopedKeypairs.ts';
+import {
+  RepositoryScopedMintQuoteClaims,
+  type ScopedMintQuoteClaims,
+} from './mintQuoteClaims/ScopedMintQuoteClaims.ts';
 import { TransactionLifetime } from './TransactionLifetime.ts';
 import { getTransitionBody, type Transition } from './Transition.ts';
 import type { MintSwapOperationRepository } from '../operations/mintSwap/MintSwapOperationRepository.ts';
@@ -33,6 +37,7 @@ export interface CoreTransaction {
   readonly keypairs: ScopedKeypairs;
   readonly proofs: ScopedProofs;
   readonly outputs: ScopedOutputs;
+  readonly mintQuoteClaims: ScopedMintQuoteClaims;
   readonly mintSwapOperations: Pick<
     MintSwapOperationRepository,
     'getById' | 'getByChild' | 'getByQuote' | 'create' | 'transition'
@@ -128,6 +133,10 @@ export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
       keypairs: new RepositoryScopedKeypairs(repositories.keyRingRepository),
       proofs,
       outputs,
+      mintQuoteClaims: new RepositoryScopedMintQuoteClaims(
+        repositories.mintOperationRepository,
+        repositories.batchMint.operationRepository,
+      ),
       receiveOperations: repositories.receiveOperationRepository,
       sendOperations: repositories.sendOperationRepository,
     });

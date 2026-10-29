@@ -1,4 +1,4 @@
-import { Amount, RateLimitError, type Proof } from '@cashu/cashu-ts';
+import { RateLimitError, type Proof } from '@cashu/cashu-ts';
 import type { DeferPublication } from '../../events/DeferredPublication.ts';
 import type { CoreTransaction, CoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
 import type { MintSwapOperationRepository } from './MintSwapOperationRepository.ts';
@@ -74,7 +74,7 @@ export interface MintSwapOperationServiceDependencies {
   transactionRunner: CoreTransactionRunner;
   parentQueries: Pick<MintSwapOperationRepository, 'getById' | 'listActive' | 'listDue'>;
   sourceQueries: Pick<MeltOperationRepository, 'getById'>;
-  destinationQueries: Pick<MintOperationRepository, 'getById' | 'getByQuoteId'>;
+  destinationQueries: Pick<MintOperationRepository, 'getById'>;
   proofQueries: Pick<ProofRepository, 'getProofsBySecrets'>;
   mintService: Pick<MintService, 'refreshAndCommitIfStale'>;
   walletService: Pick<WalletService, 'getWalletWithActiveKeysetId'>;
@@ -727,10 +727,11 @@ export class MintSwapOperationService {
             ? result.proofs
             : await this.restoreDestination(parent, operation);
       } else {
-        const siblings = await this.dependencies.destinationQueries.getByQuoteId(
-          operation.mintUrl,
-          'bolt11',
-          operation.quoteId,
+        const facts = await this.dependencies.transactionRunner.run((tx) =>
+          tx.mintQuoteClaims.getFacts(
+            { mintUrl: operation.mintUrl, method: 'bolt11', quoteId: operation.quoteId },
+            { excludeOperationId: operation.id },
+          ),
         );
         const result = await handler.recoverExecuting({
           ...context,
@@ -745,14 +746,8 @@ export class MintSwapOperationService {
             );
           },
           localClaimabilityFacts: {
-            finalizedAmount: Amount.sum(
-              siblings.filter((value) => value.state === 'finalized').map((value) => value.amount),
-            ),
-            reservedAmount: Amount.sum(
-              siblings
-                .filter((value) => value.state === 'executing' && value.id !== operation.id)
-                .map((value) => value.amount),
-            ),
+            finalizedAmount: facts.finalizedAmount,
+            reservedAmount: facts.reservedAmount,
           },
         });
         if (result.status === 'REJECTED')

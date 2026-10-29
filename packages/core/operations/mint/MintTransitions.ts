@@ -64,11 +64,21 @@ export const prepareMint = defineTransition<PrepareMintInput, PrepareMintResult>
     if (fixedAmount && quote.amountIssued.greaterThanOrEqual(fixedAmount))
       throw new Error(`Cannot prepare mint operation: quote is terminal`);
     if (fixedAmount) {
-      const siblings = await tx.mintOperations.getByQuoteId(mintUrl, input.method, quote.quoteId);
-      const sibling = siblings.find((op) => op.id !== input.operationId);
+      const facts = await tx.mintQuoteClaims.getFacts({
+        mintUrl,
+        method: input.method,
+        quoteId: quote.quoteId,
+      });
+      const sibling = facts.standaloneOperations.find((op) => op.id !== input.operationId);
       if (sibling)
         throw new Error(
           `Mint quote ${quote.quoteId} is already tracked by operation ${sibling.id} in state ${sibling.state}`,
+        );
+      // A failed Batch Mint Operation provably issued nothing, so it leaves the quote claimable.
+      const batch = facts.batchMintOperations.find((op) => op.state !== 'failed');
+      if (batch)
+        throw new Error(
+          `Mint quote ${quote.quoteId} is already claimed by Batch Mint Operation ${batch.id} in state ${batch.state}`,
         );
     }
     const pubkey = quote.pubkey;
@@ -139,19 +149,9 @@ export const reserveMintQuoteForExecution = defineTransition<
     operation.quoteId,
   );
   if (!quote) throw new Error(`Mint quote ${operation.quoteId} was not found`);
-  const siblings = await tx.mintOperations.getByQuoteId(
-    operation.mintUrl,
-    operation.method,
-    operation.quoteId,
-  );
-  const finalizedAmount = siblings.reduce(
-    (sum, op) => (op.state === 'finalized' ? sum.add(op.amount) : sum),
-    Amount.zero(),
-  );
-  const reservedAmount = siblings.reduce(
-    (sum, op) => (op.state === 'executing' ? sum.add(op.amount) : sum),
-    Amount.zero(),
-  );
+  const { finalizedAmount, reservedAmount } = await tx.mintQuoteClaims.getFacts(operation, {
+    excludeOperationId: operation.id,
+  });
   const assessment = assessMintQuoteClaimability(quote, {
     finalizedAmount,
     reservedAmount,

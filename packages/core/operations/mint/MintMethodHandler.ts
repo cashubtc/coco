@@ -162,6 +162,10 @@ export interface RecoverExecutingContext<
   restoreOutputs(): Promise<Proof[]>;
   /** The coordinator persists observations before recovery advances the operation. */
   recordQuoteSnapshot(snapshot: MintMethodQuoteSnapshot<M>): Promise<void>;
+  /**
+   * Local claim facts for the quote across Mint Operations and Batch Mint Operations, excluding
+   * this operation's own reservation.
+   */
   localClaimabilityFacts: { finalizedAmount: Amount; reservedAmount: Amount };
 }
 
