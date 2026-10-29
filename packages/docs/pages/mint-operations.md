@@ -319,7 +319,8 @@ if (operation.state === 'executing') {
 
 `execute` rejects before persisting anything when the group has fewer than 2
 or duplicate members, mixes methods or units, targets an untrusted mint, uses a
-method the mint does not advertise for NUT-29, exceeds the mint's
+method the mint does not advertise for NUT-29 or advertises a malformed or
+single-quote `max_batch_size` for (`unsupported_method`), exceeds the mint's
 `max_batch_size` (capped at 100), or contains a member that is unclaimable,
 mismatches its BOLT11 amount, has a nonterminal standalone mint operation, is
 coordinated by an active Mint Swap, or lacks a Wallet-owned NUT-20 quote key.
@@ -333,7 +334,9 @@ Outcomes:
   reservation is released and the quotes can be claimed again.
 - `executing`: network errors, timeouts, server errors and malformed or invalid
   responses are ambiguous. Recovery uses locally saved proofs, then NUT-09
-  Restore of the persisted outputs, then a fresh NUT-29 quote check. It replays
+  Restore of the persisted outputs, then a fresh quote check of exactly the
+  members: one NUT-29 check, or one single-quote check per member when the
+  NUT-29 quote check is unavailable for the mint and method. It replays
   the identical request only when nothing was restored and every member is
   still claimable, and marks the batch `failed` when a member is no longer
   claimable.
