@@ -133,6 +133,50 @@ export class OperationInProgressError extends Error {
   }
 }
 
+/** Operation families whose lifecycle commands report typed lookup and state failures. */
+export type LifecycleOperationType = 'mint' | 'melt' | 'send' | 'receive';
+
+/** Raised when a lifecycle command targets an Operation ID that does not exist. */
+export class OperationNotFoundError extends Error {
+  constructor(
+    readonly operationType: LifecycleOperationType,
+    readonly operationId: string,
+  ) {
+    super(`Operation ${operationId} not found`);
+    this.name = 'OperationNotFoundError';
+  }
+}
+
+/** Current and accepted states of an Operation whose lifecycle command was rejected. */
+export interface OperationStateErrorDetails {
+  operationType: LifecycleOperationType;
+  operationId: string;
+  state: string;
+  expectedStates: readonly string[];
+}
+
+/**
+ * Raised when a lifecycle command is unavailable in the Operation's current state.
+ *
+ * The state is the one observed when the command was rejected, so callers should re-read the
+ * Operation before choosing another command.
+ */
+export class OperationStateError extends Error {
+  readonly operationType: LifecycleOperationType;
+  readonly operationId: string;
+  readonly state: string;
+  readonly expectedStates: readonly string[];
+
+  constructor(details: OperationStateErrorDetails, message: string) {
+    super(message);
+    this.name = 'OperationStateError';
+    this.operationType = details.operationType;
+    this.operationId = details.operationId;
+    this.state = details.state;
+    this.expectedStates = [...details.expectedStates];
+  }
+}
+
 export class SendOperationConflictError extends Error {
   readonly operationId: string;
 

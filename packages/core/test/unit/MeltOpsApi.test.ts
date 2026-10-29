@@ -284,5 +284,29 @@ describe('MeltOpsApi', () => {
       pendingOperation.id,
       'user requested',
     );
+
+    (meltOperationService.getOperation as unknown as ReturnType<typeof mock>).mockResolvedValueOnce(
+      pendingOperation as MeltOperation,
+    );
+    await expect(api.cancel(pendingOperation.id)).rejects.toMatchObject({
+      name: 'OperationStateError',
+      operationType: 'melt',
+      operationId: pendingOperation.id,
+      state: 'pending',
+      expectedStates: ['prepared'],
+    });
+    expect(meltOperationService.rollback).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports missing operations with a typed lookup error', async () => {
+    (meltOperationService.getOperation as unknown as ReturnType<typeof mock>).mockResolvedValueOnce(
+      null,
+    );
+
+    await expect(api.reclaim('missing')).rejects.toMatchObject({
+      name: 'OperationNotFoundError',
+      operationType: 'melt',
+      operationId: 'missing',
+    });
   });
 });

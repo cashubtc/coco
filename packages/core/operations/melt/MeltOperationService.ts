@@ -31,7 +31,11 @@ import {
   getSecretsFromSerializedOutputData,
   normalizeMintUrl,
 } from '../../utils';
-import { ProofValidationError } from '../../models/Error';
+import {
+  OperationNotFoundError,
+  OperationStateError,
+  ProofValidationError,
+} from '../../models/Error';
 import type { MintAdapter } from '@core/infra';
 import type { MeltHandlerProvider } from '../../infra/handlers/melt';
 import { MintScopedLock } from '../MintScopedLock';
@@ -246,9 +250,16 @@ export class MeltOperationService {
     const releaseLock = await this.operationIdLock.acquire(operationId);
     try {
       const current = await this.dependencies.meltOperationQueries.getById(operationId);
-      if (!current || current.state !== 'prepared') {
-        throw new Error(
-          `Cannot execute operation ${operationId}: expected state 'prepared' but found '${current?.state ?? 'not found'}'`,
+      if (!current) throw new OperationNotFoundError('melt', operationId);
+      if (current.state !== 'prepared') {
+        throw new OperationStateError(
+          {
+            operationType: 'melt',
+            operationId,
+            state: current.state,
+            expectedStates: ['prepared'],
+          },
+          `Cannot execute operation ${operationId}: expected state 'prepared' but found '${current.state}'`,
         );
       }
       const authorizationNow = Date.now();
@@ -323,7 +334,15 @@ export class MeltOperationService {
       const current = await this.requireOperation(operationId);
       if (current.state === 'finalized') return this.finalizeResult(current);
       if (current.state !== 'pending' && current.state !== 'executing') {
-        throw new Error(`Cannot finalize operation in state ${current.state}`);
+        throw new OperationStateError(
+          {
+            operationType: 'melt',
+            operationId,
+            state: current.state,
+            expectedStates: ['pending', 'executing'],
+          },
+          `Cannot finalize operation in state ${current.state}`,
+        );
       }
       let quote = options.canonicalQuote;
       if (!quote || (quote.state === 'PAID' && !Array.isArray(quote.change))) {
@@ -356,7 +375,15 @@ export class MeltOperationService {
         return;
       }
       if (operation.state !== 'pending') {
-        throw new Error(`Cannot rollback operation in state ${operation.state}`);
+        throw new OperationStateError(
+          {
+            operationType: 'melt',
+            operationId,
+            state: operation.state,
+            expectedStates: ['prepared', 'pending'],
+          },
+          `Cannot rollback operation in state ${operation.state}`,
+        );
       }
       const quote = await this.dependencies.quoteLifecycle.refreshMeltQuote(
         operation.mintUrl,
@@ -800,7 +827,7 @@ export class MeltOperationService {
 
   private async requireOperation(operationId: string): Promise<MeltOperation> {
     const operation = await this.dependencies.meltOperationQueries.getById(operationId);
-    if (!operation) throw new Error(`Operation ${operationId} not found`);
+    if (!operation) throw new OperationNotFoundError('melt', operationId);
     return operation;
   }
 

@@ -356,6 +356,13 @@ for setup and storage-security guidance.
   plus `recovery` and `diagnostics`. Built-in methods: `bolt11`, `bolt12`,
   `onchain`.
 
+Lifecycle commands that target a missing Operation reject with `OperationNotFoundError`. A
+command that is unavailable in the Operation's current state rejects with `OperationStateError`,
+which carries `operationType`, `operationId`, the observed `state`, and the accepted
+`expectedStates`. Re-read the Operation before choosing another command. Send and Receive
+transitions that detect a concurrent change under their operation lock still reject with
+`SendOperationConflictError` and `ReceiveOperationConflictError`.
+
 Mint and melt quote lookups use `QuoteIdentity`, the methodless object shape
 `{ mintUrl, quoteId }`:
 
@@ -391,6 +398,10 @@ those details are derived from canonical quote storage.
 - `getAllTrustedMints(): Promise<Mint[]>`
 - `trustMint(mintUrl: string): Promise<void>`
 - `untrustMint(mintUrl: string): Promise<void>`
+
+Trust changes, including `addMint()` with a different `trusted` value for a Known Mint, commit
+before Coco refreshes stale metadata. If that refresh fails, the trust change still succeeds and
+publishes the stored metadata; only a mint with no stored metadata propagates the refresh failure.
 
 ### WalletApi
 

@@ -275,7 +275,12 @@ export class PaymentRequestService {
 
   private async readPaymentRequest(paymentRequest: string): Promise<PaymentRequest> {
     this.logger?.debug('Reading payment request', { paymentRequest });
-    const decodedPaymentRequest = PaymentRequest.fromEncodedRequest(paymentRequest);
+    let decodedPaymentRequest: PaymentRequest;
+    try {
+      decodedPaymentRequest = PaymentRequest.fromEncodedRequest(paymentRequest);
+    } catch (error) {
+      throw new PaymentRequestError('Malformed encoded payment request', error);
+    }
     this.logger?.info('Payment request decoded', {
       decodedPaymentRequest,
     });

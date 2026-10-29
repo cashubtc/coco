@@ -242,6 +242,16 @@ describe('PaymentRequestService', () => {
   });
 
   describe('parse', () => {
+    it('rejects a malformed encoded payment request with a typed error', async () => {
+      const rejection = service.parse('creqAnot-a-payment-request');
+
+      await expect(rejection).rejects.toBeInstanceOf(PaymentRequestError);
+      await expect(rejection).rejects.toMatchObject({
+        message: 'Malformed encoded payment request',
+        cause: expect.any(Error),
+      });
+    });
+
     it('should decode an inband payment request', async () => {
       const pr = new PaymentRequest([], 'request-id-1', 100, 'sat', [testMintUrl], 'Test payment');
       const encoded = pr.toEncodedRequest();

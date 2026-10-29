@@ -143,6 +143,37 @@ describe('MintService', () => {
       expect(events[0]?.mint.trusted).toBe(true);
     });
 
+    it('keeps a committed trust change when the stale metadata refresh fails', async () => {
+      await service.addMintByUrl(testMintUrl);
+      const stored = await mintRepo.getMintByUrl(testMintUrl);
+      await mintRepo.updateMint({ ...stored, updatedAt: Math.floor(Date.now() / 1000) - 600 });
+      (mockAdapter.fetchMintInfo as ReturnType<typeof mock>).mockImplementation(() =>
+        Promise.reject(new Error('mint offline')),
+      );
+      const publishedTrust: boolean[] = [];
+      eventBus.on('mint:updated', ({ mint }) => {
+        publishedTrust.push(mint.trusted);
+      });
+
+      await service.trustMint(testMintUrl);
+      expect(await service.isTrustedMint(testMintUrl)).toBe(true);
+
+      const registered = await service.addMintByUrl(testMintUrl, { trusted: false });
+
+      expect(await service.isTrustedMint(testMintUrl)).toBe(false);
+      expect(registered.mint.trusted).toBe(false);
+      expect(publishedTrust).toEqual([true, false]);
+    });
+
+    it('propagates a refresh failure when trusting an unknown mint', async () => {
+      (mockAdapter.fetchMintInfo as ReturnType<typeof mock>).mockImplementation(() =>
+        Promise.reject(new Error('mint offline')),
+      );
+
+      await expect(service.trustMint(testMintUrl)).rejects.toThrow();
+      expect(await service.getAllMints()).toEqual([]);
+    });
+
     it('should emit mint:updated event when untrusting mint', async () => {
       await service.addMintByUrl(testMintUrl);
       await service.trustMint(testMintUrl);

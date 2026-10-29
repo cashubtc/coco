@@ -1908,12 +1908,20 @@ describe('MintOperationService', () => {
     const init = makeInitOp('init-operation');
     await operationRepo.create(init);
 
-    await expect(service.execute('missing-operation')).rejects.toThrow(
-      'Operation missing-operation not found',
-    );
-    await expect(service.execute(init.id)).rejects.toThrow(
-      "expected state 'pending' but found 'init'",
-    );
+    await expect(service.execute('missing-operation')).rejects.toMatchObject({
+      name: 'OperationNotFoundError',
+      message: 'Operation missing-operation not found',
+      operationType: 'mint',
+      operationId: 'missing-operation',
+    });
+    await expect(service.execute(init.id)).rejects.toMatchObject({
+      name: 'OperationStateError',
+      message: expect.stringContaining("expected state 'pending' but found 'init'"),
+      operationType: 'mint',
+      operationId: init.id,
+      state: 'init',
+      expectedStates: ['pending'],
+    });
 
     expect(handler.execute).not.toHaveBeenCalled();
     expect(handler.recoverExecuting).not.toHaveBeenCalled();

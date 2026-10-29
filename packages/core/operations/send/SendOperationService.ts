@@ -67,6 +67,8 @@ import {
   ProofValidationError,
   OperationInProgressError,
   SendOperationConflictError,
+  OperationNotFoundError,
+  OperationStateError,
 } from '../../models/Error';
 import { MintScopedLock } from '../MintScopedLock';
 import { OperationIdLock } from '../OperationIdLock';
@@ -293,7 +295,7 @@ export class SendOperationService {
     try {
       const current = await this.operationQueries.getById(operationId);
       if (!current) {
-        throw new Error(`Operation ${operationId} not found`);
+        throw new OperationNotFoundError('send', operationId);
       }
       if (current.state !== 'prepared') {
         throw new SendOperationConflictError(
@@ -455,7 +457,7 @@ export class SendOperationService {
    */
   async finalize(operationId: string): Promise<void> {
     const operation = await this.operationQueries.getById(operationId);
-    if (!operation) throw new Error(`Operation ${operationId} not found`);
+    if (!operation) throw new OperationNotFoundError('send', operationId);
     return this.completePersistedSend(operationId);
   }
 
@@ -474,7 +476,7 @@ export class SendOperationService {
 
         const latest = await this.operationQueries.getById(operationId);
         if (!latest) {
-          throw new Error(`Operation ${operationId} not found`);
+          throw new OperationNotFoundError('send', operationId);
         }
 
         if (latest.state === 'finalized') {
@@ -495,7 +497,7 @@ export class SendOperationService {
 
       const operation = await this.operationQueries.getById(operationId);
       if (!operation) {
-        throw new Error(`Operation ${operationId} not found`);
+        throw new OperationNotFoundError('send', operationId);
       }
       if (operation.state === 'finalized') {
         this.logger?.debug('Operation already finalized', { operationId });
@@ -510,7 +512,15 @@ export class SendOperationService {
       }
 
       if (operation.state !== 'pending') {
-        throw new Error(`Cannot finalize operation in state ${operation.state}`);
+        throw new OperationStateError(
+          {
+            operationType: 'send',
+            operationId,
+            state: operation.state,
+            expectedStates: ['pending'],
+          },
+          `Cannot finalize operation in state ${operation.state}`,
+        );
       }
       if (isLegacyTokenlessP2pkSend(operation)) {
         const observation = await this.observeLegacyTokenlessP2pk(operation);
@@ -563,10 +573,18 @@ export class SendOperationService {
    */
   async rollback(operationId: string, reason = 'Rolled back by user action'): Promise<void> {
     const operation = await this.operationQueries.getById(operationId);
-    if (!operation) throw new Error(`Operation ${operationId} not found`);
+    if (!operation) throw new OperationNotFoundError('send', operationId);
     const handler = this.handlerProvider.get(operation.method);
     if (operation.state !== 'prepared' && !handler.canReclaim) {
-      throw new Error(`P2PK Send Operation in ${operation.state} state can not be rolled back.`);
+      throw new OperationStateError(
+        {
+          operationType: 'send',
+          operationId,
+          state: operation.state,
+          expectedStates: ['prepared'],
+        },
+        `P2PK Send Operation in ${operation.state} state can not be rolled back.`,
+      );
     }
     return this.rollbackPersistedSend(operationId, reason);
   }
@@ -578,7 +596,7 @@ export class SendOperationService {
     try {
       const operation = await this.operationQueries.getById(operationId);
       if (!operation) {
-        throw new Error(`Operation ${operationId} not found`);
+        throw new OperationNotFoundError('send', operationId);
       }
       if (operation.state === 'prepared') {
         const updatedAt = Date.now();
@@ -625,7 +643,15 @@ export class SendOperationService {
           }),
         );
       } else {
-        throw new Error(`Cannot rollback operation in state ${operation.state}`);
+        throw new OperationStateError(
+          {
+            operationType: 'send',
+            operationId,
+            state: operation.state,
+            expectedStates: ['prepared', 'pending'],
+          },
+          `Cannot rollback operation in state ${operation.state}`,
+        );
       }
     } finally {
       releaseLock();
