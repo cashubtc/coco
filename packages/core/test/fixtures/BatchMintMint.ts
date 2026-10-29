@@ -77,7 +77,8 @@ export class FakeBatchMint {
   readonly batchRequests: BatchMintRequestBody[] = [];
   readonly batchBehaviors: BatchMintBehavior[] = [];
   restoreBehavior: RestoreBehavior = 'all';
-  quoteCheckBehavior: 'ok' | 'unavailable' = 'ok';
+  /** `unsupported` answers the NUT-29 quote check with a 404, as from a mint without it. */
+  quoteCheckBehavior: 'ok' | 'unavailable' | 'unsupported' = 'ok';
   nut29: { max_batch_size?: number; methods?: Method[] } | null = {
     max_batch_size: 3,
     methods: ['bolt11', 'bolt12', 'onchain'],
@@ -182,6 +183,7 @@ export class FakeBatchMint {
     const checkMatch = path.match(/^\/v1\/mint\/quote\/(\w+)\/check$/);
     if (checkMatch) {
       if (this.quoteCheckBehavior === 'unavailable') return json({ error: 'unavailable' }, 503);
+      if (this.quoteCheckBehavior === 'unsupported') return json({ detail: 'Not Found' }, 404);
       return json((body.quotes as string[]).map((quoteId) => this.quoteResponse(quoteId)));
     }
     const quoteMatch = path.match(/^\/v1\/mint\/quote\/(\w+)\/(.+)$/);

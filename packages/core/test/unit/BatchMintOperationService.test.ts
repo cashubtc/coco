@@ -182,6 +182,28 @@ describe('Batch Mint Operations', () => {
         members: [{ quoteId: 'a' }, { quoteId: 'b' }],
         error: (e) => e instanceof BatchMintAdmissionError && e.reason === 'unsupported_method',
       },
+      ...(
+        [
+          ['a malformed', 'ten'],
+          ['a single-quote', 1],
+        ] as const
+      ).map(([kind, maxBatchSize]) => ({
+        name: `${kind} NUT-29 batch limit`,
+        setup: async () => {
+          await paidBolt11('a');
+          await paidBolt11('b');
+          const mint = await h.repo.mintRepository.getMintByUrl(h.mint.mintUrl);
+          const nuts = {
+            ...mint.mintInfo.nuts,
+            // Mint info is stored as received, so a malformed limit reaches admission.
+            '29': { methods: ['bolt11'], max_batch_size: maxBatchSize as number },
+          };
+          await h.repo.mintRepository.updateMint({ ...mint, mintInfo: { ...mint.mintInfo, nuts } });
+        },
+        members: [{ quoteId: 'a' }, { quoteId: 'b' }],
+        error: (e: unknown) =>
+          e instanceof BatchMintAdmissionError && e.reason === 'unsupported_method',
+      })),
       {
         name: 'a group above the NUT-29 limit',
         setup: async () => {
@@ -412,6 +434,40 @@ describe('Batch Mint Operations', () => {
         expect(await savedProofs(executing.id)).toEqual([]);
       });
     }
+
+    it('checks each member through the single-quote endpoint once the quote-check batch is unavailable', async () => {
+      h.mint.batchBehaviors.push('network');
+      const executing = await executePair();
+      // Background polling found the NUT-29 quote check unsupported for this Coco Session.
+      h.mint.quoteCheckBehavior = 'unsupported';
+      await (
+        h.coco as unknown as {
+          quoteLifecycle: {
+            checkMintQuotesForPolling(
+              method: 'bolt11',
+              identities: Array<{ mintUrl: string; quoteId: string }>,
+            ): Promise<unknown>;
+          };
+        }
+      ).quoteLifecycle.checkMintQuotesForPolling('bolt11', [
+        { mintUrl: h.mint.mintUrl, quoteId: 'a' },
+        { mintUrl: h.mint.mintUrl, quoteId: 'b' },
+      ]);
+      h.mint.quotes.get('b')!.amountIssued = 20;
+      const checksBefore = h.mint.requests.length;
+
+      await h.coco.ops.mint.batch.recovery.run();
+
+      // Each member is observed on its own and recorded before the batch acts on it.
+      const paths = h.mint.requests.slice(checksBefore).map((r) => r.path);
+      expect(paths).toContain('/v1/mint/quote/bolt11/a');
+      expect(paths).toContain('/v1/mint/quote/bolt11/b');
+      expect(paths).not.toContain('/v1/mint/quote/bolt11/check');
+      const observed = await h.coco.quotes.mint.get({ mintUrl: h.mint.mintUrl, quoteId: 'b' });
+      expect(observed?.amountIssued.toString()).toBe('20');
+      expect((await h.coco.ops.mint.batch.get(executing.id))?.state).toBe('failed');
+      expect(h.mint.batchRequests).toHaveLength(1);
+    });
 
     it('finalizes from proofs already saved locally without restoring again', async () => {
       h.mint.batchBehaviors.push('issue-then-drop');

@@ -10,6 +10,7 @@ import {
   ProofValidationError,
   UnknownMintError,
 } from '../../models/Error.ts';
+import type { MintQuote } from '../../models/MintQuote.ts';
 import { assessMintQuoteClaimability } from '../../models/MintQuoteClaimability.ts';
 import type { QuoteIdentity } from '../../models/QuoteIdentity.ts';
 import { createKeyChain } from '../../proofs/KeysetSelection.ts';
@@ -84,7 +85,10 @@ export interface BatchMintOperationServiceDependencies {
   transactionRunner: CoreTransactionRunner;
   batchMintQueries: Pick<BatchMintOperationRepository, 'getById' | 'listByQuote' | 'listInFlight'>;
   proofQueries: Pick<ProofRepository, 'getProofBySecret'>;
-  quoteLifecycle: Pick<QuoteLifecycle, 'getMintQuote' | 'checkMintQuotesForPolling'>;
+  quoteLifecycle: Pick<
+    QuoteLifecycle,
+    'getMintQuote' | 'checkMintQuotesForPolling' | 'getMintQuotePollingLimit' | 'refreshMintQuote'
+  >;
   mintService: Pick<
     MintService,
     'isTrustedMint' | 'getNut29BatchMintLimit' | 'refreshAndCommitIfStale'
@@ -137,10 +141,13 @@ export class BatchMintOperationService {
     if (!(await this.dependencies.mintService.isTrustedMint(mintUrl)))
       throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
     const limit = await this.dependencies.mintService.getNut29BatchMintLimit(mintUrl, method);
-    if (limit === 0)
+    // A malformed or single-quote `max_batch_size` admits no batch, which is not a size problem.
+    if (limit < 2)
       throw new BatchMintAdmissionError(
         'unsupported_method',
-        `Mint ${mintUrl} does not advertise NUT-29 batch minting for ${method}`,
+        limit === 0
+          ? `Mint ${mintUrl} does not advertise NUT-29 batch minting for ${method}`
+          : `Mint ${mintUrl} advertises no usable NUT-29 batch size for ${method}`,
       );
     if (members.length > limit)
       throw new BatchMintAdmissionError(
@@ -239,7 +246,7 @@ export class BatchMintOperationService {
 
   /**
    * Recover one operation: saved proofs, then NUT-09 Restore of the persisted outputs, then a fresh
-   * NUT-29 quote check whose observations are recorded before acting. Only zero restored outputs
+   * target-isolated quote check whose observations are recorded before acting. Only zero restored outputs
    * with every member still claimable replays the exact request.
    */
   async recover(operationId: string): Promise<BatchMintOperation> {
@@ -455,21 +462,11 @@ export class BatchMintOperationService {
     | { status: 'unresolved'; error: string }
   > {
     const { mintUrl, method } = operation;
-    const result = await this.dependencies.quoteLifecycle.checkMintQuotesForPolling(
-      method,
-      operation.members.map((member) => ({ mintUrl, quoteId: member.quoteId })),
-    );
-    const quotes = new Map<
-      string,
-      NonNullable<Extract<(typeof result.outcomes)[number], { status: 'updated' }>['quote']>
-    >();
-    for (const outcome of result.outcomes) {
-      if (outcome.status !== 'updated')
-        return {
-          status: 'unresolved',
-          error: `Quote check failed for ${outcome.identity.quoteId}: ${outcome.failure.error.message}`,
-        };
-      quotes.set(outcome.identity.quoteId, outcome.quote);
+    let quotes: Map<string, MintQuote>;
+    try {
+      quotes = await this.checkMemberQuotes(operation);
+    } catch (error) {
+      return { status: 'unresolved', error: message(error) };
     }
     const facts = await this.dependencies.transactionRunner.run(async (tx) => {
       const all = [];
@@ -502,6 +499,36 @@ export class BatchMintOperationService {
         };
     }
     return { status: 'claimable' };
+  }
+
+  /**
+   * Recovery is explicit work, so its quote check stays target-isolated (ADR-0006): one NUT-29
+   * check of exactly the members while that check is available for the mint and method, otherwise
+   * one single-quote check per member. Both record Quote Observations before returning (ADR-0004).
+   */
+  private async checkMemberQuotes(
+    operation: ExecutingBatchMintOperation,
+  ): Promise<Map<string, MintQuote>> {
+    const { mintUrl, method, members } = operation;
+    const { quoteLifecycle } = this.dependencies;
+    const quotes = new Map<string, MintQuote>();
+    if ((await quoteLifecycle.getMintQuotePollingLimit(mintUrl, method)) < members.length) {
+      for (const { quoteId } of members)
+        quotes.set(quoteId, await quoteLifecycle.refreshMintQuote(mintUrl, method, quoteId));
+      return quotes;
+    }
+    const result = await quoteLifecycle.checkMintQuotesForPolling(
+      method,
+      members.map(({ quoteId }) => ({ mintUrl, quoteId })),
+    );
+    for (const outcome of result.outcomes) {
+      if (outcome.status !== 'updated')
+        throw new Error(
+          `Quote check failed for ${outcome.identity.quoteId}: ${outcome.failure.error.message}`,
+        );
+      quotes.set(outcome.identity.quoteId, outcome.quote);
+    }
+    return quotes;
   }
 
   private async restoreOutputs(operation: BatchMintOperation): Promise<Proof[]> {
