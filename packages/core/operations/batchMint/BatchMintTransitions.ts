@@ -6,10 +6,10 @@ import {
   MintQuoteKeyError,
   ProofValidationError,
 } from '../../models/Error.ts';
-import { assessMintQuoteClaimability } from '../../models/MintQuoteClaimability.ts';
 import { assertOutputProofs } from '../../proofs/OutputProofs.ts';
 import type { CoreTransaction } from '../../transactions/CoreTransaction.ts';
 import { defineTransition } from '../../transactions/Transition.ts';
+import { assessMintQuoteClaim } from '../../transactions/mintQuoteClaims/ScopedMintQuoteClaims.ts';
 import type { CoreProof } from '../../types.ts';
 import {
   getSecretsFromSerializedOutputData,
@@ -91,23 +91,14 @@ export const admitBatchMint = defineTransition<AdmitBatchMintInput, AdmitBatchMi
           `Mint quote ${quoteId} is claimed by Mint Operation ${standalone.id} in state ${standalone.state}`,
           quoteId,
         );
-      const assessment = assessMintQuoteClaimability(quote, {
-        finalizedAmount: facts.finalizedAmount,
-        reservedAmount: facts.reservedAmount,
-        requestedAmount: member.amount,
-      });
+      const assessment = assessMintQuoteClaim(quote, facts, member.amount);
       if (assessment.status === 'invalid' && method === 'bolt11' && member.amount)
         throw new BatchMintAdmissionError(
           'amount_mismatch',
           `Mint quote ${quoteId} amount does not match requested amount ${member.amount}`,
           quoteId,
         );
-      // An atomic quote admits one claim at a time: any reservation already holds all of it.
-      if (
-        assessment.status !== 'claimable' ||
-        !assessment.claimAmount ||
-        (method === 'bolt11' && !facts.reservedAmount.isZero())
-      )
+      if (assessment.status !== 'claimable' || !assessment.claimAmount)
         throw new BatchMintAdmissionError(
           'unclaimable',
           `Mint quote ${quoteId} is not claimable${member.amount ? ` for ${member.amount}` : ''}`,

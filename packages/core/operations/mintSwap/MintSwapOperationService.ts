@@ -36,6 +36,7 @@ import type { ExecutingMintOperation, MintOperation } from '../mint/MintOperatio
 import type { MeltQuote } from '../../models/MeltQuote.ts';
 import type { CoreProof } from '../../types.ts';
 import type { Counter } from '../../models/Counter.ts';
+import { claimabilityFacts } from '../../transactions/mintQuoteClaims/ScopedMintQuoteClaims.ts';
 import {
   assertMintSwapIntent,
   initialMintSwapRetry,
@@ -745,10 +746,7 @@ export class MintSwapOperationService {
               this.deferPublication(parent.id),
             );
           },
-          localClaimabilityFacts: {
-            finalizedAmount: facts.finalizedAmount,
-            reservedAmount: facts.reservedAmount,
-          },
+          localClaimabilityFacts: claimabilityFacts(facts),
         });
         if (result.status === 'REJECTED')
           throw new MintSwapInvariantError('child_identity', 'child_conflict', 'destination');

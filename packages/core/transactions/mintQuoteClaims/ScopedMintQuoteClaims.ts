@@ -1,5 +1,10 @@
 import { Amount } from '@cashu/cashu-ts';
 import type { MintOperationRepository } from '@core/repositories';
+import type { MintQuote } from '../../models/MintQuote.ts';
+import {
+  assessMintQuoteClaimability,
+  type MintQuoteClaimabilityAssessment,
+} from '../../models/MintQuoteClaimability.ts';
 import type { MintQuoteRef } from '../../models/QuoteIdentity.ts';
 import type { BatchMintOperation } from '../../operations/batchMint/BatchMintOperation.ts';
 import type { BatchMintOperationRepository } from '../../operations/batchMint/BatchMintOperationRepository.ts';
@@ -22,6 +27,45 @@ export interface MintQuoteClaimFacts {
   standaloneOperations: MintOperation[];
   /** Every Batch Mint Operation with a member for the quote, ordered by createdAt then ID. */
   batchMintOperations: BatchMintOperation[];
+}
+
+/** The amounts of the shared claim facts that Mint Quote claimability consumes. */
+export function claimabilityFacts(
+  facts: Pick<MintQuoteClaimFacts, 'finalizedAmount' | 'reservedAmount'>,
+  requestedAmount?: Amount,
+): { finalizedAmount: Amount; reservedAmount: Amount; requestedAmount?: Amount } {
+  return {
+    finalizedAmount: facts.finalizedAmount,
+    reservedAmount: facts.reservedAmount,
+    ...(requestedAmount ? { requestedAmount } : {}),
+  };
+}
+
+/**
+ * Whether another active Mint Quote Reservation holds an atomic BOLT11 quote. An atomic quote
+ * admits one claim at a time, so any reservation holds all of it; balance arithmetic, which
+ * claimability deliberately does not apply to atomic quotes, cannot say so.
+ */
+export function holdsAtomicQuote(
+  quote: Pick<MintQuoteRef, 'method'>,
+  facts: Pick<MintQuoteClaimFacts, 'reservedAmount'>,
+): boolean {
+  return quote.method === 'bolt11' && !facts.reservedAmount.isZero();
+}
+
+/**
+ * Assess a new local claim of a quote against its shared claim facts: claimability, except that an
+ * atomic quote another reservation holds is `waiting`.
+ */
+export function assessMintQuoteClaim(
+  quote: MintQuote,
+  facts: Pick<MintQuoteClaimFacts, 'finalizedAmount' | 'reservedAmount'>,
+  requestedAmount?: Amount,
+): MintQuoteClaimabilityAssessment {
+  const assessment = assessMintQuoteClaimability(quote, claimabilityFacts(facts, requestedAmount));
+  if (assessment.status === 'claimable' && holdsAtomicQuote(quote, facts))
+    return { status: 'waiting', remoteAvailable: assessment.remoteAvailable };
+  return assessment;
 }
 
 export interface MintQuoteClaimFactsOptions {

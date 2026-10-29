@@ -18,6 +18,10 @@ import { mapProofToCoreProof, normalizeMintUrl } from '@core/utils.ts';
 import type { CoreProof } from '@core/types.ts';
 import type { CoreTransaction } from '../../transactions/CoreTransaction.ts';
 import { defineTransition } from '../../transactions/Transition.ts';
+import {
+  claimabilityFacts,
+  holdsAtomicQuote,
+} from '../../transactions/mintQuoteClaims/ScopedMintQuoteClaims.ts';
 import type {
   ApplyMintResultInput,
   ApplyMintResult,
@@ -149,17 +153,13 @@ export const reserveMintQuoteForExecution = defineTransition<
     operation.quoteId,
   );
   if (!quote) throw new Error(`Mint quote ${operation.quoteId} was not found`);
-  const { finalizedAmount, reservedAmount } = await tx.mintQuoteClaims.getFacts(operation, {
+  const facts = await tx.mintQuoteClaims.getFacts(operation, {
     excludeOperationId: operation.id,
   });
-  const assessment = assessMintQuoteClaimability(quote, {
-    finalizedAmount,
-    reservedAmount,
-    requestedAmount: operation.amount,
-  });
+  const assessment = assessMintQuoteClaimability(quote, claimabilityFacts(facts, operation.amount));
   if (assessment.status === 'invalid')
     throw new Error(`Mint quote ${operation.quoteId} has invalid claimability accounting`);
-  if ((quote.method === 'bolt11' && !reservedAmount.isZero()) || assessment.status === 'waiting')
+  if (holdsAtomicQuote(quote, facts) || assessment.status === 'waiting')
     return { operation, changed: false };
   assertMintOutputPlan(operation);
   const executing: ExecutingMintOperation = {

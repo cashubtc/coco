@@ -20,13 +20,14 @@ import type { ProofRepository } from '../../repositories/index.ts';
 import type { MintService } from '../../services/MintService.ts';
 import type { WalletService } from '../../services/WalletService.ts';
 import type { CoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
+import { claimabilityFacts } from '../../transactions/mintQuoteClaims/ScopedMintQuoteClaims.ts';
 import {
   deserializeOutputData,
   generateSubId,
   getSecretsFromSerializedOutputData,
   normalizeMintUrl,
 } from '../../utils.ts';
-import { MintScopedLock } from '../MintScopedLock.ts';
+import { MintScopedLock, mintQuoteLockKey } from '../MintScopedLock.ts';
 import { OperationIdLock } from '../OperationIdLock.ts';
 import type { MintMethod } from '../mint/MintMethodHandler.ts';
 import { assertOrdinaryChildWork } from '../mintSwap/MintSwapTransitions.ts';
@@ -290,7 +291,9 @@ export class BatchMintOperationService {
     const { method } = input;
     // Stable order prevents deadlock between overlapping groups and standalone claims.
     const quoteKeys = [
-      ...new Set(input.members.map((m) => `${mintUrl}::${method}::${m.quoteId}`)),
+      ...new Set(
+        input.members.map(({ quoteId }) => mintQuoteLockKey({ mintUrl, method, quoteId })),
+      ),
     ].sort();
     const releases: Array<() => void> = [];
     try {
@@ -482,11 +485,10 @@ export class BatchMintOperationService {
     for (const [index, member] of operation.members.entries()) {
       const quote = quotes.get(member.quoteId);
       if (!quote) return { status: 'unresolved', error: `Quote check omitted ${member.quoteId}` };
-      const assessment = assessMintQuoteClaimability(quote, {
-        finalizedAmount: facts[index]!.finalizedAmount,
-        reservedAmount: facts[index]!.reservedAmount,
-        requestedAmount: member.amount,
-      });
+      const assessment = assessMintQuoteClaimability(
+        quote,
+        claimabilityFacts(facts[index]!, member.amount),
+      );
       if (assessment.status === 'invalid')
         return {
           status: 'unresolved',

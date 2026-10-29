@@ -26,16 +26,17 @@ import {
 } from '../../models/Error';
 import type { MintAdapter } from '../../infra';
 import type { MintHandlerProvider } from '../../infra/handlers/mint';
-import { MintScopedLock } from '../MintScopedLock';
+import { MintScopedLock, mintQuoteLockKey } from '../MintScopedLock';
 import { OperationIdLock } from '../OperationIdLock';
 import type { MintQuote } from '../../models/MintQuote';
-import {
-  assessMintQuoteClaimability,
-  type MintQuoteClaimabilityAssessment,
-} from '../../models/MintQuoteClaimability.ts';
+import type { MintQuoteClaimabilityAssessment } from '../../models/MintQuoteClaimability.ts';
 import type { MintQuoteRef } from '../../models/QuoteIdentity';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle';
-import type { MintQuoteClaimFacts } from '../../transactions/mintQuoteClaims/ScopedMintQuoteClaims.ts';
+import {
+  assessMintQuoteClaim,
+  claimabilityFacts,
+  type MintQuoteClaimFacts,
+} from '../../transactions/mintQuoteClaims/ScopedMintQuoteClaims.ts';
 import type { CoreTransaction, CoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
 import {
   prepareMint,
@@ -533,10 +534,7 @@ export class MintOperationService {
         logger: this.dependencies.logger,
         operation: executing as any,
         wallet,
-        localClaimabilityFacts: {
-          finalizedAmount: facts.finalizedAmount,
-          reservedAmount: facts.reservedAmount,
-        },
+        localClaimabilityFacts: claimabilityFacts(facts),
         restoreOutputs: () => this.restoreOutputs(executing),
         recordQuoteSnapshot: async (snapshot) => {
           await this.dependencies.quoteLifecycle.recordMintQuoteSnapshot(
@@ -628,7 +626,7 @@ export class MintOperationService {
   ): Promise<MintOperation[]> {
     await this.assertCanResolve({ mintUrl, method, quoteId });
     const releaseQuoteLock = await this.mintScopedLock.acquire(
-      this.quoteLockKey(mintUrl, method, quoteId),
+      mintQuoteLockKey({ mintUrl, method, quoteId }),
     );
     try {
       const quote = await this.dependencies.quoteLifecycle.getMintQuote(mintUrl, method, quoteId);
@@ -639,7 +637,7 @@ export class MintOperationService {
       }
       const facts = await this.readClaimFacts({ mintUrl, method, quoteId });
       const siblings = facts.standaloneOperations;
-      const assessment = this.assessQuoteClaimability(quote, facts);
+      const assessment = assessMintQuoteClaim(quote, facts);
       const claimable = assessment.claimAmount ?? Amount.zero();
       if (assessment.status === 'complete') {
         const completed: MintOperation[] = [];
@@ -680,7 +678,7 @@ export class MintOperationService {
       if (autoClaimRemaining && !remaining.isZero()) {
         const refreshedQuote =
           (await this.dependencies.quoteLifecycle.getMintQuote(mintUrl, method, quoteId)) ?? quote;
-        const currentAssessment = this.assessQuoteClaimability(
+        const currentAssessment = assessMintQuoteClaim(
           refreshedQuote,
           await this.readClaimFacts({ mintUrl, method, quoteId }),
         );
@@ -769,7 +767,7 @@ export class MintOperationService {
         method: ref.method,
         quoteId: ref.quoteId,
       };
-      const key = this.quoteLockKey(target.mintUrl, target.method, target.quoteId);
+      const key = mintQuoteLockKey(target);
       if (seen.has(key)) continue;
       seen.add(key);
       const eligibility = options.batchMintQuotes
@@ -823,7 +821,7 @@ export class MintOperationService {
       const facts = await this.readClaimFacts(ref);
       if (facts.standaloneOperations.some((operation) => !isTerminalOperation(operation)))
         return undefined;
-      const assessment = this.assessQuoteClaimability(quote, facts);
+      const assessment = assessMintQuoteClaim(quote, facts);
       if (
         assessment.status !== 'claimable' ||
         !assessment.claimAmount ||
@@ -909,16 +907,14 @@ export class MintOperationService {
       { mintUrl, method, quoteId },
       options.targetOperationId,
     );
-    return this.assessQuoteClaimability(quote, facts, options.requestedAmount);
+    return assessMintQuoteClaim(quote, facts, options.requestedAmount);
   }
 
   private async claimPendingQuoteOperation(
     operation: PendingMintOperation,
     initialQuote: MintQuote,
   ): Promise<MintOperation> {
-    const releaseQuoteLock = await this.mintScopedLock.acquire(
-      this.quoteLockKey(operation.mintUrl, operation.method, operation.quoteId),
-    );
+    const releaseQuoteLock = await this.mintScopedLock.acquire(mintQuoteLockKey(operation));
     try {
       const current = await this.dependencies.mintOperationQueries.getById(operation.id);
       if (!current || current.state !== 'pending') {
@@ -934,7 +930,7 @@ export class MintOperationService {
           pending.quoteId,
         )) ?? initialQuote;
 
-      const assessment = this.assessQuoteClaimability(
+      const assessment = assessMintQuoteClaim(
         quote,
         await this.readClaimFacts(pending, pending.id),
         pending.amount,
@@ -980,31 +976,6 @@ export class MintOperationService {
         { excludeOperationId },
       ),
     );
-  }
-
-  private assessQuoteClaimability(
-    quote: MintQuote,
-    facts: MintQuoteClaimFacts,
-    requestedAmount?: Amount,
-  ): MintQuoteClaimabilityAssessment {
-    const assessment = assessMintQuoteClaimability(quote, {
-      finalizedAmount: facts.finalizedAmount,
-      reservedAmount: facts.reservedAmount,
-      requestedAmount,
-    });
-    // Another reservation holds all of an atomic quote, as `reserveMintQuoteForExecution` enforces.
-    // Only a Batch Mint Operation can hold one beside a standalone claim.
-    if (
-      quote.method === 'bolt11' &&
-      assessment.status === 'claimable' &&
-      !facts.reservedAmount.isZero()
-    )
-      return { status: 'waiting', remoteAvailable: assessment.remoteAvailable };
-    return assessment;
-  }
-
-  private quoteLockKey(mintUrl: string, method: MintMethod, quoteId: string): string {
-    return `${mintUrl}::${method}::${quoteId}`;
   }
 
   async getInFlightOperations(): Promise<MintOperation[]> {
@@ -1140,7 +1111,7 @@ export class MintOperationService {
       if (!canonicalQuote) {
         throw new Error(`Pending mint observation for operation ${op.id} has no quote snapshot`);
       }
-      const assessment = this.assessQuoteClaimability(
+      const assessment = assessMintQuoteClaim(
         canonicalQuote,
         await this.readClaimFacts(op, op.id),
         op.amount,

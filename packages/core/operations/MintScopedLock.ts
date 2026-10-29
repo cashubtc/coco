@@ -1,3 +1,6 @@
+import type { MintQuoteRef } from '../models/QuoteIdentity.ts';
+import { normalizeMintUrl } from '../utils.ts';
+
 type LockQueue = {
   locked: boolean;
   waiters: Array<() => void>;
@@ -44,4 +47,12 @@ export class MintScopedLock {
       this.queues.delete(mintUrl);
     };
   }
+}
+
+/**
+ * The `MintScopedLock` key that serializes every claim of one Mint Quote, shared by standalone Mint
+ * Operations and Batch Mint admission so both wait on the same Quote Identity.
+ */
+export function mintQuoteLockKey(quote: MintQuoteRef): string {
+  return `${normalizeMintUrl(quote.mintUrl)}::${quote.method}::${quote.quoteId}`;
 }
