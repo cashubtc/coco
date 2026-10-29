@@ -48,6 +48,8 @@ class FakeTable<TRow extends { createdAt: number }> {
         first: async (): Promise<TRow | undefined> => {
           return this.rows.find((row) => rowMatchesIndex(row, index, value));
         },
+        toArray: async (): Promise<TRow[]> =>
+          this.rows.filter((row) => rowMatchesIndex(row, index, value)),
       }),
     };
   }
@@ -66,7 +68,8 @@ function rowMatchesIndex(row: unknown, index: string, value: unknown): boolean {
 function makeDb(stores: StoreRows) {
   const tx = {
     table(name: string) {
-      return new FakeTable(stores[name] as { createdAt: number }[]);
+      // Stores a test does not seed, such as Batch Mint stores, are empty.
+      return new FakeTable((stores[name] ?? []) as { createdAt: number }[]);
     },
   };
 

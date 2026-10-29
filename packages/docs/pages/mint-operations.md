@@ -286,3 +286,72 @@ const waitForMintCompletion = (operationId: string) =>
     });
   });
 ```
+
+## Batch Mint Operations (`coco.ops.mint.batch`)
+
+A Batch Mint Operation claims two or more Mint Quotes from one trusted mint in
+one atomic NUT-29 request with one aggregate output set. It is a standalone
+operation: it never creates, adopts or falls back to standalone mint
+operations.
+
+```ts
+const operation = await coco.ops.mint.batch.execute({
+  mintUrl,
+  method: 'bolt11',
+  members: [{ quoteId: first.quoteId }, { quoteId: second.quoteId }],
+});
+
+if (operation.state === 'executing') {
+  // Ambiguous outcome: the request may have reached the mint. Recover later.
+  await coco.ops.mint.batch.recovery.run();
+}
+```
+
+- `execute({ mintUrl, method, members })` admits, prepares and submits the
+  exact request in caller order. Each member is `{ quoteId, amount? }`;
+  reusable (`bolt12`, `onchain`) members default to their full available
+  amount, and `bolt11` members claim the quote amount. Every request carries
+  `quote_amounts`.
+- `get(operationId)`, `listByQuote({ mintUrl, quoteId })` and `listInFlight()`
+  load persisted batches.
+- `recovery.run()` recovers every `executing` batch. Startup recovery also runs
+  it together with mint recovery.
+
+`execute` rejects before persisting anything when the group has fewer than 2
+or duplicate members, mixes methods or units, targets an untrusted mint, uses a
+method the mint does not advertise for NUT-29, exceeds the mint's
+`max_batch_size` (capped at 100), or contains a member that is unclaimable,
+mismatches its BOLT11 amount, has a nonterminal standalone mint operation, is
+coordinated by an active Mint Swap, or lacks a Wallet-owned NUT-20 quote key.
+Admission failures throw `BatchMintAdmissionError` (with a `reason`),
+`UnknownMintError`, `MintQuoteKeyError` or `MintSwapChildOperationError`.
+
+Outcomes:
+
+- `finalized`: the complete proof set is saved, attributed to the batch.
+- `failed`: the mint definitively rejected the exact request; every member's
+  reservation is released and the quotes can be claimed again.
+- `executing`: network errors, timeouts, server errors and malformed or invalid
+  responses are ambiguous. Recovery uses locally saved proofs, then NUT-09
+  Restore of the persisted outputs, then a fresh NUT-29 quote check. It replays
+  the identical request only when nothing was restored and every member is
+  still claimable, and marks the batch `failed` when a member is no longer
+  claimable.
+
+Each member keeps its own `type: 'mint'` history entry with its own `quoteId`,
+`paymentRequest` and `amount`, the batch's state, `operationId` and
+`batchMintOperationId` set to the batch ID, and the entry ID
+`batch-mint:<batchId>:<ordinal>`.
+
+Batches publish `batch-mint-op:executing`, `batch-mint-op:finalized` and
+`batch-mint-op:failed` with the operation and its ordered members, after the
+change commits. They never emit `mint-op:*` events.
+
+```ts
+coco.on('batch-mint-op:finalized', ({ operation }) => {
+  console.log(
+    'Batch settled quotes',
+    operation.members.map((member) => member.quoteId),
+  );
+});
+```

@@ -3,6 +3,7 @@ import type {
   BatchMintMember,
   BatchMintOperation,
   BatchMintOperationState,
+  HistoryEntry,
   Repositories,
   RepositoryTransactionScope,
 } from '@cashu/coco-core/adapter';
@@ -344,4 +345,107 @@ async function expectRejects(
 
 function requireBatchMint(repositories: Repositories | RepositoryTransactionScope) {
   return repositories.batchMint.operationRepository;
+}
+
+function historyView(entry: HistoryEntry | null): string {
+  if (!entry || entry.type !== 'mint' || entry.source !== 'operation') return JSON.stringify(entry);
+  return JSON.stringify([
+    entry.id,
+    entry.source,
+    entry.type,
+    entry.mintUrl,
+    entry.unit,
+    entry.operationId,
+    entry.batchMintOperationId ?? null,
+    entry.quoteId,
+    entry.paymentRequest,
+    entry.amount.toString(),
+    entry.state,
+    entry.createdAt,
+    entry.updatedAt,
+    entry.error ?? null,
+  ]);
+}
+
+/**
+ * Each Batch Mint Member is an ordinary `type: 'mint'` history entry with its own quote, request
+ * and amount, the batch's state, `operationId` and `batchMintOperationId` set to the batch ID, and
+ * a per-member entry ID `batch-mint:<id>:<ordinal>`.
+ */
+export function runBatchMintHistoryContract(
+  options: BatchMintContractOptions,
+  runner: ContractRunner,
+): void {
+  const { describe, it, expect } = runner;
+  const memberEntry = (operation: BatchMintOperation, ordinal: number) => {
+    const member = operation.members.find((candidate) => candidate.ordinal === ordinal)!;
+    return JSON.stringify([
+      `batch-mint:${operation.id}:${ordinal}`,
+      'operation',
+      'mint',
+      operation.mintUrl,
+      operation.unit,
+      operation.id,
+      operation.id,
+      member.quoteId,
+      member.request,
+      member.amount.toString(),
+      operation.state,
+      operation.createdAt,
+      operation.updatedAt,
+      operation.error ?? null,
+    ]);
+  };
+
+  describe('Batch Mint history projection contract', () => {
+    it('projects one mint history entry per member in history order', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const { finalized } = fixtures('batch');
+        await repositories.batchMint.operationRepository.create(finalized);
+
+        const entries = await repositories.historyRepository.getPaginatedHistoryEntries(10, 0);
+
+        expect(JSON.stringify(entries.map(historyView))).toBe(
+          JSON.stringify([2, 1, 0].map((ordinal) => memberEntry(finalized, ordinal))),
+        );
+        const page = await repositories.historyRepository.getPaginatedHistoryEntries(1, 1);
+        expect(JSON.stringify(page.map(historyView))).toBe(
+          JSON.stringify([memberEntry(finalized, 1)]),
+        );
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('resolves member entries by ID and follows the batch state', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const { executing, failed } = fixtures('batch');
+        await repositories.batchMint.operationRepository.create(executing);
+        expect(
+          historyView(
+            await repositories.historyRepository.getHistoryEntryById('batch-mint:batch:2'),
+          ),
+        ).toBe(memberEntry(executing, 2));
+
+        await repositories.batchMint.operationRepository.update(failed);
+
+        expect(
+          historyView(
+            await repositories.historyRepository.getHistoryEntryById('batch-mint:batch:0'),
+          ),
+        ).toBe(memberEntry(failed, 0));
+        expect(await repositories.historyRepository.getHistoryEntryById('batch-mint:batch:3')).toBe(
+          null,
+        );
+        expect(
+          await repositories.historyRepository.getHistoryEntryById('batch-mint:missing:0'),
+        ).toBe(null);
+        expect(await repositories.historyRepository.getHistoryEntryById('mint:batch')).toBe(null);
+      } finally {
+        await dispose();
+      }
+    });
+  });
 }

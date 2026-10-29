@@ -812,11 +812,20 @@ export class MintOperationService {
     facts: MintQuoteClaimFacts,
     requestedAmount?: Amount,
   ): MintQuoteClaimabilityAssessment {
-    return assessMintQuoteClaimability(quote, {
+    const assessment = assessMintQuoteClaimability(quote, {
       finalizedAmount: facts.finalizedAmount,
       reservedAmount: facts.reservedAmount,
       requestedAmount,
     });
+    // Another reservation holds all of an atomic quote, as `reserveMintQuoteForExecution` enforces.
+    // Only a Batch Mint Operation can hold one beside a standalone claim.
+    if (
+      quote.method === 'bolt11' &&
+      assessment.status === 'claimable' &&
+      !facts.reservedAmount.isZero()
+    )
+      return { status: 'waiting', remoteAvailable: assessment.remoteAvailable };
+    return assessment;
   }
 
   private quoteLockKey(mintUrl: string, method: MintMethod, quoteId: string): string {

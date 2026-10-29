@@ -3080,5 +3080,6 @@ export {
 export {
   createBatchMintFixtures,
   runBatchMintPersistenceContract,
+  runBatchMintHistoryContract,
   type BatchMintContractOptions,
 } from './batchMint.ts';

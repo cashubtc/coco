@@ -7,6 +7,7 @@ import type {
 } from '@cashu/coco-core/adapter';
 import type { Token } from '@cashu/cashu-ts';
 import {
+  batchMintHistoryId,
   compareHistoryEntries,
   deserializeAmount,
   deserializeToken,
@@ -15,6 +16,8 @@ import {
   projectLegacyHistoryRow,
 } from '@cashu/coco-core/adapter';
 import type {
+  BatchMintMemberRow,
+  BatchMintOperationRow,
   IdbDb,
   MeltOperationRow,
   MintQuoteRow,
@@ -47,6 +50,8 @@ const stores = [
   'coco_cashu_mint_operations',
   'coco_cashu_canonical_mint_quotes',
   'coco_cashu_receive_operations',
+  'coco_cashu_batch_mint_operations',
+  'coco_cashu_batch_mint_members',
   'coco_cashu_history',
 ] as const;
 
@@ -153,6 +158,7 @@ export class IdbHistoryRepository implements HistoryRepository {
           .map((row) => this.mintRowToEntry(row, mintRemoteStateByOperationId.get(row.id)))
           .filter(Boolean),
         ...receiveRows.map((row) => this.receiveRowToEntry(row)).filter(Boolean),
+        ...(await this.readRecentBatchMintEntries(tx, pageWindow)),
       ] as HistoryEntry[];
 
       return [...operationEntries, ...legacyRows].sort(compareHistoryEntries);
@@ -172,6 +178,17 @@ export class IdbHistoryRepository implements HistoryRepository {
           | undefined;
         if (!row || (await this.legacyIsDeduped(tx, row))) return null;
         return this.legacyRowToEntry(row);
+      }
+
+      if (parsed.source === 'batch-mint') {
+        const operation = (await tx
+          .table('coco_cashu_batch_mint_operations')
+          .get(parsed.operationId)) as BatchMintOperationRow | undefined;
+        if (!operation) return null;
+        const member = (await tx
+          .table('coco_cashu_batch_mint_members')
+          .get([parsed.operationId, parsed.ordinal])) as BatchMintMemberRow | undefined;
+        return member ? this.batchMintMemberToEntry(tx, operation, member) : null;
       }
 
       switch (parsed.type) {
@@ -343,6 +360,58 @@ export class IdbHistoryRepository implements HistoryRepository {
     };
   }
 
+  /** Each operation yields at least one entry, so `limit` recent operations cover the page. */
+  private async readRecentBatchMintEntries(
+    tx: { table(name: string): Table },
+    limit: number,
+  ): Promise<HistoryEntry[]> {
+    const operations = (await this.readRecentRows<BatchMintOperationRow>(
+      tx.table('coco_cashu_batch_mint_operations'),
+      0,
+      limit,
+    )) as BatchMintOperationRow[];
+    const entries: HistoryEntry[] = [];
+    for (const operation of operations) {
+      const members = (await tx
+        .table('coco_cashu_batch_mint_members')
+        .where('operationId')
+        .equals(operation.id)
+        .toArray()) as BatchMintMemberRow[];
+      for (const member of members.sort((a, b) => a.ordinal - b.ordinal)) {
+        entries.push(await this.batchMintMemberToEntry(tx, operation, member));
+      }
+    }
+    return entries;
+  }
+
+  private async batchMintMemberToEntry(
+    tx: { table(name: string): Table },
+    operation: BatchMintOperationRow,
+    member: BatchMintMemberRow,
+  ): Promise<HistoryEntry> {
+    const quote = (await tx
+      .table('coco_cashu_canonical_mint_quotes')
+      .get([operation.mintUrl, operation.method, member.quoteId])) as MintQuoteRow | undefined;
+    const remoteState = quote?.method === 'bolt11' ? (quote.state ?? undefined) : undefined;
+    return {
+      id: batchMintHistoryId(operation.id, member.ordinal),
+      source: 'operation',
+      type: 'mint',
+      createdAt: operation.createdAt,
+      updatedAt: operation.updatedAt,
+      mintUrl: operation.mintUrl,
+      unit: operation.unit,
+      operationId: operation.id,
+      batchMintOperationId: operation.id,
+      quoteId: member.quoteId,
+      paymentRequest: member.request,
+      amount: deserializeAmount(member.amount),
+      state: operation.state,
+      ...(remoteState ? { remoteState } : {}),
+      ...(operation.error ? { error: operation.error } : {}),
+    };
+  }
+
   private receiveRowToEntry(row: ReceiveOperationRow): HistoryEntry | null {
     if (row.state !== 'finalized' && row.state !== 'rolled_back') return null;
     const metadata = parseReceiveSourceMetadata(row.sourceJson);
@@ -455,6 +524,16 @@ export class IdbHistoryRepository implements HistoryRepository {
     mintUrl: string,
     quoteId: string,
   ): Promise<boolean> {
+    if (
+      type === 'mint' &&
+      (await tx
+        .table('coco_cashu_batch_mint_members')
+        .where('[mintUrl+quoteId]')
+        .equals([mintUrl, quoteId])
+        .first())
+    ) {
+      return true;
+    }
     const store = type === 'mint' ? 'coco_cashu_mint_operations' : 'coco_cashu_melt_operations';
     const row = (await tx
       .table(store)

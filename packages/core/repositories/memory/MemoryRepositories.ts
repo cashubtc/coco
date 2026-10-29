@@ -179,6 +179,7 @@ function createMemoryRepositoryState() {
   const mintOperationRepository = new MemoryMintOperationRepository();
   const receiveOperationRepository = new MemoryReceiveOperationRepository();
   const mintQuoteRepository = new MemoryMintQuoteRepository();
+  const batchMintOperationRepository = new MemoryBatchMintOperationRepository();
 
   const state = {
     mintRepository: new MemoryMintRepository(),
@@ -195,6 +196,7 @@ function createMemoryRepositoryState() {
       mintOperationRepository,
       mintQuoteRepository,
       receiveOperationRepository,
+      batchMintOperationRepository,
     }),
     sendOperationRepository,
     meltOperationRepository,
@@ -212,7 +214,7 @@ function createMemoryRepositoryState() {
   return {
     ...repositories,
     mintSwap: { operationRepository: new MemoryMintSwapOperationRepository() },
-    batchMint: { operationRepository: new MemoryBatchMintOperationRepository() },
+    batchMint: { operationRepository: batchMintOperationRepository },
   };
 }
 

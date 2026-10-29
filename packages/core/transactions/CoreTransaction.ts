@@ -50,7 +50,7 @@ export interface CoreTransaction {
     MintOperationRepository,
     'getById' | 'getByQuoteId' | 'create' | 'update' | 'delete'
   >;
-  readonly mintQuotes: Pick<MintQuoteRepository, 'getMintQuote'>;
+  readonly mintQuotes: Pick<MintQuoteRepository, 'getMintQuote' | 'getMintQuoteById'>;
   readonly meltOperations: Pick<
     MeltOperationRepository,
     'getById' | 'getByQuoteId' | 'create' | 'update' | 'delete'

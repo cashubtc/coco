@@ -40,6 +40,7 @@ export type {
 } from './models/index.ts';
 export {
   applyBolt11MintQuoteStateFallback,
+  batchMintHistoryId,
   compareHistoryEntries,
   deriveBolt11MintQuoteState,
   getMintQuoteAmount,
@@ -48,6 +49,7 @@ export {
   isStatefulMintQuote,
   operationHistoryId,
   parseHistoryEntryId,
+  projectBatchMintOperation,
   projectLegacyHistoryRow,
   reconcileKeysetKeypairs,
   DerivationIndexExhaustedError,

@@ -17,6 +17,7 @@ import {
   type Wallet,
 } from '@cashu/cashu-ts';
 import { MintOpsApi } from '../../api/MintOpsApi';
+import type { BatchMintOpsApi } from '../../api/BatchMintOpsApi.ts';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import { MintOperationService } from '../../operations/mint/MintOperationService';
@@ -1858,7 +1859,7 @@ describe('MintOperationService', () => {
   it('public execute joins a background claim that already moved the operation to executing', async () => {
     await persistQuote();
     const pending = await service.prepare({ mintUrl, method: 'bolt11', quoteId }, Amount.from(10));
-    const api = new MintOpsApi(service);
+    const api = new MintOpsApi(service, {} as BatchMintOpsApi);
     const executionStarted = createDeferred();
     const releaseExecution = createDeferred();
     (handler.execute as Mock<any>).mockImplementationOnce(async () => {
@@ -2699,7 +2700,7 @@ describe('MintOperationService', () => {
     const failed = mock(() => {});
     eventBus.on('mint-op:failed', failed);
 
-    const result = await new MintOpsApi(service).checkPayment(pendingOp.id);
+    const result = await new MintOpsApi(service, {} as BatchMintOpsApi).checkPayment(pendingOp.id);
 
     expect(result.category).toBe('ready');
     expect((await operationRepo.getById(pendingOp.id))?.state).toBe('finalized');
