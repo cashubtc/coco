@@ -30,8 +30,10 @@ export interface MeltDiagnosticsApi {
 }
 
 /**
- * While a Mint Swap is active, commands reject its source child and quote with
- * `MintSwapChildOperationError`; use `ops.mintSwap`. Once the parent stops (terminal or
+ * While a Mint Swap is active, commands that would change its source child or use its quote reject
+ * with `MintSwapChildOperationError`; use `ops.mintSwap`. A command called in the wrong state for
+ * the child reports that state error first, and `refresh` reads a child it has nothing to resolve
+ * for. Once the parent stops (terminal or
  * `needs_attention`), refresh, cancel, reclaim, finalize and recovery may resolve the child, but
  * `prepare` and `execute` never authorize its payment (`parentStopped` is then true).
  * Read methods include children.

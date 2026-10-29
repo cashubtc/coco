@@ -357,9 +357,10 @@ and owned proof evidence in the same scope that reserves destination claimable v
 `beginMintExecution` still checks trust before composing that shared reservation transition.
 
 Mint Swap is the exclusive coordinator of its source Melt and destination Mint children while the
-parent is active. Ordinary Mint/Melt commands reject its child IDs and quote references with
-`MintSwapChildOperationError`, carrying `parentOperationId` and directing callers to `ops.mintSwap`.
-Read APIs still expose children. Ordinary processors, automatic Mint quote claiming and generic
+parent is active. Ordinary Mint/Melt commands that would change a child or use its quote reject
+with `MintSwapChildOperationError`, carrying `parentOperationId` and directing callers to
+`ops.mintSwap`. A command called in the wrong state for the child reports that state error first,
+and refresh reads a child it has nothing to resolve for. Read APIs still expose children. Ordinary processors, automatic Mint quote claiming and generic
 Mint/Melt recovery skip these children and quotes. Watchers continue recording shared canonical
 Quote Observations.
 

@@ -66,8 +66,8 @@ export class MintSwapChildOperationError extends Error {
   ) {
     super(
       parentStopped
-        ? `This operation or quote belongs to stopped Mint Swap ${parentOperationId}; its source payment cannot be authorized.`
-        : `This operation or quote belongs to Mint Swap ${parentOperationId}; use ops.mintSwap with that parent ID.`,
+        ? `This operation or quote was coordinated by stopped Mint Swap ${parentOperationId}; its source payment cannot be authorized.`
+        : `This operation or quote is coordinated by Mint Swap ${parentOperationId}; use ops.mintSwap with that parent ID.`,
     );
     this.name = 'MintSwapChildOperationError';
   }

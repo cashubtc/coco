@@ -35,7 +35,7 @@ import type {
   BeginMintSwapSourceResult,
   ApplyMintSwapSourceInput,
   BeginMintSwapDestinationResult,
-  OrdinaryChildWorkInput,
+  AssertOrdinaryChildWorkInput,
 } from './MintSwapTransitionTypes.ts';
 import {
   advanceMintSwap,
@@ -780,7 +780,7 @@ export const flagMintSwapAttention = defineTransition<
  * Ordinary Mint and Melt coordinators perform this in the same scope as authorization or mutation.
  * Lookups include terminal and needs_attention parents.
  */
-export const assertOrdinaryChildWork = defineTransition<OrdinaryChildWorkInput, void>(
+export const assertOrdinaryChildWork = defineTransition<AssertOrdinaryChildWorkInput, void>(
   async (tx, { kind, target, authority }) => {
     const parent =
       typeof target === 'string'

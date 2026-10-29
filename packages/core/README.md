@@ -116,10 +116,12 @@ outside awaited operation or lifecycle event listeners, so a listener does not a
 Use one effect-driving Coco Session per Wallet store. Manager shares child locks with ordinary
 Mint/Melt services; Core does not enforce a universal cross-process singleton. Reuse host session
 guards (such as Cocod's state-directory lease); React initialization guards apply per provider.
-Mint Swap exclusively coordinates its children while it is active. Ordinary Mint/Melt mutation
-commands (including refresh, recovery of one child, and preparation or claiming against a
-coordinated quote) reject with `MintSwapChildOperationError`. Its `parentOperationId` identifies the parent to
-pass to `ops.mintSwap.execute`, `refresh`, or `cancel`. Read APIs continue returning child records.
+Mint Swap exclusively coordinates its children while it is active. Ordinary Mint/Melt commands
+that would change a child (including refresh of a pending child, recovery of one child, and
+preparation or claiming against a coordinated quote) reject with `MintSwapChildOperationError`. Its
+`parentOperationId` identifies the parent to pass to `ops.mintSwap.execute`, `refresh`, or `cancel`.
+A command called in the wrong state for the child reports that state error first, and refresh reads
+a child it has nothing to resolve for. Read APIs continue returning child records.
 Ordinary processors, automatic quote claiming, and generic Mint/Melt recovery skip these children
 and quotes. Watchers still record quote observations. Once the parent is terminal or
 `needs_attention`, its children return to ordinary resolution, for example `ops.melt.cancel` to
@@ -127,9 +129,9 @@ release reserved source proofs, generic recovery, or claiming a paid destination
 `ops.melt.prepare` and `execute` still reject its source with `parentStopped: true`, so no ordinary
 command pays a stopped swap. Disabling the parent processor pauses automatic progression of active
 parents' children and the parent's existing startup/resume recovery; explicit parent recovery remains
-available. Existing persisted
-parents need no migration. Custom adapters must implement the new durable `getByChild` and
-`getByQuote` repository queries; built-in adapters use existing identity indexes.
+available. Existing persisted parents need no migration. The unreleased Mint Swap repository
+contract adds durable `getByChild` and `getByQuote` queries; built-in adapters use existing identity
+indexes.
 History projection and React Mint Swap hooks are outside this slice.
 
 ## Protocol Support

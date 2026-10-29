@@ -40,7 +40,7 @@ export interface BeginMintSwapDestinationResult {
 }
 
 /** An operation ID matches a parent's child; a quote reference matches its quote. */
-export interface OrdinaryChildWorkInput {
+export interface AssertOrdinaryChildWorkInput {
   kind: 'mint' | 'melt';
   target: string | MintQuoteRef | MeltQuoteRef;
   authority: OrdinaryChildAuthority;
