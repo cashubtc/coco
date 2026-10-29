@@ -1,0 +1,4276 @@
+{
+  "openapi": "3.1.0",
+  "info": { "title": "cocod", "version": "0.0.17", "x-interface-version": "1" },
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "getHealth",
+        "security": [],
+        "x-cocod-capability": null,
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Health" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/status": {
+      "get": {
+        "operationId": "getStatus",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:read",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/LifecycleStatus" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/wallet/initialize": {
+      "post": {
+        "operationId": "postAdminWalletInitialize",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:admin",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the original result of a repeated identical request within this Cocod Process.",
+            "schema": { "type": "string", "pattern": "^[\\x21-\\x7e]{1,255}$" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/InitializeWalletRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "headers": { "Cache-Control": { "schema": { "const": "no-store" } } },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/InitializeWalletResponse" }
+              }
+            }
+          },
+          "202": {
+            "description": "Success",
+            "headers": { "Cache-Control": { "schema": { "const": "no-store" } } },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/InitializeWalletResponse" }
+              }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/wallet/recovery-material": {
+      "post": {
+        "operationId": "postAdminWalletRecoveryMaterial",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:admin",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/WalletRecoveryMaterialRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": { "Cache-Control": { "schema": { "const": "no-store" } } },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/WalletRecoveryMaterialResponse" }
+              }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/session/start": {
+      "post": {
+        "operationId": "postAdminSessionStart",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:admin",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the original result of a repeated identical request within this Cocod Process.",
+            "schema": { "type": "string", "pattern": "^[\\x21-\\x7e]{1,255}$" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/StartSessionRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/LifecycleStatus" } }
+            }
+          },
+          "202": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/LifecycleStatus" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/session/stop": {
+      "post": {
+        "operationId": "postAdminSessionStop",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:admin",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the original result of a repeated identical request within this Cocod Process.",
+            "schema": { "type": "string", "pattern": "^[\\x21-\\x7e]{1,255}$" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/StopSessionRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/LifecycleStatus" } }
+            }
+          },
+          "202": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/LifecycleStatus" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/process/stop": {
+      "post": {
+        "operationId": "postAdminProcessStop",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:admin",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the original result of a repeated identical request within this Cocod Process.",
+            "schema": { "type": "string", "pattern": "^[\\x21-\\x7e]{1,255}$" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ProcessShutdownRequest" }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ProcessShutdownResponse" }
+              }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/openapi.json": {
+      "get": {
+        "operationId": "getOpenapiJson",
+        "summary": "OpenAPI description of this interface",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:read",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/OpenApiDocument" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/balances": {
+      "get": {
+        "operationId": "getBalances",
+        "summary": "Spendable, reserved, and total balances by Mint and unit",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:read",
+        "parameters": [
+          {
+            "name": "mintUrl",
+            "in": "query",
+            "required": false,
+            "description": "Restrict balances to these Known Mints.",
+            "schema": {
+              "type": "array",
+              "items": { "type": "string", "format": "uri", "pattern": "^https?://" }
+            },
+            "style": "form",
+            "explode": true
+          },
+          {
+            "name": "unit",
+            "in": "query",
+            "required": false,
+            "description": "Restrict balances to these units.",
+            "schema": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+            "style": "form",
+            "explode": true
+          },
+          {
+            "name": "trustedOnly",
+            "in": "query",
+            "required": false,
+            "description": "Restrict balances to trusted Known Mints.",
+            "schema": { "type": "boolean" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Balances" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/mints": {
+      "get": {
+        "operationId": "getMints",
+        "summary": "List Known Mints",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:read",
+        "parameters": [
+          {
+            "name": "trustedOnly",
+            "in": "query",
+            "required": false,
+            "description": "List only trusted Known Mints.",
+            "schema": { "type": "boolean" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/KnownMints" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "postMints",
+        "summary": "Register a Known Mint, optionally setting its trust",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:admin",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the original result of a repeated identical request within this Cocod Process.",
+            "schema": { "type": "string", "pattern": "^[\\x21-\\x7e]{1,255}$" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/RegisterMintRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/KnownMint" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/mints/trust": {
+      "post": {
+        "operationId": "postMintsTrust",
+        "summary": "Trust a Known Mint",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:admin",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the original result of a repeated identical request within this Cocod Process.",
+            "schema": { "type": "string", "pattern": "^[\\x21-\\x7e]{1,255}$" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/MintTrustRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/KnownMint" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/mints/untrust": {
+      "post": {
+        "operationId": "postMintsUntrust",
+        "summary": "Stop trusting a Known Mint",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:admin",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the original result of a repeated identical request within this Cocod Process.",
+            "schema": { "type": "string", "pattern": "^[\\x21-\\x7e]{1,255}$" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/MintTrustRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/KnownMint" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/mints/info": {
+      "get": {
+        "operationId": "getMintsInfo",
+        "summary": "Mint information of a Known Mint",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:read",
+        "parameters": [
+          {
+            "name": "mintUrl",
+            "in": "query",
+            "required": true,
+            "description": "Known Mint URL.",
+            "schema": { "type": "string", "format": "uri", "pattern": "^https?://" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/MintInformation" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/mints/payment-method-capabilities": {
+      "get": {
+        "operationId": "getMintsPaymentMethodCapabilities",
+        "summary": "Enabled NUT-04 and NUT-05 methods and units of a Known Mint",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:read",
+        "parameters": [
+          {
+            "name": "mintUrl",
+            "in": "query",
+            "required": true,
+            "description": "Known Mint URL.",
+            "schema": { "type": "string", "format": "uri", "pattern": "^https?://" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PaymentMethodCapabilities" }
+              }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/quotes/mint": {
+      "post": {
+        "operationId": "postQuotesMint",
+        "summary": "Create a Mint Quote",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:admin",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the original result of a repeated identical request within this Cocod Process.",
+            "schema": { "type": "string", "pattern": "^[\\x21-\\x7e]{1,255}$" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CreateMintQuoteRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/MintQuote" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/quotes/mint/pending": {
+      "get": {
+        "operationId": "getQuotesMintPending",
+        "summary": "List pending Mint Quotes",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:read",
+        "parameters": [
+          {
+            "name": "method",
+            "in": "query",
+            "required": false,
+            "description": "Restrict the collection to one payment method.",
+            "schema": { "type": "string", "enum": ["bolt11", "bolt12", "onchain"] }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 0, "maximum": 9007199254740991, "default": 0 }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/PendingMintQuotes" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/quotes/mint/{quoteId}": {
+      "get": {
+        "operationId": "getQuotesMintQuoteId",
+        "summary": "Read a Mint Quote",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:read",
+        "parameters": [
+          {
+            "name": "quoteId",
+            "in": "path",
+            "required": true,
+            "description": "Mint Quote ID assigned by the Mint.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 512 }
+          },
+          {
+            "name": "mintUrl",
+            "in": "query",
+            "required": true,
+            "description": "Mint that issued the Mint Quote.",
+            "schema": { "type": "string", "format": "uri", "pattern": "^https?://" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/MintQuote" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/quotes/mint/{quoteId}/refresh": {
+      "post": {
+        "operationId": "postQuotesMintQuoteIdRefresh",
+        "summary": "Reconcile a Mint Quote with the Mint",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:admin",
+        "parameters": [
+          {
+            "name": "quoteId",
+            "in": "path",
+            "required": true,
+            "description": "Mint Quote ID assigned by the Mint.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 512 }
+          },
+          {
+            "name": "mintUrl",
+            "in": "query",
+            "required": true,
+            "description": "Mint that issued the Mint Quote.",
+            "schema": { "type": "string", "format": "uri", "pattern": "^https?://" }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the original result of a repeated identical request within this Cocod Process.",
+            "schema": { "type": "string", "pattern": "^[\\x21-\\x7e]{1,255}$" }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/EmptyCommandRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/MintQuote" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/quotes/melt": {
+      "post": {
+        "operationId": "postQuotesMelt",
+        "summary": "Create a Melt Quote",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:admin",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the original result of a repeated identical request within this Cocod Process.",
+            "schema": { "type": "string", "pattern": "^[\\x21-\\x7e]{1,255}$" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CreateMeltQuoteRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/MeltQuote" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/quotes/melt/pending": {
+      "get": {
+        "operationId": "getQuotesMeltPending",
+        "summary": "List pending Melt Quotes",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:read",
+        "parameters": [
+          {
+            "name": "method",
+            "in": "query",
+            "required": false,
+            "description": "Restrict the collection to one payment method.",
+            "schema": { "type": "string", "enum": ["bolt11", "bolt12", "onchain"] }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 0, "maximum": 9007199254740991, "default": 0 }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/PendingMeltQuotes" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/quotes/melt/{quoteId}": {
+      "get": {
+        "operationId": "getQuotesMeltQuoteId",
+        "summary": "Read a Melt Quote",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:read",
+        "parameters": [
+          {
+            "name": "quoteId",
+            "in": "path",
+            "required": true,
+            "description": "Melt Quote ID assigned by the Mint.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 512 }
+          },
+          {
+            "name": "mintUrl",
+            "in": "query",
+            "required": true,
+            "description": "Mint that issued the Melt Quote.",
+            "schema": { "type": "string", "format": "uri", "pattern": "^https?://" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/MeltQuote" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/quotes/melt/{quoteId}/refresh": {
+      "post": {
+        "operationId": "postQuotesMeltQuoteIdRefresh",
+        "summary": "Reconcile a Melt Quote with the Mint",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:admin",
+        "parameters": [
+          {
+            "name": "quoteId",
+            "in": "path",
+            "required": true,
+            "description": "Melt Quote ID assigned by the Mint.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 512 }
+          },
+          {
+            "name": "mintUrl",
+            "in": "query",
+            "required": true,
+            "description": "Mint that issued the Melt Quote.",
+            "schema": { "type": "string", "format": "uri", "pattern": "^https?://" }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the original result of a repeated identical request within this Cocod Process.",
+            "schema": { "type": "string", "pattern": "^[\\x21-\\x7e]{1,255}$" }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/EmptyCommandRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/MeltQuote" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/operations/mint": {
+      "post": {
+        "operationId": "postOperationsMint",
+        "summary": "Prepare a pending Mint Operation for a Mint Quote without executing it",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:admin",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the original result of a repeated identical request within this Cocod Process.",
+            "schema": { "type": "string", "pattern": "^[\\x21-\\x7e]{1,255}$" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/PrepareMintOperationRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/MintOperation" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/operations/mint/pending": {
+      "get": {
+        "operationId": "getOperationsMintPending",
+        "summary": "List pending Mint Operations",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:read",
+        "parameters": [
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 0, "maximum": 9007199254740991, "default": 0 }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/MintOperations" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/operations/mint/in-flight": {
+      "get": {
+        "operationId": "getOperationsMintInFlight",
+        "summary": "List pending and executing Mint Operations",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:read",
+        "parameters": [
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 0, "maximum": 9007199254740991, "default": 0 }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/MintOperations" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/operations/mint/{operationId}": {
+      "get": {
+        "operationId": "getOperationsMintOperationId",
+        "summary": "Read a Mint Operation",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:read",
+        "parameters": [
+          {
+            "name": "operationId",
+            "in": "path",
+            "required": true,
+            "description": "Mint Operation ID.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 512 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/MintOperation" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/operations/mint/{operationId}/execute": {
+      "post": {
+        "operationId": "postOperationsMintOperationIdExecute",
+        "summary": "Redeem a paid Mint Operation, or resume one that is executing",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:admin",
+        "parameters": [
+          {
+            "name": "operationId",
+            "in": "path",
+            "required": true,
+            "description": "Mint Operation ID.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 512 }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the original result of a repeated identical request within this Cocod Process.",
+            "schema": { "type": "string", "pattern": "^[\\x21-\\x7e]{1,255}$" }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/EmptyCommandRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/MintOperation" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/operations/mint/{operationId}/refresh": {
+      "post": {
+        "operationId": "postOperationsMintOperationIdRefresh",
+        "summary": "Reconcile a Mint Operation with its Mint Quote",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:admin",
+        "parameters": [
+          {
+            "name": "operationId",
+            "in": "path",
+            "required": true,
+            "description": "Mint Operation ID.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 512 }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the original result of a repeated identical request within this Cocod Process.",
+            "schema": { "type": "string", "pattern": "^[\\x21-\\x7e]{1,255}$" }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/EmptyCommandRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/MintOperation" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/operations/melt": {
+      "post": {
+        "operationId": "postOperationsMelt",
+        "summary": "Prepare a Melt Operation for a Melt Quote without paying it",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:admin",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the original result of a repeated identical request within this Cocod Process.",
+            "schema": { "type": "string", "pattern": "^[\\x21-\\x7e]{1,255}$" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/PrepareMeltOperationRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/MeltOperation" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/operations/melt/prepared": {
+      "get": {
+        "operationId": "getOperationsMeltPrepared",
+        "summary": "List prepared Melt Operations",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:read",
+        "parameters": [
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 0, "maximum": 9007199254740991, "default": 0 }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/MeltOperations" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/operations/melt/in-flight": {
+      "get": {
+        "operationId": "getOperationsMeltInFlight",
+        "summary": "List in-flight Melt Operations",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:read",
+        "parameters": [
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 0, "maximum": 9007199254740991, "default": 0 }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/MeltOperations" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/operations/melt/{operationId}": {
+      "get": {
+        "operationId": "getOperationsMeltOperationId",
+        "summary": "Read a Melt Operation",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:read",
+        "parameters": [
+          {
+            "name": "operationId",
+            "in": "path",
+            "required": true,
+            "description": "Melt Operation ID.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 512 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/MeltOperation" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/operations/melt/{operationId}/execute": {
+      "post": {
+        "operationId": "postOperationsMeltOperationIdExecute",
+        "summary": "Pay a prepared Melt Operation",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:admin",
+        "parameters": [
+          {
+            "name": "operationId",
+            "in": "path",
+            "required": true,
+            "description": "Melt Operation ID.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 512 }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the original result of a repeated identical request within this Cocod Process.",
+            "schema": { "type": "string", "pattern": "^[\\x21-\\x7e]{1,255}$" }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/EmptyCommandRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": { "Cache-Control": { "schema": { "const": "no-store" } } },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ExecuteMeltOperationResponse" }
+              }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/operations/melt/{operationId}/result": {
+      "get": {
+        "operationId": "getOperationsMeltOperationIdResult",
+        "summary": "Read the proof of payment of a finalized Melt Operation",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:read",
+        "parameters": [
+          {
+            "name": "operationId",
+            "in": "path",
+            "required": true,
+            "description": "Melt Operation ID.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 512 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": { "Cache-Control": { "schema": { "const": "no-store" } } },
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/MeltResult" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/operations/melt/{operationId}/cancel": {
+      "post": {
+        "operationId": "postOperationsMeltOperationIdCancel",
+        "summary": "Cancel a prepared Melt Operation and release its reservations",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:admin",
+        "parameters": [
+          {
+            "name": "operationId",
+            "in": "path",
+            "required": true,
+            "description": "Melt Operation ID.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 512 }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the original result of a repeated identical request within this Cocod Process.",
+            "schema": { "type": "string", "pattern": "^[\\x21-\\x7e]{1,255}$" }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/EmptyCommandRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/MeltOperation" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/operations/melt/{operationId}/refresh": {
+      "post": {
+        "operationId": "postOperationsMeltOperationIdRefresh",
+        "summary": "Reconcile a Melt Operation with its Melt Quote",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:admin",
+        "parameters": [
+          {
+            "name": "operationId",
+            "in": "path",
+            "required": true,
+            "description": "Melt Operation ID.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 512 }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the original result of a repeated identical request within this Cocod Process.",
+            "schema": { "type": "string", "pattern": "^[\\x21-\\x7e]{1,255}$" }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/EmptyCommandRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/MeltOperation" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/operations/melt/{operationId}/reclaim": {
+      "post": {
+        "operationId": "postOperationsMeltOperationIdReclaim",
+        "summary": "Reclaim the proofs of a pending Melt Operation whose payment failed",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:admin",
+        "parameters": [
+          {
+            "name": "operationId",
+            "in": "path",
+            "required": true,
+            "description": "Melt Operation ID.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 512 }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the original result of a repeated identical request within this Cocod Process.",
+            "schema": { "type": "string", "pattern": "^[\\x21-\\x7e]{1,255}$" }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/EmptyCommandRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/MeltOperation" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/operations/send": {
+      "post": {
+        "operationId": "postOperationsSend",
+        "summary": "Prepare a Send Operation without executing it",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:admin",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the original result of a repeated identical request within this Cocod Process.",
+            "schema": { "type": "string", "pattern": "^[\\x21-\\x7e]{1,255}$" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/PrepareSendOperationRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/SendOperation" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/operations/send/prepared": {
+      "get": {
+        "operationId": "getOperationsSendPrepared",
+        "summary": "List prepared Send Operations",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:read",
+        "parameters": [
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 0, "maximum": 9007199254740991, "default": 0 }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/SendOperations" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/operations/send/in-flight": {
+      "get": {
+        "operationId": "getOperationsSendInFlight",
+        "summary": "List in-flight Send Operations",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:read",
+        "parameters": [
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 0, "maximum": 9007199254740991, "default": 0 }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/SendOperations" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/operations/send/{operationId}": {
+      "get": {
+        "operationId": "getOperationsSendOperationId",
+        "summary": "Read a Send Operation",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:read",
+        "parameters": [
+          {
+            "name": "operationId",
+            "in": "path",
+            "required": true,
+            "description": "Send Operation ID.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 512 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/SendOperation" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/operations/send/{operationId}/execute": {
+      "post": {
+        "operationId": "postOperationsSendOperationIdExecute",
+        "summary": "Execute a prepared Send Operation and return its token",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:admin",
+        "parameters": [
+          {
+            "name": "operationId",
+            "in": "path",
+            "required": true,
+            "description": "Send Operation ID.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 512 }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the original result of a repeated identical request within this Cocod Process.",
+            "schema": { "type": "string", "pattern": "^[\\x21-\\x7e]{1,255}$" }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/EmptyCommandRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": { "Cache-Control": { "schema": { "const": "no-store" } } },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ExecuteSendOperationResponse" }
+              }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/operations/send/{operationId}/result": {
+      "get": {
+        "operationId": "getOperationsSendOperationIdResult",
+        "summary": "Read the token of an executed Send Operation",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:admin",
+        "parameters": [
+          {
+            "name": "operationId",
+            "in": "path",
+            "required": true,
+            "description": "Send Operation ID.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 512 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": { "Cache-Control": { "schema": { "const": "no-store" } } },
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/SendResult" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/operations/send/{operationId}/cancel": {
+      "post": {
+        "operationId": "postOperationsSendOperationIdCancel",
+        "summary": "Cancel a prepared Send Operation and release its reservations",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:admin",
+        "parameters": [
+          {
+            "name": "operationId",
+            "in": "path",
+            "required": true,
+            "description": "Send Operation ID.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 512 }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the original result of a repeated identical request within this Cocod Process.",
+            "schema": { "type": "string", "pattern": "^[\\x21-\\x7e]{1,255}$" }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/EmptyCommandRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/SendOperation" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/operations/send/{operationId}/refresh": {
+      "post": {
+        "operationId": "postOperationsSendOperationIdRefresh",
+        "summary": "Reconcile a Send Operation with the Mint",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:admin",
+        "parameters": [
+          {
+            "name": "operationId",
+            "in": "path",
+            "required": true,
+            "description": "Send Operation ID.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 512 }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the original result of a repeated identical request within this Cocod Process.",
+            "schema": { "type": "string", "pattern": "^[\\x21-\\x7e]{1,255}$" }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/EmptyCommandRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/SendOperation" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/operations/send/{operationId}/reclaim": {
+      "post": {
+        "operationId": "postOperationsSendOperationIdReclaim",
+        "summary": "Reclaim the proofs of a pending Send Operation",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:admin",
+        "parameters": [
+          {
+            "name": "operationId",
+            "in": "path",
+            "required": true,
+            "description": "Send Operation ID.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 512 }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the original result of a repeated identical request within this Cocod Process.",
+            "schema": { "type": "string", "pattern": "^[\\x21-\\x7e]{1,255}$" }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/EmptyCommandRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/SendOperation" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/operations/receive": {
+      "post": {
+        "operationId": "postOperationsReceive",
+        "summary": "Prepare a Receive Operation for a Cashu token without executing it",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:admin",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the original result of a repeated identical request within this Cocod Process.",
+            "schema": { "type": "string", "pattern": "^[\\x21-\\x7e]{1,255}$" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/PrepareReceiveOperationRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ReceiveOperation" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/operations/receive/prepared": {
+      "get": {
+        "operationId": "getOperationsReceivePrepared",
+        "summary": "List prepared Receive Operations",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:read",
+        "parameters": [
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 0, "maximum": 9007199254740991, "default": 0 }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ReceiveOperations" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/operations/receive/in-flight": {
+      "get": {
+        "operationId": "getOperationsReceiveInFlight",
+        "summary": "List in-flight Receive Operations",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:read",
+        "parameters": [
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 0, "maximum": 9007199254740991, "default": 0 }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ReceiveOperations" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/operations/receive/{operationId}": {
+      "get": {
+        "operationId": "getOperationsReceiveOperationId",
+        "summary": "Read a Receive Operation",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:read",
+        "parameters": [
+          {
+            "name": "operationId",
+            "in": "path",
+            "required": true,
+            "description": "Receive Operation ID.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 512 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ReceiveOperation" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/operations/receive/{operationId}/execute": {
+      "post": {
+        "operationId": "postOperationsReceiveOperationIdExecute",
+        "summary": "Execute a prepared Receive Operation",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:admin",
+        "parameters": [
+          {
+            "name": "operationId",
+            "in": "path",
+            "required": true,
+            "description": "Receive Operation ID.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 512 }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the original result of a repeated identical request within this Cocod Process.",
+            "schema": { "type": "string", "pattern": "^[\\x21-\\x7e]{1,255}$" }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/EmptyCommandRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ReceiveOperation" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/operations/receive/{operationId}/cancel": {
+      "post": {
+        "operationId": "postOperationsReceiveOperationIdCancel",
+        "summary": "Cancel a Receive Operation that has not executed",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:admin",
+        "parameters": [
+          {
+            "name": "operationId",
+            "in": "path",
+            "required": true,
+            "description": "Receive Operation ID.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 512 }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the original result of a repeated identical request within this Cocod Process.",
+            "schema": { "type": "string", "pattern": "^[\\x21-\\x7e]{1,255}$" }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/EmptyCommandRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ReceiveOperation" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/operations/receive/{operationId}/refresh": {
+      "post": {
+        "operationId": "postOperationsReceiveOperationIdRefresh",
+        "summary": "Reconcile a Receive Operation with the Mint",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:admin",
+        "parameters": [
+          {
+            "name": "operationId",
+            "in": "path",
+            "required": true,
+            "description": "Receive Operation ID.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 512 }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the original result of a repeated identical request within this Cocod Process.",
+            "schema": { "type": "string", "pattern": "^[\\x21-\\x7e]{1,255}$" }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/EmptyCommandRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ReceiveOperation" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/payment-requests/evaluate": {
+      "post": {
+        "operationId": "postPaymentRequestsEvaluate",
+        "summary": "Evaluate what paying an outgoing Payment Request would require",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:read",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/EvaluatePaymentRequestRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PaymentRequestEvaluation" }
+              }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/history": {
+      "get": {
+        "operationId": "getHistory",
+        "summary": "List Wallet history, newest first",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:read",
+        "parameters": [
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 0, "maximum": 9007199254740991, "default": 0 }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/HistoryPage" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/history/{historyEntryId}": {
+      "get": {
+        "operationId": "getHistoryHistoryEntryId",
+        "summary": "Read a Wallet history entry",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:read",
+        "parameters": [
+          {
+            "name": "historyEntryId",
+            "in": "path",
+            "required": true,
+            "description": "History entry ID such as `send:{operationId}` or `legacy:{legacyHistoryId}`.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 512 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/History" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/events": {
+      "get": {
+        "operationId": "getEvents",
+        "summary": "Server-sent resource invalidations for the running Coco Session",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:read",
+        "responses": {
+          "200": {
+            "description": "Server-sent events; each `data` line carries one document.",
+            "headers": { "Cache-Control": { "schema": { "const": "no-store" } } },
+            "content": {
+              "text/event-stream": { "schema": { "$ref": "#/components/schemas/ResourceEvent" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["error"],
+        "properties": {
+          "error": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["code", "message", "retryable"],
+            "properties": {
+              "code": {
+                "enum": [
+                  "unauthenticated",
+                  "forbidden",
+                  "invalid_request",
+                  "not_found",
+                  "method_not_allowed",
+                  "internal_error",
+                  "invalid_idempotency_key",
+                  "idempotency_key_conflict",
+                  "idempotency_capacity_exceeded",
+                  "wallet_already_configured",
+                  "wallet_not_configured",
+                  "passphrase_required",
+                  "wallet_unlock_failed",
+                  "session_transition_in_progress",
+                  "session_restart_required",
+                  "process_shutting_down",
+                  "wallet_locked",
+                  "session_stopped",
+                  "invalid_operation_state",
+                  "operation_conflict",
+                  "operation_in_progress",
+                  "operation_coordinated",
+                  "operation_result_not_available",
+                  "mint_unavailable",
+                  "mint_unreachable",
+                  "mint_rejected",
+                  "unsupported_behavior",
+                  "payment_request_unpayable",
+                  "coco_error"
+                ]
+              },
+              "message": { "type": "string" },
+              "retryable": { "type": "boolean" },
+              "details": {
+                "type": "object",
+                "additionalProperties": true,
+                "required": [],
+                "properties": {}
+              }
+            }
+          }
+        }
+      },
+      "Health": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["status", "interfaceVersion"],
+        "properties": { "status": { "const": "ok" }, "interfaceVersion": { "const": "1" } }
+      },
+      "LifecycleStatus": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["daemon", "wallet", "seedAccess", "cocoSession"],
+            "properties": {
+              "daemon": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["version", "interfaceVersion"],
+                "properties": {
+                  "version": { "type": "string" },
+                  "interfaceVersion": { "const": "1" }
+                }
+              },
+              "wallet": { "type": "null" },
+              "seedAccess": { "type": "null" },
+              "cocoSession": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["state", "startedAt", "lastFailure"],
+                "properties": {
+                  "state": { "enum": ["stopped", "starting", "running", "stopping", "failed"] },
+                  "startedAt": {
+                    "anyOf": [
+                      { "type": "null" },
+                      {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                      }
+                    ]
+                  },
+                  "lastFailure": {
+                    "anyOf": [
+                      { "type": "null" },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["code", "message", "occurredAt"],
+                        "properties": {
+                          "code": { "type": "string" },
+                          "message": { "type": "string" },
+                          "occurredAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["daemon", "wallet", "seedAccess", "cocoSession"],
+            "properties": {
+              "daemon": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["version", "interfaceVersion"],
+                "properties": {
+                  "version": { "type": "string" },
+                  "interfaceVersion": { "const": "1" }
+                }
+              },
+              "wallet": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["configuredAt"],
+                "properties": {
+                  "configuredAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  }
+                }
+              },
+              "seedAccess": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["state", "requiresPassphrase"],
+                "properties": {
+                  "state": { "enum": ["locked", "available"] },
+                  "requiresPassphrase": { "type": "boolean" }
+                }
+              },
+              "cocoSession": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["state", "startedAt", "lastFailure"],
+                "properties": {
+                  "state": { "enum": ["stopped", "starting", "running", "stopping", "failed"] },
+                  "startedAt": {
+                    "anyOf": [
+                      { "type": "null" },
+                      {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                      }
+                    ]
+                  },
+                  "lastFailure": {
+                    "anyOf": [
+                      { "type": "null" },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["code", "message", "occurredAt"],
+                        "properties": {
+                          "code": { "type": "string" },
+                          "message": { "type": "string" },
+                          "occurredAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "InitializeWalletRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [],
+        "properties": { "passphrase": { "type": "string", "x-sensitive": true } }
+      },
+      "InitializeWalletResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["generatedMnemonic", "status"],
+        "properties": {
+          "generatedMnemonic": { "type": "string", "x-sensitive": true },
+          "status": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["daemon", "wallet", "seedAccess", "cocoSession"],
+                "properties": {
+                  "daemon": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["version", "interfaceVersion"],
+                    "properties": {
+                      "version": { "type": "string" },
+                      "interfaceVersion": { "const": "1" }
+                    }
+                  },
+                  "wallet": { "type": "null" },
+                  "seedAccess": { "type": "null" },
+                  "cocoSession": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["state", "startedAt", "lastFailure"],
+                    "properties": {
+                      "state": { "enum": ["stopped", "starting", "running", "stopping", "failed"] },
+                      "startedAt": {
+                        "anyOf": [
+                          { "type": "null" },
+                          {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                          }
+                        ]
+                      },
+                      "lastFailure": {
+                        "anyOf": [
+                          { "type": "null" },
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["code", "message", "occurredAt"],
+                            "properties": {
+                              "code": { "type": "string" },
+                              "message": { "type": "string" },
+                              "occurredAt": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["daemon", "wallet", "seedAccess", "cocoSession"],
+                "properties": {
+                  "daemon": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["version", "interfaceVersion"],
+                    "properties": {
+                      "version": { "type": "string" },
+                      "interfaceVersion": { "const": "1" }
+                    }
+                  },
+                  "wallet": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["configuredAt"],
+                    "properties": {
+                      "configuredAt": {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                      }
+                    }
+                  },
+                  "seedAccess": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["state", "requiresPassphrase"],
+                    "properties": {
+                      "state": { "enum": ["locked", "available"] },
+                      "requiresPassphrase": { "type": "boolean" }
+                    }
+                  },
+                  "cocoSession": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["state", "startedAt", "lastFailure"],
+                    "properties": {
+                      "state": { "enum": ["stopped", "starting", "running", "stopping", "failed"] },
+                      "startedAt": {
+                        "anyOf": [
+                          { "type": "null" },
+                          {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                          }
+                        ]
+                      },
+                      "lastFailure": {
+                        "anyOf": [
+                          { "type": "null" },
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["code", "message", "occurredAt"],
+                            "properties": {
+                              "code": { "type": "string" },
+                              "message": { "type": "string" },
+                              "occurredAt": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "WalletRecoveryMaterialRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [],
+        "properties": { "passphrase": { "type": "string", "x-sensitive": true } }
+      },
+      "WalletRecoveryMaterialResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["mnemonic"],
+        "properties": { "mnemonic": { "type": "string", "x-sensitive": true } }
+      },
+      "StartSessionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [],
+        "properties": { "passphrase": { "type": "string", "x-sensitive": true } }
+      },
+      "StopSessionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [],
+        "properties": {}
+      },
+      "ProcessShutdownRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [],
+        "properties": {}
+      },
+      "ProcessShutdownResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["status"],
+        "properties": { "status": { "const": "stopping" } }
+      },
+      "OpenApiDocument": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["openapi", "info", "paths", "components"],
+        "properties": {
+          "openapi": { "const": "3.1.0" },
+          "info": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": [],
+            "properties": {}
+          },
+          "paths": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": [],
+            "properties": {}
+          },
+          "components": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": [],
+            "properties": {}
+          }
+        }
+      },
+      "Balances": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["mintUrl", "unit", "spendable", "reserved", "total"],
+              "properties": {
+                "mintUrl": {
+                  "type": "string",
+                  "format": "uri",
+                  "pattern": "^https?://",
+                  "maxLength": 2048
+                },
+                "unit": { "type": "string", "minLength": 1, "maxLength": 32 },
+                "spendable": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+                "reserved": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+                "total": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 }
+              }
+            }
+          }
+        }
+      },
+      "KnownMints": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["mintUrl", "name", "trusted", "createdAt", "updatedAt"],
+              "properties": {
+                "mintUrl": {
+                  "type": "string",
+                  "format": "uri",
+                  "pattern": "^https?://",
+                  "maxLength": 2048
+                },
+                "name": { "type": "string" },
+                "trusted": { "type": "boolean" },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                },
+                "updatedAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                }
+              }
+            }
+          }
+        }
+      },
+      "RegisterMintRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["mintUrl"],
+        "properties": {
+          "mintUrl": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https?://",
+            "maxLength": 2048
+          },
+          "trusted": { "type": "boolean" }
+        }
+      },
+      "KnownMint": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["mintUrl", "name", "trusted", "createdAt", "updatedAt"],
+        "properties": {
+          "mintUrl": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https?://",
+            "maxLength": 2048
+          },
+          "name": { "type": "string" },
+          "trusted": { "type": "boolean" },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+          }
+        }
+      },
+      "MintTrustRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["mintUrl"],
+        "properties": {
+          "mintUrl": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https?://",
+            "maxLength": 2048
+          }
+        }
+      },
+      "MintInformation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["mintUrl", "info"],
+        "properties": {
+          "mintUrl": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https?://",
+            "maxLength": 2048
+          },
+          "info": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": [],
+            "properties": {}
+          }
+        }
+      },
+      "PaymentMethodCapabilities": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["mintUrl", "items"],
+        "properties": {
+          "mintUrl": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https?://",
+            "maxLength": 2048
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["operation", "nut", "method", "unit"],
+              "properties": {
+                "operation": { "enum": ["mint", "melt"] },
+                "nut": { "oneOf": [{ "const": 4 }, { "const": 5 }] },
+                "method": { "type": "string" },
+                "unit": { "type": "string", "minLength": 1, "maxLength": 32 },
+                "minAmount": {
+                  "anyOf": [
+                    { "type": "null" },
+                    { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 }
+                  ]
+                },
+                "maxAmount": {
+                  "anyOf": [
+                    { "type": "null" },
+                    { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 }
+                  ]
+                },
+                "options": {}
+              }
+            }
+          }
+        }
+      },
+      "CreateMintQuoteRequest": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["method", "amount"],
+            "properties": {
+              "method": { "const": "bolt11" },
+              "amount": { "type": "string", "pattern": "^[1-9][0-9]*$", "maxLength": 20 },
+              "unit": { "type": "string", "minLength": 1, "maxLength": 32 },
+              "mintUrl": {
+                "type": "string",
+                "format": "uri",
+                "pattern": "^https?://",
+                "maxLength": 2048
+              },
+              "locked": { "type": "boolean" }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["method"],
+            "properties": {
+              "method": { "const": "bolt12" },
+              "amount": { "type": "string", "pattern": "^[1-9][0-9]*$", "maxLength": 20 },
+              "unit": { "type": "string", "minLength": 1, "maxLength": 32 },
+              "mintUrl": {
+                "type": "string",
+                "format": "uri",
+                "pattern": "^https?://",
+                "maxLength": 2048
+              },
+              "description": { "type": "string", "maxLength": 1024 }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["method"],
+            "properties": {
+              "method": { "const": "onchain" },
+              "unit": { "type": "string", "minLength": 1, "maxLength": 32 },
+              "mintUrl": {
+                "type": "string",
+                "format": "uri",
+                "pattern": "^https?://",
+                "maxLength": 2048
+              }
+            }
+          }
+        ]
+      },
+      "MintQuote": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "type",
+          "mintUrl",
+          "quoteId",
+          "method",
+          "request",
+          "unit",
+          "amountPaid",
+          "amountIssued",
+          "reusable",
+          "expiry",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "type": { "const": "mint" },
+          "mintUrl": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https?://",
+            "maxLength": 2048
+          },
+          "quoteId": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "method": { "enum": ["bolt11", "bolt12", "onchain"] },
+          "request": { "type": "string" },
+          "unit": { "type": "string", "minLength": 1, "maxLength": 32 },
+          "amount": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+          "amountPaid": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+          "amountIssued": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+          "reusable": { "type": "boolean" },
+          "state": { "enum": ["UNPAID", "PAID", "ISSUED"] },
+          "expiry": {
+            "anyOf": [
+              { "type": "null" },
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+              }
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+          }
+        }
+      },
+      "PendingMintQuotes": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items", "offset", "limit"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "type",
+                "mintUrl",
+                "quoteId",
+                "method",
+                "request",
+                "unit",
+                "amountPaid",
+                "amountIssued",
+                "reusable",
+                "expiry",
+                "createdAt",
+                "updatedAt"
+              ],
+              "properties": {
+                "type": { "const": "mint" },
+                "mintUrl": {
+                  "type": "string",
+                  "format": "uri",
+                  "pattern": "^https?://",
+                  "maxLength": 2048
+                },
+                "quoteId": { "type": "string", "minLength": 1, "maxLength": 512 },
+                "method": { "enum": ["bolt11", "bolt12", "onchain"] },
+                "request": { "type": "string" },
+                "unit": { "type": "string", "minLength": 1, "maxLength": 32 },
+                "amount": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+                "amountPaid": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+                "amountIssued": {
+                  "type": "string",
+                  "pattern": "^(0|[1-9][0-9]*)$",
+                  "maxLength": 20
+                },
+                "reusable": { "type": "boolean" },
+                "state": { "enum": ["UNPAID", "PAID", "ISSUED"] },
+                "expiry": {
+                  "anyOf": [
+                    { "type": "null" },
+                    {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                },
+                "updatedAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                }
+              }
+            }
+          },
+          "offset": { "type": "integer", "minimum": 0 },
+          "limit": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "EmptyCommandRequest": {
+        "anyOf": [
+          { "type": "null" },
+          { "type": "object", "additionalProperties": false, "required": [], "properties": {} }
+        ]
+      },
+      "CreateMeltQuoteRequest": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["method", "invoice"],
+            "properties": {
+              "method": { "const": "bolt11" },
+              "invoice": { "type": "string", "minLength": 1, "x-sensitive": true },
+              "amountSats": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]*$",
+                "maxLength": 20,
+                "description": "Payment amount in satoshis, independent of the ecash unit that funds the payment."
+              },
+              "unit": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 32,
+                "description": "Ecash unit that funds the payment and denominates the Quote amounts (default sat)."
+              },
+              "mintUrl": {
+                "type": "string",
+                "format": "uri",
+                "pattern": "^https?://",
+                "maxLength": 2048
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["method", "offer"],
+            "properties": {
+              "method": { "const": "bolt12" },
+              "offer": { "type": "string", "minLength": 1, "x-sensitive": true },
+              "amountSats": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]*$",
+                "maxLength": 20,
+                "description": "Payment amount in satoshis, independent of the ecash unit that funds the payment."
+              },
+              "unit": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 32,
+                "description": "Ecash unit that funds the payment and denominates the Quote amounts (default sat)."
+              },
+              "mintUrl": {
+                "type": "string",
+                "format": "uri",
+                "pattern": "^https?://",
+                "maxLength": 2048
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["method", "address", "amountSats"],
+            "properties": {
+              "method": { "const": "onchain" },
+              "address": { "type": "string", "minLength": 1, "x-sensitive": true },
+              "amountSats": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]*$",
+                "maxLength": 20,
+                "description": "Payment amount in satoshis, independent of the ecash unit that funds the payment."
+              },
+              "unit": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 32,
+                "description": "Ecash unit that funds the payment and denominates the Quote amounts (default sat)."
+              },
+              "mintUrl": {
+                "type": "string",
+                "format": "uri",
+                "pattern": "^https?://",
+                "maxLength": 2048
+              }
+            }
+          }
+        ]
+      },
+      "MeltQuote": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "type",
+          "mintUrl",
+          "quoteId",
+          "method",
+          "request",
+          "unit",
+          "amount",
+          "state",
+          "expiry",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "type": { "const": "melt" },
+          "mintUrl": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https?://",
+            "maxLength": 2048
+          },
+          "quoteId": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "method": { "enum": ["bolt11", "bolt12", "onchain"] },
+          "request": { "type": "string" },
+          "unit": { "type": "string", "minLength": 1, "maxLength": 32 },
+          "amount": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+          "state": { "enum": ["UNPAID", "PENDING", "PAID"] },
+          "feeReserve": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+          "feeOptions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["feeIndex", "feeReserve", "estimatedBlocks"],
+              "properties": {
+                "feeIndex": { "type": "integer", "minimum": 0 },
+                "feeReserve": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+                "estimatedBlocks": { "type": "integer", "minimum": 0 }
+              }
+            }
+          },
+          "expiry": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+          }
+        }
+      },
+      "PendingMeltQuotes": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items", "offset", "limit"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "type",
+                "mintUrl",
+                "quoteId",
+                "method",
+                "request",
+                "unit",
+                "amount",
+                "state",
+                "expiry",
+                "createdAt",
+                "updatedAt"
+              ],
+              "properties": {
+                "type": { "const": "melt" },
+                "mintUrl": {
+                  "type": "string",
+                  "format": "uri",
+                  "pattern": "^https?://",
+                  "maxLength": 2048
+                },
+                "quoteId": { "type": "string", "minLength": 1, "maxLength": 512 },
+                "method": { "enum": ["bolt11", "bolt12", "onchain"] },
+                "request": { "type": "string" },
+                "unit": { "type": "string", "minLength": 1, "maxLength": 32 },
+                "amount": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+                "state": { "enum": ["UNPAID", "PENDING", "PAID"] },
+                "feeReserve": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+                "feeOptions": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["feeIndex", "feeReserve", "estimatedBlocks"],
+                    "properties": {
+                      "feeIndex": { "type": "integer", "minimum": 0 },
+                      "feeReserve": {
+                        "type": "string",
+                        "pattern": "^(0|[1-9][0-9]*)$",
+                        "maxLength": 20
+                      },
+                      "estimatedBlocks": { "type": "integer", "minimum": 0 }
+                    }
+                  }
+                },
+                "expiry": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                },
+                "updatedAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                }
+              }
+            }
+          },
+          "offset": { "type": "integer", "minimum": 0 },
+          "limit": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "PrepareMintOperationRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["mintUrl", "quoteId", "amount"],
+        "properties": {
+          "mintUrl": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https?://",
+            "maxLength": 2048
+          },
+          "quoteId": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "amount": { "type": "string", "pattern": "^[1-9][0-9]*$", "maxLength": 20 }
+        }
+      },
+      "MintOperation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "type",
+          "state",
+          "mintUrl",
+          "method",
+          "unit",
+          "amount",
+          "quote",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "type": { "const": "mint" },
+          "state": { "enum": ["init", "pending", "executing", "finalized", "failed"] },
+          "mintUrl": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https?://",
+            "maxLength": 2048
+          },
+          "method": { "enum": ["bolt11", "bolt12", "onchain"] },
+          "unit": { "type": "string", "minLength": 1, "maxLength": 32 },
+          "amount": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+          "quote": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["mintUrl", "quoteId"],
+            "properties": {
+              "mintUrl": {
+                "type": "string",
+                "format": "uri",
+                "pattern": "^https?://",
+                "maxLength": 2048
+              },
+              "quoteId": { "type": "string", "minLength": 1, "maxLength": 512 }
+            }
+          },
+          "expiry": {
+            "anyOf": [
+              { "type": "null" },
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+              }
+            ]
+          },
+          "failure": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["observedAt"],
+            "properties": {
+              "code": { "type": "string" },
+              "retryable": { "type": "boolean" },
+              "observedAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+              }
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+          }
+        }
+      },
+      "MintOperations": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items", "offset", "limit"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "type",
+                "state",
+                "mintUrl",
+                "method",
+                "unit",
+                "amount",
+                "quote",
+                "createdAt",
+                "updatedAt"
+              ],
+              "properties": {
+                "id": { "type": "string", "minLength": 1, "maxLength": 512 },
+                "type": { "const": "mint" },
+                "state": { "enum": ["init", "pending", "executing", "finalized", "failed"] },
+                "mintUrl": {
+                  "type": "string",
+                  "format": "uri",
+                  "pattern": "^https?://",
+                  "maxLength": 2048
+                },
+                "method": { "enum": ["bolt11", "bolt12", "onchain"] },
+                "unit": { "type": "string", "minLength": 1, "maxLength": 32 },
+                "amount": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+                "quote": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["mintUrl", "quoteId"],
+                  "properties": {
+                    "mintUrl": {
+                      "type": "string",
+                      "format": "uri",
+                      "pattern": "^https?://",
+                      "maxLength": 2048
+                    },
+                    "quoteId": { "type": "string", "minLength": 1, "maxLength": 512 }
+                  }
+                },
+                "expiry": {
+                  "anyOf": [
+                    { "type": "null" },
+                    {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                    }
+                  ]
+                },
+                "failure": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["observedAt"],
+                  "properties": {
+                    "code": { "type": "string" },
+                    "retryable": { "type": "boolean" },
+                    "observedAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                    }
+                  }
+                },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                },
+                "updatedAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                }
+              }
+            }
+          },
+          "offset": { "type": "integer", "minimum": 0 },
+          "limit": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "PrepareMeltOperationRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["mintUrl", "quoteId"],
+        "properties": {
+          "mintUrl": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https?://",
+            "maxLength": 2048
+          },
+          "quoteId": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "feeIndex": { "type": "integer", "minimum": 0 }
+        }
+      },
+      "MeltOperation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "type", "state", "mintUrl", "method", "unit", "createdAt", "updatedAt"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "type": { "const": "melt" },
+          "state": {
+            "enum": [
+              "init",
+              "prepared",
+              "executing",
+              "pending",
+              "failed",
+              "finalized",
+              "rolling_back",
+              "rolled_back"
+            ]
+          },
+          "mintUrl": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https?://",
+            "maxLength": 2048
+          },
+          "method": { "enum": ["bolt11", "bolt12", "onchain"] },
+          "unit": { "type": "string", "minLength": 1, "maxLength": 32 },
+          "quote": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["mintUrl", "quoteId"],
+            "properties": {
+              "mintUrl": {
+                "type": "string",
+                "format": "uri",
+                "pattern": "^https?://",
+                "maxLength": 2048
+              },
+              "quoteId": { "type": "string", "minLength": 1, "maxLength": 512 }
+            }
+          },
+          "amount": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+          "feeReserve": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+          "swapFee": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+          "inputAmount": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+          "needsSwap": { "type": "boolean" },
+          "feeIndex": { "type": "integer", "minimum": 0 },
+          "changeAmount": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+          "effectiveFee": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+          }
+        }
+      },
+      "MeltOperations": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items", "offset", "limit"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "type",
+                "state",
+                "mintUrl",
+                "method",
+                "unit",
+                "createdAt",
+                "updatedAt"
+              ],
+              "properties": {
+                "id": { "type": "string", "minLength": 1, "maxLength": 512 },
+                "type": { "const": "melt" },
+                "state": {
+                  "enum": [
+                    "init",
+                    "prepared",
+                    "executing",
+                    "pending",
+                    "failed",
+                    "finalized",
+                    "rolling_back",
+                    "rolled_back"
+                  ]
+                },
+                "mintUrl": {
+                  "type": "string",
+                  "format": "uri",
+                  "pattern": "^https?://",
+                  "maxLength": 2048
+                },
+                "method": { "enum": ["bolt11", "bolt12", "onchain"] },
+                "unit": { "type": "string", "minLength": 1, "maxLength": 32 },
+                "quote": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["mintUrl", "quoteId"],
+                  "properties": {
+                    "mintUrl": {
+                      "type": "string",
+                      "format": "uri",
+                      "pattern": "^https?://",
+                      "maxLength": 2048
+                    },
+                    "quoteId": { "type": "string", "minLength": 1, "maxLength": 512 }
+                  }
+                },
+                "amount": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+                "feeReserve": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+                "swapFee": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+                "inputAmount": {
+                  "type": "string",
+                  "pattern": "^(0|[1-9][0-9]*)$",
+                  "maxLength": 20
+                },
+                "needsSwap": { "type": "boolean" },
+                "feeIndex": { "type": "integer", "minimum": 0 },
+                "changeAmount": {
+                  "type": "string",
+                  "pattern": "^(0|[1-9][0-9]*)$",
+                  "maxLength": 20
+                },
+                "effectiveFee": {
+                  "type": "string",
+                  "pattern": "^(0|[1-9][0-9]*)$",
+                  "maxLength": 20
+                },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                },
+                "updatedAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                }
+              }
+            }
+          },
+          "offset": { "type": "integer", "minimum": 0 },
+          "limit": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "ExecuteMeltOperationResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["operation"],
+        "properties": {
+          "operation": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "type",
+              "state",
+              "mintUrl",
+              "method",
+              "unit",
+              "createdAt",
+              "updatedAt"
+            ],
+            "properties": {
+              "id": { "type": "string", "minLength": 1, "maxLength": 512 },
+              "type": { "const": "melt" },
+              "state": {
+                "enum": [
+                  "init",
+                  "prepared",
+                  "executing",
+                  "pending",
+                  "failed",
+                  "finalized",
+                  "rolling_back",
+                  "rolled_back"
+                ]
+              },
+              "mintUrl": {
+                "type": "string",
+                "format": "uri",
+                "pattern": "^https?://",
+                "maxLength": 2048
+              },
+              "method": { "enum": ["bolt11", "bolt12", "onchain"] },
+              "unit": { "type": "string", "minLength": 1, "maxLength": 32 },
+              "quote": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["mintUrl", "quoteId"],
+                "properties": {
+                  "mintUrl": {
+                    "type": "string",
+                    "format": "uri",
+                    "pattern": "^https?://",
+                    "maxLength": 2048
+                  },
+                  "quoteId": { "type": "string", "minLength": 1, "maxLength": 512 }
+                }
+              },
+              "amount": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+              "feeReserve": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+              "swapFee": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+              "inputAmount": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+              "needsSwap": { "type": "boolean" },
+              "feeIndex": { "type": "integer", "minimum": 0 },
+              "changeAmount": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+              "effectiveFee": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+              },
+              "updatedAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+              }
+            }
+          },
+          "result": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["preimage"],
+                "properties": { "preimage": { "type": "string", "minLength": 1 } }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["outpoint"],
+                "properties": { "outpoint": { "type": "string", "minLength": 1 } }
+              }
+            ]
+          }
+        }
+      },
+      "MeltResult": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["preimage"],
+            "properties": { "preimage": { "type": "string", "minLength": 1 } }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["outpoint"],
+            "properties": { "outpoint": { "type": "string", "minLength": 1 } }
+          }
+        ]
+      },
+      "PrepareSendOperationRequest": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["amount"],
+            "properties": {
+              "amount": { "type": "string", "pattern": "^[1-9][0-9]*$", "maxLength": 20 },
+              "unit": { "type": "string", "minLength": 1, "maxLength": 32 },
+              "mintUrl": {
+                "type": "string",
+                "format": "uri",
+                "pattern": "^https?://",
+                "maxLength": 2048
+              },
+              "forceSwap": { "type": "boolean" }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["source"],
+            "properties": {
+              "source": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["type", "request"],
+                "properties": {
+                  "type": { "const": "payment-request" },
+                  "request": { "type": "string", "minLength": 1, "x-sensitive": true }
+                }
+              },
+              "mintUrl": {
+                "type": "string",
+                "format": "uri",
+                "pattern": "^https?://",
+                "maxLength": 2048
+              },
+              "amount": { "type": "string", "pattern": "^[1-9][0-9]*$", "maxLength": 20 },
+              "unit": { "type": "string", "minLength": 1, "maxLength": 32 }
+            },
+            "dependentRequired": { "unit": ["amount"] }
+          }
+        ]
+      },
+      "SendOperation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "type",
+          "state",
+          "mintUrl",
+          "method",
+          "unit",
+          "amount",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "type": { "const": "send" },
+          "state": {
+            "enum": [
+              "init",
+              "prepared",
+              "executing",
+              "pending",
+              "finalized",
+              "rolling_back",
+              "rolled_back"
+            ]
+          },
+          "mintUrl": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https?://",
+            "maxLength": 2048
+          },
+          "method": { "enum": ["default", "p2pk"] },
+          "unit": { "type": "string", "minLength": 1, "maxLength": 32 },
+          "amount": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+          "inputAmount": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+          "fee": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+          "needsSwap": { "type": "boolean" },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+          }
+        }
+      },
+      "SendOperations": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items", "offset", "limit"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "type",
+                "state",
+                "mintUrl",
+                "method",
+                "unit",
+                "amount",
+                "createdAt",
+                "updatedAt"
+              ],
+              "properties": {
+                "id": { "type": "string", "minLength": 1, "maxLength": 512 },
+                "type": { "const": "send" },
+                "state": {
+                  "enum": [
+                    "init",
+                    "prepared",
+                    "executing",
+                    "pending",
+                    "finalized",
+                    "rolling_back",
+                    "rolled_back"
+                  ]
+                },
+                "mintUrl": {
+                  "type": "string",
+                  "format": "uri",
+                  "pattern": "^https?://",
+                  "maxLength": 2048
+                },
+                "method": { "enum": ["default", "p2pk"] },
+                "unit": { "type": "string", "minLength": 1, "maxLength": 32 },
+                "amount": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+                "inputAmount": {
+                  "type": "string",
+                  "pattern": "^(0|[1-9][0-9]*)$",
+                  "maxLength": 20
+                },
+                "fee": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+                "needsSwap": { "type": "boolean" },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                },
+                "updatedAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                }
+              }
+            }
+          },
+          "offset": { "type": "integer", "minimum": 0 },
+          "limit": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "ExecuteSendOperationResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["operation", "result"],
+        "properties": {
+          "operation": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "type",
+              "state",
+              "mintUrl",
+              "method",
+              "unit",
+              "amount",
+              "createdAt",
+              "updatedAt"
+            ],
+            "properties": {
+              "id": { "type": "string", "minLength": 1, "maxLength": 512 },
+              "type": { "const": "send" },
+              "state": {
+                "enum": [
+                  "init",
+                  "prepared",
+                  "executing",
+                  "pending",
+                  "finalized",
+                  "rolling_back",
+                  "rolled_back"
+                ]
+              },
+              "mintUrl": {
+                "type": "string",
+                "format": "uri",
+                "pattern": "^https?://",
+                "maxLength": 2048
+              },
+              "method": { "enum": ["default", "p2pk"] },
+              "unit": { "type": "string", "minLength": 1, "maxLength": 32 },
+              "amount": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+              "inputAmount": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+              "fee": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+              "needsSwap": { "type": "boolean" },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+              },
+              "updatedAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+              }
+            }
+          },
+          "result": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["token"],
+            "properties": { "token": { "type": "string", "minLength": 1, "x-sensitive": true } }
+          }
+        }
+      },
+      "SendResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["token"],
+        "properties": { "token": { "type": "string", "minLength": 1, "x-sensitive": true } }
+      },
+      "PrepareReceiveOperationRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["token"],
+        "properties": { "token": { "type": "string", "minLength": 1, "x-sensitive": true } }
+      },
+      "ReceiveOperation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "type", "state", "mintUrl", "unit", "amount", "createdAt", "updatedAt"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "type": { "const": "receive" },
+          "state": { "enum": ["init", "prepared", "executing", "finalized", "rolled_back"] },
+          "mintUrl": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https?://",
+            "maxLength": 2048
+          },
+          "unit": { "type": "string", "minLength": 1, "maxLength": 32 },
+          "amount": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+          "fee": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+          }
+        }
+      },
+      "ReceiveOperations": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items", "offset", "limit"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "type",
+                "state",
+                "mintUrl",
+                "unit",
+                "amount",
+                "createdAt",
+                "updatedAt"
+              ],
+              "properties": {
+                "id": { "type": "string", "minLength": 1, "maxLength": 512 },
+                "type": { "const": "receive" },
+                "state": { "enum": ["init", "prepared", "executing", "finalized", "rolled_back"] },
+                "mintUrl": {
+                  "type": "string",
+                  "format": "uri",
+                  "pattern": "^https?://",
+                  "maxLength": 2048
+                },
+                "unit": { "type": "string", "minLength": 1, "maxLength": 32 },
+                "amount": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+                "fee": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                },
+                "updatedAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                }
+              }
+            }
+          },
+          "offset": { "type": "integer", "minimum": 0 },
+          "limit": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "EvaluatePaymentRequestRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["request"],
+        "properties": { "request": { "type": "string", "minLength": 1, "x-sensitive": true } }
+      },
+      "PaymentRequestEvaluation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["unit", "transport", "allowedMints", "payableMints"],
+        "properties": {
+          "amount": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+          "unit": { "type": "string", "minLength": 1, "maxLength": 32 },
+          "transport": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type"],
+            "properties": { "type": { "enum": ["inband", "http", "nostr"] } }
+          },
+          "allowedMints": { "type": "array", "items": { "type": "string" } },
+          "payableMints": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uri",
+              "pattern": "^https?://",
+              "maxLength": 2048
+            }
+          },
+          "spendingCondition": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind"],
+                "properties": { "kind": { "const": "P2PK" } }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind", "nut10Kind"],
+                "properties": {
+                  "kind": { "enum": ["unsupported", "malformed"] },
+                  "nut10Kind": { "type": "string" }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "HistoryPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items", "offset", "limit"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "type",
+                "source",
+                "state",
+                "mintUrl",
+                "unit",
+                "amount",
+                "createdAt",
+                "updatedAt"
+              ],
+              "properties": {
+                "id": { "type": "string", "minLength": 1, "maxLength": 512 },
+                "type": { "enum": ["mint", "melt", "send", "receive"] },
+                "source": { "enum": ["operation", "legacy"] },
+                "operationId": { "type": "string", "minLength": 1, "maxLength": 512 },
+                "quoteId": { "type": "string", "minLength": 1, "maxLength": 512 },
+                "state": { "type": "string" },
+                "mintUrl": { "type": "string" },
+                "unit": { "type": "string", "minLength": 1, "maxLength": 32 },
+                "amount": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                },
+                "updatedAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                }
+              }
+            }
+          },
+          "offset": { "type": "integer", "minimum": 0 },
+          "limit": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "History": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "type",
+          "source",
+          "state",
+          "mintUrl",
+          "unit",
+          "amount",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "type": { "enum": ["mint", "melt", "send", "receive"] },
+          "source": { "enum": ["operation", "legacy"] },
+          "operationId": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "quoteId": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "state": { "type": "string" },
+          "mintUrl": { "type": "string" },
+          "unit": { "type": "string", "minLength": 1, "maxLength": 32 },
+          "amount": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+          }
+        }
+      },
+      "ResourceEvent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "timestamp", "data"],
+            "properties": {
+              "type": { "const": "history.updated" },
+              "timestamp": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+              },
+              "data": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "type",
+                  "source",
+                  "state",
+                  "mintUrl",
+                  "unit",
+                  "amount",
+                  "createdAt",
+                  "updatedAt"
+                ],
+                "properties": {
+                  "id": { "type": "string", "minLength": 1, "maxLength": 512 },
+                  "type": { "enum": ["mint", "melt", "send", "receive"] },
+                  "source": { "enum": ["operation", "legacy"] },
+                  "operationId": { "type": "string", "minLength": 1, "maxLength": 512 },
+                  "quoteId": { "type": "string", "minLength": 1, "maxLength": 512 },
+                  "state": { "type": "string" },
+                  "mintUrl": { "type": "string" },
+                  "unit": { "type": "string", "minLength": 1, "maxLength": 32 },
+                  "amount": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+                  "createdAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  },
+                  "updatedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "timestamp", "data"],
+            "properties": {
+              "type": { "const": "operation.updated" },
+              "timestamp": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+              },
+              "data": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["operationType", "operationId", "mintUrl"],
+                "properties": {
+                  "operationType": { "enum": ["mint", "melt", "send", "receive"] },
+                  "operationId": { "type": "string", "minLength": 1, "maxLength": 512 },
+                  "mintUrl": {
+                    "type": "string",
+                    "format": "uri",
+                    "pattern": "^https?://",
+                    "maxLength": 2048
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "timestamp", "data"],
+            "properties": {
+              "type": { "const": "quote.updated" },
+              "timestamp": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+              },
+              "data": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["quoteType", "mintUrl", "method", "quoteId"],
+                "properties": {
+                  "quoteType": { "enum": ["mint", "melt"] },
+                  "mintUrl": {
+                    "type": "string",
+                    "format": "uri",
+                    "pattern": "^https?://",
+                    "maxLength": 2048
+                  },
+                  "method": { "type": "string" },
+                  "quoteId": { "type": "string", "minLength": 1, "maxLength": 512 }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "timestamp", "data"],
+            "properties": {
+              "type": { "const": "mint.updated" },
+              "timestamp": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+              },
+              "data": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["mintUrl"],
+                "properties": {
+                  "mintUrl": {
+                    "type": "string",
+                    "format": "uri",
+                    "pattern": "^https?://",
+                    "maxLength": 2048
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "timestamp", "data"],
+            "properties": {
+              "type": { "const": "balance.updated" },
+              "timestamp": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+              },
+              "data": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["mintUrl"],
+                "properties": {
+                  "mintUrl": {
+                    "type": "string",
+                    "format": "uri",
+                    "pattern": "^https?://",
+                    "maxLength": 2048
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "securitySchemes": { "clientCredential": { "type": "http", "scheme": "bearer" } }
+  }
+}

@@ -35,6 +35,10 @@ describe('StructuredLogger', () => {
         'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about',
       mintUrl: 'https://mint.example.com/Bitcoin',
       passphrase: 'secret-passphrase',
+      paymentRequest: 'creqAsecret',
+      decodedPaymentRequest: { id: 'secret-request' },
+      offer: 'lno1secret',
+      address: 'bc1secret',
     });
     await logger.flush();
 
@@ -46,6 +50,7 @@ describe('StructuredLogger', () => {
     expect(entry.component).toBe('daemon');
     expect(entry.passphrase).toBe('[REDACTED]');
     expect(entry.generatedMnemonic).toBe('[REDACTED]');
+    expect(content).not.toContain('secret');
     expect(entry.mintUrl).toBe('https://mint.example.com/Bitcoin');
   });
 

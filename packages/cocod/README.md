@@ -123,7 +123,8 @@ upgrading and delete the copy once you're settled.
 
 - CLI: `src/cli.ts`
 - Daemon: `src/daemon.ts`
-- Routes: `src/routes.ts`
+- HTTP interface: `src/v1` (Wallet resources in `src/v1/resources`)
+- NPC extension routes: `src/routes.ts`
 - Transport: authenticated HTTP over one TCP listener
 
 Defaults:
@@ -185,7 +186,8 @@ bun test
 ## Docs
 
 - [API and command reference](docs/API.md)
-- [Machine-readable daemon contract](docs/daemon-api.json)
+- [OpenAPI description](docs/openapi-v1.json)
+- [NPC extension contract](docs/daemon-api.json)
 - [Network interface v1](docs/network-interface-v1.md)
 
 ## License

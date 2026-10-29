@@ -19,30 +19,33 @@ Use the implicit `http://127.0.0.1:62626` endpoint for local auto-start. The glo
 - `session start` - Start the Coco Session
   - `--passphrase <str>` supply the passphrase for protected Wallet Seed Access
 - `session stop` - Stop the Coco Session without stopping the Cocod Process
-- `balance` - Get wallet balances
-- `history` - List history entries
+- `balance` - Print spendable, reserved, and total balances by Mint and unit as JSON
+- `history` - Print history entries as JSON
   - `--offset <number>` default `0`
   - `--limit <number>` default `20`, max `100`
-  - `--watch` stream real-time updates after initial fetch
+  - `--watch` print each later history entry as one JSON line until the Coco Session stops
 
 ### Receive
 
 - `receive cashu <token>` - Receive a Cashu token
-- `receive bolt11 <amount>` - Create a Lightning invoice
+- `receive bolt11 <amount>` - Create a Lightning invoice; Coco redeems it once paid
   - `--mint-url <url>` override default mint for this request
 
 ### Send
 
 - `send cashu <amount>` - Create a Cashu token to send
   - `--mint-url <url>` override default mint
-- `send bolt11 <invoice>` - Pay a Lightning invoice
+- `send bolt11 <invoice>` - Pay a Lightning invoice and report whether it settled
   - `--mint-url <url>` override default mint
 
 ### Mints
 
-- `mints add <url>` - Add mint URL
-- `mints list` - List configured mints
-- `mints info <url>` - Fetch mint metadata
+- `mints add <url>` - Register and trust a Mint
+- `mints list` - List trusted Mints
+- `mints info <url>` - Print Mint information as JSON
+
+One-shot send, receive, and payment commands prepare an Operation and then execute it. When
+execution fails, the error names the prepared Operation so it can be inspected or cancelled.
 
 ### NPC
 
@@ -57,7 +60,8 @@ Use the implicit `http://127.0.0.1:62626` endpoint for local auto-start. The glo
 
 Both `creqA` and `creqB` encodings are accepted. NUT-10 spending conditions are enforced
 by Coco: P2PK-locked requests are paid with locked outputs; unsupported or malformed
-conditions return a 400 before any proofs move.
+conditions are rejected before any proofs move. `x-cashu handle` pays in-band requests only, from
+the configured Mint when it can pay and otherwise from the first payable Mint.
 
 ### Daemon control
 
@@ -76,42 +80,91 @@ daemon validates both settings and does not inherit a generic `PORT` variable.
 Listener overrides apply to an explicitly started `cocod daemon`. Auto-start always uses the local
 default; connect to a custom listener with `--url` or `COCOD_URL`, which never starts a process.
 
-`GET /health` is public. Every `/v1/*` request and every remaining legacy route requires
+`GET /health` is public. Every `/v1/*` request and both NPC routes require
 `Authorization: Bearer <credential>`. The local client reads the credential from
 `~/.cocod/credentials/current/client`. Remote TLS belongs at a trusted proxy such as Caddy; cocod
 still authenticates the credential itself, ignores forwarded identity headers, and does not enable
 browser CORS.
 
+The [network interface](network-interface-v1.md) specifies representation, errors, and lifecycle
+rules. `GET /v1/openapi.json` and the committed [OpenAPI document](openapi-v1.json) give exact
+request, response, parameter, capability, and status schemas. Regenerate the committed copy with
+`bun run generate:interface`.
+
 ### Response shapes
 
-- The v1 lifecycle resources return typed documents directly. Their errors use
+- v1 resources return typed documents directly. Errors use
   `{ "error": { "code": string, "message": string, "retryable": boolean, "details"?: object } }`.
-- The remaining operational legacy routes retain `{ "output": <value> }` success and
-  `{ "error": "message" }` error envelopes.
+- The NPC routes keep `{ "output": <value> }` success and `{ "error": "message" }` error envelopes;
+  see [daemon-api.json](daemon-api.json).
 
 ### Endpoint list
 
-- `GET /health` (public)
-- `GET /v1/status`
-- `POST /v1/admin/wallet/initialize`
-- `POST /v1/admin/wallet/recovery-material`
-- `POST /v1/admin/session/start`
-- `POST /v1/admin/session/stop`
-- `POST /v1/admin/process/stop`
-- `GET /balance`
-- `POST /receive/cashu`
-- `POST /receive/bolt11`
-- `POST /send/cashu`
-- `POST /send/bolt11`
-- `POST /x-cashu/parse`
-- `POST /x-cashu/handle`
-- `POST /mints/add`
-- `GET /mints/list`
-- `POST /mints/info`
-- `GET /history`
-- `GET /events` (SSE stream)
-- `GET /npc/address`
-- `POST /npc/username`
+Capabilities: `read` is `wallet:read`, `admin` is `wallet:admin`. Commands marked `idem` accept an
+optional `Idempotency-Key`; `no-store` responses are never cached.
 
-For the remaining operational legacy request/response details, see `docs/daemon-api.json`. The
-generated structured lifecycle description is `docs/lifecycle-api-v1.json`.
+Lifecycle and interface:
+
+- `GET /health` - public
+- `GET /v1/status` - read
+- `POST /v1/admin/wallet/initialize` - admin, idem, no-store
+- `POST /v1/admin/wallet/recovery-material` - admin, no-store
+- `POST /v1/admin/session/start` - admin, idem
+- `POST /v1/admin/session/stop` - admin, idem
+- `POST /v1/admin/process/stop` - admin, idem
+- `GET /v1/openapi.json` - read
+
+Balances and Known Mints:
+
+- `GET /v1/balances?mintUrl=…&unit=…&trustedOnly=` - read; repeatable `mintUrl` and `unit` filters
+- `GET /v1/mints?trustedOnly=` - read
+- `POST /v1/mints` `{ mintUrl, trusted? }` - admin, idem; idempotent registration, `200`
+- `POST /v1/mints/trust` and `/v1/mints/untrust` `{ mintUrl }` - admin, idem; `404` when unknown
+- `GET /v1/mints/info?mintUrl=` - read; may refresh stale metadata
+- `GET /v1/mints/payment-method-capabilities?mintUrl=` - read
+
+Quotes (`{type}` is `mint` or `melt`; a Quote is addressed by `quoteId` and `mintUrl`):
+
+- `POST /v1/quotes/mint` - admin, idem, `201`; `bolt11` `{ amount, unit?, mintUrl?, locked? }`,
+  `bolt12` `{ amount?, unit?, mintUrl?, description? }`, or `onchain` `{ unit?, mintUrl? }`
+- `POST /v1/quotes/melt` - admin, idem, `201`; `bolt11` `{ invoice, amountSats? }`, `bolt12`
+  `{ offer, amountSats? }`, or `onchain` `{ address, amountSats }`, each with `unit?` (the funding
+  unit, default `sat`) and `mintUrl?`. `amountSats` is always denominated in satoshis.
+- `GET /v1/quotes/{type}/pending?method=&offset=&limit=` - read
+- `GET /v1/quotes/{type}/{quoteId}?mintUrl=` - read
+- `POST /v1/quotes/{type}/{quoteId}/refresh?mintUrl=` - admin, idem
+
+Operations (`{id}` is Coco's Operation ID; collections accept `offset` and `limit`):
+
+- Mint: `POST /v1/operations/mint` `{ mintUrl, quoteId, amount }` (admin, idem, `201`, yields a
+  `pending` Operation); `GET /v1/operations/mint/pending`, `/in-flight`, `/{id}` (read);
+  `POST /v1/operations/mint/{id}/execute`, `/refresh` (admin, idem)
+- Melt: `POST /v1/operations/melt` `{ mintUrl, quoteId, feeIndex? }` (admin, idem, `201`;
+  `feeIndex` is required for on-chain Quotes and rejected otherwise);
+  `GET /v1/operations/melt/prepared`, `/in-flight`, `/{id}` (read); `GET /v1/operations/melt/{id}/result`
+  (read, no-store; the preimage or outpoint); `POST /v1/operations/melt/{id}/execute` (admin, idem,
+  no-store), `/cancel`, `/refresh`, `/reclaim` (admin, idem)
+- Send: `POST /v1/operations/send` `{ amount, unit?, mintUrl?, forceSwap? }` or
+  `{ source: { type: "payment-request", request }, mintUrl?, amount?, unit? }` (admin, idem, `201`;
+  `unit` requires `amount`); `GET /v1/operations/send/prepared`, `/in-flight`, `/{id}` (read);
+  `GET /v1/operations/send/{id}/result` (admin, no-store; the token);
+  `POST /v1/operations/send/{id}/execute` (admin, idem, no-store; `{ operation, result: { token } }`),
+  `/cancel`, `/refresh`, `/reclaim` (admin, idem)
+- Receive: `POST /v1/operations/receive` `{ token }` (admin, idem, `201`);
+  `GET /v1/operations/receive/prepared`, `/in-flight`, `/{id}` (read);
+  `POST /v1/operations/receive/{id}/execute`, `/cancel`, `/refresh` (admin, idem)
+
+Payment Requests, history, and events:
+
+- `POST /v1/payment-requests/evaluate` `{ request }` - read
+- `GET /v1/history?offset=&limit=` - read; newest first
+- `GET /v1/history/{historyEntryId}` - read; `send:{operationId}` or `legacy:{legacyHistoryId}`
+- `GET /v1/events` - read, no-store; server-sent invalidations
+
+Documents omit proofs, secrets, output data, Mint error text, and history tokens, requests, and
+metadata. Only the Send execute and result responses contain an encoded token.
+
+NPC extension:
+
+- `GET /npc/address` - read
+- `POST /npc/username` - admin

@@ -2,13 +2,50 @@ import { program } from 'commander';
 
 import { loadClientCredential } from './credentials.js';
 import {
+  balancesSchema,
+  executeMeltOperationResponseSchema,
+  executeSendOperationResponseSchema,
   healthSchema,
+  historyPageSchema,
   initializeWalletResponseSchema,
+  knownMintSchema,
+  knownMintsSchema,
   lifecycleStatusSchema,
+  meltOperationSchema,
+  meltQuoteSchema,
+  mintInformationSchema,
+  mintOperationSchema,
+  mintQuoteSchema,
+  paymentRequestEvaluationSchema,
   processShutdownResponseSchema,
+  receiveOperationSchema,
+  resourceEventSchema,
+  sendOperationSchema,
   v1ErrorSchema,
   walletRecoveryMaterialResponseSchema,
+  type BalancesDocument,
+  type CreateMeltQuoteRequest,
+  type CreateMintQuoteRequest,
+  type ExecuteMeltOperationResponse,
+  type ExecuteSendOperationResponse,
   type HealthDocument,
+  type HistoryDocument,
+  type KnownMintDocument,
+  type KnownMintsDocument,
+  type MeltOperationDocument,
+  type MeltQuoteDocument,
+  type MintInformationDocument,
+  type MintOperationDocument,
+  type MintQuoteDocument,
+  type PageDocument,
+  type PaymentRequestEvaluationDocument,
+  type PrepareMeltOperationRequest,
+  type PrepareMintOperationRequest,
+  type PrepareSendOperationRequest,
+  type ReceiveOperationDocument,
+  type RegisterMintRequest,
+  type ResourceEventDocument,
+  type SendOperationDocument,
   type InitializeWalletRequest,
   type InitializeWalletResponseDocument,
   type LifecycleStatusDocument,
@@ -60,6 +97,23 @@ export interface V1Client {
   startSession(input: StartSessionRequest): Promise<LifecycleStatusDocument>;
   stopSession(): Promise<LifecycleStatusDocument>;
   stopProcess(): Promise<ProcessShutdownResponseDocument>;
+  balances(): Promise<BalancesDocument>;
+  listMints(query?: { trustedOnly?: boolean }): Promise<KnownMintsDocument>;
+  registerMint(input: RegisterMintRequest): Promise<KnownMintDocument>;
+  getMintInfo(mintUrl: string): Promise<MintInformationDocument>;
+  createMintQuote(input: CreateMintQuoteRequest): Promise<MintQuoteDocument>;
+  createMeltQuote(input: CreateMeltQuoteRequest): Promise<MeltQuoteDocument>;
+  prepareMint(input: PrepareMintOperationRequest): Promise<MintOperationDocument>;
+  prepareMelt(input: PrepareMeltOperationRequest): Promise<MeltOperationDocument>;
+  executeMelt(operationId: string): Promise<ExecuteMeltOperationResponse>;
+  prepareSend(input: PrepareSendOperationRequest): Promise<SendOperationDocument>;
+  executeSend(operationId: string): Promise<ExecuteSendOperationResponse>;
+  prepareReceive(token: string): Promise<ReceiveOperationDocument>;
+  executeReceive(operationId: string): Promise<ReceiveOperationDocument>;
+  evaluatePaymentRequest(request: string): Promise<PaymentRequestEvaluationDocument>;
+  listHistory(query: { offset: number; limit: number }): Promise<PageDocument<HistoryDocument>>;
+  /** Streams resource events until the stream ends or `signal` aborts. */
+  watchEvents(onEvent: (event: ResourceEventDocument) => void, signal?: AbortSignal): Promise<void>;
 }
 
 export class V1ClientError extends Error {
@@ -143,7 +197,179 @@ export function createV1Client(options: ClientCredentialOptions = {}): V1Client 
         processShutdownResponseSchema,
         credentialFile,
       ),
+    balances: () => get('/v1/balances', balancesSchema),
+    listMints: (query = {}) =>
+      get(
+        withQuery(
+          '/v1/mints',
+          query.trustedOnly === undefined ? {} : { trustedOnly: `${query.trustedOnly}` },
+        ),
+        knownMintsSchema,
+      ),
+    registerMint: (input) => post('/v1/mints', input, knownMintSchema),
+    getMintInfo: (mintUrl) => get(withQuery('/v1/mints/info', { mintUrl }), mintInformationSchema),
+    createMintQuote: (input) => post('/v1/quotes/mint', input, mintQuoteSchema),
+    createMeltQuote: (input) => post('/v1/quotes/melt', input, meltQuoteSchema),
+    prepareMint: (input) => post('/v1/operations/mint', input, mintOperationSchema),
+    prepareMelt: (input) => post('/v1/operations/melt', input, meltOperationSchema),
+    executeMelt: (operationId) =>
+      post(
+        operationPath('melt', operationId, 'execute'),
+        undefined,
+        executeMeltOperationResponseSchema,
+      ),
+    prepareSend: (input) => post('/v1/operations/send', input, sendOperationSchema),
+    executeSend: (operationId) =>
+      post(
+        operationPath('send', operationId, 'execute'),
+        undefined,
+        executeSendOperationResponseSchema,
+      ),
+    prepareReceive: (token) => post('/v1/operations/receive', { token }, receiveOperationSchema),
+    executeReceive: (operationId) =>
+      post(operationPath('receive', operationId, 'execute'), undefined, receiveOperationSchema),
+    evaluatePaymentRequest: (request) =>
+      post('/v1/payment-requests/evaluate', { request }, paymentRequestEvaluationSchema),
+    listHistory: ({ offset, limit }) =>
+      get(withQuery('/v1/history', { offset: `${offset}`, limit: `${limit}` }), historyPageSchema),
+    watchEvents: (onEvent, signal) => watchV1Events(endpoint, credentialFile, onEvent, signal),
   };
+
+  function get<T>(path: string, schema: RuntimeSchema<T>): Promise<T> {
+    return requestV1(endpoint, path, 'GET', undefined, schema, credentialFile);
+  }
+
+  function post<T>(path: string, body: object | undefined, schema: RuntimeSchema<T>): Promise<T> {
+    return requestV1(endpoint, path, 'POST', body, schema, credentialFile);
+  }
+}
+
+function withQuery(path: string, query: Record<string, string>): string {
+  const search = new URLSearchParams(query).toString();
+  return search ? `${path}?${search}` : path;
+}
+
+function operationPath(
+  type: 'mint' | 'melt' | 'send' | 'receive',
+  operationId: string,
+  command: string,
+): string {
+  return `/v1/operations/${type}/${encodeURIComponent(operationId)}/${command}`;
+}
+
+/** Registers a Known Mint and trusts it in one request. */
+export function registerTrustedMint(client: V1Client, mintUrl: string): Promise<KnownMintDocument> {
+  return client.registerMint({ mintUrl, trusted: true });
+}
+
+/** Creates a BOLT11 Mint Quote and its pending Mint Operation; returns the invoice to pay. */
+export async function requestBolt11Receive(
+  client: V1Client,
+  input: { amount: string; mintUrl?: string },
+): Promise<string> {
+  const quote = await client.createMintQuote({
+    method: 'bolt11',
+    amount: input.amount,
+    unit: 'sat',
+    ...(input.mintUrl !== undefined ? { mintUrl: input.mintUrl } : {}),
+  });
+  await client.prepareMint({
+    mintUrl: quote.mintUrl,
+    quoteId: quote.quoteId,
+    amount: input.amount,
+  });
+  return quote.request;
+}
+
+/** Prepares and executes a Cashu Send; returns the encoded token. */
+export async function sendCashu(
+  client: V1Client,
+  input: { amount: string; mintUrl?: string },
+): Promise<string> {
+  const prepared = await client.prepareSend({
+    amount: input.amount,
+    unit: 'sat',
+    ...(input.mintUrl !== undefined ? { mintUrl: input.mintUrl } : {}),
+  });
+  const executed = await executeOrExplain('Send', prepared.id, () =>
+    client.executeSend(prepared.id),
+  );
+  return executed.result.token;
+}
+
+/** Prepares and executes a BOLT11 Melt; reports whether the payment settled. */
+export async function payBolt11Invoice(
+  client: V1Client,
+  input: { invoice: string; mintUrl?: string },
+): Promise<string> {
+  const quote = await client.createMeltQuote({
+    method: 'bolt11',
+    invoice: input.invoice,
+    ...(input.mintUrl !== undefined ? { mintUrl: input.mintUrl } : {}),
+  });
+  const prepared = await client.prepareMelt({ mintUrl: quote.mintUrl, quoteId: quote.quoteId });
+  const { operation } = await executeOrExplain('Melt', prepared.id, () =>
+    client.executeMelt(prepared.id),
+  );
+  return operation.state === 'finalized'
+    ? 'Invoice paid'
+    : `Payment ${operation.state}; Melt Operation ${operation.id}`;
+}
+
+/** Prepares and executes a Cashu Receive. */
+export async function receiveCashu(client: V1Client, token: string): Promise<string> {
+  const prepared = await client.prepareReceive(token);
+  const received = await executeOrExplain('Receive', prepared.id, () =>
+    client.executeReceive(prepared.id),
+  );
+  return `Received ${received.amount} ${received.unit}`;
+}
+
+/** Describes an outgoing Payment Request for a person. */
+export async function describePaymentRequest(client: V1Client, request: string): Promise<string> {
+  const evaluation = await client.evaluatePaymentRequest(request);
+  const amount =
+    evaluation.amount === undefined
+      ? 'an amount you choose'
+      : `${evaluation.amount} ${evaluation.unit}`;
+  const mints =
+    evaluation.allowedMints.length > 0
+      ? `from one of ${evaluation.allowedMints.length} Mints`
+      : 'from any Mint';
+  const payable =
+    evaluation.payableMints.length > 0 ? evaluation.payableMints.join('\n') : 'No payable Mint';
+  return `Request requires payment of ${amount} ${mints} over ${evaluation.transport.type} transport.\nPayable Mints:\n${payable}`;
+}
+
+/** Pays an in-band Payment Request; returns the X-Cashu header carrying the token. */
+export async function payPaymentRequest(client: V1Client, request: string): Promise<string> {
+  const prepared = await client.prepareSend({ source: { type: 'payment-request', request } });
+  const executed = await executeOrExplain('Send', prepared.id, () =>
+    client.executeSend(prepared.id),
+  );
+  return `X-Cashu: ${executed.result.token}`;
+}
+
+/** Names the prepared Operation when execution fails so the person can inspect or cancel it. */
+async function executeOrExplain<T>(
+  label: 'Send' | 'Melt' | 'Receive',
+  operationId: string,
+  execute: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await execute();
+  } catch (error) {
+    if (error instanceof V1ClientError) {
+      throw new V1ClientError(
+        `${error.message}; ${label} Operation ${operationId} was prepared`,
+        error.status,
+        error.code,
+        error.retryable,
+        error.details,
+      );
+    }
+    throw error;
+  }
 }
 
 async function callDaemon(path: string, options: DaemonCallOptions = {}): Promise<CommandResponse> {
@@ -278,6 +504,21 @@ export async function handleV1Command<T>(
   }
 }
 
+/** Runs a Wallet command once any in-progress Coco Session transition has finished. */
+export async function handleWalletCommand<T>(
+  action: (client: V1Client) => Promise<T>,
+  options: ClientCredentialOptions = {},
+): Promise<T> {
+  try {
+    await ensureDaemonRunning(options);
+    const client = createV1Client(options);
+    await waitForOperationalSession(client);
+    return await action(client);
+  } catch (error) {
+    exitForClientError(error);
+  }
+}
+
 export async function handleDaemonCommand(
   path: string,
   options: DaemonCallOptions = {},
@@ -302,46 +543,43 @@ export async function handleDaemonCommand(
   }
 }
 
-export async function callDaemonStream(
-  path: string,
-  onData: (data: unknown) => void,
-  options: ClientCredentialOptions = {},
+/** Reads `/v1/events`, delivering each validated event document in order. */
+async function watchV1Events(
+  endpoint: ClientEndpoint,
+  credentialFile: string | undefined,
+  onEvent: (event: ResourceEventDocument) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
-  await ensureDaemonRunning(options);
-  await waitForOperationalSession(createV1Client(options));
-  const endpoint = configuredClientEndpoint(options.url);
-  const response = await requestDaemon(endpoint, path, options);
-
+  const response = await fetch(new URL('/v1/events', `${endpoint.url}/`), {
+    headers: await buildRequestHeaders('/v1/events', credentialFile ?? CLIENT_CREDENTIAL_FILE),
+    signal,
+  });
   if (!response.ok) {
-    const errorData = (await response.json()) as { error?: string };
-    throw new Error(errorData.error || `HTTP ${response.status}`);
+    throw await toClientError(response);
   }
-
   if (!response.body) {
-    throw new Error('No response body');
+    throw new Error('The event stream has no body');
   }
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
-
   try {
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
-
+      if (done) return;
       buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          try {
-            onData(JSON.parse(line.slice(6)));
-          } catch {
-            // Ignore malformed event data and continue reading the stream.
-          }
-        }
+      let boundary = buffer.indexOf('\n\n');
+      while (boundary !== -1) {
+        const frame = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        const data = frame
+          .split('\n')
+          .filter((line) => line.startsWith('data: '))
+          .map((line) => line.slice('data: '.length))
+          .join('\n');
+        if (data) onEvent(resourceEventSchema.parse(JSON.parse(data)));
+        boundary = buffer.indexOf('\n\n');
       }
     }
   } finally {
@@ -376,31 +614,31 @@ async function requestV1<T>(
   credentialFile = CLIENT_CREDENTIAL_FILE,
 ): Promise<T> {
   const response = await requestDaemon(endpoint, path, { method, body, credentialFile });
-  const document: unknown = await response.json();
-
   if (!response.ok) {
-    try {
-      const error = v1ErrorSchema.parse(document).error;
-      throw new V1ClientError(
-        error.message,
-        response.status,
-        error.code,
-        error.retryable,
-        error.details,
-      );
-    } catch (error) {
-      if (error instanceof V1ClientError) {
-        throw error;
-      }
-      throw new Error(`HTTP ${response.status}: invalid v1 error response`);
-    }
+    throw await toClientError(response);
   }
+  const document: unknown = await response.json();
 
   try {
     return schema.parse(document);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Invalid ${schema.name} response: ${message}`);
+  }
+}
+
+async function toClientError(response: Response): Promise<Error> {
+  try {
+    const error = v1ErrorSchema.parse(await response.json()).error;
+    return new V1ClientError(
+      error.message,
+      response.status,
+      error.code,
+      error.retryable,
+      error.details,
+    );
+  } catch {
+    return new Error(`HTTP ${response.status}: invalid v1 error response`);
   }
 }
 

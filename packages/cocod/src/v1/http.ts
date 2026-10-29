@@ -4,10 +4,23 @@ import type { AppLogger } from '../utils/logger.js';
 import {
   defineV1Route,
   V1HttpResponse,
-  type V1LifecycleRuntime,
   type V1RouteDefinition,
   type V1RouteMetadata,
+  type V1Runtime,
 } from './contract.js';
+import { generateV1OpenApiDocument } from './openapi.js';
+import { openApiDocumentSchema } from './resource-schemas.js';
+import { balanceRoutes } from './resources/balances.js';
+import { EVENT_KEEP_ALIVE_INTERVAL_MS, eventRoutes } from './resources/events.js';
+import { historyRoutes } from './resources/history.js';
+import { meltOperationRoutes } from './resources/melt-operations.js';
+import { mintOperationRoutes } from './resources/mint-operations.js';
+import { mintRoutes } from './resources/mints.js';
+import { paymentRequestRoutes } from './resources/payment-requests.js';
+import { quoteRoutes } from './resources/quotes.js';
+import { receiveOperationRoutes } from './resources/receive-operations.js';
+import { sendOperationRoutes } from './resources/send-operations.js';
+import { defineResourceRoute, type ResourceRoute } from './resources/shared.js';
 import {
   healthSchema,
   initializeWalletRequestSchema,
@@ -34,8 +47,10 @@ import {
 } from './schema.js';
 
 export * from './contract.js';
+export * from './resource-schemas.js';
 export { buildV1FallbackHandler, buildV1Routes } from './runner.js';
 export * from './schema.js';
+export { generateV1OpenApiDocument, type V1OpenApiDocument } from './openapi.js';
 
 const HEALTH_ROUTE = {
   method: 'GET',
@@ -117,7 +132,42 @@ const STOP_PROCESS_ROUTE = {
   responseCacheControl: null,
 } as const satisfies V1RouteMetadata<ProcessShutdownRequest, ProcessShutdownResponseDocument>;
 
-/** Returns lifecycle route metadata without constructing a runtime or executable handlers. */
+const OPENAPI_ROUTE: ResourceRoute = defineResourceRoute({
+  method: 'GET',
+  path: '/v1/openapi.json',
+  capability: 'wallet:read',
+  summary: 'OpenAPI description of this interface',
+  requestSchema: noBodySchema,
+  responseSchema: openApiDocumentSchema,
+  handler: (_input, _context, { daemonVersion }) =>
+    generateV1OpenApiDocument(createV1RouteMetadata(), daemonVersion) as unknown as Record<
+      string,
+      unknown
+    >,
+});
+
+/** Wallet resources served only while a Coco Session is running, in documentation order. */
+const RESOURCE_ROUTES: readonly ResourceRoute[] = [
+  OPENAPI_ROUTE,
+  ...balanceRoutes,
+  ...mintRoutes,
+  ...quoteRoutes,
+  ...mintOperationRoutes,
+  ...meltOperationRoutes,
+  ...sendOperationRoutes,
+  ...receiveOperationRoutes,
+  ...paymentRequestRoutes,
+  ...historyRoutes,
+  ...eventRoutes,
+];
+
+/** Options for binding route handlers to a Cocod Process. */
+export interface V1RouteOptions {
+  /** Event-stream keep-alive and credential re-check interval; defaults to five seconds. */
+  eventKeepAliveIntervalMs?: number;
+}
+
+/** Returns all v1 route metadata without constructing a runtime or executable handlers. */
 export function createV1RouteMetadata(): Array<V1RouteMetadata> {
   return [
     HEALTH_ROUTE,
@@ -127,16 +177,26 @@ export function createV1RouteMetadata(): Array<V1RouteMetadata> {
     START_SESSION_ROUTE,
     STOP_SESSION_ROUTE,
     STOP_PROCESS_ROUTE,
+    ...RESOURCE_ROUTES.map((route) => route.metadata),
   ];
 }
 
-/** Binds the transport-independent Cocod lifecycle runtime to the v1 route metadata. */
+/** Binds the transport-independent Cocod runtime to every v1 route. */
 export function createV1RouteDefinitions(
-  runtime: V1LifecycleRuntime,
+  runtime: V1Runtime,
   daemonVersion: string,
   processShutdown: Pick<ProcessShutdownCoordinator, 'request'>,
   logger?: AppLogger,
+  options: V1RouteOptions = {},
 ): Array<V1RouteDefinition> {
+  const resources = RESOURCE_ROUTES.map((route) =>
+    route.bind({
+      runtime,
+      daemonVersion,
+      logger,
+      eventKeepAliveIntervalMs: options.eventKeepAliveIntervalMs ?? EVENT_KEEP_ALIVE_INTERVAL_MS,
+    }),
+  );
   const health = defineV1Route({
     ...HEALTH_ROUTE,
     handler: () => ({ status: 'ok', interfaceVersion: '1' }),
@@ -200,6 +260,7 @@ export function createV1RouteDefinitions(
     startSession,
     stopSession,
     stopProcess,
+    ...resources,
   ];
 }
 

@@ -2,10 +2,18 @@ import { startDaemon } from './daemon';
 import { AdministrativeCredential } from './credentials.js';
 import {
   assertHostLocalOperation,
-  program,
+  createV1Client,
+  describePaymentRequest,
   handleDaemonCommand,
-  callDaemonStream,
   handleV1Command,
+  handleWalletCommand,
+  payBolt11Invoice,
+  payPaymentRequest,
+  program,
+  receiveCashu,
+  registerTrustedMint,
+  requestBolt11Receive,
+  sendCashu,
   waitForSessionTransition,
 } from './cli-shared';
 import type { LifecycleStatusDocument } from './v1/http.js';
@@ -92,12 +100,11 @@ sessionCmd
     printLifecycleStatus(status);
   });
 
-// Balance - simple GET command
 program
   .command('balance')
-  .description('Get wallet balance')
+  .description('Show spendable, reserved, and total balances by Mint and unit')
   .action(async () => {
-    await handleDaemonCommand('/balance');
+    printJson(await handleWalletCommand((client) => client.balances()));
   });
 
 // Receive - nested subcommands
@@ -107,10 +114,7 @@ receiveCmd
   .command('cashu <token>')
   .description('Receive Cashu token')
   .action(async (token: string) => {
-    await handleDaemonCommand('/receive/cashu', {
-      method: 'POST',
-      body: { token },
-    });
+    console.log(await handleWalletCommand((client) => receiveCashu(client, token)));
   });
 
 receiveCmd
@@ -118,10 +122,11 @@ receiveCmd
   .description('Create Lightning invoice to receive tokens')
   .option('--mint-url <url>', 'Mint URL to use (defaults to the mint URL configured during init)')
   .action(async (amount: string, options: { mintUrl?: string }) => {
-    await handleDaemonCommand('/receive/bolt11', {
-      method: 'POST',
-      body: { amount: parseInt(amount), mintUrl: options.mintUrl },
-    });
+    console.log(
+      await handleWalletCommand((client) =>
+        requestBolt11Receive(client, { amount, mintUrl: options.mintUrl }),
+      ),
+    );
   });
 
 // Send - nested subcommands
@@ -132,10 +137,11 @@ sendCmd
   .description('Create Cashu token to send')
   .option('--mint-url <url>', 'Mint URL to use (defaults to the mint URL configured during init)')
   .action(async (amount: string, options: { mintUrl?: string }) => {
-    await handleDaemonCommand('/send/cashu', {
-      method: 'POST',
-      body: { amount: parseInt(amount), mintUrl: options.mintUrl },
-    });
+    console.log(
+      await handleWalletCommand((client) =>
+        sendCashu(client, { amount, mintUrl: options.mintUrl }),
+      ),
+    );
   });
 
 sendCmd
@@ -143,10 +149,11 @@ sendCmd
   .description('Pay Lightning invoice')
   .option('--mint-url <url>', 'Mint URL to use (defaults to the mint URL configured during init)')
   .action(async (invoice: string, options: { mintUrl?: string }) => {
-    await handleDaemonCommand('/send/bolt11', {
-      method: 'POST',
-      body: { invoice, mintUrl: options.mintUrl },
-    });
+    console.log(
+      await handleWalletCommand((client) =>
+        payBolt11Invoice(client, { invoice, mintUrl: options.mintUrl }),
+      ),
+    );
   });
 
 program
@@ -230,29 +237,25 @@ const mintsCmd = program.command('mints').description('Mints operations');
 
 mintsCmd
   .command('add <url>')
-  .description('Add a mint URL')
+  .description('Register and trust a Mint')
   .action(async (url: string) => {
-    await handleDaemonCommand('/mints/add', {
-      method: 'POST',
-      body: { url },
-    });
+    const mint = await handleWalletCommand((client) => registerTrustedMint(client, url));
+    console.log(`Trusted Mint: ${mint.mintUrl}`);
   });
 
 mintsCmd
   .command('list')
-  .description('List configured mints')
+  .description('List trusted Mints')
   .action(async () => {
-    await handleDaemonCommand('/mints/list');
+    const mints = await handleWalletCommand((client) => client.listMints({ trustedOnly: true }));
+    console.log(mints.items.map((mint) => mint.mintUrl).join('\n'));
   });
 
 mintsCmd
   .command('info <url>')
-  .description('Get mint info')
+  .description('Get Mint information')
   .action(async (url: string) => {
-    await handleDaemonCommand('/mints/info', {
-      method: 'POST',
-      body: { url },
-    });
+    printJson((await handleWalletCommand((client) => client.getMintInfo(url))).info);
   });
 
 // NPC - nested subcommands
@@ -286,20 +289,14 @@ xCashuCmd
   .command('parse <request>')
   .description('Parse x-cashu request')
   .action(async (request: string) => {
-    await handleDaemonCommand('/x-cashu/parse', {
-      method: 'POST',
-      body: { request },
-    });
+    console.log(await handleWalletCommand((client) => describePaymentRequest(client, request)));
   });
 
 xCashuCmd
   .command('handle <request>')
   .description('Handle x-cashu request. Returns a X-Cashu header')
   .action(async (request: string) => {
-    await handleDaemonCommand('/x-cashu/handle', {
-      method: 'POST',
-      body: { request },
-    });
+    console.log(await handleWalletCommand((client) => payPaymentRequest(client, request)));
   });
 
 // History - with pagination and watch options
@@ -333,19 +330,13 @@ program
       process.exit(1);
     }
 
-    // Fetch paginated history first (pass params as query string, not body)
-    const queryParams = new URLSearchParams();
-    queryParams.set('offset', offset.toString());
-    queryParams.set('limit', limit.toString());
-    const path = `/history?${queryParams.toString()}`;
+    printJson((await handleWalletCommand((client) => client.listHistory({ offset, limit }))).items);
 
-    await handleDaemonCommand(path);
-
-    // If watch is enabled, continue streaming after initial fetch
+    // Stream later history entries; the stream ends when the Coco Session stops.
     if (options.watch) {
       try {
-        await callDaemonStream('/events', (data) => {
-          console.log(JSON.stringify(data));
+        await createV1Client().watchEvents((event) => {
+          if (event.type === 'history.updated') console.log(JSON.stringify(event.data));
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -371,6 +362,10 @@ function requireHostLocalOperation(operation: string): void {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
   }
+}
+
+function printJson(value: unknown): void {
+  console.log(JSON.stringify(value, null, 2));
 }
 
 function printLifecycleStatus(status: LifecycleStatusDocument): void {
