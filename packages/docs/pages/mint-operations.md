@@ -347,6 +347,12 @@ Batches publish `batch-mint-op:executing`, `batch-mint-op:finalized` and
 `batch-mint-op:failed` with the operation and its ordered members, after the
 change commits. They never emit `mint-op:*` events.
 
+Automatic claiming creates Batch Mint Operations by default, so a quote paid
+while the processor runs may settle through these events rather than
+`mint-op:*`. Use `ops.mint.batch.listByQuote({ mintUrl, quoteId })` alongside
+`ops.mint.listByQuote` to find its claim, or set
+`processors.mintOperationProcessor.batchMintQuotes: false`.
+
 ```ts
 coco.on('batch-mint-op:finalized', ({ operation }) => {
   console.log(

@@ -22,10 +22,16 @@ type QuoteSpec = Omit<FakeMintQuote, 'request' | 'expiry' | 'amountIssued' | 'un
  * processors are disabled so tests drive every effect explicitly.
  */
 export async function createBatchMintHarness(
-  options: { repo?: MemoryRepositories; mint?: FakeBatchMint } = {},
+  options: {
+    repo?: MemoryRepositories;
+    mint?: FakeBatchMint;
+    /** NUT-29 settings the mint advertises when it is added. */
+    nut29?: FakeBatchMint['nut29'];
+  } = {},
 ) {
   const mint = options.mint ?? new FakeBatchMint();
   if (!options.mint) mint.install();
+  if (options.nut29 !== undefined) mint.nut29 = options.nut29;
   const repo = options.repo ?? new MemoryRepositories();
   const coco = await initializeCoco({
     repo,

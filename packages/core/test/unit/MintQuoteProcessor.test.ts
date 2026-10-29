@@ -92,6 +92,7 @@ describe('MintOperationProcessor', () => {
         baseRetryDelayMs: TEST_RETRY_DELAY,
         maxRetries: 3,
         initialEnqueueDelayMs: TEST_INITIAL_DELAY,
+        batchMintQuotes: false,
       },
     );
   });
@@ -147,6 +148,7 @@ describe('MintOperationProcessor', () => {
         baseRetryDelayMs: TEST_RETRY_DELAY,
         maxRetries: 3,
         initialEnqueueDelayMs: TEST_INITIAL_DELAY,
+        batchMintQuotes: false,
       },
     );
     await processor.start();
@@ -194,6 +196,7 @@ describe('MintOperationProcessor', () => {
         baseRetryDelayMs: TEST_RETRY_DELAY,
         maxRetries: 3,
         initialEnqueueDelayMs: TEST_INITIAL_DELAY,
+        batchMintQuotes: false,
       },
     );
 
@@ -262,6 +265,7 @@ describe('MintOperationProcessor', () => {
         baseRetryDelayMs: TEST_RETRY_DELAY,
         maxRetries: 3,
         initialEnqueueDelayMs: TEST_INITIAL_DELAY,
+        batchMintQuotes: false,
       },
     );
 
@@ -294,6 +298,7 @@ describe('MintOperationProcessor', () => {
         baseRetryDelayMs: TEST_RETRY_DELAY,
         maxRetries: 3,
         initialEnqueueDelayMs: TEST_INITIAL_DELAY,
+        batchMintQuotes: false,
       },
     );
 
@@ -327,6 +332,7 @@ describe('MintOperationProcessor', () => {
         baseRetryDelayMs: TEST_RETRY_DELAY,
         maxRetries: 3,
         initialEnqueueDelayMs: TEST_INITIAL_DELAY,
+        batchMintQuotes: false,
         autoClaimMintQuotes: false,
       },
     );
@@ -419,6 +425,7 @@ describe('MintOperationProcessor', () => {
         baseRetryDelayMs: TEST_RETRY_DELAY,
         maxRetries: 3,
         initialEnqueueDelayMs: TEST_INITIAL_DELAY,
+        batchMintQuotes: false,
       },
     );
     await processor.start();
@@ -463,6 +470,7 @@ describe('MintOperationProcessor', () => {
         baseRetryDelayMs: TEST_RETRY_DELAY,
         maxRetries: 3,
         initialEnqueueDelayMs: TEST_INITIAL_DELAY,
+        batchMintQuotes: false,
       },
     );
     await processor.start();
@@ -512,6 +520,7 @@ describe('MintOperationProcessor', () => {
         baseRetryDelayMs: TEST_RETRY_DELAY,
         maxRetries: 3,
         initialEnqueueDelayMs: TEST_INITIAL_DELAY,
+        batchMintQuotes: false,
       },
     );
 
@@ -571,6 +580,7 @@ describe('MintOperationProcessor', () => {
         baseRetryDelayMs: TEST_RETRY_DELAY,
         maxRetries: 3,
         initialEnqueueDelayMs: TEST_INITIAL_DELAY,
+        batchMintQuotes: false,
       },
     );
 

@@ -266,8 +266,10 @@ Start background watchers or processors to automatically react to changes:
 // Watch mint operation quote updates on startup and while running (default true)
 await manager.enableMintOperationWatcher({ watchExistingPendingOnStart: true });
 
-// Process queued mint operations from live events (auto-enabled by initializeCoco)
-await manager.enableMintOperationProcessor({ processIntervalMs: 3000 });
+// Process queued mint operations from live events (auto-enabled by initializeCoco).
+// Quotes claimed automatically are batched through NUT-29 when the mint supports it
+// (`batchMintQuotes`, default true); `false` claims one mint operation per quote.
+await manager.enableMintOperationProcessor({ processIntervalMs: 3000, batchMintQuotes: true });
 
 // Watch canonical melt quote updates and settle pending melt operations
 await manager.enableMeltQuoteWatcher();
@@ -359,6 +361,9 @@ for setup and storage-security guidance.
   `executing` for `recovery.run()`. Each member keeps its own `type: 'mint'`
   history entry (`batchMintOperationId` set to the batch ID), and batches publish
   `batch-mint-op:executing | finalized | failed` instead of `mint-op:*` events.
+  Automatic claiming uses Batch Mint Operations too unless
+  `processors.mintOperationProcessor.batchMintQuotes` is `false`; see
+  [Coco config](../docs/pages/coco-config.md).
   See [Mint Operations](../docs/pages/mint-operations.md#batch-mint-operations-coco-ops-mint-batch).
 - `melt`: `prepare`, `execute`, `get`, `getByQuote`, `listByQuote`,
   `listPrepared`, `listInFlight`, `refresh`, `cancel`, `reclaim`, `finalize`,

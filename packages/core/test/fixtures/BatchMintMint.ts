@@ -40,6 +40,9 @@ export interface BatchMintRequestBody {
  * - `network`: fail the transport without reaching the mint;
  * - `server`: HTTP 500 without processing;
  * - `short`: issue but return one signature too few (invalid success);
+ * - `unsupported`: HTTP 404 without a NUT code, as from a mint without the endpoint;
+ * - `unparseable` / `wrong-shape`: HTTP 200 with a non-JSON body / without `signatures`;
+ * - `unauthorized` / `rate-limited`: HTTP 401 / 429 without processing;
  * - `{ code }`: reject with a NUT error code without issuing.
  */
 export type BatchMintBehavior =
@@ -48,6 +51,11 @@ export type BatchMintBehavior =
   | 'network'
   | 'server'
   | 'short'
+  | 'unsupported'
+  | 'unparseable'
+  | 'wrong-shape'
+  | 'unauthorized'
+  | 'rate-limited'
   | { code: number; detail?: string };
 
 export type RestoreBehavior = 'all' | 'none' | 'partial' | 'unavailable';
@@ -184,7 +192,14 @@ export class FakeBatchMint {
     if (mintMatch) {
       const result = this.issue(mintMatch[1] as Method, {
         quotes: [body.quote],
-        quote_amounts: [Number(body.amount ?? this.quotes.get(body.quote)?.amount)],
+        // Reusable quotes mint the outputs' total, as NUT-04 requests carry no amount for them.
+        quote_amounts: [
+          Number(
+            body.amount ??
+              this.quotes.get(body.quote)?.amount ??
+              (body.outputs as WireOutput[]).reduce((sum, o) => sum + Number(o.amount), 0),
+          ),
+        ],
         outputs: body.outputs,
         signatures: [body.signature ?? null],
       });
@@ -215,6 +230,11 @@ export class FakeBatchMint {
     const behavior = this.batchBehaviors.shift() ?? 'issue';
     if (behavior === 'network') throw new TypeError('fetch failed');
     if (behavior === 'server') return json({ error: 'internal error' }, 500);
+    if (behavior === 'unsupported') return json({ detail: 'Not Found' }, 404);
+    if (behavior === 'unparseable') return new Response('<html>ok</html>', { status: 200 });
+    if (behavior === 'wrong-shape') return json({ promises: [] });
+    if (behavior === 'unauthorized') return json({ error: 'unauthorized' }, 401);
+    if (behavior === 'rate-limited') return json({ error: 'slow down' }, 429);
     if (typeof behavior === 'object') return error(behavior.code, behavior.detail ?? 'rejected');
     if (new Set(body.quotes).size !== body.quotes.length) return error(11016, 'duplicate quote');
     if (this.nut29?.max_batch_size && body.quotes.length > this.nut29.max_batch_size)

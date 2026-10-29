@@ -1,9 +1,15 @@
-import { Amount, type Proof } from '@cashu/cashu-ts';
+import { Amount, CTSError, type Proof } from '@cashu/cashu-ts';
 import type { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
 import { restoreOutputProofs } from '../../infra/ProofRestore.ts';
 import type { Logger } from '../../logging/Logger.ts';
-import { MintOperationError, ProofValidationError, UnknownMintError } from '../../models/Error.ts';
+import {
+  HttpResponseError,
+  MintOperationError,
+  NetworkError,
+  ProofValidationError,
+  UnknownMintError,
+} from '../../models/Error.ts';
 import { assessMintQuoteClaimability } from '../../models/MintQuoteClaimability.ts';
 import type { QuoteIdentity } from '../../models/QuoteIdentity.ts';
 import { createKeyChain } from '../../proofs/KeysetSelection.ts';
@@ -46,6 +52,27 @@ const DEFINITIVE_REJECTION_CODES = new Set([
   20003, 20007, 20008, 20009,
 ]);
 
+/**
+ * Whether a failed submission shows the mint cannot batch this request at all: `11017` (batch too
+ * large), an unsupported endpoint, or a response that cannot be read as a batch mint result.
+ * Network, authentication, rate-limit and server failures, and other NUT codes, are not evidence.
+ * This classification is independent of whether the outcome is definitive.
+ */
+function isBatchMintIncompatibility(error: unknown): boolean {
+  // MintOperationError extends HttpResponseError, so NUT codes are classified first.
+  if (error instanceof MintOperationError) return error.code === 11017;
+  if (error instanceof NetworkError) return false;
+  if (error instanceof HttpResponseError)
+    return (
+      (error.status >= 200 && error.status < 300) ||
+      error.status === 404 ||
+      error.status === 405 ||
+      error.status === 501
+    );
+  // cashu-ts rejects an unreadable success response (missing or mismatched signatures) this way.
+  return error instanceof CTSError;
+}
+
 export interface ExecuteBatchMintInput {
   mintUrl: string;
   method: MintMethod;
@@ -80,6 +107,8 @@ export class BatchMintOperationService {
   private readonly mintScopedLock: MintScopedLock;
   private readonly operationIdLock: OperationIdLock;
   private recoveryInProgress = false;
+  /** Mint-and-method groups whose batch endpoint proved incompatible during this Coco Session. */
+  private readonly unavailableMethodsByMint = new Map<string, Set<MintMethod>>();
 
   constructor(private readonly dependencies: BatchMintOperationServiceDependencies) {
     this.mintScopedLock = dependencies.mintScopedLock ?? new MintScopedLock();
@@ -159,6 +188,28 @@ export class BatchMintOperationService {
 
   async listInFlight(): Promise<BatchMintOperation[]> {
     return this.dependencies.batchMintQueries.listInFlight();
+  }
+
+  /**
+   * @internal Whether automatic claiming should claim this mint and method through standalone Mint
+   * Operations for the rest of the Coco Session, after a submission showed incompatibility. The
+   * marker is never persisted and is separate from the NUT-29 quote-check marker; explicit
+   * `execute` calls ignore it.
+   */
+  isBatchMintUnavailable(mintUrl: string, method: MintMethod): boolean {
+    return this.unavailableMethodsByMint.get(normalizeMintUrl(mintUrl))?.has(method) === true;
+  }
+
+  private markBatchMintUnavailable(mintUrl: string, method: MintMethod, error: unknown): void {
+    const methods = this.unavailableMethodsByMint.get(mintUrl) ?? new Set<MintMethod>();
+    if (methods.has(method)) return;
+    methods.add(method);
+    this.unavailableMethodsByMint.set(mintUrl, methods);
+    this.dependencies.logger?.warn('Disabling automatic batch minting for the Coco Session', {
+      mintUrl,
+      method,
+      error: message(error),
+    });
   }
 
   isRecoveryInProgress(): boolean {
@@ -278,6 +329,7 @@ export class BatchMintOperationService {
   /** Send exactly the persisted request through cashu-ts and settle its outcome. */
   private async submit(operation: ExecutingBatchMintOperation): Promise<BatchMintOperation> {
     let proofs: Proof[];
+    let submitted = false;
     try {
       const { wallet } = await this.dependencies.walletService.getWalletWithActiveKeysetId(
         operation.mintUrl,
@@ -302,6 +354,7 @@ export class BatchMintOperationService {
       )
         throw new Error('Prepared Batch Mint outputs differ from the persisted request');
       const signatures = operation.members.map((member) => member.signature);
+      submitted = true;
       proofs = await wallet.completeBatchMint({
         ...preview,
         payload: {
@@ -313,6 +366,8 @@ export class BatchMintOperationService {
         legacySignatures: undefined,
       });
     } catch (error) {
+      if (submitted && isBatchMintIncompatibility(error))
+        this.markBatchMintUnavailable(operation.mintUrl, operation.method, error);
       if (error instanceof MintOperationError && DEFINITIVE_REJECTION_CODES.has(error.code))
         return this.fail(operation, error.message, String(error.code));
       return this.defer(operation, message(error));

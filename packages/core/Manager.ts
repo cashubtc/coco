@@ -175,6 +175,11 @@ export interface CocoConfig {
       baseRetryDelayMs?: number;
       initialEnqueueDelayMs?: number;
       autoClaimMintQuotes?: boolean;
+      /**
+       * Claim compatible quotes together through Batch Mint Operations (default `true`). `false`
+       * claims one standalone Mint Operation per quote; `ops.mint.batch` stays available.
+       */
+      batchMintQuotes?: boolean;
     };
     /** Melt settlement processor (enabled by default) */
     meltSettlementProcessor?: {
@@ -626,6 +631,7 @@ export class Manager {
     baseRetryDelayMs?: number;
     initialEnqueueDelayMs?: number;
     autoClaimMintQuotes?: boolean;
+    batchMintQuotes?: boolean;
   }): Promise<boolean> {
     if (this.disposed) return false;
     if (this.mintOperationProcessor?.isRunning()) return false;
@@ -1228,6 +1234,19 @@ export class Manager {
     });
     const meltOperationRepository = repositories.meltOperationRepository;
 
+    const batchMintOperationService = new BatchMintOperationService({
+      transactionRunner,
+      batchMintQueries: repositories.batchMint.operationRepository,
+      proofQueries: repositories.proofRepository,
+      quoteLifecycle,
+      mintService,
+      walletService,
+      loadSeed: () => seedService.getSeed(),
+      eventBus: this.eventBus,
+      logger: this.getChildLogger('BatchMintOperationService'),
+      mintScopedLock,
+    });
+
     const mintOperationLogger = this.getChildLogger('MintOperationService');
     const mintOperationService = new MintOperationService({
       handlerProvider: mintHandlerProvider,
@@ -1243,6 +1262,7 @@ export class Manager {
       logger: mintOperationLogger,
       mintScopedLock,
       operationIdLock: destinationOperationLock,
+      batchMintOperations: batchMintOperationService,
     });
     const mintOperationRepository = repositories.mintOperationRepository;
     const mintSwapOperationService = new MintSwapOperationService({
@@ -1264,19 +1284,6 @@ export class Manager {
       mintScopedLock,
       eventBus: this.eventBus,
       logger: this.getChildLogger('MintSwapOperationService'),
-    });
-
-    const batchMintOperationService = new BatchMintOperationService({
-      transactionRunner,
-      batchMintQueries: repositories.batchMint.operationRepository,
-      proofQueries: repositories.proofRepository,
-      quoteLifecycle,
-      mintService,
-      walletService,
-      loadSeed: () => seedService.getSeed(),
-      eventBus: this.eventBus,
-      logger: this.getChildLogger('BatchMintOperationService'),
-      mintScopedLock,
     });
 
     const historyService = new HistoryService(
