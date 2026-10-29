@@ -375,12 +375,12 @@ or quote event. Release is one-way, so a check that admits ordinary work stays v
 commits its stop inside any child lock it holds; the record keeps that diagnosis and is not updated
 by later child resolution.
 
-Ownership is derived from immutable parent child IDs and quote references using durable reverse
-lookups, including terminal and `needs_attention` parents. It is never inferred from an active scan
-or copied to a mutable child flag. Ordinary coordinators check ownership in the same transaction as
-authorization and mutation, and before recovery effects. Parent creation rejects quotes with existing
-ordinary operations, so ownership cannot appear after ordinary effect authorization. Historical
-parents and their children need no migration; historical sibling operations on an owned quote
+The coordinating parent is derived from immutable parent child IDs and quote references using
+durable reverse lookups, including terminal and `needs_attention` parents. It is never inferred from
+an active scan or copied to a mutable child flag. Ordinary coordinators check for a parent in the
+same transaction as authorization and mutation, and before recovery effects. Parent creation rejects quotes with existing
+ordinary operations, so a parent cannot appear after ordinary effect authorization. Historical
+parents and their children need no migration; historical sibling operations on a coordinated quote
 follow the same parent-state rules. Parent coordinators retain direct access to composable
 transitions, whose child-state and proof invariants still apply. Shared child locks remain in place.
 

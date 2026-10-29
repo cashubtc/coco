@@ -480,7 +480,7 @@ export class MeltSettlementProcessor {
         nextContext = undefined;
 
         try {
-          // Mark before reading ownership so a parent stop committed during the read rechecks it.
+          // Mark before reading the parent so a parent stop committed during the read rechecks it.
           this.awaitingParentStopIds.add(operationId);
           if (await this.meltOperations.canResolve(operationId)) {
             this.awaitingParentStopIds.delete(operationId);

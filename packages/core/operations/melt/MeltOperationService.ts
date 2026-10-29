@@ -3,9 +3,9 @@ import { unblindMeltChange } from './MeltChange.ts';
 import {
   allowsOrdinaryWork,
   assertOrdinaryWork,
-  findMintSwapOwner,
+  findMintSwapParent,
   type OrdinaryChildAuthority,
-} from '../mintSwap/MintSwapOwnership.ts';
+} from '../mintSwap/MintSwapChildCoordination.ts';
 import type { MeltOperationRepository, ProofRepository } from '../../repositories';
 import type {
   ExecutingMeltOperation,
@@ -106,7 +106,7 @@ export class MeltOperationService {
    */
   async canResolve(target: string | MeltQuoteRef): Promise<boolean> {
     return this.dependencies.transactionRunner.run(async (tx) =>
-      allowsOrdinaryWork(await findMintSwapOwner(tx, 'melt', target), 'resolve'),
+      allowsOrdinaryWork(await findMintSwapParent(tx, 'melt', target), 'resolve'),
     );
   }
 
@@ -127,7 +127,7 @@ export class MeltOperationService {
     );
   }
 
-  /** Mutations recheck ownership in their own transaction; a command's entry check can go stale. */
+  /** Mutations recheck the parent in their own transaction; a command's entry check can go stale. */
   private runChecked<T>(
     target: string | MeltQuoteRef,
     work: (tx: CoreTransaction) => Promise<T>,

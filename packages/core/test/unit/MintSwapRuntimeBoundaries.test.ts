@@ -381,7 +381,7 @@ describe('Mint Swap real runtime boundaries', () => {
   });
 
   for (const kind of ['mint', 'melt'] as const) {
-    it(`rechecks ${kind} quote ownership after preparation preflight`, async () => {
+    it(`rechecks the ${kind} quote's parent after preparation preflight`, async () => {
       const { manager, fixture } = await setup(undefined, false);
       const entered = deferred();
       const release = deferred();
@@ -409,7 +409,7 @@ describe('Mint Swap real runtime boundaries', () => {
       expect(await manager.ops.melt.listByQuote(fixture.parent.sourceQuote)).toEqual([]);
     });
 
-    it(`refuses parent ownership after an ordinary ${kind} plan commits`, async () => {
+    it(`refuses a parent claim after an ordinary ${kind} plan commits`, async () => {
       const { manager, fixture } = await setup(undefined, false);
       spyOn(MintService.prototype, 'refreshAndCommitIfStale').mockImplementation(
         fixture.dependencies.mintService.refreshAndCommitIfStale,

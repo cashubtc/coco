@@ -14,9 +14,9 @@ export interface MintSwapOperationRepository {
   create(operation: MintSwapOperation): Promise<void>;
   /** Hydrate through the parser and return an independent snapshot. */
   getById(id: string): Promise<MintSwapOperation | null>;
-  /** Durable ownership, including terminal and needs_attention parents; return independent snapshots. */
+  /** Durable parent lookup, including terminal and needs_attention parents; return independent snapshots. */
   getByChild(kind: 'mint' | 'melt', operationId: string): Promise<MintSwapOperation | null>;
-  /** Normalize the mint URL; ownership survives completion and does not depend on child presence. */
+  /** Normalize the mint URL; the parent link survives completion and does not depend on child presence. */
   getByQuote(
     kind: 'mint' | 'melt',
     quote: MintQuoteRef | MeltQuoteRef,

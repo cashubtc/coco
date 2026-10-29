@@ -56,7 +56,7 @@ export function runMintSwapTransitionContract(
       'failed',
       'needs_attention',
     ] as const) {
-      it(`resolves durable child and quote ownership for ${state} parents without child rows`, async () => {
+      it(`resolves durable parents by child and quote for ${state} parents without child rows`, async () => {
         const parent = mintSwapFixtures('historical')[state];
         let repositories = fixture.repositories;
         await repositories.mintSwap.operationRepository.create(parent);

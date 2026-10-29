@@ -113,10 +113,10 @@ it does not change the persisted parent format.
 Mint Swap now exclusively coordinates its children. This revises the earlier permission for
 independent ordinary child commands: they reject with `MintSwapChildOperationError` and the parent
 ID, while reads and shared quote observation remain available. Ordinary processors, quote claiming
-and generic recovery skip owned children and quotes. Durable reverse lookups include terminal and
+and generic recovery skip coordinated children and quotes. Durable reverse lookups include terminal and
 `needs_attention` parents; coordinator transaction guards and parent creation checks protect both
-orderings of an ownership race. Composable transitions retain their existing authority contract for
-parent composition. No persisted format changes or ownership flags are introduced.
+orderings of a parent-creation race. Composable transitions retain their existing authority contract for
+parent composition. No persisted format changes or parent flags are introduced.
 Exclusivity lasts while the parent can act. Children of terminal or `needs_attention` parents return
 to ordinary resolution, so a stopped swap cannot strand reserved proofs or paid quotes; ordinary
 coordination still never authorizes their source payment.

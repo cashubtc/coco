@@ -198,8 +198,8 @@ export const createMintSwap = defineTransition<PreparingMintSwapOperation, MintS
       return current;
     }
     await quotes(tx, input);
-    // Ownership cannot be acquired after an ordinary coordinator has allocated a plan or
-    // authorized effects. The inverse race is rejected by its scoped ownership check.
+    // A parent cannot claim a quote after an ordinary coordinator has allocated a plan or
+    // authorized effects. The inverse race is rejected by its scoped parent check.
     if (
       (await tx.meltOperations.getByQuoteId(input.sourceQuote.mintUrl, input.sourceQuote.quoteId))
         .length

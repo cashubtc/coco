@@ -2,8 +2,8 @@ import { Amount, type Proof } from '@cashu/cashu-ts';
 import {
   allowsOrdinaryWork,
   assertOrdinaryWork,
-  findMintSwapOwner,
-} from '../mintSwap/MintSwapOwnership.ts';
+  findMintSwapParent,
+} from '../mintSwap/MintSwapChildCoordination.ts';
 import type { MintOperationRepository, ProofRepository } from '../../repositories';
 import type {
   ExecutingMintOperation,
@@ -119,7 +119,7 @@ export class MintOperationService {
    */
   async canResolve(target: string | MintQuoteRef): Promise<boolean> {
     return this.dependencies.transactionRunner.run(async (tx) =>
-      allowsOrdinaryWork(await findMintSwapOwner(tx, 'mint', target), 'resolve'),
+      allowsOrdinaryWork(await findMintSwapParent(tx, 'mint', target), 'resolve'),
     );
   }
 

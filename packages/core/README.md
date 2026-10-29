@@ -117,8 +117,8 @@ Use one effect-driving Coco Session per Wallet store. Manager shares child locks
 Mint/Melt services; Core does not enforce a universal cross-process singleton. Reuse host session
 guards (such as Cocod's state-directory lease); React initialization guards apply per provider.
 Mint Swap exclusively coordinates its children while it is active. Ordinary Mint/Melt mutation
-commands (including refresh, recovery of one child, and preparation or claiming against an owned
-quote) reject with `MintSwapChildOperationError`. Its `parentOperationId` identifies the parent to
+commands (including refresh, recovery of one child, and preparation or claiming against a
+coordinated quote) reject with `MintSwapChildOperationError`. Its `parentOperationId` identifies the parent to
 pass to `ops.mintSwap.execute`, `refresh`, or `cancel`. Read APIs continue returning child records.
 Ordinary processors, automatic quote claiming, and generic Mint/Melt recovery skip these children
 and quotes. Watchers still record quote observations. Once the parent is terminal or

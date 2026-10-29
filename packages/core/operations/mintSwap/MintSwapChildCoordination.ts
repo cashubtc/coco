@@ -10,7 +10,7 @@ import { isMintSwapQuiescentState, type MintSwapOperation } from './MintSwapOper
 export type OrdinaryChildAuthority = 'resolve' | 'effect';
 
 /** Look up immutable parent identities, including historical and terminal records. */
-export async function findMintSwapOwner(
+export async function findMintSwapParent(
   tx: CoreTransaction,
   kind: 'mint' | 'melt',
   target: string | MintQuoteRef | MeltQuoteRef,
@@ -19,7 +19,7 @@ export async function findMintSwapOwner(
   const parent = await tx.mintSwapOperations.getByChild(kind, target);
   if (parent) return parent;
   const operation = await (kind === 'mint' ? tx.mintOperations : tx.meltOperations).getById(target);
-  // Quote ownership also excludes historical sibling operations and new automatic claims.
+  // A coordinated quote also excludes historical sibling operations and new automatic claims.
   return operation?.quoteId
     ? tx.mintSwapOperations.getByQuote(kind, {
         mintUrl: operation.mintUrl,
@@ -49,7 +49,7 @@ export async function assertOrdinaryWork(
   target: string | MintQuoteRef | MeltQuoteRef,
   authority: OrdinaryChildAuthority,
 ): Promise<void> {
-  const parent = await findMintSwapOwner(tx, kind, target);
+  const parent = await findMintSwapParent(tx, kind, target);
   if (parent && !allowsOrdinaryWork(parent, authority))
     throw new MintSwapChildOperationError(parent.id, isMintSwapQuiescentState(parent.state));
 }

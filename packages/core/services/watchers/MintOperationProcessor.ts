@@ -319,7 +319,7 @@ export class MintOperationProcessor {
     this.claimingQuotes.add(key);
     const task = (async () => {
       try {
-        // Mark before reading ownership so a parent stop committed during the read reschedules it.
+        // Mark before reading the parent so a parent stop committed during the read reschedules it.
         this.quotesAwaitingParentStop.set(key, { mintUrl, method, quoteId });
         if (!(await this.mintOperations.canResolve({ mintUrl, method, quoteId }))) return;
         this.quotesAwaitingParentStop.delete(key);
