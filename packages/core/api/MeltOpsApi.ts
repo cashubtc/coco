@@ -77,9 +77,6 @@ export class MeltOpsApi<TSupported extends MeltMethod = DefaultSupportedMeltMeth
   async execute(
     operationOrId: MeltOperation | string,
   ): Promise<PendingMeltOperation | FinalizedMeltOperation> {
-    await this.meltOperationService.assertCanResolve(
-      typeof operationOrId === 'string' ? operationOrId : operationOrId.id,
-    );
     const operation = await this.resolveOperation(operationOrId);
     if (operation.state !== 'prepared') {
       throw new Error(
@@ -123,7 +120,6 @@ export class MeltOpsApi<TSupported extends MeltMethod = DefaultSupportedMeltMeth
    * the updated state.
    */
   async refresh(operationId: string): Promise<MeltOperation> {
-    await this.meltOperationService.assertCanResolve(operationId);
     const operation = await this.requireOperation(operationId);
     if (operation.state === 'pending') {
       await this.meltOperationService.checkPendingOperation(operation.id);
@@ -143,7 +139,6 @@ export class MeltOpsApi<TSupported extends MeltMethod = DefaultSupportedMeltMeth
    * phase.
    */
   async cancel(operationId: string, reason?: string): Promise<void> {
-    await this.meltOperationService.assertCanResolve(operationId);
     const operation = await this.requireOperation(operationId);
     if (operation.state !== 'prepared') {
       throw new Error(
@@ -161,7 +156,6 @@ export class MeltOpsApi<TSupported extends MeltMethod = DefaultSupportedMeltMeth
    * is still safe.
    */
   async reclaim(operationId: string, reason?: string): Promise<void> {
-    await this.meltOperationService.assertCanResolve(operationId);
     const operation = await this.requireOperation(operationId);
     if (operation.state !== 'pending') {
       throw new Error(

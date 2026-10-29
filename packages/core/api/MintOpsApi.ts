@@ -97,7 +97,6 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
    * Paid or issued quotes are reconciled immediately.
    */
   async checkPayment(operationId: string): Promise<PendingMintCheckResult> {
-    await this.mintOperationService.assertCanResolve(operationId);
     const operation = await this.requireOperation(operationId);
     if (operation.state !== 'pending') {
       throw new Error(`Cannot check payment in state '${operation.state}'. Expected 'pending'.`);
@@ -110,7 +109,6 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
    * Re-checks a mint operation and returns its latest persisted state.
    */
   async refresh(operationId: string): Promise<MintOperation> {
-    await this.mintOperationService.assertCanResolve(operationId);
     const operation = await this.requireOperation(operationId);
     if (operation.state === 'pending') {
       await this.mintOperationService.checkPendingOperation(operation.id);

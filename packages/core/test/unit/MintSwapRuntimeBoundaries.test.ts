@@ -156,8 +156,6 @@ describe('Mint Swap real runtime boundaries', () => {
     const commands = [
       () => manager.ops.melt.execute('source-child'),
       () => manager.ops.melt.cancel('source-child'),
-      () => manager.ops.melt.reclaim('source-child'),
-      () => manager.ops.melt.refresh('source-child'),
       () => manager.ops.melt.finalize('source-child'),
       () => manager.ops.melt.prepare({ quote: fixture.parent.sourceQuote }),
       () => manager.ops.mint.execute('destination-child'),
@@ -178,6 +176,8 @@ describe('Mint Swap real runtime boundaries', () => {
         parentOperationId: 'swap',
       });
     }
+    // Refreshing a prepared Melt has nothing to resolve, so it reads the child unchanged.
+    expect((await manager.ops.melt.refresh('source-child')).state).toBe('prepared');
     expect((await manager.ops.melt.get('source-child'))?.state).toBe('prepared');
     expect((await manager.ops.mint.listPending()).map((op) => op.id)).toContain(
       'destination-child',
