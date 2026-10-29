@@ -219,6 +219,55 @@ describe('Automatic Batch Mint claiming', () => {
     });
   });
 
+  describe('admission rejections naming a member', () => {
+    /** While the first batch issues, prepare standalone Mint Operations for `prepared`. */
+    const prepareDuringFirstBatch = (...prepared: string[]) => {
+      h.mint.onBatchIssued = async () => {
+        h.mint.onBatchIssued = undefined;
+        for (const quoteId of prepared)
+          await h.coco.ops.mint.prepare({
+            quote: { mintUrl: h.mint.mintUrl, method: 'bolt11', quoteId },
+            amount: 10,
+          });
+      };
+    };
+    const singles = () =>
+      mintCalls()
+        .filter((call) => 'single' in call)
+        .map((call) => (call as { single: string }).single)
+        .sort();
+
+    it('retries the batch once without the named member and claims that member standalone', async () => {
+      for (const quote of ['a', 'b', 'c', 'd', 'e', 'f']) await paid(quote);
+      prepareDuringFirstBatch('e');
+
+      await h.coco.enableMintOperationProcessor({ processIntervalMs: 20 });
+      await h.coco.waitForMintOperationProcessor();
+
+      expect(h.mint.batchRequests.map(({ quotes }) => quotes)).toEqual([
+        ['a', 'b', 'c'],
+        ['d', 'f'],
+      ]);
+      expect(singles()).toEqual(['e']);
+      for (const quoteId of ['d', 'e', 'f'])
+        expect(h.mint.quotes.get(quoteId)!.amountIssued).toBe(10);
+    });
+
+    it('claims the rest standalone when the retried batch is rejected too', async () => {
+      await h.dispose();
+      h.uninstall();
+      h = await createBatchMintHarness({ nut29: { max_batch_size: 4, methods: ['bolt11'] } });
+      for (const quote of ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']) await paid(quote);
+      prepareDuringFirstBatch('f', 'g');
+
+      await h.coco.enableMintOperationProcessor({ processIntervalMs: 20 });
+      await h.coco.waitForMintOperationProcessor();
+
+      expect(h.mint.batchRequests.map(({ quotes }) => quotes)).toEqual([['a', 'b', 'c', 'd']]);
+      expect(singles()).toEqual(['e', 'f', 'g', 'h']);
+    });
+  });
+
   describe('batching unavailable marker', () => {
     /** Startup batch of `a` and `b` answered with `behavior`, then a later turn pays `d` and `e`. */
     const runTwoTurns = async (behavior: BatchMintBehavior) => {

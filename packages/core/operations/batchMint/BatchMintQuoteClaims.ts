@@ -1,4 +1,5 @@
 import type { Logger } from '../../logging/Logger.ts';
+import { BatchMintAdmissionError } from '../../models/Error.ts';
 import type { MintQuoteRef } from '../../models/QuoteIdentity.ts';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
 import type { MintService } from '../../services/MintService.ts';
@@ -95,7 +96,7 @@ export class BatchMintQuoteClaims {
           .slice(start, start + limit)
           .map((quoteId) => ({ mintUrl, method, quoteId }));
         if (chunk.length === 1) await this.claimEach(chunk);
-        else await this.claimChunk(chunk);
+        else await this.claimChunk(chunk, true);
       }
     }
     await this.claimEach(standalone);
@@ -147,9 +148,15 @@ export class BatchMintQuoteClaims {
     }
   }
 
-  private async claimChunk(chunk: MintQuoteRef[]): Promise<void> {
+  /**
+   * Claim one chunk as a Batch Mint Operation. When admission rejects a named member, the chunk is
+   * retried once without it if at least two members remain; that member and anything left over
+   * are claimed standalone.
+   */
+  private async claimChunk(chunk: MintQuoteRef[], retryWithoutRejected: boolean): Promise<void> {
     const { mintUrl, method } = chunk[0]!;
     let operation: BatchMintOperation | undefined;
+    let rejected: MintQuoteRef | undefined;
     try {
       operation = await this.dependencies.batchMintOperations.execute({
         mintUrl,
@@ -163,11 +170,17 @@ export class BatchMintQuoteClaims {
         quoteIds: chunk.map(({ quoteId }) => quoteId),
         error: error instanceof Error ? error.message : String(error),
       });
+      if (error instanceof BatchMintAdmissionError && error.quoteId)
+        rejected = chunk.find(({ quoteId }) => quoteId === error.quoteId);
     }
     // An executing batch keeps its reservations for recovery. A rejected or failed one holds
     // nothing, so its members are reassessed and claimed with fresh outputs of their own.
     if (operation && operation.state !== 'failed') return;
-    await this.claimEach(chunk);
+    if (!rejected || !retryWithoutRejected) return this.claimEach(chunk);
+    const rest = chunk.filter((ref) => ref !== rejected);
+    if (rest.length >= 2) await this.claimChunk(rest, false);
+    else await this.claimEach(rest);
+    await this.claimEach([rejected]);
   }
 
   private async claimEach(refs: readonly MintQuoteRef[]): Promise<void> {
