@@ -30,7 +30,6 @@ import { MemoryMintQuoteRepository } from '../../repositories/memory/MemoryMintQ
 import type { MemoryMintRepository } from '../../repositories/memory/MemoryMintRepository.ts';
 import { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
 import { MintService } from '../../services/MintService.ts';
-import type { ProofService } from '../../services/ProofService.ts';
 import type { WalletService } from '../../services/WalletService.ts';
 import { waitFor } from '../waitFor.ts';
 
@@ -127,7 +126,6 @@ describe('QuoteLifecycle mint quote polling', () => {
       mintQuoteRepository,
       meltQuoteRepository: {} as never,
       proofRepository: {} as ProofRepository,
-      proofService: {} as ProofService,
       mintService,
       walletService: {} as WalletService,
       mintAdapter,
@@ -945,7 +943,6 @@ describe('QuoteLifecycle mint quote polling', () => {
       mintQuoteRepository,
       meltQuoteRepository: {} as never,
       proofRepository: {} as ProofRepository,
-      proofService: {} as ProofService,
       mintService,
       walletService: {} as WalletService,
       mintAdapter,

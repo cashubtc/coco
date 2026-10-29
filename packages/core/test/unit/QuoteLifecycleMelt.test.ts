@@ -14,7 +14,6 @@ import type { MeltQuoteRepository, MintQuoteRepository, ProofRepository } from '
 import { MemoryMeltQuoteRepository } from '../../repositories/memory/MemoryMeltQuoteRepository.ts';
 import { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
 import type { MintService } from '../../services/MintService.ts';
-import type { ProofService } from '../../services/ProofService.ts';
 import type { WalletService } from '../../services/WalletService.ts';
 
 const mintUrl = 'https://mint.test';
@@ -45,7 +44,6 @@ describe('QuoteLifecycle Melt settlement observations', () => {
       mintQuoteRepository: {} as MintQuoteRepository,
       meltQuoteRepository: repository as MeltQuoteRepository,
       proofRepository: {} as ProofRepository,
-      proofService: {} as ProofService,
       mintService: {} as MintService,
       walletService: {} as WalletService,
       mintAdapter: {} as MintAdapter,

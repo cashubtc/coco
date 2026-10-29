@@ -1195,7 +1195,6 @@ export class Manager {
       mintQuoteRepository: repositories.mintQuoteRepository,
       meltQuoteRepository: repositories.meltQuoteRepository,
       proofRepository: repositories.proofRepository,
-      proofService,
       mintService,
       walletService,
       mintAdapter: this.mintAdapter,
@@ -1270,7 +1269,7 @@ export class Manager {
     const paymentRequestLogger = this.getChildLogger('PaymentRequestService');
     const paymentRequestService = new PaymentRequestService(
       sendOperationService,
-      proofService,
+      balanceQueries,
       mintService,
       paymentRequestLogger,
     );
