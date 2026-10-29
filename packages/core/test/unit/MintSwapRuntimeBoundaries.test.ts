@@ -4,7 +4,8 @@ import { MintSwapChildOperationError } from '../../operations/mintSwap/MintSwapE
 import { MintSwapInvariantError } from '../../operations/mintSwap/MintSwapErrors.ts';
 import { flagMintSwapAttention } from '../../operations/mintSwap/MintSwapTransitions.ts';
 import { MintService } from '../../services/MintService.ts';
-import type { MintOperationService } from '../../operations/mint/MintOperationService.ts';
+import { MintOperationService } from '../../operations/mint/MintOperationService.ts';
+import { MeltOperationService } from '../../operations/melt/MeltOperationService.ts';
 import { initializeCoco, Manager } from '../../Manager.ts';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 import { MintAdapter } from '../../infra/MintAdapter.ts';
@@ -44,6 +45,33 @@ async function within<T>(promise: Promise<T>): Promise<T> {
   } finally {
     clearTimeout(timer!);
   }
+}
+
+/**
+ * Counts ordinary background work that skipped a matching target because its parent was active.
+ * The returned function resolves once that many skips have happened.
+ */
+function observeSkips<T>(
+  service: { canResolve(target: T): Promise<boolean> },
+  matches: (target: T) => boolean,
+): (count: number) => Promise<void> {
+  let skips = 0;
+  const waiters: { count: number; resolve: () => void }[] = [];
+  const canResolve = service.canResolve;
+  spyOn(service, 'canResolve').mockImplementation(async function (this: unknown, target: T) {
+    const allowed = await canResolve.call(this, target);
+    if (!allowed && matches(target)) {
+      skips++;
+      for (const waiter of waiters) if (waiter.count <= skips) waiter.resolve();
+    }
+    return allowed;
+  });
+  return (count) => {
+    const reached = deferred();
+    waiters.push({ count, resolve: reached.resolve });
+    if (skips >= count) reached.resolve();
+    return reached.promise;
+  };
 }
 
 describe('Mint Swap real runtime boundaries', () => {
@@ -319,16 +347,20 @@ describe('Mint Swap real runtime boundaries', () => {
   it('resumes a settlement check skipped while the parent was active when it stops', async () => {
     const { manager, runtime, repo, setSourceState, sourceCheck } = await setup();
     await manager.enableMeltSettlementProcessor();
+    const skips = observeSkips(MeltOperationService.prototype, (id) => id === 'source-child');
     setSourceState('PENDING');
     await manager.ops.mintSwap.execute('swap');
     expect((await manager.ops.melt.get('source-child'))?.state).toBe('pending');
+    // The pending child's initial check runs on a timer; let it skip so it cannot settle the child
+    // after the parent stops.
+    await within(skips(1));
     setSourceState('PAID');
     // PAID is observed while the parent is active, so the processor leaves the child alone.
     await runtime.quoteLifecycle.refreshMeltQuoteById({
       mintUrl: 'https://source.test',
       quoteId: 'source-quote',
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await within(skips(2));
     expect((await manager.ops.melt.get('source-child'))?.state).toBe('pending');
     const finalized = deferred();
     manager.on('melt-op:finalized', ({ operationId }) => {
@@ -358,12 +390,16 @@ describe('Mint Swap real runtime boundaries', () => {
     expect((await manager.ops.mint.get('destination-child'))?.state).toBe('pending');
     setDestinationState('PAID');
     // The processor sees the paid quote while the parent is active and must leave it alone.
+    const skips = observeSkips(
+      MintOperationService.prototype,
+      (target) => typeof target !== 'string' && target.quoteId === 'destination-quote',
+    );
     await runtime.quoteLifecycle.recordMintQuoteSnapshot(
       'https://destination.test',
       'bolt11',
       destinationResponse(),
     );
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await within(skips(1));
     expect(issuance).not.toHaveBeenCalled();
     const finalized = deferred();
     manager.on('mint-op:finalized', ({ operationId }) => {
