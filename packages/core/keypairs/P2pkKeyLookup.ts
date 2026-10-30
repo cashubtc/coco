@@ -1,7 +1,6 @@
-import { secp256k1 } from '@noble/curves/secp256k1.js';
-import { bytesToHex } from '@noble/curves/utils.js';
 import type { Keypair } from '../models/Keypair.ts';
 import type { KeypairQueries } from './KeypairQueries.ts';
+import { canonicalPublicKeyHex, legacyPublicKeyHex } from './PublicKeyEncoding.ts';
 
 /**
  * Resolves canonical SEC1 and legacy always-02 P2PK identities without changing stored rows.
@@ -20,7 +19,7 @@ export async function findP2pkKeyPair(
   if (!candidate) return null;
 
   // Flipping parity alone is insufficient: an even-Y key has no distinct legacy alias.
-  const canonicalKey = bytesToHex(secp256k1.getPublicKey(candidate.secretKey, true));
-  const legacyKey = '02' + canonicalKey.slice(2);
+  const canonicalKey = canonicalPublicKeyHex(candidate.secretKey);
+  const legacyKey = legacyPublicKeyHex(canonicalKey);
   return publicKey === canonicalKey || publicKey === legacyKey ? candidate : null;
 }

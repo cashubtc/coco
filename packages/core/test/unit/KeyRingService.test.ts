@@ -1,7 +1,7 @@
 import { Amount, type Proof } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect } from 'bun:test';
 import { bytesToHex } from '@noble/curves/utils.js';
-import { schnorr, secp256k1 } from '@noble/curves/secp256k1.js';
+import { schnorr } from '@noble/curves/secp256k1.js';
 import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
 import { KeyRingService } from '../../services/KeyRingService.ts';
 import { SeedService } from '../../services/SeedService.ts';
@@ -14,42 +14,20 @@ import type {
 } from '../../repositories';
 import { KeypairDerivation } from '../../keypairs/KeypairDerivation.ts';
 import { KeypairP2pkSigner } from '../../keypairs/P2pkSigner.ts';
+import { canonicalPublicKeyHex, legacyPublicKeyHex } from '../../keypairs/PublicKeyEncoding.ts';
 import { overrideTransactions } from '../overrideTransactions.ts';
+import {
+  ODD_Y_CANONICAL_PUBLIC_KEY,
+  ODD_Y_LEGACY_PUBLIC_KEY,
+  ODD_Y_SECRET_KEY,
+  nut13P2pkSeed,
+} from '../fixtures/P2pkKeys.ts';
 
 // Mock seed for deterministic testing
 const MOCK_SEED = new Uint8Array(64);
 for (let i = 0; i < 64; i++) {
   MOCK_SEED[i] = i;
 }
-
-async function mnemonicToSeedNormalized(mnemonic: string, passphrase: string): Promise<Uint8Array> {
-  const encoder = new TextEncoder();
-  const password = encoder.encode(mnemonic.normalize('NFKD'));
-  const salt = encoder.encode(`mnemonic${passphrase.normalize('NFKD')}`);
-  const key = await crypto.subtle.importKey('raw', password, 'PBKDF2', false, ['deriveBits']);
-  const seed = await crypto.subtle.deriveBits(
-    {
-      name: 'PBKDF2',
-      hash: 'SHA-512',
-      salt,
-      iterations: 2048,
-    },
-    key,
-    512,
-  );
-
-  return new Uint8Array(seed);
-}
-
-function getLegacyPublicKeyHex(secretKey: Uint8Array): string {
-  return '02' + bytesToHex(schnorr.getPublicKey(secretKey));
-}
-
-const ODD_Y_SECRET_KEY = Uint8Array.from([...new Uint8Array(31), 6]);
-const ODD_Y_CANONICAL_PUBLIC_KEY =
-  '03fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556';
-const ODD_Y_LEGACY_PUBLIC_KEY =
-  '02fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556';
 
 describe('KeyRingService', () => {
   let repositories: MemoryRepositories;
@@ -65,6 +43,19 @@ describe('KeyRingService', () => {
       new KeypairDerivation(() => seed.getSeed()),
       new KeypairP2pkSigner(transactionRepositories.keyRingRepository),
     );
+  }
+
+  /** Keyring seeded from the NUT-13 P2PK derivation vector mnemonic. */
+  async function createVectorService(): Promise<{
+    vectorRepo: KeyRingRepository;
+    vectorService: KeyRingService;
+  }> {
+    const vectorRepositories = new MemoryRepositories();
+    const vectorSeedService = new SeedService(nut13P2pkSeed);
+    return {
+      vectorRepo: vectorRepositories.keyRingRepository,
+      vectorService: createService(vectorRepositories, vectorSeedService),
+    };
   }
 
   beforeEach(() => {
@@ -149,14 +140,7 @@ describe('KeyRingService', () => {
     });
 
     it('P2PK derivation test vectors', async () => {
-      const seed = await mnemonicToSeedNormalized(
-        'half depart obvious quality work element tank gorilla view sugar picture humble',
-        '',
-      );
-      const vectorRepositories = new MemoryRepositories();
-      const vectorRepo = vectorRepositories.keyRingRepository;
-      const vectorSeedService = new SeedService(async () => seed);
-      const vectorService = createService(vectorRepositories, vectorSeedService);
+      const { vectorRepo, vectorService } = await createVectorService();
 
       const kp0 = await vectorService.generateNewKeyPair();
       const kp1 = await vectorService.generateNewKeyPair();
@@ -218,9 +202,7 @@ describe('KeyRingService', () => {
       expect(p2pk.purpose).toBe('p2pk');
       expect(quoteKey.derivationIndex).toBe(0);
       expect(quoteKey.purpose).toBe('nut20_mint_quote');
-      expect(quoteKey.publicKeyHex).toBe(
-        bytesToHex(secp256k1.getPublicKey(quoteKey.secretKey, true)),
-      );
+      expect(quoteKey.publicKeyHex).toBe(canonicalPublicKeyHex(quoteKey.secretKey));
     });
 
     it('atomically generates distinct mint quote keys for concurrent calls', async () => {
@@ -437,7 +419,7 @@ describe('KeyRingService', () => {
       const secretKey = schnorr.utils.randomSecretKey();
       const result = await service.addKeyPair(secretKey);
 
-      const publicKeyHex = bytesToHex(secp256k1.getPublicKey(secretKey, true));
+      const publicKeyHex = canonicalPublicKeyHex(secretKey);
       const stored = await repo.getPersistedKeyPair(publicKeyHex);
 
       expect(stored).not.toBeNull();
@@ -473,7 +455,7 @@ describe('KeyRingService', () => {
       'preserves a mint quote key when importing secret scalar %s',
       async (scalar) => {
         const secretKey = Uint8Array.from([...new Uint8Array(31), scalar]);
-        const publicKeyHex = bytesToHex(secp256k1.getPublicKey(secretKey, true));
+        const publicKeyHex = canonicalPublicKeyHex(secretKey);
         await repo.setPersistedKeyPair({ publicKeyHex, secretKey, purpose: 'nut20_mint_quote' });
         const original = await service.getMintQuoteKeyPair(publicKeyHex);
 
@@ -750,7 +732,7 @@ describe('KeyRingService', () => {
 
     it('signs proofs locked to the legacy public key alias', async () => {
       const kp = await service.generateNewKeyPair({ dumpSecretKey: true });
-      const legacyPublicKeyHex = getLegacyPublicKeyHex(kp.secretKey);
+      const legacyAlias = legacyPublicKeyHex(canonicalPublicKeyHex(kp.secretKey));
 
       const proof: Proof = {
         id: 'keyset123',
@@ -759,21 +741,14 @@ describe('KeyRingService', () => {
         C: '0000000000000000000000000000000000000000000000000000000000000000',
       };
 
-      const signed = await service.signProof(proof, legacyPublicKeyHex);
+      const signed = await service.signProof(proof, legacyAlias);
       const witness = JSON.parse(signed.witness as string);
 
       expect(witness.signatures).toHaveLength(1);
     });
 
     it('signs legacy aliases for keys with odd-Y compressed public keys', async () => {
-      const seed = await mnemonicToSeedNormalized(
-        'half depart obvious quality work element tank gorilla view sugar picture humble',
-        '',
-      );
-      const vectorRepositories = new MemoryRepositories();
-      const vectorRepo = vectorRepositories.keyRingRepository;
-      const vectorSeedService = new SeedService(async () => seed);
-      const vectorService = createService(vectorRepositories, vectorSeedService);
+      const { vectorService } = await createVectorService();
 
       await vectorService.generateNewKeyPair();
       const oddYKeyPair = await vectorService.generateNewKeyPair({ dumpSecretKey: true });
@@ -788,7 +763,7 @@ describe('KeyRingService', () => {
 
       const signed = await vectorService.signProof(
         proof,
-        getLegacyPublicKeyHex(oddYKeyPair.secretKey),
+        legacyPublicKeyHex(canonicalPublicKeyHex(oddYKeyPair.secretKey)),
       );
       const witness = JSON.parse(signed.witness as string);
 

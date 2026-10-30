@@ -8,12 +8,15 @@ import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransact
 import { SqlStorageRepositories } from '../../../sql-storage/src/repositories.ts';
 import { SqliteDb } from '../../../sqlite-bun/src/db.ts';
 import { overrideTransactions } from '../overrideTransactions.ts';
+import {
+  ODD_Y_CANONICAL_PUBLIC_KEY as canonicalKey,
+  ODD_Y_LEGACY_PUBLIC_KEY as legacyKey,
+  ODD_Y_SECRET_KEY,
+} from '../fixtures/P2pkKeys.ts';
 
-const canonicalKey = '03fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556';
-const legacyKey = '02' + canonicalKey.slice(2);
 const importedKey: Keypair = {
   publicKeyHex: canonicalKey,
-  secretKey: Uint8Array.from([...new Uint8Array(31), 6]),
+  secretKey: ODD_Y_SECRET_KEY,
   purpose: 'p2pk',
 };
 const legacyKeypair: Keypair = { ...importedKey, publicKeyHex: legacyKey, derivationIndex: 7 };

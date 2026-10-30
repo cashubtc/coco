@@ -7,6 +7,11 @@ import { KeypairDerivation } from '../../keypairs/KeypairDerivation.ts';
 import { KeypairP2pkSigner } from '../../keypairs/P2pkSigner.ts';
 import { findP2pkKeyPair } from '../../keypairs/P2pkKeyLookup.ts';
 import { MemoryKeyRingRepository } from '../../repositories/memory/MemoryKeyRingRepository.ts';
+import {
+  ODD_Y_CANONICAL_PUBLIC_KEY,
+  ODD_Y_LEGACY_PUBLIC_KEY,
+  ODD_Y_SECRET_KEY,
+} from '../fixtures/P2pkKeys.ts';
 
 describe('shared keypair capabilities', () => {
   it('prepares derivation once and reuses it synchronously without loading the seed again', async () => {
@@ -51,16 +56,16 @@ describe('shared keypair capabilities', () => {
 });
 
 describe('P2PK alias lookup and signing', () => {
-  const secretKey = Uint8Array.from([...new Uint8Array(31), 6]);
-  const canonicalKey = '03fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556';
-  const legacyKey = '02' + canonicalKey.slice(2);
-
   it.each([
-    [canonicalKey, legacyKey],
-    [legacyKey, canonicalKey],
+    [ODD_Y_CANONICAL_PUBLIC_KEY, ODD_Y_LEGACY_PUBLIC_KEY],
+    [ODD_Y_LEGACY_PUBLIC_KEY, ODD_Y_CANONICAL_PUBLIC_KEY],
   ])('signs using stored %s through alias %s with two reads', async (storedKey, alias) => {
     const repository = new MemoryKeyRingRepository();
-    await repository.setPersistedKeyPair({ publicKeyHex: storedKey, secretKey, purpose: 'p2pk' });
+    await repository.setPersistedKeyPair({
+      publicKeyHex: storedKey,
+      secretKey: ODD_Y_SECRET_KEY,
+      purpose: 'p2pk',
+    });
     const getPersistedKeyPair = mock(repository.getPersistedKeyPair.bind(repository));
     const signer = new KeypairP2pkSigner({ getPersistedKeyPair });
     const proof = { secret: 'proof-secret' } as Proof;
@@ -93,12 +98,12 @@ describe('P2PK alias lookup and signing', () => {
   it('keeps mint quote keys out of both direct and alias signing', async () => {
     const repository = new MemoryKeyRingRepository();
     await repository.setPersistedKeyPair({
-      publicKeyHex: canonicalKey,
-      secretKey,
+      publicKeyHex: ODD_Y_CANONICAL_PUBLIC_KEY,
+      secretKey: ODD_Y_SECRET_KEY,
       purpose: 'nut20_mint_quote',
     });
     const signer = new KeypairP2pkSigner(repository);
-    for (const publicKey of [canonicalKey, legacyKey]) {
+    for (const publicKey of [ODD_Y_CANONICAL_PUBLIC_KEY, ODD_Y_LEGACY_PUBLIC_KEY]) {
       expect(await findP2pkKeyPair(repository, publicKey)).toBeNull();
       await expect(
         signer.signProof({ secret: 'proof-secret' } as Proof, publicKey),
@@ -109,7 +114,7 @@ describe('P2PK alias lookup and signing', () => {
   it('bounds absent-key lookups and does not derive from unrelated stored secrets', async () => {
     const repository = new MemoryKeyRingRepository();
     await repository.setPersistedKeyPair({
-      publicKeyHex: canonicalKey,
+      publicKeyHex: ODD_Y_CANONICAL_PUBLIC_KEY,
       secretKey: new Uint8Array(32),
       purpose: 'p2pk',
     });

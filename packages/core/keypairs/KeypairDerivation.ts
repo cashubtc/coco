@@ -1,7 +1,6 @@
-import { secp256k1 } from '@noble/curves/secp256k1.js';
-import { bytesToHex } from '@noble/curves/utils.js';
 import { HDKey } from '@scure/bip32';
 import type { KeypairPurpose } from '../models/Keypair.ts';
+import { canonicalPublicKeyHex } from './PublicKeyEncoding.ts';
 import type { AllocateKeypairInput } from './types.ts';
 
 const DERIVATION_PURPOSES: Record<KeypairPurpose, number> = {
@@ -23,8 +22,7 @@ export class KeypairDerivation {
           `m/129373'/${derivationPurpose}'/0'/0'/${derivationIndex}`,
         );
         if (!secretKey) throw new Error('Failed to derive secret key');
-        const publicKeyHex = bytesToHex(secp256k1.getPublicKey(secretKey, true));
-        return { publicKeyHex, secretKey };
+        return { publicKeyHex: canonicalPublicKeyHex(secretKey), secretKey };
       },
     };
   }

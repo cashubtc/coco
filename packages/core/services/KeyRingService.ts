@@ -1,6 +1,4 @@
 import type { Proof } from '@cashu/cashu-ts';
-import { secp256k1 } from '@noble/curves/secp256k1.js';
-import { bytesToHex } from '@noble/curves/utils.js';
 import type { Logger } from '@core/logging';
 import type { Keypair, KeypairPurpose } from '@core/models/Keypair';
 import type { CoreTransactionRunner } from '../transactions/CoreTransaction.ts';
@@ -8,6 +6,7 @@ import type { KeypairQueries } from '../keypairs/KeypairQueries.ts';
 import type { KeypairDerivation } from '../keypairs/KeypairDerivation.ts';
 import type { P2pkSigner } from '../keypairs/P2pkSigner.ts';
 import { findP2pkKeyPair } from '../keypairs/P2pkKeyLookup.ts';
+import { canonicalPublicKeyHex } from '../keypairs/PublicKeyEncoding.ts';
 
 export class KeyRingService {
   constructor(
@@ -57,7 +56,7 @@ export class KeyRingService {
     if (secretKey.length !== 32) {
       throw new Error('Secret key must be exactly 32 bytes');
     }
-    const publicKeyHex = this.getPublicKeyHex(secretKey);
+    const publicKeyHex = canonicalPublicKeyHex(secretKey);
     const keyPair = await this.transactionRunner.run((tx) =>
       tx.keypairs.importP2pk({
         publicKeyHex,
@@ -101,12 +100,5 @@ export class KeyRingService {
     const signedProof = await this.signer.signProof(proof, publicKey);
     this.logger?.debug('Proof signed successfully', { publicKey });
     return signedProof;
-  }
-
-  /**
-   * Converts a secret key to its corresponding public key in SEC1 compressed format.
-   */
-  private getPublicKeyHex(secretKey: Uint8Array): string {
-    return bytesToHex(secp256k1.getPublicKey(secretKey, true));
   }
 }
