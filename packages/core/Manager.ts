@@ -147,7 +147,7 @@ export interface CocoConfig {
     /** Proof state watcher (enabled by default) */
     proofStateWatcher?: {
       disabled?: boolean;
-      /** When enabled, scan existing inflight proofs on start (default: true) */
+      /** Scan existing inflight proofs and pending Sends on start (default: true). */
       watchExistingInflightOnStart?: boolean;
     };
     /** Melt quote watcher (enabled by default) */
@@ -172,11 +172,13 @@ export interface CocoConfig {
       maxRetries?: number;
       baseRetryDelayMs?: number;
       initialEnqueueDelayMs?: number;
+      /** Automatically claim cached and newly observed Mint Quote value (default: true). */
       autoClaimMintQuotes?: boolean;
     };
     /** Melt settlement processor (enabled by default) */
     meltSettlementProcessor?: {
       disabled?: boolean;
+      /** Discover pending Melts from persisted evidence; live listeners remain enabled. */
       initializeExistingPendingOperationsOnStart?: boolean;
     };
   };
@@ -575,6 +577,7 @@ export class Manager {
     if (this.mintSwapOperationProcessor === processor) this.mintSwapOperationProcessor = undefined;
   }
 
+  /** Enable observation; parent-owned subscription setup may still be pending on return. */
   async enableMintOperationWatcher(options?: {
     watchExistingPendingOnStart?: boolean;
     watchExistingPendingQuotesOnStart?: boolean;
@@ -582,6 +585,7 @@ export class Manager {
     if (this.disposed) return;
     if (this.mintOperationWatcher) {
       if (!this.mintOperationWatcher.isRunning()) await this.mintOperationWatcher.stop();
+      else this.mintOperationWatcher.retryFailedInterests();
       return;
     }
     const watcherLogger = this.logger.child
@@ -631,6 +635,7 @@ export class Manager {
     this.mintOperationProcessor = new MintOperationProcessor(
       this.mintOperationService,
       this.quoteLifecycle,
+      this.mintService,
       this.eventBus,
       processorLogger,
       options,
@@ -645,6 +650,11 @@ export class Manager {
     this.mintOperationProcessor = undefined;
   }
 
+  /**
+   * Enable quote observation and attach pending-operation interests. Operation-owned interests
+   * are accepted synchronously; their subscription setup may still be pending when this resolves.
+   * Setup errors are reported by the watcher and do not block cached-evidence progression.
+   */
   async enableMeltQuoteWatcher(options?: {
     watchExistingPendingQuotesOnStart?: boolean;
   }): Promise<void> {
@@ -655,6 +665,7 @@ export class Manager {
         return;
       }
       await this.meltSettlementProcessor?.setInterestRegistrar(this.meltQuoteWatcher);
+      this.meltQuoteWatcher.retryFailedInterests();
       await this.rebindMintSwapObservation();
       return;
     }
@@ -696,6 +707,7 @@ export class Manager {
     });
   }
 
+  /** Enable cached-evidence progression without waiting for operation quote subscriptions. */
   async enableMeltSettlementProcessor(options?: {
     initializeExistingPendingOperationsOnStart?: boolean;
   }): Promise<boolean> {
@@ -750,6 +762,11 @@ export class Manager {
     await this.proofStateWatcher.start();
   }
 
+  /**
+   * Stop proof observation and release subscriptions, including acquisitions in progress.
+   * Already-started notification processing and operation checks may finish and publish events
+   * after this resolves. Safe to await from a proof or Send event listener.
+   */
   async disableProofStateWatcher(): Promise<void> {
     if (!this.proofStateWatcher) return;
     await this.proofStateWatcher.stop();

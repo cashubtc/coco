@@ -62,6 +62,7 @@ export class MintSwapOperationProcessor {
   private readonly childParents = new Map<string, string>();
   private readonly hinted = new Set<string>();
   private readonly registrations = new Map<string, Registration>();
+  private readonly retiredInterests = new Set<Promise<void>>();
   private observationWork: Promise<void> = Promise.resolve();
 
   private serializeObservation(work: () => Promise<void>): Promise<void> {
@@ -72,12 +73,19 @@ export class MintSwapOperationProcessor {
 
   /** @internal Rebind observation without restarting recovery or its durable deadlines. */
   setInterestRegistrars(registrars: Pick<ObservationDependencies, 'mint' | 'melt'>): Promise<void> {
-    return this.serializeObservation(async () => {
+    const rebound = this.serializeObservation(async () => {
+      if (this.observations.mint === registrars.mint && this.observations.melt === registrars.melt)
+        return;
       this.observations.mint = registrars.mint;
       this.observations.melt = registrars.melt;
       const generation = this.generation;
       const parents = this.active(generation) ? await this.queries.listActive() : [];
       await this.synchronizeInterests(parents, generation);
+    });
+    // Keep physical cleanup out of the declaration queue and progression scan, while callers
+    // disabling/replacing a watcher still wait for the old ownership to be fully released.
+    return rebound.then(async () => {
+      await Promise.all([...this.retiredInterests]);
     });
   }
 
@@ -166,17 +174,17 @@ export class MintSwapOperationProcessor {
     for (const off of this.unsubscribe) off();
     this.unsubscribe = [];
     this.sweepRequested = false;
-    const stopping = Promise.resolve(this.worker).then(() =>
-      this.serializeObservation(async () => {
-        for (const registration of this.registrations.values())
-          await registration.registrar.removeInterest(registration.interest.owner);
+    const stopping = Promise.resolve(this.worker).then(async () => {
+      await this.serializeObservation(async () => {
+        for (const registration of this.registrations.values()) this.retireInterest(registration);
         this.registrations.clear();
         this.parents.clear();
         this.quoteParents.clear();
         this.childParents.clear();
         this.hinted.clear();
-      }),
-    );
+      });
+      while (this.retiredInterests.size) await Promise.all([...this.retiredInterests]);
+    });
     this.stopping = stopping;
     const finished = () => {
       if (this.stopping === stopping) this.stopping = undefined;
@@ -187,6 +195,26 @@ export class MintSwapOperationProcessor {
 
   private active(generation: number): boolean {
     return this.running && generation === this.generation;
+  }
+
+  private retireInterest(registration: Registration): void {
+    // Watcher withdrawal is synchronous. Track only the physical cleanup it returns; a slow
+    // retired acquisition must not block declarations or cached work for other parents.
+    let removal: Promise<void>;
+    try {
+      removal = registration.registrar.removeInterest(registration.interest.owner);
+    } catch (error) {
+      removal = Promise.reject(error);
+    }
+    const cleanup = removal.catch(() => {
+      this.logger?.warn('Mint Swap quote interest cleanup failed', {
+        operationId: registration.interest.owner.id,
+        mintUrl: registration.interest.mintUrl,
+        quoteId: registration.interest.quoteId,
+      });
+    });
+    this.retiredInterests.add(cleanup);
+    void cleanup.then(() => this.retiredInterests.delete(cleanup));
   }
 
   private async run(generation: number, startup = false): Promise<void> {
@@ -267,17 +295,17 @@ export class MintSwapOperationProcessor {
         next.registrar !== previous.registrar ||
         quoteWatchKey(next.interest) !== quoteWatchKey(previous.interest)
       ) {
-        await previous.registrar.removeInterest(previous.interest.owner);
+        this.retireInterest(previous);
         this.registrations.delete(key);
       }
     }
     for (const [key, registration] of desired) {
       if (!this.active(generation)) return;
-      // Registration may acquire logical ownership before subscription startup fails.
-      // stop() drains this worker and releases successful and partially acquired interests.
+      // Declaration accepts local ownership immediately; activation and its diagnostics belong
+      // to the watcher. Keep ownership until explicitly withdrawn, even when activation fails.
       this.registrations.set(key, registration);
       try {
-        await registration.registrar.registerInterest(registration.interest);
+        registration.registrar.registerInterest(registration.interest);
       } catch {
         this.logger?.warn('Mint Swap quote interest registration failed');
         this.sweepRequested = true;

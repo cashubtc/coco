@@ -1294,7 +1294,7 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
     });
     const processor = new MeltSettlementProcessor(service, bus, undefined, {
       interestRegistrar: {
-        registerOperationInterest: async ({ operationId }) => {
+        registerOperationInterest: ({ operationId }) => {
           registeredOperations.push(operationId);
         },
         removeOperationInterest: async () => {},

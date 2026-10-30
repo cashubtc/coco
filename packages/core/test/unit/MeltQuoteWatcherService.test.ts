@@ -4,10 +4,10 @@ import {
   type MeltQuoteOnchainResponse,
 } from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it, mock, type Mock } from 'bun:test';
-import { deferred } from '../fixtures/MintSwapRuntime.ts';
 import { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
 import type { SubscriptionManager } from '../../infra/SubscriptionManager.ts';
+import type { Logger } from '../../logging/Logger.ts';
 import { NullLogger } from '../../logging/NullLogger.ts';
 import type { MeltQuote } from '../../models/MeltQuote.ts';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
@@ -104,17 +104,19 @@ describe('MeltQuoteWatcherService', () => {
     mintService = { isTrustedMint: mock(async () => true) } as unknown as MintService,
     quoteLifecycle = makeQuoteLifecycle(),
     options,
+    logger = new NullLogger(),
   }: {
     mintService?: MintService;
     quoteLifecycle?: QuoteLifecycle;
     options?: MeltQuoteWatcherOptions;
+    logger?: Logger;
   } = {}): MeltQuoteWatcherService =>
     new MeltQuoteWatcherService(
       { subscribe } as unknown as SubscriptionManager,
       mintService,
       quoteLifecycle,
       bus,
-      new NullLogger(),
+      logger,
       options,
     );
 
@@ -133,6 +135,207 @@ describe('MeltQuoteWatcherService', () => {
         return { subId: `sub-${callbacks.length}`, unsubscribe };
       },
     );
+  });
+
+  const operationInterest = (operationId = 'melt-op-1', id = quoteId) => ({
+    operationId,
+    mintUrl,
+    method: 'bolt11' as const,
+    quoteId: id,
+  });
+
+  const deferred = <T = void>() => {
+    let resolve!: (value: T) => void;
+    let reject!: (error: Error) => void;
+    const promise = new Promise<T>((yes, no) => {
+      resolve = yes;
+      reject = no;
+    });
+    return { promise, resolve, reject };
+  };
+
+  it('records interest synchronously while the watcher owns pending trust setup', async () => {
+    const trust = deferred<boolean>();
+    const isTrustedMint = mock(() => trust.promise);
+    const watcher = makeWatcher({
+      mintService: { isTrustedMint } as unknown as MintService,
+      options: { watchExistingPendingQuotesOnStart: false },
+    });
+    await watcher.start();
+    expect(watcher.registerOperationInterest(operationInterest())).toBeUndefined();
+    expect(isTrustedMint).toHaveBeenCalledTimes(1);
+    expect(subscribe).not.toHaveBeenCalled();
+    const removed = watcher.removeOperationInterest('melt-op-1');
+    trust.resolve(true);
+    await removed;
+    expect(subscribe).not.toHaveBeenCalled();
+    await watcher.stop();
+  });
+
+  it('drains retired acquisition and cleanup even after its interest was removed', async () => {
+    const subscription = deferred<{ subId: string; unsubscribe: () => Promise<void> }>();
+    const cleanup = deferred<void>();
+    const lateUnsubscribe = mock(() => cleanup.promise);
+    subscribe.mockImplementationOnce(() => subscription.promise);
+    const watcher = makeWatcher({ options: { watchExistingPendingQuotesOnStart: false } });
+    await watcher.start();
+    watcher.registerOperationInterest(operationInterest());
+    await waitForSubscribeCalls(1);
+    const removed = watcher.removeOperationInterest('melt-op-1');
+    const stopping = watcher.stop();
+    expect(watcher.stop()).toBe(stopping);
+    let stopped = false;
+    void stopping.then(() => {
+      stopped = true;
+    });
+    subscription.resolve({ subId: 'late', unsubscribe: lateUnsubscribe });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(lateUnsubscribe).toHaveBeenCalledTimes(1);
+    expect(stopped).toBe(false);
+    cleanup.resolve();
+    await Promise.all([removed, stopping]);
+    expect(stopped).toBe(true);
+    expect(lateUnsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps old removal from tearing down a replacement for the same quote', async () => {
+    const first = deferred<{ subId: string; unsubscribe: () => Promise<void> }>();
+    const firstUnsubscribe = mock(async () => {});
+    subscribe.mockImplementationOnce(() => first.promise);
+    const watcher = makeWatcher({ options: { watchExistingPendingQuotesOnStart: false } });
+    await watcher.start();
+    watcher.registerOperationInterest(operationInterest());
+    await waitForSubscribeCalls(1);
+    const removed = watcher.removeOperationInterest('melt-op-1');
+    watcher.registerOperationInterest(operationInterest('replacement'));
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    first.resolve({ subId: 'first', unsubscribe: firstUnsubscribe });
+    await removed;
+    await waitForSubscribeCalls(2);
+    expect(firstUnsubscribe).toHaveBeenCalledTimes(1);
+    expect(unsubscribe).not.toHaveBeenCalled();
+    await watcher.removeOperationInterest('replacement');
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    await watcher.stop();
+  });
+
+  it('invalidates every mint acquisition before waiting for any cleanup on untrust', async () => {
+    const first = deferred<{ subId: string; unsubscribe: () => Promise<void> }>();
+    const second = deferred<{ subId: string; unsubscribe: () => Promise<void> }>();
+    const firstUnsubscribe = mock(async () => {});
+    const secondUnsubscribe = mock(async () => {});
+    subscribe
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise);
+    const watcher = makeWatcher({ options: { watchExistingPendingQuotesOnStart: false } });
+    await watcher.start();
+    watcher.registerOperationInterest(operationInterest('first', 'first'));
+    watcher.registerOperationInterest(operationInterest('second', 'second'));
+    await waitForSubscribeCalls(2);
+    const untrusted = bus.emit('mint:untrusted', { mintUrl });
+    second.resolve({ subId: 'second', unsubscribe: secondUnsubscribe });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(secondUnsubscribe).toHaveBeenCalledTimes(1);
+    first.resolve({ subId: 'first', unsubscribe: firstUnsubscribe });
+    await untrusted;
+    expect(firstUnsubscribe).toHaveBeenCalledTimes(1);
+    await watcher.stop();
+  });
+
+  it('does not resume startup discovery from a previous run', async () => {
+    const discovery = deferred<MeltQuote[]>();
+    const getPendingMeltQuotes = mock(async () => [] as MeltQuote[]);
+    getPendingMeltQuotes.mockImplementationOnce(() => discovery.promise);
+    const watcher = makeWatcher({ quoteLifecycle: makeQuoteLifecycle({ getPendingMeltQuotes }) });
+    const firstStart = watcher.start();
+    await watcher.stop();
+    await watcher.start();
+    discovery.resolve([makeBolt11Quote()]);
+    await firstStart;
+    expect(subscribe).not.toHaveBeenCalled();
+    watcher.registerOperationInterest(operationInterest());
+    await waitForSubscribeCalls(1);
+    await watcher.stop();
+  });
+
+  it('fences old callbacks before persistence and before changing replacement resources', async () => {
+    const observation = deferred<MeltQuote>();
+    const recordMeltQuoteObservation = mock(async (quote: MeltQuote) => quote);
+    recordMeltQuoteObservation.mockImplementationOnce(() => observation.promise);
+    const watcher = makeWatcher({
+      quoteLifecycle: makeQuoteLifecycle({ recordMeltQuoteObservation }),
+      options: { watchExistingPendingQuotesOnStart: false },
+    });
+    await watcher.start();
+    watcher.registerOperationInterest(operationInterest());
+    await waitForSubscribeCalls(1);
+    const payload = {
+      quote: quoteId,
+      request: 'invoice',
+      amount: '10',
+      unit: 'sat',
+      fee_reserve: '1',
+      expiry: futureExpiry(),
+      state: 'PAID',
+      change: [],
+    };
+    const notification = callbacks[0]!(payload);
+    await watcher.removeOperationInterest('melt-op-1');
+    watcher.registerOperationInterest(operationInterest('replacement'));
+    await waitForSubscribeCalls(2);
+    observation.resolve(makeBolt11Quote({ state: 'PAID' }));
+    await notification;
+    await callbacks[0]!(payload);
+    expect(recordMeltQuoteObservation).toHaveBeenCalledTimes(1);
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    await watcher.removeOperationInterest('replacement');
+    expect(unsubscribe).toHaveBeenCalledTimes(2);
+    await watcher.stop();
+  });
+
+  it('retries failed activation only on existing declaration or enable triggers', async () => {
+    const failure = new Error('subscription unavailable');
+    subscribe.mockRejectedValueOnce(failure);
+    const logger = new NullLogger();
+    logger.warn = mock(() => {});
+    const watcher = makeWatcher({ logger, options: { watchExistingPendingQuotesOnStart: false } });
+    await watcher.start();
+    watcher.registerOperationInterest(operationInterest());
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith('Failed to start melt quote watch', {
+      mintUrl,
+      method: 'bolt11',
+      quoteId,
+      owners: [{ kind: 'operation', id: 'melt-op-1' }],
+      err: failure,
+    });
+    watcher.retryFailedInterests();
+    await waitForSubscribeCalls(2);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    watcher.retryFailedInterests();
+    expect(subscribe).toHaveBeenCalledTimes(2);
+    await watcher.stop();
+  });
+
+  it('does not retry an untrusted skip on enable, but does on a repeated declaration', async () => {
+    const isTrustedMint = mock(async () => false);
+    const watcher = makeWatcher({
+      mintService: { isTrustedMint } as unknown as MintService,
+      options: { watchExistingPendingQuotesOnStart: false },
+    });
+    await watcher.start();
+    watcher.registerOperationInterest(operationInterest());
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    isTrustedMint.mockResolvedValue(true);
+    watcher.retryFailedInterests();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(isTrustedMint).toHaveBeenCalledTimes(1);
+    expect(subscribe).not.toHaveBeenCalled();
+    watcher.registerOperationInterest(operationInterest());
+    await waitForSubscribeCalls(1);
+    expect(isTrustedMint).toHaveBeenCalledTimes(2);
+    await watcher.stop();
   });
 
   it('keeps recovery observation registered while another owner removal awaits trust', async () => {
@@ -185,6 +388,7 @@ describe('MeltQuoteWatcherService', () => {
       quoteId,
       owner: { kind: 'mint-swap', id: 'parent', recovery: true },
     });
+    await waitForSubscribeCalls(1);
     const first = watcher.stop();
     await entered.promise;
     let secondFinished = false;
@@ -200,13 +404,16 @@ describe('MeltQuoteWatcherService', () => {
     expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
 
-  it('awaits shared subscription acquisition and permits retry after acquisition fails', async () => {
+  it('accepts ownership before acquisition and retries watcher-owned setup failure', async () => {
     const acquisition = deferred();
+    const failed = deferred();
+    const logger = new NullLogger();
+    logger.warn = mock(() => failed.resolve());
     subscribe.mockImplementationOnce(async () => {
       await acquisition.promise;
       throw new Error('subscription unavailable');
     });
-    const watcher = makeWatcher();
+    const watcher = makeWatcher({ logger });
     await watcher.start();
     const interest = {
       mintUrl,
@@ -214,18 +421,15 @@ describe('MeltQuoteWatcherService', () => {
       quoteId,
       owner: { kind: 'mint-swap' as const, id: 'swap', recovery: true },
     };
-    let settled = false;
-    const registration = watcher.registerInterest(interest).finally(() => {
-      settled = true;
-    });
-    // Install the rejection observer before releasing acquisition.
-    const rejected = registration.catch((error: unknown) => error);
+    expect(watcher.registerInterest(interest)).toBeUndefined();
+    expect(watcher.hasRecoveryInterest(interest)).toBe(true);
     await waitForSubscribeCalls(1);
-    expect(settled).toBe(false);
     acquisition.resolve();
-    expect(await rejected).toEqual(new Error('subscription unavailable'));
-    await watcher.registerInterest(interest);
-    expect(subscribe).toHaveBeenCalledTimes(2);
+    await failed.promise;
+    // The failed activation settles before the next explicit enable trigger.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    watcher.retryFailedInterests();
+    await waitForSubscribeCalls(2);
     await watcher.stop();
     expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
@@ -246,9 +450,10 @@ describe('MeltQuoteWatcherService', () => {
     const owner = { kind: 'mint-swap' as const, id: 'swap', recovery: true };
     const registration = watcher.registerInterest({ mintUrl, method: 'bolt11', quoteId, owner });
     await entered.promise;
-    await watcher.removeInterest(owner);
+    const removal = watcher.removeInterest(owner);
+    expect(watcher.hasRecoveryInterest({ mintUrl, method: 'bolt11', quoteId })).toBe(false);
     release.resolve();
-    await registration;
+    await removal;
     expect(subscribe).not.toHaveBeenCalled();
     expect(watcher.hasRecoveryInterest({ mintUrl, method: 'bolt11', quoteId })).toBe(false);
     await watcher.stop();
@@ -266,6 +471,7 @@ describe('MeltQuoteWatcherService', () => {
     const owner = { kind: 'mint-swap' as const, id: 'same-id', recovery: true };
     await watcher.registerInterest({ mintUrl: `${mintUrl}/`, method: 'bolt11', quoteId, owner });
     await watcher.registerInterest({ mintUrl, method: 'bolt11', quoteId, owner });
+    await waitForSubscribeCalls(1);
     expect(subscribe).toHaveBeenCalledTimes(1);
     await watcher.removeInterest(owner);
     expect(unsubscribe).not.toHaveBeenCalled();
@@ -291,6 +497,7 @@ describe('MeltQuoteWatcherService', () => {
       method: 'bolt11',
       quoteId: 'other',
     });
+    await waitForSubscribeCalls(2);
     trusted = false;
     await bus.emit('mint:untrusted', { mintUrl });
     expect(unsubscribe).toHaveBeenCalledTimes(2);
@@ -320,6 +527,7 @@ describe('MeltQuoteWatcherService', () => {
       method: 'bolt11',
       quoteId,
     });
+    await waitForSubscribeCalls(1);
     const observation = callbacks[0]!(makeBolt11Quote({ state: 'PENDING' }));
     await arrival;
     let stopped = false;
@@ -337,13 +545,16 @@ describe('MeltQuoteWatcherService', () => {
     const bolt11Quote = makeBolt11Quote();
     const onchainQuote = makeOnchainQuote();
     const getPendingMeltQuotes = mock(async () => [bolt11Quote, onchainQuote]);
+    const getMeltQuote = mock(async () => makeBolt11Quote());
     const watcher = makeWatcher({
-      quoteLifecycle: makeQuoteLifecycle({ getPendingMeltQuotes }),
+      quoteLifecycle: makeQuoteLifecycle({ getPendingMeltQuotes, getMeltQuote }),
     });
 
     await watcher.start();
 
     expect(getPendingMeltQuotes).toHaveBeenCalledWith();
+    // Activation uses the discovered quotes instead of reading each one again.
+    expect(getMeltQuote).not.toHaveBeenCalled();
     expect(subscribe).toHaveBeenCalledWith(
       mintUrl,
       'bolt11_melt_quote',
@@ -507,12 +718,13 @@ describe('MeltQuoteWatcherService', () => {
 
     await watcher.start();
     try {
-      await watcher.registerOperationInterest({
+      watcher.registerOperationInterest({
         operationId: 'melt-op-1',
         mintUrl,
         method: 'bolt11',
         quoteId,
       });
+      await waitForSubscribeCalls(1);
       // Registration reads the canonical quote; malformed notifications must do no further work.
       expect(getMeltQuote).toHaveBeenCalledWith(mintUrl, 'bolt11', quoteId);
       getMeltQuote.mockClear();
@@ -540,12 +752,13 @@ describe('MeltQuoteWatcherService', () => {
       quoteId,
       quote,
     });
-    await watcher.registerOperationInterest({
+    watcher.registerOperationInterest({
       operationId: 'melt-op-1',
       mintUrl,
       method: 'bolt11',
       quoteId,
     });
+    await waitForSubscribeCalls(1);
 
     expect(subscribe).toHaveBeenCalledTimes(1);
 
@@ -578,12 +791,13 @@ describe('MeltQuoteWatcherService', () => {
     });
 
     const start = watcher.start();
-    await watcher.registerOperationInterest({
+    watcher.registerOperationInterest({
       operationId: 'melt-op-1',
       mintUrl,
       method: 'bolt11',
       quoteId,
     });
+    await waitForSubscribeCalls(1);
 
     expect(subscribe).toHaveBeenCalledTimes(1);
     if (!resolvePendingQuotes) {
@@ -615,12 +829,13 @@ describe('MeltQuoteWatcherService', () => {
       quoteId,
       quote,
     });
-    await watcher.registerOperationInterest({
+    watcher.registerOperationInterest({
       operationId: 'melt-op-1',
       mintUrl,
       method: 'bolt11',
       quoteId,
     });
+    await waitForSubscribeCalls(1);
 
     expect(subscribe).toHaveBeenCalledTimes(1);
 
@@ -659,7 +874,7 @@ describe('MeltQuoteWatcherService', () => {
     });
 
     await watcher.start();
-    const watch = watcher.registerOperationInterest({
+    watcher.registerOperationInterest({
       operationId: 'melt-op-1',
       mintUrl,
       method: 'bolt11',
@@ -677,7 +892,7 @@ describe('MeltQuoteWatcherService', () => {
     }
     resolveTrusted(true);
 
-    await Promise.all([watch, stop]);
+    await stop;
 
     expect(subscribe).not.toHaveBeenCalled();
     expect(unsubscribe).not.toHaveBeenCalled();
@@ -704,7 +919,7 @@ describe('MeltQuoteWatcherService', () => {
     });
 
     await watcher.start();
-    const watch = watcher.registerOperationInterest({
+    watcher.registerOperationInterest({
       operationId: 'melt-op-1',
       mintUrl,
       method: 'bolt11',
@@ -721,7 +936,7 @@ describe('MeltQuoteWatcherService', () => {
     expect(stopped).toBe(false);
 
     resolveSubscribe[0]?.();
-    await Promise.all([watch, stop]);
+    await stop;
 
     expect(pendingUnsubscribe).toHaveBeenCalledTimes(1);
   });
@@ -748,7 +963,7 @@ describe('MeltQuoteWatcherService', () => {
     });
 
     await watcher.start();
-    const firstWatch = watcher.registerOperationInterest({
+    watcher.registerOperationInterest({
       operationId: 'melt-op-1',
       mintUrl,
       method: 'bolt11',
@@ -756,7 +971,7 @@ describe('MeltQuoteWatcherService', () => {
     });
     await waitForSubscribeCalls(1);
 
-    const secondWatch = watcher.registerOperationInterest({
+    watcher.registerOperationInterest({
       operationId: 'melt-op-2',
       mintUrl,
       method: 'bolt11',
@@ -767,7 +982,7 @@ describe('MeltQuoteWatcherService', () => {
     expect(subscribe).toHaveBeenCalledTimes(1);
 
     resolveSubscribe[0]?.();
-    await Promise.all([firstWatch, secondWatch]);
+    await flushPromises();
 
     await watcher.removeOperationInterest('melt-op-1');
     expect(firstUnsubscribe).not.toHaveBeenCalled();
@@ -839,5 +1054,31 @@ describe('MeltQuoteWatcherService', () => {
     expect(unsubscribe).toHaveBeenCalledTimes(2);
 
     await watcher.stop();
+  });
+
+  it('does not start a recovery replacement twice when declared during untrust cleanup', async () => {
+    const cleanup = deferred();
+    unsubscribe.mockImplementationOnce(() => cleanup.promise);
+    const watcher = makeWatcher({ options: { watchExistingPendingQuotesOnStart: false } });
+    await watcher.start();
+    watcher.registerInterest({
+      mintUrl,
+      method: 'bolt11',
+      quoteId,
+      owner: { kind: 'mint-swap', id: 'swap-1', recovery: true },
+    });
+    await waitForSubscribeCalls(1);
+
+    const untrusted = bus.emit('mint:untrusted', { mintUrl });
+    await flushPromises();
+    // A declaration while the old subscription closes builds the replacement record.
+    watcher.registerOperationInterest(operationInterest());
+    cleanup.resolve();
+    await untrusted;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(subscribe).toHaveBeenCalledTimes(2);
+    await watcher.stop();
+    expect(unsubscribe).toHaveBeenCalledTimes(2);
   });
 });

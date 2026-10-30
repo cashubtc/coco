@@ -409,6 +409,47 @@ export class MeltOperationService {
     }
   }
 
+  /**
+   * Advance from canonical persisted evidence. Releasing inputs additionally requires a fresh
+   * nonpayment confirmation under the operation lock; explicit payment checks retain their refresh.
+   */
+  async advancePendingOperation(operationId: string): Promise<PendingCheckResult> {
+    await this.assertCanResolve(operationId);
+    const releaseLock = await this.operationIdLock.acquire(operationId);
+    try {
+      const operation = await this.requireOperation(operationId);
+      if (operation.state !== 'pending') return 'stay_pending';
+      const quote = await this.dependencies.quoteLifecycle.getMeltQuote(
+        operation.mintUrl,
+        operation.method,
+        operation.quoteId,
+      );
+      if (quote?.state === 'PAID' && Array.isArray(quote.change)) {
+        await this.applyPaid(operation, quote);
+        return 'finalize';
+      }
+      if (quote?.state === 'UNPAID' && quote.lastObservedRemoteStateAt !== undefined) {
+        // Confirm nonpayment under the same lock used by explicit execution and parent recovery.
+        const confirmed = await this.dependencies.quoteLifecycle.refreshMeltQuote(
+          operation.mintUrl,
+          operation.method,
+          operation.quoteId,
+        );
+        if (confirmed.state === 'PAID') {
+          await this.applyPaid(operation, confirmed);
+          return 'finalize';
+        }
+        if (confirmed.state === 'UNPAID') {
+          await this.releaseAfterNonPayment(operation, confirmed, 'Confirmed quote is UNPAID');
+          return 'rollback';
+        }
+      }
+      return 'stay_pending';
+    } finally {
+      releaseLock();
+    }
+  }
+
   async recoverPendingOperations(): Promise<void> {
     if (this.recoveryLock) throw new Error('Recovery is already in progress');
     let releaseRecovery!: () => void;

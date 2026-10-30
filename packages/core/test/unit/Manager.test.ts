@@ -896,8 +896,8 @@ describe('initializeCoco', () => {
       await manager.initPlugins();
       manager.subscriptions.pause();
       manager['mintService'].isTrustedMint = mock(async () => true);
-      const checkPendingOperation = mock(async () => 'stay_pending' as const);
-      manager['meltOperationService'].checkPendingOperation = checkPendingOperation;
+      const advancePendingOperation = mock(async () => 'stay_pending' as const);
+      manager['meltOperationService'].advancePendingOperation = advancePendingOperation;
 
       await manager.enableMeltQuoteWatcher();
       await manager.enableMeltSettlementProcessor();
@@ -917,7 +917,7 @@ describe('initializeCoco', () => {
         'melt-canonical-startup',
         'melt-expired-operation-startup',
       ]);
-      expect(checkPendingOperation).toHaveBeenCalledWith(expiredOperation.id);
+      expect(advancePendingOperation).toHaveBeenCalledWith(expiredOperation.id);
 
       await manager.dispose();
     });
@@ -939,8 +939,8 @@ describe('initializeCoco', () => {
       await manager.initPlugins();
       manager.subscriptions.pause();
       manager['mintService'].isTrustedMint = mock(async () => true);
-      const checkPendingOperation = mock(async () => 'stay_pending' as const);
-      manager['meltOperationService'].checkPendingOperation = checkPendingOperation;
+      const advancePendingOperation = mock(async () => 'stay_pending' as const);
+      manager['meltOperationService'].advancePendingOperation = advancePendingOperation;
 
       await manager.enableMeltSettlementProcessor();
       await manager.enableMeltQuoteWatcher();
@@ -956,7 +956,7 @@ describe('initializeCoco', () => {
       expect(subscriptions.map((subscription) => subscription.filters[0])).toEqual([
         'melt-expired-operation-first',
       ]);
-      expect(checkPendingOperation).toHaveBeenCalledWith(expiredOperation.id);
+      expect(advancePendingOperation).toHaveBeenCalledWith(expiredOperation.id);
 
       await manager.dispose();
     });

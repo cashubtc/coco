@@ -17,7 +17,9 @@ export interface QuoteWatchInterest extends QuoteWatchIdentity {
 }
 
 export interface QuoteInterestRegistrar {
-  registerInterest(interest: QuoteWatchInterest): Promise<void>;
+  /** Accept local ownership synchronously; the watcher owns activation and setup diagnostics. */
+  registerInterest(interest: QuoteWatchInterest): void;
+  /** Withdraw ownership synchronously, then wait for the cleanup that withdrawal requires. */
   removeInterest(owner: QuoteWatchOwner): Promise<void>;
 }
 
@@ -55,6 +57,10 @@ export class QuoteWatchInterests {
 
   hasAny(key: string): boolean {
     return this.byQuote.has(key);
+  }
+
+  owners(key: string): QuoteWatchOwner[] {
+    return [...(this.byQuote.get(key)?.values() ?? [])];
   }
 
   hasRecovery(key: string): boolean {
