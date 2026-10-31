@@ -33,7 +33,10 @@ describe('Batch Mint persistence validation', () => {
 
   const requestChanges: Array<[string, Partial<BatchMintOperation>]> = [
     ['a member amount', { members: [{ ...first, amount: Amount.from(15) }, second, third] }],
-    ['a member signature', { members: [{ ...first, signature: 'cc'.repeat(64) }, second, third] }],
+    [
+      'a member quote key',
+      { members: [{ ...first, pubkey: `02${'cc'.repeat(32)}` }, second, third] },
+    ],
     ['the membership', { members: [second, third] }],
     ['the outputs', { outputData: { keep: finalized.outputData.keep.slice(1), send: [] } }],
     ['the mint', { mintUrl: 'https://other.example' }],

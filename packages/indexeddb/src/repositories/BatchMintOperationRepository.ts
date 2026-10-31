@@ -50,7 +50,7 @@ export class IdbBatchMintOperationRepository implements BatchMintOperationReposi
           quoteId: member.quoteId,
           amount: serializeAmount(member.amount),
           request: member.request,
-          signature: member.signature,
+          pubkey: member.pubkey,
         })),
       );
     });
@@ -124,7 +124,7 @@ function toMember(row: BatchMintMemberRow): BatchMintMember {
     quoteId: row.quoteId,
     amount: deserializeAmount(row.amount),
     request: row.request,
-    signature: row.signature,
+    pubkey: row.pubkey,
   };
 }
 

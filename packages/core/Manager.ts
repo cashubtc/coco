@@ -1246,6 +1246,7 @@ export class Manager {
       quoteLifecycle,
       mintService,
       walletService,
+      keyRingService,
       loadSeed: () => seedService.getSeed(),
       eventBus: this.eventBus,
       logger: this.getChildLogger('BatchMintOperationService'),

@@ -34,7 +34,7 @@ interface BatchMintMemberRow {
   quoteId: string;
   amount: string;
   request: string;
-  signature: string | null;
+  pubkey: string | null;
 }
 
 const OPERATIONS = 'coco_cashu_batch_mint_operations';
@@ -72,7 +72,7 @@ export class SqliteBatchMintOperationRepository implements BatchMintOperationRep
       );
       for (const member of operation.members) {
         await tx.run(
-          `INSERT INTO ${MEMBERS} (operationId, ordinal, mintUrl, quoteId, amount, request, signature)
+          `INSERT INTO ${MEMBERS} (operationId, ordinal, mintUrl, quoteId, amount, request, pubkey)
            VALUES (?, ?, ?, ?, ?, ?, ?)`,
           [
             operation.id,
@@ -81,7 +81,7 @@ export class SqliteBatchMintOperationRepository implements BatchMintOperationRep
             member.quoteId,
             serializeAmount(member.amount),
             member.request,
-            member.signature,
+            member.pubkey,
           ],
         );
       }
@@ -134,7 +134,7 @@ export class SqliteBatchMintOperationRepository implements BatchMintOperationRep
     );
     if (rows.length === 0) return [];
     const members = await this.db.all<BatchMintMemberRow>(
-      `SELECT operationId, ordinal, quoteId, amount, request, signature FROM ${MEMBERS}
+      `SELECT operationId, ordinal, quoteId, amount, request, pubkey FROM ${MEMBERS}
        WHERE operationId IN (SELECT id FROM ${OPERATIONS} WHERE ${where})
        ORDER BY operationId, ordinal ASC`,
       params,
@@ -147,7 +147,7 @@ export class SqliteBatchMintOperationRepository implements BatchMintOperationRep
         quoteId: row.quoteId,
         amount: deserializeAmount(row.amount),
         request: row.request,
-        signature: row.signature,
+        pubkey: row.pubkey,
       });
       byOperation.set(row.operationId, list);
     }

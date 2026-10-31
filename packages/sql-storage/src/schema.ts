@@ -1642,7 +1642,7 @@ const MIGRATIONS: readonly Migration[] = [
         quoteId TEXT NOT NULL,
         amount TEXT NOT NULL,
         request TEXT NOT NULL,
-        signature TEXT,
+        pubkey TEXT,
         PRIMARY KEY (operationId, ordinal),
         UNIQUE (operationId, mintUrl, quoteId)
       );

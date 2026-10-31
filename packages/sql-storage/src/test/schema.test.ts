@@ -1339,7 +1339,7 @@ describe('Batch Mint migration', () => {
         'quoteId',
         'amount',
         'request',
-        'signature',
+        'pubkey',
       ]);
       expect(await getIndexNames(db, 'coco_cashu_batch_mint_members')).toEqual(
         expect.arrayContaining(['idx_coco_cashu_batch_mint_members_quote']),

@@ -27,7 +27,7 @@ const batchFor = (
       quoteId: id,
       amount: Amount.from(8),
       request: `request-${id}`,
-      signature: null,
+      pubkey: null,
     })),
     outputData: { keep: [], send: [] },
     createdAt: 1,

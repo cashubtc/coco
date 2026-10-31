@@ -364,7 +364,7 @@ export interface BatchMintMemberRow {
   quoteId: string;
   amount: string;
   request: string;
-  signature: string | null;
+  pubkey: string | null;
 }
 
 export interface MintSwapOperationRow {

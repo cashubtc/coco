@@ -1,5 +1,4 @@
-import { Amount, signMintQuote } from '@cashu/cashu-ts';
-import { bytesToHex } from '@noble/curves/utils.js';
+import { Amount } from '@cashu/cashu-ts';
 import { normalizeUnit } from '../../amounts.ts';
 import {
   BatchMintAdmissionError,
@@ -36,8 +35,8 @@ import type {
 } from './BatchMintTransitionTypes.ts';
 
 /**
- * Admission, Output Allocation, per-member NUT-20 signatures and Mint Quote Reservations commit
- * together as `executing`, in exact caller order. Every check reads the caller's scope, so a
+ * Admission, Output Allocation and Mint Quote Reservations commit together as `executing`, in exact
+ * caller order. Every check reads the caller's scope, so a
  * concurrent standalone claim or batch for the same quote cannot both commit.
  */
 export const admitBatchMint = defineTransition<AdmitBatchMintInput, AdmitBatchMintResult>(
@@ -56,7 +55,7 @@ export const admitBatchMint = defineTransition<AdmitBatchMintInput, AdmitBatchMi
     if (await tx.batchMintOperations.getById(input.operationId))
       throw new Error(`Batch Mint Operation ${input.operationId} already exists`);
 
-    const admitted: Array<Omit<BatchMintMember, 'signature'> & { privkey?: string }> = [];
+    const members: BatchMintMember[] = [];
     for (const [ordinal, member] of input.members.entries()) {
       const { quoteId } = member;
       await tx.perform(assertOrdinaryChildWork, {
@@ -109,16 +108,9 @@ export const admitBatchMint = defineTransition<AdmitBatchMintInput, AdmitBatchMi
       const pubkey = quote.pubkey;
       if (method !== 'bolt11' && !pubkey)
         throw new MintQuoteKeyError(`Mint quote ${quoteId} has no NUT-20 quote key`);
-      const key = pubkey ? await tx.keypairs.getMintQuoteKey(pubkey) : null;
-      if (pubkey && !key)
+      if (pubkey && !(await tx.keypairs.getMintQuoteKey(pubkey)))
         throw new MintQuoteKeyError(`Missing NUT-20 mint quote key for quote ${quoteId}`);
-      admitted.push({
-        ordinal,
-        quoteId,
-        amount,
-        request: quote.request,
-        ...(key ? { privkey: bytesToHex(key.secretKey) } : {}),
-      });
+      members.push({ ordinal, quoteId, amount, request: quote.request, pubkey: pubkey ?? null });
     }
 
     const allocation = await tx.outputs.allocate({
@@ -126,23 +118,15 @@ export const admitBatchMint = defineTransition<AdmitBatchMintInput, AdmitBatchMi
       unit,
       activeKeys: input.activeKeys,
       seed: input.seed,
-      keepAmount: admitted.reduce((sum, member) => sum.add(member.amount), Amount.zero()),
+      keepAmount: members.reduce((sum, member) => sum.add(member.amount), Amount.zero()),
       sendAmount: Amount.zero(),
     });
-    // Every NUT-20 signature covers its quote ID and the complete aggregate outputs.
-    const outputs = allocation.outputData.keep.map(({ blindedMessage }) => ({
-      ...blindedMessage,
-      amount: Amount.from(blindedMessage.amount),
-    }));
     const operation: ExecutingBatchMintOperation = {
       id: input.operationId,
       mintUrl,
       method,
       unit,
-      members: admitted.map(({ privkey, ...member }) => ({
-        ...member,
-        signature: privkey ? signMintQuote(privkey, member.quoteId, outputs) : null,
-      })),
+      members,
       outputData: allocation.outputData,
       state: 'executing',
       createdAt: input.now,
@@ -253,7 +237,7 @@ function sameRequest(a: BatchMintOperation, b: BatchMintOperation): boolean {
         member.ordinal === other.ordinal &&
         member.quoteId === other.quoteId &&
         member.amount.equals(other.amount) &&
-        member.signature === other.signature
+        member.pubkey === other.pubkey
       );
     }) &&
     JSON.stringify(a.outputData) === JSON.stringify(b.outputData)

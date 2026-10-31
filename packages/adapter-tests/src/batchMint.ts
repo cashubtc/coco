@@ -28,14 +28,14 @@ function member(
   ordinal: number,
   quoteId: string,
   amount: number,
-  signature: string | null,
+  pubkey: string | null,
 ): BatchMintMember {
   return {
     ordinal,
     quoteId,
     amount: Amount.from(amount),
     request: `lnbc-${quoteId}`,
-    signature,
+    pubkey,
   };
 }
 
@@ -54,8 +54,8 @@ function fixtures(
     unit: 'sat',
     members: [
       member(1, `${id}-quote-b`, 8, null),
-      member(0, `${id}-quote-a`, 16, 'aa'.repeat(64)),
-      member(2, `${id}-quote-c`, 4, 'bb'.repeat(64)),
+      member(0, `${id}-quote-a`, 16, `02${'aa'.repeat(32)}`),
+      member(2, `${id}-quote-c`, 4, `02${'bb'.repeat(32)}`),
     ],
     outputData: {
       keep: [output(`${id}-16`, 16), output(`${id}-8`, 8), output(`${id}-4`, 4)],
@@ -103,7 +103,7 @@ function comparable(operation: BatchMintOperation | null): string {
         value.quoteId,
         value.amount.toString(),
         value.request,
-        value.signature,
+        value.pubkey,
       ]),
   ]);
 }

@@ -433,14 +433,14 @@ exclusivity through `assertOrdinaryChildWork`, the canonical quote's method and 
 of a nonterminal standalone Mint Operation, claimability from `tx.mintQuoteClaims` through
 `assessMintQuoteClaim` (`holdsAtomicQuote`: an atomic quote admits no other reservation), NUT-04
 limits and Wallet-owned NUT-20 keys. It then allocates
-one aggregate output plan, signs each locked member over its quote ID and the complete outputs
-(unlocked members get `null`), and creates the operation as `executing`. That one commit is the
-Mint Quote Reservation for every member; private keys are never persisted. A concurrent standalone
+one aggregate output plan and creates the operation as `executing`. That one commit is the Mint
+Quote Reservation for every member; neither signatures nor private keys are persisted. A concurrent standalone
 claim or batch for the same quote reads the same scope, so only one commits.
 
-Submission sends exactly the persisted request through cashu-ts `prepareBatchMint` with the
-persisted outputs and quotes without keys, so cashu-ts does not sign again, and `completeBatchMint`
-with the persisted signatures and amounts and no legacy-signature retry. `applyBatchMintResult`
+Submission sends exactly the persisted members, amounts and outputs through cashu-ts
+`prepareBatchMint` and `completeBatchMint`. As for a Mint Operation, the Wallet signs at submission,
+and cashu-ts retries with the legacy NUT-20 message for mints that predate the amended one.
+`applyBatchMintResult`
 validates the complete proof set against the persisted plan and atomically saves the proofs
 (attributed to the batch) and finalizes; it never fabricates remote accounting. Only an allowlisted
 NUT error code that proves non-issuance permits `failBatchMint`, which releases every reservation.

@@ -1,4 +1,5 @@
 import { Amount, CTSError, type Proof } from '@cashu/cashu-ts';
+import { bytesToHex } from '@noble/curves/utils.js';
 import type { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
 import { restoreOutputProofs } from '../../infra/ProofRestore.ts';
@@ -7,6 +8,7 @@ import {
   BatchMintAdmissionError,
   HttpResponseError,
   MintOperationError,
+  MintQuoteKeyError,
   NetworkError,
   ProofValidationError,
   UnknownMintError,
@@ -16,6 +18,7 @@ import type { QuoteIdentity } from '../../models/QuoteIdentity.ts';
 import { createKeyChain } from '../../proofs/KeysetSelection.ts';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
 import type { ProofRepository } from '../../repositories/index.ts';
+import type { KeyRingService } from '../../services/KeyRingService.ts';
 import type { MintService } from '../../services/MintService.ts';
 import type { WalletService } from '../../services/WalletService.ts';
 import type { CoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
@@ -91,6 +94,7 @@ export interface BatchMintOperationServiceDependencies {
     'isTrustedMint' | 'getNut29BatchMintLimit' | 'refreshAndCommitIfStale'
   >;
   walletService: Pick<WalletService, 'getWalletWithActiveKeysetId'>;
+  keyRingService: Pick<KeyRingService, 'getMintQuoteKeyPair'>;
   loadSeed: () => Promise<Uint8Array>;
   eventBus: EventBus<CoreEvents>;
   logger?: Logger;
@@ -329,15 +333,19 @@ export class BatchMintOperationService {
         operation.unit,
       );
       const outputs = deserializeOutputData(operation.outputData).keep;
-      // Quotes are passed without pubkeys so cashu-ts does not sign again; the persisted
-      // signatures, amounts and outputs form the exact request.
+      const privkeys = await this.loadQuoteKeys(operation);
+      // As for a Mint Operation, the Wallet signs at submission through cashu-ts, which retries with
+      // the legacy NUT-20 message for mints that predate the amended one.
       const preview = await wallet.prepareBatchMint(
         operation.method,
         operation.members.map((member) => ({
           amount: member.amount,
-          quote: { quote: member.quoteId },
+          quote: { quote: member.quoteId, ...(member.pubkey ? { pubkey: member.pubkey } : {}) },
         })),
-        { keysetId: outputs[0]!.blindedMessage.id },
+        {
+          keysetId: outputs[0]!.blindedMessage.id,
+          ...(privkeys.length ? { privkey: privkeys } : {}),
+        },
         { type: 'custom', data: outputs },
       );
       const persistedOutputs = operation.outputData.keep.map((output) => output.blindedMessage.B_);
@@ -346,18 +354,8 @@ export class BatchMintOperationService {
         preview.payload.outputs.some((output, index) => output.B_ !== persistedOutputs[index])
       )
         throw new Error('Prepared Batch Mint outputs differ from the persisted request');
-      const signatures = operation.members.map((member) => member.signature);
       submitted = true;
-      proofs = await wallet.completeBatchMint({
-        ...preview,
-        payload: {
-          quotes: operation.members.map((member) => member.quoteId),
-          quote_amounts: operation.members.map((member) => member.amount),
-          outputs: preview.payload.outputs,
-          ...(signatures.some((signature) => signature !== null) ? { signatures } : {}),
-        },
-        legacySignatures: undefined,
-      });
+      proofs = await wallet.completeBatchMint(preview);
     } catch (error) {
       if (submitted && isBatchMintIncompatibility(error))
         this.markBatchMintUnavailable(operation.mintUrl, operation.method, error);
@@ -366,6 +364,17 @@ export class BatchMintOperationService {
       return this.defer(operation, message(error));
     }
     return this.settle(operation, proofs);
+  }
+
+  private async loadQuoteKeys(operation: ExecutingBatchMintOperation): Promise<string[]> {
+    const privkeys: string[] = [];
+    for (const { pubkey, quoteId } of operation.members) {
+      if (!pubkey) continue;
+      const key = await this.dependencies.keyRingService.getMintQuoteKeyPair(pubkey);
+      if (!key) throw new MintQuoteKeyError(`Missing NUT-20 mint quote key for quote ${quoteId}`);
+      privkeys.push(bytesToHex(key.secretKey));
+    }
+    return privkeys;
   }
 
   /** Finalize from candidate proofs; an incomplete or invalid set leaves the operation executing. */

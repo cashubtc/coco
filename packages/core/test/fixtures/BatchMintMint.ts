@@ -5,10 +5,12 @@ import {
   hashToCurve,
   pointFromHex,
   serializeMintKeys,
+  schnorrVerifyDigest,
   verifyMintQuoteSignature,
 } from '@cashu/cashu-ts';
 import { bytesToHex } from '@noble/curves/utils.js';
 import { secp256k1 } from '@noble/curves/secp256k1.js';
+import { sha256 } from '@noble/hashes/sha2.js';
 
 type Method = 'bolt11' | 'bolt12' | 'onchain';
 type WireOutput = { id: string; amount: number; B_: string };
@@ -78,6 +80,8 @@ export class FakeBatchMint {
   readonly batchBehaviors: BatchMintBehavior[] = [];
   restoreBehavior: RestoreBehavior = 'all';
   quoteCheckBehavior: 'ok' | 'unavailable' = 'ok';
+  /** `legacy` verifies NUT-20 signatures as mints that predate the amended message do. */
+  quoteSignatureFormat: 'amended' | 'legacy' = 'amended';
   nut29: { max_batch_size?: number; methods?: Method[] } | null = {
     max_batch_size: 3,
     methods: ['bolt11', 'bolt12', 'onchain'],
@@ -271,8 +275,16 @@ export class FakeBatchMint {
           ...output,
           amount: Amount.from(output.amount),
         }));
-        if (!signature || !verifyMintQuoteSignature(quote.pubkey, quoteId, outputs, signature))
-          return { code: 20008, detail: 'invalid signature' };
+        const valid =
+          signature &&
+          (this.quoteSignatureFormat === 'legacy'
+            ? schnorrVerifyDigest(
+                signature,
+                sha256(new TextEncoder().encode(quoteId + outputs.map((o) => o.B_).join(''))),
+                quote.pubkey,
+              )
+            : verifyMintQuoteSignature(quote.pubkey, quoteId, outputs, signature));
+        if (!valid) return { code: 20008, detail: 'invalid signature' };
       }
       if (quote.method === 'bolt11') {
         if (quote.amountIssued > 0) return { code: 20002, detail: 'already issued' };

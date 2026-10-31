@@ -56,7 +56,6 @@ describe('Batch Mint Operations', () => {
       expect(request.outputs.map((o) => o.B_)).toEqual(
         operation.outputData.keep.map((o) => o.blindedMessage.B_),
       );
-      expect(request.signatures).toEqual(operation.members.map((m) => m.signature));
       expect(request.signatures?.[0]).toEqual(expect.any(String));
       expect(request.signatures?.[1]).toBeNull();
 
@@ -337,12 +336,12 @@ describe('Batch Mint Operations', () => {
     beforeEach(setupPair);
 
     it('marks a definitive rejection failed and releases its reservations without fallback', async () => {
-      h.mint.batchBehaviors.push({ code: 20008, detail: 'signature invalid' });
+      h.mint.batchBehaviors.push({ code: 20007, detail: 'quote expired' });
 
       const operation = await executePair();
 
       expect(operation.state).toBe('failed');
-      expect(operation.state === 'failed' && operation.terminalFailure.code).toBe('20008');
+      expect(operation.state === 'failed' && operation.terminalFailure.code).toBe('20007');
       expect(h.mint.batchRequests).toHaveLength(1);
       expect(h.eventNames()).toEqual(['batch-mint-op:executing', 'batch-mint-op:failed']);
       expect(await savedProofs(operation.id)).toEqual([]);
@@ -396,6 +395,19 @@ describe('Batch Mint Operations', () => {
       });
     }
 
+    it('retries locked members with the legacy signature on a mint that predates the amended one', async () => {
+      h.mint.quoteSignatureFormat = 'legacy';
+
+      const operation = await executePair();
+
+      expect(operation.state).toBe('finalized');
+      const [amended, legacy] = h.mint.batchRequests;
+      expect(h.mint.batchRequests).toHaveLength(2);
+      expect(legacy!.outputs).toEqual(amended!.outputs);
+      expect(legacy!.signatures![0]).toBeNull();
+      expect(legacy!.signatures![1]).not.toBe(amended!.signatures![1]);
+    });
+
     it('recovers an issued batch through Restore without resubmitting', async () => {
       h.mint.batchBehaviors.push('issue-then-drop');
       const executing = await executePair();
@@ -424,7 +436,10 @@ describe('Batch Mint Operations', () => {
 
       expect((await h.coco.ops.mint.batch.get(executing.id))?.state).toBe('finalized');
       expect(h.mint.batchRequests).toHaveLength(2);
-      expect(h.mint.batchRequests[1]).toEqual(h.mint.batchRequests[0]!);
+      const [first, replay] = h.mint.batchRequests;
+      expect(replay!.quotes).toEqual(first!.quotes);
+      expect(replay!.quote_amounts).toEqual(first!.quote_amounts);
+      expect(replay!.outputs).toEqual(first!.outputs);
       const paths = h.mint.requests.map((r) => r.path);
       expect(paths.indexOf('/v1/restore')).toBeLessThan(paths.indexOf('/v1/mint/quote/bolt11/a'));
       expect(paths.indexOf('/v1/mint/quote/bolt11/a')).toBeLessThan(

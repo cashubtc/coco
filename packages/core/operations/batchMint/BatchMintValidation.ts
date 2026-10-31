@@ -31,7 +31,7 @@ export function assertBatchMintOperation(operation: BatchMintOperation): void {
 }
 
 /**
- * Validate an update against the stored operation. Membership, amounts, outputs, signatures and
+ * Validate an update against the stored operation. Membership, amounts, outputs, quote keys and
  * other request material never change; only `executing` may move to another state.
  *
  * @remarks
@@ -64,7 +64,7 @@ function requestKey(operation: BatchMintOperation): string {
         member.quoteId,
         member.amount.toString(),
         member.request,
-        member.signature,
+        member.pubkey,
       ]),
     operation.outputData,
   ]);

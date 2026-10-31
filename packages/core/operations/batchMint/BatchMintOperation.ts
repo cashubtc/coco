@@ -8,8 +8,7 @@ import type { MintMethod } from '../mint/MintMethodHandler.ts';
  * executing -> finalized
  *           +-> failed
  *
- * - executing: Admission, Output Allocation, signatures and Mint Quote Reservations committed
- *   together; the exact NUT-29 request may have reached the mint.
+ * - executing: Admission, Output Allocation and Mint Quote Reservations committed together; the exact NUT-29 request may have reached the mint.
  * - finalized: The complete validated proof set and each member's local issuance committed.
  * - failed: The mint definitively rejected the exact request; reservations are released.
  *
@@ -30,10 +29,10 @@ export interface BatchMintMember {
   /** Payment request snapshot of the quote, kept for per-member history. */
   request: string;
   /**
-   * NUT-20 signature over this quote ID and the complete aggregate outputs, or `null` for an
-   * unlocked quote. Private keys are never persisted.
+   * NUT-20 public key of a locked quote, or `null` for an unlocked one. As for a Mint Operation, the
+   * Wallet signs at submission; neither signatures nor private keys are persisted.
    */
-  signature: string | null;
+  pubkey: string | null;
 }
 
 export interface BatchMintOperationFailure {
