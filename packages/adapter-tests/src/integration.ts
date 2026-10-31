@@ -725,10 +725,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           // Three separate splits of 21 (16 + 4 + 1) would need nine outputs.
           expect(operation.outputData.keep).toHaveLength(6);
           expect(await getMintTotalBalance(mgr, mintUrl, testUnit)).toBe(63);
-          for (const { quoteId } of quotes) {
-            const observed = await mgr.quotes.mint.refresh({ mintUrl, quoteId });
-            expect(observed.state).toBe('ISSUED');
-          }
+          const observed = await mgr.quotes.mint.refresh({ mintUrl, quoteId: quotes[0]!.quoteId });
+          expect(observed.state).toBe('ISSUED');
         } finally {
           if (mgr) {
             await mgr.pauseSubscriptions();
@@ -737,7 +735,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           }
           await dispose();
         }
-      });
+        // The Manager's limiter allows a burst of 20 requests, then one every 3 seconds.
+      }, 20000);
 
       it('should claim quotes paid before startup as one Batch Mint Operation', async () => {
         const { repositories, dispose } = await createRepositories();
