@@ -93,7 +93,12 @@ export class BatchMintQuoteClaims {
         const chunk = quoteIds
           .slice(start, start + limit)
           .map((quoteId) => ({ mintUrl, method, quoteId }));
-        if (chunk.length === 1) await this.claimEach(chunk);
+        // An earlier chunk may have shown that this mint cannot batch this method.
+        if (
+          chunk.length === 1 ||
+          this.dependencies.batchMintOperations.isBatchMintUnavailable(mintUrl, method)
+        )
+          await this.claimEach(chunk);
         else await this.claimChunk(chunk);
       }
     }

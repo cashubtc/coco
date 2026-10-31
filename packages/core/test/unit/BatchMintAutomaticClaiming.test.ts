@@ -285,6 +285,16 @@ describe('Automatic Batch Mint claiming', () => {
       });
     }
 
+    it('claims later chunks standalone once an earlier chunk sets the marker', async () => {
+      for (const quote of ['a', 'b', 'c', 'd', 'e']) await paid(quote);
+      h.mint.batchBehaviors.push('unsupported');
+
+      await h.coco.enableMintOperationProcessor({ processIntervalMs: 20 });
+      await h.coco.waitForMintOperationProcessor();
+
+      expect(mintCalls()).toEqual([{ batch: ['a', 'b', 'c'] }, { single: 'd' }, { single: 'e' }]);
+    });
+
     it('starts a new Coco Session without the marker', async () => {
       await runTwoTurns('unsupported');
       await h.dispose();
