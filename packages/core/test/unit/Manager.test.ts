@@ -6,7 +6,7 @@ import {
   type OutputDataLike,
   type SerializedBlindedSignature,
 } from '@cashu/cashu-ts';
-import { describe, it, beforeEach, expect, mock } from 'bun:test';
+import { describe, it, beforeEach, afterEach, expect, mock } from 'bun:test';
 
 import { CocoInitializationError, initializeCoco, type CocoConfig, Manager } from '../../Manager';
 import { PaymentRequestsApi } from '../../api/PaymentRequestsApi';
@@ -29,6 +29,19 @@ describe('initializeCoco', () => {
   let repositories: MemoryRepositories;
   let seedGetter: () => Promise<Uint8Array>;
   let baseConfig: Pick<CocoConfig, 'repo' | 'seedGetter'>;
+
+  // Dispose every Manager a test creates, so its processor timers cannot fire into later suites
+  // that control `setTimeout`.
+  const managers: Manager[] = [];
+  async function createManager(config: CocoConfig): Promise<Manager> {
+    const manager = await initializeCoco(config);
+    managers.push(manager);
+    return manager;
+  }
+
+  afterEach(async () => {
+    await Promise.all(managers.splice(0).map((manager) => manager.dispose()));
+  });
 
   beforeEach(() => {
     repositories = new MemoryRepositories();
@@ -155,7 +168,7 @@ describe('initializeCoco', () => {
         },
       };
 
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         ...disabledRuntime,
         seedGetter: async () => outputCreatorSeed,
@@ -245,7 +258,7 @@ describe('initializeCoco', () => {
       let manager: Manager | undefined;
 
       try {
-        manager = await initializeCoco({
+        manager = await createManager({
           ...baseConfig,
           ...disabledRuntime,
           seedGetter: async () => outputCreatorSeed,
@@ -265,7 +278,7 @@ describe('initializeCoco', () => {
     });
 
     it('should enable all watchers and processors by default', async () => {
-      const manager = await initializeCoco(baseConfig);
+      const manager = await createManager(baseConfig);
 
       // Check that manager is created
       expect(manager).toBeInstanceOf(Manager);
@@ -292,7 +305,7 @@ describe('initializeCoco', () => {
         init: initSpy,
       });
 
-      await initializeCoco({
+      await createManager({
         ...baseConfig,
         repo: mockRepo,
       });
@@ -309,7 +322,7 @@ describe('initializeCoco', () => {
       });
 
       try {
-        await initializeCoco({
+        await createManager({
           ...baseConfig,
           ...disabledRuntime,
           plugins: [
@@ -345,7 +358,7 @@ describe('initializeCoco', () => {
       Manager.prototype.dispose = dispose;
 
       try {
-        await initializeCoco({
+        await createManager({
           ...baseConfig,
           ...disabledRuntime,
         });
@@ -373,7 +386,7 @@ describe('initializeCoco', () => {
       });
 
       try {
-        await initializeCoco({
+        await createManager({
           ...baseConfig,
           ...disabledRuntime,
           plugins: [
@@ -398,7 +411,7 @@ describe('initializeCoco', () => {
     });
 
     it('should expose the dedicated payment requests api', async () => {
-      const manager = await initializeCoco(baseConfig);
+      const manager = await createManager(baseConfig);
 
       expect(manager.paymentRequests).toBeInstanceOf(PaymentRequestsApi);
 
@@ -408,7 +421,7 @@ describe('initializeCoco', () => {
     });
 
     it('should expose the dedicated quotes api', async () => {
-      const manager = await initializeCoco(baseConfig);
+      const manager = await createManager(baseConfig);
 
       expect(manager.quotes).toBeInstanceOf(QuoteApi);
 
@@ -418,7 +431,7 @@ describe('initializeCoco', () => {
     });
 
     it('should allocate keys atomically through the public keyring api', async () => {
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         ...disabledRuntime,
         seedGetter: async () => new Uint8Array(64),
@@ -445,7 +458,7 @@ describe('initializeCoco', () => {
         },
       };
 
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         plugins: [plugin],
         watchers: {
@@ -501,7 +514,7 @@ describe('initializeCoco', () => {
         },
       };
 
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         plugins: [plugin],
         watchers: {
@@ -536,7 +549,7 @@ describe('initializeCoco', () => {
         }),
       );
 
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         watchers: {
           mintOperationWatcher: { disabled: true },
@@ -556,7 +569,7 @@ describe('initializeCoco', () => {
     });
 
     it('projects mint history remote state from canonical quotes', async () => {
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         watchers: {
           mintOperationWatcher: { disabled: true },
@@ -608,7 +621,7 @@ describe('initializeCoco', () => {
     });
 
     it('does not project history for quote-only updates', async () => {
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         watchers: {
           mintOperationWatcher: { disabled: true },
@@ -655,7 +668,7 @@ describe('initializeCoco', () => {
     });
 
     it('should use NullLogger by default', async () => {
-      const manager = await initializeCoco(baseConfig);
+      const manager = await createManager(baseConfig);
 
       expect(manager['logger']).toBeInstanceOf(NullLogger);
       expect(manager.ops.send).toBeDefined();
@@ -670,7 +683,7 @@ describe('initializeCoco', () => {
 
     it('should accept custom logger', async () => {
       const customLogger = new NullLogger();
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         logger: customLogger,
       });
@@ -686,7 +699,7 @@ describe('initializeCoco', () => {
       const counters = { init: 0, ready: 0 };
       const extension = { ok: true };
 
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         plugins: [
           {
@@ -763,7 +776,7 @@ describe('initializeCoco', () => {
         updatedAt: now,
       } satisfies FinalizedReceiveOperation);
 
-      await initializeCoco({
+      await createManager({
         ...baseConfig,
         watchers: {
           mintOperationWatcher: { disabled: true },
@@ -869,7 +882,7 @@ describe('initializeCoco', () => {
 
   describe('melt watcher and settlement lifecycle', () => {
     it('starts melt quote watching and settlement processing by default', async () => {
-      const manager = await initializeCoco(baseConfig);
+      const manager = await createManager(baseConfig);
 
       expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
       expect(manager['meltSettlementProcessor']?.isRunning()).toBe(true);
@@ -962,7 +975,7 @@ describe('initializeCoco', () => {
     });
 
     it('settles a pending melt operation from a canonical melt quote update', async () => {
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         watchers: {
           mintOperationWatcher: { disabled: true },
@@ -1019,7 +1032,7 @@ describe('initializeCoco', () => {
 
   describe('watchers configuration', () => {
     it('should disable mintOperationWatcher when explicitly disabled', async () => {
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         watchers: {
           mintOperationWatcher: { disabled: true },
@@ -1036,7 +1049,7 @@ describe('initializeCoco', () => {
     });
 
     it('should disable proofStateWatcher when explicitly disabled', async () => {
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         watchers: {
           proofStateWatcher: { disabled: true },
@@ -1052,7 +1065,7 @@ describe('initializeCoco', () => {
     });
 
     it('should disable meltQuoteWatcher when explicitly disabled', async () => {
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         watchers: {
           meltQuoteWatcher: { disabled: true },
@@ -1069,7 +1082,7 @@ describe('initializeCoco', () => {
     });
 
     it('should disable all watchers when all are explicitly disabled', async () => {
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         watchers: {
           mintOperationWatcher: { disabled: true },
@@ -1088,7 +1101,7 @@ describe('initializeCoco', () => {
     });
 
     it('should pass options to mintOperationWatcher when not disabled', async () => {
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         watchers: {
           mintOperationWatcher: {
@@ -1103,7 +1116,7 @@ describe('initializeCoco', () => {
     });
 
     it('should enable with options even when disabled is explicitly false', async () => {
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         watchers: {
           mintOperationWatcher: {
@@ -1119,7 +1132,7 @@ describe('initializeCoco', () => {
     });
 
     it('should pass options to meltQuoteWatcher when not disabled', async () => {
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         watchers: {
           meltQuoteWatcher: {
@@ -1136,7 +1149,7 @@ describe('initializeCoco', () => {
 
   describe('processors configuration', () => {
     it('should disable mintOperationProcessor when explicitly disabled', async () => {
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         processors: {
           mintOperationProcessor: { disabled: true },
@@ -1152,7 +1165,7 @@ describe('initializeCoco', () => {
     });
 
     it('should disable meltSettlementProcessor when explicitly disabled', async () => {
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         processors: {
           meltSettlementProcessor: { disabled: true },
@@ -1169,7 +1182,7 @@ describe('initializeCoco', () => {
     });
 
     it('should pass options to mintOperationProcessor when not disabled', async () => {
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         processors: {
           mintOperationProcessor: {
@@ -1185,7 +1198,7 @@ describe('initializeCoco', () => {
     });
 
     it('should enable with options even when disabled is explicitly false', async () => {
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         processors: {
           mintOperationProcessor: {
@@ -1201,7 +1214,7 @@ describe('initializeCoco', () => {
     });
 
     it('should pass options to meltSettlementProcessor when not disabled', async () => {
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         processors: {
           meltSettlementProcessor: {
@@ -1218,7 +1231,7 @@ describe('initializeCoco', () => {
 
   describe('mixed configuration', () => {
     it('should handle mixed enabled/disabled watchers and processors', async () => {
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         watchers: {
           mintOperationWatcher: { disabled: true },
@@ -1238,7 +1251,7 @@ describe('initializeCoco', () => {
     });
 
     it('should support options with mixed configuration', async () => {
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         watchers: {
           mintOperationWatcher: {
@@ -1273,7 +1286,7 @@ describe('initializeCoco', () => {
         onInit: pluginInitMock,
       };
 
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         plugins: [plugin],
       });
@@ -1287,7 +1300,7 @@ describe('initializeCoco', () => {
     });
 
     it('should reject duplicate plugin instance registration', async () => {
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         watchers: {
           mintOperationWatcher: { disabled: true },
@@ -1310,7 +1323,7 @@ describe('initializeCoco', () => {
 
   describe('dispose', () => {
     it('should stop owned watchers, processors, and active subscriptions', async () => {
-      const manager = await initializeCoco(baseConfig);
+      const manager = await createManager(baseConfig);
       const subscriptionInternals = manager.subscriptions as unknown as {
         subscriptions: Map<string, unknown>;
         activeByMint: Map<string, Set<string>>;
@@ -1345,7 +1358,7 @@ describe('initializeCoco', () => {
       const onDispose = mock(() => {});
       const cleanup = mock(() => {});
 
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         plugins: [
           {
@@ -1365,7 +1378,7 @@ describe('initializeCoco', () => {
     });
 
     it('should not recreate subscription transports during plugin cleanup', async () => {
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         plugins: [
           {
@@ -1401,7 +1414,7 @@ describe('initializeCoco', () => {
     });
 
     it('should not restart background work after disposal', async () => {
-      const manager = await initializeCoco(baseConfig);
+      const manager = await createManager(baseConfig);
 
       await manager.dispose();
       await manager.resumeSubscriptions();
@@ -1421,7 +1434,7 @@ describe('initializeCoco', () => {
 
   describe('edge cases', () => {
     it('should handle empty watchers config object', async () => {
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         watchers: {},
       });
@@ -1434,7 +1447,7 @@ describe('initializeCoco', () => {
     });
 
     it('should handle empty processors config object', async () => {
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         processors: {},
       });
@@ -1446,7 +1459,7 @@ describe('initializeCoco', () => {
     });
 
     it('should handle empty config objects for both watchers and processors', async () => {
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         watchers: {},
         processors: {},
@@ -1462,7 +1475,7 @@ describe('initializeCoco', () => {
     });
 
     it('should handle all features disabled', async () => {
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         watchers: {
           mintOperationWatcher: { disabled: true },
@@ -1489,7 +1502,7 @@ describe('initializeCoco', () => {
 
   describe('API availability', () => {
     it('should expose all public APIs regardless of watcher/processor config', async () => {
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         watchers: {
           mintOperationWatcher: { disabled: true },
@@ -1509,7 +1522,7 @@ describe('initializeCoco', () => {
     });
 
     it('exposes typed event subscription helpers and manager-owned event side effects', async () => {
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         watchers: {
           mintOperationWatcher: { disabled: true },
@@ -1571,7 +1584,7 @@ describe('initializeCoco', () => {
     });
 
     it('requeues pending mint operations from canonical accounting', async () => {
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         watchers: {
           mintOperationWatcher: { disabled: true },
@@ -1613,7 +1626,7 @@ describe('initializeCoco', () => {
 
   describe('pause and resume subscriptions', () => {
     it('should pause and stop all watchers and processors', async () => {
-      const manager = await initializeCoco(baseConfig);
+      const manager = await createManager(baseConfig);
 
       expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
       expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
@@ -1632,7 +1645,7 @@ describe('initializeCoco', () => {
     });
 
     it('should resume and restart all watchers and processors', async () => {
-      const manager = await initializeCoco(baseConfig);
+      const manager = await createManager(baseConfig);
 
       await manager.pauseSubscriptions();
       await manager.resumeSubscriptions();
@@ -1647,7 +1660,7 @@ describe('initializeCoco', () => {
     });
 
     it('should be idempotent - multiple pause calls should not error', async () => {
-      const manager = await initializeCoco(baseConfig);
+      const manager = await createManager(baseConfig);
 
       await manager.pauseSubscriptions();
       await manager.pauseSubscriptions();
@@ -1662,7 +1675,7 @@ describe('initializeCoco', () => {
     });
 
     it('should be idempotent - multiple resume calls should not error', async () => {
-      const manager = await initializeCoco(baseConfig);
+      const manager = await createManager(baseConfig);
 
       await manager.pauseSubscriptions();
       await manager.resumeSubscriptions();
@@ -1679,7 +1692,7 @@ describe('initializeCoco', () => {
     });
 
     it('should handle resume without prior pause (OS connection teardown scenario)', async () => {
-      const manager = await initializeCoco(baseConfig);
+      const manager = await createManager(baseConfig);
 
       // Simulate OS killing connections - just call resume without pause
       await manager.resumeSubscriptions();
@@ -1694,7 +1707,7 @@ describe('initializeCoco', () => {
     });
 
     it('should respect original configuration - disabled watchers stay disabled', async () => {
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         watchers: {
           mintOperationWatcher: { disabled: true },
@@ -1728,7 +1741,7 @@ describe('initializeCoco', () => {
     });
 
     it('should respect original configuration - disabled processor stays disabled', async () => {
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         watchers: {
           mintOperationWatcher: { disabled: false },
@@ -1762,7 +1775,7 @@ describe('initializeCoco', () => {
     });
 
     it('should handle all features disabled', async () => {
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         watchers: {
           mintOperationWatcher: { disabled: true },
