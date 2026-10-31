@@ -27,6 +27,11 @@ export interface PrepareSendInput {
   unit?: string;
   /** Force a default send to swap proofs even when an exact match is available. */
   forceSwap?: boolean;
+  /**
+   * Use stored proofs and keysets without contacting the mint. Requires an exact amount;
+   * cannot be combined with a target or forceSwap. Does not pause background recovery/watchers.
+   */
+  offline?: boolean;
   /** Optional non-default send target, for example a P2PK recipient. */
   target?: SendTarget;
 }
@@ -79,7 +84,9 @@ export class SendOpsApi {
       parsed,
       this.getCreateOptions(input),
     );
-    return this.sendOperationService.prepare(initOp);
+    return input.offline
+      ? this.sendOperationService.prepare(initOp, { offline: true })
+      : this.sendOperationService.prepare(initOp);
   }
 
   /**
