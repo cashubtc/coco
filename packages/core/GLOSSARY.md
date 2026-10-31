@@ -163,7 +163,7 @@ _Avoid_: Unclaimed Send token, pending quote
 
 **Exact Operation Request**:
 Immutable mint request material owned by a durable operation and reused for both initial submission
-and Operation Recovery.
+and Operation Recovery. Quote signatures are not part of it; they are created at each submission.
 _Avoid_: Retry request, regenerated request, execution attempt
 
 **Ambiguous Operation Outcome**:
