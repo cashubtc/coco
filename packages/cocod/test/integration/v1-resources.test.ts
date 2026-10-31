@@ -502,6 +502,48 @@ describe('v1 Wallet resources over a real Coco Session', () => {
     expect(token.status).toBe(400);
   });
 
+  test('select a Mint that can pay the amount supplied for an amountless Payment Request', async () => {
+    const harness = await startHarness();
+    const funded = startFakeMint();
+    cleanups.push(() => funded.stop());
+    const { keysets } = (await (await fetch(`${funded.url}/v1/keysets`)).json()) as {
+      keysets: Array<{ id: string }>;
+    };
+    for (const [mintUrl, amount] of [
+      [harness.mint.url, 1],
+      [funded.url, 8],
+    ] as const) {
+      await harness.call('POST', '/v1/mints', { body: { mintUrl, trusted: true } });
+      await harness.repositories.proofRepository.saveProofs(mintUrl, [
+        {
+          id: keysets[0]!.id,
+          amount: Amount.from(amount),
+          secret: `secret-${amount}`,
+          C: '02'.padEnd(66, '1'),
+          mintUrl,
+          unit: 'sat',
+          state: 'ready',
+        },
+      ]);
+    }
+    const request = new PaymentRequest([], 'amountless', undefined, 'sat', [
+      harness.mint.url,
+      funded.url,
+    ]).toEncodedRequest();
+    const prepare = (amount: string) =>
+      harness.call('POST', '/v1/operations/send', {
+        body: { source: { type: 'payment-request', request }, amount },
+      });
+
+    const unaffordable = await prepare('9');
+    expect(unaffordable.status).toBe(409);
+    expect(await errorOf(unaffordable)).toMatchObject({ code: 'payment_request_unpayable' });
+
+    const prepared = await prepare('8');
+    expect(prepared.status).toBe(201);
+    expect(await prepared.json()).toMatchObject({ mintUrl: funded.url, amount: '8' });
+  });
+
   test('let the CLI client inspect an Operation and report why it cannot be cancelled', async () => {
     const harness = await startHarness();
     await harness.repositories.sendOperationRepository.create(rolledBackSend(harness.mint.url));

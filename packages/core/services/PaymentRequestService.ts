@@ -18,7 +18,13 @@ import type {
   PreparedSendOperation,
   SendOperationService,
 } from '../operations/send';
-import { DEFAULT_UNIT, normalizeUnit, type UnitAmount } from '../amounts.ts';
+import {
+  DEFAULT_UNIT,
+  normalizeUnit,
+  parseUnitAmount,
+  type UnitAmount,
+  type UnitAmountLike,
+} from '../amounts.ts';
 
 type InbandPaymentRequestTransport = { type: 'inband' };
 type HttpPaymentRequestTransport = { type: 'http'; url: string };
@@ -159,17 +165,31 @@ export class PaymentRequestService {
   /**
    * Parse and validate a payment request.
    * @param paymentRequest - The payment request to process
+   * @param options.amount - Amount the caller intends to pay. It only selects `payableMints`, which
+   * otherwise ignores an amountless request's real cost; `prepare()` still takes the amount to pay.
+   * It is parsed here because a bare amount uses the unit encoded in the request.
    * @returns The resolved payment request
    */
-  async parse(paymentRequest: string): Promise<ResolvedPaymentRequest> {
+  async parse(
+    paymentRequest: string,
+    options: { amount?: UnitAmountLike } = {},
+  ): Promise<ResolvedPaymentRequest> {
     const decodedPaymentRequest = await this.readPaymentRequest(paymentRequest);
     const transport = this.getPaymentRequestTransport(decodedPaymentRequest);
     const unit = normalizeUnit(decodedPaymentRequest.unit, { defaultUnit: DEFAULT_UNIT });
     const spendingCondition = this.resolveSpendingCondition(decodedPaymentRequest);
+    const intent =
+      options.amount === undefined
+        ? undefined
+        : this.validateAmount(
+            { amount: decodedPaymentRequest.amount, unit },
+            parseUnitAmount(options.amount, { defaultUnit: unit, explicitUnit: unit }),
+          );
     const payableMints = await this.findMatchingMints(
       decodedPaymentRequest,
       unit,
       spendingCondition,
+      intent?.amount,
     );
     const allowedMints = decodedPaymentRequest.mints ?? [];
     return {
@@ -325,6 +345,7 @@ export class PaymentRequestService {
     paymentRequest: PaymentRequest,
     unit: string,
     spendingCondition?: PaymentRequestSpendingConditionRequirement,
+    amount: Amount = paymentRequest.amount ?? Amount.zero(),
   ): Promise<string[]> {
     if (
       spendingCondition &&
@@ -338,7 +359,6 @@ export class PaymentRequestService {
       trustedOnly: true,
       units: [normalizedUnit],
     });
-    const amount = paymentRequest.amount ?? Amount.zero();
     const mintRequirement = paymentRequest.mints;
     const matchingMints: string[] = [];
     for (const [mintUrl, balance] of Object.entries(balances)) {
@@ -501,7 +521,10 @@ export class PaymentRequestService {
     throw new PaymentRequestError(message);
   }
 
-  private validateAmount(request: ResolvedPaymentRequest, amount?: UnitAmount): UnitAmount {
+  private validateAmount(
+    request: Pick<ResolvedPaymentRequest, 'amount' | 'unit'>,
+    amount?: UnitAmount,
+  ): UnitAmount {
     const providedAmount = amount?.amount;
     if (amount) {
       if (normalizeUnit(amount.unit) !== request.unit) {

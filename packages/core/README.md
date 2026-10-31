@@ -446,7 +446,7 @@ restart or deduplicate a later sweep against unresolved exchanges. See the [Swee
 
 ### PaymentRequestsApi
 
-- `parse(paymentRequest: string): Promise<ResolvedPaymentRequest>`
+- `parse(paymentRequest: string, options?: { amount?: UnitAmountLike }): Promise<ResolvedPaymentRequest>`
 - `prepare(request: ResolvedPaymentRequest, options: { mintUrl: string; amount?: UnitAmountLike }): Promise<PreparedPaymentRequest>`
 - `execute(transaction: PreparedPaymentRequest): Promise<PaymentRequestExecutionResult>`
 - `incoming.create(input: CreateIncomingPaymentRequestInput): Promise<PaymentRequestReceiveOperation>`

@@ -13,3 +13,6 @@ A trust change now succeeds once committed even when the stale metadata refresh 
 fails; the stored metadata is published instead. Malformed encoded payment requests reject with
 `PaymentRequestError`, and a missing or unknown on-chain fee option rejects with
 `MeltQuoteValidationError`.
+
+`paymentRequests.parse()` accepts an optional `amount`, so `payableMints` for an amountless request
+lists only the Mints that can pay it.

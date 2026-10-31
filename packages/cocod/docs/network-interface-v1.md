@@ -395,8 +395,10 @@ A committed trust change succeeds even if Coco's subsequent metadata refresh fai
 `POST /v1/payment-requests/evaluate` reports the amount, unit, transport, allowed Mints, payable
 Mints, and spending condition Coco resolves for a request. A Send Operation created from a Payment
 Request source pays in-band requests only; other transports return `409 unsupported_behavior`.
-Without an explicit `mintUrl`, cocod uses the configured Mint when Coco reports it payable,
-otherwise the first payable Mint, and returns `409 payment_request_unpayable` when there is none.
+Without an explicit `mintUrl`, cocod uses the configured Mint when Coco reports it payable for the
+requested or supplied amount, otherwise the first payable Mint, and returns
+`409 payment_request_unpayable` when there is none. Evaluation takes no amount, so for an amountless
+request its `payableMints` only reflect allowed Mints with a balance in the request's unit.
 
 ### Events
 

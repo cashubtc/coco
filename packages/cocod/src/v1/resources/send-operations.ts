@@ -65,8 +65,14 @@ async function preparePaymentRequestSend(
 ): Promise<SendOperation> {
   const { manager } = session;
   const action = { action: 'prepare the Payment Request' };
+  const amount =
+    input.amount === undefined
+      ? undefined
+      : input.unit === undefined
+        ? input.amount
+        : { amount: input.amount, unit: input.unit };
   const resolved = await withCocoErrors(action, () =>
-    manager.paymentRequests.parse(input.source.request),
+    manager.paymentRequests.parse(input.source.request, { amount }),
   );
   if (resolved.transport.type !== 'inband') {
     throw new V1HttpError({
@@ -92,12 +98,6 @@ async function preparePaymentRequestSend(
       retryable: false,
     });
   }
-  const amount =
-    input.amount === undefined
-      ? undefined
-      : input.unit === undefined
-        ? input.amount
-        : { amount: input.amount, unit: input.unit };
   const prepared = await withCocoErrors(action, () =>
     manager.paymentRequests.prepare(resolved, {
       mintUrl,

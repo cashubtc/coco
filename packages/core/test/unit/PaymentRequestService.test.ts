@@ -528,6 +528,58 @@ describe('PaymentRequestService', () => {
       });
       expect(result.payableMints).toEqual([testMintUrl]);
     });
+
+    describe('with an amount to pay', () => {
+      const amountless = new PaymentRequest([], 'request-id-amountless', undefined, 'sat', [
+        testMintUrl,
+        testMintUrl2,
+      ]).toEncodedRequest();
+
+      beforeEach(() => {
+        const balance = (spendable: number) => ({
+          spendable: Amount.from(spendable),
+          reserved: Amount.zero(),
+          total: Amount.from(spendable),
+          unit: 'sat',
+        });
+        (
+          mockProofService.getBalancesByMint as unknown as ReturnType<typeof mock>
+        ).mockImplementation(async () => ({
+          [testMintUrl]: balance(1),
+          [testMintUrl2]: balance(100),
+        }));
+      });
+
+      it('checks balances against the amount and keeps the request amountless', async () => {
+        const result = await service.parse(amountless, { amount: 50 });
+
+        expect(result.payableMints).toEqual([testMintUrl2]);
+        expect(result.amount).toBeUndefined();
+        expect(result.paymentRequest.amount).toBeUndefined();
+      });
+
+      it('lists every Mint with a balance when no amount is known', async () => {
+        const result = await service.parse(amountless);
+
+        expect(result.payableMints).toEqual([testMintUrl, testMintUrl2]);
+      });
+
+      it('rejects an amount in another unit', async () => {
+        await expect(
+          service.parse(amountless, { amount: { amount: 50, unit: 'usd' } }),
+        ).rejects.toThrow();
+      });
+
+      it('rejects an amount that contradicts the request', async () => {
+        const fixed = new PaymentRequest([], 'request-id-fixed', 100, 'sat', [
+          testMintUrl,
+        ]).toEncodedRequest();
+
+        await expect(service.parse(fixed, { amount: 50 })).rejects.toBeInstanceOf(
+          PaymentRequestError,
+        );
+      });
+    });
   });
 
   describe('prepare', () => {
