@@ -1,5 +1,6 @@
 import type { V1RouteMetadata } from './contract.js';
-import { v1ErrorSchema } from './schema.js';
+import { emptyCommandRequestSchema } from './resource-schemas.js';
+import { noBodySchema, v1ErrorSchema } from './schema.js';
 import type { RuntimeSchema } from './schema-nodes.js';
 
 /** OpenAPI 3.1 description of cocod's v1 interface, generated from the runtime route metadata. */
@@ -64,11 +65,11 @@ export function generateV1OpenApiDocument(
       security: route.capability ? [{ clientCredential: [] }] : [],
       'x-cocod-capability': route.capability,
       ...(parameters.length > 0 ? { parameters } : {}),
-      ...(route.requestSchema.name === 'NoBody'
+      ...(route.requestSchema === noBodySchema
         ? {}
         : {
             requestBody: {
-              required: route.requestSchema.name !== 'EmptyCommandRequest',
+              required: route.requestSchema !== emptyCommandRequestSchema,
               content: { 'application/json': { schema: reference(route.requestSchema) } },
             },
           }),

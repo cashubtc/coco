@@ -80,6 +80,11 @@ export interface V1RouteDefinition<
   P extends V1Parameters = V1Parameters,
 > extends V1RouteMetadata<TRequest, TResponse, P> {
   readonly handler: V1RouteHandler<TRequest, TResponse, P>;
+  /**
+   * Throws the lifecycle error that prevents this route from serving a request right now. The
+   * runner calls it before an idempotent replay, which never reaches the handler's own check.
+   */
+  readonly assertAvailable?: () => void;
 }
 
 /** Transport metadata for a stable v1 HTTP failure. */
@@ -112,10 +117,7 @@ export class V1HttpResponse<T> {
 
 /** Carries an event stream through the common authorization, header, and logging boundary. */
 export class V1HttpStreamResponse {
-  constructor(
-    readonly body: ReadableStream<Uint8Array>,
-    readonly headers?: ResponseHeaders,
-  ) {}
+  constructor(readonly body: ReadableStream<Uint8Array>) {}
 }
 
 /** Transport-independent host interface consumed by the v1 route handlers. */

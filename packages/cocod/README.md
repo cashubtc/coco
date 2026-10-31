@@ -78,6 +78,10 @@ cocod send bolt11 "lnbc..."
 cocod mints add https://mint.example.com/Bitcoin
 cocod mints list
 
+# Inspect or cancel an Operation named by a failed command
+cocod operations show melt <operation-id>
+cocod operations cancel melt <operation-id>
+
 # History
 cocod history --limit 10
 cocod history --watch

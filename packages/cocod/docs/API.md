@@ -23,7 +23,8 @@ Use the implicit `http://127.0.0.1:62626` endpoint for local auto-start. The glo
 - `history` - Print history entries as JSON
   - `--offset <number>` default `0`
   - `--limit <number>` default `20`, max `100`
-  - `--watch` print each later history entry as one JSON line until the Coco Session stops
+  - `--watch` print each new or changed history entry as one JSON line, reconnecting after a
+    disconnect, until a non-retryable failure such as a stopped Coco Session
 
 ### Receive
 
@@ -44,8 +45,15 @@ Use the implicit `http://127.0.0.1:62626` endpoint for local auto-start. The glo
 - `mints list` - List trusted Mints
 - `mints info <url>` - Print Mint information as JSON
 
+### Operations
+
+- `operations show <mint|melt|send|receive> <id>` - Print a Wallet Operation as JSON
+- `operations cancel <melt|send|receive> <id>` - Cancel a prepared Operation and release its
+  reservations
+
 One-shot send, receive, and payment commands prepare an Operation and then execute it. When
-execution fails, the error names the prepared Operation so it can be inspected or cancelled.
+execution fails, the error reads the Operation and reports its state, naming the commands that can
+inspect it and, while it is still prepared, cancel it.
 
 ### NPC
 
@@ -142,7 +150,7 @@ Operations (`{id}` is Coco's Operation ID; collections accept `offset` and `limi
 - Melt: `POST /v1/operations/melt` `{ mintUrl, quoteId, feeIndex? }` (admin, idem, `201`;
   `feeIndex` is required for on-chain Quotes and rejected otherwise);
   `GET /v1/operations/melt/prepared`, `/in-flight`, `/{id}` (read); `GET /v1/operations/melt/{id}/result`
-  (read, no-store; the preimage or outpoint); `POST /v1/operations/melt/{id}/execute` (admin, idem,
+  (admin, no-store; the preimage or outpoint); `POST /v1/operations/melt/{id}/execute` (admin, idem,
   no-store), `/cancel`, `/refresh`, `/reclaim` (admin, idem)
 - Send: `POST /v1/operations/send` `{ amount, unit?, mintUrl?, forceSwap? }` or
   `{ source: { type: "payment-request", request }, mintUrl?, amount?, unit? }` (admin, idem, `201`;

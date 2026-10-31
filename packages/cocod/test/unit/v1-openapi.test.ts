@@ -33,9 +33,11 @@ test('routes that return secrets or bearer value require wallet:admin and are no
   );
 
   expect(sensitive.map((route) => `${route.method} ${route.path}`).toSorted()).toEqual([
+    'GET /v1/operations/melt/{operationId}/result',
     'GET /v1/operations/send/{operationId}/result',
     'POST /v1/admin/wallet/initialize',
     'POST /v1/admin/wallet/recovery-material',
+    'POST /v1/operations/melt/{operationId}/execute',
     'POST /v1/operations/send/{operationId}/execute',
   ]);
   for (const route of sensitive) {

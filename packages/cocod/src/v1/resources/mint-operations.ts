@@ -22,7 +22,7 @@ import {
   requireRunningSession,
 } from './shared.js';
 
-const operationId = { operationId: pathIdentifier('Mint Operation ID.') };
+const operationIdParameters = { operationId: pathIdentifier('Mint Operation ID.') };
 
 function toMintOperationDocument(operation: MintOperation): MintOperationDocument {
   const failure = operation.terminalFailure;
@@ -114,7 +114,7 @@ export const mintOperationRoutes = [
     summary: 'Read a Mint Operation',
     requestSchema: noBodySchema,
     responseSchema: mintOperationSchema,
-    parameters: operationId,
+    parameters: operationIdParameters,
     handler: async (_input, { params }, { runtime }) => {
       const { manager } = requireRunningSession(runtime);
       return toMintOperationDocument(await readMintOperation(manager, params.operationId));
@@ -128,7 +128,7 @@ export const mintOperationRoutes = [
     requestSchema: emptyCommandRequestSchema,
     responseSchema: mintOperationSchema,
     idempotencyKey: 'optional',
-    parameters: operationId,
+    parameters: operationIdParameters,
     handler: async (_input, { params }, { runtime }) => {
       const { manager } = requireRunningSession(runtime);
       const operation = await withCocoErrors(
@@ -146,7 +146,7 @@ export const mintOperationRoutes = [
     requestSchema: emptyCommandRequestSchema,
     responseSchema: mintOperationSchema,
     idempotencyKey: 'optional',
-    parameters: operationId,
+    parameters: operationIdParameters,
     handler: async (_input, { params }, { runtime }) => {
       const { manager } = requireRunningSession(runtime);
       const operation = await withCocoErrors({ action: 'refresh the Mint Operation' }, () =>

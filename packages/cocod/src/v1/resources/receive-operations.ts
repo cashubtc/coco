@@ -19,7 +19,7 @@ import {
   requireRunningSession,
 } from './shared.js';
 
-const operationId = { operationId: pathIdentifier('Receive Operation ID.') };
+const operationIdParameters = { operationId: pathIdentifier('Receive Operation ID.') };
 
 function toReceiveOperationDocument(operation: ReceiveOperation): ReceiveOperationDocument {
   return {
@@ -79,7 +79,7 @@ function commandRoute(command: 'cancel' | 'refresh') {
     requestSchema: emptyCommandRequestSchema,
     responseSchema: receiveOperationSchema,
     idempotencyKey: 'optional',
-    parameters: operationId,
+    parameters: operationIdParameters,
     handler: async (_input, { params }, { runtime }) => {
       const { manager } = requireRunningSession(runtime);
       await withCocoErrors({ action: `${command} the Receive Operation` }, async () => {
@@ -117,7 +117,7 @@ export const receiveOperationRoutes = [
     summary: 'Read a Receive Operation',
     requestSchema: noBodySchema,
     responseSchema: receiveOperationSchema,
-    parameters: operationId,
+    parameters: operationIdParameters,
     handler: async (_input, { params }, { runtime }) => {
       const { manager } = requireRunningSession(runtime);
       return toReceiveOperationDocument(await readReceiveOperation(manager, params.operationId));
@@ -131,7 +131,7 @@ export const receiveOperationRoutes = [
     requestSchema: emptyCommandRequestSchema,
     responseSchema: receiveOperationSchema,
     idempotencyKey: 'optional',
-    parameters: operationId,
+    parameters: operationIdParameters,
     handler: async (_input, { params }, { runtime }) => {
       const { manager } = requireRunningSession(runtime);
       const operation = await withCocoErrors(

@@ -1,3 +1,5 @@
+import type { LifecycleOperationType } from '@cashu/coco-core';
+
 import {
   amountNode,
   arrayNode,
@@ -52,23 +54,28 @@ function pageNode(item: SchemaNode): SchemaNode {
   });
 }
 
+/** Rejects anything other than an absolute HTTP(S) URL without credentials. */
+export function assertHttpMintUrl(value: string, label: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`${label} must be an absolute URL`);
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`${label} must use HTTP or HTTPS`);
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error(`${label} must not contain credentials`);
+  }
+}
+
 /** Request-side Mint URL: an absolute HTTP(S) URL that Coco normalizes. */
 const mintUrlRequestNode: SchemaNode = {
   jsonSchema: mintUrlNode.jsonSchema,
   parse(value, path) {
     mintUrlNode.parse(value, path);
-    let parsed: URL;
-    try {
-      parsed = new URL(value as string);
-    } catch {
-      throw new Error(`${path} must be an absolute URL`);
-    }
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      throw new Error(`${path} must use HTTP or HTTPS`);
-    }
-    if (parsed.username || parsed.password) {
-      throw new Error(`${path} must not contain credentials`);
-    }
+    assertHttpMintUrl(value as string, path);
     return value;
   },
 };
@@ -221,7 +228,9 @@ function constant<T extends number>(value: unknown, expected: T, path: string): 
 // Quotes
 // ---------------------------------------------------------------------------
 
-export type QuoteMethod = 'bolt11' | 'bolt12' | 'onchain';
+export const QUOTE_METHODS = ['bolt11', 'bolt12', 'onchain'] as const;
+
+export type QuoteMethod = (typeof QUOTE_METHODS)[number];
 
 export type CreateMintQuoteRequest =
   | { method: 'bolt11'; amount: string; unit?: string; mintUrl?: string; locked?: boolean }
@@ -274,7 +283,7 @@ export interface MeltQuoteDocument {
   updatedAt: string;
 }
 
-const quoteMethodNode = enumNode(['bolt11', 'bolt12', 'onchain']);
+const quoteMethodNode = enumNode(QUOTE_METHODS);
 const meltPaymentAmountNode = positiveAmountNode(
   'Payment amount in satoshis, independent of the ecash unit that funds the payment.',
 );
@@ -644,7 +653,7 @@ export const meltOperationsSchema = namedSchema<PageDocument<MeltOperationDocume
 );
 
 const meltResultNode = unionNode([
-  objectNode({ preimage: stringNode({ minLength: 1 }) }),
+  objectNode({ preimage: stringNode({ minLength: 1, sensitive: true }) }),
   objectNode({ outpoint: stringNode({ minLength: 1 }) }),
 ]);
 
@@ -805,7 +814,7 @@ export const paymentRequestEvaluationSchema = namedSchema<PaymentRequestEvaluati
 /** Safe projection of a Wallet history entry; it omits tokens, requests, and metadata. */
 export interface HistoryDocument {
   id: string;
-  type: 'mint' | 'melt' | 'send' | 'receive';
+  type: LifecycleOperationType;
   source: 'operation' | 'legacy';
   operationId?: string;
   quoteId?: string;
@@ -847,7 +856,7 @@ export type ResourceEventDocument = { timestamp: string } & (
   | {
       type: 'operation.updated';
       data: {
-        operationType: 'mint' | 'melt' | 'send' | 'receive';
+        operationType: LifecycleOperationType;
         operationId: string;
         mintUrl: string;
       };

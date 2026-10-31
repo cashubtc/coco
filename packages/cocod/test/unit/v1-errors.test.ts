@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   HttpResponseError,
+  MeltQuoteValidationError,
   MintFetchError,
   MintOperationError,
   MintSwapChildOperationError,
@@ -58,6 +59,24 @@ describe('Coco error mapping', () => {
         expectedStates: ['prepared'],
       },
     });
+    expect(
+      mapped(
+        new OperationStateError(
+          {
+            operationType: 'melt',
+            operationId: 'op-9',
+            state: 'pending',
+            expectedStates: ['prepared', 'pending'],
+            quoteState: 'PAID',
+          },
+          'Cannot rollback',
+        ),
+      ),
+    ).toMatchObject({
+      status: 409,
+      code: 'invalid_operation_state',
+      details: { state: 'pending', quoteState: 'PAID' },
+    });
     expect(mapped(new SendOperationConflictError('op-3'))).toMatchObject({
       status: 409,
       code: 'operation_conflict',
@@ -92,6 +111,10 @@ describe('Coco error mapping', () => {
       code: 'mint_unavailable',
     });
     expect(mapped(new ProofValidationError('x'))).toMatchObject({
+      status: 400,
+      code: 'invalid_request',
+    });
+    expect(mapped(new MeltQuoteValidationError('x'))).toMatchObject({
       status: 400,
       code: 'invalid_request',
     });

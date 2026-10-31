@@ -1,4 +1,4 @@
-import type { Manager, MeltOperation, MeltQuote } from '@cashu/coco-core';
+import type { Manager, MeltOperation, MeltQuote, PrepareMeltInput } from '@cashu/coco-core';
 
 import { V1HttpError, V1HttpResponse } from '../contract.js';
 import { noBodySchema } from '../schema.js';
@@ -24,7 +24,7 @@ import {
   requireRunningSession,
 } from './shared.js';
 
-const operationId = { operationId: pathIdentifier('Melt Operation ID.') };
+const operationIdParameters = { operationId: pathIdentifier('Melt Operation ID.') };
 
 function toMeltOperationDocument(operation: MeltOperation): MeltOperationDocument {
   const base = {
@@ -93,19 +93,16 @@ function invalidFeeIndex(message: string): V1HttpError {
   });
 }
 
-/** On-chain quotes require a fee option; BOLT quotes have a single fee reserve and reject one. */
+/**
+ * BOLT quotes have a single fee reserve, so v1 rejects the `feeIndex` Coco would ignore. Coco owns
+ * the on-chain fee option rules and rejects a missing or unknown one with a typed error.
+ */
 function prepareMelt(manager: Manager, quote: MeltQuote, feeIndex: number | undefined) {
-  if (quote.method === 'onchain') {
-    if (feeIndex === undefined) throw invalidFeeIndex('An on-chain Melt Quote requires feeIndex');
-    if (!quote.fee_options.some((option) => option.fee_index === feeIndex)) {
-      throw invalidFeeIndex('feeIndex does not match a fee option of the Melt Quote');
-    }
-    return manager.ops.melt.prepare({ quote, feeIndex });
+  if (quote.method !== 'onchain' && feeIndex !== undefined) {
+    throw invalidFeeIndex('Only on-chain Melt Quotes accept feeIndex');
   }
-  if (feeIndex !== undefined) throw invalidFeeIndex('Only on-chain Melt Quotes accept feeIndex');
-  return quote.method === 'bolt11'
-    ? manager.ops.melt.prepare({ quote })
-    : manager.ops.melt.prepare({ quote });
+  // The request schema cannot correlate `feeIndex` with the method of a stored quote.
+  return manager.ops.melt.prepare({ quote, feeIndex } as PrepareMeltInput);
 }
 
 function listRoute(collection: 'prepared' | 'in-flight') {
@@ -145,7 +142,7 @@ function commandRoute(command: 'cancel' | 'refresh' | 'reclaim') {
     requestSchema: emptyCommandRequestSchema,
     responseSchema: meltOperationSchema,
     idempotencyKey: 'optional',
-    parameters: operationId,
+    parameters: operationIdParameters,
     handler: async (_input, { params }, { runtime }) => {
       const { manager } = requireRunningSession(runtime);
       await withCocoErrors({ action: `${command} the Melt Operation` }, async () => {
@@ -187,7 +184,7 @@ export const meltOperationRoutes = [
     summary: 'Read a Melt Operation',
     requestSchema: noBodySchema,
     responseSchema: meltOperationSchema,
-    parameters: operationId,
+    parameters: operationIdParameters,
     handler: async (_input, { params }, { runtime }) => {
       const { manager } = requireRunningSession(runtime);
       return toMeltOperationDocument(await readMeltOperation(manager, params.operationId));
@@ -202,7 +199,7 @@ export const meltOperationRoutes = [
     responseSchema: executeMeltOperationResponseSchema,
     idempotencyKey: 'optional',
     responseCacheControl: 'no-store',
-    parameters: operationId,
+    parameters: operationIdParameters,
     handler: async (_input, { params }, { runtime }) => {
       const { manager } = requireRunningSession(runtime);
       const operation = await withCocoErrors(
@@ -215,13 +212,14 @@ export const meltOperationRoutes = [
   }),
   defineResourceRoute({
     method: 'GET',
+    // A preimage can act as a bearer credential, so reading it requires the admin capability.
     path: '/v1/operations/melt/{operationId}/result',
-    capability: 'wallet:read',
+    capability: 'wallet:admin',
     summary: 'Read the proof of payment of a finalized Melt Operation',
     requestSchema: noBodySchema,
     responseSchema: meltResultSchema,
     responseCacheControl: 'no-store',
-    parameters: operationId,
+    parameters: operationIdParameters,
     handler: async (_input, { params }, { runtime }) => {
       const { manager } = requireRunningSession(runtime);
       const operation = await readMeltOperation(manager, params.operationId);

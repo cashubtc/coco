@@ -1,8 +1,10 @@
+import type { LifecycleOperationType } from '@cashu/coco-core';
+import { Argument } from 'commander';
+
 import { startDaemon } from './daemon';
 import { AdministrativeCredential } from './credentials.js';
 import {
   assertHostLocalOperation,
-  createV1Client,
   describePaymentRequest,
   handleDaemonCommand,
   handleV1Command,
@@ -11,10 +13,11 @@ import {
   payPaymentRequest,
   program,
   receiveCashu,
-  registerTrustedMint,
   requestBolt11Receive,
   sendCashu,
   waitForSessionTransition,
+  watchHistory,
+  type CancellableOperationType,
 } from './cli-shared';
 import type { LifecycleStatusDocument } from './v1/http.js';
 import {
@@ -39,7 +42,7 @@ program
   .command('status')
   .description('Show Cocod Process, Wallet Seed Access, and Coco Session status')
   .action(async () => {
-    printLifecycleStatus(await handleV1Command((client) => client.status()));
+    printJson(await handleV1Command((client) => client.status()));
   });
 
 const walletCmd = program.command('wallet').description('Wallet lifecycle operations');
@@ -54,7 +57,7 @@ walletCmd
     );
     console.log('Wallet initialized.');
     printWalletRecoveryMaterial(result.generatedMnemonic, true);
-    printLifecycleStatus(result.status);
+    printJson(result.status);
   });
 
 walletCmd
@@ -84,7 +87,7 @@ sessionCmd
         'running',
       ),
     );
-    printLifecycleStatus(status);
+    printJson(status);
   });
 
 sessionCmd
@@ -97,7 +100,7 @@ sessionCmd
         'stopped',
       ),
     );
-    printLifecycleStatus(status);
+    printJson(status);
   });
 
 program
@@ -156,12 +159,34 @@ sendCmd
     );
   });
 
+// Operations - recover a prepared or in-flight Operation that a one-shot command named
+const operationsCmd = program.command('operations').description('Wallet Operation recovery');
+
+operationsCmd
+  .command('show')
+  .description('Show a Wallet Operation')
+  .addArgument(
+    new Argument('<type>', 'Operation type').choices(['mint', 'melt', 'send', 'receive']),
+  )
+  .argument('<id>', 'Operation ID')
+  .action(async (type: LifecycleOperationType, id: string) => {
+    printJson(await handleWalletCommand((client) => client.getOperation(type, id)));
+  });
+
+operationsCmd
+  .command('cancel')
+  .description('Cancel a prepared Wallet Operation and release its reservations')
+  .addArgument(new Argument('<type>', 'Operation type').choices(['melt', 'send', 'receive']))
+  .argument('<id>', 'Operation ID')
+  .action(async (type: CancellableOperationType, id: string) => {
+    printJson(await handleWalletCommand((client) => client.cancelOperation(type, id)));
+  });
+
 program
   .command('health')
   .description('Check Cocod Process reachability')
   .action(async () => {
-    const health = await handleV1Command((client) => client.health());
-    console.log(JSON.stringify(health, null, 2));
+    printJson(await handleV1Command((client) => client.health()));
   });
 
 // Logs
@@ -239,7 +264,9 @@ mintsCmd
   .command('add <url>')
   .description('Register and trust a Mint')
   .action(async (url: string) => {
-    const mint = await handleWalletCommand((client) => registerTrustedMint(client, url));
+    const mint = await handleWalletCommand((client) =>
+      client.registerMint({ mintUrl: url, trusted: true }),
+    );
     console.log(`Trusted Mint: ${mint.mintUrl}`);
   });
 
@@ -330,20 +357,16 @@ program
       process.exit(1);
     }
 
-    printJson((await handleWalletCommand((client) => client.listHistory({ offset, limit }))).items);
-
-    // Stream later history entries; the stream ends when the Coco Session stops.
-    if (options.watch) {
-      try {
-        await createV1Client().watchEvents((event) => {
-          if (event.type === 'history.updated') console.log(JSON.stringify(event.data));
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        console.error(message);
-        process.exit(1);
-      }
-    }
+    await handleWalletCommand(async (client) => {
+      const { items } = await client.listHistory({ offset, limit });
+      printJson(items);
+      if (!options.watch) return;
+      await watchHistory(client, items, {
+        limit,
+        onEntry: (entry) => console.log(JSON.stringify(entry)),
+        onDisconnect: () => console.error('Event stream disconnected; reconnecting'),
+      });
+    });
   });
 
 // Daemon command - special case, doesn't go through IPC
@@ -366,10 +389,6 @@ function requireHostLocalOperation(operation: string): void {
 
 function printJson(value: unknown): void {
   console.log(JSON.stringify(value, null, 2));
-}
-
-function printLifecycleStatus(status: LifecycleStatusDocument): void {
-  console.log(JSON.stringify(status, null, 2));
 }
 
 function printWalletRecoveryMaterial(mnemonic: string, leadingNewline = false): void {

@@ -24,7 +24,7 @@ import {
   requireRunningSession,
 } from './shared.js';
 
-const operationId = { operationId: pathIdentifier('Send Operation ID.') };
+const operationIdParameters = { operationId: pathIdentifier('Send Operation ID.') };
 
 function toSendOperationDocument(operation: SendOperation): SendOperationDocument {
   return {
@@ -144,7 +144,7 @@ function commandRoute(command: 'cancel' | 'refresh' | 'reclaim') {
     requestSchema: emptyCommandRequestSchema,
     responseSchema: sendOperationSchema,
     idempotencyKey: 'optional',
-    parameters: operationId,
+    parameters: operationIdParameters,
     handler: async (_input, { params }, { runtime }) => {
       const { manager } = requireRunningSession(runtime);
       await withCocoErrors(
@@ -196,7 +196,7 @@ export const sendOperationRoutes = [
     summary: 'Read a Send Operation',
     requestSchema: noBodySchema,
     responseSchema: sendOperationSchema,
-    parameters: operationId,
+    parameters: operationIdParameters,
     handler: async (_input, { params }, { runtime }) => {
       const { manager } = requireRunningSession(runtime);
       return toSendOperationDocument(await readSendOperation(manager, params.operationId));
@@ -211,7 +211,7 @@ export const sendOperationRoutes = [
     responseSchema: executeSendOperationResponseSchema,
     idempotencyKey: 'optional',
     responseCacheControl: 'no-store',
-    parameters: operationId,
+    parameters: operationIdParameters,
     handler: async (_input, { params }, { runtime }) => {
       const { manager } = requireRunningSession(runtime);
       const { operation, token } = await withCocoErrors(
@@ -233,7 +233,7 @@ export const sendOperationRoutes = [
     requestSchema: noBodySchema,
     responseSchema: sendResultSchema,
     responseCacheControl: 'no-store',
-    parameters: operationId,
+    parameters: operationIdParameters,
     handler: async (_input, { params }, { runtime }) => {
       const { manager } = requireRunningSession(runtime);
       const operation = await readSendOperation(manager, params.operationId);

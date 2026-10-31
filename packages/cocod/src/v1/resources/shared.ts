@@ -12,7 +12,7 @@ import {
   type V1RouteMetadata,
   type V1Runtime,
 } from '../contract.js';
-import type { PageDocument } from '../resource-schemas.js';
+import { assertHttpMintUrl, type PageDocument } from '../resource-schemas.js';
 
 /** Host dependencies bound to Wallet resource routes by the HTTP composition root. */
 export interface ResourceDependencies {
@@ -59,6 +59,10 @@ export function defineResourceRoute<
       defineV1Route<TRequest, TResponse, P>({
         ...metadata,
         handler: (input, context) => handler(input, context, dependencies),
+        // Every idempotent resource command changes the Wallet, so a replay needs a running Session.
+        ...(metadata.idempotencyKey === 'optional'
+          ? { assertAvailable: () => void requireRunningSession(dependencies.runtime) }
+          : {}),
       }),
   };
 }
@@ -239,11 +243,7 @@ export function queryStrings(description: string): V1Parameter<string[]> {
 
 /** Normalizes an absolute HTTP(S) Mint URL that a request schema or parameter accepted. */
 export function normalizeRequestMintUrl(value: string): string {
-  const parsed = new URL(value);
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new Error('Mint URL must use HTTP or HTTPS');
-  }
-  if (parsed.username || parsed.password) throw new Error('Mint URL must not contain credentials');
+  assertHttpMintUrl(value, 'Mint URL');
   return normalizeMintUrl(value);
 }
 

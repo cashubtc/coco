@@ -260,8 +260,8 @@ credential, it does not identify which Cocod Client is calling, and it does not 
 Wallet Seed Access.
 
 Reads require `wallet:read`; commands require `wallet:admin`. A response that carries a secret or
-bearer value, such as Wallet Recovery Material or an encoded Cashu token, MUST require
-`wallet:admin` and `Cache-Control: no-store`, including a read of an already created token.
+bearer value, such as Wallet Recovery Material, an encoded Cashu token, or a Melt preimage, MUST
+require `wallet:admin` and `Cache-Control: no-store`, including a read of an already created token.
 
 Browser clients are outside v1 scope. Cocod does not emit permissive CORS headers and clients MUST
 NOT expose the shared administrative credential to browser storage or browser application code.
@@ -354,7 +354,9 @@ inspect, refresh, or retrieve the result
 ```
 
 The CLI keeps one-shot human commands by issuing two v1 requests. When execution fails after
-preparation, it names the prepared Operation so the person can inspect or cancel it.
+preparation, including when the connection drops, it reads the Operation and reports its state,
+naming it so the person can inspect it with `cocod operations show` and, while it is still prepared,
+cancel it with `cocod operations cancel`.
 
 ### Lifecycle failures
 
@@ -372,7 +374,8 @@ preparation, it names the prepared Operation so the person can inspect or cancel
 | Result is not available in the Operation's current state  | 409    | `operation_result_not_available` |
 
 `invalid_operation_state` details carry `operationType`, `operationId`, the observed `state`, and
-`expectedStates`. `mint_rejected` details carry the Mint's NUT error code as `mintErrorCode`, or its
+`expectedStates`, plus `quoteState` when the Melt Quote's state rather than the Operation's own state
+blocks the command. `mint_rejected` details carry the Mint's NUT error code as `mintErrorCode`, or its
 HTTP status as `mintStatus`.
 
 `mint_unreachable` is retryable, except for commands that may already have reached the Mint, such as
@@ -624,7 +627,9 @@ every state.
 - Lifecycle mutation requests SHOULD include an `Idempotency-Key` header; other commands MAY.
 - Repeating the same key and request returns the original result. The request identity is the
   method, concrete path, parsed parameters, and body, so one key cannot replay a command recorded
-  for another Operation or Quote.
+  for another Operation or Quote. The Coco Session rules above take precedence: while a Wallet
+  resource is unavailable, a repeated request returns the lifecycle error instead of its recorded
+  result, and the original result is replayed once the Coco Session is running again.
 - Reusing a key with a different request returns `idempotency_key_conflict`.
 - Idempotency records live only in memory for the lifetime of one Cocod Process. After a restart,
   clients reconcile through `GET /v1/status` and the Coco resources; cocod does not promise to

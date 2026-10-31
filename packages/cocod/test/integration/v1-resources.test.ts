@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { Amount, initializeCoco, type Manager, type SendOperation } from '@cashu/coco-core';
 import { SqliteRepositories } from '@cashu/coco-sqlite-bun';
 
+import { createV1Client, V1ClientError, watchHistory } from '../../src/cli-shared.js';
 import { AdministrativeCredential, loadClientCredential } from '../../src/credentials.js';
 import type { CocodStatus, RunningCocoSession } from '../../src/runtime.js';
 import {
@@ -51,6 +52,7 @@ interface Harness {
     options?: { body?: unknown; headers?: Record<string, string>; credential?: string },
   ): Promise<Response>;
   readOnlyCredential(): Promise<string>;
+  clientCredentialFile: string;
   url: string;
   adminCredential: string;
 }
@@ -121,6 +123,7 @@ async function startHarness(options: { keepAliveMs?: number } = {}): Promise<Har
     mint,
     url,
     adminCredential,
+    clientCredentialFile: paths.clientCredentialFile,
     setStatus: (next) => {
       status = next;
     },
@@ -337,6 +340,29 @@ describe('v1 Wallet resources over a real Coco Session', () => {
     ).toHaveLength(1);
   });
 
+  test('refuse an idempotent replay while the Wallet is unavailable', async () => {
+    const harness = await startHarness();
+    await harness.call('POST', '/v1/mints', { body: { mintUrl: harness.mint.url, trusted: true } });
+    const create = () =>
+      harness.call('POST', '/v1/quotes/mint', {
+        body: { method: 'bolt11', amount: '5' },
+        headers: { 'Idempotency-Key': 'quote-1' },
+      });
+    const first = (await (await create()).json()) as { quoteId: string };
+
+    harness.setStatus({
+      ...runningStatus(),
+      seedAccess: { state: 'locked', requiresPassphrase: true },
+      cocoSession: { state: 'stopped', startedAt: null, lastFailure: null },
+    } as CocodStatus);
+    const locked = await create();
+    expect([locked.status, (await errorOf(locked)).code]).toEqual([423, 'wallet_locked']);
+
+    harness.setStatus(runningStatus());
+    const replay = (await (await create()).json()) as { quoteId: string };
+    expect(replay.quoteId).toBe(first.quoteId);
+  });
+
   test('map typed Coco lifecycle errors to stable codes with details', async () => {
     const harness = await startHarness();
     await harness.repositories.sendOperationRepository.create(rolledBackSend(harness.mint.url));
@@ -385,7 +411,7 @@ describe('v1 Wallet resources over a real Coco Session', () => {
     expect(await errorOf(result)).toMatchObject({ code: 'operation_result_not_available' });
   });
 
-  test('require the admin capability to read a Send token', async () => {
+  test('require the admin capability to read a Send token or Melt preimage', async () => {
     const harness = await startHarness();
     await harness.repositories.sendOperationRepository.create(rolledBackSend(harness.mint.url));
     const readOnly = await harness.readOnlyCredential();
@@ -396,9 +422,13 @@ describe('v1 Wallet resources over a real Coco Session', () => {
     const operation = await harness.call('GET', '/v1/operations/send/send-rolled-back', {
       credential: readOnly,
     });
+    const meltResult = await harness.call('GET', '/v1/operations/melt/melt-1/result', {
+      credential: readOnly,
+    });
 
     expect(result.status).toBe(403);
     expect(operation.status).toBe(200);
+    expect(meltResult.status).toBe(403);
   });
 
   test('reject invalid parameters and request bodies before calling Coco', async () => {
@@ -470,6 +500,60 @@ describe('v1 Wallet resources over a real Coco Session', () => {
       body: { token: 'cashuBnot-a-token' },
     });
     expect(token.status).toBe(400);
+  });
+
+  test('let the CLI client inspect an Operation and report why it cannot be cancelled', async () => {
+    const harness = await startHarness();
+    await harness.repositories.sendOperationRepository.create(rolledBackSend(harness.mint.url));
+    const client = createV1Client({
+      url: harness.url,
+      credentialFile: harness.clientCredentialFile,
+    });
+
+    expect(await client.getOperation('send', 'send-rolled-back')).toMatchObject({
+      id: 'send-rolled-back',
+      state: 'rolled_back',
+    });
+    const cancelling = client.cancelOperation('send', 'send-rolled-back');
+    await expect(cancelling).rejects.toBeInstanceOf(V1ClientError);
+    await expect(cancelling).rejects.toMatchObject({
+      status: 409,
+      code: 'invalid_operation_state',
+    });
+    await expect(client.getOperation('melt', 'missing')).rejects.toMatchObject({
+      status: 404,
+      code: 'not_found',
+    });
+  });
+
+  test('watch history over the event stream until the Coco Session stops', async () => {
+    const harness = await startHarness({ keepAliveMs: 20 });
+    await harness.call('POST', '/v1/mints', { body: { mintUrl: harness.mint.url, trusted: true } });
+    const client = createV1Client({
+      url: harness.url,
+      credentialFile: harness.clientCredentialFile,
+    });
+    const { promise: firstEntry, resolve: entryReported } = Promise.withResolvers<string>();
+
+    const watching = watchHistory(client, [], {
+      limit: 5,
+      onEntry: (entry) => entryReported(entry.type),
+      reconnectDelayMs: 5,
+    });
+    const quote = (await (
+      await harness.call('POST', '/v1/quotes/mint', { body: { method: 'bolt11', amount: '5' } })
+    ).json()) as { mintUrl: string; quoteId: string };
+    await harness.call('POST', '/v1/operations/mint', {
+      body: { mintUrl: quote.mintUrl, quoteId: quote.quoteId, amount: '5' },
+    });
+
+    expect(await firstEntry).toBe('mint');
+
+    harness.setStatus({
+      ...runningStatus(),
+      cocoSession: { state: 'stopped', startedAt: null, lastFailure: null },
+    } as CocodStatus);
+    await expect(watching).rejects.toMatchObject({ status: 503, code: 'session_stopped' });
   });
 
   test('stream Mint invalidations and close the stream when the Coco Session stops', async () => {

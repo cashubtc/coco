@@ -1,6 +1,7 @@
 import {
   HttpResponseError,
   KeysetSyncError,
+  MeltQuoteValidationError,
   MintFetchError,
   MintOperationError,
   MintQuoteValidationError,
@@ -16,6 +17,7 @@ import {
   TokenValidationError,
   UnitValidationError,
   UnknownMintError,
+  type LifecycleOperationType,
 } from '@cashu/coco-core';
 
 import { V1HttpError } from '../contract.js';
@@ -61,6 +63,7 @@ export function toV1Error(cause: unknown, context: CocoErrorContext): V1HttpErro
         operationId: cause.operationId,
         state: cause.state,
         expectedStates: [...cause.expectedStates],
+        ...(cause.quoteState !== undefined ? { quoteState: cause.quoteState } : {}),
       },
       cause,
     });
@@ -116,7 +119,8 @@ export function toV1Error(cause: unknown, context: CocoErrorContext): V1HttpErro
     cause instanceof UnitValidationError ||
     cause instanceof ProofValidationError ||
     cause instanceof TokenValidationError ||
-    cause instanceof MintQuoteValidationError
+    cause instanceof MintQuoteValidationError ||
+    cause instanceof MeltQuoteValidationError
   ) {
     return new V1HttpError({
       status: 400,
@@ -186,7 +190,7 @@ export async function withCocoErrors<T>(
 
 /** The 404 a lookup returns when Coco has no Operation with this ID. */
 export function operationNotFound(
-  operationType: 'mint' | 'melt' | 'send' | 'receive',
+  operationType: LifecycleOperationType,
   operationId: string,
 ): V1HttpError {
   return toV1Error(new OperationNotFoundError(operationType, operationId), {

@@ -10,6 +10,7 @@ import {
   mintQuoteSchema,
   pendingMeltQuotesSchema,
   pendingMintQuotesSchema,
+  QUOTE_METHODS,
   type MeltQuoteDocument,
   type MintQuoteDocument,
   type PageDocument,
@@ -30,8 +31,6 @@ import {
   requireRunningSession,
   type ResourceRoute,
 } from './shared.js';
-
-const QUOTE_METHODS = ['bolt11', 'bolt12', 'onchain'] as const;
 
 function toMintQuoteDocument(quote: MintQuote): MintQuoteDocument {
   return {

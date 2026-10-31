@@ -1,3 +1,4 @@
+import type { LifecycleOperationType } from '@cashu/coco-core';
 import { program } from 'commander';
 
 import { loadClientCredential } from './credentials.js';
@@ -7,6 +8,7 @@ import {
   executeSendOperationResponseSchema,
   healthSchema,
   historyPageSchema,
+  historySchema,
   initializeWalletResponseSchema,
   knownMintSchema,
   knownMintsSchema,
@@ -65,7 +67,31 @@ import {
 } from './utils/config.js';
 
 const SESSION_TRANSITION_POLL_INTERVAL_MS = 100;
+const HISTORY_WATCH_RECONNECT_DELAY_MS = 1_000;
 export const DEFAULT_SESSION_TRANSITION_TIMEOUT_MS = DEFAULT_SHUTDOWN_TIMEOUT_MS + 5_000;
+
+const OPERATION_SCHEMAS = {
+  mint: mintOperationSchema,
+  melt: meltOperationSchema,
+  send: sendOperationSchema,
+  receive: receiveOperationSchema,
+};
+
+const OPERATION_LABELS: Record<LifecycleOperationType, string> = {
+  mint: 'Mint',
+  melt: 'Melt',
+  send: 'Send',
+  receive: 'Receive',
+};
+
+export type OperationDocument =
+  | MintOperationDocument
+  | MeltOperationDocument
+  | SendOperationDocument
+  | ReceiveOperationDocument;
+
+/** Operation families with a cancel command; a Mint Operation has no reservations to release. */
+export type CancellableOperationType = Exclude<LifecycleOperationType, 'mint'>;
 
 export interface CommandResponse {
   output?: unknown;
@@ -110,10 +136,19 @@ export interface V1Client {
   executeSend(operationId: string): Promise<ExecuteSendOperationResponse>;
   prepareReceive(token: string): Promise<ReceiveOperationDocument>;
   executeReceive(operationId: string): Promise<ReceiveOperationDocument>;
+  getOperation(type: LifecycleOperationType, operationId: string): Promise<OperationDocument>;
+  cancelOperation(type: CancellableOperationType, operationId: string): Promise<OperationDocument>;
   evaluatePaymentRequest(request: string): Promise<PaymentRequestEvaluationDocument>;
   listHistory(query: { offset: number; limit: number }): Promise<PageDocument<HistoryDocument>>;
-  /** Streams resource events until the stream ends or `signal` aborts. */
-  watchEvents(onEvent: (event: ResourceEventDocument) => void, signal?: AbortSignal): Promise<void>;
+  getHistoryEntry(id: string): Promise<HistoryDocument>;
+  /**
+   * Streams resource events until the stream ends or `signal` aborts. `onOpen` runs once the stream
+   * is established, so a client that refetches then cannot miss a later invalidation.
+   */
+  watchEvents(
+    onEvent: (event: ResourceEventDocument) => void,
+    options?: { signal?: AbortSignal; onOpen?: () => void },
+  ): Promise<void>;
 }
 
 export class V1ClientError extends Error {
@@ -128,6 +163,11 @@ export class V1ClientError extends Error {
   ) {
     super(message);
   }
+}
+
+/** A command failed without a v1 error after preparation, such as a dropped connection. */
+export class OperationExecutionError extends Error {
+  override readonly name = 'OperationExecutionError';
 }
 
 export function assertHostLocalOperation(
@@ -228,11 +268,20 @@ export function createV1Client(options: ClientCredentialOptions = {}): V1Client 
     prepareReceive: (token) => post('/v1/operations/receive', { token }, receiveOperationSchema),
     executeReceive: (operationId) =>
       post(operationPath('receive', operationId, 'execute'), undefined, receiveOperationSchema),
+    getOperation: (type, operationId) =>
+      get<OperationDocument>(operationPath(type, operationId), OPERATION_SCHEMAS[type]),
+    cancelOperation: (type, operationId) =>
+      post<OperationDocument>(
+        operationPath(type, operationId, 'cancel'),
+        undefined,
+        OPERATION_SCHEMAS[type],
+      ),
     evaluatePaymentRequest: (request) =>
       post('/v1/payment-requests/evaluate', { request }, paymentRequestEvaluationSchema),
     listHistory: ({ offset, limit }) =>
       get(withQuery('/v1/history', { offset: `${offset}`, limit: `${limit}` }), historyPageSchema),
-    watchEvents: (onEvent, signal) => watchV1Events(endpoint, credentialFile, onEvent, signal),
+    getHistoryEntry: (id) => get(`/v1/history/${encodeURIComponent(id)}`, historySchema),
+    watchEvents: (onEvent, options) => watchV1Events(endpoint, credentialFile, onEvent, options),
   };
 
   function get<T>(path: string, schema: RuntimeSchema<T>): Promise<T> {
@@ -250,16 +299,12 @@ function withQuery(path: string, query: Record<string, string>): string {
 }
 
 function operationPath(
-  type: 'mint' | 'melt' | 'send' | 'receive',
+  type: LifecycleOperationType,
   operationId: string,
-  command: string,
+  command?: string,
 ): string {
-  return `/v1/operations/${type}/${encodeURIComponent(operationId)}/${command}`;
-}
-
-/** Registers a Known Mint and trusts it in one request. */
-export function registerTrustedMint(client: V1Client, mintUrl: string): Promise<KnownMintDocument> {
-  return client.registerMint({ mintUrl, trusted: true });
+  const path = `/v1/operations/${type}/${encodeURIComponent(operationId)}`;
+  return command ? `${path}/${command}` : path;
 }
 
 /** Creates a BOLT11 Mint Quote and its pending Mint Operation; returns the invoice to pay. */
@@ -291,7 +336,7 @@ export async function sendCashu(
     unit: 'sat',
     ...(input.mintUrl !== undefined ? { mintUrl: input.mintUrl } : {}),
   });
-  const executed = await executeOrExplain('Send', prepared.id, () =>
+  const executed = await executeOrExplain(client, 'send', prepared.id, () =>
     client.executeSend(prepared.id),
   );
   return executed.result.token;
@@ -308,7 +353,7 @@ export async function payBolt11Invoice(
     ...(input.mintUrl !== undefined ? { mintUrl: input.mintUrl } : {}),
   });
   const prepared = await client.prepareMelt({ mintUrl: quote.mintUrl, quoteId: quote.quoteId });
-  const { operation } = await executeOrExplain('Melt', prepared.id, () =>
+  const { operation } = await executeOrExplain(client, 'melt', prepared.id, () =>
     client.executeMelt(prepared.id),
   );
   return operation.state === 'finalized'
@@ -319,7 +364,7 @@ export async function payBolt11Invoice(
 /** Prepares and executes a Cashu Receive. */
 export async function receiveCashu(client: V1Client, token: string): Promise<string> {
   const prepared = await client.prepareReceive(token);
-  const received = await executeOrExplain('Receive', prepared.id, () =>
+  const received = await executeOrExplain(client, 'receive', prepared.id, () =>
     client.executeReceive(prepared.id),
   );
   return `Received ${received.amount} ${received.unit}`;
@@ -344,30 +389,125 @@ export async function describePaymentRequest(client: V1Client, request: string):
 /** Pays an in-band Payment Request; returns the X-Cashu header carrying the token. */
 export async function payPaymentRequest(client: V1Client, request: string): Promise<string> {
   const prepared = await client.prepareSend({ source: { type: 'payment-request', request } });
-  const executed = await executeOrExplain('Send', prepared.id, () =>
+  const executed = await executeOrExplain(client, 'send', prepared.id, () =>
     client.executeSend(prepared.id),
   );
   return `X-Cashu: ${executed.result.token}`;
 }
 
-/** Names the prepared Operation when execution fails so the person can inspect or cancel it. */
+/**
+ * Names the prepared Operation when execution fails so the person can inspect or cancel it. A failed
+ * execution may still have reached the Mint, so the explanation comes from a fresh read.
+ */
 async function executeOrExplain<T>(
-  label: 'Send' | 'Melt' | 'Receive',
+  client: V1Client,
+  type: CancellableOperationType,
   operationId: string,
   execute: () => Promise<T>,
 ): Promise<T> {
   try {
     return await execute();
   } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    const message = `${reason}; ${await explainOperation(client, type, operationId)}`;
     if (error instanceof V1ClientError) {
-      throw new V1ClientError(
-        `${error.message}; ${label} Operation ${operationId} was prepared`,
-        error.status,
-        error.code,
-        error.retryable,
-        error.details,
-      );
+      throw new V1ClientError(message, error.status, error.code, error.retryable, error.details);
     }
+    throw new OperationExecutionError(message, { cause: error });
+  }
+}
+
+async function explainOperation(
+  client: V1Client,
+  type: CancellableOperationType,
+  operationId: string,
+): Promise<string> {
+  const label = `${OPERATION_LABELS[type]} Operation ${operationId}`;
+  const inspect = `inspect it with \`cocod operations show ${type} ${operationId}\``;
+  try {
+    const { state } = await client.getOperation(type, operationId);
+    return state === 'prepared'
+      ? `${label} is still prepared; ${inspect} or cancel it with \`cocod operations cancel ${type} ${operationId}\``
+      : `${label} is ${state}; ${inspect}`;
+  } catch {
+    return `the state of ${label} could not be read; ${inspect}`;
+  }
+}
+
+export interface HistoryWatchOptions {
+  /** Size of the first history page refetched on every (re)connection. */
+  limit: number;
+  /** Receives each new or changed entry once, as it is observed. */
+  onEntry(entry: HistoryDocument): void;
+  onDisconnect?(): void;
+  reconnectDelayMs?: number;
+}
+
+/**
+ * Reports history changes after `initial` until a non-retryable failure, such as a stopped Coco
+ * Session. Events have no replay, so each connection refetches the first page once the stream is
+ * open, and each invalidation refetches the entry it names.
+ */
+export async function watchHistory(
+  client: V1Client,
+  initial: readonly HistoryDocument[],
+  options: HistoryWatchOptions,
+): Promise<never> {
+  const reported = new Map(initial.map((entry) => [entry.id, JSON.stringify(entry)]));
+  const report = (entries: readonly HistoryDocument[]) => {
+    for (const entry of entries) {
+      const serialized = JSON.stringify(entry);
+      if (reported.get(entry.id) === serialized) continue;
+      reported.set(entry.id, serialized);
+      options.onEntry(entry);
+    }
+  };
+
+  while (true) {
+    const stream = new AbortController();
+    let refetches = Promise.resolve();
+    // Serialized so entries are reported in the order they were invalidated. A failed refetch
+    // closes the stream; this connection then ends with that failure.
+    const refetch = (read: () => Promise<readonly HistoryDocument[]>) => {
+      refetches = refetches.then(async () => report(await read()));
+      refetches.catch(() => stream.abort());
+    };
+
+    try {
+      await client.watchEvents(
+        (event) => {
+          if (event.type === 'history.updated') {
+            refetch(() => readHistoryEntry(client, event.data.id));
+          }
+        },
+        {
+          signal: stream.signal,
+          onOpen: () =>
+            refetch(async () => {
+              const { items } = await client.listHistory({ offset: 0, limit: options.limit });
+              return items.toReversed();
+            }),
+        },
+      );
+      await refetches;
+    } catch (error) {
+      const failure = await refetches.then(
+        () => error,
+        (refetchFailure: unknown) => refetchFailure,
+      );
+      if (failure instanceof V1ClientError && !failure.retryable) throw failure;
+    }
+    options.onDisconnect?.();
+    await Bun.sleep(options.reconnectDelayMs ?? HISTORY_WATCH_RECONNECT_DELAY_MS);
+  }
+}
+
+/** An invalidated entry that no longer exists has nothing to report. */
+async function readHistoryEntry(client: V1Client, id: string): Promise<HistoryDocument[]> {
+  try {
+    return [await client.getHistoryEntry(id)];
+  } catch (error) {
+    if (error instanceof V1ClientError && error.status === 404) return [];
     throw error;
   }
 }
@@ -548,11 +688,11 @@ async function watchV1Events(
   endpoint: ClientEndpoint,
   credentialFile: string | undefined,
   onEvent: (event: ResourceEventDocument) => void,
-  signal?: AbortSignal,
+  options: { signal?: AbortSignal; onOpen?: () => void } = {},
 ): Promise<void> {
   const response = await fetch(new URL('/v1/events', `${endpoint.url}/`), {
     headers: await buildRequestHeaders('/v1/events', credentialFile ?? CLIENT_CREDENTIAL_FILE),
-    signal,
+    signal: options.signal,
   });
   if (!response.ok) {
     throw await toClientError(response);
@@ -560,6 +700,7 @@ async function watchV1Events(
   if (!response.body) {
     throw new Error('The event stream has no body');
   }
+  options.onOpen?.();
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -656,7 +797,10 @@ function printValue(value: unknown): void {
 
 function exitForClientError(error: unknown): never {
   const message = error instanceof Error ? error.message : String(error);
-  if (message.includes('fetch failed') || message.includes('Connection refused')) {
+  if (error instanceof OperationExecutionError) {
+    // Keeps the Operation ID even when the connection failed with a message matched below.
+    console.error(message);
+  } else if (message.includes('fetch failed') || message.includes('Connection refused')) {
     console.error('Cocod Process is not running and failed to auto-start');
   } else if (error instanceof V1ClientError) {
     console.error(`${error.message} [${error.code}]`);

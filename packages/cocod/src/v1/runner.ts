@@ -232,7 +232,7 @@ async function runV1Route(
       if (definition.responseMediaType !== 'text/event-stream') {
         throw new Error(`${definition.method} ${definition.path} returned an undocumented stream`);
       }
-      const responseHeaders = new Headers(result.headers);
+      const responseHeaders = new Headers();
       responseHeaders.set('Content-Type', 'text/event-stream');
       responseHeaders.set('X-Request-ID', requestId);
       const response = withCachePolicy(
@@ -403,6 +403,7 @@ async function executeIdempotent<T>(
       retryable: false,
     });
   }
+  definition.assertAvailable?.();
   // The concrete path and parsed parameters identify the target resource, so one key cannot
   // replay a command recorded for a different Operation or Quote.
   const definedParams = Object.fromEntries(

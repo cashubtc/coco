@@ -1294,7 +1294,7 @@
         "operationId": "getOperationsMeltOperationIdResult",
         "summary": "Read the proof of payment of a finalized Melt Operation",
         "security": [{ "clientCredential": [] }],
-        "x-cocod-capability": "wallet:read",
+        "x-cocod-capability": "wallet:admin",
         "parameters": [
           {
             "name": "operationId",
@@ -3625,7 +3625,9 @@
                 "type": "object",
                 "additionalProperties": false,
                 "required": ["preimage"],
-                "properties": { "preimage": { "type": "string", "minLength": 1 } }
+                "properties": {
+                  "preimage": { "type": "string", "minLength": 1, "x-sensitive": true }
+                }
               },
               {
                 "type": "object",
@@ -3643,7 +3645,7 @@
             "type": "object",
             "additionalProperties": false,
             "required": ["preimage"],
-            "properties": { "preimage": { "type": "string", "minLength": 1 } }
+            "properties": { "preimage": { "type": "string", "minLength": 1, "x-sensitive": true } }
           },
           {
             "type": "object",

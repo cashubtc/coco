@@ -146,7 +146,10 @@ const OPENAPI_ROUTE: ResourceRoute = defineResourceRoute({
     >,
 });
 
-/** Wallet resources served only while a Coco Session is running, in documentation order. */
+/**
+ * The interface description, served in every state, and the Wallet resources served only while a
+ * Coco Session is running, in documentation order.
+ */
 const RESOURCE_ROUTES: readonly ResourceRoute[] = [
   OPENAPI_ROUTE,
   ...balanceRoutes,
