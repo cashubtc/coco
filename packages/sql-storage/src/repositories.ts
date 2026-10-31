@@ -18,6 +18,7 @@ import type {
   PaymentRequestReceiveAttemptRepository,
   PaymentRequestReceiveOperationRepository,
   MintSwapPersistence,
+  BatchMintPersistence,
 } from '@cashu/coco-core/adapter';
 import { RepositoryTransactionConflictError } from '@cashu/coco-core/adapter';
 import type { SqlDatabase } from './index.ts';
@@ -45,6 +46,7 @@ import {
   SqlitePaymentRequestReceiveOperationRepository,
 } from './repositories/PaymentRequestReceiveRepository.ts';
 import { SqliteMintSwapOperationRepository } from './repositories/MintSwapOperationRepository.ts';
+import { SqliteBatchMintOperationRepository } from './repositories/BatchMintOperationRepository.ts';
 
 export interface SqlStorageRepositoriesOptions {
   database: SqlDatabase;
@@ -81,6 +83,7 @@ function createRepositoryScope(database: SqlDatabase): RepositoryTransactionScop
       database,
     ),
     mintSwap: { operationRepository: new SqliteMintSwapOperationRepository(database) },
+    batchMint: { operationRepository: new SqliteBatchMintOperationRepository(database) },
   };
 }
 
@@ -102,6 +105,7 @@ export class SqlStorageRepositories implements Repositories {
   readonly paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
   readonly paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
   readonly mintSwap: MintSwapPersistence;
+  readonly batchMint: BatchMintPersistence;
   private readonly database: SqlDatabase;
 
   constructor(options: SqlStorageRepositoriesOptions) {
@@ -126,6 +130,7 @@ export class SqlStorageRepositories implements Repositories {
     this.paymentRequestReceiveAttemptRepository =
       repositories.paymentRequestReceiveAttemptRepository;
     this.mintSwap = repositories.mintSwap;
+    this.batchMint = repositories.batchMint;
   }
 
   async init(): Promise<void> {
@@ -177,4 +182,5 @@ export {
   SqlitePaymentRequestReceiveOperationRepository,
   SqlitePaymentRequestReceiveAttemptRepository,
   SqliteMintSwapOperationRepository,
+  SqliteBatchMintOperationRepository,
 };

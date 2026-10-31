@@ -40,6 +40,8 @@ import { ReceiveOperationService } from './operations/receive/ReceiveOperationSe
 import { MintScopedLock } from './operations/MintScopedLock';
 import { OperationIdLock } from './operations/OperationIdLock.ts';
 import { MintSwapOperationService } from './operations/mintSwap/MintSwapOperationService.ts';
+import { BatchMintOperationService } from './operations/batchMint/BatchMintOperationService.ts';
+import { BatchMintQuoteClaims } from './operations/batchMint/BatchMintQuoteClaims.ts';
 import type { MintSwapOperationRepository } from './operations/mintSwap/MintSwapOperationRepository.ts';
 import {
   MintSwapOperationProcessor,
@@ -78,6 +80,7 @@ import {
   ReceiveOpsApi,
   MeltOpsApi,
   MintOpsApi,
+  BatchMintOpsApi,
   MintSwapOpsApi,
   QuoteApi,
   PaymentRequestsApi,
@@ -173,6 +176,11 @@ export interface CocoConfig {
       baseRetryDelayMs?: number;
       initialEnqueueDelayMs?: number;
       autoClaimMintQuotes?: boolean;
+      /**
+       * Claim compatible quotes together through Batch Mint Operations (default `true`). `false`
+       * claims one standalone Mint Operation per quote; `ops.mint.batch` stays available.
+       */
+      batchMintQuotes?: boolean;
     };
     /** Melt settlement processor (enabled by default) */
     meltSettlementProcessor?: {
@@ -346,6 +354,8 @@ export class Manager {
   private meltOperationService: MeltOperationService;
   private meltOperationRepository: MeltOperationRepository;
   private mintOperationService: MintOperationService;
+  private batchMintOperationService: BatchMintOperationService;
+  private batchMintQuoteClaims: BatchMintQuoteClaims;
   private mintOperationRepository: MintOperationRepository;
   private receiveOperationService: ReceiveOperationService;
   private receiveOperationRepository: ReceiveOperationRepository;
@@ -423,6 +433,8 @@ export class Manager {
     this.authService = core.authService;
     this.mintOperationService = core.mintOperationService;
     this.mintSwapOperationService = core.mintSwapOperationService;
+    this.batchMintOperationService = core.batchMintOperationService;
+    this.batchMintQuoteClaims = core.batchMintQuoteClaims;
     this.mintOperationRepository = core.mintOperationRepository;
     this.proofRepository = repositories.proofRepository;
     this.balanceQueries = core.balanceQueries;
@@ -622,6 +634,7 @@ export class Manager {
     baseRetryDelayMs?: number;
     initialEnqueueDelayMs?: number;
     autoClaimMintQuotes?: boolean;
+    batchMintQuotes?: boolean;
   }): Promise<boolean> {
     if (this.disposed) return false;
     if (this.mintOperationProcessor?.isRunning()) return false;
@@ -634,6 +647,7 @@ export class Manager {
       this.eventBus,
       processorLogger,
       options,
+      this.batchMintQuoteClaims,
     );
     await this.mintOperationProcessor.start();
     return true;
@@ -756,8 +770,10 @@ export class Manager {
     this.proofStateWatcher = undefined;
   }
 
+  /** Recover Mint Operations, then in-flight Batch Mint Operations. */
   async recoverPendingMintOperations(): Promise<void> {
     await this.mintOperationService.recoverPendingOperations();
+    await this.batchMintOperationService.recoverInFlight();
   }
 
   async recoverPendingPaymentRequestReceiveAttempts(): Promise<void> {
@@ -1042,6 +1058,8 @@ export class Manager {
     authService: AuthService;
     mintOperationService: MintOperationService;
     mintSwapOperationService: MintSwapOperationService;
+    batchMintOperationService: BatchMintOperationService;
+    batchMintQuoteClaims: BatchMintQuoteClaims;
     mintOperationRepository: MintOperationRepository;
     balanceQueries: BalanceQueries;
   } {
@@ -1221,6 +1239,20 @@ export class Manager {
     });
     const meltOperationRepository = repositories.meltOperationRepository;
 
+    const batchMintOperationService = new BatchMintOperationService({
+      transactionRunner,
+      batchMintQueries: repositories.batchMint.operationRepository,
+      proofQueries: repositories.proofRepository,
+      quoteLifecycle,
+      mintService,
+      walletService,
+      keyRingService,
+      loadSeed: () => seedService.getSeed(),
+      eventBus: this.eventBus,
+      logger: this.getChildLogger('BatchMintOperationService'),
+      mintScopedLock,
+    });
+
     const mintOperationLogger = this.getChildLogger('MintOperationService');
     const mintOperationService = new MintOperationService({
       handlerProvider: mintHandlerProvider,
@@ -1236,6 +1268,14 @@ export class Manager {
       logger: mintOperationLogger,
       mintScopedLock,
       operationIdLock: destinationOperationLock,
+    });
+    const batchMintQuoteClaims = new BatchMintQuoteClaims({
+      mintOperations: mintOperationService,
+      batchMintOperations: batchMintOperationService,
+      quoteLifecycle,
+      mintService,
+      transactionRunner,
+      logger: this.getChildLogger('BatchMintQuoteClaims'),
     });
     const mintOperationRepository = repositories.mintOperationRepository;
     const mintSwapOperationService = new MintSwapOperationService({
@@ -1323,6 +1363,8 @@ export class Manager {
       authService,
       mintOperationService,
       mintSwapOperationService,
+      batchMintOperationService,
+      batchMintQuoteClaims,
       mintOperationRepository,
       balanceQueries,
     };
@@ -1354,7 +1396,10 @@ export class Manager {
     const history = new HistoryApi(this.historyService);
     const send = new SendOpsApi(this.sendOperationService);
     const receive = new ReceiveOpsApi(this.receiveOperationService);
-    const mintOps = new MintOpsApi(this.mintOperationService);
+    const mintOps = new MintOpsApi(
+      this.mintOperationService,
+      new BatchMintOpsApi(this.batchMintOperationService),
+    );
     const melt = new MeltOpsApi(this.meltOperationService);
     const mintSwap = new MintSwapOpsApi(
       this.mintSwapOperationService,

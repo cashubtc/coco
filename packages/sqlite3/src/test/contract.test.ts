@@ -19,6 +19,8 @@ import {
   runMeltQuoteRepositoryContract,
   createMintSwapFixtures,
   runMintSwapPersistenceContract,
+  runBatchMintPersistenceContract,
+  runBatchMintHistoryContract,
 } from '@cashu/coco-adapter-tests';
 import {
   MintSwapIdentityConflictError,
@@ -215,6 +217,9 @@ describe('synchronous SQLite contention', () => {
     });
   }
 });
+
+runBatchMintPersistenceContract({ createRepositories }, { describe, it, expect });
+runBatchMintHistoryContract({ createRepositories }, { describe, it, expect });
 
 runMintSwapPersistenceContract(
   {

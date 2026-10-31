@@ -222,6 +222,17 @@ export const createMintSwap = defineTransition<PreparingMintSwapOperation, MintS
     ) {
       throw new MintSwapInvariantError('child_identity', 'child_conflict', 'destination');
     }
+    // An executing Batch Mint Operation holds the quote's reservation; failed batches released it.
+    if (
+      (
+        await tx.batchMintOperations.listByQuote({
+          mintUrl: input.destinationQuote.mintUrl,
+          quoteId: input.destinationQuote.quoteId,
+        })
+      ).some((operation) => operation.state === 'executing')
+    ) {
+      throw new MintSwapInvariantError('child_identity', 'child_conflict', 'destination');
+    }
     await tx.mintSwapOperations.create(input);
     return input;
   },

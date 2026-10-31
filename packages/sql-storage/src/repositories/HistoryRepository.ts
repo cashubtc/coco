@@ -33,6 +33,7 @@ type HistoryProjectionRow = {
   operationId: string | null;
   remoteState: string | null;
   error: string | null;
+  batchMintOperationId: string | null;
 };
 
 const projectionSelect = `
@@ -56,7 +57,8 @@ const projectionSelect = `
       NULL AS metadata,
       id AS operationId,
       NULL AS remoteState,
-      error
+      error,
+      NULL AS batchMintOperationId
     FROM coco_cashu_send_operations
     WHERE state != 'init'
 
@@ -80,7 +82,8 @@ const projectionSelect = `
       NULL AS metadata,
       id AS operationId,
       NULL AS remoteState,
-      error
+      error,
+      NULL AS batchMintOperationId
     FROM coco_cashu_melt_operations
     WHERE state IN ('prepared', 'executing', 'pending', 'finalized', 'rolling_back', 'rolled_back')
 
@@ -104,13 +107,43 @@ const projectionSelect = `
       NULL AS metadata,
       op.id AS operationId,
       q.state AS remoteState,
-      op.error
+      op.error,
+      NULL AS batchMintOperationId
     FROM coco_cashu_mint_operations op
     LEFT JOIN coco_cashu_canonical_mint_quotes q
       ON q.mintUrl = op.mintUrl
      AND q.method = op.method
      AND q.quoteId = op.quoteId
     WHERE op.state != 'init'
+
+    UNION ALL
+
+    SELECT
+      'operation' AS source,
+      'batch-mint:' || op.id || ':' || m.ordinal AS id,
+      NULL AS legacyHistoryId,
+      'mint' AS type,
+      op.mintUrl,
+      op.unit,
+      m.amount,
+      op.createdAt AS createdAt,
+      op.updatedAt AS updatedAt,
+      op.state,
+      m.quoteId,
+      m.request AS paymentRequest,
+      NULL AS tokenJson,
+      NULL AS inputProofsJson,
+      NULL AS metadata,
+      op.id AS operationId,
+      q.state AS remoteState,
+      op.error,
+      op.id AS batchMintOperationId
+    FROM coco_cashu_batch_mint_members m
+    JOIN coco_cashu_batch_mint_operations op ON op.id = m.operationId
+    LEFT JOIN coco_cashu_canonical_mint_quotes q
+      ON q.mintUrl = op.mintUrl
+     AND q.method = op.method
+     AND q.quoteId = m.quoteId
 
     UNION ALL
 
@@ -132,7 +165,8 @@ const projectionSelect = `
       sourceJson AS metadata,
       id AS operationId,
       NULL AS remoteState,
-      error
+      error,
+      NULL AS batchMintOperationId
     FROM coco_cashu_receive_operations
     WHERE state IN ('finalized', 'rolled_back')
 
@@ -156,7 +190,8 @@ const projectionSelect = `
       h.metadata,
       h.operationId,
       NULL AS remoteState,
-      NULL AS error
+      NULL AS error,
+      NULL AS batchMintOperationId
     FROM coco_cashu_history h
     WHERE NOT (
       h.operationId IS NOT NULL AND EXISTS (
@@ -197,6 +232,9 @@ const projectionSelect = `
           SELECT 'mint' AS type, mintUrl, quoteId
           FROM coco_cashu_mint_operations
           WHERE state != 'init'
+          UNION ALL
+          SELECT 'mint' AS type, mintUrl, quoteId
+          FROM coco_cashu_batch_mint_members
           UNION ALL
           SELECT 'melt' AS type, mintUrl, quoteId
           FROM coco_cashu_melt_operations
@@ -282,9 +320,19 @@ export class SqliteHistoryRepository implements HistoryRepository {
       return row ? rowToEntry(row) : null;
     }
 
+    if (parsed.source === 'batch-mint') {
+      const row = await this.db.get<HistoryProjectionRow>(
+        `${projectionSelect}
+         WHERE source = 'operation' AND batchMintOperationId = ? AND id = ?
+         LIMIT 1`,
+        [parsed.operationId, id],
+      );
+      return row ? rowToEntry(row) : null;
+    }
+
     const row = await this.db.get<HistoryProjectionRow>(
       `${projectionSelect}
-       WHERE source = 'operation' AND type = ? AND operationId = ?
+       WHERE source = 'operation' AND type = ? AND operationId = ? AND batchMintOperationId IS NULL
        LIMIT 1`,
       [parsed.type, parsed.operationId],
     );
@@ -298,7 +346,7 @@ function rowToEntry(row: HistoryProjectionRow): HistoryEntry {
   }
 
   const base = {
-    id: operationHistoryId(row.type, row.operationId ?? ''),
+    id: row.batchMintOperationId ? row.id : operationHistoryId(row.type, row.operationId ?? ''),
     source: 'operation' as const,
     type: row.type,
     createdAt: row.createdAt,
@@ -320,6 +368,7 @@ function rowToEntry(row: HistoryProjectionRow): HistoryEntry {
         paymentRequest: row.paymentRequest ?? '',
         state: row.state as HistoryEntry['state'],
         ...(row.remoteState ? { remoteState: row.remoteState } : {}),
+        ...(row.batchMintOperationId ? { batchMintOperationId: row.batchMintOperationId } : {}),
       } as HistoryEntry;
     case 'melt':
       return {

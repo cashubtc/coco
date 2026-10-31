@@ -384,7 +384,7 @@ describe('Mint Swap real runtime boundaries', () => {
   it('resumes a skipped destination claim when the parent stops', async () => {
     const { manager, runtime, repo, setDestinationState, issuance, destinationResponse } =
       await setup();
-    await manager.enableMintOperationProcessor({ initialEnqueueDelayMs: 0 });
+    await manager.enableMintOperationProcessor({ initialEnqueueDelayMs: 0, processIntervalMs: 20 });
     setDestinationState('UNPAID');
     await manager.ops.mintSwap.execute('swap');
     expect((await manager.ops.mint.get('destination-child'))?.state).toBe('pending');
@@ -433,7 +433,7 @@ describe('Mint Swap real runtime boundaries', () => {
       (target) => typeof target !== 'string' && target.quoteId === 'destination-quote',
     );
     // The startup sweep skips the paid quote, then hands it to the processor's quote claim.
-    await manager.enableMintOperationProcessor({ initialEnqueueDelayMs: 0 });
+    await manager.enableMintOperationProcessor({ initialEnqueueDelayMs: 0, processIntervalMs: 20 });
     await within(skips(2));
     expect(issuance).not.toHaveBeenCalled();
     const finalized = deferred();

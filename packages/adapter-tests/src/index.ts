@@ -3077,3 +3077,9 @@ export {
   runMintSwapPersistenceContract,
   type MintSwapContractOptions,
 } from './mintSwap.ts';
+export {
+  createBatchMintFixtures,
+  runBatchMintPersistenceContract,
+  runBatchMintHistoryContract,
+  type BatchMintContractOptions,
+} from './batchMint.ts';
