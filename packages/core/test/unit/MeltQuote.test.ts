@@ -4,6 +4,7 @@ import {
   type SerializedBlindedSignature,
 } from '@cashu/cashu-ts';
 import { describe, expect, it } from 'bun:test';
+import { MeltQuoteValidationError } from '../../models/Error.ts';
 import {
   meltQuoteFromBolt11Response,
   meltQuoteFromBolt12Response,
@@ -118,6 +119,16 @@ describe('MeltQuote model', () => {
     expect(() => resolveOnchainMeltFeeOption(makeOnchainQuote(), 99)).toThrow(
       'does not include onchain fee option 99',
     );
+  });
+
+  it('types every onchain fee option rejection', () => {
+    for (const reject of [
+      () => resolveOnchainMeltFeeOption(makeOnchainQuote({ fee_options: [] }), 1),
+      () => resolveOnchainMeltFeeOption(makeOnchainQuote()),
+      () => resolveOnchainMeltFeeOption(makeOnchainQuote(), 99),
+    ]) {
+      expect(reject).toThrow(MeltQuoteValidationError);
+    }
   });
 
   it('validates onchain fee option indexes and estimated blocks', () => {

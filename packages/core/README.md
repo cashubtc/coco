@@ -359,9 +359,12 @@ for setup and storage-security guidance.
 Lifecycle commands that target a missing Operation reject with `OperationNotFoundError`. A
 command that is unavailable in the Operation's current state rejects with `OperationStateError`,
 which carries `operationType`, `operationId`, the observed `state`, and the accepted
-`expectedStates`. Re-read the Operation before choosing another command. Send and Receive
-transitions that detect a concurrent change under their operation lock still reject with
-`SendOperationConflictError` and `ReceiveOperationConflictError`.
+`expectedStates`. When a Melt Quote's state rather than the Operation's own state blocks the
+command, such as reclaiming a Melt whose quote is `PAID`, it also carries `quoteState`. Re-read the
+Operation before choosing another command. Send and Receive transitions that detect a concurrent
+change under their operation lock still reject with `SendOperationConflictError` and
+`ReceiveOperationConflictError`. Preparing an on-chain Melt with a missing or unknown fee option
+rejects with `MeltQuoteValidationError`.
 
 Mint and melt quote lookups use `QuoteIdentity`, the methodless object shape
 `{ mintUrl, quoteId }`:

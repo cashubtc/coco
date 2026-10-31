@@ -192,6 +192,52 @@ describe('MeltOperationService coordinator', () => {
     expect(performed).toEqual([]);
   });
 
+  it.each(['PENDING', 'PAID'] as const)(
+    'reports the quote state when rollback finds a pending operation whose quote is %s',
+    async (quoteState) => {
+      current = pending();
+      dependencies.quoteLifecycle.refreshMeltQuote = mock(async () => quote(quoteState));
+
+      const rejection = new MeltOperationService(dependencies).rollback('op-1');
+
+      await expect(rejection).rejects.toBeInstanceOf(OperationStateError);
+      await expect(rejection).rejects.toMatchObject({
+        message: `Cannot rollback pending operation: quote state is ${quoteState}`,
+        operationType: 'melt',
+        operationId: 'op-1',
+        state: 'pending',
+        expectedStates: ['prepared', 'pending'],
+        quoteState,
+      });
+      expect(performed).toEqual([]);
+    },
+  );
+
+  it('reports the observed state when a pending check finds another state', async () => {
+    const rejection = new MeltOperationService(dependencies).checkPendingOperation('op-1');
+
+    await expect(rejection).rejects.toBeInstanceOf(OperationStateError);
+    await expect(rejection).rejects.toMatchObject({
+      operationType: 'melt',
+      operationId: 'op-1',
+      state: 'prepared',
+      expectedStates: ['pending'],
+    });
+  });
+
+  it('reports the quote state when finalize finds an unpaid quote', async () => {
+    current = pending();
+
+    const rejection = new MeltOperationService(dependencies).finalize('op-1');
+
+    await expect(rejection).rejects.toBeInstanceOf(OperationStateError);
+    await expect(rejection).rejects.toMatchObject({
+      state: 'pending',
+      expectedStates: ['pending', 'executing'],
+      quoteState: 'UNPAID',
+    });
+  });
+
   it('reports a missing operation with a typed lookup error', async () => {
     current = null;
 

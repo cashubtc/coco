@@ -271,11 +271,18 @@ export class MintOperationService {
       if (operation && isTerminalOperation(operation)) {
         return operation;
       }
-      if (!operation || operation.state !== 'pending') {
-        throw new Error(
-          `Cannot execute operation ${operationId}: expected state 'pending' but found '${
-            operation?.state ?? 'not found'
-          }'`,
+      if (!operation) {
+        throw new OperationNotFoundError('mint', operationId);
+      }
+      if (operation.state !== 'pending') {
+        throw new OperationStateError(
+          {
+            operationType: 'mint',
+            operationId,
+            state: operation.state,
+            expectedStates: ['pending'],
+          },
+          `Cannot execute operation ${operationId}: expected state 'pending' but found '${operation.state}'`,
         );
       }
       if (!(await this.dependencies.mintService.isTrustedMint(operation.mintUrl))) {
@@ -954,11 +961,18 @@ export class MintOperationService {
   async observePendingOperation(operationId: string): Promise<PendingMintCheckResult> {
     await this.assertCanResolve(operationId);
     const op = await this.getOperation(operationId);
-    if (!op || op.state !== 'pending') {
-      throw new Error(
-        `Cannot check operation ${operationId}: expected state 'pending' but found '${
-          op?.state ?? 'not found'
-        }'`,
+    if (!op) {
+      throw new OperationNotFoundError('mint', operationId);
+    }
+    if (op.state !== 'pending') {
+      throw new OperationStateError(
+        {
+          operationType: 'mint',
+          operationId,
+          state: op.state,
+          expectedStates: ['pending'],
+        },
+        `Cannot check operation ${operationId}: expected state 'pending' but found '${op.state}'`,
       );
     }
     const handler = this.dependencies.handlerProvider.get(op.method);

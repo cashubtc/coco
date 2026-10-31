@@ -161,7 +161,13 @@ export class MeltOperationService {
     await this.assertCanPay(operationId);
     const operation = await this.requireOperation(operationId);
     if (operation.state !== 'init' || !operation.quoteId) {
-      throw new Error(
+      throw new OperationStateError(
+        {
+          operationType: 'melt',
+          operationId,
+          state: operation.state,
+          expectedStates: ['init'],
+        },
         `Cannot prepare operation ${operationId}: expected quote-bound state 'init' but found '${operation.state}'`,
       );
     }
@@ -353,7 +359,16 @@ export class MeltOperationService {
         );
       }
       if (quote.state !== 'PAID') {
-        throw new Error(`Cannot finalize operation from quote state ${quote.state}`);
+        throw new OperationStateError(
+          {
+            operationType: 'melt',
+            operationId,
+            state: current.state,
+            expectedStates: ['pending', 'executing'],
+            quoteState: quote.state,
+          },
+          `Cannot finalize operation from quote state ${quote.state}`,
+        );
       }
       return this.finalizeResult(await this.applyPaid(current, quote));
     } finally {
@@ -391,7 +406,16 @@ export class MeltOperationService {
         operation.quoteId,
       );
       if (quote.state !== 'UNPAID') {
-        throw new Error(`Cannot rollback pending operation: quote state is ${quote.state}`);
+        throw new OperationStateError(
+          {
+            operationType: 'melt',
+            operationId,
+            state: operation.state,
+            expectedStates: ['prepared', 'pending'],
+            quoteState: quote.state,
+          },
+          `Cannot rollback pending operation: quote state is ${quote.state}`,
+        );
       }
       await this.releaseAfterNonPayment(operation, quote, reason);
     } finally {
@@ -405,7 +429,13 @@ export class MeltOperationService {
     try {
       const operation = await this.requireOperation(operationId);
       if (operation.state !== 'pending') {
-        throw new Error(
+        throw new OperationStateError(
+          {
+            operationType: 'melt',
+            operationId,
+            state: operation.state,
+            expectedStates: ['pending'],
+          },
           `Cannot check operation ${operationId}: expected state 'pending' but found '${operation.state}'`,
         );
       }

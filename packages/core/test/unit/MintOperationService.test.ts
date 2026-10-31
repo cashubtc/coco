@@ -1927,6 +1927,24 @@ describe('MintOperationService', () => {
     expect(handler.recoverExecuting).not.toHaveBeenCalled();
   });
 
+  it('observing a missing or non-pending operation rejects with typed errors', async () => {
+    const init = makeInitOp('init-operation');
+    await operationRepo.create(init);
+
+    await expect(service.observePendingOperation('missing-operation')).rejects.toMatchObject({
+      name: 'OperationNotFoundError',
+      operationType: 'mint',
+      operationId: 'missing-operation',
+    });
+    await expect(service.observePendingOperation(init.id)).rejects.toMatchObject({
+      name: 'OperationStateError',
+      operationType: 'mint',
+      operationId: init.id,
+      state: 'init',
+      expectedStates: ['pending'],
+    });
+  });
+
   it('execute returns persisted terminal outcomes without invoking the handler', async () => {
     const finalized: FinalizedMintOperation = {
       ...makePendingOp('finalized-operation'),
