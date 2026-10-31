@@ -18,8 +18,6 @@ export interface ExecuteBatchMintInput {
 export interface BatchMintRecoveryApi {
   /** Recover every `executing` Batch Mint Operation now. */
   run(): Promise<void>;
-  /** Returns true while a recovery sweep is running. */
-  inProgress(): boolean;
 }
 
 /**
@@ -33,7 +31,6 @@ export interface BatchMintRecoveryApi {
 export class BatchMintOpsApi {
   readonly recovery: BatchMintRecoveryApi = {
     run: () => this.service.recoverInFlight(),
-    inProgress: () => this.service.isRecoveryInProgress(),
   };
 
   constructor(private readonly service: BatchMintOperationService) {}

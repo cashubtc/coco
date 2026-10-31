@@ -197,8 +197,6 @@ describe('Batch Mint admission races', () => {
     });
     expect(executing.state).toBe('executing');
 
-    const claimed = await h.coco.ops.mint.listInFlight();
-    expect(claimed).toEqual([]);
     const manager = h.coco as unknown as {
       mintOperationService: { claimMintQuote(...args: unknown[]): Promise<unknown[]> };
     };

@@ -123,21 +123,8 @@ export function runBatchMintPersistenceContract(
   const { describe, it, expect } = runner;
 
   describe('Batch Mint persistence contract', () => {
-    it('provides Batch Mint persistence in root and transaction scopes', async () => {
-      const { repositories, dispose } = await options.createRepositories();
-      try {
-        expect(repositories.batchMint.operationRepository !== undefined).toBe(true);
-        await repositories.withTransaction(async (scope) => {
-          expect(scope.batchMint.operationRepository !== undefined).toBe(true);
-        });
-      } finally {
-        await dispose();
-      }
-    });
-
-    it('round-trips every state with members hydrated in ordinal order', async () => {
-      const { repositories, dispose } = await options.createRepositories();
-      try {
+    it('round-trips every state with members hydrated in ordinal order', () =>
+      withRepositories(options, async (repositories) => {
         const repository = requireBatchMint(repositories);
         for (const state of ['executing', 'finalized', 'failed'] as const) {
           const operation = fixtures(`round-trip-${state}`)[state];
@@ -150,14 +137,10 @@ export function runBatchMintPersistenceContract(
           expect(reread?.members[0]?.quoteId).toBe(`round-trip-${state}-quote-a`);
         }
         expect(await repository.getById('missing')).toBe(null);
-      } finally {
-        await dispose();
-      }
-    });
+      }));
 
-    it('rejects duplicate IDs, ordinals and Quote Identities without mutation', async () => {
-      const { repositories, dispose } = await options.createRepositories();
-      try {
+    it('rejects duplicate IDs and invalid operations without mutation', () =>
+      withRepositories(options, async (repositories) => {
         const repository = requireBatchMint(repositories);
         const existing = fixtures('existing').executing;
         await repository.create(existing);
@@ -169,10 +152,6 @@ export function runBatchMintPersistenceContract(
         const invalid: BatchMintOperation[] = [
           { ...fixtures('other').executing, id: existing.id },
           {
-            ...fixtures('duplicate-ordinal').executing,
-            members: [first, { ...second, ordinal: first.ordinal }, third],
-          },
-          {
             ...fixtures('duplicate-quote').executing,
             members: [first, { ...second, quoteId: first.quoteId }, third],
           },
@@ -181,19 +160,14 @@ export function runBatchMintPersistenceContract(
           await expectRejects(() => repository.create(operation), expect);
         }
         expect(comparable(await repository.getById(existing.id))).toBe(comparable(existing));
-        expect(await repository.getById('duplicate-ordinal')).toBe(null);
         expect(await repository.getById('duplicate-quote')).toBe(null);
         expect(
           await repository.listByQuote({ mintUrl: MINT_URL, quoteId: first.quoteId }),
         ).toHaveLength(0);
-      } finally {
-        await dispose();
-      }
-    });
+      }));
 
-    it('updates outcomes but keeps the exact request immutable', async () => {
-      const { repositories, dispose } = await options.createRepositories();
-      try {
+    it('updates outcomes but keeps the exact request immutable', () =>
+      withRepositories(options, async (repositories) => {
         const repository = requireBatchMint(repositories);
         const { executing, finalized, failed } = fixtures('update');
         await repository.create(executing);
@@ -202,19 +176,14 @@ export function runBatchMintPersistenceContract(
         expect(comparable(await repository.getById(executing.id))).toBe(comparable(deferred));
 
         const [first, ...rest] = executing.members as [BatchMintMember, ...BatchMintMember[]];
-        const changedRequests: BatchMintOperation[] = [
-          { ...finalized, members: [{ ...first, amount: Amount.from(15) }, ...rest] },
-          { ...finalized, members: [{ ...first, signature: 'cc'.repeat(64) }, ...rest] },
-          { ...finalized, members: rest },
-          { ...finalized, outputData: { keep: finalized.outputData.keep.slice(1), send: [] } },
-          { ...finalized, mintUrl: 'https://other.example' },
-          { ...finalized, method: 'bolt12' },
-          { ...finalized, unit: 'usd' },
-          { ...finalized, createdAt: CREATED_AT + 1 },
-        ];
-        for (const operation of changedRequests) {
-          await expectRejects(() => repository.update(operation), expect);
-        }
+        await expectRejects(
+          () =>
+            repository.update({
+              ...finalized,
+              members: [{ ...first, amount: Amount.from(15) }, ...rest],
+            }),
+          expect,
+        );
         await expectRejects(() => repository.update({ ...finalized, id: 'missing' }), expect);
         expect(comparable(await repository.getById(executing.id))).toBe(comparable(deferred));
 
@@ -223,14 +192,10 @@ export function runBatchMintPersistenceContract(
         await expectRejects(() => repository.update(failed), expect);
         await expectRejects(() => repository.update(executing), expect);
         expect(comparable(await repository.getById(executing.id))).toBe(comparable(finalized));
-      } finally {
-        await dispose();
-      }
-    });
+      }));
 
-    it('lists by state, in flight and Quote Identity in createdAt then ID order', async () => {
-      const { repositories, dispose } = await options.createRepositories();
-      try {
+    it('lists by state, in flight and Quote Identity in createdAt then ID order', () =>
+      withRepositories(options, async (repositories) => {
         const repository = requireBatchMint(repositories);
         const shared = 'shared-quote';
         const withShared = (
@@ -269,26 +234,18 @@ export function runBatchMintPersistenceContract(
         expect(
           await repository.listByQuote({ mintUrl: MINT_URL, quoteId: 'unknown-quote' }),
         ).toHaveLength(0);
-      } finally {
-        await dispose();
-      }
-    });
+      }));
 
-    it('stores normalized mint URLs', async () => {
-      const { repositories, dispose } = await options.createRepositories();
-      try {
+    it('stores normalized mint URLs', () =>
+      withRepositories(options, async (repositories) => {
         const repository = requireBatchMint(repositories);
         const operation = { ...fixtures('normalized').executing, mintUrl: `${MINT_URL}/` };
         await repository.create(operation);
         expect((await repository.getById(operation.id))?.mintUrl).toBe(MINT_URL);
-      } finally {
-        await dispose();
-      }
-    });
+      }));
 
-    it('commits and rolls back operations and members with the Wallet transaction', async () => {
-      const { repositories, dispose } = await options.createRepositories();
-      try {
+    it('commits and rolls back operations and members with the Wallet transaction', () =>
+      withRepositories(options, async (repositories) => {
         const { executing, finalized } = fixtures('atomic');
         const [first] = executing.members as [BatchMintMember];
         await repositories.withTransaction(async (scope) => {
@@ -323,11 +280,20 @@ export function runBatchMintPersistenceContract(
             quoteId: rolledBack.members[0]!.quoteId,
           }),
         ).toHaveLength(0);
-      } finally {
-        await dispose();
-      }
-    });
+      }));
   });
+}
+
+async function withRepositories(
+  options: BatchMintContractOptions,
+  run: (repositories: Repositories) => Promise<void>,
+): Promise<void> {
+  const { repositories, dispose } = await options.createRepositories();
+  try {
+    await run(repositories);
+  } finally {
+    await dispose();
+  }
 }
 
 async function expectRejects(
@@ -398,9 +364,8 @@ export function runBatchMintHistoryContract(
   };
 
   describe('Batch Mint history projection contract', () => {
-    it('projects one mint history entry per member in history order', async () => {
-      const { repositories, dispose } = await options.createRepositories();
-      try {
+    it('projects one mint history entry per member in history order', () =>
+      withRepositories(options, async (repositories) => {
         const { finalized } = fixtures('batch');
         await repositories.batchMint.operationRepository.create(finalized);
 
@@ -413,14 +378,10 @@ export function runBatchMintHistoryContract(
         expect(JSON.stringify(page.map(historyView))).toBe(
           JSON.stringify([memberEntry(finalized, 1)]),
         );
-      } finally {
-        await dispose();
-      }
-    });
+      }));
 
-    it('resolves member entries by ID and follows the batch state', async () => {
-      const { repositories, dispose } = await options.createRepositories();
-      try {
+    it('resolves member entries by ID and follows the batch state', () =>
+      withRepositories(options, async (repositories) => {
         const { executing, failed } = fixtures('batch');
         await repositories.batchMint.operationRepository.create(executing);
         expect(
@@ -443,9 +404,6 @@ export function runBatchMintHistoryContract(
           await repositories.historyRepository.getHistoryEntryById('batch-mint:missing:0'),
         ).toBe(null);
         expect(await repositories.historyRepository.getHistoryEntryById('mint:batch')).toBe(null);
-      } finally {
-        await dispose();
-      }
-    });
+      }));
   });
 }

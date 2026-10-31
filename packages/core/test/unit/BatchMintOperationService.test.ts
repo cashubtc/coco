@@ -69,6 +69,26 @@ describe('Batch Mint Operations', () => {
       expect(h.eventNames()).toEqual(['batch-mint-op:executing', 'batch-mint-op:finalized']);
     });
 
+    it('issues one optimised output set for the combined amount, with no prior quote check', async () => {
+      for (const quote of ['a', 'b', 'c'])
+        await h.quote({ quote, method: 'bolt11', amount: 21, amountPaid: 21 });
+
+      const operation = await h.coco.ops.mint.batch.execute({
+        mintUrl: h.mint.mintUrl,
+        method: 'bolt11',
+        members: ['a', 'b', 'c'].map((quoteId) => ({ quoteId })),
+      });
+
+      // Three separate splits of 21 (16 + 4 + 1) would need nine outputs.
+      expect(
+        h.mint.batchRequests[0]!.outputs.map((o) => Number(o.amount)).sort((x, y) => y - x),
+      ).toEqual([32, 16, 8, 4, 2, 1]);
+      expect(
+        await h.repo.proofRepository.getProofsByOperationId(h.mint.mintUrl, operation.id),
+      ).toHaveLength(6);
+      expect(h.mint.requests.filter((r) => r.path.startsWith('/v1/mint/quote/'))).toEqual([]);
+    });
+
     for (const method of ['bolt12', 'onchain'] as const) {
       it(`claims ${method} members at their full available amount unless one is given`, async () => {
         await h.quote({
@@ -313,8 +333,6 @@ describe('Batch Mint Operations', () => {
       });
     const savedProofs = (operationId: string) =>
       h.repo.proofRepository.getProofsByOperationId(h.mint.mintUrl, operationId);
-    const claimability = (quoteId: string) =>
-      h.coco.ops.mint.batch.listByQuote({ mintUrl: h.mint.mintUrl, quoteId });
 
     beforeEach(setupPair);
 
@@ -336,12 +354,27 @@ describe('Batch Mint Operations', () => {
       expect((await h.coco.ops.mint.execute(standalone.id)).state).toBe('finalized');
     });
 
+    for (const code of [
+      11005, 11006, 11008, 11009, 11010, 11012, 11014, 11015, 11016, 11017, 12001, 12002, 12003,
+      20001, 20003, 20007, 20008, 20009,
+    ]) {
+      it(`fails the batch on the definitive rejection code ${code}`, async () => {
+        h.mint.batchBehaviors.push({ code });
+
+        const operation = await executePair();
+
+        expect(operation.state === 'failed' && operation.terminalFailure.code).toBe(String(code));
+      });
+    }
+
     for (const [name, behavior] of [
       ['a network failure', 'network'],
       ['a server error', 'server'],
       ['a lost response after issuance', 'issue-then-drop'],
       ['an invalid success response', 'short'],
-      ['an error code that may follow issuance', { code: 20002 }],
+      ['"quote already issued", which may follow issuance', { code: 20002 }],
+      ['"outputs already signed", which may follow issuance', { code: 10002 }],
+      ['an unknown error code', { code: 19999 }],
     ] as const) {
       it(`leaves ${name} executing and returns it`, async () => {
         h.mint.batchBehaviors.push(behavior);
@@ -393,11 +426,12 @@ describe('Batch Mint Operations', () => {
       expect(h.mint.batchRequests).toHaveLength(2);
       expect(h.mint.batchRequests[1]).toEqual(h.mint.batchRequests[0]!);
       const paths = h.mint.requests.map((r) => r.path);
-      expect(paths.indexOf('/v1/restore')).toBeLessThan(
-        paths.indexOf('/v1/mint/quote/bolt11/check'),
+      expect(paths.indexOf('/v1/restore')).toBeLessThan(paths.indexOf('/v1/mint/quote/bolt11/a'));
+      expect(paths.indexOf('/v1/mint/quote/bolt11/a')).toBeLessThan(
+        paths.indexOf('/v1/mint/quote/bolt11/b'),
       );
       expect(paths.lastIndexOf('/v1/mint/bolt11/batch')).toBeGreaterThan(
-        paths.indexOf('/v1/mint/quote/bolt11/check'),
+        paths.indexOf('/v1/mint/quote/bolt11/b'),
       );
     });
 
@@ -438,38 +472,16 @@ describe('Batch Mint Operations', () => {
       });
     }
 
-    it('checks each member through the single-quote endpoint once the quote-check batch is unavailable', async () => {
-      h.mint.batchBehaviors.push('network');
+    it('leaves an executing batch alone while its mint is untrusted', async () => {
+      h.mint.batchBehaviors.push('issue-then-drop');
       const executing = await executePair();
-      // Background polling found the NUT-29 quote check unsupported for this Coco Session.
-      h.mint.quoteCheckBehavior = 'unsupported';
-      await (
-        h.coco as unknown as {
-          quoteLifecycle: {
-            checkMintQuotesForPolling(
-              method: 'bolt11',
-              identities: Array<{ mintUrl: string; quoteId: string }>,
-            ): Promise<unknown>;
-          };
-        }
-      ).quoteLifecycle.checkMintQuotesForPolling('bolt11', [
-        { mintUrl: h.mint.mintUrl, quoteId: 'a' },
-        { mintUrl: h.mint.mintUrl, quoteId: 'b' },
-      ]);
-      h.mint.quotes.get('b')!.amountIssued = 20;
-      const checksBefore = h.mint.requests.length;
+      await h.coco.mint.untrustMint(h.mint.mintUrl);
+      const requestsBefore = h.mint.requests.length;
 
       await h.coco.ops.mint.batch.recovery.run();
 
-      // Each member is observed on its own and recorded before the batch acts on it.
-      const paths = h.mint.requests.slice(checksBefore).map((r) => r.path);
-      expect(paths).toContain('/v1/mint/quote/bolt11/a');
-      expect(paths).toContain('/v1/mint/quote/bolt11/b');
-      expect(paths).not.toContain('/v1/mint/quote/bolt11/check');
-      const observed = await h.coco.quotes.mint.get({ mintUrl: h.mint.mintUrl, quoteId: 'b' });
-      expect(observed?.amountIssued.toString()).toBe('20');
-      expect((await h.coco.ops.mint.batch.get(executing.id))?.state).toBe('failed');
-      expect(h.mint.batchRequests).toHaveLength(1);
+      expect((await h.coco.ops.mint.batch.get(executing.id))?.state).toBe('executing');
+      expect(h.mint.requests.slice(requestsBefore)).toEqual([]);
     });
 
     it('finalizes from proofs already saved locally without restoring again', async () => {
@@ -559,44 +571,10 @@ describe('Batch Mint Operations', () => {
       });
 
       const history = await h.coco.history.getPaginatedHistory();
-      expect(
-        history.map((entry) => [
-          entry.id,
-          entry.type,
-          entry.type === 'mint' ? entry.quoteId : null,
-          entry.type === 'mint' ? entry.paymentRequest : null,
-          entry.amount.toString(),
-          entry.state,
-          entry.operationId,
-          entry.type === 'mint' && entry.source === 'operation' ? entry.batchMintOperationId : null,
-        ]),
-      ).toEqual([
-        [
-          `batch-mint:${operation.id}:1`,
-          'mint',
-          'a',
-          'bolt11-request-a',
-          '10',
-          'finalized',
-          operation.id,
-          operation.id,
-        ],
-        [
-          `batch-mint:${operation.id}:0`,
-          'mint',
-          'b',
-          'bolt11-request-b',
-          '20',
-          'finalized',
-          operation.id,
-          operation.id,
-        ],
+      expect(history.map((entry) => entry.id)).toEqual([
+        `batch-mint:${operation.id}:1`,
+        `batch-mint:${operation.id}:0`,
       ]);
-      expect(
-        (
-          await h.coco.history.getHistoryEntryById(`batch-mint:${operation.id}:0`)
-        )?.amount.toString(),
-      ).toBe('20');
 
       const updates = h.events
         .filter((e) => e.event === 'history:updated')

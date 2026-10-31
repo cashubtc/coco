@@ -424,8 +424,9 @@ Mint Quotes ([ADR-0014](packages/core/docs/adr/0014-model-batch-minting-as-a-sta
 It receives the shared runner, read-only batch and proof queries, seed loading, the Quote Lifecycle's
 quote checks, mint metadata, and the Wallet factory. Preflight rejects malformed groups,
 untrusted mints and groups the mint's NUT-29 metadata does not admit (a malformed or single-quote
-batch size admits none), takes the shared Quote Identity locks (`mintQuoteLockKey`) in sorted order
-and then the mint lock, and fixes the ID, keys, seed and timestamp.
+batch size admits none), takes the mint lock for same-session coordination with legacy output
+allocators, and fixes the ID, keys, seed and timestamp. Admission takes no Quote Identity lock: its
+checks and writes share the serialized Wallet transaction, which alone chooses one winner.
 
 `tx.perform(admitBatchMint, input)` rechecks trust and, per member in caller order, Mint Swap
 exclusivity through `assertOrdinaryChildWork`, the canonical quote's method and unit, the absence
@@ -448,19 +449,18 @@ invalid results keep `executing` through `deferBatchMintRecovery`.
 
 Recovery holds the operation lock and uses locally saved proofs first, then NUT-09 Restore of the
 persisted outputs; any restored proofs must form the complete set. With zero restored, a fresh
-quote check of exactly the members records Quote Observations before the coordinator reads claim facts
+quote check of each member records Quote Observations before the coordinator reads claim facts
 excluding the batch's own reservations: any unclaimable member proves non-issuance and fails the
 batch, and only an all-claimable group replays the identical request. Recovery runs with Mint
 recovery at startup and through `ops.mint.batch.recovery.run()`; there is no retry scheduler.
-Recovery is explicit work, so that check is target-isolated (ADR-0006): one NUT-29 check of the
-members while the Quote Lifecycle's polling limit for the mint and method covers them, otherwise one
-single-quote check per member, so the session's quote-check batch marker cannot stall recovery.
+Recovery is explicit work, so that check is target-isolated (ADR-0006): one single-quote check per
+member, so the session's quote-check batch marker cannot stall recovery.
 
 `BatchMintQuoteClaims` owns automatic claiming through batches for the Mint Operation Processor's
 processing turns and startup sweep. It depends on the Batch Mint coordinator and on Mint's
 standalone `claimMintQuote`; Mint does not depend on either. Its eligibility pre-check reads claim
-facts in a read-only `run()`, and admission rereads them. A rejection naming one member retries the
-chunk once without it when at least two remain; everything else falls back to standalone claims.
+facts in a read-only `run()`, and admission rereads them. A rejected or failed batch falls back to
+standalone claims for its members.
 
 Mint Swap creation rejects a destination quote held by an `executing` Batch Mint Operation, and
 batch admission rejects quotes an active Mint Swap coordinates. Standalone Mint preparation,

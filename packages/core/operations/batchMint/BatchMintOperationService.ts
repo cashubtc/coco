@@ -11,7 +11,6 @@ import {
   ProofValidationError,
   UnknownMintError,
 } from '../../models/Error.ts';
-import type { MintQuote } from '../../models/MintQuote.ts';
 import { assessMintQuoteClaimability } from '../../models/MintQuoteClaimability.ts';
 import type { QuoteIdentity } from '../../models/QuoteIdentity.ts';
 import { createKeyChain } from '../../proofs/KeysetSelection.ts';
@@ -27,7 +26,7 @@ import {
   getSecretsFromSerializedOutputData,
   normalizeMintUrl,
 } from '../../utils.ts';
-import { MintScopedLock, mintQuoteLockKey } from '../MintScopedLock.ts';
+import { MintScopedLock } from '../MintScopedLock.ts';
 import { OperationIdLock } from '../OperationIdLock.ts';
 import type { MintMethod } from '../mint/MintMethodHandler.ts';
 import { assertOrdinaryChildWork } from '../mintSwap/MintSwapTransitions.ts';
@@ -86,10 +85,7 @@ export interface BatchMintOperationServiceDependencies {
   transactionRunner: CoreTransactionRunner;
   batchMintQueries: Pick<BatchMintOperationRepository, 'getById' | 'listByQuote' | 'listInFlight'>;
   proofQueries: Pick<ProofRepository, 'getProofBySecret'>;
-  quoteLifecycle: Pick<
-    QuoteLifecycle,
-    'getMintQuote' | 'checkMintQuotesForPolling' | 'getMintQuotePollingLimit' | 'refreshMintQuote'
-  >;
+  quoteLifecycle: Pick<QuoteLifecycle, 'getMintQuote' | 'refreshMintQuote'>;
   mintService: Pick<
     MintService,
     'isTrustedMint' | 'getNut29BatchMintLimit' | 'refreshAndCommitIfStale'
@@ -98,7 +94,7 @@ export interface BatchMintOperationServiceDependencies {
   loadSeed: () => Promise<Uint8Array>;
   eventBus: EventBus<CoreEvents>;
   logger?: Logger;
-  /** Shared with Mint so admission and standalone claims serialize on the same Quote Identity keys. */
+  /** Shared with Mint so admission keeps same-session coordination with legacy output allocators. */
   mintScopedLock?: MintScopedLock;
   operationIdLock?: OperationIdLock;
 }
@@ -170,7 +166,7 @@ export class BatchMintOperationService {
     const releaseOperation = await this.operationIdLock.acquire(operationId);
     try {
       const admitted = await this.admit(operationId, mintUrl, input);
-      // Publish after releasing quote locks so listeners may claim quotes without deadlock.
+      // Publish after releasing the mint lock so listeners may claim quotes without deadlock.
       if (admitted.counter) await this.publish('counter:updated', admitted.counter);
       await this.publish('batch-mint-op:executing', {
         mintUrl,
@@ -218,10 +214,6 @@ export class BatchMintOperationService {
       method,
       error: message(error),
     });
-  }
-
-  isRecoveryInProgress(): boolean {
-    return this.recoveryInProgress;
   }
 
   /** Recover every `executing` operation not currently held by this session. */
@@ -289,28 +281,20 @@ export class BatchMintOperationService {
     input: ExecuteBatchMintInput,
   ): Promise<AdmitBatchMintResult> {
     const { method } = input;
-    // Stable order prevents deadlock between overlapping groups and standalone claims.
-    const quoteKeys = [
-      ...new Set(
-        input.members.map(({ quoteId }) => mintQuoteLockKey({ mintUrl, method, quoteId })),
-      ),
-    ].sort();
-    const releases: Array<() => void> = [];
-    try {
-      for (const key of quoteKeys) releases.push(await this.mintScopedLock.acquire(key));
-      const first = await this.dependencies.quoteLifecycle.getMintQuote(
-        mintUrl,
-        method,
+    const first = await this.dependencies.quoteLifecycle.getMintQuote(
+      mintUrl,
+      method,
+      input.members[0]!.quoteId,
+    );
+    if (!first)
+      throw new BatchMintAdmissionError(
+        'quote_missing',
+        `Mint quote ${input.members[0]!.quoteId} was not found for ${method}`,
         input.members[0]!.quoteId,
       );
-      if (!first)
-        throw new BatchMintAdmissionError(
-          'quote_missing',
-          `Mint quote ${input.members[0]!.quoteId} was not found for ${method}`,
-          input.members[0]!.quoteId,
-        );
-      // Keep same-session coordination with legacy output allocators, as Mint preparation does.
-      releases.push(await this.mintScopedLock.acquire(mintUrl));
+    // Keep same-session coordination with legacy output allocators, as Mint preparation does.
+    const release = await this.mintScopedLock.acquire(mintUrl);
+    try {
       const metadata = await this.dependencies.mintService.refreshAndCommitIfStale(mintUrl);
       const activeKeys = createKeyChain(mintUrl, first.unit, metadata.keysets)
         .getCheapestKeyset()
@@ -318,7 +302,7 @@ export class BatchMintOperationService {
       if (!activeKeys) throw new ProofValidationError('Active keyset is missing mint keys');
       const seed = await this.dependencies.loadSeed();
       const now = Date.now();
-      const result = await this.dependencies.transactionRunner.run((tx) =>
+      return await this.dependencies.transactionRunner.run((tx) =>
         tx.perform(admitBatchMint, {
           operationId,
           mintUrl,
@@ -330,9 +314,8 @@ export class BatchMintOperationService {
           now,
         }),
       );
-      return result;
     } finally {
-      for (const release of releases.reverse()) release();
+      release();
     }
   }
 
@@ -455,7 +438,9 @@ export class BatchMintOperationService {
 
   /**
    * A fresh quote check after zero restored outputs. Any member unclaimable for its amount proves
-   * the atomic request did not issue; malformed or unavailable evidence stays unresolved.
+   * the atomic request did not issue; malformed or unavailable evidence stays unresolved. Recovery
+   * is explicit work, so each member gets its own target-isolated check (ADR-0006), which records
+   * its Quote Observation before returning (ADR-0004).
    */
   private async assessMembers(
     operation: ExecutingBatchMintOperation,
@@ -465,9 +450,12 @@ export class BatchMintOperationService {
     | { status: 'unresolved'; error: string }
   > {
     const { mintUrl, method } = operation;
-    let quotes: Map<string, MintQuote>;
+    const quotes = [];
     try {
-      quotes = await this.checkMemberQuotes(operation);
+      for (const { quoteId } of operation.members)
+        quotes.push(
+          await this.dependencies.quoteLifecycle.refreshMintQuote(mintUrl, method, quoteId),
+        );
     } catch (error) {
       return { status: 'unresolved', error: message(error) };
     }
@@ -483,10 +471,8 @@ export class BatchMintOperationService {
       return all;
     });
     for (const [index, member] of operation.members.entries()) {
-      const quote = quotes.get(member.quoteId);
-      if (!quote) return { status: 'unresolved', error: `Quote check omitted ${member.quoteId}` };
       const assessment = assessMintQuoteClaimability(
-        quote,
+        quotes[index]!,
         claimabilityFacts(facts[index]!, member.amount),
       );
       if (assessment.status === 'invalid')
@@ -501,36 +487,6 @@ export class BatchMintOperationService {
         };
     }
     return { status: 'claimable' };
-  }
-
-  /**
-   * Recovery is explicit work, so its quote check stays target-isolated (ADR-0006): one NUT-29
-   * check of exactly the members while that check is available for the mint and method, otherwise
-   * one single-quote check per member. Both record Quote Observations before returning (ADR-0004).
-   */
-  private async checkMemberQuotes(
-    operation: ExecutingBatchMintOperation,
-  ): Promise<Map<string, MintQuote>> {
-    const { mintUrl, method, members } = operation;
-    const { quoteLifecycle } = this.dependencies;
-    const quotes = new Map<string, MintQuote>();
-    if ((await quoteLifecycle.getMintQuotePollingLimit(mintUrl, method)) < members.length) {
-      for (const { quoteId } of members)
-        quotes.set(quoteId, await quoteLifecycle.refreshMintQuote(mintUrl, method, quoteId));
-      return quotes;
-    }
-    const result = await quoteLifecycle.checkMintQuotesForPolling(
-      method,
-      members.map(({ quoteId }) => ({ mintUrl, quoteId })),
-    );
-    for (const outcome of result.outcomes) {
-      if (outcome.status !== 'updated')
-        throw new Error(
-          `Quote check failed for ${outcome.identity.quoteId}: ${outcome.failure.error.message}`,
-        );
-      quotes.set(outcome.identity.quoteId, outcome.quote);
-    }
-    return quotes;
   }
 
   private async restoreOutputs(operation: BatchMintOperation): Promise<Proof[]> {
