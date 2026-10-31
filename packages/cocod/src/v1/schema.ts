@@ -1,11 +1,16 @@
 import type { CocodStatus } from '../runtime.js';
+import {
+  booleanNode,
+  enumNode,
+  literalNode,
+  namedSchema,
+  nullableNode,
+  objectNode,
+  stringNode,
+  unionNode,
+} from './schema-nodes.js';
 
-/** Runtime validator paired with the JSON Schema emitted for the same document. */
-export interface RuntimeSchema<T> {
-  readonly name: string;
-  readonly jsonSchema: Readonly<Record<string, unknown>>;
-  parse(value: unknown): T;
-}
+export type { RuntimeSchema } from './schema-nodes.js';
 
 /** Stable error codes that v1 clients may branch on. */
 export const V1_ERROR_CODES = [
@@ -25,6 +30,19 @@ export const V1_ERROR_CODES = [
   'session_transition_in_progress',
   'session_restart_required',
   'process_shutting_down',
+  'wallet_locked',
+  'session_stopped',
+  'invalid_operation_state',
+  'operation_conflict',
+  'operation_in_progress',
+  'operation_coordinated',
+  'operation_result_not_available',
+  'mint_unavailable',
+  'mint_unreachable',
+  'mint_rejected',
+  'unsupported_behavior',
+  'payment_request_unpayable',
+  'coco_error',
 ] as const;
 
 /** Stable machine-readable code carried by every v1 error document. */
@@ -97,11 +115,6 @@ export interface ProcessShutdownResponseDocument {
 }
 
 const INTERFACE_VERSION = '1' as const;
-
-interface SchemaNode {
-  readonly jsonSchema: Readonly<Record<string, unknown>>;
-  parse(value: unknown, path: string): unknown;
-}
 
 const rfc3339UtcSchema = stringNode({
   format: 'date-time',
@@ -244,157 +257,4 @@ export function toLifecycleStatusDocument(
     seedAccess: status.seedAccess,
     cocoSession: status.cocoSession,
   };
-}
-
-function namedSchema<T>(name: string, node: SchemaNode): RuntimeSchema<T> {
-  return {
-    name,
-    jsonSchema: node.jsonSchema,
-    parse(value) {
-      return node.parse(value, '$') as T;
-    },
-  };
-}
-
-function literalNode<T extends string | null>(expected: T): SchemaNode {
-  return {
-    jsonSchema: expected === null ? { type: 'null' } : { const: expected },
-    parse(value, path) {
-      if (value !== expected) {
-        throw new Error(`${path} must equal ${JSON.stringify(expected)}`);
-      }
-      return expected;
-    },
-  };
-}
-
-function stringNode(
-  options: { format?: 'date-time'; pattern?: string; sensitive?: boolean } = {},
-): SchemaNode {
-  return {
-    jsonSchema: {
-      type: 'string',
-      ...(options.format ? { format: options.format } : {}),
-      ...(options.pattern ? { pattern: options.pattern } : {}),
-      ...(options.sensitive ? { 'x-sensitive': true } : {}),
-    },
-    parse(value, path) {
-      if (typeof value !== 'string') {
-        throw new Error(`${path} must be a string`);
-      }
-      if (options.pattern && !new RegExp(options.pattern).test(value)) {
-        throw new Error(`${path} does not match the required pattern`);
-      }
-      if (
-        options.format === 'date-time' &&
-        (!Number.isFinite(Date.parse(value)) || new Date(value).toISOString() !== value)
-      ) {
-        throw new Error(`${path} must be an RFC 3339 UTC timestamp`);
-      }
-      return value;
-    },
-  };
-}
-
-function booleanNode(): SchemaNode {
-  return {
-    jsonSchema: { type: 'boolean' },
-    parse(value, path) {
-      if (typeof value !== 'boolean') {
-        throw new Error(`${path} must be a boolean`);
-      }
-      return value;
-    },
-  };
-}
-
-function enumNode<const T extends readonly string[]>(values: T): SchemaNode {
-  return {
-    jsonSchema: { enum: values },
-    parse(value, path) {
-      if (typeof value !== 'string' || !values.includes(value)) {
-        throw new Error(`${path} must be one of ${values.join(', ')}`);
-      }
-      return value;
-    },
-  };
-}
-
-function nullableNode(node: SchemaNode): SchemaNode {
-  return unionNode([literalNode(null), node], 'anyOf');
-}
-
-function objectNode(
-  properties: Readonly<Record<string, SchemaNode>>,
-  options: { optional?: readonly string[]; additionalProperties?: boolean } = {},
-): SchemaNode {
-  const optional = new Set(options.optional ?? []);
-  const additionalProperties = options.additionalProperties ?? false;
-  const required = Object.keys(properties).filter((key) => !optional.has(key));
-  return {
-    jsonSchema: {
-      type: 'object',
-      additionalProperties,
-      required,
-      properties: Object.fromEntries(
-        Object.entries(properties).map(([key, node]) => [key, node.jsonSchema]),
-      ),
-    },
-    parse(value, path) {
-      const record = requireRecord(value, path);
-      if (!additionalProperties) {
-        requireOnlyKeys(record, Object.keys(properties), path);
-      }
-      const parsed: Record<string, unknown> = additionalProperties ? { ...record } : {};
-      for (const [key, node] of Object.entries(properties)) {
-        if (!(key in record)) {
-          if (optional.has(key)) {
-            continue;
-          }
-          throw new Error(`${path}.${key} is required`);
-        }
-        parsed[key] = node.parse(record[key], `${path}.${key}`);
-      }
-      return parsed;
-    },
-  };
-}
-
-function unionNode(nodes: readonly SchemaNode[], keyword: 'oneOf' | 'anyOf' = 'oneOf'): SchemaNode {
-  return {
-    jsonSchema: { [keyword]: nodes.map((node) => node.jsonSchema) },
-    parse(value, path) {
-      const matches: unknown[] = [];
-      const errors: unknown[] = [];
-      for (const node of nodes) {
-        try {
-          matches.push(node.parse(value, path));
-        } catch (error) {
-          errors.push(error);
-        }
-      }
-      if (matches.length === 0 || (keyword === 'oneOf' && matches.length !== 1)) {
-        throw new AggregateError(errors, `${path} does not match ${keyword}`);
-      }
-      return matches[0];
-    },
-  };
-}
-
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new Error(`${label} must be an object`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function requireOnlyKeys(
-  value: Record<string, unknown>,
-  allowedKeys: readonly string[],
-  label: string,
-): void {
-  const allowed = new Set(allowedKeys);
-  if (Object.keys(value).some((key) => !allowed.has(key))) {
-    throw new Error(`${label} contains an unexpected field`);
-  }
 }

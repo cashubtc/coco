@@ -11,6 +11,7 @@ import type {
   SendOperationService,
 } from '../operations/send/SendOperationService';
 import { parseUnitAmount, type UnitAmountLike } from '../amounts.ts';
+import { OperationNotFoundError, OperationStateError } from '../models/Error.ts';
 
 type NonDefaultSendMethod = Exclude<SendMethod, 'default'>;
 
@@ -95,7 +96,13 @@ export class SendOpsApi {
   ): Promise<{ operation: PendingSendOperation; token: Token }> {
     const operation = await this.resolveOperation(operationOrId);
     if (operation.state !== 'prepared') {
-      throw new Error(
+      throw new OperationStateError(
+        {
+          operationType: 'send',
+          operationId: operation.id,
+          state: operation.state,
+          expectedStates: ['prepared'],
+        },
         `Cannot execute operation in state '${operation.state}'. Expected 'prepared'.`,
       );
     }
@@ -140,7 +147,13 @@ export class SendOpsApi {
   async cancel(operationId: string): Promise<void> {
     const operation = await this.requireOperation(operationId);
     if (operation.state !== 'prepared') {
-      throw new Error(
+      throw new OperationStateError(
+        {
+          operationType: 'send',
+          operationId: operation.id,
+          state: operation.state,
+          expectedStates: ['prepared'],
+        },
         `Cannot cancel operation in state '${operation.state}'. Expected 'prepared'.`,
       );
     }
@@ -157,7 +170,13 @@ export class SendOpsApi {
   async reclaim(operationId: string): Promise<void> {
     const operation = await this.requireOperation(operationId);
     if (operation.state !== 'pending') {
-      throw new Error(
+      throw new OperationStateError(
+        {
+          operationType: 'send',
+          operationId: operation.id,
+          state: operation.state,
+          expectedStates: ['pending'],
+        },
         `Cannot reclaim operation in state '${operation.state}'. Expected 'pending'.`,
       );
     }
@@ -204,7 +223,7 @@ export class SendOpsApi {
   private async requireOperation(operationId: string): Promise<SendOperation> {
     const operation = await this.sendOperationService.getOperation(operationId);
     if (!operation) {
-      throw new Error(`Operation ${operationId} not found`);
+      throw new OperationNotFoundError('send', operationId);
     }
 
     return operation;

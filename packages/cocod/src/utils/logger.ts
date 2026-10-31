@@ -38,12 +38,16 @@ const DEFAULT_MAX_BYTES = 5 * 1024 * 1024;
 const DEFAULT_MAX_FILES = 5;
 const DEFAULT_SERVICE = 'cocod-daemon';
 const REDACTED_KEYS = new Set([
+  'address',
   'authorization',
+  'decodedPaymentRequest',
   'encryptedMnemonic',
   'generatedMnemonic',
   'invoice',
   'mnemonic',
+  'offer',
   'passphrase',
+  'paymentRequest',
   'request',
   'recoveryMaterial',
   'seed',

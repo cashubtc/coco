@@ -78,6 +78,10 @@ cocod send bolt11 "lnbc..."
 cocod mints add https://mint.example.com/Bitcoin
 cocod mints list
 
+# Inspect or cancel an Operation named by a failed command
+cocod operations show melt <operation-id>
+cocod operations cancel melt <operation-id>
+
 # History
 cocod history --limit 10
 cocod history --watch
@@ -123,7 +127,8 @@ upgrading and delete the copy once you're settled.
 
 - CLI: `src/cli.ts`
 - Daemon: `src/daemon.ts`
-- Routes: `src/routes.ts`
+- HTTP interface: `src/v1` (Wallet resources in `src/v1/resources`)
+- NPC extension routes: `src/routes.ts`
 - Transport: authenticated HTTP over one TCP listener
 
 Defaults:
@@ -185,7 +190,8 @@ bun test
 ## Docs
 
 - [API and command reference](docs/API.md)
-- [Machine-readable daemon contract](docs/daemon-api.json)
+- [OpenAPI description](docs/openapi-v1.json)
+- [NPC extension contract](docs/daemon-api.json)
 - [Network interface v1](docs/network-interface-v1.md)
 
 ## License

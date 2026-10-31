@@ -7,6 +7,7 @@ import {
   defineV1Route,
   V1HttpError,
   V1HttpResponse,
+  V1HttpStreamResponse,
   type ResponseHeaders,
   type V1HttpErrorOptions,
   type V1RouteDefinition,
@@ -24,13 +25,11 @@ import {
   type V1ErrorDocument,
 } from './schema.js';
 
-type BunRouteHandlers = Record<
-  string,
-  {
-    GET?: (request: Request) => Promise<Response>;
-    POST?: (request: Request) => Promise<Response>;
-  }
->;
+type BunRequestHandler = (
+  request: Request & { params?: Record<string, string> },
+) => Promise<Response>;
+
+type BunRouteHandlers = Record<string, { GET?: BunRequestHandler; POST?: BunRequestHandler }>;
 
 /** Builds Bun route handlers backed by one shared v1 runner and idempotency store. */
 export function buildV1Routes(
@@ -45,14 +44,37 @@ export function buildV1Routes(
     if (definition.path.startsWith('/v1/') && definition.capability === null) {
       throw new Error(`V1 route ${definition.method} ${definition.path} must require a capability`);
     }
-    const handlers = (routes[definition.path] ??= {});
+    assertPathParametersDeclared(definition);
+    const runtimePath = definition.path.replaceAll(PATH_TEMPLATE_SEGMENT, ':$1');
+    const handlers = (routes[runtimePath] ??= {});
+    if (handlers[definition.method]) {
+      throw new Error(`V1 route ${definition.method} ${definition.path} is defined twice`);
+    }
     handlers[definition.method] = (request) =>
       runV1Route(definition, request, credentials, logger, {
         idempotency,
         isAcceptingWork: options.isAcceptingWork,
+        pathParams: request.params ?? {},
       });
   }
   return routes;
+}
+
+const PATH_TEMPLATE_SEGMENT = /\{([A-Za-z][A-Za-z0-9_]*)\}/g;
+
+function assertPathParametersDeclared(definition: V1RouteDefinition): void {
+  const templated = Array.from(
+    definition.path.matchAll(PATH_TEMPLATE_SEGMENT),
+    (match) => match[1],
+  );
+  const declared = Object.entries(definition.parameters ?? {})
+    .filter(([, parameter]) => parameter.in === 'path')
+    .map(([name]) => name);
+  if (templated.length !== declared.length || templated.some((name) => !declared.includes(name!))) {
+    throw new Error(
+      `V1 route ${definition.method} ${definition.path} declares mismatched path parameters`,
+    );
+  }
 }
 
 /** Gives unknown `/v1` resources stable v1 errors while preserving the legacy fallback. */
@@ -128,20 +150,26 @@ async function runV1Route(
     skipRequestParsing?: boolean;
     idempotency?: ProcessLocalIdempotency;
     isAcceptingWork?: () => boolean;
+    pathParams?: Readonly<Record<string, string>>;
   } = {},
 ): Promise<Response> {
   const startedAt = performance.now();
   const requestId = crypto.randomUUID();
   const requestPath = options.requestPath ?? definition.path;
+  const authorizationHeader = request.headers.get('authorization');
   const requestLogger =
     logger?.child?.({ method: request.method, path: requestPath, requestId }) ?? logger;
+  const withCachePolicy = (response: Response): Response => {
+    // Sensitive routes keep intermediaries from replaying stale errors in place of a result.
+    if (definition.responseCacheControl) {
+      response.headers.set('Cache-Control', definition.responseCacheControl);
+    }
+    return response;
+  };
 
   try {
     if (definition.capability) {
-      const authorization = await credentials.authorize(
-        request.headers.get('authorization'),
-        definition.capability,
-      );
+      const authorization = await credentials.authorize(authorizationHeader, definition.capability);
       if (authorization !== 'authorized') {
         const status = authorization === 'unauthenticated' ? 401 : 403;
         const code: V1ErrorCode = authorization;
@@ -157,7 +185,7 @@ async function runV1Route(
           headers: status === 401 ? { 'WWW-Authenticate': 'Bearer' } : undefined,
         });
         logCompleted(requestLogger, startedAt, response.status);
-        return response;
+        return withCachePolicy(response);
       }
     }
 
@@ -170,15 +198,52 @@ async function runV1Route(
       });
     }
 
+    const params = options.skipRequestParsing
+      ? {}
+      : parseParameters(definition, request, options.pathParams ?? {});
     const input = options.skipRequestParsing
       ? null
       : await parseRequest(request, definition.requestSchema);
-    requestLogger?.debug('request.received', { input: redactLogValue(input) });
-    const invokeHandler = () => definition.handler(input, request);
+    requestLogger?.debug('request.received', {
+      input: redactLogValue(input),
+      params: redactLogValue(params),
+    });
+    const invokeHandler = () =>
+      definition.handler(input, {
+        request,
+        params,
+        reauthorize: async () =>
+          definition.capability === null ||
+          (await credentials.authorize(authorizationHeader, definition.capability)) ===
+            'authorized',
+      });
     const result =
       definition.idempotencyKey === 'optional'
-        ? await executeIdempotent(definition, request, input, invokeHandler, options.idempotency)
+        ? await executeIdempotent(
+            definition,
+            request,
+            params,
+            input,
+            invokeHandler,
+            options.idempotency,
+          )
         : await invokeHandler();
+    if (result instanceof V1HttpStreamResponse) {
+      if (definition.responseMediaType !== 'text/event-stream') {
+        throw new Error(`${definition.method} ${definition.path} returned an undocumented stream`);
+      }
+      const responseHeaders = new Headers();
+      responseHeaders.set('Content-Type', 'text/event-stream');
+      responseHeaders.set('X-Request-ID', requestId);
+      const response = withCachePolicy(
+        new Response(result.body, { status: 200, headers: responseHeaders }),
+      );
+      logCompleted(requestLogger, startedAt, response.status);
+      return response;
+    }
+    if (definition.responseMediaType === 'text/event-stream') {
+      throw new Error(`${definition.method} ${definition.path} did not return its event stream`);
+    }
     const routeResponse = result instanceof V1HttpResponse ? result : new V1HttpResponse(result);
     if (!definition.successStatuses?.includes(routeResponse.status)) {
       throw new Error(
@@ -186,15 +251,13 @@ async function runV1Route(
       );
     }
     const output = definition.responseSchema.parse(routeResponse.body);
-    const responseHeaders = new Headers(routeResponse.headers);
-    if (definition.responseCacheControl) {
-      responseHeaders.set('Cache-Control', definition.responseCacheControl);
-    }
-    const response = jsonResponse(output, routeResponse.status, requestId, responseHeaders);
+    const response = withCachePolicy(
+      jsonResponse(output, routeResponse.status, requestId, routeResponse.headers),
+    );
     logCompleted(requestLogger, startedAt, response.status);
     return response;
   } catch (error) {
-    const response = mapError(error, requestId);
+    const response = withCachePolicy(mapError(error, requestId));
     const fields = {
       durationMs: Math.round(performance.now() - startedAt),
       error: { name: error instanceof Error ? error.name : 'UnknownError' },
@@ -207,6 +270,47 @@ async function runV1Route(
     }
     return response;
   }
+}
+
+/** Applies the route's declared parameter parsers and rejects undeclared query parameters. */
+function parseParameters(
+  definition: V1RouteDefinition,
+  request: Request,
+  pathParams: Readonly<Record<string, string>>,
+): Record<string, unknown> {
+  const declared = definition.parameters ?? {};
+  const query = new URL(request.url).searchParams;
+  for (const name of new Set(query.keys())) {
+    if (declared[name]?.in !== 'query') throw invalidParameter(name);
+  }
+  const values: Record<string, unknown> = {};
+  for (const [name, parameter] of Object.entries(declared)) {
+    const raw =
+      parameter.in === 'path'
+        ? pathParams[name] === undefined
+          ? []
+          : [pathParams[name]]
+        : query.getAll(name);
+    if (raw.length === 0 && parameter.required) throw invalidParameter(name);
+    if (raw.length > 1 && !parameter.explode) throw invalidParameter(name);
+    try {
+      values[name] = parameter.parse(raw);
+    } catch (cause) {
+      throw invalidParameter(name, cause);
+    }
+  }
+  return values;
+}
+
+function invalidParameter(name: string, cause?: unknown): V1HttpError {
+  return new V1HttpError({
+    status: 400,
+    code: 'invalid_request',
+    message: 'The request parameters are invalid',
+    retryable: false,
+    details: { parameter: name },
+    cause,
+  });
 }
 
 async function parseRequest<T>(request: Request, schema: RuntimeSchema<T>): Promise<T> {
@@ -282,6 +386,7 @@ function mapError(error: unknown, requestId: string): Response {
 async function executeIdempotent<T>(
   definition: V1RouteDefinition,
   request: Request,
+  params: Readonly<Record<string, unknown>>,
   input: unknown,
   operation: () => Promise<T> | T,
   idempotency = new ProcessLocalIdempotency(),
@@ -298,9 +403,20 @@ async function executeIdempotent<T>(
       retryable: false,
     });
   }
+  definition.assertAvailable?.();
+  // The concrete path and parsed parameters identify the target resource, so one key cannot
+  // replay a command recorded for a different Operation or Quote.
+  const definedParams = Object.fromEntries(
+    Object.entries(params).filter(([, value]) => value !== undefined),
+  );
   return idempotency.execute(
     key,
-    { method: definition.method, path: definition.path, input },
+    {
+      method: definition.method,
+      path: new URL(request.url).pathname,
+      params: definedParams,
+      input,
+    },
     operation,
   );
 }

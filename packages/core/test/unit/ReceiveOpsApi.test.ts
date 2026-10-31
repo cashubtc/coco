@@ -129,8 +129,25 @@ describe('ReceiveOpsApi', () => {
       receiveOperationService.getOperation as unknown as ReturnType<typeof mock>
     ).mockResolvedValueOnce(finalizedOperation);
 
-    await expect(api.cancel(finalizedOperation.id)).rejects.toThrow(
-      "Expected 'init' or 'prepared'",
-    );
+    await expect(api.cancel(finalizedOperation.id)).rejects.toMatchObject({
+      name: 'OperationStateError',
+      message: "Cannot cancel operation in state 'finalized'. Expected 'init' or 'prepared'.",
+      operationType: 'receive',
+      operationId: finalizedOperation.id,
+      state: 'finalized',
+      expectedStates: ['init', 'prepared'],
+    });
+  });
+
+  it('reports missing operations with a typed lookup error', async () => {
+    (
+      receiveOperationService.getOperation as unknown as ReturnType<typeof mock>
+    ).mockResolvedValueOnce(null);
+
+    await expect(api.refresh('missing')).rejects.toMatchObject({
+      name: 'OperationNotFoundError',
+      operationType: 'receive',
+      operationId: 'missing',
+    });
   });
 });

@@ -5,6 +5,7 @@ import type {
   PreparedMeltOperation,
 } from '@core/operations/melt';
 import type { MeltMethod, MeltOperationService } from '@core/operations/melt';
+import { OperationNotFoundError, OperationStateError } from '../models/Error.ts';
 import type { MeltQuoteRef, QuoteIdentity } from '../models/QuoteIdentity.ts';
 
 /** Melt methods supported by the default `Manager` wiring. */
@@ -81,7 +82,13 @@ export class MeltOpsApi<TSupported extends MeltMethod = DefaultSupportedMeltMeth
   ): Promise<PendingMeltOperation | FinalizedMeltOperation> {
     const operation = await this.resolveOperation(operationOrId);
     if (operation.state !== 'prepared') {
-      throw new Error(
+      throw new OperationStateError(
+        {
+          operationType: 'melt',
+          operationId: operation.id,
+          state: operation.state,
+          expectedStates: ['prepared'],
+        },
         `Cannot execute operation in state '${operation.state}'. Expected 'prepared'.`,
       );
     }
@@ -143,7 +150,13 @@ export class MeltOpsApi<TSupported extends MeltMethod = DefaultSupportedMeltMeth
   async cancel(operationId: string, reason?: string): Promise<void> {
     const operation = await this.requireOperation(operationId);
     if (operation.state !== 'prepared') {
-      throw new Error(
+      throw new OperationStateError(
+        {
+          operationType: 'melt',
+          operationId: operation.id,
+          state: operation.state,
+          expectedStates: ['prepared'],
+        },
         `Cannot cancel operation in state '${operation.state}'. Expected 'prepared'.`,
       );
     }
@@ -160,7 +173,13 @@ export class MeltOpsApi<TSupported extends MeltMethod = DefaultSupportedMeltMeth
   async reclaim(operationId: string, reason?: string): Promise<void> {
     const operation = await this.requireOperation(operationId);
     if (operation.state !== 'pending') {
-      throw new Error(
+      throw new OperationStateError(
+        {
+          operationType: 'melt',
+          operationId: operation.id,
+          state: operation.state,
+          expectedStates: ['pending'],
+        },
         `Cannot reclaim operation in state '${operation.state}'. Expected 'pending'.`,
       );
     }
@@ -189,7 +208,7 @@ export class MeltOpsApi<TSupported extends MeltMethod = DefaultSupportedMeltMeth
   private async requireOperation(operationId: string): Promise<MeltOperation> {
     const operation = await this.meltOperationService.getOperation(operationId);
     if (!operation) {
-      throw new Error(`Operation ${operationId} not found`);
+      throw new OperationNotFoundError('melt', operationId);
     }
 
     return operation;

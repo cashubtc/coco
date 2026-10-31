@@ -42,6 +42,9 @@
         "commander": "^14.0.2",
         "nostr-tools": "^2.22.1",
       },
+      "devDependencies": {
+        "@cashu/cashu-ts": "5.0.0-rc.4",
+      },
       "peerDependencies": {
         "@cashu/coco-core": "workspace:*",
         "@cashu/coco-sqlite-bun": "workspace:*",
