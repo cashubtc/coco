@@ -29,6 +29,9 @@ const keypair = await coco.keyring.generateKeyPair(true);
 console.log('Public key:', keypair.publicKeyHex);
 ```
 
+Generated P2PK public keys use canonical SEC1 compressed encoding, including the key's actual
+`02` or `03` parity prefix. This matches CDK and the deterministic P2PK derivation vectors.
+
 ::: warning
 The secret key is sensitive cryptographic material. When setting `dumpSecretKey: true`, ensure you handle the key securely and clear it from memory when no longer needed.
 :::
@@ -56,10 +59,18 @@ const keypair = await coco.keyring.addKeyPair(secretKey);
 console.log('Imported public key:', keypair.publicKeyHex);
 ```
 
+For compatibility with earlier coco versions, the keyring treats the legacy always-`02` encoding
+and the canonical compressed encoding as aliases for the same P2PK key. Existing persisted keys
+keep their stored public key encoding and derivation metadata; imports do not create a duplicate
+row for the other alias.
+
+If a new import would overwrite a stored NUT-20 mint quote key, `addKeyPair()` rejects with
+`MintQuoteKeyError` and leaves the existing key unchanged.
+
 ### Retrieving Keypairs
 
 ```ts
-// Get a specific keypair by public key
+// Get a specific keypair by its canonical or legacy public key encoding
 const keypair = await coco.keyring.getKeyPair(publicKeyHex);
 if (keypair) {
   console.log('Found keypair:', keypair.publicKeyHex);
@@ -76,7 +87,7 @@ console.log(`You have ${allKeypairs.length} keypairs`);
 ### Removing Keypairs
 
 ```ts
-// Remove a keypair by public key
+// Remove a keypair by its canonical or legacy public key encoding
 await coco.keyring.removeKeyPair(publicKeyHex);
 ```
 

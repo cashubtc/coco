@@ -117,6 +117,13 @@ Await dependent capability calls sequentially. `Promise.all()` is appropriate on
 and writes cannot violate a shared invariant. Lifetime tracking provides containment, not ordering;
 it does not make concurrent allocations for the same purpose safe within one scope.
 
+P2PK imports and deletions resolve canonical SEC1 and legacy always-`02` identities through
+the scoped keypair repository before mutating it. `KeyRingService` owns the transaction and
+returns the persisted keypair only after commit, preserving its identity and derivation metadata.
+Imports reject writes that would overwrite a mint quote key; neither import nor deletion changes
+allocation high-water marks. Read-only lookup and signing reuse the bounded alias lookup through
+narrow `KeypairQueries` access. The helper cannot open transactions, enumerate keys, or rewrite rows.
+
 ## Coordinator Effects
 
 A `<Domain>Service` coordinates management actions. A `<Domain>OperationService` additionally owns
