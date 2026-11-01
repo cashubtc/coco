@@ -176,7 +176,7 @@ describe('PaymentRequestService', () => {
           updatedAt: Date.now(),
         }),
       ),
-      prepare: mock(
+      preparePaymentRequest: mock(
         async (initOp: {
           mintUrl: string;
           amount: Amount;
@@ -537,7 +537,7 @@ describe('PaymentRequestService', () => {
         },
         undefined,
       );
-      expect(mockSendOperationService.prepare).toHaveBeenCalled();
+      expect(mockSendOperationService.preparePaymentRequest).toHaveBeenCalled();
     });
 
     it('should use amount from options if not in request', async () => {

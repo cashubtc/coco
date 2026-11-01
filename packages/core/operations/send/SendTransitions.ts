@@ -73,6 +73,7 @@ export const prepareSend = defineTransition<PrepareSendInput, PrepareSendResult>
       operationId: operation.id,
       amount: operation.amount,
       forceSwap: input.forceSwap,
+      receiverAmount: input.receiverAmount,
     });
     const inputAmount = sumProofs(selected.proofs);
     const inputProofSecrets = selected.proofs.map((proof) => proof.secret);
@@ -95,8 +96,19 @@ export const prepareSend = defineTransition<PrepareSendInput, PrepareSendResult>
       await tx.outputs.assertActiveKeys(operation.mintUrl, operation.unit, input.activeKeys);
     }
 
+    if (input.receiverAmount) {
+      const outgoing = outputData
+        ? outputData.send.map((output) => output.blindedMessage)
+        : selected.proofs;
+      const receiverFee = await tx.proofs.getFee(operation.mintUrl, operation.unit, outgoing);
+      if (sumProofs(outgoing).lessThan(input.receiverAmount.add(receiverFee))) {
+        throw new ProofValidationError('Prepared Send does not cover receiver input fees');
+      }
+    }
+
     const prepared: PreparedSendOperation = {
       ...operation,
+      amount: selected.needsSwap ? operation.amount : inputAmount,
       state: 'prepared',
       revision: 0,
       updatedAt: operation.updatedAt,

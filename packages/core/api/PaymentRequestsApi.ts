@@ -92,7 +92,10 @@ export class PaymentRequestsApi {
   }
 
   /**
-   * Prepare a payment request for execution.
+   * Prepare a payment request for execution. The requested (or caller-chosen) amount is the
+   * receiver's net target after input fees. Core funds those fees automatically, including for
+   * P2PK outputs. The resolved request retains that net amount; sendOperation.amount is gross
+   * token value and sendOperation.fee remains the separate payer-side swap fee.
    */
   async prepare(
     request: ResolvedPaymentRequest,
