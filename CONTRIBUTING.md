@@ -112,6 +112,23 @@ Every package does not mean every environment: custom-unit runs and the auth sui
 The runner executes each package's `integration.test.ts`, so import any new integration test file from
 that entry file or it will not run.
 
+#### Writing an integration test
+
+Start from the closest existing test: `packages/core/test/integration/SweepIntegration.test.ts` for a
+flow that needs its own funding and storage, or a new `it` in `packages/adapter-tests/src/integration.ts`
+for behavior every storage adapter should show.
+
+- Read `MINT_URL` from the environment and go through `initializeCoco`, `ops.*`, `wallet` and
+  `history` rather than services.
+- Fund the wallet with a real mint operation (see `fund` in `SweepIntegration.test.ts` or `mintAmount` in
+  `integration.ts`) and assert balances, operation states and history.
+- Disable the watchers and processors in the `initializeCoco` config unless the test is about them, and
+  `dispose()` every Manager in `afterEach`.
+- Create a fresh seed per test. Tests share one mint, so do not depend on its prior state.
+- Respect `CUSTOM_UNIT` when amounts or fees are asserted, as `SweepIntegration.test.ts` does.
+- Before you open the PR, run `bun run test:integration core -t '<your test name>'` and confirm the pass
+  count is not zero. A file that `integration.test.ts` does not import is silently skipped.
+
 The `indexeddb` tests also need Playwright browsers. The runner stops and prints the install command
 if they are missing, rather than installing them for you.
 
@@ -192,6 +209,8 @@ expectations may lead to contribution restrictions.
 - Explain the problem and why your change is the right fix
 - Include the verification steps you ran
 - Keep descriptions short and concrete
+- Fill in the Tests section of the PR template: name the integration tests you added and justify each
+  unit test
 - Add screenshots when a PR changes UI or docs visuals
 - Mention follow-up work instead of bundling unrelated fixes into the same PR
 
