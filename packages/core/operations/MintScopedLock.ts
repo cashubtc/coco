@@ -50,8 +50,9 @@ export class MintScopedLock {
 }
 
 /**
- * The `MintScopedLock` key that serializes every claim of one Mint Quote, shared by standalone Mint
- * Operations and Batch Mint admission so both wait on the same Quote Identity.
+ * The `MintScopedLock` key that serializes every standalone Mint Operation claim of one Mint Quote.
+ * Batch Mint admission takes no Quote Identity lock; its serialized Wallet transaction chooses one
+ * winner. Automatic claiming reuses the key only to identify one Quote Identity.
  */
 export function mintQuoteLockKey(quote: MintQuoteRef): string {
   return `${normalizeMintUrl(quote.mintUrl)}::${quote.method}::${quote.quoteId}`;

@@ -100,9 +100,9 @@ Batch Mint admission for the same quote cannot both commit. Adapter migrations g
 Batch Mint format ([ADR-0014](0014-model-batch-minting-as-a-standalone-atomic-operation.md)).
 
 Send, Mint, Melt, Receive, the Mint Swap and Batch Mint coordinators, KeyRing, and mint metadata
-refresh use this model. The Batch Mint coordinator commits admission, Output Allocation, NUT-20
-signing and every member's Mint Quote Reservation in one `run()`, and settlement, failure and
-deferral in one `run()` each; submission, Restore and quote checks stay outside transactions.
+refresh use this model. The Batch Mint coordinator commits admission, Output Allocation and every
+member's Mint Quote Reservation in one `run()`, and settlement, failure and deferral in one `run()`
+each; NUT-20 signing at submission, Restore and quote checks stay outside transactions.
 Mint Swap composes exact child preparation, authorization, and settlement through the same runner
 scope. Manager shares its child locks with ordinary Mint/Melt services in one effect-driving Coco
 Session per Wallet store. Existing host/session guards retain their scope; Core does not add a

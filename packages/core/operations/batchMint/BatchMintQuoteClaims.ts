@@ -106,8 +106,8 @@ export class BatchMintQuoteClaims {
   }
 
   /**
-   * Informational pre-check for automatic batching; admission rereads everything under the quote
-   * locks and rejects a group whose member changed.
+   * Informational pre-check for automatic batching; admission rereads everything inside its
+   * serialized Wallet transaction and rejects a group whose member changed.
    */
   private async batchEligibility(
     ref: MintQuoteRef,

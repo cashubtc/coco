@@ -220,7 +220,10 @@ export class BatchMintOperationService {
     });
   }
 
-  /** Recover every `executing` operation not currently held by this session. */
+  /**
+   * Recover every `executing` operation not currently held by this session. Returns without work
+   * while an earlier recovery run is still in progress.
+   */
   async recoverInFlight(): Promise<void> {
     if (this.recoveryInProgress) return;
     this.recoveryInProgress = true;

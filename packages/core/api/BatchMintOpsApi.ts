@@ -16,7 +16,10 @@ export interface ExecuteBatchMintInput {
 }
 
 export interface BatchMintRecoveryApi {
-  /** Recover every `executing` Batch Mint Operation now. */
+  /**
+   * Recover every `executing` Batch Mint Operation now. Resolves without work while an earlier
+   * recovery run is still in progress.
+   */
   run(): Promise<void>;
 }
 
