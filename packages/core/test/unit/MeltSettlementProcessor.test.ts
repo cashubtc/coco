@@ -11,7 +11,7 @@ import type {
   RolledBackMeltOperation,
 } from '../../operations/melt/MeltOperation.ts';
 import type { MeltOperationService } from '../../operations/melt/MeltOperationService.ts';
-import type { MeltQuoteWatcherService } from '../../services/watchers/MeltQuoteWatcherService.ts';
+import { MeltQuoteWatcherService } from '../../services/watchers/MeltQuoteWatcherService.ts';
 import { MeltSettlementProcessor } from '../../services/watchers/MeltSettlementProcessor.ts';
 
 describe('MeltSettlementProcessor', () => {
@@ -19,7 +19,7 @@ describe('MeltSettlementProcessor', () => {
   const quoteId = 'melt-quote-1';
 
   let bus: EventBus<CoreEvents>;
-  let checkPendingOperation: Mock<any>;
+  let advancePendingOperation: Mock<any>;
   let getPendingOperations: Mock<any>;
   let registerOperationInterest: Mock<any>;
   let removeOperationInterest: Mock<any>;
@@ -99,17 +99,17 @@ describe('MeltSettlementProcessor', () => {
 
   const registerPendingAndClearInitialCheck = async (operation = makePendingOperation()) => {
     await emitPending(operation);
-    expect(checkPendingOperation).not.toHaveBeenCalled();
+    expect(advancePendingOperation).not.toHaveBeenCalled();
     await flushDeferredInitialChecks();
-    expect(checkPendingOperation).toHaveBeenCalledWith(operation.id);
-    checkPendingOperation.mockClear();
+    expect(advancePendingOperation).toHaveBeenCalledWith(operation.id);
+    advancePendingOperation.mockClear();
   };
 
   beforeEach(() => {
     bus = new EventBus<CoreEvents>();
-    checkPendingOperation = mock(async () => 'stay_pending');
+    advancePendingOperation = mock(async () => 'stay_pending');
     getPendingOperations = mock(async () => []);
-    registerOperationInterest = mock(async () => {});
+    registerOperationInterest = mock(() => {});
     removeOperationInterest = mock(async () => {});
     warn = mock(() => {});
     logger = {
@@ -121,7 +121,7 @@ describe('MeltSettlementProcessor', () => {
     processor = new MeltSettlementProcessor(
       {
         canResolve: mock(async () => true),
-        checkPendingOperation,
+        advancePendingOperation,
         getPendingOperations,
       } as unknown as MeltOperationService,
       bus,
@@ -146,24 +146,24 @@ describe('MeltSettlementProcessor', () => {
       method: 'bolt11',
       quoteId,
     });
-    expect(checkPendingOperation).not.toHaveBeenCalled();
+    expect(advancePendingOperation).not.toHaveBeenCalled();
 
     await flushDeferredInitialChecks();
 
-    expect(checkPendingOperation).toHaveBeenCalledTimes(1);
-    expect(checkPendingOperation).toHaveBeenCalledWith('melt-op-1');
+    expect(advancePendingOperation).toHaveBeenCalledTimes(1);
+    expect(advancePendingOperation).toHaveBeenCalledWith('melt-op-1');
 
-    checkPendingOperation.mockClear();
+    advancePendingOperation.mockClear();
 
     await emitQuoteUpdated();
 
-    expect(checkPendingOperation).toHaveBeenCalledTimes(1);
-    expect(checkPendingOperation).toHaveBeenCalledWith('melt-op-1');
+    expect(advancePendingOperation).toHaveBeenCalledTimes(1);
+    expect(advancePendingOperation).toHaveBeenCalledWith('melt-op-1');
   });
 
   it('does not run the initial pending-event check before the event handler returns', async () => {
     let pendingEventReturned = false;
-    checkPendingOperation.mockImplementation(async () => {
+    advancePendingOperation.mockImplementation(async () => {
       if (!pendingEventReturned) {
         throw new OperationInProgressError('melt-op-1');
       }
@@ -173,13 +173,13 @@ describe('MeltSettlementProcessor', () => {
 
     await emitPending();
 
-    expect(checkPendingOperation).not.toHaveBeenCalled();
+    expect(advancePendingOperation).not.toHaveBeenCalled();
     expect(warn).not.toHaveBeenCalled();
 
     pendingEventReturned = true;
     await flushDeferredInitialChecks();
 
-    expect(checkPendingOperation).toHaveBeenCalledTimes(1);
+    expect(advancePendingOperation).toHaveBeenCalledTimes(1);
     expect(warn).not.toHaveBeenCalled();
   });
 
@@ -199,19 +199,19 @@ describe('MeltSettlementProcessor', () => {
       method: 'bolt11',
       quoteId,
     });
-    expect(checkPendingOperation).not.toHaveBeenCalled();
+    expect(advancePendingOperation).not.toHaveBeenCalled();
 
     await flushDeferredInitialChecks();
 
-    expect(checkPendingOperation).toHaveBeenCalledTimes(1);
-    expect(checkPendingOperation).toHaveBeenCalledWith('existing-pending');
+    expect(advancePendingOperation).toHaveBeenCalledTimes(1);
+    expect(advancePendingOperation).toHaveBeenCalledWith('existing-pending');
 
-    checkPendingOperation.mockClear();
+    advancePendingOperation.mockClear();
 
     await emitQuoteUpdated();
 
-    expect(checkPendingOperation).toHaveBeenCalledTimes(1);
-    expect(checkPendingOperation).toHaveBeenCalledWith('existing-pending');
+    expect(advancePendingOperation).toHaveBeenCalledTimes(1);
+    expect(advancePendingOperation).toHaveBeenCalledWith('existing-pending');
   });
 
   it('checks only operation ids with exact interest in the updated quote', async () => {
@@ -225,7 +225,7 @@ describe('MeltSettlementProcessor', () => {
 
     await emitQuoteUpdated(makeQuote({ quoteId: 'quote-a', quote: 'quote-a' }));
 
-    expect(checkPendingOperation.mock.calls.map((call) => call[0])).toEqual(['interested-a']);
+    expect(advancePendingOperation.mock.calls.map((call) => call[0])).toEqual(['interested-a']);
   });
 
   it.each(['PAID', 'PENDING', 'UNPAID'] as const)(
@@ -236,7 +236,7 @@ describe('MeltSettlementProcessor', () => {
 
       await emitQuoteUpdated(makeQuote({ state }));
 
-      expect(checkPendingOperation).toHaveBeenCalledWith('melt-op-1');
+      expect(advancePendingOperation).toHaveBeenCalledWith('melt-op-1');
     },
   );
 
@@ -245,7 +245,7 @@ describe('MeltSettlementProcessor', () => {
 
     await emitQuoteUpdated();
 
-    expect(checkPendingOperation).not.toHaveBeenCalled();
+    expect(advancePendingOperation).not.toHaveBeenCalled();
   });
 
   it('collapses in-flight duplicate checks into one follow-up for the same operation', async () => {
@@ -253,7 +253,7 @@ describe('MeltSettlementProcessor', () => {
     await registerPendingAndClearInitialCheck();
 
     let resolveCheck: ((value: 'stay_pending') => void) | undefined;
-    checkPendingOperation.mockImplementationOnce(
+    advancePendingOperation.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
           resolveCheck = resolve;
@@ -264,11 +264,11 @@ describe('MeltSettlementProcessor', () => {
     await Promise.resolve();
     await Promise.all([emitQuoteUpdated(), emitQuoteUpdated()]);
 
-    expect(checkPendingOperation).toHaveBeenCalledTimes(1);
+    expect(advancePendingOperation).toHaveBeenCalledTimes(1);
 
     resolveCheck?.('stay_pending');
     await first;
-    expect(checkPendingOperation).toHaveBeenCalledTimes(2);
+    expect(advancePendingOperation).toHaveBeenCalledTimes(2);
   });
 
   it('reattempts watcher registration for duplicate pending interest without concurrent checks', async () => {
@@ -277,7 +277,7 @@ describe('MeltSettlementProcessor', () => {
     registerOperationInterest.mockClear();
 
     let resolveCheck: ((value: 'stay_pending') => void) | undefined;
-    checkPendingOperation.mockImplementationOnce(
+    advancePendingOperation.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
           resolveCheck = resolve;
@@ -287,7 +287,7 @@ describe('MeltSettlementProcessor', () => {
     const inFlightNotification = emitQuoteUpdated();
     await Promise.resolve();
 
-    expect(checkPendingOperation).toHaveBeenCalledTimes(1);
+    expect(advancePendingOperation).toHaveBeenCalledTimes(1);
 
     await emitPending();
 
@@ -298,28 +298,28 @@ describe('MeltSettlementProcessor', () => {
       method: 'bolt11',
       quoteId,
     });
-    expect(checkPendingOperation).toHaveBeenCalledTimes(1);
+    expect(advancePendingOperation).toHaveBeenCalledTimes(1);
 
     await flushDeferredInitialChecks();
 
-    expect(checkPendingOperation).toHaveBeenCalledTimes(1);
+    expect(advancePendingOperation).toHaveBeenCalledTimes(1);
 
     resolveCheck?.('stay_pending');
     await inFlightNotification;
 
-    expect(checkPendingOperation).toHaveBeenCalledTimes(2);
+    expect(advancePendingOperation).toHaveBeenCalledTimes(2);
   });
 
   it('logs processor failures without retrying until a future notification arrives', async () => {
     await processor.start();
     await registerPendingAndClearInitialCheck();
 
-    checkPendingOperation.mockRejectedValueOnce(new Error('mint unavailable'));
+    advancePendingOperation.mockRejectedValueOnce(new Error('mint unavailable'));
 
     await emitQuoteUpdated();
     await Promise.resolve();
 
-    expect(checkPendingOperation).toHaveBeenCalledTimes(1);
+    expect(advancePendingOperation).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith('Failed to settle pending melt operation', {
       operationId: 'melt-op-1',
       mintUrl,
@@ -330,7 +330,7 @@ describe('MeltSettlementProcessor', () => {
 
     await emitQuoteUpdated();
 
-    expect(checkPendingOperation).toHaveBeenCalledTimes(2);
+    expect(advancePendingOperation).toHaveBeenCalledTimes(2);
   });
 
   it('removes operation interest when an operation finalizes', async () => {
@@ -345,7 +345,7 @@ describe('MeltSettlementProcessor', () => {
     await emitQuoteUpdated();
 
     expect(removeOperationInterest).toHaveBeenCalledWith('melt-op-1');
-    expect(checkPendingOperation).not.toHaveBeenCalled();
+    expect(advancePendingOperation).not.toHaveBeenCalled();
   });
 
   it('removes operation interest when an operation rolls back', async () => {
@@ -360,7 +360,7 @@ describe('MeltSettlementProcessor', () => {
     await emitQuoteUpdated();
 
     expect(removeOperationInterest).toHaveBeenCalledWith('melt-op-1');
-    expect(checkPendingOperation).not.toHaveBeenCalled();
+    expect(advancePendingOperation).not.toHaveBeenCalled();
   });
 
   it('reports running state and removes registered interests on stop', async () => {
@@ -378,7 +378,7 @@ describe('MeltSettlementProcessor', () => {
 
     await emitQuoteUpdated();
 
-    expect(checkPendingOperation).not.toHaveBeenCalled();
+    expect(advancePendingOperation).not.toHaveBeenCalled();
   });
 
   it('waits for in-flight checks before removing interests on stop', async () => {
@@ -386,7 +386,7 @@ describe('MeltSettlementProcessor', () => {
     await registerPendingAndClearInitialCheck();
 
     let resolveCheck: ((value: 'stay_pending') => void) | undefined;
-    checkPendingOperation.mockImplementationOnce(
+    advancePendingOperation.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
           resolveCheck = resolve;
@@ -411,14 +411,16 @@ describe('MeltSettlementProcessor', () => {
 
   it('retries registration after registrar registration fails', async () => {
     const err = new Error('watch unavailable');
-    registerOperationInterest.mockRejectedValueOnce(err);
+    registerOperationInterest.mockImplementationOnce(() => {
+      throw err;
+    });
     await processor.start();
 
     await emitPending();
 
     expect(registerOperationInterest).toHaveBeenCalledTimes(1);
     expect(removeOperationInterest).not.toHaveBeenCalled();
-    expect(checkPendingOperation).not.toHaveBeenCalled();
+    expect(advancePendingOperation).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalledWith('Failed to register melt quote operation watch interest', {
       operationId: 'melt-op-1',
       mintUrl,
@@ -431,12 +433,12 @@ describe('MeltSettlementProcessor', () => {
 
     expect(registerOperationInterest).toHaveBeenCalledTimes(2);
     expect(removeOperationInterest).not.toHaveBeenCalled();
-    expect(checkPendingOperation).not.toHaveBeenCalled();
+    expect(advancePendingOperation).not.toHaveBeenCalled();
 
     await flushDeferredInitialChecks();
 
-    expect(checkPendingOperation).toHaveBeenCalledTimes(1);
-    expect(checkPendingOperation).toHaveBeenCalledWith('melt-op-1');
+    expect(advancePendingOperation).toHaveBeenCalledTimes(1);
+    expect(advancePendingOperation).toHaveBeenCalledWith('melt-op-1');
   });
 
   it('does not register startup pending operations after stop', async () => {
@@ -457,7 +459,26 @@ describe('MeltSettlementProcessor', () => {
     await starting;
 
     expect(registerOperationInterest).not.toHaveBeenCalled();
-    expect(checkPendingOperation).not.toHaveBeenCalled();
+    expect(advancePendingOperation).not.toHaveBeenCalled();
+  });
+
+  it('ignores discovery from a previous run when restarted before that read finishes', async () => {
+    let releaseDiscovery!: (operations: PendingMeltOperation[]) => void;
+    getPendingOperations.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseDiscovery = resolve;
+        }),
+    );
+    const starting = processor.start();
+    await processor.stop();
+    await processor.start();
+    releaseDiscovery([makePendingOperation({ id: 'previous-run' })]);
+    await starting;
+    await flushDeferredInitialChecks();
+    expect(registerOperationInterest).not.toHaveBeenCalled();
+    expect(advancePendingOperation).not.toHaveBeenCalled();
+    await processor.stop();
   });
 
   it('normalizes mint URLs before registering watcher interest', async () => {
@@ -473,5 +494,94 @@ describe('MeltSettlementProcessor', () => {
     });
 
     await flushDeferredInitialChecks();
+  });
+
+  it('waits for watcher-owned cleanup after synchronously withdrawing interest', async () => {
+    let releaseRemoval!: () => void;
+    removeOperationInterest.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseRemoval = resolve;
+        }),
+    );
+    await processor.start();
+    await emitPending();
+    let didStop = false;
+    const stopped = processor.stop().then(() => {
+      didStop = true;
+    });
+    expect(removeOperationInterest).toHaveBeenCalledWith('melt-op-1');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(didStop).toBe(false);
+    releaseRemoval();
+    await stopped;
+    expect(advancePendingOperation).not.toHaveBeenCalled();
+  });
+
+  it('advances cached evidence without waiting for watcher-owned setup', async () => {
+    let resolveTrust!: (trusted: boolean) => void;
+    const trust = new Promise<boolean>((resolve) => {
+      resolveTrust = resolve;
+    });
+    const subscribe = mock(async () => ({ subId: 'test', unsubscribe: async () => {} }));
+    const watcher = new MeltQuoteWatcherService(
+      { subscribe } as unknown as ConstructorParameters<typeof MeltQuoteWatcherService>[0],
+      { isTrustedMint: () => trust } as unknown as ConstructorParameters<
+        typeof MeltQuoteWatcherService
+      >[1],
+      {} as ConstructorParameters<typeof MeltQuoteWatcherService>[2],
+      bus,
+      logger,
+      { watchExistingPendingQuotesOnStart: false },
+    );
+    await watcher.start();
+    await processor.setInterestRegistrar(watcher);
+    await processor.start();
+    await emitPending();
+    await flushDeferredInitialChecks();
+    expect(advancePendingOperation).toHaveBeenCalledWith('melt-op-1');
+    expect(subscribe).not.toHaveBeenCalled();
+    const stopping = processor.stop();
+    resolveTrust(true);
+    await stopping;
+    expect(subscribe).not.toHaveBeenCalled();
+    await watcher.stop();
+  });
+
+  it('registers a replacement immediately while old registrar cleanup is pending', async () => {
+    await processor.start();
+    await emitPending();
+    let resolveRemoval!: () => void;
+    removeOperationInterest.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveRemoval = resolve;
+        }),
+    );
+    const replacement = {
+      registerOperationInterest: mock(() => {}),
+      removeOperationInterest: mock(async () => {}),
+    };
+    const rebinding = processor.setInterestRegistrar(replacement);
+    expect(replacement.registerOperationInterest).toHaveBeenCalledTimes(1);
+    await emitPending();
+    expect(replacement.registerOperationInterest).toHaveBeenCalledTimes(2);
+    resolveRemoval();
+    await rebinding;
+    expect(replacement.removeOperationInterest).not.toHaveBeenCalled();
+    await processor.setInterestRegistrar(replacement);
+    expect(replacement.registerOperationInterest).toHaveBeenCalledTimes(2);
+    await processor.stop();
+  });
+
+  it('evaluates cached evidence even when observation registration fails', async () => {
+    registerOperationInterest.mockImplementationOnce(() => {
+      throw new Error('observation unavailable');
+    });
+    await processor.start();
+    await emitPending();
+    await flushDeferredInitialChecks();
+    expect(advancePendingOperation).toHaveBeenCalledWith('melt-op-1');
+    await processor.stop();
   });
 });

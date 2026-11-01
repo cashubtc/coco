@@ -35,6 +35,13 @@ describe('MintOperationWatcherService', () => {
     | ((payload: MintQuoteBolt11Response | MintQuoteOnchainResponse | any) => Promise<void>)
     | undefined;
 
+  const waitForSubscribeCalls = async (count: number) => {
+    for (let attempt = 0; attempt < 50 && subscribe.mock.calls.length < count; attempt++) {
+      await Promise.resolve();
+    }
+    expect(subscribe).toHaveBeenCalledTimes(count);
+  };
+
   const makePendingOperation = (): PendingMintOperation => ({
     id: 'mint-op-1',
     state: 'pending',
@@ -235,6 +242,7 @@ describe('MintOperationWatcherService', () => {
     await removal;
     try {
       expect(unsubscribe).not.toHaveBeenCalled();
+      await waitForSubscribeCalls(1);
       expect(subscribe).toHaveBeenCalledTimes(1);
       expect(watcher.hasRecoveryInterest(identity)).toBe(true);
     } finally {
@@ -257,6 +265,7 @@ describe('MintOperationWatcherService', () => {
       quoteId,
       owner: { kind: 'mint-swap', id: 'parent', recovery: true },
     });
+    await waitForSubscribeCalls(1);
     const first = watcher.stop();
     await entered.promise;
     let secondFinished = false;
@@ -285,6 +294,7 @@ describe('MintOperationWatcherService', () => {
     const owner = { kind: 'mint-swap' as const, id: 'parent', recovery: true };
     await watcher.registerInterest({ mintUrl: `${mintUrl}/`, method: 'bolt11', quoteId, owner });
     await watcher.registerInterest({ mintUrl, method: 'bolt11', quoteId, owner });
+    await waitForSubscribeCalls(1);
     expect(subscribe).toHaveBeenCalledTimes(1);
     expect(subscribe.mock.calls[0]![2]).toEqual([quoteId, 'second']);
     await watcher.removeInterest(owner);
@@ -321,6 +331,7 @@ describe('MintOperationWatcherService', () => {
     expect(stopped).toBe(false);
     resolveStart({ subId: 'late', unsubscribe });
     await Promise.all([first, second, stopping]);
+    await waitForSubscribeCalls(1);
     expect(subscribe).toHaveBeenCalledTimes(1);
     expect(unsubscribe).toHaveBeenCalledTimes(1);
     expect(watcher.hasRecoveryInterest(interest)).toBe(false);
@@ -577,7 +588,9 @@ describe('MintOperationWatcherService', () => {
       operation,
     });
 
+    await waitForSubscribeCalls(1);
     expect(subscribe).toHaveBeenCalledTimes(1);
+    await waitForSubscribeCalls(1);
     if (!callback) {
       throw new Error('Expected watcher subscription callback');
     }
@@ -629,6 +642,7 @@ describe('MintOperationWatcherService', () => {
       operation,
     });
 
+    await waitForSubscribeCalls(1);
     if (!callback) {
       throw new Error('Expected watcher subscription callback');
     }
@@ -694,6 +708,7 @@ describe('MintOperationWatcherService', () => {
       operation,
     });
 
+    await waitForSubscribeCalls(1);
     if (!callback) {
       throw new Error('Expected watcher subscription callback');
     }
@@ -744,6 +759,7 @@ describe('MintOperationWatcherService', () => {
       operation,
     });
 
+    await waitForSubscribeCalls(1);
     if (!callback) {
       throw new Error('Expected watcher subscription callback');
     }
@@ -787,6 +803,7 @@ describe('MintOperationWatcherService', () => {
       quote,
     });
 
+    await waitForSubscribeCalls(1);
     expect(subscribe).toHaveBeenCalledTimes(1);
 
     await watcher.stop();
@@ -810,6 +827,7 @@ describe('MintOperationWatcherService', () => {
       operation,
     });
 
+    await waitForSubscribeCalls(1);
     if (!callback) {
       throw new Error('Expected watcher subscription callback');
     }
@@ -850,6 +868,7 @@ describe('MintOperationWatcherService', () => {
     });
 
     await watcher.start();
+    await waitForSubscribeCalls(1);
     if (!callback) {
       throw new Error('Expected watcher subscription callback');
     }
@@ -886,6 +905,7 @@ describe('MintOperationWatcherService', () => {
     });
 
     await watcher.start();
+    await waitForSubscribeCalls(1);
     if (!callback) {
       throw new Error('Expected watcher subscription callback');
     }
@@ -928,6 +948,7 @@ describe('MintOperationWatcherService', () => {
       operation,
     });
 
+    await waitForSubscribeCalls(1);
     if (!callback) {
       throw new Error('Expected watcher subscription callback');
     }
@@ -968,6 +989,7 @@ describe('MintOperationWatcherService', () => {
       operation,
     });
 
+    await waitForSubscribeCalls(1);
     if (!callback) {
       throw new Error('Expected watcher subscription callback');
     }
@@ -1007,6 +1029,7 @@ describe('MintOperationWatcherService', () => {
       operation,
     });
 
+    await waitForSubscribeCalls(1);
     if (!callback) {
       throw new Error('Expected watcher subscription callback');
     }
@@ -1038,6 +1061,7 @@ describe('MintOperationWatcherService', () => {
     });
 
     await watcher.start();
+    await waitForSubscribeCalls(1);
     expect(subscribe).toHaveBeenCalledTimes(1);
 
     await bus.emit('mint-op:finalized', {
@@ -1098,6 +1122,7 @@ describe('MintOperationWatcherService', () => {
 
     await watcher.start();
 
+    await waitForSubscribeCalls(1);
     expect(subscribe).toHaveBeenCalledTimes(1);
 
     await bus.emit('mint-op:finalized', {
@@ -1129,6 +1154,7 @@ describe('MintOperationWatcherService', () => {
     });
 
     await watcher.start();
+    await waitForSubscribeCalls(1);
     expect(subscribe).toHaveBeenCalledTimes(1);
 
     await bus.emit('mint-op:failed', {
@@ -1154,6 +1180,7 @@ describe('MintOperationWatcherService', () => {
     });
 
     await watcher.start();
+    await waitForSubscribeCalls(1);
     expect(subscribe).toHaveBeenCalledTimes(1);
 
     await bus.emit('mint-op:executing', {
@@ -1187,6 +1214,7 @@ describe('MintOperationWatcherService', () => {
       operationId: operation.id,
       operation,
     });
+    await waitForSubscribeCalls(1);
     expect(subscribe).toHaveBeenCalledTimes(1);
 
     await bus.emit('mint-quote:updated', {
@@ -1215,6 +1243,7 @@ describe('MintOperationWatcherService', () => {
       operationId: operation.id,
       operation,
     });
+    await waitForSubscribeCalls(1);
     expect(subscribe).toHaveBeenCalledTimes(1);
 
     await bus.emit('mint:untrusted', { mintUrl });
@@ -1236,6 +1265,7 @@ describe('MintOperationWatcherService', () => {
     });
 
     await watcher.start();
+    await waitForSubscribeCalls(1);
     expect(subscribe).toHaveBeenCalledTimes(1);
 
     await bus.emit('mint-op:executing', {
@@ -1284,6 +1314,7 @@ describe('MintOperationWatcherService', () => {
       operation,
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitForSubscribeCalls(1);
     expect(subscribe).toHaveBeenCalledTimes(1);
 
     await emitOperationEvent(operation);
@@ -1291,6 +1322,7 @@ describe('MintOperationWatcherService', () => {
     releaseSubscribe?.();
     await pendingEmit;
 
+    await waitForSubscribeCalls(1);
     expect(subscribe).toHaveBeenCalledTimes(1);
     expect(unsubscribe).not.toHaveBeenCalled();
 

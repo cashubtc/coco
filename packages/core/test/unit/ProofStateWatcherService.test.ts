@@ -34,6 +34,245 @@ describe('ProofStateWatcherService', () => {
     bus = new EventBus<CoreEvents>();
   });
 
+  it('drains acquisition and unsubscribes a late subscription before stopping', async () => {
+    let releaseSubscription!: (subscription: {
+      subId: string;
+      unsubscribe: () => Promise<void>;
+    }) => void;
+    let enteredSubscription!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      enteredSubscription = resolve;
+    });
+    const unsubscribe = mock(async () => {});
+    const subscribe = mock(
+      () =>
+        new Promise<{ subId: string; unsubscribe: () => Promise<void> }>((resolve) => {
+          releaseSubscription = resolve;
+          enteredSubscription();
+        }),
+    );
+    const watcher = new ProofStateWatcherService(
+      { subscribe } as unknown as SubscriptionManager,
+      { isTrustedMint: async () => true } as unknown as MintService,
+      {} as ProofService,
+      {} as ProofRepository,
+      bus,
+      undefined,
+      { watchExistingInflightOnStart: false },
+    );
+    await watcher.start();
+    const watching = watcher.watchProof(mintUrlA, ['late-proof']);
+    await entered;
+    // Overlapping discovery must not acquire another subscription for the same proof.
+    await watcher.watchProof(mintUrlA, ['late-proof']);
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    let didStop = false;
+    const stopping = watcher.stop();
+    expect(watcher.stop()).toBe(stopping);
+    const stopped = stopping.then(() => {
+      didStop = true;
+    });
+    await Promise.resolve();
+    expect(didStop).toBe(false);
+    releaseSubscription({ subId: 'late-subscription', unsubscribe });
+    await Promise.all([watching, stopped]);
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    await watcher.watchProof(mintUrlA, ['after-stop']);
+    expect(subscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows an awaited proof-state listener to stop the watcher', async () => {
+    const secret = 'stop-from-listener';
+    let notify!: (payload: { Y: string; state: 'SPENT' }) => Promise<void>;
+    const unsubscribe = mock(async () => {});
+    const subscribe = mock(async (_mintUrl, _kind, _filters, callback) => {
+      notify = callback;
+      return { subId: 'stop-from-listener', unsubscribe };
+    });
+    const setProofState = mock(async (mintUrl: string, secrets: string[], state: 'spent') => {
+      await bus.emit('proofs:state-changed', { mintUrl, secrets, state });
+    });
+    const watcher = new ProofStateWatcherService(
+      { subscribe } as unknown as SubscriptionManager,
+      { isTrustedMint: async () => true } as unknown as MintService,
+      { setProofState } as unknown as ProofService,
+      {} as ProofRepository,
+      bus,
+      undefined,
+      { watchExistingInflightOnStart: false },
+    );
+    await watcher.start();
+    await watcher.watchProof(mintUrlA, [secret]);
+    const stoppedInListener = mock(async () => {
+      await watcher.stop();
+      expect(watcher.isRunning()).toBe(false);
+    });
+    bus.on('proofs:state-changed', stoppedInListener);
+
+    const Y = buildYHexMapsForSecrets([secret]).yHexBySecret.get(secret)!;
+    await notify({ Y, state: 'SPENT' });
+
+    expect(stoppedInListener).toHaveBeenCalledTimes(1);
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    await notify({ Y, state: 'SPENT' });
+    expect(setProofState).toHaveBeenCalledTimes(1);
+  });
+
+  it('waits for subscription cleanup already started by a notification', async () => {
+    const secret = 'cleanup-in-progress';
+    let notify!: (payload: { Y: string; state: 'SPENT' }) => Promise<void>;
+    let releaseCleanup!: () => void;
+    const cleanup = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    let enteredCleanup!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      enteredCleanup = resolve;
+    });
+    const unsubscribe = mock(async () => {
+      enteredCleanup();
+      await cleanup;
+    });
+    const subscribe = mock(async (_mintUrl, _kind, _filters, callback) => {
+      notify = callback;
+      return { subId: 'cleanup-in-progress', unsubscribe };
+    });
+    const watcher = new ProofStateWatcherService(
+      { subscribe } as unknown as SubscriptionManager,
+      { isTrustedMint: async () => true } as unknown as MintService,
+      { setProofState: async () => {} } as unknown as ProofService,
+      {} as ProofRepository,
+      bus,
+      undefined,
+      { watchExistingInflightOnStart: false },
+    );
+    await watcher.start();
+    await watcher.watchProof(mintUrlA, [secret]);
+    const notification = notify({
+      Y: buildYHexMapsForSecrets([secret]).yHexBySecret.get(secret)!,
+      state: 'SPENT',
+    });
+    await entered;
+    let didStop = false;
+    const stopping = watcher.stop().then(() => {
+      didStop = true;
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(didStop).toBe(false);
+
+    releaseCleanup();
+    await Promise.all([notification, stopping]);
+    expect(didStop).toBe(true);
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets started processing finish without affecting a restarted watcher', async () => {
+    const secret = 'finish-after-stop';
+    const callbacks: ((payload: { Y: string; state: 'SPENT' }) => Promise<void>)[] = [];
+    const unsubscribes: Mock<() => Promise<void>>[] = [];
+    const subscribe = mock(async (_mintUrl, _kind, _filters, callback) => {
+      callbacks.push(callback);
+      const unsubscribe = mock(async () => {});
+      unsubscribes.push(unsubscribe);
+      return { subId: `sub-${callbacks.length}`, unsubscribe };
+    });
+    let releaseProcessing!: () => void;
+    const processing = new Promise<void>((resolve) => {
+      releaseProcessing = resolve;
+    });
+    let enteredProcessing!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      enteredProcessing = resolve;
+    });
+    let didFinish = false;
+    const setProofState = mock(async () => {
+      enteredProcessing();
+      await processing;
+      didFinish = true;
+    });
+    const watcher = new ProofStateWatcherService(
+      { subscribe } as unknown as SubscriptionManager,
+      { isTrustedMint: async () => true } as unknown as MintService,
+      { setProofState } as unknown as ProofService,
+      {} as ProofRepository,
+      bus,
+      undefined,
+      { watchExistingInflightOnStart: false },
+    );
+    await watcher.start();
+    await watcher.watchProof(mintUrlA, [secret]);
+    const payload = {
+      Y: buildYHexMapsForSecrets([secret]).yHexBySecret.get(secret)!,
+      state: 'SPENT' as const,
+    };
+    const notification = callbacks[0]!(payload);
+    await entered;
+    await watcher.stop();
+    expect(unsubscribes[0]).toHaveBeenCalledTimes(1);
+    expect(didFinish).toBe(false);
+
+    await watcher.start();
+    await watcher.watchProof(mintUrlA, [secret]);
+    await callbacks[0]!(payload);
+    expect(setProofState).toHaveBeenCalledTimes(1);
+
+    releaseProcessing();
+    await notification;
+    expect(didFinish).toBe(true);
+    expect(unsubscribes[1]).not.toHaveBeenCalled();
+    await callbacks[1]!(payload);
+    expect(setProofState).toHaveBeenCalledTimes(2);
+    expect(unsubscribes[1]).toHaveBeenCalledTimes(1);
+    await watcher.stop();
+    expect(unsubscribes[1]).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not resume an old startup scan after a restart', async () => {
+    let releaseScan!: (operations: { id: string; state: 'pending' }[]) => void;
+    let enteredScan!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      enteredScan = resolve;
+    });
+    const firstScan = new Promise<{ id: string; state: 'pending' }[]>((resolve) => {
+      releaseScan = resolve;
+    });
+    const getPendingOperations = mock(() => {
+      enteredScan();
+      return firstScan;
+    });
+    let checkedInflight!: () => void;
+    const checked = new Promise<void>((resolve) => {
+      checkedInflight = resolve;
+    });
+    const checkInflightProofs = mock(async () => checkedInflight());
+    const getOperation = mock(async () => undefined);
+    const watcher = new ProofStateWatcherService(
+      {} as SubscriptionManager,
+      {} as MintService,
+      { checkInflightProofs } as unknown as ProofService,
+      { getInflightProofs: async () => [] } as unknown as ProofRepository,
+      bus,
+    );
+    watcher.setSendOperationService({
+      getPendingOperations,
+      getOperation,
+    } as unknown as SendOperationService);
+    await watcher.start();
+    await entered;
+    await watcher.stop();
+    getPendingOperations.mockImplementation(async () => []);
+    await watcher.start();
+    await checked;
+    // Starting a new scan must not make the original scan eligible to continue.
+    releaseScan([{ id: 'old-send', state: 'pending' }]);
+    await firstScan;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(getOperation).not.toHaveBeenCalled();
+    // Each start scans inflight proofs once; Send discovery does not delay that scan.
+    expect(checkInflightProofs).toHaveBeenCalledTimes(2);
+    await watcher.stop();
+  });
+
   it('bootstraps inflight proofs on start by default', async () => {
     const checkInflightProofs = mock(async () => {});
     const inflightProofs = [

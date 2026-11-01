@@ -41,8 +41,8 @@ describe('Mint Swap automatic recovery', () => {
       }),
     );
     const before = await fixture.repositories.mintSwap.operationRepository.getById('swap');
-    const mint = { registerInterest: mock(async () => {}), removeInterest: mock(async () => {}) };
-    const melt = { registerInterest: mock(async () => {}), removeInterest: mock(async () => {}) };
+    const mint = { registerInterest: mock(() => {}), removeInterest: mock(async () => {}) };
+    const melt = { registerInterest: mock(() => {}), removeInterest: mock(async () => {}) };
     const service = { reconcileInBackground: mock(async () => {}) };
     const runtime = processor(
       service,
@@ -78,7 +78,7 @@ describe('Mint Swap automatic recovery', () => {
     const fixture = await mintSwapFixture(new MemoryRepositories());
     await fixture.create();
     await fixture.prepare();
-    const mint = { registerInterest: mock(async () => {}), removeInterest: mock(async () => {}) };
+    const mint = { registerInterest: mock(() => {}), removeInterest: mock(async () => {}) };
     const service = { reconcileInBackground: mock(async () => {}) };
     const runtime = processor(
       service,
@@ -115,13 +115,13 @@ describe('Mint Swap automatic recovery', () => {
     expect(await fixture.repositories.mintSwap.operationRepository.getById('swap')).toEqual(parent);
   });
 
-  it('releases partially registered ownership after subscription startup fails', async () => {
+  it('releases partially declared ownership after a registrar rejects declaration', async () => {
     const repo = new MemoryRepositories();
     const parent = mintSwapFixtures().prepared;
     await repo.mintSwap.operationRepository.create(parent);
     const mint = {
-      registerInterest: mock(async () => {
-        throw new Error('subscription startup failed');
+      registerInterest: mock(() => {
+        throw new Error('declaration rejected');
       }),
       removeInterest: mock(async () => {}),
     };
@@ -142,17 +142,17 @@ describe('Mint Swap automatic recovery', () => {
     });
   });
 
-  it('removes interests acquired while stop is draining registration', async () => {
+  it('drains watcher cleanup on stop without delaying progression', async () => {
     const repo = new MemoryRepositories();
     await repo.mintSwap.operationRepository.create(mintSwapFixtures().prepared);
     const entered = deferred();
     const release = deferred();
     const mint = {
-      registerInterest: mock(async () => {
+      registerInterest: mock(() => {}),
+      removeInterest: mock(async () => {
         entered.resolve();
         await release.promise;
       }),
-      removeInterest: mock(async () => {}),
     };
     const service = { reconcileInBackground: mock(async () => {}) };
     const runtime = processor(
@@ -163,13 +163,17 @@ describe('Mint Swap automatic recovery', () => {
       {},
       { mint },
     );
-    const starting = runtime.start();
+    await runtime.start();
+    expect(service.reconcileInBackground).toHaveBeenCalledTimes(1);
+    let stopped = false;
+    const stopping = runtime.stop().then(() => {
+      stopped = true;
+    });
     await entered.promise;
-    const stopping = runtime.stop();
+    expect(stopped).toBe(false);
     release.resolve();
-    await Promise.all([starting, stopping]);
+    await stopping;
     expect(mint.removeInterest).toHaveBeenCalledTimes(1);
-    expect(service.reconcileInBackground).not.toHaveBeenCalled();
   });
 
   it('visits the complete eligible snapshot past a failing first batch', async () => {

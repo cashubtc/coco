@@ -34,6 +34,18 @@ attempts. Complete sweeps observe prepared parents and visit the entire eligible
 prefix cannot starve the tail. Eligibility is rechecked under the parent lock. Events coalesce into
 later scans, never inline reconciliation or retry-deadline changes. Stop invalidates callbacks and
 drains current work; Manager disposal also drains admitted parent commands and aborts local waiters.
+Parent quote interests use the same synchronous local declaration contract as ordinary operations.
+Routing and all declarations are installed before progression without awaiting subscription setup.
+Watchers own trust checks, acquisition failures, and late cleanup. Withdrawal revokes permission
+immediately; parent stop and watcher stop wait for required cleanup, including late acquisition.
+Repeated declarations and explicit watcher enable can retry failed setup without a new retry loop.
+
+Normal scans consume cached canonical evidence. Startup prefers complete paid source evidence and
+sufficient destination funding/completion accounting, but retains bounded recovery for unresolved
+observations and an already-authorized destination's accounting. This is a temporary split: #559 moves
+and narrows startup repair. Explicit refresh/recovery still observes immediately. Fresh source UNPAID
+confirmation under the shared child lock remains required before releasing inputs.
+
 Manager orders overlapping pause/resume requests and drains admitted lifecycle changes on disposal.
 Do not await a lifecycle change from an awaited operation/lifecycle listener whose work it must drain.
 

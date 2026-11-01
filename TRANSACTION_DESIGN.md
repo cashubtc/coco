@@ -320,7 +320,10 @@ records each remote quote observation before calling `applyMeltPending`, `applyM
 `releaseMeltAfterNonPayment`. Paid settlement validates NUT-08 change against the persisted output
 plan and atomically saves change, spends the exact Melt inputs, and finalizes the operation.
 
-Only fresh positive `UNPAID` evidence permits release. Prepared cancellation is safe because no
+Only fresh positive `UNPAID` evidence permits release. Background Melt progression consumes cached
+PAID settlement evidence, but confirms nonpayment under the shared operation lock before release.
+This applies to standalone operations and to Mint Swap source children released to ordinary
+resolution; an active parent coordinates its child instead. Prepared cancellation is safe because no
 remote effect was authorized. Timeouts, transport errors, malformed responses, incomplete pre-swap
 restoration, and contradictory proof/quote observations retain operation-owned value and use
 `deferMeltRecovery`. Recovery restores remote output candidates outside transactions, then passes
@@ -405,10 +408,21 @@ Coco uses lock-step package versioning, so the Mint Swap API has no feature acti
 Initial source payment requires an explicit `execute` call. The Mint Swap processor is enabled by
 default and can be disabled independently without restricting explicit commands. It honors
 persisted due times and registers exact parent quote interests with the existing Mint/Melt watchers,
-including parents whose due time is still ahead. Prepared observation never authorizes payment.
+including parents whose due time is still ahead. Ordinary operation and parent interests use the same
+synchronous declaration contract: local acceptance does not promise subscription readiness. Watchers
+own trust checks, acquisition, setup diagnostics, failure retries on existing triggers, and late cleanup.
+Parent scans install routing and declare all interests without awaiting acquisition; retired cleanup
+also stays outside the progression queue. Withdrawal revokes logical ownership synchronously while its
+returned promise drains required physical cleanup. Parent stop and watcher stop retain their drain
+guarantees. Shared owners cannot remove one another's interests or revive retired records.
+Prepared observation never authorizes payment.
 Watchers commit canonical observations; parent callbacks only request later coordination scans.
-Disabling a watcher does not introduce replacement polling in the parent. Bounded startup recovery
-respects automatic eligibility; explicit refresh/recovery can request immediate observation.
+Disabling a watcher does not introduce replacement polling in the parent. Normal scans use cached
+canonical evidence. Startup also uses complete paid source evidence and sufficient funded-destination
+accounting before considering remote recovery. As a temporary migration boundary, startup still falls
+back to bounded recovery for unresolved evidence, including fresh accounting for an already-authorized
+destination; it respects automatic eligibility and retry deadlines. Issue #559 moves and narrows that
+repair responsibility. Explicit refresh/recovery retains immediate observation.
 Necessary operation recovery effects remain available. Fresh positive `UNPAID` confirmation under
 the shared source lock remains required before releasing inputs, independently of watcher state.
 Exact authorized recovery interests can survive trust revocation, including Manager's transport

@@ -101,9 +101,15 @@ so the Mint Swap API has no feature activation gate. Initial source payment requ
 `execute` call. The parent processor is enabled by default and can be disabled without restricting
 explicit commands. It registers interests in the existing Mint/Melt watchers and consumes committed
 canonical quote updates without initiating prepared source payment. Interests are rebuilt independently
-of durable retry deadlines. A disabled watcher does not recruit a replacement parent quote poller;
-bounded startup/explicit recovery and necessary recovery effects remain available. Source proof release
-still requires fresh positive `UNPAID` confirmation under the shared child lock. Authorized recovery
+of durable retry deadlines. Ordinary and parent interests are synchronous local declarations;
+watchers own asynchronous activation, diagnostics, and late cleanup. Parent scans and replacement
+declarations do not await retired physical cleanup, but stop drains it. Withdrawal immediately revokes
+logical ownership while preserving shared owners. A disabled watcher does not recruit a replacement
+parent quote poller. Startup uses sufficient cached evidence first, retaining a bounded recovery
+fallback for unresolved evidence until #559 separates startup repair. Explicit recovery and necessary
+recovery effects remain available. Source proof release
+still requires fresh positive `UNPAID` confirmation under the shared child lock, including when the
+ordinary Melt processor advances the child after its parent stops. Authorized recovery
 interests permit observation of exact quotes after trust revocation, without restoring mint trust.
 Parent update hints are captured in the owning transaction and published after commit and
 lock release; local polling and complete active sweeps tolerate lost hints. No outbox or new schema
