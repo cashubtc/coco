@@ -241,13 +241,16 @@ describe('Payment Request Send planning with real selection and allocation', () 
     );
   });
 
-  it('rejects a keyset whose fees cannot leave positive spendable output value', async () => {
-    const env = await setup([16], 8000);
-    const init = await env.service.init(mintUrl, { amount: Amount.from(7), unit: 'sat' });
-    await expect(env.service.preparePaymentRequest(init)).rejects.toThrow(
-      'Unable to fund receiver input fees',
-    );
-    expect(await env.repositories.proofRepository.getReservedProofs()).toEqual([]);
-    expect(await env.repositories.counterRepository.getCounter(mintUrl, env.keysetId)).toBeNull();
-  });
+  it.each([8000, 16000])(
+    'rejects a keyset whose %i-ppk fees cannot leave positive spendable output value',
+    async (feePpk) => {
+      const env = await setup([16], feePpk);
+      const init = await env.service.init(mintUrl, { amount: Amount.from(7), unit: 'sat' });
+      await expect(env.service.preparePaymentRequest(init)).rejects.toThrow(
+        'Unable to fund receiver input fees',
+      );
+      expect(await env.repositories.proofRepository.getReservedProofs()).toEqual([]);
+      expect(await env.repositories.counterRepository.getCounter(mintUrl, env.keysetId)).toBeNull();
+    },
+  );
 });

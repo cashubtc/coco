@@ -8,6 +8,15 @@ export function feeCoveredSendAmount(
   activeKeys: MintKeys,
   keyChain: KeyChain,
 ): Amount {
+  const largestDenomination = Object.keys(activeKeys.keys).reduce((largest, denomination) => {
+    const value = BigInt(denomination);
+    return value > largest ? value : largest;
+  }, 0n);
+  // If even the largest proof costs its full value to redeem, no output set can fund a
+  // positive net amount. Reject before denomination arrays can grow with the allowance.
+  if (BigInt(keyChain.getKeyset(activeKeys.id).fee) >= largestDenomination * 1000n) {
+    throw new ProofValidationError('Unable to fund receiver input fees with this keyset');
+  }
   let grossAmount = netAmount;
   // Increasing the allowance can change the proof count in either direction. Keep a sufficient
   // candidate rather than oscillating toward equality; pathological fee schedules reject finitely.
