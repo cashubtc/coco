@@ -14,7 +14,6 @@ const mintUrl = process.env.MINT_URL ?? 'http://localhost:3338';
 const sessions: Manager[] = [];
 // The custom-unit harness uses zero fees; require the advertised rate in either configuration.
 const feePpk = process.env.CUSTOM_UNIT ? 0 : 100;
-const gross = feePpk === 0 ? 7 : 8;
 
 async function session() {
   const repo = new MemoryRepositories();
@@ -60,14 +59,22 @@ afterEach(async () => {
 
 describe('Payment Request receiver input fees', () => {
   it.each([
-    { locked: false, chosenAmount: false, http: false, direct: false },
-    { locked: false, chosenAmount: false, http: false, direct: true },
-    { locked: true, chosenAmount: false, http: false, direct: false },
-    { locked: false, chosenAmount: true, http: true, direct: false },
-    { locked: true, chosenAmount: true, http: true, direct: false },
+    { net: 7, locked: false, chosenAmount: false, http: false, direct: false },
+    { net: 7, locked: false, chosenAmount: false, http: false, direct: true },
+    { net: 7, locked: true, chosenAmount: false, http: false, direct: false },
+    { net: 7, locked: false, chosenAmount: true, http: true, direct: false },
+    { net: 7, locked: true, chosenAmount: true, http: true, direct: false },
+    ...[1, 3, 8, 15, 16].map((net) => ({
+      net,
+      locked: false,
+      chosenAmount: false,
+      http: false,
+      direct: false,
+    })),
   ])(
-    `redeems 7 net sats at ${feePpk} ppk: %j`,
-    async ({ locked, chosenAmount, http, direct }) => {
+    `redeems the requested net amount at ${feePpk} ppk: %j`,
+    async ({ net, locked, chosenAmount, http, direct }) => {
+      const gross = net + (feePpk === 0 ? 0 : 1);
       const payer = await session();
       const receiver = await session();
       await fund(payer, direct ? gross : 64);
@@ -84,7 +91,7 @@ describe('Payment Request receiver input fees', () => {
       const encoded = new PaymentRequest(
         http ? [{ type: PaymentRequestTransportType.POST, target }] : [],
         'fee-request',
-        chosenAmount ? undefined : Amount.from(7),
+        chosenAmount ? undefined : Amount.from(net),
         'sat',
         [mintUrl],
         undefined,
@@ -94,14 +101,14 @@ describe('Payment Request receiver input fees', () => {
       const request = await payer.paymentRequests.parse(encoded);
       const prepared = await payer.paymentRequests.prepare(request, {
         mintUrl,
-        ...(chosenAmount ? { amount: 7 } : {}),
+        ...(chosenAmount ? { amount: net } : {}),
       });
       expect(prepared.request.unit).toBe('sat');
       expect(prepared.sendOperation.amount).toEqual(Amount.from(gross));
       expect(prepared.sendOperation.fee).toEqual(Amount.from(direct || feePpk === 0 ? 0 : 1));
       expect(prepared.sendOperation.needsSwap).toBe(!direct);
       const committedOutputs = prepared.sendOperation.outputData;
-      expect(prepared.request.amount).toEqual(Amount.from(7));
+      expect(prepared.request.amount).toEqual(Amount.from(net));
       let delivered: Token | undefined;
       const originalFetch = globalThis.fetch;
       if (http) {
@@ -127,7 +134,7 @@ describe('Payment Request receiver input fees', () => {
         }, 0n);
         const receiverFee = Amount.from((aggregatePpk + 999n) / 1000n);
         expect(
-          sumProofs(delivered!.proofs).greaterThanOrEqual(Amount.from(7).add(receiverFee)),
+          sumProofs(delivered!.proofs).greaterThanOrEqual(Amount.from(net).add(receiverFee)),
         ).toBe(true);
         if (key) {
           for (const proof of delivered!.proofs) {
@@ -140,10 +147,91 @@ describe('Payment Request receiver input fees', () => {
       } finally {
         globalThis.fetch = originalFetch;
       }
-      expect((await receiver.wallet.balances.total()).spendable).toEqual(Amount.from(7));
+      expect((await receiver.wallet.balances.total()).spendable).toEqual(Amount.from(net));
+      expect((await payer.wallet.balances.total()).spendable).toEqual(
+        Amount.from(direct ? 0 : 64 - gross - (feePpk === 0 ? 0 : 1)),
+      );
     },
     30000,
   );
+
+  it.each([false, true])('keeps ordinary Send amounts at face value (swap: %s)', async (swap) => {
+    const payer = await session();
+    const receiver = await session();
+    await fund(payer, swap ? 64 : 7);
+    const prepared = await payer.ops.send.prepare({ mintUrl, amount: 7, forceSwap: swap });
+    expect(prepared.needsSwap).toBe(swap);
+    expect(prepared.amount).toEqual(Amount.from(7));
+    expect(prepared.fee).toEqual(Amount.from(swap && feePpk !== 0 ? 1 : 0));
+    const { token } = await payer.ops.send.execute(prepared.id);
+    expect(sumProofs(token.proofs)).toEqual(Amount.from(7));
+    await receiver.wallet.receive(token);
+    expect((await receiver.wallet.balances.total()).spendable).toEqual(
+      Amount.from(feePpk === 0 ? 7 : 6),
+    );
+  });
+
+  it.each(['before', 'after'] as const)(
+    'recovers and redeems a P2PK payment interrupted %s the mint swap',
+    async (interruption) => {
+      const payer = await session();
+      const receiver = await session();
+      await fund(payer);
+      const key = await receiver.keyring.generateKeyPair();
+      const encoded = new PaymentRequest(
+        [],
+        'recovery',
+        Amount.from(7),
+        'sat',
+        [mintUrl],
+        undefined,
+        undefined,
+        { kind: 'P2PK', data: key.publicKeyHex, tags: [] },
+      ).toEncodedRequest();
+      const prepared = await payer.paymentRequests.prepare(
+        await payer.paymentRequests.parse(encoded),
+        { mintUrl },
+      );
+      const originalFetch = globalThis.fetch;
+      let interrupted = false;
+      globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
+        if (args[0] === `${mintUrl}/v1/swap`) {
+          interrupted = true;
+          if (interruption === 'after') {
+            // Let the mint commit, then lose its real response before Coco can persist it.
+            const response = await originalFetch(...args);
+            expect(response.ok).toBe(true);
+            await response.arrayBuffer();
+          }
+          throw new Error('Payment connection lost');
+        }
+        return originalFetch(...args);
+      }, originalFetch);
+      try {
+        await expect(payer.paymentRequests.execute(prepared)).rejects.toThrow(
+          'Payment connection lost',
+        );
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+      expect(interrupted).toBe(true);
+      expect((await payer.ops.send.get(prepared.sendOperation.id))?.state).toBe('executing');
+      await payer.ops.send.recovery.run();
+      const recovered = await payer.ops.send.get(prepared.sendOperation.id);
+      expect(recovered?.state).toBe('pending');
+      if (recovered?.state !== 'pending' || !recovered.token)
+        throw new Error('Payment recovery did not produce a token');
+      expect(recovered.outputData).toEqual(prepared.sendOperation.outputData);
+      expect(recovered.amount).toEqual(Amount.from(feePpk === 0 ? 7 : 8));
+      await receiver.wallet.receive(recovered.token);
+      expect((await receiver.wallet.balances.total()).spendable).toEqual(Amount.from(7));
+      expect((await payer.wallet.balances.total()).spendable).toEqual(
+        Amount.from(feePpk === 0 ? 57 : 55),
+      );
+    },
+    30000,
+  );
+
   it.skipIf(feePpk === 0).each([7, 8])(
     'rejects a nominally funded locked request with %i sats before delivery',
     async (balance) => {
