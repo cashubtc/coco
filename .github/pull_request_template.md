@@ -4,9 +4,9 @@
 
 ## Tests
 
-- **Integration tests added or changed:** <!-- file and test name, or "none" with the reason -->
-- **Unit tests added:** <!-- one line each: pure logic, state-transition table, or a failure a real mint cannot produce. "none" is fine. -->
-- **Verification run:** <!-- which `bun run test:integration` suites you ran; what you left to CI -->
+- **Integration tests added or changed:** <!-- file and test name, executing package suites and storage backends; explain core-only scope. Or "none" with the reason. -->
+- **Unit tests added:** <!-- one line each: pure logic or state-transition table. Failures a real mint cannot produce belong at the public API with boundary fault injection. "none" is fine. -->
+- **Verification run:** <!-- exact commands, results, suites/backends and relevant mint fee/unit configuration; distinguish direct entry-file execution from the runner's package matrix; state what you left to CI. -->
 
 ## Merge Danger
 

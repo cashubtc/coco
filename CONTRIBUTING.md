@@ -114,9 +114,12 @@ that entry file or it will not run.
 
 #### Writing an integration test
 
-Start from the closest existing test: `packages/core/test/integration/SweepIntegration.test.ts` for a
-flow that needs its own funding and storage, or a new `it` in `packages/adapter-tests/src/integration.ts`
-for behavior every storage adapter should show.
+Choose the public API boundary and storage coverage separately. Add portable wallet behavior to
+`packages/adapter-tests/src/integration.ts` when it should run across adapters, using the harness's
+repository factory. Use a core-only suite when the intended coverage is core-specific, and explain
+that scope. Needing fresh funding or multiple Coco Sessions does not itself justify core-only
+placement. `packages/core/test/integration/SweepIntegration.test.ts` is a reference for funding and
+session lifecycle, not a rule for where to put a new test.
 
 - Read `MINT_URL` from the environment and go through `initializeCoco`, `ops.*`, `wallet` and
   `history` rather than services.
@@ -126,8 +129,10 @@ for behavior every storage adapter should show.
   `dispose()` every Manager in `afterEach`.
 - Create a fresh seed per test. Tests share one mint, so do not depend on its prior state.
 - Respect `CUSTOM_UNIT` when amounts or fees are asserted, as `SweepIntegration.test.ts` does.
-- Before you open the PR, run `bun run test:integration core -t '<your test name>'` and confirm the pass
-  count is not zero. A file that `integration.test.ts` does not import is silently skipped.
+- Before you open the PR, use the selection table above to choose the applicable package suites. Run
+  `bun run test:integration <package> -t '<your test name>'` for each selected package and confirm the
+  intended tests execute with a nonzero pass count. A file that `integration.test.ts` does not import
+  is silently skipped.
 
 The `indexeddb` tests also need Playwright browsers. The runner stops and prints the install command
 if they are missing, rather than installing them for you.
