@@ -31,6 +31,8 @@ export interface SelectAndReserveProofsInput {
   operationId: string;
   amount: Amount;
   forceSwap: boolean;
+  /** Opt-in net target for Payment Requests; amount remains the planned swap gross value. */
+  receiverAmount?: Amount;
 }
 
 export interface SelectAndReserveForMeltInput {
@@ -188,6 +190,7 @@ export class RepositoryScopedProofs implements ScopedProofs {
       createKeyChain(input.mintUrl, input.unit, keysets),
       this.selectProofs,
       input.forceSwap,
+      input.receiverAmount,
     );
     const secrets = selected.proofs.map((proof) => proof.secret);
     if (new Set(secrets).size !== secrets.length) {

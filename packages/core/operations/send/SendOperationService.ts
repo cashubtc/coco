@@ -73,6 +73,7 @@ import { OperationIdLock } from '../OperationIdLock';
 import { normalizeUnitAmount, type UnitAmount } from '../../amounts.ts';
 import type { SendOperationQueries } from './SendOperationQueries.ts';
 import type { SendRemote, SendRemoteSession } from './SendRemote.ts';
+import { feeCoveredSendAmount } from './SendFeePlanning.ts';
 
 // Explicit request-validation rejections from NUT error_codes.md. Unknown errors
 // do not establish non-effect and must retain the request for recovery.
@@ -215,6 +216,18 @@ export class SendOperationService {
    * Throws if the operation is already in progress.
    */
   async prepare(operation: InitSendOperation): Promise<PreparedSendOperation> {
+    return this.prepareWithAmountPolicy(operation, false);
+  }
+
+  /** Prepare a Payment Request's net target; the resulting Send amount is gross token value. */
+  async preparePaymentRequest(operation: InitSendOperation): Promise<PreparedSendOperation> {
+    return this.prepareWithAmountPolicy(operation, true);
+  }
+
+  private async prepareWithAmountPolicy(
+    operation: InitSendOperation,
+    coverReceiverFees: boolean,
+  ): Promise<PreparedSendOperation> {
     const releaseLock = await this.acquireOperationLock(operation.id);
     let result: PrepareSendResult;
     try {
@@ -227,8 +240,19 @@ export class SendOperationService {
         const metadata = await this.mintMetadataRefresh.refreshAndCommitIfStale(operation.mintUrl);
         const keys = this.activeKeys(metadata, operation.unit);
         const seed = await this.loadSeed();
+        const receiverAmount = coverReceiverFees ? operation.amount : undefined;
+        const plannedOperation = receiverAmount
+          ? {
+              ...operation,
+              amount: feeCoveredSendAmount(
+                receiverAmount,
+                keys,
+                createKeyChain(operation.mintUrl, operation.unit, metadata.keysets),
+              ),
+            }
+          : operation;
         const plan = handler.prepare({
-          operation,
+          operation: plannedOperation,
           activeKeys: keys,
           mintInfo: metadata.mint.mintInfo,
           outputDataCreator: this.outputDataCreator,
@@ -236,10 +260,11 @@ export class SendOperationService {
         const updatedAt = Date.now();
         result = await this.transactionRunner.run((tx) =>
           tx.perform(prepareSend, {
-            operation: { ...operation, updatedAt },
+            operation: { ...plannedOperation, updatedAt },
             activeKeys: keys,
             seed,
             ...plan,
+            receiverAmount,
           }),
         );
       } finally {

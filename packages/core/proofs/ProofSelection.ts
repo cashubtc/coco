@@ -8,18 +8,27 @@ export function selectProofInputs(
   keyChain: KeyChain,
   selectProofs: SelectProofs,
   forceSwap: boolean,
+  receiverAmount?: Amount,
 ): { proofs: Proof[]; fee: Amount; needsSwap: boolean } {
   const unit = normalizeUnit(operation.unit);
   for (const proof of available) {
     assertSameUnit(normalizeUnit((proof as { unit?: string }).unit), unit, 'Send proof selection');
   }
-  if (sumProofs(available).lessThan(operation.amount)) {
+  if (sumProofs(available).lessThan(receiverAmount ?? operation.amount)) {
     throw new ProofValidationError('Not enough proofs to send');
   }
 
   if (!forceSwap) {
-    const exact = selectProofs(available, operation.amount, keyChain, false).send;
-    if (sumProofs(exact).equals(operation.amount)) {
+    const exact = selectProofs(
+      available,
+      receiverAmount ?? operation.amount,
+      keyChain,
+      receiverAmount !== undefined,
+    ).send;
+    const directAmount = receiverAmount
+      ? receiverAmount.add(calculateProofFee(exact, keyChain))
+      : operation.amount;
+    if (sumProofs(exact).equals(directAmount)) {
       return { proofs: exact, fee: Amount.zero(), needsSwap: false };
     }
   }

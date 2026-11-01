@@ -92,6 +92,7 @@ type ResolvedPaymentRequest = {
   paymentRequest: PaymentRequest;
   payableMints: string[];
   allowedMints: string[];
+  /** Receiver's net target after redemption input fees, including for caller-chosen amounts. */
   amount?: Amount;
   unit: string;
   transport: PaymentRequestTransport;
@@ -99,6 +100,7 @@ type ResolvedPaymentRequest = {
 };
 
 export type PreparedPaymentRequest = {
+  /** Gross outgoing value in amount; fee is the separate payer-side preparation cost. */
   sendOperation: PreparedSendOperation;
   request: ResolvedPaymentRequest;
 };
@@ -197,7 +199,7 @@ export class PaymentRequestService {
     const sendOptions = await this.resolveSendOptions(preparedRequest, mintUrl);
     this.logger?.debug('Preparing payment request transaction', { mintUrl, amount: finalAmount });
     const initSend = await this.sendOperationService.init(mintUrl, finalAmount, sendOptions);
-    const preparedSend = await this.sendOperationService.prepare(initSend);
+    const preparedSend = await this.sendOperationService.preparePaymentRequest(initSend);
     this.logger?.debug('Payment request transaction prepared', { mintUrl, amount: finalAmount });
     return { sendOperation: preparedSend, request: preparedRequest };
   }

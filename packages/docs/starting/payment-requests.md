@@ -21,14 +21,40 @@ console.log('Matching mints:', prepared.payableMints);
 The returned `ResolvedPaymentRequest` contains:
 
 - **transport** - How to deliver the tokens (`inband`, `http`, or `nostr`)
-- **amount** - The requested amount (optional, but required for payment)
+- **amount** - The receiver's requested net amount after redemption input fees (optional, but required for payment)
 - **unit** - The requested unit, normalized to lowercase
 - **allowedMints** - List of allowed mints from the request
-- **payableMints** - Trusted mints with sufficient balance. For P2PK requests,
-  this also requires NUT-11 support.
+- **payableMints** - Trusted mints with enough balance for the nominal requested amount. For P2PK
+  requests, this also requires NUT-11 support. Preparation checks affordability including all fees.
 - **spendingCondition** - Optional NUT-10 requirement details. Valid P2PK
   requirements are exposed as normalized P2PK options; unsupported or malformed
   requirements are exposed as diagnostics.
+
+## Amounts and Input Fees
+
+Supply the amount the receiver should be able to spend. Coco automatically covers the input fee
+for redeeming the outgoing proofs, using their keysets and aggregate fee rounding. This applies
+to fixed requests and to `options.amount` for amountless requests, for both in-band and HTTP
+delivery. Do not add a receiver fee yourself.
+
+The prepared result keeps the amounts distinct:
+
+- `transaction.request.amount` and `unit` retain the requested net target.
+- `transaction.sendOperation.amount` is the gross outgoing proof value, including the receiver's
+  fee allowance. It can exceed the net target.
+- `transaction.sendOperation.fee` is still the payer-side preparation fee, such as a swap input
+  fee. It does **not** include the receiver's fee allowance.
+
+For example, a 7-sat request at a mint charging 100 input-fee ppk can produce one 8-sat proof.
+The receiver pays 1 sat to redeem it and receives 7 spendable sats. If preparation consumes one
+input in a swap, the payer also funds that swap's separate 1-sat fee. Existing proofs that cover
+the net target and their own redemption fee can be sent directly without that swap cost.
+
+At zero-fee mints, no fee allowance is added. For P2PK requests, the entire outgoing value,
+including the fee allowance, is locked to the requested condition. Preparation rejects insufficient
+funding before delivery and rolls back proof reservations and Output Allocation. Execution and
+recovery reuse the committed output plan. Already prepared operations keep their original meaning.
+Ordinary `ops.send.prepare()` amounts continue to mean face value.
 
 ## P2PK Payment Request Requirements
 

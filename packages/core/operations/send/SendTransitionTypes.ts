@@ -20,6 +20,8 @@ export interface PrepareSendInput {
   forceSwap: boolean;
   /** Randomized outputs fixed during preflight and reused across transaction retries. */
   fixedSendOutputs?: readonly OutputDataLike[];
+  /** Payment Request net target. Omitted for ordinary face-value Sends. */
+  receiverAmount?: Amount;
 }
 
 export interface PrepareSendResult {
