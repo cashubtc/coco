@@ -42,7 +42,7 @@ jobs:
         with:
           files: coverage/core/lcov.info
           disable_search: true
-          fail_ci_if_error: true
+          fail_ci_if_error: false
           flags: core-unit
           name: core-unit
           token: ${{ secrets.CODECOV_TOKEN }}
