@@ -59,6 +59,7 @@ const EXPECTED_MIGRATION_IDS = [
   '042_mint_swap_operations',
   '043_pending_proofs',
   '044_receive_operation_revision',
+  '045_batch_mint_operations',
 ] as const;
 
 async function allocateP2pkKey(db: SqlDatabase) {
@@ -1295,6 +1296,64 @@ describe('shared SQL schema migrations', () => {
           ],
         );
       });
+    },
+  );
+});
+
+describe('Batch Mint migration', () => {
+  itWithDatabase(
+    'adds indexed Batch Mint tables and keeps existing Mint Operations',
+    async (db) => {
+      await ensureSchemaUpTo(db, '045_batch_mint_operations');
+      const mintOperationColumns = await getColumnNames(db, 'coco_cashu_mint_operations');
+      const mintOperationIndexes = await getIndexNames(db, 'coco_cashu_mint_operations');
+      await db.run(
+        `INSERT INTO coco_cashu_mint_operations
+        (id, mintUrl, quoteId, state, createdAt, updatedAt, method, methodDataJson, amount, unit,
+         request, outputDataJson)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          'existing-mint-op',
+          'https://mint.test',
+          'existing-quote',
+          'finalized',
+          1,
+          1,
+          'bolt11',
+          '{}',
+          '10',
+          'sat',
+          'lnbc-existing',
+          JSON.stringify({ keep: [], send: [] }),
+        ],
+      );
+
+      await ensureSchemaUpTo(db);
+
+      expect(await getColumnNames(db, 'coco_cashu_mint_operations')).toEqual(mintOperationColumns);
+      expect(await getIndexNames(db, 'coco_cashu_mint_operations')).toEqual(mintOperationIndexes);
+      expect(await getColumnNames(db, 'coco_cashu_batch_mint_members')).toEqual([
+        'operationId',
+        'ordinal',
+        'mintUrl',
+        'quoteId',
+        'amount',
+        'request',
+        'pubkey',
+      ]);
+      expect(await getIndexNames(db, 'coco_cashu_batch_mint_members')).toEqual(
+        expect.arrayContaining(['idx_coco_cashu_batch_mint_members_quote']),
+      );
+      const repositories = new SqlStorageRepositories({ database: db });
+      const existing = await repositories.mintOperationRepository.getById('existing-mint-op');
+      expect(existing?.state).toBe('finalized');
+      expect(await repositories.batchMint.operationRepository.listInFlight()).toEqual([]);
+      expect(
+        await repositories.batchMint.operationRepository.listByQuote({
+          mintUrl: 'https://mint.test',
+          quoteId: 'existing-quote',
+        }),
+      ).toEqual([]);
     },
   );
 });

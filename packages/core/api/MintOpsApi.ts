@@ -7,6 +7,7 @@ import type {
   PendingMintOperation,
 } from '@core/operations/mint';
 import type { MintQuoteRef, QuoteIdentity } from '../models/QuoteIdentity.ts';
+import type { BatchMintOpsApi } from './BatchMintOpsApi.ts';
 
 /** Mint methods supported by the default `Manager` wiring. */
 export type DefaultSupportedMintMethod = 'bolt11' | 'onchain' | 'bolt12';
@@ -55,7 +56,14 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
     isLocked: (operationId: string) => this.mintOperationService.isOperationLocked(operationId),
   };
 
-  constructor(private readonly mintOperationService: MintOperationService) {}
+  constructor(
+    private readonly mintOperationService: MintOperationService,
+    /**
+     * Batch Mint Operations: claim two or more quotes in one atomic NUT-29 request, with no
+     * fallback to the standalone Mint Operations managed by this API.
+     */
+    readonly batch: BatchMintOpsApi,
+  ) {}
 
   /**
    * Prepares a mint operation against an existing canonical quote without executing it.

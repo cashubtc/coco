@@ -1,0 +1,119 @@
+import { Amount } from '@cashu/cashu-ts';
+import type { MintOperationRepository } from '@core/repositories';
+import type { MintQuote } from '../../models/MintQuote.ts';
+import {
+  assessMintQuoteClaimability,
+  type MintQuoteClaimabilityAssessment,
+} from '../../models/MintQuoteClaimability.ts';
+import type { MintQuoteRef } from '../../models/QuoteIdentity.ts';
+import type { BatchMintOperation } from '../../operations/batchMint/BatchMintOperation.ts';
+import type { BatchMintOperationRepository } from '../../operations/batchMint/BatchMintOperationRepository.ts';
+import type { MintOperation } from '../../operations/mint/MintOperation.ts';
+import { normalizeMintUrl } from '../../utils.ts';
+
+/** Local facts about one Mint Quote's claims across Mint Operations and Batch Mint Operations. */
+export interface MintQuoteClaimFacts {
+  /** Local issuance: finalized Mint Operations plus finalized Batch Mint Members. */
+  finalizedAmount: Amount;
+  /**
+   * Active Mint Quote Reservations: executing Mint Operations plus executing Batch Mint Members,
+   * excluding the operation being assessed.
+   */
+  reservedAmount: Amount;
+  /**
+   * Every standalone Mint Operation for the quote, ordered by createdAt then ID. Nonterminal ones
+   * keep claiming the quote; fixed-amount quotes admit no second standalone operation at all.
+   */
+  standaloneOperations: MintOperation[];
+  /** Every Batch Mint Operation with a member for the quote, ordered by createdAt then ID. */
+  batchMintOperations: BatchMintOperation[];
+}
+
+/** The amounts of the shared claim facts that Mint Quote claimability consumes. */
+export function claimabilityFacts(
+  facts: Pick<MintQuoteClaimFacts, 'finalizedAmount' | 'reservedAmount'>,
+  requestedAmount?: Amount,
+): { finalizedAmount: Amount; reservedAmount: Amount; requestedAmount?: Amount } {
+  return {
+    finalizedAmount: facts.finalizedAmount,
+    reservedAmount: facts.reservedAmount,
+    ...(requestedAmount ? { requestedAmount } : {}),
+  };
+}
+
+/**
+ * Whether another active Mint Quote Reservation holds an atomic BOLT11 quote. An atomic quote
+ * admits one claim at a time, so any reservation holds all of it; balance arithmetic, which
+ * claimability deliberately does not apply to atomic quotes, cannot say so.
+ */
+export function holdsAtomicQuote(
+  quote: Pick<MintQuoteRef, 'method'>,
+  facts: Pick<MintQuoteClaimFacts, 'reservedAmount'>,
+): boolean {
+  return quote.method === 'bolt11' && !facts.reservedAmount.isZero();
+}
+
+/**
+ * Assess a new local claim of a quote against its shared claim facts: claimability, except that an
+ * atomic quote another reservation holds is `waiting`.
+ */
+export function assessMintQuoteClaim(
+  quote: MintQuote,
+  facts: Pick<MintQuoteClaimFacts, 'finalizedAmount' | 'reservedAmount'>,
+  requestedAmount?: Amount,
+): MintQuoteClaimabilityAssessment {
+  const assessment = assessMintQuoteClaimability(quote, claimabilityFacts(facts, requestedAmount));
+  if (assessment.status === 'claimable' && holdsAtomicQuote(quote, facts))
+    return { status: 'waiting', remoteAvailable: assessment.remoteAvailable };
+  return assessment;
+}
+
+export interface MintQuoteClaimFactsOptions {
+  /** Mint or Batch Mint Operation whose own reservation must not count against itself. */
+  excludeOperationId?: string;
+}
+
+/**
+ * The single source of local Mint Quote claim facts. Every claimability decision reads them here,
+ * inside the transaction that authorizes it or a read transaction for informational checks.
+ */
+export interface ScopedMintQuoteClaims {
+  getFacts(quote: MintQuoteRef, options?: MintQuoteClaimFactsOptions): Promise<MintQuoteClaimFacts>;
+}
+
+export class RepositoryScopedMintQuoteClaims implements ScopedMintQuoteClaims {
+  constructor(
+    private readonly mintOperations: Pick<MintOperationRepository, 'getByQuoteId'>,
+    private readonly batchMintOperations: Pick<BatchMintOperationRepository, 'listByQuote'>,
+  ) {}
+
+  async getFacts(
+    quote: MintQuoteRef,
+    options: MintQuoteClaimFactsOptions = {},
+  ): Promise<MintQuoteClaimFacts> {
+    const mintUrl = normalizeMintUrl(quote.mintUrl);
+    const standaloneOperations = await this.mintOperations.getByQuoteId(
+      mintUrl,
+      quote.method,
+      quote.quoteId,
+    );
+    const batchMintOperations = (
+      await this.batchMintOperations.listByQuote({ mintUrl, quoteId: quote.quoteId })
+    ).filter((operation) => operation.method === quote.method);
+
+    let finalizedAmount = Amount.zero();
+    let reservedAmount = Amount.zero();
+    const count = (operation: MintOperation | BatchMintOperation, amount: Amount) => {
+      if (operation.state === 'finalized') finalizedAmount = finalizedAmount.add(amount);
+      else if (operation.state === 'executing' && operation.id !== options.excludeOperationId)
+        reservedAmount = reservedAmount.add(amount);
+    };
+    for (const operation of standaloneOperations) count(operation, operation.amount);
+    for (const operation of batchMintOperations) {
+      for (const member of operation.members) {
+        if (member.quoteId === quote.quoteId) count(operation, member.amount);
+      }
+    }
+    return { finalizedAmount, reservedAmount, standaloneOperations, batchMintOperations };
+  }
+}

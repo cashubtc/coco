@@ -43,6 +43,7 @@ export interface CocoConfig {
       baseRetryDelayMs?: number;
       initialEnqueueDelayMs?: number;
       autoClaimMintQuotes?: boolean;
+      batchMintQuotes?: boolean;
     };
     meltSettlementProcessor?: {
       disabled?: boolean;
@@ -69,6 +70,21 @@ recovery, ordinary processors and automatic quote claiming leave children of act
 the parent, so disabling this processor also pauses them; see
 [Mint Swap Operations](https://github.com/cashubtc/coco/blob/master/TRANSACTION_DESIGN.md#mint-swap-operations). Scan defaults are `processIntervalMs: 1000`,
 `sweepIntervalMs: 30000`, and `batchSize: 25`; durable retry deadlines remain authoritative.
+
+`processors.mintOperationProcessor.batchMintQuotes` defaults to `true`. Automatic claiming then
+groups claimable quotes by mint, method and unit, both in the startup sweep and over one processing
+turn (`processIntervalMs`, default `3000`) of quote updates, and claims each group of two or more
+within the mint's NUT-29 batch limit as one
+[Batch Mint Operation](./mint-operations.md#batch-mint-operations-coco-ops-mint-batch). A lone
+quote, a method the mint does not advertise for NUT-29, a quote with a nonterminal mint operation
+and a quote coordinated by an active Mint Swap keep a standalone mint operation. When admission or
+the mint rejects a batch, its still-claimable quotes are claimed as standalone mint operations. If the
+batch endpoint is unsupported, answers with a malformed response or rejects with `11017` (batch too
+large), automatic claiming uses standalone mint operations for that mint and method for the rest of
+the Coco Session; network, authentication, rate-limit and server failures do not change this.
+Batched quotes settle through `batch-mint-op:*` events instead of `mint-op:*`, and each keeps its own
+history entry. Set `batchMintQuotes: false` to claim one standalone mint operation per quote;
+`ops.mint.batch` stays available either way.
 
 ## Custom output construction
 

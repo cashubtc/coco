@@ -10,6 +10,7 @@ import type {
 import {
   compareHistoryEntries,
   parseHistoryEntryId,
+  projectBatchMintOperation,
   projectLegacyHistoryRow,
   projectMeltOperation,
   projectMintOperation,
@@ -18,6 +19,8 @@ import {
 } from '@core/models/History';
 import { getMintQuoteRemoteState } from '@core/models/MintQuote';
 import type { MintOperation } from '@core/operations/mint';
+import type { BatchMintOperation } from '../../operations/batchMint/BatchMintOperation.ts';
+import type { MemoryBatchMintOperationRepository } from './MemoryBatchMintOperationRepository.ts';
 import type { MemoryMeltOperationRepository } from './MemoryMeltOperationRepository';
 import type { MemoryMintOperationRepository } from './MemoryMintOperationRepository';
 import type { MemoryReceiveOperationRepository } from './MemoryReceiveOperationRepository';
@@ -30,6 +33,7 @@ type OperationRepositories = {
   mintOperationRepository?: MemoryMintOperationRepository;
   mintQuoteRepository?: MintQuoteRepository;
   receiveOperationRepository?: MemoryReceiveOperationRepository;
+  batchMintOperationRepository?: MemoryBatchMintOperationRepository;
 };
 
 export class MemoryHistoryRepository implements HistoryProjectionRepository {
@@ -53,6 +57,15 @@ export class MemoryHistoryRepository implements HistoryProjectionRepository {
     if (parsed.source === 'legacy') {
       const entries = await this.getProjectedEntries();
       return entries.find((entry) => entry.id === id && entry.source === 'legacy') ?? null;
+    }
+
+    if (parsed.source === 'batch-mint') {
+      const operation = await this.operationRepositories.batchMintOperationRepository?.getById(
+        parsed.operationId,
+      );
+      if (!operation) return null;
+      const entries = await this.projectBatchMintOperation(operation);
+      return entries.find((entry) => entry.id === id) ?? null;
     }
 
     return this.projectOperationById(parsed.type, parsed.operationId);
@@ -112,6 +125,14 @@ export class MemoryHistoryRepository implements HistoryProjectionRepository {
       if (entry) entries.push(entry);
     }
 
+    for (const state of ['executing', 'finalized', 'failed'] as const) {
+      const batchMintOperations =
+        await this.operationRepositories.batchMintOperationRepository?.listByState(state);
+      for (const operation of batchMintOperations ?? []) {
+        entries.push(...(await this.projectBatchMintOperation(operation)));
+      }
+    }
+
     const receiveOperations = await this.operationRepositories.receiveOperationRepository?.getAll();
     for (const operation of receiveOperations ?? []) {
       const entry = projectReceiveOperation(operation);
@@ -161,6 +182,20 @@ export class MemoryHistoryRepository implements HistoryProjectionRepository {
     const remoteState = quote ? getMintQuoteRemoteState(quote) : undefined;
 
     return remoteState ? { ...entry, remoteState } : entry;
+  }
+
+  private async projectBatchMintOperation(operation: BatchMintOperation): Promise<HistoryEntry[]> {
+    const entries: HistoryEntry[] = [];
+    for (const entry of projectBatchMintOperation(operation)) {
+      const quote = await this.operationRepositories.mintQuoteRepository?.getMintQuote(
+        operation.mintUrl,
+        operation.method,
+        entry.quoteId,
+      );
+      const remoteState = quote ? getMintQuoteRemoteState(quote) : undefined;
+      entries.push(remoteState ? { ...entry, remoteState } : entry);
+    }
+    return entries;
   }
 
   private dedupeLegacyEntries(operationEntries: HistoryEntry[]): LegacyHistoryEntry[] {

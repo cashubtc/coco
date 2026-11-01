@@ -40,8 +40,11 @@ Use `amountPaid` and `amountIssued` for cumulative quote accounting; these quote
 Coco also accounts for finalized operations and active reservations.
 
 With the default `processors.mintOperationProcessor.autoClaimMintQuotes: true`, Coco creates
-claims for available quote value automatically. After a payment, discover the associated operations
-with `ops.mint.listByQuote({ mintUrl, quoteId })` and track their operation events. Keep the quote
+claims for available quote value automatically. With the default `batchMintQuotes: true`, quotes
+paid together may be claimed by one Batch Mint Operation. After a payment, discover the associated
+operations with `ops.mint.listByQuote({ mintUrl, quoteId })` and
+`ops.mint.batch.listByQuote({ mintUrl, quoteId })`, and track `mint-op:*` and `batch-mint-op:*`
+events. Keep the quote
 available for later payments after an individual operation finalizes.
 
 If the app must choose each claim amount, set

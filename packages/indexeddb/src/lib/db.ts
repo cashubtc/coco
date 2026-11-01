@@ -344,6 +344,29 @@ export interface MintOperationRow {
   outputDataJson?: string | null;
 }
 
+export interface BatchMintOperationRow {
+  id: string;
+  mintUrl: string;
+  method: string;
+  unit: string;
+  state: 'executing' | 'finalized' | 'failed';
+  createdAt: number;
+  updatedAt: number;
+  error: string | null;
+  terminalFailureJson: string | null;
+  outputDataJson: string;
+}
+
+export interface BatchMintMemberRow {
+  operationId: string;
+  ordinal: number;
+  mintUrl: string;
+  quoteId: string;
+  amount: string;
+  request: string;
+  pubkey: string | null;
+}
+
 export interface MintSwapOperationRow {
   id: string;
   state:

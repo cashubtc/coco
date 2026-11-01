@@ -5,6 +5,7 @@ import type {
   MeltOperationState,
   PreparedOrLaterOperation as PreparedOrLaterMeltOperation,
 } from '../operations/melt/MeltOperation.ts';
+import type { BatchMintOperation } from '../operations/batchMint/BatchMintOperation.ts';
 import type {
   MintOperation,
   MintOperationState,
@@ -50,6 +51,11 @@ export type MintHistoryEntry = OperationHistoryBase & {
   state: MintHistoryState;
   amount: Amount;
   remoteState?: string;
+  /**
+   * Set when the entry is a Batch Mint Member. `operationId` is then the same batch ID, the state
+   * is the batch's state, and the entry ID is `batch-mint:<batch ID>:<ordinal>`.
+   */
+  batchMintOperationId?: string;
 };
 
 export type MeltHistoryEntry = OperationHistoryBase & {
@@ -155,6 +161,11 @@ export function operationHistoryId(type: HistoryType, operationId: string): stri
   return `${type}:${operationId}`;
 }
 
+/** Per-member history entry ID of a Batch Mint Member. */
+export function batchMintHistoryId(operationId: string, ordinal: number): string {
+  return `batch-mint:${operationId}:${ordinal}`;
+}
+
 export function legacyHistoryId(legacyId: string | number): string {
   return `legacy:${legacyId}`;
 }
@@ -165,10 +176,19 @@ export function parseHistoryEntryId(id: string):
       source: 'legacy';
       legacyHistoryId: string;
     }
+  | { source: 'batch-mint'; operationId: string; ordinal: number }
   | null {
   if (id.startsWith('legacy:')) {
     const legacyId = id.slice('legacy:'.length);
     return legacyId ? { source: 'legacy', legacyHistoryId: legacyId } : null;
+  }
+  if (id.startsWith('batch-mint:')) {
+    const rest = id.slice('batch-mint:'.length);
+    const separator = rest.lastIndexOf(':');
+    const operationId = rest.slice(0, separator);
+    const ordinal = rest.slice(separator + 1);
+    if (separator <= 0 || !/^(0|[1-9]\d*)$/.test(ordinal)) return null;
+    return { source: 'batch-mint', operationId, ordinal: Number(ordinal) };
   }
 
   const separator = id.indexOf(':');
@@ -245,6 +265,31 @@ export function projectMintOperation(operation: MintOperation): MintHistoryEntry
     state: pending.state,
     ...(pending.error ? { error: pending.error } : {}),
   };
+}
+
+/**
+ * Project each Batch Mint Member as an ordinary mint history entry sharing the batch's outcome.
+ * Members are returned in ordinal order.
+ */
+export function projectBatchMintOperation(operation: BatchMintOperation): MintHistoryEntry[] {
+  return [...operation.members]
+    .sort((a, b) => a.ordinal - b.ordinal)
+    .map((member) => ({
+      id: batchMintHistoryId(operation.id, member.ordinal),
+      source: 'operation',
+      type: 'mint',
+      createdAt: operation.createdAt,
+      updatedAt: operation.updatedAt,
+      mintUrl: operation.mintUrl,
+      unit: operation.unit,
+      operationId: operation.id,
+      batchMintOperationId: operation.id,
+      quoteId: member.quoteId,
+      paymentRequest: member.request,
+      amount: member.amount,
+      state: operation.state,
+      ...(operation.error ? { error: operation.error } : {}),
+    }));
 }
 
 export function projectReceiveOperation(operation: ReceiveOperation): ReceiveHistoryEntry | null {

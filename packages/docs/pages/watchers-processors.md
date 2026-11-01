@@ -37,6 +37,11 @@ This module processes live mint operation events. When a pending BOLT11 mint ope
 as `PAID`, the processor advances it by finalizing the operation. For reusable onchain mint quotes,
 it claims locally available balance when quote updates show newly claimable funds.
 
+With `batchMintQuotes` (default `true`), claims from quote updates are collected over one processing
+turn (`processIntervalMs`) and, like the startup sweep, grouped into Batch Mint Operations per mint,
+method and unit when the mint supports NUT-29 batch minting. See
+[Coco config](./coco-config.md) for the fallback rules.
+
 ## MintOperationWatcher
 
 This module watches pending mint operations via WebSockets and polling, observes remote quote

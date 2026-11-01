@@ -60,6 +60,17 @@ A durable, individually observable intent to claim value from one Mint Quote. It
 as one mint history entry.
 _Avoid_: Mint request, quote state
 
+**Batch Mint Operation**:
+A durable, individually observable intent to atomically claim value from an exact ordered group of
+two or more compatible Mint Quotes through one issuance outcome. Each member appears as one mint
+history entry sharing that outcome.
+_Avoid_: Mint Operation parent, Mint Batch Attempt, transparent batch
+
+**Batch Mint Member**:
+An ordered allocation of an amount from one Mint Quote within a Batch Mint Operation. It is not a
+child operation and has no independent outcome.
+_Avoid_: Child Mint Operation, batch item, quote owner
+
 **Mint Swap Operation**:
 A durable parent Saga that moves value between two mints by referencing one exact source Melt
 Operation and one exact destination Mint Operation. It exclusively coordinates their progress and
@@ -152,7 +163,7 @@ _Avoid_: Unclaimed Send token, pending quote
 
 **Exact Operation Request**:
 Immutable mint request material owned by a durable operation and reused for both initial submission
-and Operation Recovery.
+and Operation Recovery. Quote signatures are not part of it; they are created at each submission.
 _Avoid_: Retry request, regenerated request, execution attempt
 
 **Ambiguous Operation Outcome**:

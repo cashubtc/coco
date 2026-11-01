@@ -1616,6 +1616,40 @@ const MIGRATIONS: readonly Migration[] = [
       }
     },
   },
+  {
+    id: '045_batch_mint_operations',
+    sql: `
+      CREATE TABLE coco_cashu_batch_mint_operations (
+        id TEXT PRIMARY KEY,
+        mintUrl TEXT NOT NULL,
+        method TEXT NOT NULL,
+        unit TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('executing', 'finalized', 'failed')),
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL,
+        error TEXT,
+        terminalFailureJson TEXT,
+        outputDataJson TEXT NOT NULL
+      );
+      CREATE INDEX idx_coco_cashu_batch_mint_operations_state
+        ON coco_cashu_batch_mint_operations(state);
+
+      CREATE TABLE coco_cashu_batch_mint_members (
+        operationId TEXT NOT NULL
+          REFERENCES coco_cashu_batch_mint_operations(id) ON DELETE CASCADE,
+        ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+        mintUrl TEXT NOT NULL,
+        quoteId TEXT NOT NULL,
+        amount TEXT NOT NULL,
+        request TEXT NOT NULL,
+        pubkey TEXT,
+        PRIMARY KEY (operationId, ordinal),
+        UNIQUE (operationId, mintUrl, quoteId)
+      );
+      CREATE INDEX idx_coco_cashu_batch_mint_members_quote
+        ON coco_cashu_batch_mint_members(mintUrl, quoteId);
+    `,
+  },
 ];
 
 // Export for testing
