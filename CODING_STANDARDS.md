@@ -99,10 +99,11 @@ copies, cached values, encodings, object dumps or error context. This also appli
 ## Test behavior
 
 Add or update tests with behavior changes whenever practical.
-Prefer real behavior tests, especially the integration suite, for workflows and interactions. Focused
-unit tests are valuable for complex behavior. Choose the boundary that demonstrates the guarantee under
-change; doubles must not remove the persistence, protocol or lifecycle behavior the test is meant to
-prove. Avoid tests that merely mirror implementation or repeat trivial delegation.
+Default to the integration suite, which runs against a real mint, for workflows and interactions. Add a
+new unit test only for pure logic, state transitions, or failures a real mint cannot produce on demand.
+Choose the boundary that demonstrates the guarantee under change; doubles must not remove the
+persistence, protocol or lifecycle behavior the test is meant to prove. Avoid tests that merely mirror
+implementation or repeat trivial delegation, and do not add tests only to reach a coverage target.
 
 Assert observable outcomes and relevant failure behavior. For recovery changes, exercise the historical
 records or interrupted states that the change actually promises to handle, guided by the risk assessment
@@ -112,8 +113,8 @@ do not require every backend or duplicate equivalent assertions
 by default. Type-level contracts also need compiler verification.
 
 Use the affected scripts and CI selection to establish what actually runs. A test's presence in a
-directory is not evidence that a particular CI job executes it. Report relevant verification and any
-remaining uncertainty.
+directory is not evidence that a particular CI job executes it. Report relevant verification, including
+which integration suites you ran and which you left to CI, and any remaining uncertainty.
 
 ## Keep guidance accurate
 
