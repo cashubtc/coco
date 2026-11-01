@@ -6,6 +6,7 @@ import type {
   PendingMintCheckResult,
   PendingMintOperation,
 } from '@core/operations/mint';
+import { OperationNotFoundError, OperationStateError } from '../models/Error.ts';
 import type { MintQuoteRef, QuoteIdentity } from '../models/QuoteIdentity.ts';
 
 /** Mint methods supported by the default `Manager` wiring. */
@@ -101,7 +102,15 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
   async checkPayment(operationId: string): Promise<PendingMintCheckResult> {
     const operation = await this.requireOperation(operationId);
     if (operation.state !== 'pending') {
-      throw new Error(`Cannot check payment in state '${operation.state}'. Expected 'pending'.`);
+      throw new OperationStateError(
+        {
+          operationType: 'mint',
+          operationId: operation.id,
+          state: operation.state,
+          expectedStates: ['pending'],
+        },
+        `Cannot check payment in state '${operation.state}'. Expected 'pending'.`,
+      );
     }
 
     return this.mintOperationService.checkPendingOperation(operation.id);
@@ -138,7 +147,7 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
   private async requireOperation(operationId: string): Promise<MintOperation> {
     const operation = await this.mintOperationService.getOperation(operationId);
     if (!operation) {
-      throw new Error(`Operation ${operationId} not found`);
+      throw new OperationNotFoundError('mint', operationId);
     }
 
     return operation;

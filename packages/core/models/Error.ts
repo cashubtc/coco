@@ -55,6 +55,14 @@ export class MintQuoteValidationError extends Error {
   }
 }
 
+/** Raised when a Melt Quote cannot back the requested Melt, such as an unknown fee option. */
+export class MeltQuoteValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'MeltQuoteValidationError';
+  }
+}
+
 export class MintQuoteKeyError extends Error {
   constructor(message: string, cause?: unknown) {
     super(message);
@@ -130,6 +138,55 @@ export class OperationInProgressError extends Error {
     super(`Operation ${operationId} is already in progress`);
     this.name = 'OperationInProgressError';
     this.operationId = operationId;
+  }
+}
+
+/** Operation families whose lifecycle commands report typed lookup and state failures. */
+export type LifecycleOperationType = 'mint' | 'melt' | 'send' | 'receive';
+
+/** Raised when a lifecycle command targets an Operation ID that does not exist. */
+export class OperationNotFoundError extends Error {
+  constructor(
+    readonly operationType: LifecycleOperationType,
+    readonly operationId: string,
+  ) {
+    super(`Operation ${operationId} not found`);
+    this.name = 'OperationNotFoundError';
+  }
+}
+
+/** Current and accepted states of an Operation whose lifecycle command was rejected. */
+export interface OperationStateErrorDetails {
+  operationType: LifecycleOperationType;
+  operationId: string;
+  state: string;
+  expectedStates: readonly string[];
+  /** Set when the Melt Quote's state, not the Operation's own state, blocks the command. */
+  quoteState?: string;
+}
+
+/**
+ * Raised when a lifecycle command is unavailable in the Operation's current state.
+ *
+ * The state is the one observed when the command was rejected, so callers should re-read the
+ * Operation before choosing another command. `quoteState` is set when the Operation's own state
+ * accepts the command but its Melt Quote's state does not.
+ */
+export class OperationStateError extends Error {
+  readonly operationType: LifecycleOperationType;
+  readonly operationId: string;
+  readonly state: string;
+  readonly expectedStates: readonly string[];
+  readonly quoteState?: string;
+
+  constructor(details: OperationStateErrorDetails, message: string) {
+    super(message);
+    this.name = 'OperationStateError';
+    this.operationType = details.operationType;
+    this.operationId = details.operationId;
+    this.state = details.state;
+    this.expectedStates = [...details.expectedStates];
+    this.quoteState = details.quoteState;
   }
 }
 

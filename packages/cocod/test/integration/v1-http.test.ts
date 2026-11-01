@@ -11,7 +11,7 @@ import {
   buildV1FallbackHandler,
   buildV1Routes,
   createV1RouteDefinitions,
-  type V1LifecycleRuntime,
+  type V1Runtime,
 } from '../../src/v1/http.js';
 import { deferred } from '../helpers/deferred.js';
 import { createTestLogger } from '../helpers/logger.js';
@@ -42,8 +42,9 @@ test('serves public health and authenticated structured status beside operationa
   };
   const startCompletion = deferred<void>();
   const stopCompletion = deferred<void>();
-  const runtime: V1LifecycleRuntime = {
+  const runtime: V1Runtime = {
     getStatus: () => runtimeStatus,
+    getRunningSession: () => null,
     initializeWallet: async (input) => {
       const requiresPassphrase = Boolean(input.passphrase);
       runtimeStatus = {

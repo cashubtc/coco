@@ -1,12 +1,23 @@
+import type { LifecycleOperationType } from '@cashu/coco-core';
+import { Argument } from 'commander';
+
 import { startDaemon } from './daemon';
 import { AdministrativeCredential } from './credentials.js';
 import {
   assertHostLocalOperation,
-  program,
+  describePaymentRequest,
   handleDaemonCommand,
-  callDaemonStream,
   handleV1Command,
+  handleWalletCommand,
+  payBolt11Invoice,
+  payPaymentRequest,
+  program,
+  receiveCashu,
+  requestBolt11Receive,
+  sendCashu,
   waitForSessionTransition,
+  watchHistory,
+  type CancellableOperationType,
 } from './cli-shared';
 import type { LifecycleStatusDocument } from './v1/http.js';
 import {
@@ -31,7 +42,7 @@ program
   .command('status')
   .description('Show Cocod Process, Wallet Seed Access, and Coco Session status')
   .action(async () => {
-    printLifecycleStatus(await handleV1Command((client) => client.status()));
+    printJson(await handleV1Command((client) => client.status()));
   });
 
 const walletCmd = program.command('wallet').description('Wallet lifecycle operations');
@@ -46,7 +57,7 @@ walletCmd
     );
     console.log('Wallet initialized.');
     printWalletRecoveryMaterial(result.generatedMnemonic, true);
-    printLifecycleStatus(result.status);
+    printJson(result.status);
   });
 
 walletCmd
@@ -76,7 +87,7 @@ sessionCmd
         'running',
       ),
     );
-    printLifecycleStatus(status);
+    printJson(status);
   });
 
 sessionCmd
@@ -89,15 +100,14 @@ sessionCmd
         'stopped',
       ),
     );
-    printLifecycleStatus(status);
+    printJson(status);
   });
 
-// Balance - simple GET command
 program
   .command('balance')
-  .description('Get wallet balance')
+  .description('Show spendable, reserved, and total balances by Mint and unit')
   .action(async () => {
-    await handleDaemonCommand('/balance');
+    printJson(await handleWalletCommand((client) => client.balances()));
   });
 
 // Receive - nested subcommands
@@ -107,10 +117,7 @@ receiveCmd
   .command('cashu <token>')
   .description('Receive Cashu token')
   .action(async (token: string) => {
-    await handleDaemonCommand('/receive/cashu', {
-      method: 'POST',
-      body: { token },
-    });
+    console.log(await handleWalletCommand((client) => receiveCashu(client, token)));
   });
 
 receiveCmd
@@ -118,10 +125,11 @@ receiveCmd
   .description('Create Lightning invoice to receive tokens')
   .option('--mint-url <url>', 'Mint URL to use (defaults to the mint URL configured during init)')
   .action(async (amount: string, options: { mintUrl?: string }) => {
-    await handleDaemonCommand('/receive/bolt11', {
-      method: 'POST',
-      body: { amount: parseInt(amount), mintUrl: options.mintUrl },
-    });
+    console.log(
+      await handleWalletCommand((client) =>
+        requestBolt11Receive(client, { amount, mintUrl: options.mintUrl }),
+      ),
+    );
   });
 
 // Send - nested subcommands
@@ -132,10 +140,11 @@ sendCmd
   .description('Create Cashu token to send')
   .option('--mint-url <url>', 'Mint URL to use (defaults to the mint URL configured during init)')
   .action(async (amount: string, options: { mintUrl?: string }) => {
-    await handleDaemonCommand('/send/cashu', {
-      method: 'POST',
-      body: { amount: parseInt(amount), mintUrl: options.mintUrl },
-    });
+    console.log(
+      await handleWalletCommand((client) =>
+        sendCashu(client, { amount, mintUrl: options.mintUrl }),
+      ),
+    );
   });
 
 sendCmd
@@ -143,18 +152,41 @@ sendCmd
   .description('Pay Lightning invoice')
   .option('--mint-url <url>', 'Mint URL to use (defaults to the mint URL configured during init)')
   .action(async (invoice: string, options: { mintUrl?: string }) => {
-    await handleDaemonCommand('/send/bolt11', {
-      method: 'POST',
-      body: { invoice, mintUrl: options.mintUrl },
-    });
+    console.log(
+      await handleWalletCommand((client) =>
+        payBolt11Invoice(client, { invoice, mintUrl: options.mintUrl }),
+      ),
+    );
+  });
+
+// Operations - recover a prepared or in-flight Operation that a one-shot command named
+const operationsCmd = program.command('operations').description('Wallet Operation recovery');
+
+operationsCmd
+  .command('show')
+  .description('Show a Wallet Operation')
+  .addArgument(
+    new Argument('<type>', 'Operation type').choices(['mint', 'melt', 'send', 'receive']),
+  )
+  .argument('<id>', 'Operation ID')
+  .action(async (type: LifecycleOperationType, id: string) => {
+    printJson(await handleWalletCommand((client) => client.getOperation(type, id)));
+  });
+
+operationsCmd
+  .command('cancel')
+  .description('Cancel a prepared Wallet Operation and release its reservations')
+  .addArgument(new Argument('<type>', 'Operation type').choices(['melt', 'send', 'receive']))
+  .argument('<id>', 'Operation ID')
+  .action(async (type: CancellableOperationType, id: string) => {
+    printJson(await handleWalletCommand((client) => client.cancelOperation(type, id)));
   });
 
 program
   .command('health')
   .description('Check Cocod Process reachability')
   .action(async () => {
-    const health = await handleV1Command((client) => client.health());
-    console.log(JSON.stringify(health, null, 2));
+    printJson(await handleV1Command((client) => client.health()));
   });
 
 // Logs
@@ -230,29 +262,27 @@ const mintsCmd = program.command('mints').description('Mints operations');
 
 mintsCmd
   .command('add <url>')
-  .description('Add a mint URL')
+  .description('Register and trust a Mint')
   .action(async (url: string) => {
-    await handleDaemonCommand('/mints/add', {
-      method: 'POST',
-      body: { url },
-    });
+    const mint = await handleWalletCommand((client) =>
+      client.registerMint({ mintUrl: url, trusted: true }),
+    );
+    console.log(`Trusted Mint: ${mint.mintUrl}`);
   });
 
 mintsCmd
   .command('list')
-  .description('List configured mints')
+  .description('List trusted Mints')
   .action(async () => {
-    await handleDaemonCommand('/mints/list');
+    const mints = await handleWalletCommand((client) => client.listMints({ trustedOnly: true }));
+    console.log(mints.items.map((mint) => mint.mintUrl).join('\n'));
   });
 
 mintsCmd
   .command('info <url>')
-  .description('Get mint info')
+  .description('Get Mint information')
   .action(async (url: string) => {
-    await handleDaemonCommand('/mints/info', {
-      method: 'POST',
-      body: { url },
-    });
+    printJson((await handleWalletCommand((client) => client.getMintInfo(url))).info);
   });
 
 // NPC - nested subcommands
@@ -286,20 +316,14 @@ xCashuCmd
   .command('parse <request>')
   .description('Parse x-cashu request')
   .action(async (request: string) => {
-    await handleDaemonCommand('/x-cashu/parse', {
-      method: 'POST',
-      body: { request },
-    });
+    console.log(await handleWalletCommand((client) => describePaymentRequest(client, request)));
   });
 
 xCashuCmd
   .command('handle <request>')
   .description('Handle x-cashu request. Returns a X-Cashu header')
   .action(async (request: string) => {
-    await handleDaemonCommand('/x-cashu/handle', {
-      method: 'POST',
-      body: { request },
-    });
+    console.log(await handleWalletCommand((client) => payPaymentRequest(client, request)));
   });
 
 // History - with pagination and watch options
@@ -333,26 +357,16 @@ program
       process.exit(1);
     }
 
-    // Fetch paginated history first (pass params as query string, not body)
-    const queryParams = new URLSearchParams();
-    queryParams.set('offset', offset.toString());
-    queryParams.set('limit', limit.toString());
-    const path = `/history?${queryParams.toString()}`;
-
-    await handleDaemonCommand(path);
-
-    // If watch is enabled, continue streaming after initial fetch
-    if (options.watch) {
-      try {
-        await callDaemonStream('/events', (data) => {
-          console.log(JSON.stringify(data));
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        console.error(message);
-        process.exit(1);
-      }
-    }
+    await handleWalletCommand(async (client) => {
+      const { items } = await client.listHistory({ offset, limit });
+      printJson(items);
+      if (!options.watch) return;
+      await watchHistory(client, items, {
+        limit,
+        onEntry: (entry) => console.log(JSON.stringify(entry)),
+        onDisconnect: () => console.error('Event stream disconnected; reconnecting'),
+      });
+    });
   });
 
 // Daemon command - special case, doesn't go through IPC
@@ -373,8 +387,8 @@ function requireHostLocalOperation(operation: string): void {
   }
 }
 
-function printLifecycleStatus(status: LifecycleStatusDocument): void {
-  console.log(JSON.stringify(status, null, 2));
+function printJson(value: unknown): void {
+  console.log(JSON.stringify(value, null, 2));
 }
 
 function printWalletRecoveryMaterial(mnemonic: string, leadingNewline = false): void {

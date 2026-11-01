@@ -1,12 +1,11 @@
 # Cocod Network Interface v1
 
-Status: accepted and implemented for the authenticated TCP transport, legacy compatibility,
-Wallet and Coco Session lifecycle, Wallet Recovery Material, and Cocod Process shutdown described
-here. The later balance, mint, quote, operation, history, and event resources remain proposed.
+Status: accepted and implemented for the authenticated TCP transport, the Wallet and Coco Session
+lifecycle, Wallet Recovery Material, Cocod Process shutdown, and the Wallet resources (balances,
+Known Mints, Quotes, Operations, outgoing Payment Requests, history, and events) described here.
 
-This document specifies cocod's machine-oriented network interface. The implemented first revision
-covers the Wallet and Coco Session lifecycle; later revisions will specify balances, mints, quotes,
-operations, history, and events.
+This document specifies cocod's machine-oriented network interface. The
+[API reference](API.md#daemon-http-endpoints) lists every route.
 
 Normative requirements use **MUST**, **MUST NOT**, **SHOULD**, and **MAY**.
 
@@ -22,13 +21,17 @@ Normative requirements use **MUST**, **MUST NOT**, **SHOULD**, and **MAY**.
 
 - Mirroring every method on Coco's `Manager` class.
 - Supporting multiple Wallets in one cocod process.
-- Defining payment, quote, or operation resources in this first revision.
 - Identifying or revoking individual Cocod Clients in the first interface version.
 - Importing a Wallet from existing Wallet Recovery Material through the network interface.
 - Providing native TLS termination.
 - Supporting browser clients or defining a CORS policy.
 - Preserving the current `{ output }` and `{ error }` response shapes in `/v1` resources.
 - Providing durable event replay in the first interface version.
+- Serializing proof-bearing Coco models or repository records into network responses.
+- Providing one-shot server commands that hide the preparation and execution of an Operation.
+- Maintaining cocod-owned copies of Coco resources, public identifier maps, or durable idempotency
+  records.
+- Hosting incoming Payment Requests, and the optional NPC extension, which keeps its legacy routes.
 
 ## Domain language
 
@@ -61,6 +64,15 @@ Session and client authentication.
 One cocod process owns exactly one state directory, listens on one TCP address, and manages zero or
 one Wallet. Running multiple Wallets requires multiple cocod processes with distinct state
 directories and listener addresses.
+
+Cocod persists only hosting state: daemon configuration, Client Credential verification, Wallet
+configuration and protected recovery material, and process metadata. Coco and its repositories own
+durable Mint, Quote, Operation, proof, and history state. The network interface projects that state
+into safe documents; it does not keep a parallel resource store or state machine.
+
+Every Wallet-dependent command delegates its behavior to a public Coco interface. When the network
+interface needs a capability Coco does not expose, that capability MUST land in Coco first. Cocod
+MUST NOT bypass Coco through repository access or compensate with its own Wallet behavior.
 
 The TCP listener and health endpoint can be available while no Wallet or Coco Session exists.
 Wallet-dependent requests require a running Coco Session.
@@ -243,22 +255,24 @@ invalidates every copied credential.
 - Clients send the opaque credential in the `Authorization: Bearer` header.
 - Client credentials MUST be read from a mode-`0600` file rather than command arguments.
 
-Authentication proves which client is calling cocod. It does not by itself grant Wallet Seed
-Access.
+Authentication proves that the bearer has Cocod Owner authority. Because v1 clients share one
+credential, it does not identify which Cocod Client is calling, and it does not by itself grant
+Wallet Seed Access.
+
+Reads require `wallet:read`; commands require `wallet:admin`. A response that carries a secret or
+bearer value, such as Wallet Recovery Material, an encoded Cashu token, or a Melt preimage, MUST
+require `wallet:admin` and `Cache-Control: no-store`, including a read of an already created token.
 
 Browser clients are outside v1 scope. Cocod does not emit permissive CORS headers and clients MUST
 NOT expose the shared administrative credential to browser storage or browser application code.
 
 ## Legacy command compatibility
 
-The existing unversioned command routes move from the Unix socket to the same TCP listener as
-`/v1`. They retain their current request and response shapes temporarily so the CLI's balance,
-send, receive, mint, history, NPC, and X-Cashu commands remain usable while their v1 resources are
-specified.
-
-Every unversioned route except the minimal health check requires the same administrative Client
-Credential. Cocod does not run a Unix listener or a second compatibility transport. Later interface
-revisions replace these routes incrementally and remove their CLI-oriented response envelopes.
+The only remaining unversioned command routes are the optional NPC extension's `/npc/address` and
+`/npc/username`. They share the TCP listener, require the administrative Client Credential, and keep
+their `{ output }` and `{ error }` envelopes. Balance, Known Mint, Lightning, Cashu, Payment
+Request, history, and event commands use the v1 resources, and their legacy routes are removed.
+Cocod does not run a Unix listener or a second compatibility transport.
 
 The legacy `/stop` route is not carried forward. The CLI uses the authenticated v1 process-shutdown
 resource instead.
@@ -274,7 +288,11 @@ local and remote clients use the same HTTP resources and authentication.
 
 - Request and response bodies use JSON.
 - Timestamps use RFC 3339 UTC strings.
-- Identifiers are opaque strings.
+- Identifiers are Coco's own identities; cocod MUST NOT persist a translation table. A Known Mint is
+  identified by Coco's normalized Mint URL, a Quote by its `mintUrl` and `quoteId` within its `mint`
+  or `melt` namespace, and an Operation by Coco's Operation ID.
+- Amounts are lossless decimal integer strings no larger than 2^64 - 1. Request amounts MUST be
+  positive; response amounts MAY be `"0"`. Each document states the unit its amounts use.
 - Successful responses contain the documented resource directly, not an `{ output }` envelope.
 - Error responses use the common error document below.
 - Sensitive request fields MUST be redacted from structured logs.
@@ -294,6 +312,114 @@ local and remote clients use the same HTTP resources and authentication.
 
 `code` is stable interface data. `message` is diagnostic text and clients MUST NOT branch on it.
 `details` is optional and its schema depends on `code`.
+
+Cocod maps a Coco failure to a Wallet-domain code only when Coco raises a typed error for that
+condition, and MUST NOT infer codes from error messages. Messages are fixed phrases; they never
+carry Mint responses, Wallet data, or the text of the underlying error. An untyped Coco failure
+returns `500 coco_error`; a new stable code requires a corresponding typed Coco error first.
+
+## Wallet resources
+
+### Representation
+
+- Responses are stable cocod documents. They MUST NOT contain proofs, proof secrets, blinded
+  messages, serialized output data, or repository rows. Only the Send result and execute responses
+  contain an encoded token.
+- Paginated collections accept `offset` and `limit` and return `{ items, offset, limit }`. Pages are
+  not snapshots; concurrent changes may shift later pages.
+- `GET` requests MUST NOT initiate financial transitions. A Mint information read MAY let Coco
+  refresh stale Mint metadata.
+- Undeclared query parameters, and repeats of a non-repeatable parameter, return
+  `400 invalid_request` with the parameter name in `details.parameter`.
+- Commands without inputs accept no body or an empty JSON object.
+
+### Preparation and execution
+
+Creating an Operation prepares it as far as its type allows and returns `201 Created`; it MUST NOT
+also execute it. Preparation is not a dry run: it persists the Operation and may reserve proofs.
+Execution is an explicit command. Operation types keep their real Coco states; preparing a Mint
+Operation yields a durable `pending` Operation rather than a renamed `prepared` one.
+
+```text
+create Quote when required
+        |
+        v
+create and prepare Operation ---> inspect amounts, fees, and state ---> cancel when supported
+        |
+        v
+execute explicitly
+        |
+        v
+inspect, refresh, or retrieve the result
+```
+
+The CLI keeps one-shot human commands by issuing two v1 requests. When execution fails after
+preparation, including when the connection drops, it reads the Operation and reports its state,
+naming it so the person can inspect it with `cocod operations show` and, while it is still prepared,
+cancel it with `cocod operations cancel`.
+
+### Lifecycle failures
+
+| Condition                                                 | Status | Code                             |
+| --------------------------------------------------------- | ------ | -------------------------------- |
+| Operation, Quote, Known Mint, or history entry is missing | 404    | `not_found`                      |
+| Command unavailable in the Operation's current state      | 409    | `invalid_operation_state`        |
+| Operation changed concurrently under its lock             | 409    | `operation_conflict`             |
+| Another command for the Operation is running              | 409    | `operation_in_progress`          |
+| Operation or Quote is coordinated by a Mint Swap          | 409    | `operation_coordinated`          |
+| Selected Mint is unknown or untrusted                     | 409    | `mint_unavailable`               |
+| Coco rejected the Wallet request as invalid               | 400    | `invalid_request`                |
+| Mint answered with a protocol error                       | 409    | `mint_rejected`                  |
+| Mint could not be reached or failed                       | 502    | `mint_unreachable`               |
+| Result is not available in the Operation's current state  | 409    | `operation_result_not_available` |
+
+`invalid_operation_state` details carry `operationType`, `operationId`, the observed `state`, and
+`expectedStates`, plus `quoteState` when the Melt Quote's state rather than the Operation's own state
+blocks the command. `mint_rejected` details carry the Mint's NUT error code as `mintErrorCode`, or its
+HTTP status as `mintStatus`.
+
+`mint_unreachable` is retryable, except for commands that may already have reached the Mint, such as
+execute. Their outcome is uncertain: the Operation is authoritative and the client MUST read or
+refresh it before choosing another command.
+
+### Known Mints
+
+`POST /v1/mints` registers a Known Mint and returns it with `200 OK`; registration is idempotent.
+A new Known Mint is untrusted unless the request sets `trusted`. Omitting `trusted` for an existing
+Known Mint preserves its trust decision. Trusting or untrusting an unknown Mint returns `404`.
+
+A committed trust change succeeds even if Coco's subsequent metadata refresh fails.
+
+### Outgoing Payment Requests
+
+`POST /v1/payment-requests/evaluate` reports the amount, unit, transport, allowed Mints, payable
+Mints, and spending condition Coco resolves for a request. A Send Operation created from a Payment
+Request source pays in-band requests only; other transports return `409 unsupported_behavior`.
+Without an explicit `mintUrl`, cocod uses the configured Mint when Coco reports it payable for the
+requested or supplied amount, otherwise the first payable Mint, and returns
+`409 payment_request_unpayable` when there is none. Evaluation takes no amount, so for an amountless
+request its `payableMints` only reflect allowed Mints with a balance in the request's unit.
+
+### Events
+
+`GET /v1/events` streams server-sent `{ type, timestamp, data }` invalidations for the running Coco
+Session: `history.updated`, `operation.updated`, `quote.updated`, `mint.updated`, and
+`balance.updated`. Clients fetch initial state from the resources and refetch after an
+invalidation. Events have no IDs or replay.
+
+The stream ends when its Coco Session stops or is replaced, when a keep-alive re-check finds the
+Client Credential revoked, or when a client stops reading and 256 chunks are buffered. Clients
+reconnect and refetch after any disconnect.
+
+### Interface description
+
+Authenticated `GET /v1/openapi.json` returns an OpenAPI 3.1 document generated from the route
+metadata and schemas the server validates with. `docs/openapi-v1.json` is the committed copy; the
+cocod test suite fails when it differs from the generated document.
+
+Within v1, new routes and optional response fields are additive. Removing or renaming a route or
+field, adding required inputs, narrowing accepted values, or changing identity, amount, error, or
+Operation semantics requires a new interface version.
 
 ## Health
 
@@ -350,7 +476,7 @@ third-party responses.
 
 Creates the single Wallet owned by this cocod process. This command requires `wallet:admin`.
 
-Proposed request:
+Request:
 
 ```json
 {
@@ -361,7 +487,7 @@ Proposed request:
 Omitting `passphrase` enables unattended Coco Session start. Providing a non-empty passphrase
 requires explicit session start after process restart.
 
-Proposed behavior:
+Behavior:
 
 - The state directory MUST be mode `0700`; secret-bearing files MUST be mode `0600`.
 - Configuration writes MUST be atomic.
@@ -392,7 +518,7 @@ For a Wallet configured with a passphrase:
 
 A Wallet without a passphrase uses an empty JSON object.
 
-Proposed behavior:
+Behavior:
 
 - A Wallet without a passphrase returns its mnemonic to an authenticated administrative client.
 - A Wallet with a passphrase requires and validates that passphrase on every retrieval. The Client
@@ -422,12 +548,13 @@ For a Wallet configured with a passphrase:
 
 A Wallet without a passphrase uses an empty JSON object.
 
-Proposed behavior:
+Behavior:
 
 - When a passphrase is configured, cocod validates it and acquires Wallet Seed Access before
   accepting the transition. Otherwise no unlocking material is required.
 - A valid request transitions the session to `starting` and returns `202 Accepted` with status.
-- Clients observe completion through `GET /v1/status` or the future event stream.
+- Clients observe completion by polling `GET /v1/status`; the event stream does not carry Coco
+  Session lifecycle transitions.
 - Calling start while the session is `running` is idempotent and returns `200 OK` with status.
 - Calling start while the session is `starting` returns `202 Accepted` with status.
 - Calling start while the session is `stopping` returns `session_transition_in_progress`.
@@ -448,7 +575,7 @@ acquired.
 Stops Wallet-dependent work, disposes the Coco Session, and removes seed bytes retained by that
 session from reachable application state. This command requires `wallet:admin`.
 
-Proposed behavior:
+Behavior:
 
 - A running session transitions to `stopping` and returns `202 Accepted` with status.
 - Calling stop while the session is `stopped` is idempotent and returns `200 OK` with status.
@@ -483,15 +610,15 @@ and remote `cocod stop` commands call this same endpoint.
 
 ## Wallet-dependent requests
 
-Wallet-dependent routes introduced by later revisions MUST behave consistently with lifecycle
-state:
+Wallet-dependent routes MUST behave consistently with lifecycle state:
 
 - `running`: process the request.
 - `starting` or `stopping`: return `session_transition_in_progress`, normally with `503` and a
   `Retry-After` header.
 - `failed`: return `session_restart_required` with `503`.
 - `stopped` with locked Wallet Seed Access: return `wallet_locked` with `423 Locked`.
-- `stopped` with available Wallet Seed Access: return `session_stopped` with `503`.
+- `stopped` with available Wallet Seed Access: return `session_stopped` with `503`. It is not
+  retryable: an explicit stop stays in effect until an administrator starts the Coco Session.
 - no Wallet: return `wallet_not_configured` with `409 Conflict`.
 
 Read-only process endpoints such as `/health` and authenticated `/v1/status` remain available in
@@ -499,12 +626,16 @@ every state.
 
 ## Concurrency and retries
 
-- Lifecycle mutation requests SHOULD include an `Idempotency-Key` header.
-- Repeating the same key and request returns the original result.
+- Lifecycle mutation requests SHOULD include an `Idempotency-Key` header; other commands MAY.
+- Repeating the same key and request returns the original result. The request identity is the
+  method, concrete path, parsed parameters, and body, so one key cannot replay a command recorded
+  for another Operation or Quote. The Coco Session rules above take precedence: while a Wallet
+  resource is unavailable, a repeated request returns the lifecycle error instead of its recorded
+  result, and the original result is replayed once the Coco Session is running again.
 - Reusing a key with a different request returns `idempotency_key_conflict`.
-- Idempotency records live only for the lifetime of one Cocod Process. After a restart, clients
-  reconcile lifecycle state through `GET /v1/status`; cocod does not promise to replay the original
-  response for a pre-restart key.
+- Idempotency records live only in memory for the lifetime of one Cocod Process. After a restart,
+  clients reconcile through `GET /v1/status` and the Coco resources; cocod does not promise to
+  replay the original response for a pre-restart key.
 - Cocod serializes lifecycle transitions.
 - Concurrent callers observe the same transition; cocod MUST NOT construct two Coco Sessions.
 - Disconnecting the initiating client does not cancel an accepted transition.
@@ -566,14 +697,3 @@ Wallet Import is not part of the network interface in v1. A later host-local wor
 initialize cocod from existing Wallet Recovery Material. After Wallet Import, Coco Restore remains
 a separate action that reconstructs proofs from mints; importing the mnemonic does not itself
 restore proofs.
-
-## Next specification slices
-
-After the lifecycle is accepted, extend this document in this order:
-
-1. Common identifiers, amounts, timestamps, pagination, errors, and idempotency.
-2. Balance snapshots and mint trust/capability resources.
-3. Mint and Melt Quotes as durable resources.
-4. Mint, Melt, Send, and Receive Operations with explicit lifecycle commands.
-5. Payment requests, history, and safe live events.
-6. Generated OpenAPI and client compatibility policy.

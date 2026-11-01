@@ -174,6 +174,20 @@ cocod npc username <name>
 cocod npc username <name> --confirm
 ```
 
+### Recovering a Failed Payment
+
+When `send`, `receive`, or `x-cashu handle` fails after preparing an Operation, the error reports the Operation's ID and state. A failed payment may still have reached the Mint, so inspect the Operation before retrying or cancelling.
+
+AGENT rule: surface the reported state to the user and ask permission before cancelling, unless already instructed. Do not rerun a failed payment command while its Operation is `executing` or `pending`.
+
+```bash
+# Show an Operation (type: mint, melt, send, or receive)
+cocod operations show <type> <id>
+
+# Cancel a prepared Operation and release its reservations (type: melt, send, or receive)
+cocod operations cancel <type> <id>
+```
+
 ### History
 
 ```bash
@@ -183,7 +197,7 @@ cocod history
 # With pagination
 cocod history --offset 0 --limit 20
 
-# Watch for real-time updates
+# Watch for real-time updates; reconnects until a non-retryable failure such as a stopped Coco Session
 cocod history --watch
 
 # Limit with watch
