@@ -9,6 +9,7 @@ import type {
   MeltMethodQuoteSnapshot,
   MeltMethodRemoteState,
 } from '../operations/melt/MeltMethodHandler';
+import { MeltQuoteValidationError } from './Error';
 
 type BoltMeltMethod = Extract<MeltMethod, 'bolt11' | 'bolt12'>;
 
@@ -163,16 +164,18 @@ export function resolveOnchainMeltFeeOption(
 ): { feeIndex: number; feeOption: MeltQuoteOnchainFeeOption } {
   const feeOptions = quote.fee_options;
   if (feeOptions.length === 0) {
-    throw new Error(`Melt quote ${quote.quoteId} has no onchain fee options`);
+    throw new MeltQuoteValidationError(`Melt quote ${quote.quoteId} has no onchain fee options`);
   }
 
   if (feeIndex === undefined) {
-    throw new Error(`Melt quote ${quote.quoteId} requires an explicit feeIndex`);
+    throw new MeltQuoteValidationError(`Melt quote ${quote.quoteId} requires an explicit feeIndex`);
   }
 
   const feeOption = feeOptions.find((option) => option.fee_index === feeIndex);
   if (!feeOption) {
-    throw new Error(`Melt quote ${quote.quoteId} does not include onchain fee option ${feeIndex}`);
+    throw new MeltQuoteValidationError(
+      `Melt quote ${quote.quoteId} does not include onchain fee option ${feeIndex}`,
+    );
   }
 
   return { feeIndex, feeOption };

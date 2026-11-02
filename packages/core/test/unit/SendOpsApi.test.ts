@@ -208,7 +208,29 @@ describe('SendOpsApi', () => {
       pendingOperation as SendOperation,
     );
 
-    await expect(api.cancel(pendingOperation.id)).rejects.toThrow("Expected 'prepared'");
+    await expect(api.cancel(pendingOperation.id)).rejects.toMatchObject({
+      name: 'OperationStateError',
+      message: "Cannot cancel operation in state 'pending'. Expected 'prepared'.",
+      operationType: 'send',
+      operationId: pendingOperation.id,
+      state: 'pending',
+      expectedStates: ['prepared'],
+    });
+    expect(sendOperationService.rollback).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports missing operations with a typed lookup error', async () => {
+    (sendOperationService.getOperation as unknown as ReturnType<typeof mock>).mockResolvedValueOnce(
+      null,
+    );
+
+    await expect(api.execute('missing')).rejects.toMatchObject({
+      name: 'OperationNotFoundError',
+      message: 'Operation missing not found',
+      operationType: 'send',
+      operationId: 'missing',
+    });
+    expect(sendOperationService.execute).not.toHaveBeenCalled();
   });
 
   it('reclaim only allows pending operations', async () => {
