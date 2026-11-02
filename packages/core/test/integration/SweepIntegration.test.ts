@@ -25,6 +25,8 @@ const config = {
     mintOperationProcessor: { disabled: true },
     meltSettlementProcessor: { disabled: true },
   },
+  // Sweeps are request-heavy; the default limit would queue them behind each other.
+  requestRateLimit: { disabled: true },
 };
 
 async function session(seed: Uint8Array, repo: Repositories = new MemoryRepositories()) {
