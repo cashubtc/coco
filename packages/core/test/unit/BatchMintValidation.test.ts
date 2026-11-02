@@ -20,6 +20,7 @@ describe('Batch Mint persistence validation', () => {
 
   const invalidMembers: Array<[string, BatchMintMember[]]> = [
     ['no members', []],
+    ['one member', [first]],
     ['a duplicate ordinal', [first, { ...second, ordinal: first.ordinal }, third]],
     ['a negative ordinal', [first, { ...second, ordinal: -1 }, third]],
     ['a duplicate quote', [first, { ...second, quoteId: first.quoteId }, third]],
@@ -30,6 +31,18 @@ describe('Batch Mint persistence validation', () => {
       expect(() => assertBatchMintOperation({ ...executing, members })).toThrow();
     });
   }
+
+  it('accepts two members without requiring contiguous ordinals', () => {
+    expect(() =>
+      assertBatchMintOperation({
+        ...executing,
+        members: [
+          { ...first, ordinal: 1 },
+          { ...second, ordinal: 3 },
+        ],
+      }),
+    ).not.toThrow();
+  });
 
   const requestChanges: Array<[string, Partial<BatchMintOperation>]> = [
     ['a member amount', { members: [{ ...first, amount: Amount.from(15) }, second, third] }],

@@ -2,7 +2,7 @@ import { normalizeMintUrl } from '../../utils.ts';
 import type { BatchMintOperation } from './BatchMintOperation.ts';
 
 /**
- * Validate the persisted shape every adapter must enforce before writing: at least one member,
+ * Validate the persisted shape every adapter must enforce before writing: at least two members,
  * unique nonnegative integer ordinals, unique Quote Identities and positive member amounts.
  *
  * @remarks
@@ -13,7 +13,7 @@ import type { BatchMintOperation } from './BatchMintOperation.ts';
  */
 export function assertBatchMintOperation(operation: BatchMintOperation): void {
   const { id, members } = operation;
-  if (members.length === 0) throw new Error(`Batch Mint Operation ${id} has no members`);
+  if (members.length < 2) throw new Error(`Batch Mint Operation ${id} needs at least 2 members`);
   const ordinals = new Set<number>();
   const quoteIds = new Set<string>();
   for (const member of members) {
