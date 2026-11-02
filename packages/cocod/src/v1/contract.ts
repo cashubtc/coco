@@ -41,9 +41,11 @@ export type V1ParameterValues<P extends V1Parameters> = {
 export interface V1RequestContext<P extends V1Parameters = V1Parameters> {
   readonly request: Request;
   readonly params: V1ParameterValues<P>;
+  /** Rechecks the request's original Client Credential against the active verifier. */
+  reauthorize(): Promise<boolean>;
 }
 
-type V1HandlerResult<TResponse> = TResponse | V1HttpResponse<TResponse>;
+type V1HandlerResult<TResponse> = TResponse | V1HttpResponse<TResponse> | V1HttpStreamResponse;
 
 type V1RouteHandler<TRequest, TResponse, P extends V1Parameters> = (
   input: TRequest,
@@ -66,6 +68,8 @@ export interface V1RouteMetadata<
   readonly successStatuses?: readonly number[];
   readonly idempotencyKey?: 'optional' | null;
   readonly responseCacheControl?: 'no-store' | null;
+  /** Streaming routes return a `V1HttpStreamResponse`; `responseSchema` describes each event. */
+  readonly responseMediaType?: 'application/json' | 'text/event-stream';
   readonly parameters?: P;
 }
 
@@ -111,6 +115,11 @@ export class V1HttpResponse<T> {
   ) {}
 }
 
+/** Carries an event stream through the common authorization, header, and logging boundary. */
+export class V1HttpStreamResponse {
+  constructor(readonly body: ReadableStream<Uint8Array>) {}
+}
+
 /** Transport-independent host interface consumed by the v1 route handlers. */
 export interface V1Runtime {
   getStatus(): CocodStatus;
@@ -130,6 +139,7 @@ export function defineV1Route<TRequest, TResponse, P extends V1Parameters = Reco
     successStatuses: definition.successStatuses ?? [200],
     idempotencyKey: definition.idempotencyKey ?? null,
     responseCacheControl: definition.responseCacheControl ?? null,
+    responseMediaType: definition.responseMediaType ?? 'application/json',
     parameters: definition.parameters ?? {},
     handler: (input, context) =>
       definition.handler(input as TRequest, context as unknown as V1RequestContext<P>),

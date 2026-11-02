@@ -19,6 +19,8 @@ export interface ResourceDependencies {
   readonly runtime: V1Runtime;
   readonly daemonVersion: string;
   readonly logger?: AppLogger;
+  /** Interval between event-stream keep-alives, which also re-check the Client Credential. */
+  readonly eventKeepAliveIntervalMs: number;
 }
 
 /** A route whose metadata is static and whose handler is bound to host dependencies later. */

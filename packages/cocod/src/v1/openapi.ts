@@ -54,6 +54,7 @@ export function generateV1OpenApiDocument(
       })),
       ...(route.idempotencyKey === 'optional' ? [IDEMPOTENCY_KEY_PARAMETER] : []),
     ];
+    const mediaType = route.responseMediaType ?? 'application/json';
     const successHeaders =
       route.responseCacheControl === 'no-store'
         ? { headers: { 'Cache-Control': { schema: { const: 'no-store' } } } }
@@ -77,9 +78,12 @@ export function generateV1OpenApiDocument(
           (route.successStatuses ?? [200]).map((status) => [
             String(status),
             {
-              description: 'Success',
+              description:
+                mediaType === 'text/event-stream'
+                  ? 'Server-sent events; each `data` line carries one document.'
+                  : 'Success',
               ...successHeaders,
-              content: { 'application/json': { schema: reference(route.responseSchema) } },
+              content: { [mediaType]: { schema: reference(route.responseSchema) } },
             },
           ]),
         ),

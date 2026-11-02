@@ -9,6 +9,7 @@ import {
   defineV1Route,
   emptyCommandRequestSchema,
   V1HttpError,
+  V1HttpStreamResponse,
   type V1RouteDefinition,
 } from '../../src/v1/http.js';
 import {
@@ -251,4 +252,45 @@ test('no-store covers authentication, validation, mapped, internal, and replay-c
   const forbidden = await harness.call('/v1/test/ok', { key: 'conflict' });
   expect(forbidden.status).toBe(403);
   expect(forbidden.headers.get('cache-control')).toBe('no-store');
+});
+
+test('stream response contracts reject mismatches and cancel rejected stream resources', async () => {
+  let cancelled = 0;
+  const definitions = [
+    ['json-stream', 'application/json', [200]],
+    ['wrong-status', 'text/event-stream', [201]],
+    ['stream-json', 'text/event-stream', [200]],
+  ] as const;
+  const harness = await listen(
+    definitions.map(([name, responseMediaType, successStatuses]) =>
+      defineV1Route({
+        method: 'POST',
+        path: `/v1/test/${name}`,
+        capability: 'wallet:read',
+        requestSchema: emptyCommandRequestSchema,
+        responseSchema: resultSchema,
+        responseMediaType,
+        successStatuses,
+        responseCacheControl: 'no-store',
+        handler: () =>
+          name === 'stream-json'
+            ? { value: 'unexpected JSON' }
+            : new V1HttpStreamResponse(
+                new ReadableStream<Uint8Array>({
+                  cancel() {
+                    cancelled++;
+                  },
+                }),
+              ),
+      }),
+    ),
+  );
+  for (const [name] of definitions) {
+    const response = await harness.call(`/v1/test/${name}`);
+    expect(response.status).toBe(500);
+    expect(response.headers.get('content-type')).toContain('application/json');
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(await response.json()).toMatchObject({ error: { code: 'internal_error' } });
+  }
+  expect(cancelled).toBe(2);
 });

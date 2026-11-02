@@ -84,7 +84,7 @@ browser CORS.
 
 ### Response shapes
 
-- The v1 resources return typed documents directly. Their errors use
+- The v1 JSON resources return typed documents directly. Their errors use
   `{ "error": { "code": string, "message": string, "retryable": boolean, "details"?: object } }`.
 - The remaining operational legacy routes retain `{ "output": <value> }` success and
   `{ "error": "message" }` error envelopes.
@@ -106,6 +106,7 @@ browser CORS.
 - `GET /v1/mints/info?mintUrl=…` (`wallet:read`; may refresh stale metadata)
 - `GET /v1/mints/payment-method-capabilities?mintUrl=…` (`wallet:read`)
 - `GET /v1/history?offset=0&limit=20` (`wallet:read`; newest first, maximum limit 100)
+- `GET /v1/events` (`wallet:read`; safe SSE invalidations for a running Coco Session, no-store)
 - `GET /v1/history/{historyEntryId}` (`wallet:read`; URL-encoded Operation or legacy history ID)
 - `GET /balance`
 - `POST /receive/cashu`
@@ -121,6 +122,18 @@ browser CORS.
 - `GET /events` (SSE stream)
 - `GET /npc/address`
 - `POST /npc/username`
+
+### V1 events
+
+`GET /v1/events` returns `text/event-stream`. Each `data` line contains `{ type, timestamp, data }`
+for `history.updated`, `operation.updated`, `quote.updated`, `mint.updated`, or `balance.updated`.
+These safe projections omit bearer tokens, proofs, preimages, and raw metadata. Fetch initial state
+and refetch after invalidations; there are no event IDs or replay.
+
+Five-second keep-alives recheck the original Client Credential and `wallet:read`. The stream closes
+on failed authorization, session end/replacement, client disconnect, or application queue overflow
+(256 chunks). Reconnect and refetch after disconnects. See [event semantics](network-interface-v1.md#events)
+for payloads and cleanup behavior. Legacy `/events` and the current CLI remain unchanged.
 
 ### Send, Receive, and outgoing Payment Requests
 

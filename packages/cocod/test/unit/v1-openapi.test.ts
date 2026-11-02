@@ -87,6 +87,7 @@ test('describes exactly the implemented v1 routes and components', () => {
     '/v1/admin/wallet/initialize',
     '/v1/admin/wallet/recovery-material',
     '/v1/balances',
+    '/v1/events',
     '/v1/history',
     '/v1/history/{historyEntryId}',
     '/v1/mints',
@@ -177,6 +178,7 @@ test('describes exactly the implemented v1 routes and components', () => {
     'ReceiveOperation',
     'ReceiveOperations',
     'RegisterMintRequest',
+    'ResourceEvent',
     'SendOperation',
     'SendOperations',
     'SendResult',
@@ -267,4 +269,28 @@ test('Wallet routes advertise read/admin boundaries and repeatable balance filte
   expect(document.paths['/v1/history/{historyEntryId}']!.get).toMatchObject({
     parameters: [expect.objectContaining({ name: 'historyEntryId', in: 'path', required: true })],
   });
+});
+
+test('events document their media type, safe schema, read capability and cache policy', () => {
+  const operation = document.paths['/v1/events']!.get as { responses: Record<string, unknown> };
+  expect(operation).toMatchObject({
+    security: [{ clientCredential: [] }],
+    'x-cocod-capability': 'wallet:read',
+    responses: {
+      '200': {
+        description: 'Server-sent events; each `data` line carries one document.',
+        headers: { 'Cache-Control': { schema: { const: 'no-store' } } },
+        content: {
+          'text/event-stream': { schema: { $ref: '#/components/schemas/ResourceEvent' } },
+        },
+      },
+      default: {
+        content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+      },
+    },
+  });
+  expect(containsSensitiveField(document.components.schemas.ResourceEvent)).toBe(false);
+  for (const route of routes.filter(({ path }) => path !== '/v1/events')) {
+    expect(route.responseMediaType ?? 'application/json').toBe('application/json');
+  }
 });

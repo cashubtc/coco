@@ -73,7 +73,7 @@ describe('shared resource availability', () => {
     });
     for (const [status, httpStatus, code, retryable] of cases) {
       const runtime = unavailableRuntime(status);
-      const bound = route.bind({ runtime, daemonVersion: 'test' });
+      const bound = route.bind({ runtime, daemonVersion: 'test', eventKeepAliveIntervalMs: 5_000 });
       expect(bound.assertAvailable).toBeDefined();
       for (const check of [() => requireRunningSession(runtime), () => bound.assertAvailable!()]) {
         let failure: unknown;

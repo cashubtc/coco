@@ -13,6 +13,7 @@ import { receiveOperationRoutes } from './resources/receive-operations.js';
 import { paymentRequestRoutes } from './resources/payment-requests.js';
 import { generateV1OpenApiDocument } from './openapi.js';
 import { openApiDocumentSchema } from './resource-schemas.js';
+import { EVENT_KEEP_ALIVE_INTERVAL_MS, eventRoutes } from './resources/events.js';
 import { balanceRoutes } from './resources/balances.js';
 import { historyRoutes } from './resources/history.js';
 import { mintRoutes } from './resources/mints.js';
@@ -157,7 +158,14 @@ const RESOURCE_ROUTES: readonly ResourceRoute[] = [
   ...sendOperationRoutes,
   ...receiveOperationRoutes,
   ...paymentRequestRoutes,
+  ...eventRoutes,
 ];
+
+/** Options for binding route handlers to a Cocod Process. */
+export interface V1RouteOptions {
+  /** Event-stream keep-alive and credential re-check interval; defaults to five seconds. */
+  eventKeepAliveIntervalMs?: number;
+}
 
 /** Returns all v1 route metadata without constructing a runtime or executable handlers. */
 export function createV1RouteMetadata(): Array<V1RouteMetadata> {
@@ -179,12 +187,14 @@ export function createV1RouteDefinitions(
   daemonVersion: string,
   processShutdown: Pick<ProcessShutdownCoordinator, 'request'>,
   logger?: AppLogger,
+  options: V1RouteOptions = {},
 ): Array<V1RouteDefinition> {
   const resources = RESOURCE_ROUTES.map((route) =>
     route.bind({
       runtime,
       daemonVersion,
       logger,
+      eventKeepAliveIntervalMs: options.eventKeepAliveIntervalMs ?? EVENT_KEEP_ALIVE_INTERVAL_MS,
     }),
   );
   const health = defineV1Route({

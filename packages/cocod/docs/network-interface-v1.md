@@ -1,13 +1,12 @@
 # Cocod Network Interface v1
 
 Status: accepted and implemented for the authenticated TCP transport, legacy compatibility,
-Wallet and Coco Session lifecycle, Wallet Recovery Material, OpenAPI description, and Cocod
-Process shutdown described here, plus Mint/Melt Quotes and Operations. Balance, mint management,
-Send/Receive, Payment Request, history, and v1 event resources remain proposed.
+Wallet and Coco Session lifecycle, Wallet Recovery Material, Cocod Process shutdown, balances,
+Known Mints, Mint/Melt Quotes, Send/Receive and Quote-backed Operations, outgoing Payment Requests,
+history, safe v1 events, and the OpenAPI description.
 
-This document specifies cocod's machine-oriented network interface. The implemented first revision
-covers the Wallet and Coco Session lifecycle and Quote-backed Operations; later revisions will
-specify the remaining Wallet resources.
+This document specifies cocod's machine-oriented network interface. The v1 resources coexist with
+the authenticated legacy routes and current CLI during migration.
 
 Normative requirements use **MUST**, **MUST NOT**, **SHOULD**, and **MAY**.
 
@@ -361,13 +360,41 @@ The daemon uses Bun's maximum idle timeout of 255 seconds so a command waiting o
 is not disconnected by the 10 second default. A lost response still requires reading or refreshing
 the Operation before retrying. See [the route reference](API.md#v1-quote-backed-operations).
 
+## Events
+
+`GET /v1/events` requires `wallet:read` and a running Coco Session. Success uses
+`Content-Type: text/event-stream` and `Cache-Control: no-store`; failures before streaming use the
+standard JSON error document. Each `data` line contains `{ type, timestamp, data }`, with a UTC
+timestamp and one safe resource invalidation:
+
+| Type                | Data                                                             |
+| ------------------- | ---------------------------------------------------------------- |
+| `history.updated`   | The safe History document, without tokens, requests, or metadata |
+| `operation.updated` | `operationType`, `operationId`, `mintUrl`                        |
+| `quote.updated`     | `quoteType`, `mintUrl`, `method`, `quoteId`                      |
+| `mint.updated`      | `mintUrl`                                                        |
+| `balance.updated`   | `mintUrl`                                                        |
+
+Clients fetch initial state from the resources and refetch after invalidations. Events have no IDs
+or durable replay. The stream starts with a `: connected` comment and sends `: keep-alive` comments
+every five seconds. Each keep-alive rechecks the original Client Credential against the current
+verifier and required capability; a revoked credential, removed `wallet:read`, or failed credential
+check closes the stream.
+
+The stream also closes when its Coco Session stops or is replaced, detected before the next event
+or keep-alive, and releases subscriptions when the client disconnects. Its application queue is
+bounded to 256 chunks, including comments; if another chunk arrives while full, it closes and
+releases subscriptions. Already queued chunks may still drain. Clients reconnect and refetch after
+any disconnect. The stream does not publish lifecycle status; use `GET /v1/status` to observe
+session start or shutdown completion. Legacy `/events` and CLI behavior remain available unchanged.
+
 ## Interface description
 
 Authenticated `GET /v1/openapi.json` requires `wallet:read` and returns an OpenAPI 3.1 document
 from the route metadata and runtime schemas. It remains available in every Wallet and Coco
 Session state. The committed copy, [openapi-v1.json](openapi-v1.json), describes only the implemented
 lifecycle, balances, Known Mint, history, Quote-backed Operations, Send/Receive, outgoing Payment
-Request, and description routes; legacy routes retain their separate contract.
+Request, event, and description routes; legacy routes retain their separate contract.
 
 Run `bun run generate:interface` from `packages/cocod` after changing route metadata or schemas.
 `bun run check:interface` and the Cocod tests check the committed document against runtime metadata.
@@ -618,7 +645,7 @@ Behavior:
 - When a passphrase is configured, cocod validates it and acquires Wallet Seed Access before
   accepting the transition. Otherwise no unlocking material is required.
 - A valid request transitions the session to `starting` and returns `202 Accepted` with status.
-- Clients observe completion through `GET /v1/status` or the future event stream.
+- Clients observe completion through `GET /v1/status`. The resource event stream closes when its Coco Session ends.
 - Calling start while the session is `running` is idempotent and returns `200 OK` with status.
 - Calling start while the session is `starting` returns `202 Accepted` with status.
 - Calling start while the session is `stopping` returns `session_transition_in_progress`.
