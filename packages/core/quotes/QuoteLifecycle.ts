@@ -647,7 +647,7 @@ export class QuoteLifecycle {
     );
     if (!allowed.length) throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
     const rejected = normalizedIdentities.filter((identity) => !allowed.includes(identity));
-    const result = await this.checkAdmittedMintQuotesForPolling(method, allowed);
+    const result = await this.checkAdmittedMintQuotes(method, allowed, 'polling');
     return {
       outcomes: [
         ...result.outcomes,
@@ -661,15 +661,53 @@ export class QuoteLifecycle {
     };
   }
 
-  private async checkAdmittedMintQuotesForPolling(
+  /**
+   * Refresh exactly one operation's members through NUT-29, without joining Watcher work or
+   * falling back to individual checks. Every response must be complete and valid before the
+   * caller may advance its operation; valid observations survive an incomplete response.
+   */
+  async refreshMintQuotesForRecovery(
+    mintUrl: string,
+    method: MintMethod,
+    quoteIds: readonly string[],
+  ): Promise<MintQuote[]> {
+    if (quoteIds.length === 0) return [];
+    mintUrl = normalizeMintUrl(mintUrl);
+    if (
+      !BUILT_IN_MINT_METHODS.has(method) ||
+      new Set(quoteIds).size !== quoteIds.length ||
+      quoteIds.some((quoteId) => quoteId.length === 0)
+    )
+      throw new MintQuoteValidationError(
+        'Mint quote recovery requires unique built-in quote identities',
+      );
+    const limit = await this.mintService.getNut29MintQuoteCheckLimit(mintUrl, method);
+    const quotes: MintQuote[] = [];
+    // Metadata may have reduced the limit since admission. Split checks, never issuance.
+    for (let offset = 0; offset < quoteIds.length; offset += limit) {
+      const identities = quoteIds
+        .slice(offset, offset + limit)
+        .map((quoteId) => ({ mintUrl, quoteId }));
+      const result = await this.checkAdmittedMintQuotes(method, identities, 'recovery');
+      if (result.responseFailures.length) throw result.responseFailures[0]!.error;
+      for (const outcome of result.outcomes) {
+        if (outcome.status === 'failed') throw outcome.failure.error;
+        quotes.push(outcome.quote);
+      }
+    }
+    return quotes;
+  }
+
+  private async checkAdmittedMintQuotes(
     method: MintMethod,
     normalizedIdentities: QuoteIdentity[],
+    purpose: 'polling' | 'recovery',
   ): Promise<MintQuotePollingResult> {
     const mintUrl = normalizedIdentities[0]!.mintUrl;
     let useBatch: boolean;
     try {
       useBatch =
-        !this.isBatchUnavailableForPolling(mintUrl, method) &&
+        (purpose === 'recovery' || !this.isBatchUnavailableForPolling(mintUrl, method)) &&
         (await this.mintService.supportsNut29MintQuoteCheck(mintUrl, method));
     } catch (error) {
       return failedMintQuotePollingResult(
@@ -681,7 +719,8 @@ export class QuoteLifecycle {
     // Metadata lookup can yield while an owner is removed or trust changes.
     if (
       !(await this.mintService.isTrustedMint(mintUrl)) &&
-      !normalizedIdentities.every((identity) => this.hasMintRecoveryInterest(method, identity))
+      (purpose === 'recovery' ||
+        !normalizedIdentities.every((identity) => this.hasMintRecoveryInterest(method, identity)))
     ) {
       return failedMintQuotePollingResult(
         normalizedIdentities,
@@ -689,7 +728,7 @@ export class QuoteLifecycle {
         new UnknownMintError(`Mint ${mintUrl} is not trusted`),
       );
     }
-    if (!useBatch && normalizedIdentities.length > 1) {
+    if (!useBatch && (purpose === 'recovery' || normalizedIdentities.length > 1)) {
       return failedMintQuotePollingResult(
         normalizedIdentities,
         'incompatibility',
@@ -716,11 +755,12 @@ export class QuoteLifecycle {
           ];
     } catch (error) {
       const category = classifyMintQuotePollingFailure(error);
-      if (useBatch) this.recordDefinitiveBatchPollingFailure(mintUrl, method, category);
+      if (useBatch && purpose === 'polling')
+        this.recordDefinitiveBatchPollingFailure(mintUrl, method, category);
       return failedMintQuotePollingResult(normalizedIdentities, category, error);
     }
     if (!Array.isArray(response)) {
-      if (useBatch) {
+      if (useBatch && purpose === 'polling') {
         this.recordDefinitiveBatchPollingFailure(mintUrl, method, 'malformed-response');
       }
       return failedMintQuotePollingResult(
@@ -890,6 +930,21 @@ export class QuoteLifecycle {
           method,
           firstValid.snapshot,
         );
+        if (purpose === 'recovery') {
+          const incoming = this.mintQuoteFromSnapshot(mintUrl, method, firstValid.snapshot, true);
+          // Observation resolution may retain a newer canonical row. That is not fresh evidence
+          // from this response and must not authorize recovery from stale or conflicting data.
+          if (
+            !incoming.amountPaid.equals(result.quote.amountPaid) ||
+            !incoming.amountIssued.equals(result.quote.amountIssued) ||
+            (result.quote.remoteUpdatedAt !== null &&
+              (incoming.remoteUpdatedAt === null ||
+                incoming.remoteUpdatedAt < result.quote.remoteUpdatedAt))
+          )
+            throw new MintQuoteValidationError(
+              `Mint quote ${identity.quoteId} recovery observation is stale or conflicting`,
+            );
+        }
         persisted.push({ identity, ...result });
       } catch (error) {
         failedByQuoteId.set(identity.quoteId, {
@@ -912,7 +967,7 @@ export class QuoteLifecycle {
       return { status: 'failed', identity, failure: failedByQuoteId.get(identity.quoteId)! };
     });
     const result = { outcomes, responseFailures };
-    if (useBatch && hasDefinitiveBatchFailure) {
+    if (useBatch && purpose === 'polling' && hasDefinitiveBatchFailure) {
       this.markBatchUnavailableForPolling(mintUrl, method);
     }
     return result;

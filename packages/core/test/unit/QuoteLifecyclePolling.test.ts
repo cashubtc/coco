@@ -1010,6 +1010,32 @@ describe('QuoteLifecycle mint quote polling', () => {
     expect(result.responseFailures).toEqual([]);
   });
 
+  it('keeps operation recovery independent of the polling compatibility marker', async () => {
+    await persistBolt11Quote('quote-a');
+    await persistBolt11Quote('quote-b');
+    const ids = ['quote-a', 'quote-b'];
+    const identities = ids.map((quoteId) => ({ mintUrl, quoteId }));
+    const batchCheck = mintAdapter.checkMintQuoteBatch as ReturnType<typeof mock>;
+    // A malformed explicit response must not downgrade Background Watcher batching.
+    batchCheck.mockResolvedValueOnce([]);
+    await expect(
+      quoteLifecycle.refreshMintQuotesForRecovery(mintUrl, 'bolt11', ids),
+    ).rejects.toThrow();
+    expect(await quoteLifecycle.getMintQuotePollingLimit(mintUrl, 'bolt11')).toBe(100);
+    // A malformed polling response does downgrade polling, but cannot disable explicit recovery.
+    batchCheck.mockResolvedValueOnce([]);
+    await quoteLifecycle.checkMintQuotesForPolling('bolt11', identities);
+    expect(await quoteLifecycle.getMintQuotePollingLimit(mintUrl, 'bolt11')).toBe(1);
+    batchCheck.mockResolvedValueOnce(ids.map((id) => bolt11PollingSnapshot(id)));
+
+    const quotes = await quoteLifecycle.refreshMintQuotesForRecovery(mintUrl, 'bolt11', ids);
+
+    expect(quotes.map((quote) => quote.quoteId)).toEqual(ids);
+    expect(batchCheck).toHaveBeenCalledTimes(3);
+    expect(mintAdapter.checkMintQuote).not.toHaveBeenCalled();
+    expect(await quoteLifecycle.getMintQuotePollingLimit(mintUrl, 'bolt11')).toBe(1);
+  });
+
   it('uses one single polling check when NUT-29 does not advertise the method', async () => {
     await persistBolt11Quote('quote-a');
     await setNut29Methods(['bolt12']);
