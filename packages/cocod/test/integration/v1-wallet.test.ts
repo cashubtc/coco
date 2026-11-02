@@ -278,7 +278,7 @@ function storedProof(
   };
 }
 
-test('balances preserve precision, reservations, units, trust filters, and legacy coexistence', async () => {
+test('balances preserve precision, reservations, units, trust filters, and legacy route removal', async () => {
   const harness = await startWalletHarness();
   expect(await (await harness.call('GET', '/v1/balances')).json()).toEqual({ items: [] });
   const mintUrl = harness.mint.url;
@@ -335,13 +335,11 @@ test('balances preserve precision, reservations, units, trust filters, and legac
     ],
   });
   const legacy = await harness.call('GET', '/balance');
-  expect(legacy.status).toBe(200);
-  expect(await legacy.json()).toEqual({
-    output: { [mintUrl]: { sats: 12 }, [otherMint]: { sats: 2 } },
-  });
+  expect(legacy.status).toBe(404);
+  expect(await legacy.json()).toEqual({ error: `Unknown endpoint: ${legacy.url}` });
   const legacyMints = await harness.call('GET', '/mints/list');
-  expect(legacyMints.status).toBe(200);
-  expect(await legacyMints.json()).toMatchObject({ output: expect.anything() });
+  expect(legacyMints.status).toBe(404);
+  expect(await legacyMints.json()).toEqual({ error: `Unknown endpoint: ${legacyMints.url}` });
   expect(harness.mint.requests).toEqual(requests);
 });
 
@@ -446,7 +444,7 @@ test('history paginates stored operation and legacy projections without exposing
   const missing = await harness.call('GET', '/v1/history/send:missing');
   expect([missing.status, (await errorOf(missing)).code]).toEqual([404, 'not_found']);
   const legacy = await harness.call('GET', '/history?offset=1&limit=2');
-  expect(legacy.status).toBe(200);
-  expect(await legacy.json()).toMatchObject({ output: expect.anything() });
+  expect(legacy.status).toBe(404);
+  expect(await legacy.json()).toEqual({ error: `Unknown endpoint: ${legacy.url}` });
   expect(harness.mint.requests).toEqual([]);
 });

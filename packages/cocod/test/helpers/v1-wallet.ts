@@ -7,7 +7,7 @@ import { initializeCoco, type Manager } from '@cashu/coco-core';
 import { SqliteRepositories } from '@cashu/coco-sqlite-bun';
 
 import { AdministrativeCredential, loadClientCredential } from '../../src/credentials.js';
-import { buildRoutes, createRouteHandlers } from '../../src/routes.js';
+import { buildFallbackHandler, buildRoutes, createRouteHandlers } from '../../src/routes.js';
 import type { CocodRuntime, CocodStatus, RunningCocoSession } from '../../src/runtime.js';
 import {
   buildV1FallbackHandler,
@@ -112,7 +112,10 @@ export async function startWalletHarness(): Promise<Harness> {
       ),
       ...buildV1Routes(createV1RouteDefinitions(runtime, '0.0.17', shutdown), credentials),
     },
-    fetch: buildV1FallbackHandler(credentials, async () => new Response('legacy', { status: 404 })),
+    fetch: buildV1FallbackHandler(
+      credentials,
+      buildFallbackHandler(runtime as CocodRuntime, credentials),
+    ),
   });
   cleanups.push(() => server.stop(true));
   const url = server.url.toString().replace(/\/$/, '');

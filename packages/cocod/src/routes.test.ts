@@ -1,495 +1,326 @@
-import { describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { initializeCoco } from '@cashu/coco-core';
+import { SqliteRepositories } from '@cashu/coco-sqlite-bun';
+import { mnemonicToSeedSync } from '@scure/bip39';
+import { NPCPlugin } from 'coco-cashu-plugin-npc';
+import { finalizeEvent, nip19 } from 'nostr-tools';
+import { privateKeyFromSeedWords } from 'nostr-tools/nip06';
+import { mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { initializeCoco, toAmount, type Manager } from '@cashu/coco-core';
-import { SqliteRepositories } from '@cashu/coco-sqlite-bun';
 
-import { AdministrativeCredential, loadClientCredential } from './credentials.js';
-import { buildFallbackHandler, buildRoutes, createRouteHandlers } from './routes';
+import { startFakeNpc } from '../test/helpers/fake-npc.js';
 import { startTcpTestServer } from '../test/helpers/tcp.js';
+import { AdministrativeCredential, loadClientCredential } from './credentials.js';
+import { buildFallbackHandler, buildRoutes, createRouteHandlers } from './routes.js';
+import { CocodRuntime } from './runtime.js';
 import type { AppLogger } from './utils/logger.js';
-import { type CocodRuntime, type CocodStatus, type RunningCocoSession } from './runtime';
+import { buildV1FallbackHandler, buildV1Routes, createV1RouteDefinitions } from './v1/http.js';
 
-// A creqB (TLV + bech32m) payment request for 21 sat carrying a P2PK NUT-10
-// spending condition, generated once with the workspace @cashu/cashu-ts.
-const CREQB_P2PK_FIXTURE =
-  'CREQB1QYQQ2UN9WYKNZQSQPQQQQQQQQQQQQ9GRQQQSQPQQQYQQ2QQCDP68GURN8GHJ7MTFDE6ZUETCV9KHQMR99E3K7MGXQQX8GETNWSS8QCTED4JKUAQ8QQ0QZQQPQYPQQ9MGW368QUE69UHK27RPD4CXCEFWVDHK6TMSV9USSQZFQYQQZQQZQPPRQVNP89SKXCE3V56RSCEJX4JK2ETZ8YERSWTZX5CRXVTRVV6NWERP89NX2DEJVCEKVEFJ8QMRZEPJXC6XYERRXQMNGV3S893RZVPHVFSNYU24ZDV';
+const cleanups: Array<() => Promise<void>> = [];
+afterEach(async () => {
+  for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
+});
 
-function fakeRuntime(
-  status: CocodStatus,
-  session: RunningCocoSession | null = null,
-  overrides: Partial<CocodRuntime> = {},
-): CocodRuntime {
-  return {
-    getStatus: () => status,
-    getRunningSession: () => session,
-    ...overrides,
-  } as unknown as CocodRuntime;
-}
-
-function uninitializedRuntime(overrides: Partial<CocodRuntime> = {}): CocodRuntime {
-  return fakeRuntime(
-    {
-      wallet: null,
-      seedAccess: null,
-      cocoSession: { state: 'stopped', startedAt: null, lastFailure: null },
-    },
-    null,
-    overrides,
-  );
-}
-
-function runningRuntime(manager?: unknown): CocodRuntime {
-  const fakeManager = (manager ?? {}) as Manager;
-  const fakeNpcAccount = {} as unknown as import('coco-cashu-plugin-npc').NPCAccountApi;
-  return fakeRuntime(
-    {
-      wallet: {
-        configuredAt: '2026-08-16T00:00:00.000Z',
-        mintUrl: 'https://mint.example.com',
-      },
-      seedAccess: { state: 'available', requiresPassphrase: false },
-      cocoSession: {
-        state: 'running',
-        startedAt: '2026-08-16T00:00:01.000Z',
-        lastFailure: null,
-      },
-    },
-    {
-      manager: fakeManager,
-      mintUrl: 'https://mint.example.com',
-      npcAccount: fakeNpcAccount,
-    },
-  );
-}
-
-function postJson(path: string, body: unknown): Request {
-  return new Request(`http://localhost${path}`, {
-    method: 'POST',
-    body: JSON.stringify(body),
+async function startHarness() {
+  const directory = await mkdtemp(join(tmpdir(), 'cocod-npc-'));
+  cleanups.push(() => rm(directory, { recursive: true, force: true }));
+  const npc = startFakeNpc();
+  cleanups.push(() => npc.stop());
+  const databases: Database[] = [];
+  cleanups.push(async () => {
+    for (const database of databases) database.close();
   });
-}
-
-function credentialPaths(directory: string): {
-  credentialDirectory: string;
-  verifierFile: string;
-  clientCredentialFile: string;
-} {
+  const runtime = await CocodRuntime.load({
+    configFile: join(directory, 'state', 'config.json'),
+    saltFile: join(directory, 'state', 'salt'),
+    initializeSession: async (config) => {
+      const database = new Database(join(directory, 'wallet.sqlite'));
+      databases.push(database);
+      const plugin = new NPCPlugin({ defaultBaseUrl: npc.url });
+      const manager = await initializeCoco({
+        repo: new SqliteRepositories({ database }),
+        seedGetter: async () => mnemonicToSeedSync(config.mnemonic),
+        plugins: [plugin],
+        watchers: {
+          mintOperationWatcher: { disabled: true },
+          proofStateWatcher: { disabled: true },
+          meltQuoteWatcher: { disabled: true },
+        },
+        processors: {
+          mintOperationProcessor: { disabled: true },
+          meltSettlementProcessor: { disabled: true },
+          mintSwapOperationProcessor: { disabled: true },
+        },
+      });
+      try {
+        const secretKey = privateKeyFromSeedWords(config.mnemonic);
+        const npcAccount = await plugin.addAccount({
+          id: 'default',
+          signer: async (event) => finalizeEvent(event, secretKey),
+          autoStart: false,
+          useWebsocket: false,
+        });
+        return { manager, npcAccount, mintUrl: config.mintUrl };
+      } catch (error) {
+        await manager.dispose();
+        throw error;
+      }
+    },
+  });
+  cleanups.push(() => runtime.dispose());
   const credentialDirectory = join(directory, 'credentials');
-  const currentDirectory = join(credentialDirectory, 'current');
+  const credentials = await AdministrativeCredential.loadOrBootstrap({ credentialDirectory });
+  const credential = await loadClientCredential(join(credentialDirectory, 'current', 'client'));
+  const entries: unknown[] = [];
+  const record = (message: string, ...meta: unknown[]) => entries.push([message, ...meta]);
+  const logger: AppLogger = {
+    child: (context) => {
+      entries.push(context);
+      return logger;
+    },
+    debug: record,
+    error: record,
+    info: record,
+    warn: record,
+    log: (_level, message, ...meta) => record(message, ...meta),
+    flush: async () => {},
+  };
+  let acceptingWork = true;
+  const availability = { isAcceptingWork: () => acceptingWork };
+  const server = startTcpTestServer({
+    routes: {
+      ...buildRoutes(createRouteHandlers(runtime), runtime, credentials, logger, availability),
+      ...buildV1Routes(
+        createV1RouteDefinitions(runtime, 'test', {
+          request: () => Promise.reject(new Error('unexpected process shutdown')),
+        }),
+        credentials,
+        logger,
+        availability,
+      ),
+    },
+    fetch: buildV1FallbackHandler(
+      credentials,
+      buildFallbackHandler(runtime, credentials, logger, availability),
+    ),
+  });
+  cleanups.push(() => server.stop(true));
+  const call = (
+    path: string,
+    options: { method?: string; body?: unknown; credential?: string | null } = {},
+  ) =>
+    fetch(new URL(path, server.url), {
+      method: options.method ?? (options.body === undefined ? 'GET' : 'POST'),
+      headers: {
+        ...(options.credential === null
+          ? {}
+          : { Authorization: `Bearer ${options.credential ?? credential}` }),
+        ...(options.body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      },
+      ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+    });
   return {
-    credentialDirectory,
-    verifierFile: join(currentDirectory, 'verifier.json'),
-    clientCredentialFile: join(currentDirectory, 'client'),
+    runtime,
+    npc,
+    call,
+    entries,
+    credential,
+    stopAdmission: () => {
+      acceptingWork = false;
+    },
+    start: async () => {
+      const response = await call('/v1/admin/wallet/initialize', { body: {} });
+      expect(response.status).toBe(202);
+      await response.json();
+      await runtime.startSession().completion;
+    },
+    setCapabilities: async (capabilities: string[]) => {
+      const verifierFile = join(credentialDirectory, 'current', 'verifier.json');
+      const state = JSON.parse(await readFile(verifierFile, 'utf8'));
+      const temporary = join(credentialDirectory, 'current', 'verifier.next');
+      await writeFile(temporary, JSON.stringify({ ...state, capabilities }), { mode: 0o600 });
+      await rename(temporary, verifierFile);
+    },
   };
 }
 
-describe('routes', () => {
-  test('does not expose superseded lifecycle command routes', () => {
-    const routes = createRouteHandlers(uninitializedRuntime());
-
-    expect(routes['/ping']).toBeUndefined();
-    expect(routes['/status']).toBeUndefined();
-    expect(routes['/init']).toBeUndefined();
-    expect(routes['/unlock']).toBeUndefined();
-  });
-
-  test('rejects a protected route without a bearer credential', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'cocod-routes-auth-'));
-    try {
-      const credentials = await AdministrativeCredential.loadOrBootstrap(
-        credentialPaths(directory),
-      );
-      const runtime = uninitializedRuntime();
-      const routes = buildRoutes(createRouteHandlers(runtime), runtime, credentials);
-
-      const response = await routes['/balance']!.GET!(new Request('http://localhost/balance'));
-
-      expect(response.status).toBe(401);
-      expect(await response.json()).toEqual({ error: 'Unauthorized' });
-    } finally {
-      await rm(directory, { recursive: true, force: true });
-    }
-  });
-
-  test('serves authenticated normal and streaming legacy routes on one TCP listener', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'cocod-tcp-stream-'));
-    let server: ReturnType<typeof Bun.serve> | undefined;
-    try {
-      const paths = credentialPaths(directory);
-      const credentials = await AdministrativeCredential.loadOrBootstrap(paths);
-      const plaintext = await loadClientCredential(paths.clientCredentialFile);
-      let publishHistory: ((payload: unknown) => void) | undefined;
-      const runtime = runningRuntime({
-        mint: { getAllTrustedMints: async () => [] },
-        on: (_event: string, listener: (payload: unknown) => void) => {
-          publishHistory = listener;
-          return () => {};
-        },
-      });
-      server = startTcpTestServer({
-        routes: buildRoutes(createRouteHandlers(runtime), runtime, credentials),
-        fetch: buildFallbackHandler(runtime, credentials),
-      });
-
-      const normal = await fetch(new URL('/mints/list', server.url), {
-        headers: { Authorization: `Bearer ${plaintext}` },
-      });
-      const unauthorizedStream = await fetch(new URL('/events', server.url));
-      const abort = new AbortController();
-      const streamResponse = fetch(new URL('/events', server.url), {
-        headers: { Authorization: `Bearer ${plaintext}` },
-        signal: abort.signal,
-      });
-
-      expect(normal.status).toBe(200);
-      expect(await normal.json()).toEqual({ output: '' });
-      expect(unauthorizedStream.status).toBe(401);
-      for (let attempt = 0; attempt < 20 && !publishHistory; attempt++) {
-        await Bun.sleep(5);
+describe('retained NPC routes over TCP', () => {
+  test('removes every superseded Wallet and lifecycle path while retaining v1 and public health', async () => {
+    const h = await startHarness();
+    expect(Object.keys(createRouteHandlers(h.runtime)).toSorted()).toEqual([
+      '/npc/address',
+      '/npc/username',
+    ]);
+    const retired = [
+      ['GET', '/balance'],
+      ['POST', '/receive/cashu'],
+      ['POST', '/receive/bolt11'],
+      ['POST', '/send/cashu'],
+      ['POST', '/send/bolt11'],
+      ['POST', '/x-cashu/parse'],
+      ['POST', '/x-cashu/handle'],
+      ['POST', '/mints/add'],
+      ['GET', '/mints/list'],
+      ['POST', '/mints/info'],
+      ['GET', '/history'],
+      ['GET', '/events'],
+      ['GET', '/ping'],
+      ['GET', '/status'],
+      ['POST', '/init'],
+      ['POST', '/unlock'],
+      ['POST', '/stop'],
+    ] as const;
+    for (const running of [false, true]) {
+      if (running) await h.start();
+      for (const [method, path] of retired) {
+        const missingAuth = await h.call(path, { method, credential: null });
+        expect(missingAuth.status).toBe(401);
+        expect(await missingAuth.json()).toEqual({ error: 'Unauthorized' });
+        const removed = await h.call(path, { method });
+        expect(removed.status).toBe(404);
+        expect(await removed.json()).toEqual({ error: `Unknown endpoint: ${removed.url}` });
       }
-      expect(publishHistory).toBeFunction();
-      publishHistory!({ id: 'history-1' });
-      const stream = await streamResponse;
-      expect(stream.status).toBe(200);
-      expect(stream.headers.get('content-type')).toBe('text/event-stream');
-      const chunk = await stream.body!.getReader().read();
-      expect(new TextDecoder().decode(chunk.value)).toContain('"id":"history-1"');
-      abort.abort();
-    } finally {
-      await server?.stop(true);
-      await rm(directory, { recursive: true, force: true });
     }
+    const health = await h.call('/health', { credential: null });
+    expect(health.status).toBe(200);
+    expect(await health.json()).toEqual({ status: 'ok', interfaceVersion: '1' });
+    const balance = await h.call('/v1/balances');
+    expect(balance.status).toBe(200);
+    expect(await balance.json()).toEqual({ items: [] });
+    const openapi = await h.call('/v1/openapi.json');
+    expect(openapi.status).toBe(200);
+    const document = (await openapi.json()) as { paths: object; components: { schemas: object } };
+    expect(Object.keys(document.paths)).toHaveLength(57);
+    expect(Object.keys(document.components.schemas)).toHaveLength(47);
   });
 
-  test('returns a generic forbidden response when a capability is missing', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'cocod-routes-capability-'));
-    try {
-      const paths = credentialPaths(directory);
-      const credentials = await AdministrativeCredential.loadOrBootstrap(paths);
-      const plaintext = await loadClientCredential(paths.clientCredentialFile);
-      const state = JSON.parse(await readFile(paths.verifierFile, 'utf8')) as {
-        capabilities: string[];
-      };
-      state.capabilities = ['wallet:read'];
-      await writeFile(paths.verifierFile, JSON.stringify(state), { mode: 0o600 });
-      const runtime = uninitializedRuntime();
-      const routes = buildRoutes(createRouteHandlers(runtime), runtime, credentials);
-
-      const response = await routes['/receive/cashu']!.POST!(
-        new Request('http://localhost/receive/cashu', {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${plaintext}` },
-          body: '{}',
-        }),
-      );
-
-      expect(response.status).toBe(403);
-      expect(await response.json()).toEqual({ error: 'Forbidden' });
-    } finally {
-      await rm(directory, { recursive: true, force: true });
+  test('requires bearer authentication for both NPC routes before session admission', async () => {
+    const h = await startHarness();
+    for (const credential of [null, 'z'.repeat(43)]) {
+      for (const path of ['/npc/address', '/npc/username']) {
+        const response = await h.call(path, {
+          credential,
+          ...(path.endsWith('username') ? { body: {} } : {}),
+        });
+        expect(response.status).toBe(401);
+        expect(response.headers.get('www-authenticate')).toBe('Bearer');
+        expect(await response.json()).toEqual({ error: 'Unauthorized' });
+      }
     }
+    const uninitialized = await h.call('/npc/address');
+    expect(uninitialized.status).toBe(503);
+    expect(await uninitialized.json()).toEqual({
+      error: "Wallet not initialized. Run 'cocod wallet initialize' first.",
+    });
+    expect(h.npc.usernames).toEqual([]);
+  });
+
+  test('keeps address fallback, username success, validation, and upstream errors', async () => {
+    const h = await startHarness();
+    await h.start();
+    const unnamed = await h.call('/npc/address');
+    expect(unnamed.status).toBe(200);
+    const { output } = (await unnamed.json()) as { output: string };
+    expect(output).toEndWith('@npubx.cash');
+    expect(nip19.decode(output.split('@')[0]!).type).toBe('npub');
+    const invalid = await h.call('/npc/username', { body: {} });
+    expect(invalid.status).toBe(400);
+    expect(await invalid.json()).toEqual({ error: 'Username is required' });
+    expect(h.npc.usernames).toEqual([]);
+    for (const confirm of [false, true]) {
+      const set = await h.call('/npc/username', { body: { username: 'satoshi', confirm } });
+      expect(set.status).toBe(200);
+      expect(await set.json()).toEqual({ output: { success: true } });
+    }
+    expect(h.npc.usernames).toEqual(['satoshi', 'satoshi']);
+    expect(await (await h.call('/npc/address')).json()).toEqual({ output: 'satoshi@npubx.cash' });
+    const unavailable = await h.call('/npc/username', { body: { username: 'unavailable' } });
+    expect(unavailable.status).toBe(500);
+    expect(await unavailable.json()).toEqual({
+      error: 'Username operation failed: Username unavailable',
+    });
+    h.npc.failInfo();
+    const failed = await h.call('/npc/address');
+    expect(failed.status).toBe(500);
+    expect(await failed.json()).toEqual({ error: 'Failed to get address: NPC unavailable' });
+  });
+
+  test('preserves username payment-required and confirmed insufficient-funds envelopes', async () => {
+    const h = await startHarness();
+    await h.start();
+    const unpaid = await h.call('/npc/username', { body: { username: 'paid-name' } });
+    expect(unpaid.status).toBe(402);
+    expect(await unpaid.json()).toEqual({
+      error:
+        "Payment required to set username: 21 SATS. Use 'cocod npc username paid-name --confirm' to proceed",
+    });
+    const confirmed = await h.call('/npc/username', {
+      body: { username: 'paid-name', confirm: true },
+    });
+    expect(confirmed.status).toBe(200);
+    expect(await confirmed.json()).toEqual({
+      error:
+        'Failed to set username. Required amount: 21. Required mints: https://mint.example.com',
+    });
+    expect(h.npc.usernames).toEqual(['paid-name', 'paid-name']);
+  });
+
+  test('enforces read and admin capabilities before invoking the NPC service', async () => {
+    const h = await startHarness();
+    await h.start();
+    await h.setCapabilities(['wallet:read']);
+    const address = await h.call('/npc/address');
+    expect(address.status).toBe(200);
+    await address.json();
+    const forbidden = await h.call('/npc/username', { body: { username: 'satoshi' } });
+    expect(forbidden.status).toBe(403);
+    expect(await forbidden.json()).toEqual({ error: 'Forbidden' });
+    expect(h.npc.usernames).toEqual([]);
+    await h.setCapabilities(['wallet:admin']);
+    const unreadable = await h.call('/npc/address');
+    expect(unreadable.status).toBe(403);
+    expect(await unreadable.json()).toEqual({ error: 'Forbidden' });
+    const allowed = await h.call('/npc/username', { body: { username: 'satoshi' } });
+    expect(allowed.status).toBe(200);
+    expect(await allowed.json()).toEqual({ output: { success: true } });
   });
 
   test('does not include bearer credentials or authorization headers in route logs', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'cocod-routes-redaction-'));
-    try {
-      const credentials = await AdministrativeCredential.loadOrBootstrap(
-        credentialPaths(directory),
-      );
-      const entries: unknown[] = [];
-      const logger = {
-        child: () => logger,
-        debug: (message: string, ...meta: unknown[]) => entries.push([message, ...meta]),
-        error: (message: string, ...meta: unknown[]) => entries.push([message, ...meta]),
-        info: (message: string, ...meta: unknown[]) => entries.push([message, ...meta]),
-        log: (_level: string, message: string, ...meta: unknown[]) =>
-          entries.push([message, ...meta]),
-        warn: (message: string, ...meta: unknown[]) => entries.push([message, ...meta]),
-        flush: async () => {},
-      } as AppLogger;
-      const runtime = uninitializedRuntime();
-      const routes = buildRoutes(createRouteHandlers(runtime), runtime, credentials, logger);
-      const presentedCredential = 'z'.repeat(43);
-
-      const response = await routes['/balance']!.GET!(
-        new Request('http://localhost/balance', {
-          headers: { Authorization: `Bearer ${presentedCredential}` },
-        }),
-      );
-
-      const logged = JSON.stringify(entries);
-      expect(response.status).toBe(401);
-      expect(logged).not.toContain(presentedCredential);
-      expect(logged.toLowerCase()).not.toContain('authorization');
-    } finally {
-      await rm(directory, { recursive: true, force: true });
-    }
+    const h = await startHarness();
+    await h.start();
+    const rejectedCredential = 'z'.repeat(43);
+    const rejected = await h.call('/npc/address', { credential: rejectedCredential });
+    expect(rejected.status).toBe(401);
+    await rejected.json();
+    const accepted = await h.call('/npc/address');
+    expect(accepted.status).toBe(200);
+    await accepted.json();
+    const logged = JSON.stringify(h.entries);
+    expect(logged).toContain('request.rejected');
+    expect(logged).toContain('request.completed');
+    expect(logged).not.toContain(h.credential);
+    expect(logged).not.toContain(rejectedCredential);
+    expect(logged.toLowerCase()).not.toContain('authorization');
   });
 
-  test('removes legacy /stop and rejects new legacy work during process shutdown', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'cocod-routes-shutdown-'));
-    try {
-      const paths = credentialPaths(directory);
-      const credentials = await AdministrativeCredential.loadOrBootstrap(paths);
-      const plaintext = await loadClientCredential(paths.clientCredentialFile);
-      const runtime = uninitializedRuntime();
-      const definitions = createRouteHandlers(runtime);
-      const routes = buildRoutes(definitions, runtime, credentials, undefined, {
-        isAcceptingWork: () => false,
-      });
-
-      const response = await routes['/balance']!.GET!(
-        new Request('http://localhost/balance', {
-          headers: { Authorization: `Bearer ${plaintext}` },
-        }),
+  test('rejects NPC work after session stop and during process shutdown', async () => {
+    const h = await startHarness();
+    await h.start();
+    await h.runtime.stopSession();
+    const stopped = await h.call('/npc/address');
+    expect(stopped.status).toBe(503);
+    expect(await stopped.json()).toEqual({ error: 'Wallet session is stopped' });
+    h.stopAdmission();
+    for (const path of ['/npc/address', '/npc/username']) {
+      const response = await h.call(
+        path,
+        path.endsWith('username') ? { body: { username: 'satoshi' } } : {},
       );
-
-      expect(definitions['/stop']).toBeUndefined();
       expect(response.status).toBe(503);
       expect(await response.json()).toEqual({ error: 'Daemon is shutting down' });
-    } finally {
-      await rm(directory, { recursive: true, force: true });
     }
-  });
-
-  test('/x-cashu/parse requires request field', async () => {
-    const runtime = runningRuntime();
-    const routes = createRouteHandlers(runtime);
-
-    const response = await routes['/x-cashu/parse']!.POST!(postJson('/x-cashu/parse', {}));
-
-    const body = (await response.json()) as { error?: string };
-    expect(response.status).toBe(400);
-    expect(body.error).toBe('Request is required');
-  });
-
-  test('/x-cashu/parse accepts a creqB request and keeps its P2PK lock intact', async () => {
-    // Real core against an in-memory database: proves the workspace decoder does not
-    // discard the NUT-10 condition and that core classifies it as an enforceable P2PK
-    // lock. This test gates the removal of cocod's former creqB/NUT-10 rejections.
-    const repo = new SqliteRepositories({ database: new Database(':memory:') });
-    const manager = await initializeCoco({
-      repo,
-      seedGetter: async () => new Uint8Array(64).fill(7),
-    });
-    try {
-      const parsed = await manager.paymentRequests.parse(CREQB_P2PK_FIXTURE);
-      expect(parsed.spendingCondition?.kind).toBe('P2PK');
-      expect(parsed.amount?.toNumber()).toBe(21);
-
-      const runtime = runningRuntime(manager);
-      const routes = createRouteHandlers(runtime);
-      const response = await routes['/x-cashu/parse']!.POST!(
-        postJson('/x-cashu/parse', { request: CREQB_P2PK_FIXTURE }),
-      );
-      const body = (await response.json()) as { output?: string };
-      expect(response.status).toBe(200);
-      expect(body.output).toContain('21 Sats');
-    } finally {
-      await manager.dispose();
-    }
-  });
-
-  test('/x-cashu/handle rejects unsupported spending conditions before preparing proofs', async () => {
-    let prepareCalled = false;
-    const manager = {
-      paymentRequests: {
-        parse: async () => ({
-          payableMints: ['https://mint.example.com'],
-          allowedMints: [],
-          transport: { type: 'inband' },
-          spendingCondition: { kind: 'unsupported', nut10Kind: 'HTLC' },
-        }),
-        prepare: async () => {
-          prepareCalled = true;
-          throw new Error('should not prepare');
-        },
-      },
-    };
-    const runtime = runningRuntime(manager);
-    const routes = createRouteHandlers(runtime);
-
-    const response = await routes['/x-cashu/handle']!.POST!(
-      postJson('/x-cashu/handle', { request: 'creqA-fake' }),
-    );
-
-    const body = (await response.json()) as { error?: string };
-    expect(response.status).toBe(400);
-    expect(body.error).toContain('NUT-10');
-    expect(body.error).toContain('HTLC');
-    expect(prepareCalled).toBe(false);
-  });
-
-  test('/balance reports numeric per-mint totals from the v2 balance snapshots', async () => {
-    const manager = {
-      wallet: {
-        balances: {
-          byMint: async () => ({
-            'https://mint.example.com': {
-              spendable: toAmount(40),
-              reserved: toAmount(2),
-              total: toAmount(42),
-              unit: 'sat',
-            },
-          }),
-        },
-      },
-    };
-    const runtime = runningRuntime(manager);
-    const routes = createRouteHandlers(runtime);
-
-    const response = await routes['/balance']!.GET!(new Request('http://localhost/balance'));
-
-    const body = (await response.json()) as { output?: Record<string, { sats: number }> };
-    expect(response.status).toBe(200);
-    expect(body.output).toEqual({ 'https://mint.example.com': { sats: 42 } });
-  });
-
-  test('/receive/cashu reports the received amount as a number', async () => {
-    let executed = false;
-    const manager = {
-      ops: {
-        receive: {
-          prepare: async () => ({ amount: toAmount(5) }),
-          execute: async () => {
-            executed = true;
-          },
-        },
-      },
-    };
-    const runtime = runningRuntime(manager);
-    const routes = createRouteHandlers(runtime);
-
-    const response = await routes['/receive/cashu']!.POST!(
-      postJson('/receive/cashu', { token: 'cashuB-fake' }),
-    );
-
-    const body = (await response.json()) as { output?: string };
-    expect(body.output).toBe('Received 5');
-    expect(executed).toBe(true);
-  });
-
-  test('/receive/bolt11 creates a canonical quote and prepares the mint operation with it', async () => {
-    const createdQuote = { quoteId: 'q1', request: 'lnbc210n1fake' };
-    let createInput: unknown;
-    let prepareInput: unknown;
-    const manager = {
-      quotes: {
-        mint: {
-          create: async (input: unknown) => {
-            createInput = input;
-            return createdQuote;
-          },
-        },
-      },
-      ops: {
-        mint: {
-          prepare: async (input: unknown) => {
-            prepareInput = input;
-            return {};
-          },
-        },
-      },
-    };
-    const runtime = runningRuntime(manager);
-    const routes = createRouteHandlers(runtime);
-
-    const response = await routes['/receive/bolt11']!.POST!(
-      postJson('/receive/bolt11', { amount: 21 }),
-    );
-
-    const body = (await response.json()) as { output?: string };
-    expect(response.status).toBe(200);
-    expect(body.output).toBe('lnbc210n1fake');
-    expect(createInput).toEqual({
-      mintUrl: 'https://mint.example.com',
-      method: 'bolt11',
-      amount: 21,
-    });
-    expect(prepareInput).toEqual({ quote: createdQuote, amount: 21 });
-  });
-
-  test('/send/bolt11 creates a canonical melt quote and executes the prepared melt', async () => {
-    const createdQuote = { quoteId: 'q2' };
-    let createInput: unknown;
-    let prepareInput: unknown;
-    let executed = false;
-    const manager = {
-      quotes: {
-        melt: {
-          create: async (input: unknown) => {
-            createInput = input;
-            return createdQuote;
-          },
-        },
-      },
-      ops: {
-        melt: {
-          prepare: async (input: unknown) => {
-            prepareInput = input;
-            return { id: 'op1' };
-          },
-          execute: async () => {
-            executed = true;
-          },
-        },
-      },
-    };
-    const runtime = runningRuntime(manager);
-    const routes = createRouteHandlers(runtime);
-
-    const response = await routes['/send/bolt11']!.POST!(
-      postJson('/send/bolt11', { invoice: 'lnbc210n1fake' }),
-    );
-
-    const body = (await response.json()) as { output?: string };
-    expect(response.status).toBe(200);
-    expect(body.output).toBe('Paid invoice: lnbc210n1fake');
-    expect(createInput).toEqual({
-      mintUrl: 'https://mint.example.com',
-      method: 'bolt11',
-      methodData: { invoice: 'lnbc210n1fake' },
-    });
-    expect(prepareInput).toEqual({ quote: createdQuote });
-    expect(executed).toBe(true);
-  });
-
-  test('/x-cashu/handle settles an inband request into an X-Cashu header', async () => {
-    const token = {
-      mint: 'https://mint.example.com',
-      unit: 'sat',
-      proofs: [
-        {
-          id: '009a1f293253e41e',
-          amount: 21,
-          secret: 'test-secret',
-          C: '02a9acc1e48c25eeeb9289b5031cc57da9fe72f3fe2861d264bdc074209b107ba2',
-        },
-      ],
-    };
-    const manager = {
-      paymentRequests: {
-        parse: async () => ({
-          payableMints: ['https://mint.example.com'],
-          allowedMints: [],
-          transport: { type: 'inband' },
-        }),
-        prepare: async () => ({ id: 'prepared' }),
-        execute: async () => ({ type: 'inband', token }),
-      },
-    };
-    const runtime = runningRuntime(manager);
-    const routes = createRouteHandlers(runtime);
-
-    const response = await routes['/x-cashu/handle']!.POST!(
-      postJson('/x-cashu/handle', { request: 'creqA-fake' }),
-    );
-
-    const body = (await response.json()) as { output?: string };
-    expect(response.status).toBe(200);
-    expect(body.output).toStartWith('X-Cashu: cashu');
+    expect(h.npc.usernames).toEqual([]);
   });
 });
