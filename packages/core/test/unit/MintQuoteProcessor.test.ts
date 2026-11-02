@@ -364,32 +364,6 @@ describe('MintOperationProcessor', () => {
     expect(claimCalls).toEqual([]);
   });
 
-  it('keeps explicit requeue processing enabled when automatic claiming is disabled', async () => {
-    processor = new MintOperationProcessor(
-      mockMintOperationService,
-      mockQuoteLifecycle,
-      mockMintService,
-      bus,
-      undefined,
-      {
-        autoClaimMintQuotes: false,
-        initialEnqueueDelayMs: 0,
-      },
-    );
-    await processor.start();
-    await bus.emit('mint-op:requeue', {
-      mintUrl: 'https://mint.test',
-      operationId: 'explicit-requeue',
-      operation: {
-        id: 'explicit-requeue',
-        method: 'bolt11',
-      } as CoreEvents['mint-op:requeue']['operation'],
-    });
-    await processor.waitForCompletion();
-    expect(finalizeCalls).toEqual(['explicit-requeue']);
-    expect(startupClaimCalls).toBe(0);
-  });
-
   it('can disable automatic mint quote claiming', async () => {
     processor = new MintOperationProcessor(
       mockMintOperationService,

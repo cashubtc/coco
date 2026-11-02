@@ -1,4 +1,4 @@
-import { Amount, deriveKeysetId, OutputData } from '@cashu/cashu-ts';
+import { Amount, deriveKeysetId } from '@cashu/cashu-ts';
 import { Database } from 'bun:sqlite';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -11,11 +11,8 @@ import { meltQuoteFromBolt11Response } from '../../models/MeltQuote.ts';
 import type { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
 import type { PendingMeltOperation } from '../../operations/melt/MeltOperation.ts';
-import type { PendingSendOperation } from '../../operations/send/SendOperation.ts';
 import type { Repositories } from '../../repositories/index.ts';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
-import { serializeOutputData } from '../../utils.ts';
-import { pendingSend } from '../fixtures/SendOperation.ts';
 import { mintQuoteFromBolt11Fixture } from '../normalizedMintQuoteFixtures.ts';
 
 const mintUrl = 'https://background.test';
@@ -34,8 +31,11 @@ const disabledRuntime = {
   },
 };
 
-// These workflows use the Session facade and real storage, transactions, handlers and events.
-// Enabling owners after initializeCoco isolates their discovery from the unchanged recovery sweeps.
+// These workflows need responses a real mint cannot produce on demand: conflicting or incomplete
+// evidence, pending Melts, and proof that no redundant request was made. The shared integration suite
+// covers the rest against a real mint. They use the Session facade and real storage, transactions,
+// handlers and events. Enabling owners after initializeCoco isolates their discovery from the
+// unchanged recovery sweeps.
 describe.each(['memory', 'sqlite'] as const)('background progression (%s)', (adapter) => {
   let repo: Repositories;
   let database: Database | undefined;
@@ -468,109 +468,6 @@ describe.each(['memory', 'sqlite'] as const)('background progression (%s)', (ada
     },
   );
 
-  it('discovers claimable quote-only Mint records on startup', async () => {
-    await repo.mintQuoteRepository.upsertMintQuote(
-      mintQuoteFromBolt11Fixture(mintUrl, {
-        ...remoteMint('PAID'),
-        amount: Amount.from(1),
-      }),
-    );
-    await coco.enableMintOperationProcessor();
-    await coco.waitForMintOperationProcessor();
-    expect((await coco.ops.mint.listByQuote({ mintUrl, quoteId: 'mint' }))[0]?.state).toBe(
-      'finalized',
-    );
-    expect(requests).toEqual(['/v1/mint/bolt11']);
-  });
-
-  it('advances Mint operations from explicit quote observations with its watcher disabled', async () => {
-    const operation = await seedMint();
-    await coco.enableMintOperationProcessor();
-    await coco.waitForMintOperationProcessor();
-    expect((await coco.ops.mint.get(operation.id))?.state).toBe('pending');
-    await coco.quotes.mint.refresh({ mintUrl, quoteId: 'mint' });
-    await coco.waitForMintOperationProcessor();
-    expect((await coco.ops.mint.get(operation.id))?.state).toBe('finalized');
-    expect(requests).toEqual(['/v1/mint/quote/bolt11/mint', '/v1/mint/bolt11']);
-  });
-
-  it('persists Mint watcher observations with its processor disabled', async () => {
-    const operation = await seedMint();
-    const observed = new Promise<void>((resolve) =>
-      coco.on('mint-quote:updated', ({ quote }) => {
-        if (quote.amountPaid.equals(Amount.from(1))) resolve();
-      }),
-    );
-    await coco.enableMintOperationWatcher();
-    await observed;
-    await coco.disableMintOperationWatcher();
-    expect((await coco.ops.mint.get(operation.id))?.state).toBe('pending');
-    expect(requests).toEqual(['/v1/mint/quote/bolt11/mint']);
-  });
-
-  it('suppresses automatic startup and live Mint claims while allowing explicit execution', async () => {
-    const operation = await seedMint('PAID');
-    await coco.enableMintOperationProcessor({ autoClaimMintQuotes: false });
-    await coco.quotes.mint.refresh({ mintUrl, quoteId: 'mint' });
-    await coco.waitForMintOperationProcessor();
-    expect((await coco.ops.mint.get(operation.id))?.state).toBe('pending');
-    expect(requests).toEqual(['/v1/mint/quote/bolt11/mint']);
-    expect((await coco.ops.mint.execute(operation.id)).state).toBe('finalized');
-  });
-
-  it('processes an explicit Mint requeue when automatic claiming is disabled', async () => {
-    const operation = await seedMint('PAID');
-    await coco.enableMintOperationProcessor({
-      autoClaimMintQuotes: false,
-      initialEnqueueDelayMs: 0,
-    });
-    await events.emit('mint-op:requeue', { mintUrl, operationId: operation.id, operation });
-    await coco.waitForMintOperationProcessor();
-    expect((await coco.ops.mint.get(operation.id))?.state).toBe('finalized');
-    expect(requests).toEqual(['/v1/mint/bolt11']);
-  });
-
-  it('discovers pending Sends with proofs already spent locally', async () => {
-    const proof = {
-      id: keysetId,
-      amount: Amount.from(1),
-      C: keys['1'],
-      secret: 'sent',
-      mintUrl,
-      unit: 'sat',
-      state: 'spent' as const,
-      usedByOperationId: 'send-op',
-    };
-    await repo.proofRepository.saveProofs(mintUrl, [proof]);
-    await repo.sendOperationRepository.create(pendingSend('send-op', [proof]));
-    const completed = new Promise<void>((resolve) => coco.on('send:finalized', () => resolve()));
-    await coco.enableProofStateWatcher();
-    await completed;
-    expect((await coco.ops.send.get('send-op'))?.state).toBe('finalized');
-    expect(requests).toEqual([]);
-  });
-
-  it('keeps live Send observation enabled when startup scanning is disabled', async () => {
-    await coco.enableProofStateWatcher({ watchExistingInflightOnStart: false });
-    await repo.proofRepository.saveProofs(mintUrl, [
-      {
-        id: keysetId,
-        amount: Amount.from(1),
-        C: keys['1'],
-        secret: 'live-send',
-        mintUrl,
-        unit: 'sat',
-        state: 'ready',
-      },
-    ]);
-    const operation = await coco.ops.send.prepare({ mintUrl, amount: 1 });
-    const completed = new Promise<void>((resolve) => coco.on('send:finalized', () => resolve()));
-    await coco.ops.send.execute(operation.id);
-    await completed;
-    expect((await coco.ops.send.get(operation.id))?.state).toBe('finalized');
-    expect(requests).toEqual(['/v1/checkstate']);
-  });
-
   it.each(['disableProofStateWatcher', 'dispose'] as const)(
     'allows an awaited Send completion listener to call %s',
     async (stop) => {
@@ -602,52 +499,6 @@ describe.each(['memory', 'sqlite'] as const)('background progression (%s)', (ada
     },
   );
 
-  it('discovers legacy tokenless P2PK Sends without retained output proof rows', async () => {
-    const output = OutputData.createDeterministicData(Amount.from(1), seed, 0, {
-      id: keysetId,
-      keys,
-    });
-    const operation: PendingSendOperation = {
-      id: 'legacy-send',
-      state: 'pending',
-      mintUrl,
-      unit: 'sat',
-      method: 'p2pk',
-      methodData: { pubkey: keys['1'] },
-      amount: Amount.from(1),
-      fee: Amount.zero(),
-      inputAmount: Amount.from(1),
-      inputProofSecrets: ['old-input'],
-      needsSwap: true,
-      outputData: serializeOutputData({ keep: [], send: output }),
-      createdAt: 1,
-      updatedAt: 2,
-    };
-    await repo.proofRepository.saveProofs(mintUrl, [
-      {
-        id: keysetId,
-        amount: Amount.from(1),
-        C: keys['1'],
-        secret: 'old-input',
-        mintUrl,
-        unit: 'sat',
-        state: 'spent',
-        usedByOperationId: operation.id,
-      },
-    ]);
-    await repo.sendOperationRepository.create(operation);
-    const completed = new Promise<void>((resolve) => coco.on('send:finalized', () => resolve()));
-    await coco.enableProofStateWatcher();
-    await completed;
-    expect((await coco.ops.send.get(operation.id))?.state).toBe('finalized');
-    expect(
-      await repo.proofRepository.getProofsBySecrets(
-        mintUrl,
-        output.map((data) => new TextDecoder().decode(data.secret)),
-      ),
-    ).toEqual([]);
-    expect(requests).toEqual(['/v1/checkstate']);
-  });
   it('reloads persisted startup evidence in a fresh Session without a recovery sweep', async () => {
     let directory: string | undefined;
     try {
