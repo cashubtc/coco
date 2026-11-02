@@ -1030,250 +1030,36 @@ describe('initializeCoco', () => {
     });
   });
 
-  describe('watchers configuration', () => {
-    it('should disable mintOperationWatcher when explicitly disabled', async () => {
-      const manager = await createManager({
-        ...baseConfig,
-        watchers: {
-          mintOperationWatcher: { disabled: true },
-        },
-      });
+  const components = [
+    'mintOperationWatcher',
+    'proofStateWatcher',
+    'meltQuoteWatcher',
+    'mintOperationProcessor',
+    'meltSettlementProcessor',
+  ] as const;
+  type Component = (typeof components)[number];
 
-      expect(manager['mintOperationWatcher']).toBeUndefined();
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
-      expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
-      expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
-      expect(manager['meltSettlementProcessor']?.isRunning()).toBe(true);
+  function disabling(name: Component): Pick<CocoConfig, 'watchers' | 'processors'> {
+    return name.endsWith('Watcher')
+      ? { watchers: { [name]: { disabled: true } } }
+      : { processors: { [name]: { disabled: true } } };
+  }
 
-      await manager.dispose();
-    });
+  function expectRunningExcept(manager: Manager, disabled: Component): void {
+    for (const name of components) {
+      if (name === disabled) {
+        expect(manager[name]).toBeUndefined();
+      } else {
+        expect(manager[name]?.isRunning()).toBe(true);
+      }
+    }
+  }
 
-    it('should disable proofStateWatcher when explicitly disabled', async () => {
-      const manager = await createManager({
-        ...baseConfig,
-        watchers: {
-          proofStateWatcher: { disabled: true },
-        },
-      });
+  describe('watchers and processors configuration', () => {
+    it.each([...components])('does not start %s when it is disabled', async (name) => {
+      const manager = await createManager({ ...baseConfig, ...disabling(name) });
 
-      expect(manager['proofStateWatcher']).toBeUndefined();
-      expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-      expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
-
-      await manager.disableMintOperationWatcher();
-      await manager.disableMintOperationProcessor();
-    });
-
-    it('should disable meltQuoteWatcher when explicitly disabled', async () => {
-      const manager = await createManager({
-        ...baseConfig,
-        watchers: {
-          meltQuoteWatcher: { disabled: true },
-        },
-      });
-
-      expect(manager['meltQuoteWatcher']).toBeUndefined();
-      expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
-      expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
-      expect(manager['meltSettlementProcessor']?.isRunning()).toBe(true);
-
-      await manager.dispose();
-    });
-
-    it('should disable all watchers when all are explicitly disabled', async () => {
-      const manager = await createManager({
-        ...baseConfig,
-        watchers: {
-          mintOperationWatcher: { disabled: true },
-          proofStateWatcher: { disabled: true },
-          meltQuoteWatcher: { disabled: true },
-        },
-      });
-
-      expect(manager['mintOperationWatcher']).toBeUndefined();
-      expect(manager['proofStateWatcher']).toBeUndefined();
-      expect(manager['meltQuoteWatcher']).toBeUndefined();
-      expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
-      expect(manager['meltSettlementProcessor']?.isRunning()).toBe(true);
-
-      await manager.dispose();
-    });
-
-    it('should pass options to mintOperationWatcher when not disabled', async () => {
-      const manager = await createManager({
-        ...baseConfig,
-        watchers: {
-          mintOperationWatcher: {
-            watchExistingPendingOnStart: false,
-          },
-        },
-      });
-
-      expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-
-      await manager.dispose();
-    });
-
-    it('should enable with options even when disabled is explicitly false', async () => {
-      const manager = await createManager({
-        ...baseConfig,
-        watchers: {
-          mintOperationWatcher: {
-            disabled: false,
-            watchExistingPendingOnStart: true,
-          },
-        },
-      });
-
-      expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-
-      await manager.dispose();
-    });
-
-    it('should pass options to meltQuoteWatcher when not disabled', async () => {
-      const manager = await createManager({
-        ...baseConfig,
-        watchers: {
-          meltQuoteWatcher: {
-            watchExistingPendingQuotesOnStart: false,
-          },
-        },
-      });
-
-      expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
-
-      await manager.dispose();
-    });
-  });
-
-  describe('processors configuration', () => {
-    it('should disable mintOperationProcessor when explicitly disabled', async () => {
-      const manager = await createManager({
-        ...baseConfig,
-        processors: {
-          mintOperationProcessor: { disabled: true },
-        },
-      });
-
-      expect(manager['mintOperationProcessor']).toBeUndefined();
-      expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
-
-      await manager.disableMintOperationWatcher();
-      await manager.disableProofStateWatcher();
-    });
-
-    it('should disable meltSettlementProcessor when explicitly disabled', async () => {
-      const manager = await createManager({
-        ...baseConfig,
-        processors: {
-          meltSettlementProcessor: { disabled: true },
-        },
-      });
-
-      expect(manager['meltSettlementProcessor']).toBeUndefined();
-      expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
-      expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
-      expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
-
-      await manager.dispose();
-    });
-
-    it('should pass options to mintOperationProcessor when not disabled', async () => {
-      const manager = await createManager({
-        ...baseConfig,
-        processors: {
-          mintOperationProcessor: {
-            processIntervalMs: 5000,
-            maxRetries: 3,
-          },
-        },
-      });
-
-      expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
-
-      await manager.dispose();
-    });
-
-    it('should enable with options even when disabled is explicitly false', async () => {
-      const manager = await createManager({
-        ...baseConfig,
-        processors: {
-          mintOperationProcessor: {
-            disabled: false,
-            processIntervalMs: 1000,
-          },
-        },
-      });
-
-      expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
-
-      await manager.dispose();
-    });
-
-    it('should pass options to meltSettlementProcessor when not disabled', async () => {
-      const manager = await createManager({
-        ...baseConfig,
-        processors: {
-          meltSettlementProcessor: {
-            initializeExistingPendingOperationsOnStart: false,
-          },
-        },
-      });
-
-      expect(manager['meltSettlementProcessor']?.isRunning()).toBe(true);
-
-      await manager.dispose();
-    });
-  });
-
-  describe('mixed configuration', () => {
-    it('should handle mixed enabled/disabled watchers and processors', async () => {
-      const manager = await createManager({
-        ...baseConfig,
-        watchers: {
-          mintOperationWatcher: { disabled: true },
-          proofStateWatcher: { disabled: false },
-        },
-        processors: {
-          mintOperationProcessor: { disabled: false },
-        },
-      });
-
-      expect(manager['mintOperationWatcher']).toBeUndefined();
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
-      expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
-
-      await manager.disableProofStateWatcher();
-      await manager.disableMintOperationProcessor();
-    });
-
-    it('should support options with mixed configuration', async () => {
-      const manager = await createManager({
-        ...baseConfig,
-        watchers: {
-          mintOperationWatcher: {
-            watchExistingPendingOnStart: false,
-          },
-          proofStateWatcher: { disabled: true },
-        },
-        processors: {
-          mintOperationProcessor: {
-            processIntervalMs: 10000,
-            maxRetries: 5,
-          },
-        },
-      });
-
-      expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-      expect(manager['proofStateWatcher']).toBeUndefined();
-      expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
-      expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
-      expect(manager['meltSettlementProcessor']?.isRunning()).toBe(true);
-
-      await manager.dispose();
+      expectRunningExcept(manager, name);
     });
   });
 
@@ -1429,74 +1215,6 @@ describe('initializeCoco', () => {
       expect(manager['meltQuoteWatcher']).toBeUndefined();
       expect(manager['mintOperationProcessor']).toBeUndefined();
       expect(manager['meltSettlementProcessor']).toBeUndefined();
-    });
-  });
-
-  describe('edge cases', () => {
-    it('should handle empty watchers config object', async () => {
-      const manager = await createManager({
-        ...baseConfig,
-        watchers: {},
-      });
-
-      expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
-      expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
-
-      await manager.dispose();
-    });
-
-    it('should handle empty processors config object', async () => {
-      const manager = await createManager({
-        ...baseConfig,
-        processors: {},
-      });
-
-      expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
-      expect(manager['meltSettlementProcessor']?.isRunning()).toBe(true);
-
-      await manager.dispose();
-    });
-
-    it('should handle empty config objects for both watchers and processors', async () => {
-      const manager = await createManager({
-        ...baseConfig,
-        watchers: {},
-        processors: {},
-      });
-
-      expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
-      expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
-      expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
-      expect(manager['meltSettlementProcessor']?.isRunning()).toBe(true);
-
-      await manager.dispose();
-    });
-
-    it('should handle all features disabled', async () => {
-      const manager = await createManager({
-        ...baseConfig,
-        watchers: {
-          mintOperationWatcher: { disabled: true },
-          proofStateWatcher: { disabled: true },
-          meltQuoteWatcher: { disabled: true },
-        },
-        processors: {
-          mintOperationProcessor: { disabled: true },
-          meltSettlementProcessor: { disabled: true },
-        },
-      });
-
-      expect(manager['mintOperationWatcher']).toBeUndefined();
-      expect(manager['proofStateWatcher']).toBeUndefined();
-      expect(manager['meltQuoteWatcher']).toBeUndefined();
-      expect(manager['mintOperationProcessor']).toBeUndefined();
-      expect(manager['meltSettlementProcessor']).toBeUndefined();
-
-      // Should still have API access
-      expect(manager.mint).toBeDefined();
-      expect(manager.wallet).toBeDefined();
     });
   });
 
@@ -1706,97 +1424,16 @@ describe('initializeCoco', () => {
       await manager.dispose();
     });
 
-    it('should respect original configuration - disabled watchers stay disabled', async () => {
-      const manager = await createManager({
-        ...baseConfig,
-        watchers: {
-          mintOperationWatcher: { disabled: true },
-          proofStateWatcher: { disabled: false },
-          meltQuoteWatcher: { disabled: false },
-        },
-        processors: {
-          mintOperationProcessor: { disabled: false },
-          meltSettlementProcessor: { disabled: false },
-        },
-      });
+    it.each([...components])(
+      'keeps a disabled %s disabled across pause and resume',
+      async (name) => {
+        const manager = await createManager({ ...baseConfig, ...disabling(name) });
 
-      expect(manager['mintOperationWatcher']).toBeUndefined();
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
-      expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
-      expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
-      expect(manager['meltSettlementProcessor']?.isRunning()).toBe(true);
+        await manager.pauseSubscriptions();
+        await manager.resumeSubscriptions();
 
-      await manager.pauseSubscriptions();
-      await manager.resumeSubscriptions();
-
-      // mintOperationWatcher should remain undefined (was disabled)
-      expect(manager['mintOperationWatcher']).toBeUndefined();
-      // Others should be running again
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
-      expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
-      expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
-      expect(manager['meltSettlementProcessor']?.isRunning()).toBe(true);
-
-      await manager.dispose();
-    });
-
-    it('should respect original configuration - disabled processor stays disabled', async () => {
-      const manager = await createManager({
-        ...baseConfig,
-        watchers: {
-          mintOperationWatcher: { disabled: false },
-          proofStateWatcher: { disabled: false },
-          meltQuoteWatcher: { disabled: false },
-        },
-        processors: {
-          mintOperationProcessor: { disabled: true },
-          meltSettlementProcessor: { disabled: true },
-        },
-      });
-
-      expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
-      expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
-      expect(manager['mintOperationProcessor']).toBeUndefined();
-      expect(manager['meltSettlementProcessor']).toBeUndefined();
-
-      await manager.pauseSubscriptions();
-      await manager.resumeSubscriptions();
-
-      // Watchers should be running again
-      expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
-      expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
-      // Processor should remain undefined (was disabled)
-      expect(manager['mintOperationProcessor']).toBeUndefined();
-      expect(manager['meltSettlementProcessor']).toBeUndefined();
-
-      await manager.dispose();
-    });
-
-    it('should handle all features disabled', async () => {
-      const manager = await createManager({
-        ...baseConfig,
-        watchers: {
-          mintOperationWatcher: { disabled: true },
-          proofStateWatcher: { disabled: true },
-          meltQuoteWatcher: { disabled: true },
-        },
-        processors: {
-          mintOperationProcessor: { disabled: true },
-          meltSettlementProcessor: { disabled: true },
-        },
-      });
-
-      await manager.pauseSubscriptions();
-      await manager.resumeSubscriptions();
-
-      // All should remain undefined
-      expect(manager['mintOperationWatcher']).toBeUndefined();
-      expect(manager['proofStateWatcher']).toBeUndefined();
-      expect(manager['meltQuoteWatcher']).toBeUndefined();
-      expect(manager['mintOperationProcessor']).toBeUndefined();
-      expect(manager['meltSettlementProcessor']).toBeUndefined();
-    });
+        expectRunningExcept(manager, name);
+      },
+    );
   });
 });

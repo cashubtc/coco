@@ -18,6 +18,8 @@ export interface MintRequestProviderOptions {
   refillPerMinute?: number;
   /** Path prefixes to bypass rate limiting */
   bypassPathPrefixes?: string[];
+  /** Send every request immediately, overriding all other limits (default: false) */
+  disabled?: boolean;
   /** Optional per-mint configuration override */
   configForMint?: (mintUrl: string) => Partial<{
     capacity: number;
@@ -37,9 +39,10 @@ export interface MintRequestProviderOptions {
 export class MintRequestProvider {
   private readonly limiters = new Map<string, RequestRateLimiter>();
   private readonly options: Required<
-    Omit<MintRequestProviderOptions, 'configForMint' | 'logger'>
+    Omit<MintRequestProviderOptions, 'configForMint' | 'logger' | 'disabled'>
   > & {
     configForMint?: MintRequestProviderOptions['configForMint'];
+    disabled: boolean;
     logger?: Logger;
   };
 
@@ -49,6 +52,7 @@ export class MintRequestProvider {
       refillPerMinute: options?.refillPerMinute ?? 20,
       bypassPathPrefixes: options?.bypassPathPrefixes ?? [],
       configForMint: options?.configForMint,
+      disabled: options?.disabled ?? false,
       logger: options?.logger,
     };
   }
@@ -72,7 +76,10 @@ export class MintRequestProvider {
     const limiter = new RequestRateLimiter({
       capacity: perMintConfig.capacity ?? this.options.capacity,
       refillPerMinute: perMintConfig.refillPerMinute ?? this.options.refillPerMinute,
-      bypassPathPrefixes: perMintConfig.bypassPathPrefixes ?? this.options.bypassPathPrefixes,
+      // Every pathname starts with '/', so this bypasses throttling for all requests.
+      bypassPathPrefixes: this.options.disabled
+        ? ['/']
+        : (perMintConfig.bypassPathPrefixes ?? this.options.bypassPathPrefixes),
       logger: this.options.logger?.child
         ? this.options.logger.child({ module: 'RequestRateLimiter', mintUrl })
         : this.options.logger,

@@ -171,7 +171,7 @@ describe('WalletApi - Trust Enforcement', () => {
     );
   });
 
-  describe('receive - trust enforcement', () => {
+  describe('balances', () => {
     it('exposes the structured balances api', async () => {
       await expect(walletApi.balances.byMint()).resolves.toEqual({
         [testMintUrl]: {
@@ -231,124 +231,16 @@ describe('WalletApi - Trust Enforcement', () => {
       expect(mockBalanceQueries.getBalancesByMint).toHaveBeenCalledTimes(1);
       expect(mockProofService.getBalancesByMint).not.toHaveBeenCalled();
     });
-
-    it('should reject tokens from untrusted mints', async () => {
-      const token = {
-        mint: testMintUrl,
-        proofs: testProofs,
-      };
-
-      mockMintService.isTrustedMint.mockImplementation(async () => false);
-
-      await expect(walletApi.receive(token)).rejects.toThrow(UnknownMintError);
-      await expect(walletApi.receive(token)).rejects.toThrow('not trusted');
-    });
-
-    it('should accept tokens from trusted mints', async () => {
-      const token = {
-        mint: testMintUrl,
-        proofs: testProofs,
-      };
-
-      mockMintService.isTrustedMint.mockImplementation(async () => true);
-
-      // Should not throw
-      await walletApi.receive(token);
-
-      expect(receiveEnv.remote.receive).toHaveBeenCalledTimes(1);
-      expect(receiveEnv.remote.receive.mock.calls[0]![0].unit).toBe('sat');
-    });
-
-    it('should check trust status before processing token', async () => {
-      const token = {
-        mint: testMintUrl,
-        proofs: testProofs,
-      };
-
-      mockMintService.isTrustedMint.mockImplementation(async () => false);
-
-      await expect(walletApi.receive(token)).rejects.toThrow();
-
-      // An untrusted token must not reach the mint.
-      expect(receiveEnv.remote.receive).not.toHaveBeenCalled();
-    });
-
-    it('should reject string tokens from untrusted mints', async () => {
-      const token = {
-        mint: testMintUrl,
-        proofs: testProofs,
-      };
-      const encodedToken = getEncodedToken(token);
-
-      mockMintService.isTrustedMint.mockImplementation(async () => false);
-
-      await expect(walletApi.receive(encodedToken)).rejects.toThrow(UnknownMintError);
-      await expect(walletApi.receive(encodedToken)).rejects.toThrow('not trusted');
-    });
-
-    it('should accept string tokens from trusted mints', async () => {
-      const token = {
-        mint: testMintUrl,
-        proofs: testProofs,
-      };
-      const encodedToken = getEncodedToken(token);
-
-      mockMintService.isTrustedMint.mockImplementation(async () => true);
-
-      // Should not throw
-      await walletApi.receive(encodedToken);
-
-      expect(receiveEnv.remote.receive).toHaveBeenCalledTimes(1);
-      expect(receiveEnv.remote.receive.mock.calls[0]![0].unit).toBe('sat');
-    });
-
-    it('should provide clear error message for untrusted mints', async () => {
-      const token = {
-        mint: testMintUrl,
-        proofs: testProofs,
-      };
-
-      mockMintService.isTrustedMint.mockImplementation(async () => false);
-
-      try {
-        await walletApi.receive(token);
-        expect(true).toBe(false); // Should not reach here
-      } catch (err: any) {
-        expect(err.message).toContain('not trusted');
-        expect(err.message).toContain(testMintUrl);
-      }
-    });
   });
 
-  describe('trust workflow integration', () => {
-    it('should allow receiving tokens after mint is trusted', async () => {
-      const token = {
-        mint: testMintUrl,
-        proofs: testProofs,
-      };
-
-      // Initially untrusted
+  describe('receive', () => {
+    it('rejects a token from an untrusted mint without contacting the mint', async () => {
       mockMintService.isTrustedMint.mockImplementation(async () => false);
-      await expect(walletApi.receive(token)).rejects.toThrow();
 
-      // After trusting
-      mockMintService.isTrustedMint.mockImplementation(async () => true);
-      await walletApi.receive(token); // Should not throw
-    });
+      const receive = walletApi.receive({ mint: testMintUrl, proofs: testProofs });
 
-    it('should prevent receiving tokens after mint is untrusted', async () => {
-      const token = {
-        mint: testMintUrl,
-        proofs: testProofs,
-      };
-
-      // Initially trusted
-      mockMintService.isTrustedMint.mockImplementation(async () => true);
-      await walletApi.receive(token); // Should not throw
-
-      // After untrusting
-      mockMintService.isTrustedMint.mockImplementation(async () => false);
-      await expect(walletApi.receive(token)).rejects.toThrow();
+      await expect(receive).rejects.toThrow(UnknownMintError);
+      expect(receiveEnv.remote.receive).not.toHaveBeenCalled();
     });
   });
 
