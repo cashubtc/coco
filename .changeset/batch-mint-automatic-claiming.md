@@ -8,7 +8,7 @@ The new processor option `processors.mintOperationProcessor.batchMintQuotes` (al
 
 Migration notes (breaking, because batching is on by default):
 
-- Automatically claimed quotes may now settle through `batch-mint-op:executing | finalized | failed` events instead of `mint-op:*` events, and without a Mint Operation. Listeners that track paid quotes through `mint-op:*` should also listen for `batch-mint-op:*`.
+- Automatically claimed quotes may now settle through `batch-mint-op:executing | finalized | failed` events instead of `mint-op:*` events, and without a Mint Operation. A payment waiter listening only for `mint-op:finalized` can hang even after the payment has been successfully claimed. Subscribe to both completion events, match by mint URL and quote ID (using `operation.members` for batches), and reconcile persisted standalone and batch claims after subscribing. Batch failure may be followed by a successful standalone fallback; it does not necessarily end the quote's automatic claim. Explicitly prepared standalone operations retain their existing events. See the Mint Operations documentation's "Awaiting automatically claimed payments" section for the migration example.
 - Their history entries are per-member entries with `batchMintOperationId` set and the entry ID `batch-mint:<batchId>:<ordinal>`, not a Mint Operation's ID. Code that stores or parses history entry IDs must accept them (`parseHistoryEntryId` from `@cashu/coco-core/adapter` returns `{ source: 'batch-mint', operationId, ordinal }`).
 - Find a quote's claim with `ops.mint.batch.listByQuote({ mintUrl, quoteId })` as well as `ops.mint.listByQuote`.
 - `MintOpsApi` takes a new required `batch` constructor argument (see the Batch Mint Operations changeset).

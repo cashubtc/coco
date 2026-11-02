@@ -486,6 +486,15 @@ internals.
 
 ## Core events
 
+**Automatic-claiming migration:** batching is enabled by default. A quote waiter listening only
+for `mint-op:finalized` can hang even after the processor successfully claims the payment through
+a batch. Listen for both `mint-op:finalized` and `batch-mint-op:finalized`, match by mint URL and
+quote ID, and reconcile persisted claims after subscribing. Alternatively, configure
+`processors.mintOperationProcessor.batchMintQuotes: false` for standalone automatic claims.
+Explicitly prepared standalone operations still emit `mint-op:*`. See
+[Awaiting automatically claimed payments](../docs/pages/mint-operations.md#awaiting-automatically-claimed-payments)
+for an example and failure-handling guidance.
+
 See the `CoreEvents` type for the full, current event map. Common events
 include:
 
@@ -507,6 +516,9 @@ include:
 - `mint-op:executing` → `{ mintUrl, operationId, operation }`
 - `mint-op:finalized` → `{ mintUrl, operationId, operation }`
 - `mint-op:failed` → `{ mintUrl, operationId, operation }`
+- `batch-mint-op:executing` → `{ mintUrl, operationId, operation }` (ordered `operation.members`)
+- `batch-mint-op:finalized` → `{ mintUrl, operationId, operation }` (ordered `operation.members`)
+- `batch-mint-op:failed` → `{ mintUrl, operationId, operation }` (ordered `operation.members`)
 - `send:prepared` → `{ mintUrl, operationId, operation }`
 - `send:pending` → `{ mintUrl, operationId, operation, token }`
 - `send:finalized` → `{ mintUrl, operationId, operation }`

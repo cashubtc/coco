@@ -92,6 +92,13 @@ Batched quotes settle through `batch-mint-op:*` events instead of `mint-op:*`, a
 history entry. Set `batchMintQuotes: false` to claim one standalone mint operation per quote;
 `ops.mint.batch` stays available either way.
 
+::: warning Migrate payment waiters before enabling batching
+Batching is enabled by default. Waiting only for `mint-op:finalized` can hang when the processor
+successfully claims the quote through a batch. Listen for both standalone and batch completion,
+or set `batchMintQuotes: false` while migrating. See
+[Awaiting automatically claimed payments](./mint-operations.md#awaiting-automatically-claimed-payments).
+:::
+
 ## Request rate limit
 
 Coco limits requests to each mint with a token bucket so a busy wallet does not flood a mint.
