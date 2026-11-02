@@ -123,12 +123,17 @@ The wallet database migrates in place on first start. Migrations are one-way; if
 rollback path to the previous release, copy `~/.cocod/coco.db` somewhere safe before
 upgrading and delete the copy once you're settled.
 
+The unversioned Wallet HTTP routes have been removed. This is a compatibility break: older
+Wallet clients must migrate to `/v1` resources. The CLI already uses `/v1`; authenticated
+`/npc/address` and `/npc/username` remain available with their existing response shapes.
+Public `/health` and the v1 lifecycle endpoints are unchanged.
+
 ## How it works
 
 - CLI: `src/cli.ts`
 - Daemon: `src/daemon.ts`
 - V1 HTTP interface: `src/v1`
-- Legacy command routes: `src/routes.ts`
+- Legacy NPC extension routes: `src/routes.ts`
 - Transport: authenticated HTTP over one TCP listener
 
 Defaults:
@@ -227,7 +232,7 @@ Request flow runs; ordinary CLI Send and Lightning receive commands use sat.
 
 - [API and command reference](docs/API.md)
 - [OpenAPI description of the implemented v1 interface](docs/openapi-v1.json)
-- [Machine-readable legacy daemon contract](docs/daemon-api.json)
+- [Machine-readable NPC extension contract](docs/daemon-api.json)
 - [Network interface v1](docs/network-interface-v1.md)
 
 ## License

@@ -93,17 +93,22 @@ daemon validates both settings and does not inherit a generic `PORT` variable.
 Listener overrides apply to an explicitly started `cocod daemon`. Auto-start always uses the local
 default; connect to a custom listener with `--url` or `COCOD_URL`, which never starts a process.
 
-`GET /health` is public. Every `/v1/*` request and every remaining legacy route requires
+`GET /health` is public. Every `/v1/*` request and each NPC extension route requires
 `Authorization: Bearer <credential>`. The local client reads the credential from
 `~/.cocod/credentials/current/client`. Remote TLS belongs at a trusted proxy such as Caddy; cocod
 still authenticates the credential itself, ignores forwarded identity headers, and does not enable
 browser CORS.
 
+The unversioned Wallet HTTP routes have been removed. **Compatibility break:** older Wallet
+clients must use `/v1`; there are no compatibility aliases. Authenticated `/npc/address`
+(`wallet:read`) and `/npc/username` (`wallet:admin`) remain, as do public `/health` and the v1
+lifecycle endpoints. NPC keeps its existing request/response contract in [daemon-api.json](daemon-api.json).
+
 ### Response shapes
 
 - The v1 JSON resources return typed documents directly. Their errors use
   `{ "error": { "code": string, "message": string, "retryable": boolean, "details"?: object } }`.
-- The remaining operational legacy routes retain `{ "output": <value> }` success and
+- The unversioned NPC extension routes retain `{ "output": <value> }` success and
   `{ "error": "message" }` error envelopes.
 
 ### Endpoint list
@@ -125,18 +130,6 @@ browser CORS.
 - `GET /v1/history?offset=0&limit=20` (`wallet:read`; newest first, maximum limit 100)
 - `GET /v1/events` (`wallet:read`; safe SSE invalidations for a running Coco Session, no-store)
 - `GET /v1/history/{historyEntryId}` (`wallet:read`; URL-encoded Operation or legacy history ID)
-- `GET /balance`
-- `POST /receive/cashu`
-- `POST /receive/bolt11`
-- `POST /send/cashu`
-- `POST /send/bolt11`
-- `POST /x-cashu/parse`
-- `POST /x-cashu/handle`
-- `POST /mints/add`
-- `GET /mints/list`
-- `POST /mints/info`
-- `GET /history`
-- `GET /events` (SSE stream)
 - `GET /npc/address`
 - `POST /npc/username`
 
@@ -150,7 +143,7 @@ and refetch after invalidations; there are no event IDs or replay.
 Five-second keep-alives recheck the original Client Credential and `wallet:read`. The stream closes
 on failed authorization, session end/replacement, client disconnect, or application queue overflow
 (256 chunks). Reconnect and refetch after disconnects. See [event semantics](network-interface-v1.md#events)
-for payloads and cleanup behavior. Legacy `/events` and the current CLI remain unchanged.
+for payloads and cleanup behavior. `cocod history --watch` uses this v1 stream.
 
 ### Send, Receive, and outgoing Payment Requests
 
@@ -176,9 +169,9 @@ those responses, including errors, use `Cache-Control: no-store`.
 Amounts are decimal strings. Payment Request payments support in-band transport only. Without an
 explicit Mint, preparation chooses the configured Mint when payable for the requested or supplied
 amount, otherwise the first payable Mint. See [transfer semantics](network-interface-v1.md#send-receive-and-outgoing-payment-requests)
-for fees, errors, and uncertain outcomes. Existing CLI and legacy endpoints remain available.
+for fees, errors, and uncertain outcomes. The CLI uses these v1 resources.
 
-For the remaining operational legacy request/response details, see `docs/daemon-api.json`. The
+For the unversioned NPC extension request/response details, see `docs/daemon-api.json`. The
 generated OpenAPI description of the implemented v1 routes is `docs/openapi-v1.json`, also
 served at authenticated `GET /v1/openapi.json`. It remains available without a running Coco Session.
 

@@ -31,7 +31,7 @@ afterEach(async () => {
   );
 });
 
-test('serves public health and authenticated structured status beside operational legacy routes', async () => {
+test('serves public health and authenticated structured status beside NPC routes after legacy Wallet removal', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'cocod-v1-listener-'));
   directories.push(directory);
   const credentialDirectory = join(directory, 'credentials');
@@ -159,14 +159,20 @@ test('serves public health and authenticated structured status beside operationa
   expect(await description.json()).toEqual(
     generateV1OpenApiDocument(createV1RouteMetadata(), '0.0.17'),
   );
-  for (const path of ['/balance', '/mints/list', '/history', '/npc/address']) {
+  for (const path of ['/balance', '/mints/list', '/history']) {
     expect((await tcpFetch(server, path)).status).toBe(401);
-    const legacy = await tcpFetch(server, path, plaintext);
-    expect(legacy.status).toBe(503);
-    expect(await legacy.json()).toEqual({
-      error: "Wallet not initialized. Run 'cocod wallet initialize' first.",
+    const removed = await tcpFetch(server, path, plaintext);
+    expect(removed.status).toBe(404);
+    expect(await removed.json()).toEqual({
+      error: `Unknown endpoint: ${new URL(path, server.url)}`,
     });
   }
+  expect((await tcpFetch(server, '/npc/address')).status).toBe(401);
+  const npc = await tcpFetch(server, '/npc/address', plaintext);
+  expect(npc.status).toBe(503);
+  expect(await npc.json()).toEqual({
+    error: "Wallet not initialized. Run 'cocod wallet initialize' first.",
+  });
 
   const initialize = await tcpFetch(
     server,
