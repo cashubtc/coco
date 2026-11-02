@@ -106,7 +106,7 @@ watchers own asynchronous activation, diagnostics, and late cleanup. Parent scan
 declarations do not await retired physical cleanup, but stop drains it. Withdrawal immediately revokes
 logical ownership while preserving shared owners. A disabled watcher does not recruit a replacement
 parent quote poller. Startup uses sufficient cached evidence first, retaining a bounded recovery
-fallback for unresolved evidence until #559 separates startup repair. Explicit recovery and necessary
+fallback for unresolved evidence. Explicit recovery and necessary
 recovery effects remain available. Source proof release
 still requires fresh positive `UNPAID` confirmation under the shared child lock, including when the
 ordinary Melt processor advances the child after its parent stops. Authorized recovery

@@ -184,5 +184,4 @@ cleanup. Watcher enable calls may finish while operation-owned acquisition is st
 
 Normal parent scans use cached evidence. Startup prefers sufficient cached evidence but currently
 retains bounded recovery for unresolved observations and already-authorized destination accounting.
-The separate repair-only migration is tracked in #559. Explicit refresh/recovery remains available,
-and source proof release still requires fresh nonpayment confirmation under the shared child lock.
+Explicit refresh/recovery remains available, and source proof release still requires fresh nonpayment confirmation under the shared child lock.

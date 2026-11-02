@@ -42,9 +42,8 @@ Repeated declarations and explicit watcher enable can retry failed setup without
 
 Normal scans consume cached canonical evidence. Startup prefers complete paid source evidence and
 sufficient destination funding/completion accounting, but retains bounded recovery for unresolved
-observations and an already-authorized destination's accounting. This is a temporary split: #559 moves
-and narrows startup repair. Explicit refresh/recovery still observes immediately. Fresh source UNPAID
-confirmation under the shared child lock remains required before releasing inputs.
+observations and an already-authorized destination's accounting. Explicit refresh/recovery still
+observes immediately. Fresh source UNPAID confirmation under the shared child lock remains required before releasing inputs.
 
 Manager orders overlapping pause/resume requests and drains admitted lifecycle changes on disposal.
 Do not await a lifecycle change from an awaited operation/lifecycle listener whose work it must drain.

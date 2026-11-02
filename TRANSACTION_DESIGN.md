@@ -419,10 +419,9 @@ Prepared observation never authorizes payment.
 Watchers commit canonical observations; parent callbacks only request later coordination scans.
 Disabling a watcher does not introduce replacement polling in the parent. Normal scans use cached
 canonical evidence. Startup also uses complete paid source evidence and sufficient funded-destination
-accounting before considering remote recovery. As a temporary migration boundary, startup still falls
-back to bounded recovery for unresolved evidence, including fresh accounting for an already-authorized
-destination; it respects automatic eligibility and retry deadlines. Issue #559 moves and narrows that
-repair responsibility. Explicit refresh/recovery retains immediate observation.
+accounting before considering remote recovery. Startup still falls back to bounded recovery for
+unresolved evidence, including fresh accounting for an already-authorized destination; it respects
+automatic eligibility and retry deadlines. Explicit refresh/recovery retains immediate observation.
 Necessary operation recovery effects remain available. Fresh positive `UNPAID` confirmation under
 the shared source lock remains required before releasing inputs, independently of watcher state.
 Exact authorized recovery interests can survive trust revocation, including Manager's transport
