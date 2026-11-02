@@ -100,6 +100,22 @@ describe('Payment Request planning after keyset rotation', () => {
     expect((await payer.ops.send.get(prepared.sendOperation.id))?.state).toBe('pending');
   });
 
+  it('lets the Send API opt into direct receiver fee coverage after keyset rotation', async () => {
+    const { payer, repositories } = await wallet();
+    const prepared = await payer.ops.send.prepare({
+      mintUrl,
+      amount: 7,
+      coverReceiverFees: true,
+    });
+    expect(prepared.amount).toEqual(Amount.from(8));
+    expect(prepared.fee).toEqual(Amount.zero());
+    expect(prepared.needsSwap).toBe(false);
+    expect(prepared.outputData).toBeUndefined();
+    expect(await repositories.counterRepository.getCounter(mintUrl, activeKeysetId)).toBeNull();
+    await payer.ops.send.cancel(prepared.id);
+    expect((await payer.wallet.balances.total()).spendable).toEqual(Amount.from(8));
+  });
+
   it.each([false, true])(
     'rejects unusable swap outputs without reservations (P2PK: %s)',
     async (locked) => {

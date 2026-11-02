@@ -43,7 +43,7 @@ interface SendOperationBase<M extends SendMethod = SendMethod> {
   /** The mint URL for this operation */
   mintUrl: string;
 
-  /** Gross outgoing proof value. Payment Requests include receiver input fees in this amount. */
+  /** Gross outgoing proof value, including receiver input fees when preparation opts in. */
   amount: Amount;
 
   /** Unit for all amounts, proofs, outputs, and token data in this operation. */

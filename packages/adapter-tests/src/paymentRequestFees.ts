@@ -167,27 +167,45 @@ export function runPaymentRequestFeeTests(
         );
       }, 30000);
     }
-    for (const swap of [false, true]) {
-      it(`keeps ordinary Send amounts at face value (swap: ${swap})`, async () => {
-        const payer = await session();
-        const receiver = await session();
-        await fund(payer, swap ? 64 : 7);
-        const prepared = await payer.ops.send.prepare({
-          mintUrl,
-          amount: { amount: 7, unit },
-          forceSwap: swap,
-        });
-        expect(prepared.needsSwap).toBe(swap);
-        expectAmount(prepared.amount, 7);
-        expectAmount(prepared.fee, swap && feePpk !== 0 ? 1 : 0);
-        const { token } = await payer.ops.send.execute(prepared.id);
-        expectAmount(sumProofs(token.proofs), 7);
-        await receiver.wallet.receive(token);
-        expectAmount(
-          (await receiver.wallet.balances.total({ units: [unit] })).spendable,
-          feePpk === 0 ? 7 : 6,
-        );
-      });
+    for (const method of ['direct', 'swap', 'p2pk'] as const) {
+      for (const coverReceiverFees of [undefined, false, true]) {
+        it(`Send API receiver fee coverage: ${method}, option ${String(coverReceiverFees)}`, async () => {
+          const payer = await session();
+          const receiver = await session();
+          const gross = 7 + (coverReceiverFees && feePpk !== 0 ? 1 : 0);
+          const direct = method === 'direct';
+          await fund(payer, direct ? gross : 64);
+          const key = method === 'p2pk' ? await receiver.keyring.generateKeyPair() : undefined;
+          const prepared = await payer.ops.send.prepare({
+            mintUrl,
+            amount: { amount: 7, unit },
+            ...(coverReceiverFees === undefined ? {} : { coverReceiverFees }),
+            ...(method === 'swap' ? { forceSwap: true } : {}),
+            ...(key ? { target: { type: 'p2pk' as const, pubkey: key.publicKeyHex } } : {}),
+          });
+          expect(prepared.needsSwap).toBe(!direct);
+          expectAmount(prepared.amount, gross);
+          expectAmount(prepared.fee, direct || feePpk === 0 ? 0 : 1);
+          const { token } = await payer.ops.send.execute(prepared.id);
+          expectAmount(sumProofs(token.proofs), gross);
+          if (key) {
+            for (const proof of token.proofs) {
+              const [kind, condition] = JSON.parse(proof.secret);
+              expect(kind).toBe('P2PK');
+              expect(condition.data).toBe(key.publicKeyHex);
+            }
+          }
+          await receiver.wallet.receive(token);
+          expectAmount(
+            (await receiver.wallet.balances.total({ units: [unit] })).spendable,
+            gross - (feePpk === 0 ? 0 : 1),
+          );
+          expectAmount(
+            (await payer.wallet.balances.total({ units: [unit] })).spendable,
+            direct ? 0 : 64 - gross - (feePpk === 0 ? 0 : 1),
+          );
+        }, 30000);
+      }
     }
     for (const interruption of ['before', 'after'] as const) {
       it(`recovers and redeems a P2PK payment interrupted ${interruption} the mint swap`, async () => {

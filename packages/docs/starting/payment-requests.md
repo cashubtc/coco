@@ -54,7 +54,8 @@ At zero-fee mints, no fee allowance is added. For P2PK requests, the entire outg
 including the fee allowance, is locked to the requested condition. Preparation rejects insufficient
 funding before delivery and rolls back proof reservations and Output Allocation. Execution and
 recovery reuse the committed output plan. Already prepared operations keep their original meaning.
-Ordinary `ops.send.prepare()` amounts continue to mean face value.
+Ordinary `ops.send.prepare()` amounts continue to mean face value unless the caller explicitly
+sets `coverReceiverFees: true`. Payment Requests enable that same Send preparation option automatically.
 
 ## P2PK Payment Request Requirements
 

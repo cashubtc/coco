@@ -100,6 +100,16 @@ export interface SendOperationServiceDependencies {
   mintScopedLock?: MintScopedLock;
 }
 
+/** Options applied before a Send's amount and proof plan are committed. */
+export interface PrepareSendOptions {
+  /**
+   * Treat the requested amount as the receiver's net target after redemption input fees.
+   * Defaults to false (face value). The prepared amount is gross outgoing value; its fee
+   * remains the separate payer-side preparation cost. Applies to unlocked and P2PK sends.
+   */
+  coverReceiverFees?: boolean;
+}
+
 /**
  * Options applied when a prepared send operation is executed.
  */
@@ -215,18 +225,9 @@ export class SendOperationService {
    *
    * Throws if the operation is already in progress.
    */
-  async prepare(operation: InitSendOperation): Promise<PreparedSendOperation> {
-    return this.prepareWithAmountPolicy(operation, false);
-  }
-
-  /** Prepare a Payment Request's net target; the resulting Send amount is gross token value. */
-  async preparePaymentRequest(operation: InitSendOperation): Promise<PreparedSendOperation> {
-    return this.prepareWithAmountPolicy(operation, true);
-  }
-
-  private async prepareWithAmountPolicy(
+  async prepare(
     operation: InitSendOperation,
-    coverReceiverFees: boolean,
+    options: PrepareSendOptions = {},
   ): Promise<PreparedSendOperation> {
     const releaseLock = await this.acquireOperationLock(operation.id);
     let result: PrepareSendResult;
@@ -240,7 +241,7 @@ export class SendOperationService {
         const metadata = await this.mintMetadataRefresh.refreshAndCommitIfStale(operation.mintUrl);
         const keys = this.activeKeys(metadata, operation.unit);
         const seed = await this.loadSeed();
-        const receiverAmount = coverReceiverFees ? operation.amount : undefined;
+        const receiverAmount = options.coverReceiverFees ? operation.amount : undefined;
         // P2PK outputs are randomized in preflight. Unlocked Sends defer fee planning until
         // authoritative selection determines that existing proofs cannot be sent directly.
         const plannedOperation =

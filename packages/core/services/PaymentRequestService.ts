@@ -199,7 +199,9 @@ export class PaymentRequestService {
     const sendOptions = await this.resolveSendOptions(preparedRequest, mintUrl);
     this.logger?.debug('Preparing payment request transaction', { mintUrl, amount: finalAmount });
     const initSend = await this.sendOperationService.init(mintUrl, finalAmount, sendOptions);
-    const preparedSend = await this.sendOperationService.preparePaymentRequest(initSend);
+    const preparedSend = await this.sendOperationService.prepare(initSend, {
+      coverReceiverFees: true,
+    });
     this.logger?.debug('Payment request transaction prepared', { mintUrl, amount: finalAmount });
     return { sendOperation: preparedSend, request: preparedRequest };
   }
