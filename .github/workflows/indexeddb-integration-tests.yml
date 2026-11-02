@@ -12,6 +12,7 @@ on:
 jobs:
   integration-tests:
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5

@@ -224,7 +224,7 @@ start_mint_container() {
 
     # Wait for mint to be ready
     log_info "Waiting for mint to be ready..."
-    MAX_ATTEMPTS=30
+    MAX_ATTEMPTS=150
     ATTEMPT=0
 
     while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
@@ -242,7 +242,7 @@ start_mint_container() {
             return 1
         fi
 
-        sleep 1
+        sleep 0.2
     done
 }
 
@@ -253,8 +253,9 @@ stop_mint_container() {
     container_name=$(mint_container_name "$package_name")
 
     log_info "Stopping mint container for $package_name..."
-    docker stop "$container_name" 2>/dev/null || true
-    docker rm "$container_name" 2>/dev/null || true
+    # The container holds only throwaway state and mintd ignores SIGTERM, so `docker stop` would wait
+    # out its 10 second grace period before killing it.
+    docker rm -f "$container_name" >/dev/null 2>&1 || true
 }
 
 # Run a specific integration test
@@ -357,6 +358,12 @@ run_test() {
             unset CUSTOM_UNIT
         fi
 
+        # Core's `test` script rebuilds core and adapter-tests, which this script has just built.
+        local test_command=(bun run test --)
+        if [ "$package_name" = "core" ]; then
+            test_command=(bun test)
+        fi
+
         local bun_args=()
         if [ "$package_coverage_enabled" = "true" ]; then
             bun_args+=(
@@ -367,9 +374,9 @@ run_test() {
         fi
 
         if [ -n "$test_pattern" ]; then
-            bun run test -- "${bun_args[@]}" -t "$test_pattern" "$test_file" || test_result=$?
+            "${test_command[@]}" "${bun_args[@]}" -t "$test_pattern" "$test_file" || test_result=$?
         else
-            bun run test -- "${bun_args[@]}" "$test_file" || test_result=$?
+            "${test_command[@]}" "${bun_args[@]}" "$test_file" || test_result=$?
         fi
 
         unset MINT_URL
@@ -446,8 +453,7 @@ cleanup() {
     containers=$(docker ps -a --filter "name=cdk-mint-${RUN_ID}-" --format "{{.Names}}" 2>/dev/null || true)
     if [ -n "$containers" ]; then
         echo "$containers" | while read -r container; do
-            [ -n "$container" ] && docker stop "$container" 2>/dev/null || true
-            [ -n "$container" ] && docker rm "$container" 2>/dev/null || true
+            [ -n "$container" ] && docker rm -f "$container" >/dev/null 2>&1 || true
         done
     fi
     for config_file in "${MINT_CONFIG_FILES[@]}"; do
