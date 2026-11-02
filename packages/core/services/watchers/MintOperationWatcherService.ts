@@ -363,6 +363,7 @@ export class MintOperationWatcherService {
     if (!this.running) return;
     const groups = new Map<string, QuoteWatchRecord[]>();
     const starts = new Set<Promise<void>>();
+    const grouped = new Set<QuoteWatchRecord>();
     // Reserve records before any await so concurrent owners join the same batch/startup.
     for (const input of quotes) {
       const quote = { ...input, mintUrl: normalizeMintUrl(input.mintUrl) };
@@ -377,6 +378,9 @@ export class MintOperationWatcherService {
       }
       if (existing?.stop || !this.interests.hasAny(key)) continue;
       const record = this.ensureWatchRecord(quote);
+      // Several operations can share one reusable quote; one record needs one subscription.
+      if (grouped.has(record)) continue;
+      grouped.add(record);
       record.failed = false;
       const groupKey = `${quote.mintUrl}::${policy.subscriptionKind}`;
       let group = groups.get(groupKey);

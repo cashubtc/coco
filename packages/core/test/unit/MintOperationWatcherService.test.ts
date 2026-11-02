@@ -1385,4 +1385,23 @@ describe('MintOperationWatcherService', () => {
     expect(error).toHaveBeenCalledTimes(1);
     expect(subscribe).not.toHaveBeenCalled();
   });
+
+  it('acquires one subscription per quote when many pending operations share it', async () => {
+    const operations = Array.from({ length: 101 }, (_, index) => ({
+      ...makeBolt12Operation(),
+      id: `mint-op-bolt12-${index}`,
+    }));
+    const watcher = makeWatcher({
+      mintOperations: {
+        getPendingOperations: mock(async () => operations),
+      } as unknown as MintOperationService,
+    });
+
+    await watcher.start();
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    expect(subscribe.mock.calls[0]?.[2]).toEqual([quoteId]);
+
+    await watcher.stop();
+    expect(unsubscribe).toHaveBeenCalledTimes(subscribe.mock.calls.length);
+  });
 });
