@@ -36,6 +36,8 @@ export async function createBatchMintHarness(
   const coco = await initializeCoco({
     repo,
     seedGetter: async () => new Uint8Array(64).fill(5),
+    requestRateLimit: { disabled: true },
+    subscriptions: { slowPollingIntervalMs: 10, fastPollingIntervalMs: 10 },
     watchers: {
       mintOperationWatcher: { disabled: true },
       proofStateWatcher: { disabled: true },

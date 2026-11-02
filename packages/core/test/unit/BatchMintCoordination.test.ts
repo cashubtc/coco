@@ -186,25 +186,37 @@ describe('Batch Mint admission races', () => {
     expect(h.mint.quotes.get('b')!.amountIssued).toBe(6);
   });
 
-  it('keeps automatic claiming away from a quote an executing batch reserves', async () => {
-    for (const quote of ['a', 'b'])
-      await h.quote({ quote, method: 'bolt11', amount: 10, amountPaid: 10 });
-    h.mint.batchBehaviors.push('network');
-    const executing = await h.coco.ops.mint.batch.execute({
-      mintUrl: h.mint.mintUrl,
-      method: 'bolt11',
-      members: [{ quoteId: 'a' }, { quoteId: 'b' }],
-    });
-    expect(executing.state).toBe('executing');
+  for (const batchMintQuotes of [true, false]) {
+    it(`keeps automatic claiming away from reserved quotes with batchMintQuotes: ${batchMintQuotes}`, async () => {
+      for (const quote of ['a', 'b'])
+        await h.quote({ quote, method: 'bolt11', amount: 10, amountPaid: 10 });
+      h.mint.batchBehaviors.push('network');
+      const executing = await h.coco.ops.mint.batch.execute({
+        mintUrl: h.mint.mintUrl,
+        method: 'bolt11',
+        members: [{ quoteId: 'a' }, { quoteId: 'b' }],
+      });
+      expect(executing.state).toBe('executing');
 
-    const manager = h.coco as unknown as {
-      mintOperationService: { claimMintQuote(...args: unknown[]): Promise<unknown[]> };
-    };
-    expect(
-      await manager.mintOperationService.claimMintQuote(h.mint.mintUrl, 'bolt11', 'a'),
-    ).toEqual([]);
-    expect(await h.coco.ops.mint.listByQuote({ mintUrl: h.mint.mintUrl, quoteId: 'a' })).toEqual(
-      [],
-    );
-  });
+      await h.quote({ quote: 'unreserved', method: 'bolt11', amount: 10, amountPaid: 10 });
+      await h.coco.enableMintOperationProcessor({ batchMintQuotes });
+      await h.coco.waitForMintOperationProcessor();
+
+      expect((await h.coco.ops.mint.batch.get(executing.id))?.state).toBe('executing');
+      expect(h.mint.batchRequests).toHaveLength(1);
+      expect(
+        h.mint.requests
+          .filter(({ path }) => path === '/v1/mint/bolt11')
+          .map(({ body }) => (body as { quote: string }).quote),
+      ).toEqual(['unreserved']);
+      expect(
+        (await h.coco.ops.mint.listByQuote({ mintUrl: h.mint.mintUrl, quoteId: 'unreserved' })).map(
+          (operation) => operation.state,
+        ),
+      ).toEqual(['finalized']);
+      for (const quoteId of ['a', 'b']) {
+        expect(await h.coco.ops.mint.listByQuote({ mintUrl: h.mint.mintUrl, quoteId })).toEqual([]);
+      }
+    });
+  }
 });
