@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import { Amount, RateLimitError, Wallet, type MintQuoteBolt11Response } from '@cashu/cashu-ts';
+import { Database } from 'bun:sqlite';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { SqlStorageRepositories } from '../../../sql-storage/src/repositories.ts';
+import { SqliteDb } from '../../../sqlite-bun/src/db.ts';
 import { MintSwapChildOperationError } from '../../operations/mintSwap/MintSwapErrors.ts';
 import { MintSwapInvariantError } from '../../operations/mintSwap/MintSwapErrors.ts';
 import { flagMintSwapAttention } from '../../operations/mintSwap/MintSwapTransitions.ts';
@@ -7,12 +13,14 @@ import { MintService } from '../../services/MintService.ts';
 import { MintOperationService } from '../../operations/mint/MintOperationService.ts';
 import { MeltOperationService } from '../../operations/melt/MeltOperationService.ts';
 import { initializeCoco, Manager } from '../../Manager.ts';
+import type { Repositories } from '../../repositories/index.ts';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 import { meltQuoteFromBolt11Response } from '../../models/MeltQuote.ts';
 import { MintAdapter } from '../../infra/MintAdapter.ts';
 import { PollingTransport } from '../../infra/PollingTransport.ts';
 import { SubscriptionManager } from '../../infra/SubscriptionManager.ts';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
+import type { MintSwapOperation } from '../../operations/mintSwap/MintSwapOperation.ts';
 import type { MintSwapOperationService } from '../../operations/mintSwap/MintSwapOperationService.ts';
 import type { WalletService } from '../../services/WalletService.ts';
 import type { Logger } from '../../logging/Logger.ts';
@@ -86,9 +94,13 @@ describe('Mint Swap real runtime boundaries', () => {
     mock.restore();
   });
 
-  async function setup(logger?: Logger, prepared = true) {
-    const repo = new MemoryRepositories();
-    const fixture = await mintSwapFixture(repo);
+  async function setup(
+    logger?: Logger,
+    prepared = true,
+    repo: Repositories = new MemoryRepositories(),
+    initialize = true,
+  ) {
+    const fixture = await mintSwapFixture(repo, { initialize });
     fixture.preparation.seed = new Uint8Array(64).fill(2);
     if (prepared) {
       await fixture.create();
@@ -96,8 +108,8 @@ describe('Mint Swap real runtime boundaries', () => {
     }
     let sourceState: 'PENDING' | 'PAID' | 'UNPAID' = 'PAID';
     let destinationState: 'UNPAID' | 'PAID' | 'ISSUED' = 'UNPAID';
-    const sourceResponse = () => ({
-      quote: 'source-quote',
+    const sourceResponse = (quoteId = 'source-quote') => ({
+      quote: quoteId,
       method: 'bolt11' as const,
       request: invoice,
       amount: Amount.from(8),
@@ -108,8 +120,8 @@ describe('Mint Swap real runtime boundaries', () => {
       change: [],
       payment_preimage: null,
     });
-    const destinationResponse = (): MintQuoteBolt11Response => ({
-      quote: 'destination-quote',
+    const destinationResponse = (quoteId = 'destination-quote'): MintQuoteBolt11Response => ({
+      quote: quoteId,
       request: invoice,
       amount: Amount.from(8),
       unit: 'sat',
@@ -122,20 +134,28 @@ describe('Mint Swap real runtime boundaries', () => {
       updated_at: null,
     });
     const sourceCheck = spyOn(MintAdapter.prototype, 'checkMeltQuote').mockImplementation(
-      async () => sourceResponse(),
+      async (_mintUrl, quoteId) => sourceResponse(quoteId),
     );
     const destinationCheck = spyOn(MintAdapter.prototype, 'checkMintQuote').mockImplementation(
-      (async () => destinationResponse()) as MintAdapter['checkMintQuote'],
+      (async (_mintUrl: string, _method: string, quoteId: string) =>
+        destinationResponse(quoteId)) as MintAdapter['checkMintQuote'],
     );
-    const melt = spyOn(MintAdapter.prototype, 'customMeltBolt11').mockImplementation(async () =>
-      sourceResponse(),
+    const melt = spyOn(MintAdapter.prototype, 'customMeltBolt11').mockImplementation(
+      async (_mintUrl, _proofs, _outputs, quoteId) => sourceResponse(quoteId),
     );
-    const issuance = spyOn(Wallet.prototype, 'mintProofsBolt11').mockImplementation(async () => {
-      const child = await repo.mintOperationRepository.getById('destination-child');
-      if (!child || child.state !== 'executing') throw new Error('Missing executing child');
-      destinationState = 'ISSUED';
-      return outputProofs(child.outputData);
-    });
+    const issuance = spyOn(Wallet.prototype, 'mintProofsBolt11').mockImplementation(
+      async (_amount, quoteId) => {
+        const children = await repo.mintOperationRepository.getByQuoteId(
+          fixture.parent.destinationMintUrl,
+          'bolt11',
+          String(quoteId),
+        );
+        const child = children.find((candidate) => candidate.state === 'executing');
+        if (!child) throw new Error('Missing executing child');
+        destinationState = 'ISSUED';
+        return outputProofs(child.outputData);
+      },
+    );
     spyOn(Manager.prototype as unknown as Runtime, 'createSubscriptionManager').mockImplementation(
       function (this: Runtime) {
         return new SubscriptionManager(
@@ -258,6 +278,160 @@ describe('Mint Swap real runtime boundaries', () => {
       });
     }
   }
+
+  it('advances a parent past another parent whose destination observation setup is blocked', async () => {
+    const env = await setup();
+    const { manager, repo } = env;
+    // 'swap' sorts first, so a scan that awaited its setup would never reach 'swap-b'.
+    const other = await mintSwapFixture(repo, { suffix: '-b' });
+    other.preparation.seed = new Uint8Array(64).fill(2);
+    await other.create();
+    await other.prepare();
+    env.setSourceState('PENDING');
+    await manager.ops.mintSwap.execute('swap');
+    await manager.ops.mintSwap.execute('swap-b');
+    env.setSourceState('PAID');
+    await manager.quotes.melt.refresh({
+      mintUrl: other.parent.sourceMintUrl,
+      quoteId: 'source-quote-b',
+    });
+    await manager.quotes.mint.refresh({
+      mintUrl: other.parent.destinationMintUrl,
+      quoteId: 'destination-quote-b',
+    });
+    env.sourceCheck.mockClear();
+
+    // SubscriptionManager.subscribe resolves without a mint acknowledgement, so no transport fake
+    // can hold acquisition open. Only the blocked quote is gated; every other call stays real.
+    const entered = deferred();
+    const release = deferred();
+    const subscribe = manager.subscriptions.subscribe.bind(manager.subscriptions);
+    spyOn(manager.subscriptions, 'subscribe').mockImplementation((async (
+      ...args: Parameters<typeof subscribe>
+    ) => {
+      if (args[2].includes('destination-quote')) {
+        entered.resolve();
+        await release.promise;
+      }
+      return subscribe(...args);
+    }) as typeof subscribe);
+    const progressed = deferred();
+    manager.on('mint-swap:updated', ({ operationId, state }) => {
+      if (operationId === 'swap-b' && state === 'destination_pending') progressed.resolve();
+    });
+    try {
+      await manager.enableMintOperationWatcher({
+        watchExistingPendingOnStart: false,
+        watchExistingPendingQuotesOnStart: false,
+      });
+      spyOn(Date, 'now').mockReturnValue(30_000);
+      await within(manager.enableMintSwapOperationProcessor({ processIntervalMs: 5 }));
+      await within(entered.promise);
+      await within(progressed.promise);
+      expect((await repo.meltOperationRepository.getById('source-child-b'))?.state).toBe(
+        'finalized',
+      );
+      // 'swap' has no cached settlement yet, so only it may observe its source at startup.
+      expect(env.sourceCheck.mock.calls.map(([, quoteId]) => quoteId)).not.toContain(
+        'source-quote-b',
+      );
+    } finally {
+      release.resolve();
+      await manager.disableMintSwapOperationProcessor();
+      await manager.disableMintOperationWatcher();
+    }
+  });
+
+  describe('startup across a persistent store reopen', () => {
+    const directories: string[] = [];
+    const databases: Database[] = [];
+
+    afterEach(() => {
+      for (const database of databases.splice(0)) database.close();
+      for (const directory of directories.splice(0)) {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    });
+
+    function openStore(path: string) {
+      const database = new Database(path);
+      databases.push(database);
+      return new SqlStorageRepositories({ database: new SqliteDb({ database }) });
+    }
+
+    /** Persist one parent state, then scan it from a new Session over the reopened database. */
+    async function restartAndScan(
+      persist: (env: Awaited<ReturnType<typeof setup>>) => Promise<void>,
+      expectedState: MintSwapOperation['state'],
+    ) {
+      const directory = mkdtempSync(join(tmpdir(), 'mint-swap-startup-'));
+      directories.push(directory);
+      const path = join(directory, 'wallet.sqlite');
+      const before = await setup(undefined, true, openStore(path));
+      await persist(before);
+      expect((await before.manager.ops.mintSwap.get('swap'))?.state).toBe(expectedState);
+      await within(before.manager.dispose());
+      databases.pop()!.close();
+
+      spyOn(Date, 'now').mockReturnValue(30_000);
+      const after = await setup(undefined, false, openStore(path), false);
+      after.sourceCheck.mockClear();
+      after.destinationCheck.mockClear();
+      after.melt.mockClear();
+      after.issuance.mockClear();
+      await within(after.manager.enableMintSwapOperationProcessor({ processIntervalMs: 60_000 }));
+      // The parent completes on a later scan, once it observes the issued destination accounting.
+      expect((await after.manager.ops.mintSwap.get('swap'))?.state).toBe('destination_pending');
+      expect((await after.manager.ops.melt.get('source-child'))?.state).toBe('finalized');
+      expect((await after.manager.ops.mint.get('destination-child'))?.state).toBe('finalized');
+      expect(after.melt).not.toHaveBeenCalled();
+      await within(after.manager.disableMintSwapOperationProcessor());
+      return after;
+    }
+
+    it('settles the source from cached PAID evidence without another source check', async () => {
+      const { sourceCheck, destinationCheck, issuance } = await restartAndScan(async (env) => {
+        env.setSourceState('PENDING');
+        await env.manager.ops.mintSwap.execute('swap');
+        env.setSourceState('PAID');
+        await env.manager.quotes.melt.refresh({
+          mintUrl: env.fixture.parent.sourceMintUrl,
+          quoteId: 'source-quote',
+        });
+      }, 'source_pending');
+      expect(sourceCheck).not.toHaveBeenCalled();
+      // Nothing cached says the destination is funded yet, so startup observes it once.
+      expect(destinationCheck).toHaveBeenCalledTimes(1);
+      expect(issuance).toHaveBeenCalledTimes(1);
+    });
+
+    it('issues a funded destination from cached accounting without another quote check', async () => {
+      const { sourceCheck, destinationCheck, issuance } = await restartAndScan(async (env) => {
+        env.setDestinationState('UNPAID');
+        await env.manager.ops.mintSwap.execute('swap');
+        env.setDestinationState('PAID');
+        await env.manager.quotes.mint.refresh({
+          mintUrl: env.fixture.parent.destinationMintUrl,
+          quoteId: 'destination-quote',
+        });
+      }, 'destination_funded');
+      expect(sourceCheck).not.toHaveBeenCalled();
+      expect(destinationCheck).not.toHaveBeenCalled();
+      expect(issuance).toHaveBeenCalledTimes(1);
+    });
+
+    it('refreshes an authorized destination once after a lost issuance result', async () => {
+      const { sourceCheck, destinationCheck, issuance } = await restartAndScan(async (env) => {
+        env.issuance.mockImplementationOnce(async () => {
+          throw new Error('Issuance result lost');
+        });
+        await env.manager.ops.mintSwap.execute('swap');
+      }, 'destination_pending');
+      expect(sourceCheck).not.toHaveBeenCalled();
+      expect(destinationCheck).toHaveBeenCalledTimes(1);
+      expect(issuance).toHaveBeenCalledTimes(1);
+    });
+  });
 
   it('rejects ordinary child commands and quote claims while preserving reads and parent commands', async () => {
     const { manager, runtime, fixture, issuance, sourceCheck, destinationCheck } = await setup();
