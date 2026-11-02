@@ -57,15 +57,15 @@ describe('requestRateLimit', () => {
     expect(times.at(-1)! - times[0]!).toBeGreaterThanOrEqual(queued * refillIntervalMs * 0.8);
   });
 
-  it('sends the same requests without queueing when disabled', async () => {
+  it('sends requests without queueing when disabled', async () => {
+    // With one token refilled per minute, any queued request would outlast the test timeout, so
+    // this does not depend on how fast the mint responds.
     const times = await addMintAndRecordRequestTimes({
-      capacity,
-      refillPerMinute: 60_000 / refillIntervalMs,
+      capacity: 1,
+      refillPerMinute: 1,
       disabled: true,
     });
 
-    expect(times.length).toBeGreaterThan(capacity);
-    const queued = times.length - capacity;
-    expect(times.at(-1)! - times[0]!).toBeLessThan(queued * refillIntervalMs * 0.8);
-  });
+    expect(times.length).toBeGreaterThan(1);
+  }, 10_000);
 });
