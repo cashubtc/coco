@@ -3,7 +3,7 @@ import { assertSameUnit, normalizeUnit } from '@core/amounts.ts';
 import { ProofValidationError } from '@core/models/Error.ts';
 
 export function selectProofInputs(
-  operation: { amount: Amount; unit: string },
+  operation: { amount: Amount; unit: string; offline?: boolean },
   available: Proof[],
   keyChain: KeyChain,
   selectProofs: SelectProofs,
@@ -18,10 +18,33 @@ export function selectProofInputs(
   }
 
   if (!forceSwap) {
+    if (operation.offline) {
+      // Largest-first is exact for binary denominations; randomized selection can miss them.
+      const sorted = [...available].sort((a, b) =>
+        a.amount.equals(b.amount) ? 0 : a.amount.greaterThan(b.amount) ? -1 : 1,
+      );
+      const exact: Proof[] = [];
+      let remaining = operation.amount;
+      for (const proof of sorted) {
+        if (remaining.isZero()) break;
+        if (proof.amount.greaterThan(remaining)) continue;
+        exact.push(proof);
+        remaining = remaining.subtract(proof.amount);
+      }
+      if (remaining.isZero()) {
+        // An exact transfer still requires known input keysets.
+        for (const proof of exact) keyChain.getKeyset(proof.id);
+        return { proofs: exact, fee: Amount.zero(), needsSwap: false };
+      }
+    }
     const exact = selectProofs(available, operation.amount, keyChain, false).send;
     if (sumProofs(exact).equals(operation.amount)) {
       return { proofs: exact, fee: Amount.zero(), needsSwap: false };
     }
+  }
+
+  if (operation.offline) {
+    throw new ProofValidationError('Offline send requires proofs matching the exact amount');
   }
 
   const selected = selectProofs(available, operation.amount, keyChain, true).send;
