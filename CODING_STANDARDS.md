@@ -99,11 +99,20 @@ copies, cached values, encodings, object dumps or error context. This also appli
 ## Test behavior
 
 Add or update tests with behavior changes whenever practical.
-Default to the integration suite, which runs against a real mint, for workflows and interactions. Add a
-new unit test only for pure logic, state transitions, or failures a real mint cannot produce on demand.
-Choose the boundary that demonstrates the guarantee under change; doubles must not remove the
-persistence, protocol or lifecycle behavior the test is meant to prove. Avoid tests that merely mirror
-implementation or repeat trivial delegation, and do not add tests only to reach a coverage target.
+Name the public boundary that demonstrates the guarantee under change before writing the test, then
+choose the first fit from this order:
+
+1. The public surface (`Manager`, `ops.*`) against the real mint, in the integration suite. This is the
+   default for workflows and interactions.
+2. The same public surface with an in-process fake at a system boundary (transport, clock, storage
+   failure), for failures, races and interrupted states a real mint cannot produce on demand. Use the
+   real repositories and services behind the boundary.
+3. A unit test, only for pure logic or a state-transition table.
+
+Doubles must not remove the persistence, protocol or lifecycle behavior the test is meant to prove. Do
+not mock Coco's own services or collaborators: such a test checks the mock, not the behavior. Avoid tests
+that merely mirror implementation, read private fields, or repeat trivial delegation, and do not add
+tests only to reach a coverage target.
 
 Assert observable outcomes and relevant failure behavior. For recovery changes, exercise the historical
 records or interrupted states that the change actually promises to handle, guided by the risk assessment
@@ -113,8 +122,10 @@ do not require every backend or duplicate equivalent assertions
 by default. Type-level contracts also need compiler verification.
 
 Use the affected scripts and CI selection to establish what actually runs. A test's presence in a
-directory is not evidence that a particular CI job executes it. Report relevant verification, including
-which integration suites you ran and which you left to CI, and any remaining uncertainty.
+directory is not evidence that a particular CI job executes it. Report exact verification commands and
+results, including suites and storage backends exercised, relevant mint fee and unit configuration,
+work left to CI, and any remaining uncertainty. Distinguish direct execution of a package's test entry
+from running the integration runner's package matrix.
 
 ## Keep guidance accurate
 
