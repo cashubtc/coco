@@ -30,6 +30,7 @@ import {
   type Secret,
 } from '@cashu/cashu-ts';
 import { createFakeInvoice } from 'fake-bolt11';
+import { runPaymentRequestFeeTests } from './paymentRequestFees.ts';
 
 export type OutputDataFactory = (amount: AmountLike, keys: MintKeys | HasKeysetKeys) => OutputData;
 
@@ -3130,6 +3131,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         }
       });
     });
+
+    runPaymentRequestFeeTests(options, runner, mintAmount);
 
     describe('Payment Requests', () => {
       let repositoriesDispose: (() => Promise<void>) | undefined;

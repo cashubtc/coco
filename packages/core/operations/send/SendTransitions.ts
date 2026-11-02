@@ -73,6 +73,12 @@ export const prepareSend = defineTransition<PrepareSendInput, PrepareSendResult>
       operationId: operation.id,
       amount: operation.amount,
       forceSwap: input.forceSwap,
+      receiver: input.receiverAmount
+        ? {
+            amount: input.receiverAmount,
+            swapOutputKeys: input.fixedSendOutputs ? undefined : input.activeKeys,
+          }
+        : undefined,
     });
     const inputAmount = sumProofs(selected.proofs);
     const inputProofSecrets = selected.proofs.map((proof) => proof.secret);
@@ -85,8 +91,8 @@ export const prepareSend = defineTransition<PrepareSendInput, PrepareSendResult>
         unit: operation.unit,
         activeKeys: input.activeKeys,
         seed: input.seed,
-        keepAmount: inputAmount.subtract(operation.amount.add(selected.fee)),
-        sendAmount: operation.amount,
+        keepAmount: inputAmount.subtract(selected.sendAmount.add(selected.fee)),
+        sendAmount: selected.sendAmount,
         fixedSendOutputs: input.fixedSendOutputs,
       });
       outputData = allocation.outputData;
@@ -95,8 +101,19 @@ export const prepareSend = defineTransition<PrepareSendInput, PrepareSendResult>
       await tx.outputs.assertActiveKeys(operation.mintUrl, operation.unit, input.activeKeys);
     }
 
+    if (input.receiverAmount) {
+      const outgoing = outputData
+        ? outputData.send.map((output) => output.blindedMessage)
+        : selected.proofs;
+      const receiverFee = await tx.proofs.getFee(operation.mintUrl, operation.unit, outgoing);
+      if (sumProofs(outgoing).lessThan(input.receiverAmount.add(receiverFee))) {
+        throw new ProofValidationError('Prepared Send does not cover receiver input fees');
+      }
+    }
+
     const prepared: PreparedSendOperation = {
       ...operation,
+      amount: selected.sendAmount,
       state: 'prepared',
       revision: 0,
       updatedAt: operation.updatedAt,

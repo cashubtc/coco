@@ -537,7 +537,9 @@ describe('PaymentRequestService', () => {
         },
         undefined,
       );
-      expect(mockSendOperationService.prepare).toHaveBeenCalled();
+      expect(mockSendOperationService.prepare).toHaveBeenCalledWith(expect.any(Object), {
+        coverReceiverFees: true,
+      });
     });
 
     it('should use amount from options if not in request', async () => {

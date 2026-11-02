@@ -8,6 +8,7 @@ import {
 import type { MintService } from '@core/services/MintService.ts';
 import type { ProofQueries } from '@core/proofs/ProofQueries.ts';
 import { createKeyChain } from '@core/proofs/KeysetSelection.ts';
+import { feeCoveredSendAmount } from '@core/proofs/ProofSelection.ts';
 import type { MintMetadata } from '@core/mints/MintMetadata.ts';
 import {
   applySendResult,
@@ -97,6 +98,16 @@ export interface SendOperationServiceDependencies {
   outputDataCreator?: OutputDataCreator;
   logger?: Logger;
   mintScopedLock?: MintScopedLock;
+}
+
+/** Options applied before a Send's amount and proof plan are committed. */
+export interface PrepareSendOptions {
+  /**
+   * Treat the requested amount as the receiver's net target after redemption input fees.
+   * Defaults to false (face value). The prepared amount is gross outgoing value; its fee
+   * remains the separate payer-side preparation cost. Applies to unlocked and P2PK sends.
+   */
+  coverReceiverFees?: boolean;
 }
 
 /**
@@ -214,7 +225,10 @@ export class SendOperationService {
    *
    * Throws if the operation is already in progress.
    */
-  async prepare(operation: InitSendOperation): Promise<PreparedSendOperation> {
+  async prepare(
+    operation: InitSendOperation,
+    options: PrepareSendOptions = {},
+  ): Promise<PreparedSendOperation> {
     const releaseLock = await this.acquireOperationLock(operation.id);
     let result: PrepareSendResult;
     try {
@@ -227,8 +241,22 @@ export class SendOperationService {
         const metadata = await this.mintMetadataRefresh.refreshAndCommitIfStale(operation.mintUrl);
         const keys = this.activeKeys(metadata, operation.unit);
         const seed = await this.loadSeed();
+        const receiverAmount = options.coverReceiverFees ? operation.amount : undefined;
+        // P2PK outputs are randomized in preflight. Unlocked Sends defer fee planning until
+        // authoritative selection determines that existing proofs cannot be sent directly.
+        const plannedOperation =
+          receiverAmount && operation.method === 'p2pk'
+            ? {
+                ...operation,
+                amount: feeCoveredSendAmount(
+                  receiverAmount,
+                  keys,
+                  createKeyChain(operation.mintUrl, operation.unit, metadata.keysets),
+                ),
+              }
+            : operation;
         const plan = handler.prepare({
-          operation,
+          operation: plannedOperation,
           activeKeys: keys,
           mintInfo: metadata.mint.mintInfo,
           outputDataCreator: this.outputDataCreator,
@@ -236,10 +264,11 @@ export class SendOperationService {
         const updatedAt = Date.now();
         result = await this.transactionRunner.run((tx) =>
           tx.perform(prepareSend, {
-            operation: { ...operation, updatedAt },
+            operation: { ...plannedOperation, updatedAt },
             activeKeys: keys,
             seed,
             ...plan,
+            receiverAmount,
           }),
         );
       } finally {
