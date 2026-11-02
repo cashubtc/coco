@@ -366,8 +366,8 @@ the Operation before retrying. See [the route reference](API.md#v1-quote-backed-
 Authenticated `GET /v1/openapi.json` requires `wallet:read` and returns an OpenAPI 3.1 document
 from the route metadata and runtime schemas. It remains available in every Wallet and Coco
 Session state. The committed copy, [openapi-v1.json](openapi-v1.json), describes only the implemented
-lifecycle, balances, Known Mint, history, Quote-backed Operations, and description routes;
-legacy routes retain their separate contract.
+lifecycle, balances, Known Mint, history, Quote-backed Operations, Send/Receive, outgoing Payment
+Request, and description routes; legacy routes retain their separate contract.
 
 Run `bun run generate:interface` from `packages/cocod` after changing route metadata or schemas.
 `bun run check:interface` and the Cocod tests check the committed document against runtime metadata.
@@ -428,6 +428,63 @@ History documents expose ID, type, source, state, Mint URL, unit, decimal-string
 timestamps, with nonempty Operation and Quote IDs when applicable. They omit tokens, proof
 secrets, payment requests, metadata, and error text. Stored legacy history remains readable;
 entries superseded by current Operations follow Coco's deduplication rules.
+
+## Send, Receive, and outgoing Payment Requests
+
+[API.md](API.md#send-receive-and-outgoing-payment-requests) lists the implemented routes and
+capabilities; [openapi-v1.json](openapi-v1.json) defines their exact request and response shapes.
+These resources require a running Coco Session and honor the lifecycle admission errors above.
+
+Creating a Send or Receive Operation returns `201 Created` after preparation and MUST NOT execute
+it. Preparation persists the Operation and may reserve proofs. Execute is an explicit administrative
+command. Read/list documents expose safe state, Mint, unit, amount, fee, and timestamps without proofs,
+secrets, output data, or tokens. Collections use newest-first pagination with an ID tie-breaker;
+concurrent changes can shift pages. Commands without inputs accept no body or an empty JSON object.
+
+Send execute returns `{ operation, result: { token } }`. Its result endpoint returns `{ token }`
+only while the Operation is pending or finalized and retains a token. Both endpoints require
+`wallet:admin` and MUST use `Cache-Control: no-store`, including on errors. A read credential can
+inspect the Operation but cannot retrieve its token. Optional `Idempotency-Key` replay does not
+bypass authorization or Coco Session availability.
+
+`POST /v1/payment-requests/evaluate` accepts `{ request }` and reports the amount, unit, transport,
+allowed Mints, payable Mints, and spending condition Coco resolves, without raw request or transport
+details. It accepts both `creqA` and `creqB`. A Send created from a Payment Request source pays
+in-band requests only; other transports return `409 unsupported_behavior`.
+
+Without an explicit `mintUrl`, cocod uses the configured Mint when Coco reports it payable for the
+requested or supplied amount, otherwise the first payable Mint, and returns
+`409 payment_request_unpayable` when there is none. Evaluation takes no amount, so for an amountless
+request its `payableMints` only reflect allowed Mints with a balance in the request's unit.
+Preparation supplies an amount hint to Coco's parse step; that affordability check is nominal and
+preparation still applies the complete fee/proof plan. An explicit `unit` requires an explicit
+`amount`; both are validated by Coco against the request.
+
+Ordinary Send `amount` is gross token value; Receive deducts the Mint's input fees. A Payment Request
+amount is the receiver's net target. Coco covers receiver fees automatically, so the prepared Send's
+`amount` may exceed that target, while its `fee` remains the payer's separate swap fee. Existing
+eligible proofs may satisfy a Payment Request directly without a swap. Cocod delegates these
+choices and P2PK spending conditions to Coco.
+
+| Condition                                     | Status | Code                             |
+| --------------------------------------------- | ------ | -------------------------------- |
+| Operation missing                             | 404    | `not_found`                      |
+| Command unavailable in the current state      | 409    | `invalid_operation_state`        |
+| Concurrent Operation change                   | 409    | `operation_conflict`             |
+| Another command already running               | 409    | `operation_in_progress`          |
+| Selected Mint unknown or untrusted            | 409    | `mint_unavailable`               |
+| Invalid token, request, amount, or unit       | 400    | `invalid_request`                |
+| Mint protocol rejection                       | 409    | `mint_rejected`                  |
+| Mint unreachable                              | 502    | `mint_unreachable`               |
+| Send token not available in current state     | 409    | `operation_result_not_available` |
+| Payment Request uses an unsupported transport | 409    | `unsupported_behavior`           |
+| No Known Mint can pay the Payment Request     | 409    | `payment_request_unpayable`      |
+
+State errors carry `operationType`, `operationId`, `state`, and `expectedStates`. Mint errors use
+fixed safe messages. Remote failures from execute or reclaim are not marked retryable because the
+command may already have affected the Mint. Clients MUST read or refresh the Operation before
+choosing another command. Cancel releases a prepared Send's reservations or cancels an unexecuted
+Receive; reclaim reconciles a pending Send's proofs through Coco.
 
 ## Health
 

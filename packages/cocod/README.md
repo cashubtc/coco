@@ -123,7 +123,7 @@ upgrading and delete the copy once you're settled.
 
 - CLI: `src/cli.ts`
 - Daemon: `src/daemon.ts`
-- Lifecycle and Quote-backed Operation HTTP interface: `src/v1`
+- V1 HTTP interface: `src/v1`
 - Legacy command routes: `src/routes.ts`
 - Transport: authenticated HTTP over one TCP listener
 
@@ -196,6 +196,18 @@ its Wallet through Coco APIs and `/v1` Quote/Operation routes; it does not need 
 HTTP routes. CDK fakewallet returns an empty BOLT11 preimage; that case returns
 `operation_result_not_available`, while on-chain settlement supplies an outpoint. It is separate
 from the integration runner's package matrix.
+
+The default tests are self-contained. Funded transfer tests use a separately started local
+`cashubtc/mintd:0.17.0-rc.0` with `fakewallet`, immediate payment, and `100` input-fee ppk:
+
+```bash
+COCOD_TRANSFER_MINT_URL=http://127.0.0.1:3338 bun test packages/cocod/test/integration/v1-transfers-real-mint.test.ts
+```
+
+Run from the repository root after building. For the repository's custom-unit Mint configuration (zero input fees and `usd` support), add
+`CUSTOM_UNIT=usd`. These tests exercise authenticated Send → token → Receive, in-band Payment
+Requests, receiver fees, cancellation, reclaim, and token permissions over real core and SQLite.
+They are selected directly by this command, not by the root integration runner's package matrix.
 
 ## Docs
 
