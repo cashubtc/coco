@@ -80,6 +80,8 @@ export class FakeBatchMint {
   readonly batchBehaviors: BatchMintBehavior[] = [];
   restoreBehavior: RestoreBehavior = 'all';
   quoteCheckBehavior: 'ok' | 'unavailable' = 'ok';
+  /** Transform the batch response at the HTTP boundary to exercise recovery evidence failures. */
+  batchQuoteCheckResponse?: (quotes: Record<string, unknown>[]) => unknown;
   /** `legacy` verifies NUT-20 signatures as mints that predate the amended message do. */
   quoteSignatureFormat: 'amended' | 'legacy' = 'amended';
   nut29: { max_batch_size?: number; methods?: Method[] } | null = {
@@ -186,7 +188,10 @@ export class FakeBatchMint {
     const checkMatch = path.match(/^\/v1\/mint\/quote\/(\w+)\/check$/);
     if (checkMatch) {
       if (this.quoteCheckBehavior === 'unavailable') return json({ error: 'unavailable' }, 503);
-      return json((body.quotes as string[]).map((quoteId) => this.quoteResponse(quoteId)));
+      if (this.nut29?.max_batch_size && body.quotes.length > this.nut29.max_batch_size)
+        return error(11017, 'batch too large');
+      const quotes = (body.quotes as string[]).map((quoteId) => this.quoteResponse(quoteId));
+      return json(this.batchQuoteCheckResponse ? this.batchQuoteCheckResponse(quotes) : quotes);
     }
     const quoteMatch = path.match(/^\/v1\/mint\/quote\/(\w+)\/(.+)$/);
     if (quoteMatch) {

@@ -65,7 +65,7 @@ export interface BatchMintOperationServiceDependencies {
   transactionRunner: CoreTransactionRunner;
   batchMintQueries: Pick<BatchMintOperationRepository, 'getById' | 'listByQuote' | 'listInFlight'>;
   proofQueries: Pick<ProofRepository, 'getProofBySecret'>;
-  quoteLifecycle: Pick<QuoteLifecycle, 'getMintQuote' | 'refreshMintQuote'>;
+  quoteLifecycle: Pick<QuoteLifecycle, 'getMintQuote' | 'refreshMintQuotesForRecovery'>;
   mintService: Pick<
     MintService,
     'isTrustedMint' | 'getNut29BatchMintLimit' | 'refreshAndCommitIfStale'
@@ -199,8 +199,8 @@ export class BatchMintOperationService {
 
   /**
    * Recover one operation: saved proofs, then NUT-09 Restore of the persisted outputs, then a fresh
-   * target-isolated quote check whose observations are recorded before acting. Only zero restored outputs
-   * with every member still claimable replays the exact request.
+   * operation-scoped batch quote check whose observations are recorded before acting. Only zero
+   * restored outputs with every member still claimable replays the exact request.
    */
   async recover(operationId: string): Promise<BatchMintOperation> {
     const release = await this.operationIdLock.acquire(operationId);
@@ -400,8 +400,8 @@ export class BatchMintOperationService {
   /**
    * A fresh quote check after zero restored outputs. Any member unclaimable for its amount proves
    * the atomic request did not issue; malformed or unavailable evidence stays unresolved. Recovery
-   * is explicit work, so each member gets its own target-isolated check (ADR-0006), which records
-   * its Quote Observation before returning (ADR-0004).
+   * checks exactly this operation's members through NUT-29 (ADR-0006), recording their Quote
+   * Observations before returning (ADR-0004).
    */
   private async assessMembers(
     operation: ExecutingBatchMintOperation,
@@ -411,12 +411,13 @@ export class BatchMintOperationService {
     | { status: 'unresolved'; error: string }
   > {
     const { mintUrl, method } = operation;
-    const quotes = [];
+    let quotes;
     try {
-      for (const { quoteId } of operation.members)
-        quotes.push(
-          await this.dependencies.quoteLifecycle.refreshMintQuote(mintUrl, method, quoteId),
-        );
+      quotes = await this.dependencies.quoteLifecycle.refreshMintQuotesForRecovery(
+        mintUrl,
+        method,
+        operation.members.map(({ quoteId }) => quoteId),
+      );
     } catch (error) {
       return { status: 'unresolved', error: message(error) };
     }

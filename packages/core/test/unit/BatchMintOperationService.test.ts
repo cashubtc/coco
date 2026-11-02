@@ -431,6 +431,7 @@ describe('Batch Mint Operations', () => {
     it('replays the exact request when nothing was restored and every member is claimable', async () => {
       h.mint.batchBehaviors.push('network');
       const executing = await executePair();
+      await h.quote({ quote: 'unrelated', method: 'bolt11', amount: 5, amountPaid: 5 });
 
       await h.coco.ops.mint.batch.recovery.run();
 
@@ -441,13 +442,15 @@ describe('Batch Mint Operations', () => {
       expect(replay!.quote_amounts).toEqual(first!.quote_amounts);
       expect(replay!.outputs).toEqual(first!.outputs);
       const paths = h.mint.requests.map((r) => r.path);
-      expect(paths.indexOf('/v1/restore')).toBeLessThan(paths.indexOf('/v1/mint/quote/bolt11/a'));
-      expect(paths.indexOf('/v1/mint/quote/bolt11/a')).toBeLessThan(
-        paths.indexOf('/v1/mint/quote/bolt11/b'),
+      expect(paths.indexOf('/v1/restore')).toBeLessThan(
+        paths.indexOf('/v1/mint/quote/bolt11/check'),
       );
       expect(paths.lastIndexOf('/v1/mint/bolt11/batch')).toBeGreaterThan(
-        paths.indexOf('/v1/mint/quote/bolt11/b'),
+        paths.indexOf('/v1/mint/quote/bolt11/check'),
       );
+      expect(h.mint.requests.filter((r) => r.path.startsWith('/v1/mint/quote/'))).toEqual([
+        { path: '/v1/mint/quote/bolt11/check', body: { quotes: ['a', 'b'] } },
+      ]);
     });
 
     it('records Quote Observations and fails when nothing was restored and a member is unclaimable', async () => {
@@ -486,6 +489,167 @@ describe('Batch Mint Operations', () => {
         expect(await savedProofs(executing.id)).toEqual([]);
       });
     }
+
+    for (const method of ['bolt12', 'onchain'] as const) {
+      it(`recovers ${method} claims through one batch quote check`, async () => {
+        for (const quote of ['reusable-a', 'reusable-b'])
+          await h.quote({
+            quote,
+            method,
+            amountPaid: 50,
+            amountIssued: 10,
+            pubkey: ownedKey.publicKeyHex,
+          });
+        h.mint.batchBehaviors.push('network');
+        const executing = await h.coco.ops.mint.batch.execute({
+          mintUrl: h.mint.mintUrl,
+          method,
+          members: [
+            { quoteId: 'reusable-a', amount: 15 },
+            { quoteId: 'reusable-b', amount: 20 },
+          ],
+        });
+
+        await h.coco.ops.mint.batch.recovery.run();
+
+        expect((await h.coco.ops.mint.batch.get(executing.id))?.state).toBe('finalized');
+        expect(h.mint.batchRequests).toHaveLength(2);
+        expect(h.mint.batchRequests[1]!.outputs).toEqual(h.mint.batchRequests[0]!.outputs);
+        expect(h.mint.batchRequests[1]!.quote_amounts).toEqual([15, 20]);
+        expect(h.mint.requests.filter((r) => r.path.startsWith('/v1/mint/quote/'))).toEqual([
+          {
+            path: `/v1/mint/quote/${method}/check`,
+            body: { quotes: ['reusable-a', 'reusable-b'] },
+          },
+        ]);
+      });
+    }
+
+    it('defers an older quote observation even when its amounts match the canonical row', async () => {
+      h.mint.batchBehaviors.push('network');
+      const executing = await executePair();
+      const quote = (await h.coco.quotes.mint.get({ mintUrl: h.mint.mintUrl, quoteId: 'b' }))!;
+      await h.repo.mintQuoteRepository.upsertMintQuote({ ...quote, remoteUpdatedAt: 200 });
+      h.mint.batchQuoteCheckResponse = (quotes) => [quotes[0], { ...quotes[1], updated_at: 100 }];
+
+      await h.coco.ops.mint.batch.recovery.run();
+
+      expect((await h.coco.ops.mint.batch.get(executing.id))?.state).toBe('executing');
+      expect(h.mint.batchRequests).toHaveLength(1);
+      expect(
+        (await h.coco.quotes.mint.get({ mintUrl: h.mint.mintUrl, quoteId: 'b' }))?.remoteUpdatedAt,
+      ).toBe(200);
+    });
+
+    const invalidBatchChecks: Array<{
+      name: string;
+      response: (quotes: Record<string, unknown>[]) => unknown;
+    }> = [
+      { name: 'reordered members', response: (quotes) => quotes.reverse() },
+      { name: 'a missing member', response: (quotes) => quotes.slice(0, 1) },
+      { name: 'a duplicate member', response: (quotes) => [...quotes, quotes[0]] },
+      {
+        name: 'an unselected member',
+        response: (quotes) => [...quotes, { ...quotes[0], quote: 'other' }],
+      },
+      { name: 'a malformed response', response: () => ({ quotes: [] }) },
+      {
+        name: 'an invalid identity',
+        response: (quotes) => [quotes[0], { ...quotes[1], request: 'wrong' }],
+      },
+      {
+        name: 'stale accounting',
+        response: (quotes) => [quotes[0], { ...quotes[1], amount_paid: 0, state: 'UNPAID' }],
+      },
+      {
+        name: 'impossible accounting',
+        response: (quotes) => [quotes[0], { ...quotes[1], amount_issued: 21 }],
+      },
+    ];
+    for (const { name, response } of invalidBatchChecks) {
+      it(`keeps reservations after a batch check with ${name}, without individual fallback`, async () => {
+        h.mint.batchBehaviors.push('network');
+        const executing = await executePair();
+        // Even a valid unclaimable member cannot fail the operation without complete evidence.
+        h.mint.quotes.get('a')!.amountIssued = 10;
+        h.mint.batchQuoteCheckResponse = response;
+
+        await h.coco.ops.mint.batch.recovery.run();
+
+        expect((await h.coco.ops.mint.batch.get(executing.id))?.state).toBe('executing');
+        expect(h.mint.batchRequests).toHaveLength(1);
+        expect(await savedProofs(executing.id)).toEqual([]);
+        if (['an invalid identity', 'stale accounting', 'impossible accounting'].includes(name)) {
+          // Valid observations survive another member's rejection, without advancing the batch.
+          expect(
+            (
+              await h.coco.quotes.mint.get({ mintUrl: h.mint.mintUrl, quoteId: 'a' })
+            )?.amountIssued.toString(),
+          ).toBe('10');
+          expect(
+            (
+              await h.coco.quotes.mint.get({ mintUrl: h.mint.mintUrl, quoteId: 'b' })
+            )?.amountIssued.toString(),
+          ).toBe('0');
+        }
+        expect(h.mint.requests.filter((r) => r.path.startsWith('/v1/mint/quote/'))).toEqual([
+          { path: '/v1/mint/quote/bolt11/check', body: { quotes: ['a', 'b'] } },
+        ]);
+        await expect(
+          h.coco.ops.mint.prepare({
+            quote: { mintUrl: h.mint.mintUrl, method: 'bolt11', quoteId: 'b' },
+            amount: 20,
+          }),
+        ).rejects.toThrow(`already claimed by Batch Mint Operation ${executing.id}`);
+      });
+    }
+
+    it('chunks recovery checks at a reduced advertised limit while preserving the issuance request', async () => {
+      await h.quote({ quote: 'c', method: 'bolt11', amount: 5, amountPaid: 5 });
+      h.mint.batchBehaviors.push('network');
+      const executing = await h.coco.ops.mint.batch.execute({
+        mintUrl: h.mint.mintUrl,
+        method: 'bolt11',
+        members: ['a', 'b', 'c'].map((quoteId) => ({ quoteId })),
+      });
+      const mint = (await h.repo.mintRepository.getMintByUrl(h.mint.mintUrl))!;
+      h.mint.nut29!.max_batch_size = 2;
+      await h.repo.mintRepository.updateMint({
+        ...mint,
+        mintInfo: { ...mint.mintInfo, nuts: { ...mint.mintInfo.nuts, '29': h.mint.nut29! } },
+      });
+      h.mint.quotes.get('c')!.amountIssued = 5;
+
+      await h.coco.ops.mint.batch.recovery.run();
+
+      expect((await h.coco.ops.mint.batch.get(executing.id))?.state).toBe('failed');
+      expect(h.mint.batchRequests).toHaveLength(1);
+      expect(h.mint.requests.filter((r) => r.path.startsWith('/v1/mint/quote/'))).toEqual([
+        { path: '/v1/mint/quote/bolt11/check', body: { quotes: ['a', 'b'] } },
+        { path: '/v1/mint/quote/bolt11/check', body: { quotes: ['c'] } },
+      ]);
+      expect(
+        (
+          await h.coco.quotes.mint.get({ mintUrl: h.mint.mintUrl, quoteId: 'c' })
+        )?.amountIssued.toString(),
+      ).toBe('5');
+    });
+
+    it('defers recovery when batch checks are no longer advertised without individual fallback', async () => {
+      h.mint.batchBehaviors.push('network');
+      const executing = await executePair();
+      const mint = (await h.repo.mintRepository.getMintByUrl(h.mint.mintUrl))!;
+      await h.repo.mintRepository.updateMint({
+        ...mint,
+        mintInfo: { ...mint.mintInfo, nuts: { ...mint.mintInfo.nuts, '29': { methods: [] } } },
+      });
+
+      await h.coco.ops.mint.batch.recovery.run();
+
+      expect((await h.coco.ops.mint.batch.get(executing.id))?.state).toBe('executing');
+      expect(h.mint.batchRequests).toHaveLength(1);
+      expect(h.mint.requests.filter((r) => r.path.startsWith('/v1/mint/quote/'))).toEqual([]);
+    });
 
     it('leaves an executing batch alone while its mint is untrusted', async () => {
       h.mint.batchBehaviors.push('issue-then-drop');

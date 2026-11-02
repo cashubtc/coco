@@ -334,11 +334,14 @@ Outcomes:
   reservation is released and the quotes can be claimed again.
 - `executing`: network errors, timeouts, server errors and malformed or invalid
   responses are ambiguous. Recovery uses locally saved proofs, then NUT-09
-  Restore of the persisted outputs, then a fresh single-quote check of each
-  member. It replays
-  the identical request only when nothing was restored and every member is
-  still claimable, and marks the batch `failed` when a member is no longer
-  claimable.
+  Restore of the persisted outputs, then NUT-29 batch quote checks of exactly
+  its members. Checks respect the current advertised batch size, so a reduced
+  limit may require several check requests. Recovery replays the identical
+  issuance request only when nothing was restored and every member is still
+  claimable, and marks the batch `failed` when complete valid observations show
+  a member is no longer claimable. Missing, malformed, stale or unavailable
+  evidence keeps it `executing`; recovery never falls back to individual quote
+  checks.
 
 Each member keeps its own `type: 'mint'` history entry with its own `quoteId`,
 `paymentRequest` and `amount`, the batch's state, `operationId` and
