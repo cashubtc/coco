@@ -78,6 +78,10 @@ cocod send bolt11 "lnbc..."
 cocod mints add https://mint.example.com/Bitcoin
 cocod mints list
 
+# Inspect or cancel an Operation named by a failed command
+cocod operations show melt <operation-id>
+cocod operations cancel melt <operation-id>
+
 # History
 cocod history --limit 10
 cocod history --watch
@@ -208,6 +212,16 @@ Run from the repository root after building. For the repository's custom-unit Mi
 `CUSTOM_UNIT=usd`. These tests exercise authenticated Send → token → Receive, in-band Payment
 Requests, receiver fees, cancellation, reclaim, and token permissions over real core and SQLite.
 They are selected directly by this command, not by the root integration runner's package matrix.
+
+To exercise the CLI's prepare/execute workflows and failure reporting against the same isolated Mint:
+
+```bash
+COCOD_CLI_MINT_URL=http://127.0.0.1:3338 bun test packages/cocod/test/integration/cli-wallet-real-mint.test.ts
+```
+
+Run from the repository root after building. This tests CLI Send/Receive, Payment Request payment,
+and an unreadable response after successful execution. With `CUSTOM_UNIT=usd`, only the Payment
+Request flow runs; ordinary CLI Send and Lightning receive commands use sat.
 
 ## Docs
 

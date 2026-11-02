@@ -19,30 +19,44 @@ Use the implicit `http://127.0.0.1:62626` endpoint for local auto-start. The glo
 - `session start` - Start the Coco Session
   - `--passphrase <str>` supply the passphrase for protected Wallet Seed Access
 - `session stop` - Stop the Coco Session without stopping the Cocod Process
-- `balance` - Get wallet balances
-- `history` - List history entries
+- `balance` - Print spendable, reserved, and total balances by Mint and unit as JSON
+- `history` - Print history entries as JSON
   - `--offset <number>` default `0`
   - `--limit <number>` default `20`, max `100`
-  - `--watch` stream real-time updates after initial fetch
+  - `--watch` print each new or changed history entry as one JSON line, reconnecting after a
+    disconnect, until a non-retryable failure such as a stopped Coco Session
 
 ### Receive
 
-- `receive cashu <token>` - Receive a Cashu token
-- `receive bolt11 <amount>` - Create a Lightning invoice
+- `receive cashu <token>` - Receive a Cashu token; report the net amount and any redemption fee
+- `receive bolt11 <amount>` - Create a Lightning invoice; Coco redeems it once paid
   - `--mint-url <url>` override default mint for this request
 
 ### Send
 
 - `send cashu <amount>` - Create a Cashu token to send
   - `--mint-url <url>` override default mint
-- `send bolt11 <invoice>` - Pay a Lightning invoice
+- `send bolt11 <invoice>` - Pay a Lightning invoice and report whether it settled
   - `--mint-url <url>` override default mint
 
 ### Mints
 
-- `mints add <url>` - Add mint URL
-- `mints list` - List configured mints
-- `mints info <url>` - Fetch mint metadata
+- `mints add <url>` - Register and trust a Mint
+- `mints list` - List trusted Mints
+- `mints info <url>` - Print Mint information as JSON
+
+### Operations
+
+- `operations show <mint|melt|send|receive> <id>` - Print a Wallet Operation as JSON
+- `operations cancel <melt|send|receive> <id>` - Cancel a prepared Operation and release its
+  reservations
+
+One-shot send, receive, and payment commands prepare an Operation and then execute it. When
+execution fails, the error reads the Operation and reports its state, naming the commands that can
+inspect it and, while it is still prepared, cancel it.
+Execution is never retried automatically. If the state cannot be read, the error retains the
+Operation ID for later inspection. `receive bolt11` instead prepares a pending Mint Operation for
+Coco to redeem after payment.
 
 ### NPC
 
@@ -57,7 +71,10 @@ Use the implicit `http://127.0.0.1:62626` endpoint for local auto-start. The glo
 
 Both `creqA` and `creqB` encodings are accepted. NUT-10 spending conditions are enforced
 by Coco: P2PK-locked requests are paid with locked outputs; unsupported or malformed
-conditions return a 400 before any proofs move.
+conditions are rejected before any proofs move. `x-cashu handle` pays in-band requests only, from
+the configured Mint when it can pay and otherwise from the first payable Mint.
+The command uses the request's amount and unit; amountless requests can be inspected but require
+an explicit amount through the v1 Send API to pay.
 
 ### Daemon control
 

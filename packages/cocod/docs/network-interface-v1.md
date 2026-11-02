@@ -252,9 +252,9 @@ NOT expose the shared administrative credential to browser storage or browser ap
 ## Legacy command compatibility
 
 The existing unversioned command routes move from the Unix socket to the same TCP listener as
-`/v1`. They retain their current request and response shapes temporarily so the CLI's balance,
-send, receive, mint, history, NPC, and X-Cashu commands remain usable while their v1 resources are
-specified.
+`/v1`. They retain their current request and response shapes temporarily for existing clients.
+The CLI now uses v1 Wallet resources for balance, send, receive, mint, history, and X-Cashu
+commands. NPC commands continue to use their existing unversioned routes.
 
 Every unversioned route except the minimal health check requires the same administrative Client
 Credential. Cocod does not run a Unix listener or a second compatibility transport. Later interface
@@ -332,6 +332,13 @@ execute explicitly
 inspect, refresh, or retrieve the result
 ```
 
+The CLI keeps one-shot human commands by issuing separate prepare and execute v1 requests.
+When execution fails after preparation, including when the connection drops, it reads the Operation
+and reports its state, naming it so the person can inspect it with `cocod operations show` and,
+while it is still prepared, cancel it with `cocod operations cancel`. It never retries execution
+automatically. `receive bolt11` creates a Quote and pending Mint Operation for Coco to redeem once
+paid.
+
 ### Lifecycle failures
 
 | Condition                                                | Status | Code                             |
@@ -386,7 +393,13 @@ or keep-alive, and releases subscriptions when the client disconnects. Its appli
 bounded to 256 chunks, including comments; if another chunk arrives while full, it closes and
 releases subscriptions. Already queued chunks may still drain. Clients reconnect and refetch after
 any disconnect. The stream does not publish lifecycle status; use `GET /v1/status` to observe
-session start or shutdown completion. Legacy `/events` and CLI behavior remain available unchanged.
+session start or shutdown completion. Legacy `/events` remains available during migration.
+
+`cocod history --watch` uses `/v1/events`. After each connection opens, it refetches the newest
+history page, then refetches entries named by invalidations and reports each changed document once.
+It reconnects after transport or retryable resource failures, and exits on a non-retryable error
+such as a stopped Coco Session. The reconnect page is bounded by `--limit`; this is a live view,
+not a complete replay of entries created during a long disconnect.
 
 ## Interface description
 
