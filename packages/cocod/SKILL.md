@@ -129,7 +129,8 @@ AGENT rule: `cocod x-cashu handle <request>` can spend funds. Prefer `cocod x-ca
 
 Compatibility: cocod accepts `creqA` and `creqB` requests. Coco enforces NUT-10 spending
 conditions: P2PK-locked requests are paid with locked outputs, and unsupported or malformed
-conditions fail with a 400 before any proofs move.
+conditions are rejected before any proofs move. `x-cashu handle` uses a fixed request amount and
+its declared unit; amountless requests can be inspected but cannot be paid by this CLI command.
 
 ```bash
 # Parse an encoded X-Cashu request from a 402 response header
@@ -149,10 +150,10 @@ Typical flow:
 ### Mints
 
 ```bash
-# Add a mint URL
+# Register and trust a Mint
 cocod mints add <url>
 
-# List configured mints
+# List trusted Mints
 cocod mints list
 
 # Get mint information
@@ -174,7 +175,25 @@ cocod npc username <name>
 cocod npc username <name> --confirm
 ```
 
+### Recovering a Failed Payment
+
+When `send`, `receive`, or `x-cashu handle` fails after preparing an Operation, the error reports the Operation's ID and state. A failed payment may still have reached the Mint, so inspect the Operation before retrying or cancelling.
+
+AGENT rule: surface the reported state to the user and ask permission before cancelling, unless already instructed. Do not rerun a failed payment command while its Operation is `executing` or `pending`.
+
+If the state could not be read, keep the Operation ID and inspect it when the connection returns before deciding what to do next. The CLI never retries execution automatically.
+
+```bash
+# Show an Operation (type: mint, melt, send, or receive)
+cocod operations show <type> <id>
+
+# Cancel a prepared Operation and release its reservations (type: melt, send, or receive)
+cocod operations cancel <type> <id>
+```
+
 ### History
+
+History watch refetches the newest page after reconnecting and refetches entries named by events, suppressing unchanged documents. Reconnect catch-up is bounded by `--limit`; use paginated history for entries beyond that page.
 
 ```bash
 # View wallet history
@@ -183,7 +202,7 @@ cocod history
 # With pagination
 cocod history --offset 0 --limit 20
 
-# Watch for real-time updates
+# Watch for real-time updates; reconnects until a non-retryable failure such as a stopped Coco Session
 cocod history --watch
 
 # Limit with watch

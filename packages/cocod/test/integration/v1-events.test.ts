@@ -7,6 +7,7 @@ import { mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { createV1Client, requestBolt11Receive, watchHistory } from '../../src/cli-shared.js';
 import { AdministrativeCredential, loadClientCredential } from '../../src/credentials.js';
 import { CocodRuntime, type RunningCocoSession } from '../../src/runtime.js';
 import { buildV1Routes, createV1RouteDefinitions, resourceEventSchema } from '../../src/v1/http.js';
@@ -96,6 +97,7 @@ async function startHarness() {
     runtime,
     mint,
     call,
+    client: createV1Client({ url: server.url.toString(), credentialFile: clientFile }),
     rotate: async () => {
       await credentials.rotate();
       return loadClientCredential(clientFile);
@@ -243,4 +245,45 @@ test('HTTP streams retain read-only access but close when wallet:read is removed
   expect(rejected.status).toBe(403);
   expect(rejected.headers.get('cache-control')).toBe('no-store');
   expect(await rejected.json()).toMatchObject({ error: { code: 'forbidden' } });
+});
+
+test('CLI history watch refetches committed entries and terminates after the real Coco Session stops', async () => {
+  const harness = await startHarness();
+  await harness.client.registerMint({ mintUrl: harness.mint.url, trusted: true });
+  const firstEntry = Promise.withResolvers<unknown>();
+  const seen: string[] = [];
+  const watching = watchHistory(harness.client, [], {
+    limit: 5,
+    onEntry: (entry) => {
+      seen.push(entry.id);
+      firstEntry.resolve(entry);
+    },
+    reconnectDelayMs: 0,
+  });
+  // Attach the rejection handler immediately so a terminal error is always owned by the test.
+  const stopped = watching.catch((error: unknown) => error);
+  expect(
+    await requestBolt11Receive(harness.client, { amount: '5', mintUrl: harness.mint.url }),
+  ).toBe('lnbc5fake');
+  expect(await firstEntry.promise).toMatchObject({
+    type: 'mint',
+    amount: '5',
+    unit: 'sat',
+    state: 'pending',
+  });
+  await harness.client.stopSession();
+  await harness.runtime.stopSession();
+  expect(await stopped).toMatchObject({ status: 503, code: 'session_stopped' });
+  expect(new Set(seen).size).toBe(1);
+  expect(seen).toHaveLength(1);
+  // A new watcher fails without delivering any callback after shutdown.
+  await expect(
+    watchHistory(harness.client, [], {
+      limit: 5,
+      onEntry: () => {
+        throw new Error('late history callback');
+      },
+      reconnectDelayMs: 0,
+    }),
+  ).rejects.toMatchObject({ code: 'session_stopped' });
 });

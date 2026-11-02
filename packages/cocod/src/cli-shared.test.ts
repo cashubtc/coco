@@ -5,7 +5,6 @@ import { join } from 'node:path';
 
 import {
   assertHostLocalOperation,
-  callDaemonStream,
   createV1Client,
   DEFAULT_SESSION_TRANSITION_TIMEOUT_MS,
   ensureDaemonRunning,
@@ -133,35 +132,61 @@ test('host-local operations reject an explicit remote endpoint', () => {
   expect(() => assertHostLocalOperation('logs', undefined, {})).not.toThrow();
 });
 
-test('streaming requests attach the file-backed bearer credential', async () => {
+test('event watching authenticates and parses frames split across chunks', async () => {
   const credentialFile = await temporaryCredentialFile('c'.repeat(43));
-  const streamAuthorizations: Array<string | null> = [];
-  const requestedUrls: string[] = [];
+  const authorizations: Array<string | null> = [];
+  const historyEvent = {
+    type: 'mint.updated',
+    timestamp: '2026-10-29T12:00:00.000Z',
+    data: { mintUrl: 'https://mint.example.com' },
+  };
+  const encoded = `: connected\n\ndata: ${JSON.stringify(historyEvent)}\n\n: keep-alive\n\n`;
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
-    const url = input instanceof Request ? input.url : input.toString();
-    requestedUrls.push(url);
-    const path = new URL(url).pathname;
-    if (path === '/events') {
-      streamAuthorizations.push(new Headers(init?.headers).get('authorization'));
-      return new Response('data: {"type":"ready"}\n\n');
-    }
-    if (path === '/v1/status') {
-      return Response.json(lifecycleStatus('running'));
-    }
-    return Response.json({ status: 'ok', interfaceVersion: '1' });
+    authorizations.push(new Headers(init?.headers).get('authorization'));
+    expect(new URL(input instanceof Request ? input.url : input.toString()).pathname).toBe(
+      '/v1/events',
+    );
+    const bytes = new TextEncoder().encode(encoded);
+    return new Response(
+      new ReadableStream({
+        start(controller) {
+          // Split inside the event frame to exercise buffering across reads.
+          controller.enqueue(bytes.slice(0, 30));
+          controller.enqueue(bytes.slice(30));
+          controller.close();
+        },
+      }),
+      { headers: { 'Content-Type': 'text/event-stream' } },
+    );
   }) as unknown as typeof fetch;
 
-  await callDaemonStream('/events', () => {}, {
+  const events: unknown[] = [];
+  await createV1Client({ credentialFile, url: 'https://wallet.example.com' }).watchEvents((event) =>
+    events.push(event),
+  );
+
+  expect(authorizations).toEqual([`Bearer ${'c'.repeat(43)}`]);
+  expect(events).toEqual([historyEvent]);
+});
+
+test('event watching reports v1 errors from the stream request', async () => {
+  const credentialFile = await temporaryCredentialFile('c'.repeat(43));
+  globalThis.fetch = mock(async () =>
+    Response.json(
+      {
+        error: { code: 'wallet_locked', message: 'Wallet Seed Access is locked', retryable: false },
+      },
+      { status: 423 },
+    ),
+  ) as unknown as typeof fetch;
+
+  const watching = createV1Client({
     credentialFile,
     url: 'https://wallet.example.com',
-  });
+  }).watchEvents(() => {});
 
-  expect(streamAuthorizations).toEqual([`Bearer ${'c'.repeat(43)}`]);
-  expect(requestedUrls).toEqual([
-    'https://wallet.example.com/health',
-    'https://wallet.example.com/v1/status',
-    'https://wallet.example.com/events',
-  ]);
+  await expect(watching).rejects.toBeInstanceOf(V1ClientError);
+  await expect(watching).rejects.toMatchObject({ status: 423, code: 'wallet_locked' });
 });
 
 describe('ensureDaemonRunning', () => {
@@ -225,3 +250,67 @@ async function temporaryCredentialFile(credential: string): Promise<string> {
   await writeFile(path, `${credential}\n`, { mode: 0o600 });
   return path;
 }
+
+test('event watching handles CRLF, multiline data and split UTF-8 without delivering incomplete frames', async () => {
+  const credentialFile = await temporaryCredentialFile('c'.repeat(43));
+  const event = {
+    type: 'mint.updated',
+    timestamp: '2026-10-29T12:00:00.000Z',
+    data: { mintUrl: 'https://mint.example/é' },
+  };
+  const encoded = `: connected\r\n\r\ndata:${JSON.stringify(event, null, 2).replaceAll('\n', '\r\ndata: ')}\r\n\r\ndata: incomplete`;
+  globalThis.fetch = mock(
+    async () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            for (const byte of new TextEncoder().encode(encoded))
+              controller.enqueue(new Uint8Array([byte]));
+            controller.close();
+          },
+        }),
+      ),
+  ) as unknown as typeof fetch;
+  const events: unknown[] = [];
+  await createV1Client({ credentialFile }).watchEvents((value) => events.push(value));
+  expect(events).toEqual([event]);
+});
+
+test.each(['parse', 'onOpen', 'onEvent'] as const)(
+  'event watching cancels its response body when %s fails',
+  async (failure) => {
+    const credentialFile = await temporaryCredentialFile('c'.repeat(43));
+    const cancelled = mock(() => {});
+    const data =
+      failure === 'parse'
+        ? '{}'
+        : JSON.stringify({
+            type: 'mint.updated',
+            timestamp: '2026-10-29T12:00:00.000Z',
+            data: { mintUrl: 'https://mint.example' },
+          });
+    globalThis.fetch = mock(
+      async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode(`data: ${data}\n\n`));
+            },
+            cancel: cancelled,
+          }),
+        ),
+    ) as unknown as typeof fetch;
+    const watching = createV1Client({ credentialFile }).watchEvents(
+      () => {
+        if (failure === 'onEvent') throw new Error('callback failed');
+      },
+      {
+        onOpen: () => {
+          if (failure === 'onOpen') throw new Error('callback failed');
+        },
+      },
+    );
+    await expect(watching).rejects.toBeInstanceOf(Error);
+    expect(cancelled).toHaveBeenCalledTimes(1);
+  },
+);
