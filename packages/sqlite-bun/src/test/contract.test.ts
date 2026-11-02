@@ -22,6 +22,7 @@ import {
   runMeltQuoteRepositoryContract,
   runMintSwapPersistenceContract,
   runBatchMintPersistenceContract,
+  createBatchMintFixtures,
 } from '@cashu/coco-adapter-tests';
 import { RepositoryTransactionConflictError } from '@cashu/coco-core/adapter';
 import { runSqlDatabaseContract } from '@cashu/coco-sql-storage/test';
@@ -97,6 +98,33 @@ runKeypairAllocationContract(
 );
 
 runBatchMintPersistenceContract({ createRepositories }, { describe, it, expect });
+
+describe('Batch Mint read consistency', () => {
+  for (const state of ['finalized', 'failed'] as const) {
+    it(`keeps ordered members when an in-flight batch becomes ${state} during a read`, async () => {
+      const { repositories, dispose } = await createRepositories();
+      try {
+        const fixtures = createBatchMintFixtures('concurrent');
+        const repository = repositories.batchMint.operationRepository;
+        await repository.create(fixtures.executing);
+
+        // Start the read before queuing the update; both use the real adapter's scheduling.
+        const [listed] = await Promise.all([
+          repository.listInFlight(),
+          repository.update(fixtures[state]),
+        ]);
+
+        expect(listed).toHaveLength(1);
+        expect(listed[0]?.members).toEqual(
+          [...fixtures.executing.members].sort((a, b) => a.ordinal - b.ordinal),
+        );
+        expect((await repository.getById(fixtures.executing.id))?.state).toBe(state);
+      } finally {
+        await dispose();
+      }
+    });
+  }
+});
 
 runMintSwapPersistenceContract(
   {
