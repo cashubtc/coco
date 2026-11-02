@@ -1,5 +1,6 @@
 ---
 '@cashu/coco-core': patch
+'@cashu/coco-adapter-tests': patch
 ---
 
 Cover receiver redemption input fees when preparing Payment Requests, including unlocked and P2PK
@@ -11,3 +12,6 @@ existing Send fee remains the separate payer-side preparation cost. Ordinary Sen
 already prepared operations keep their existing meaning. The plugin-reachable Send service adds
 `preparePaymentRequest()` for this dedicated preparation policy; existing signatures, repository
 contracts, and persisted formats are unchanged. No adapter or data migration is needed.
+
+The shared adapter integration suite now verifies Payment Request fee coverage and recovery through
+the public API with each adapter's repositories, including the selected custom unit.
