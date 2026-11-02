@@ -271,6 +271,329 @@
           }
         }
       }
+    },
+    "/v1/balances": {
+      "get": {
+        "operationId": "getBalances",
+        "summary": "Spendable, reserved, and total balances by Mint and unit",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:read",
+        "parameters": [
+          {
+            "name": "mintUrl",
+            "in": "query",
+            "required": false,
+            "description": "Restrict balances to these Known Mints.",
+            "schema": {
+              "type": "array",
+              "items": { "type": "string", "format": "uri", "pattern": "^https?://" }
+            },
+            "style": "form",
+            "explode": true
+          },
+          {
+            "name": "unit",
+            "in": "query",
+            "required": false,
+            "description": "Restrict balances to these units.",
+            "schema": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+            "style": "form",
+            "explode": true
+          },
+          {
+            "name": "trustedOnly",
+            "in": "query",
+            "required": false,
+            "description": "Restrict balances to trusted Known Mints.",
+            "schema": { "type": "boolean" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Balances" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/mints": {
+      "get": {
+        "operationId": "getMints",
+        "summary": "List Known Mints",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:read",
+        "parameters": [
+          {
+            "name": "trustedOnly",
+            "in": "query",
+            "required": false,
+            "description": "List only trusted Known Mints.",
+            "schema": { "type": "boolean" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/KnownMints" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "postMints",
+        "summary": "Register a Known Mint, optionally setting its trust",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:admin",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the original result of a repeated identical request within this Cocod Process.",
+            "schema": { "type": "string", "pattern": "^[\\x21-\\x7e]{1,255}$" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/RegisterMintRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/KnownMint" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/mints/trust": {
+      "post": {
+        "operationId": "postMintsTrust",
+        "summary": "Trust a Known Mint",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:admin",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the original result of a repeated identical request within this Cocod Process.",
+            "schema": { "type": "string", "pattern": "^[\\x21-\\x7e]{1,255}$" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/MintTrustRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/KnownMint" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/mints/untrust": {
+      "post": {
+        "operationId": "postMintsUntrust",
+        "summary": "Stop trusting a Known Mint",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:admin",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the original result of a repeated identical request within this Cocod Process.",
+            "schema": { "type": "string", "pattern": "^[\\x21-\\x7e]{1,255}$" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/MintTrustRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/KnownMint" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/mints/info": {
+      "get": {
+        "operationId": "getMintsInfo",
+        "summary": "Mint information of a Known Mint",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:read",
+        "parameters": [
+          {
+            "name": "mintUrl",
+            "in": "query",
+            "required": true,
+            "description": "Known Mint URL.",
+            "schema": { "type": "string", "format": "uri", "pattern": "^https?://" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/MintInformation" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/mints/payment-method-capabilities": {
+      "get": {
+        "operationId": "getMintsPaymentMethodCapabilities",
+        "summary": "Enabled NUT-04 and NUT-05 methods and units of a Known Mint",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:read",
+        "parameters": [
+          {
+            "name": "mintUrl",
+            "in": "query",
+            "required": true,
+            "description": "Known Mint URL.",
+            "schema": { "type": "string", "format": "uri", "pattern": "^https?://" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PaymentMethodCapabilities" }
+              }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/history": {
+      "get": {
+        "operationId": "getHistory",
+        "summary": "List Wallet history, newest first",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:read",
+        "parameters": [
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 0, "maximum": 9007199254740991, "default": 0 }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/HistoryPage" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/history/{historyEntryId}": {
+      "get": {
+        "operationId": "getHistoryHistoryEntryId",
+        "summary": "Read a Wallet history entry",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:read",
+        "parameters": [
+          {
+            "name": "historyEntryId",
+            "in": "path",
+            "required": true,
+            "description": "History entry ID such as `send:{operationId}` or `legacy:{legacyHistoryId}`.",
+            "schema": { "type": "string", "minLength": 1, "maxLength": 512 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/History" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -672,6 +995,263 @@
             "additionalProperties": true,
             "required": [],
             "properties": {}
+          }
+        }
+      },
+      "Balances": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["mintUrl", "unit", "spendable", "reserved", "total"],
+              "properties": {
+                "mintUrl": {
+                  "type": "string",
+                  "format": "uri",
+                  "pattern": "^https?://",
+                  "maxLength": 2048
+                },
+                "unit": { "type": "string", "minLength": 1, "maxLength": 32 },
+                "spendable": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+                "reserved": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+                "total": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 }
+              }
+            }
+          }
+        }
+      },
+      "KnownMints": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["mintUrl", "name", "trusted", "createdAt", "updatedAt"],
+              "properties": {
+                "mintUrl": {
+                  "type": "string",
+                  "format": "uri",
+                  "pattern": "^https?://",
+                  "maxLength": 2048
+                },
+                "name": { "type": "string" },
+                "trusted": { "type": "boolean" },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                },
+                "updatedAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                }
+              }
+            }
+          }
+        }
+      },
+      "RegisterMintRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["mintUrl"],
+        "properties": {
+          "mintUrl": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https?://",
+            "maxLength": 2048
+          },
+          "trusted": { "type": "boolean" }
+        }
+      },
+      "KnownMint": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["mintUrl", "name", "trusted", "createdAt", "updatedAt"],
+        "properties": {
+          "mintUrl": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https?://",
+            "maxLength": 2048
+          },
+          "name": { "type": "string" },
+          "trusted": { "type": "boolean" },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+          }
+        }
+      },
+      "MintTrustRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["mintUrl"],
+        "properties": {
+          "mintUrl": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https?://",
+            "maxLength": 2048
+          }
+        }
+      },
+      "MintInformation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["mintUrl", "info"],
+        "properties": {
+          "mintUrl": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https?://",
+            "maxLength": 2048
+          },
+          "info": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": [],
+            "properties": {}
+          }
+        }
+      },
+      "PaymentMethodCapabilities": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["mintUrl", "items"],
+        "properties": {
+          "mintUrl": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https?://",
+            "maxLength": 2048
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["operation", "nut", "method", "unit"],
+              "properties": {
+                "operation": { "enum": ["mint", "melt"] },
+                "nut": { "oneOf": [{ "const": 4 }, { "const": 5 }] },
+                "method": { "type": "string" },
+                "unit": { "type": "string", "minLength": 1, "maxLength": 32 },
+                "minAmount": {
+                  "anyOf": [
+                    { "type": "null" },
+                    { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 }
+                  ]
+                },
+                "maxAmount": {
+                  "anyOf": [
+                    { "type": "null" },
+                    { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 }
+                  ]
+                },
+                "options": {}
+              }
+            }
+          }
+        }
+      },
+      "HistoryPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items", "offset", "limit"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "type",
+                "source",
+                "state",
+                "mintUrl",
+                "unit",
+                "amount",
+                "createdAt",
+                "updatedAt"
+              ],
+              "properties": {
+                "id": { "type": "string", "minLength": 1, "maxLength": 512 },
+                "type": { "enum": ["mint", "melt", "send", "receive"] },
+                "source": { "enum": ["operation", "legacy"] },
+                "operationId": { "type": "string", "minLength": 1, "maxLength": 512 },
+                "quoteId": { "type": "string", "minLength": 1, "maxLength": 512 },
+                "state": { "type": "string" },
+                "mintUrl": { "type": "string" },
+                "unit": { "type": "string", "minLength": 1, "maxLength": 32 },
+                "amount": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                },
+                "updatedAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                }
+              }
+            }
+          },
+          "offset": { "type": "integer", "minimum": 0 },
+          "limit": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "History": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "type",
+          "source",
+          "state",
+          "mintUrl",
+          "unit",
+          "amount",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "type": { "enum": ["mint", "melt", "send", "receive"] },
+          "source": { "enum": ["operation", "legacy"] },
+          "operationId": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "quoteId": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "state": { "type": "string" },
+          "mintUrl": { "type": "string" },
+          "unit": { "type": "string", "minLength": 1, "maxLength": 32 },
+          "amount": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
           }
         }
       }

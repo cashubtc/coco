@@ -10,6 +10,9 @@ import {
 } from './contract.js';
 import { generateV1OpenApiDocument } from './openapi.js';
 import { openApiDocumentSchema } from './resource-schemas.js';
+import { balanceRoutes } from './resources/balances.js';
+import { historyRoutes } from './resources/history.js';
+import { mintRoutes } from './resources/mints.js';
 import { defineResourceRoute, type ResourceRoute } from './resources/shared.js';
 import {
   healthSchema,
@@ -137,7 +140,12 @@ const OPENAPI_ROUTE: ResourceRoute = defineResourceRoute({
 });
 
 /** Routes bound to shared host dependencies, in documentation order. */
-const RESOURCE_ROUTES: readonly ResourceRoute[] = [OPENAPI_ROUTE];
+const RESOURCE_ROUTES: readonly ResourceRoute[] = [
+  OPENAPI_ROUTE,
+  ...balanceRoutes,
+  ...mintRoutes,
+  ...historyRoutes,
+];
 
 /** Returns all v1 route metadata without constructing a runtime or executable handlers. */
 export function createV1RouteMetadata(): Array<V1RouteMetadata> {

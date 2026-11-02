@@ -84,7 +84,7 @@ browser CORS.
 
 ### Response shapes
 
-- The v1 lifecycle resources return typed documents directly. Their errors use
+- The v1 resources return typed documents directly. Their errors use
   `{ "error": { "code": string, "message": string, "retryable": boolean, "details"?: object } }`.
 - The remaining operational legacy routes retain `{ "output": <value> }` success and
   `{ "error": "message" }` error envelopes.
@@ -99,6 +99,14 @@ browser CORS.
 - `POST /v1/admin/session/start`
 - `POST /v1/admin/session/stop`
 - `POST /v1/admin/process/stop`
+- `GET /v1/balances?mintUrl=…&unit=…&trustedOnly=true` (`wallet:read`; repeatable Mint/unit filters)
+- `GET /v1/mints?trustedOnly=true` (`wallet:read`)
+- `POST /v1/mints` `{ mintUrl, trusted? }` (`wallet:admin`; idempotent registration, `200`)
+- `POST /v1/mints/trust` and `/v1/mints/untrust` `{ mintUrl }` (`wallet:admin`; `404` when unknown)
+- `GET /v1/mints/info?mintUrl=…` (`wallet:read`; may refresh stale metadata)
+- `GET /v1/mints/payment-method-capabilities?mintUrl=…` (`wallet:read`)
+- `GET /v1/history?offset=0&limit=20` (`wallet:read`; newest first, maximum limit 100)
+- `GET /v1/history/{historyEntryId}` (`wallet:read`; URL-encoded Operation or legacy history ID)
 - `GET /balance`
 - `POST /receive/cashu`
 - `POST /receive/bolt11`
@@ -117,3 +125,13 @@ browser CORS.
 For the remaining operational legacy request/response details, see `docs/daemon-api.json`. The
 generated OpenAPI description of the implemented v1 routes is `docs/openapi-v1.json`, also
 served at authenticated `GET /v1/openapi.json`. It remains available without a running Coco Session.
+
+The v1 balances, Known Mint, and history routes require a running Coco Session. Mint commands
+accept an optional `Idempotency-Key`. New Known Mints are untrusted by default; re-registration
+without `trusted` preserves an existing trust decision. A committed trust change succeeds even
+when a subsequent metadata refresh fails.
+
+Balances report spendable, reserved, and total amounts as decimal strings for each Mint and unit.
+History returns safe projections without tokens, payment requests, metadata, or error text; list
+responses use `{ items, offset, limit }`. See the
+[Wallet resource contract](network-interface-v1.md#wallet-information-and-known-mints) for details.
