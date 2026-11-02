@@ -11,7 +11,9 @@ import {
   buildV1FallbackHandler,
   buildV1Routes,
   createV1RouteDefinitions,
-  type V1LifecycleRuntime,
+  createV1RouteMetadata,
+  generateV1OpenApiDocument,
+  type V1Runtime,
 } from '../../src/v1/http.js';
 import { deferred } from '../helpers/deferred.js';
 import { createTestLogger } from '../helpers/logger.js';
@@ -42,8 +44,9 @@ test('serves public health and authenticated structured status beside operationa
   };
   const startCompletion = deferred<void>();
   const stopCompletion = deferred<void>();
-  const runtime: V1LifecycleRuntime = {
+  const runtime: V1Runtime = {
     getStatus: () => runtimeStatus,
+    getRunningSession: () => null,
     initializeWallet: async (input) => {
       const requiresPassphrase = Boolean(input.passphrase);
       runtimeStatus = {
@@ -148,6 +151,22 @@ test('serves public health and authenticated structured status beside operationa
       retryable: false,
     },
   });
+
+  const unauthenticatedDescription = await tcpFetch(server, '/v1/openapi.json');
+  expect(unauthenticatedDescription.status).toBe(401);
+  const description = await tcpFetch(server, '/v1/openapi.json', plaintext);
+  expect(description.status).toBe(200);
+  expect(await description.json()).toEqual(
+    generateV1OpenApiDocument(createV1RouteMetadata(), '0.0.17'),
+  );
+  for (const path of ['/balance', '/mints/list', '/history', '/npc/address']) {
+    expect((await tcpFetch(server, path)).status).toBe(401);
+    const legacy = await tcpFetch(server, path, plaintext);
+    expect(legacy.status).toBe(503);
+    expect(await legacy.json()).toEqual({
+      error: "Wallet not initialized. Run 'cocod wallet initialize' first.",
+    });
+  }
 
   const initialize = await tcpFetch(
     server,

@@ -4,10 +4,13 @@ import type { AppLogger } from '../utils/logger.js';
 import {
   defineV1Route,
   V1HttpResponse,
-  type V1LifecycleRuntime,
   type V1RouteDefinition,
   type V1RouteMetadata,
+  type V1Runtime,
 } from './contract.js';
+import { generateV1OpenApiDocument } from './openapi.js';
+import { openApiDocumentSchema } from './resource-schemas.js';
+import { defineResourceRoute, type ResourceRoute } from './resources/shared.js';
 import {
   healthSchema,
   initializeWalletRequestSchema,
@@ -34,8 +37,10 @@ import {
 } from './schema.js';
 
 export * from './contract.js';
+export * from './resource-schemas.js';
 export { buildV1FallbackHandler, buildV1Routes } from './runner.js';
 export * from './schema.js';
+export { generateV1OpenApiDocument, type V1OpenApiDocument } from './openapi.js';
 
 const HEALTH_ROUTE = {
   method: 'GET',
@@ -117,7 +122,24 @@ const STOP_PROCESS_ROUTE = {
   responseCacheControl: null,
 } as const satisfies V1RouteMetadata<ProcessShutdownRequest, ProcessShutdownResponseDocument>;
 
-/** Returns lifecycle route metadata without constructing a runtime or executable handlers. */
+const OPENAPI_ROUTE: ResourceRoute = defineResourceRoute({
+  method: 'GET',
+  path: '/v1/openapi.json',
+  capability: 'wallet:read',
+  summary: 'OpenAPI description of this interface',
+  requestSchema: noBodySchema,
+  responseSchema: openApiDocumentSchema,
+  handler: (_input, _context, { daemonVersion }) =>
+    generateV1OpenApiDocument(createV1RouteMetadata(), daemonVersion) as unknown as Record<
+      string,
+      unknown
+    >,
+});
+
+/** Routes bound to shared host dependencies, in documentation order. */
+const RESOURCE_ROUTES: readonly ResourceRoute[] = [OPENAPI_ROUTE];
+
+/** Returns all v1 route metadata without constructing a runtime or executable handlers. */
 export function createV1RouteMetadata(): Array<V1RouteMetadata> {
   return [
     HEALTH_ROUTE,
@@ -127,16 +149,24 @@ export function createV1RouteMetadata(): Array<V1RouteMetadata> {
     START_SESSION_ROUTE,
     STOP_SESSION_ROUTE,
     STOP_PROCESS_ROUTE,
+    ...RESOURCE_ROUTES.map((route) => route.metadata),
   ];
 }
 
-/** Binds the transport-independent Cocod lifecycle runtime to the v1 route metadata. */
+/** Binds the transport-independent Cocod runtime to every v1 route. */
 export function createV1RouteDefinitions(
-  runtime: V1LifecycleRuntime,
+  runtime: V1Runtime,
   daemonVersion: string,
   processShutdown: Pick<ProcessShutdownCoordinator, 'request'>,
   logger?: AppLogger,
 ): Array<V1RouteDefinition> {
+  const resources = RESOURCE_ROUTES.map((route) =>
+    route.bind({
+      runtime,
+      daemonVersion,
+      logger,
+    }),
+  );
   const health = defineV1Route({
     ...HEALTH_ROUTE,
     handler: () => ({ status: 'ok', interfaceVersion: '1' }),
@@ -200,6 +230,7 @@ export function createV1RouteDefinitions(
     startSession,
     stopSession,
     stopProcess,
+    ...resources,
   ];
 }
 
