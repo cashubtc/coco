@@ -13,7 +13,6 @@ import {
   ProofValidationError,
   UnknownMintError,
 } from '../../models/Error.ts';
-import { assessMintQuoteClaimability } from '../../models/MintQuoteClaimability.ts';
 import type { QuoteIdentity } from '../../models/QuoteIdentity.ts';
 import { createKeyChain } from '../../proofs/KeysetSelection.ts';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
@@ -22,7 +21,6 @@ import type { KeyRingService } from '../../services/KeyRingService.ts';
 import type { MintService } from '../../services/MintService.ts';
 import type { WalletService } from '../../services/WalletService.ts';
 import type { CoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
-import { claimabilityFacts } from '../../transactions/mintQuoteClaims/ScopedMintQuoteClaims.ts';
 import {
   deserializeOutputData,
   generateSubId,
@@ -45,16 +43,19 @@ import {
 
 const BUILT_IN_METHODS = new Set<MintMethod>(['bolt11', 'bolt12', 'onchain']);
 
-/**
- * NUT error codes proving the mint rejected the exact request without issuing. Codes that could
- * follow an earlier issuance of the same request (`10002` outputs already signed, `20002` quote
- * already issued) and unknown codes stay ambiguous, so recovery decides from Restore and a fresh
- * quote check instead.
- */
+/** Definitive rejection of the initial submission only; replay errors cannot exclude prior issuance. */
 const DEFINITIVE_REJECTION_CODES = new Set([
   11005, 11006, 11008, 11009, 11010, 11012, 11014, 11015, 11016, 11017, 12001, 12002, 12003, 20001,
   20003, 20007, 20008, 20009,
 ]);
+
+/**
+ * Replay responses that order Restore after issuance/deduplication. Includes legacy outputs-signed
+ * (10002), current outputs-signed (11003), quote-issued (20002), and CDK's duplicate-output mapping
+ * (20006). The mint must serialize competing exact requests and expose signatures when rejecting
+ * their replay; empty Restore is terminal only under this assumption (ADR-0014).
+ */
+const RESTORE_AFTER_REPLAY_CODES = new Set([10002, 11003, 20002, 20006]);
 
 /**
  * Whether a failed submission shows the mint cannot batch this request at all: `11017` (batch too
@@ -88,7 +89,7 @@ export interface BatchMintOperationServiceDependencies {
   transactionRunner: CoreTransactionRunner;
   batchMintQueries: Pick<BatchMintOperationRepository, 'getById' | 'listByQuote' | 'listInFlight'>;
   proofQueries: Pick<ProofRepository, 'getProofBySecret'>;
-  quoteLifecycle: Pick<QuoteLifecycle, 'getMintQuote' | 'refreshMintQuotesForRecovery'>;
+  quoteLifecycle: Pick<QuoteLifecycle, 'getMintQuote'>;
   mintService: Pick<
     MintService,
     'isTrustedMint' | 'getNut29BatchMintLimit' | 'refreshAndCommitIfStale'
@@ -177,7 +178,7 @@ export class BatchMintOperationService {
         operationId,
         operation: admitted.operation,
       });
-      return await this.submit(admitted.operation);
+      return await this.submit(admitted.operation, 'initial');
     } finally {
       releaseOperation();
     }
@@ -245,9 +246,9 @@ export class BatchMintOperationService {
   }
 
   /**
-   * Recover one operation: saved proofs, then NUT-09 Restore of the persisted outputs, then a fresh
-   * operation-scoped batch quote check whose observations are recorded before acting. Only zero
-   * restored outputs with every member still claimable replays the exact request.
+   * Recover from saved proofs or replay the Exact Operation Request. Ambiguous replay outcomes
+   * stop this run. Only an issuance-related rejection triggers Restore; quote checks cannot prove
+   * which outputs were issued and are not part of recovery.
    */
   async recover(operationId: string): Promise<BatchMintOperation> {
     const release = await this.operationIdLock.acquire(operationId);
@@ -265,18 +266,7 @@ export class BatchMintOperationService {
         return current;
       }
 
-      let restored: Proof[];
-      try {
-        restored = await this.restoreOutputs(current);
-      } catch (error) {
-        return this.defer(current, `Restore unavailable: ${message(error)}`);
-      }
-      if (restored.length > 0) return this.settle(current, restored);
-
-      const decision = await this.assessMembers(current);
-      if (decision.status === 'unresolved') return this.defer(current, decision.error);
-      if (decision.status === 'unclaimable') return this.fail(current, decision.reason);
-      return this.submit(current);
+      return await this.submit(current, 'recovery');
     } finally {
       release();
     }
@@ -327,7 +317,10 @@ export class BatchMintOperationService {
   }
 
   /** Send exactly the persisted request through cashu-ts and settle its outcome. */
-  private async submit(operation: ExecutingBatchMintOperation): Promise<BatchMintOperation> {
+  private async submit(
+    operation: ExecutingBatchMintOperation,
+    context: 'initial' | 'recovery',
+  ): Promise<BatchMintOperation> {
     let proofs: Proof[];
     let submitted = false;
     try {
@@ -362,8 +355,12 @@ export class BatchMintOperationService {
     } catch (error) {
       if (submitted && isBatchMintIncompatibility(error))
         this.markBatchMintUnavailable(operation.mintUrl, operation.method, error);
-      if (error instanceof MintOperationError && DEFINITIVE_REJECTION_CODES.has(error.code))
-        return this.fail(operation, error.message, String(error.code));
+      if (submitted && error instanceof MintOperationError) {
+        if (context === 'initial' && DEFINITIVE_REJECTION_CODES.has(error.code))
+          return this.fail(operation, error.message, String(error.code));
+        if (context === 'recovery' && RESTORE_AFTER_REPLAY_CODES.has(error.code))
+          return this.restoreRejectedReplay(operation, error);
+      }
       return this.defer(operation, message(error));
     }
     return this.settle(operation, proofs);
@@ -448,58 +445,23 @@ export class BatchMintOperationService {
     return (await this.dependencies.batchMintQueries.getById(operation.id)) ?? operation;
   }
 
-  /**
-   * A fresh quote check after zero restored outputs. Any member unclaimable for its amount proves
-   * the atomic request did not issue; malformed or unavailable evidence stays unresolved. Recovery
-   * checks exactly this operation's members through NUT-29 (ADR-0006), recording their Quote
-   * Observations before returning (ADR-0004).
-   */
-  private async assessMembers(
+  /** Restore only after a replay response covered by ADR-0014's issuance ordering assumption. */
+  private async restoreRejectedReplay(
     operation: ExecutingBatchMintOperation,
-  ): Promise<
-    | { status: 'claimable' }
-    | { status: 'unclaimable'; reason: string }
-    | { status: 'unresolved'; error: string }
-  > {
-    const { mintUrl, method } = operation;
-    let quotes;
+    rejection: MintOperationError,
+  ): Promise<BatchMintOperation> {
+    let restored: Proof[];
     try {
-      quotes = await this.dependencies.quoteLifecycle.refreshMintQuotesForRecovery(
-        mintUrl,
-        method,
-        operation.members.map(({ quoteId }) => quoteId),
-      );
+      restored = await this.restoreOutputs(operation);
     } catch (error) {
-      return { status: 'unresolved', error: message(error) };
+      return this.defer(operation, `Restore unresolved after replay rejection: ${message(error)}`);
     }
-    const facts = await this.dependencies.transactionRunner.run(async (tx) => {
-      const all = [];
-      for (const member of operation.members)
-        all.push(
-          await tx.mintQuoteClaims.getFacts(
-            { mintUrl, method, quoteId: member.quoteId },
-            { excludeOperationId: operation.id },
-          ),
-        );
-      return all;
-    });
-    for (const [index, member] of operation.members.entries()) {
-      const assessment = assessMintQuoteClaimability(
-        quotes[index]!,
-        claimabilityFacts(facts[index]!, member.amount),
-      );
-      if (assessment.status === 'invalid')
-        return {
-          status: 'unresolved',
-          error: `Mint quote ${member.quoteId} has invalid claimability accounting`,
-        };
-      if (assessment.status !== 'claimable')
-        return {
-          status: 'unclaimable',
-          reason: `Mint quote ${member.quoteId} is no longer claimable for ${member.amount}`,
-        };
-    }
-    return { status: 'claimable' };
+    if (restored.length > 0) return this.settle(operation, restored);
+    return this.fail(
+      operation,
+      `Replay rejected and Restore returned no signatures: ${rejection.message}`,
+      String(rejection.code),
+    );
   }
 
   private async restoreOutputs(operation: BatchMintOperation): Promise<Proof[]> {
@@ -508,7 +470,9 @@ export class BatchMintOperationService {
       operation.mintUrl,
       operation.unit,
     );
-    return restoreOutputProofs(wallet, metadata.keysets, operation.unit, operation.outputData);
+    return restoreOutputProofs(wallet, metadata.keysets, operation.unit, operation.outputData, {
+      requireComplete: true,
+    });
   }
 
   private async hasSavedOutputs(operation: BatchMintOperation): Promise<boolean> {
