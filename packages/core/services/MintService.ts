@@ -60,6 +60,15 @@ function supportsNut29MintQuoteCheckFromInfo(mintInfo: MintInfo, method: string)
   );
 }
 
+/** NUT-29 `max_batch_size`, capped at Coco's protocol safety cap of 100; malformed limits are 1. */
+function getNut29BatchSizeLimit(mintInfo: MintInfo): number {
+  const nuts = mintInfo.nuts as unknown as Record<string, unknown>;
+  const maxBatchSize = (nuts['29'] as { max_batch_size?: unknown }).max_batch_size;
+  if (maxBatchSize === undefined) return 100;
+  if (!Number.isSafeInteger(maxBatchSize) || Number(maxBatchSize) < 1) return 1;
+  return Math.min(Number(maxBatchSize), 100);
+}
+
 export interface MethodUnitCapability {
   supported: boolean;
   disabled: boolean;
@@ -333,12 +342,18 @@ export class MintService {
   async getNut29MintQuoteCheckLimit(mintUrl: string, method: string): Promise<number> {
     const mintInfo = await this.getMintInfo(normalizeMintUrl(mintUrl));
     if (!supportsNut29MintQuoteCheckFromInfo(mintInfo, method)) return 1;
+    return getNut29BatchSizeLimit(mintInfo);
+  }
 
-    const nuts = mintInfo.nuts as unknown as Record<string, unknown>;
-    const maxBatchSize = (nuts['29'] as { max_batch_size?: unknown }).max_batch_size;
-    if (maxBatchSize === undefined) return 100;
-    if (!Number.isSafeInteger(maxBatchSize) || Number(maxBatchSize) < 1) return 1;
-    return Math.min(Number(maxBatchSize), 100);
+  /**
+   * Returns the safety-capped NUT-29 batch mint limit for a payment method, or `0` when the mint
+   * does not advertise NUT-29 for it. NUT-29 shares its method list and `max_batch_size` between
+   * quote checks and batch minting. Malformed limits return `1`, which admits no batch.
+   */
+  async getNut29BatchMintLimit(mintUrl: string, method: string): Promise<number> {
+    const mintInfo = await this.getMintInfo(normalizeMintUrl(mintUrl));
+    if (!supportsNut29MintQuoteCheckFromInfo(mintInfo, method)) return 0;
+    return getNut29BatchSizeLimit(mintInfo);
   }
 
   /**

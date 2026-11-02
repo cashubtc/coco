@@ -7,6 +7,11 @@ import type {
   MintMethod,
   MintOperation,
 } from '@core/operations/mint';
+import type {
+  ExecutingBatchMintOperation,
+  FailedBatchMintOperation,
+  FinalizedBatchMintOperation,
+} from '../operations/batchMint/BatchMintOperation.ts';
 import type { MeltQuote } from '../models/MeltQuote';
 import type { MintQuote } from '../models/MintQuote';
 import type { UnitAmount } from '../amounts.ts';
@@ -94,6 +99,25 @@ export interface CoreEvents {
   'mint-op:executing': { mintUrl: string; operationId: string; operation: MintOperation };
   'mint-op:finalized': { mintUrl: string; operationId: string; operation: FinalizedMintOperation };
   'mint-op:failed': { mintUrl: string; operationId: string; operation: FailedMintOperation };
+  /**
+   * Batch Mint lifecycle, published after commit with the ordered members. Batches never emit
+   * `mint-op:*` events for their member quotes.
+   */
+  'batch-mint-op:executing': {
+    mintUrl: string;
+    operationId: string;
+    operation: ExecutingBatchMintOperation;
+  };
+  'batch-mint-op:finalized': {
+    mintUrl: string;
+    operationId: string;
+    operation: FinalizedBatchMintOperation;
+  };
+  'batch-mint-op:failed': {
+    mintUrl: string;
+    operationId: string;
+    operation: FailedBatchMintOperation;
+  };
   'subscriptions:paused': void;
   'subscriptions:resumed': void;
   'auth-session:updated': { mintUrl: string };

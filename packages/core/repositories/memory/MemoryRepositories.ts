@@ -196,6 +196,7 @@ function createMemoryRepositoryState() {
       mintOperationRepository,
       mintQuoteRepository,
       receiveOperationRepository,
+      batchMintOperationRepository,
     }),
     sendOperationRepository,
     meltOperationRepository,

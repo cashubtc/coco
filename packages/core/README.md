@@ -351,6 +351,15 @@ for setup and storage-security guidance.
   `listPending`, `listInFlight`, `checkPayment`, `refresh`, `finalize`, plus
   `recovery` and `diagnostics`. Built-in methods: `bolt11`, `onchain`,
   `bolt12`.
+- `mint.batch`: `execute({ mintUrl, method, members })`, `get`, `listByQuote`,
+  `listInFlight`, plus `recovery`. A Batch Mint Operation claims two or more
+  quotes from one trusted mint, method and unit in one atomic NUT-29 request,
+  with no fallback to standalone mint operations. Admission failures reject
+  before anything is persisted; an ambiguous outcome returns the batch still
+  `executing` for `recovery.run()`. Each member keeps its own `type: 'mint'`
+  history entry (`batchMintOperationId` set to the batch ID), and batches publish
+  `batch-mint-op:executing | finalized | failed` instead of `mint-op:*` events.
+  See [Mint Operations](../docs/pages/mint-operations.md#batch-mint-operations-coco-ops-mint-batch).
 - `melt`: `prepare`, `execute`, `get`, `getByQuote`, `listByQuote`,
   `listPrepared`, `listInFlight`, `refresh`, `cancel`, `reclaim`, `finalize`,
   plus `recovery` and `diagnostics`. Built-in methods: `bolt11`, `bolt12`,
