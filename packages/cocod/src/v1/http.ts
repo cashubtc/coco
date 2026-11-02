@@ -8,6 +8,9 @@ import {
   type V1RouteMetadata,
   type V1Runtime,
 } from './contract.js';
+import { sendOperationRoutes } from './resources/send-operations.js';
+import { receiveOperationRoutes } from './resources/receive-operations.js';
+import { paymentRequestRoutes } from './resources/payment-requests.js';
 import { generateV1OpenApiDocument } from './openapi.js';
 import { openApiDocumentSchema } from './resource-schemas.js';
 import { balanceRoutes } from './resources/balances.js';
@@ -151,6 +154,9 @@ const RESOURCE_ROUTES: readonly ResourceRoute[] = [
   ...quoteRoutes,
   ...mintOperationRoutes,
   ...meltOperationRoutes,
+  ...sendOperationRoutes,
+  ...receiveOperationRoutes,
+  ...paymentRequestRoutes,
 ];
 
 /** Returns all v1 route metadata without constructing a runtime or executable handlers. */

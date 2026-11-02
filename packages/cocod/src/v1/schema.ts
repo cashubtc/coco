@@ -33,6 +33,8 @@ export const V1_ERROR_CODES = [
   'wallet_locked',
   'session_stopped',
   'invalid_operation_state',
+  'unsupported_behavior',
+  'payment_request_unpayable',
   'operation_conflict',
   'operation_in_progress',
   'operation_coordinated',

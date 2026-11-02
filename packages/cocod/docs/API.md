@@ -122,6 +122,32 @@ browser CORS.
 - `GET /npc/address`
 - `POST /npc/username`
 
+### Send, Receive, and outgoing Payment Requests
+
+Capabilities: `read` is `wallet:read`, `admin` is `wallet:admin`; `idem` accepts an optional
+`Idempotency-Key`. Collection reads accept `offset` and `limit`.
+
+- Send: `POST /v1/operations/send` `{ amount, unit?, mintUrl?, forceSwap? }` or
+  `{ source: { type: "payment-request", request }, mintUrl?, amount?, unit? }` (admin, idem, `201`;
+  `unit` requires `amount`); `GET /v1/operations/send/prepared`, `/in-flight`, `/{id}` (read);
+  `GET /v1/operations/send/{id}/result` (admin, no-store; the token);
+  `POST /v1/operations/send/{id}/execute` (admin, idem, no-store; `{ operation, result: { token } }`),
+  `/cancel`, `/refresh`, `/reclaim` (admin, idem).
+- Receive: `POST /v1/operations/receive` `{ token }` (admin, idem, `201`);
+  `GET /v1/operations/receive/prepared`, `/in-flight`, `/{id}` (read);
+  `POST /v1/operations/receive/{id}/execute`, `/cancel`, `/refresh` (admin, idem).
+- `POST /v1/payment-requests/evaluate` `{ request }` (read) resolves an outgoing request's amount,
+  unit, transport, allowed/payable Mints, and spending condition without preparing or paying it.
+
+Creation prepares and persists an Operation without executing it. Ordinary Operation documents omit
+proofs, secrets, output data, and tokens. Only Send execute/result responses return bearer tokens;
+those responses, including errors, use `Cache-Control: no-store`.
+
+Amounts are decimal strings. Payment Request payments support in-band transport only. Without an
+explicit Mint, preparation chooses the configured Mint when payable for the requested or supplied
+amount, otherwise the first payable Mint. See [transfer semantics](network-interface-v1.md#send-receive-and-outgoing-payment-requests)
+for fees, errors, and uncertain outcomes. Existing CLI and legacy endpoints remain available.
+
 For the remaining operational legacy request/response details, see `docs/daemon-api.json`. The
 generated OpenAPI description of the implemented v1 routes is `docs/openapi-v1.json`, also
 served at authenticated `GET /v1/openapi.json`. It remains available without a running Coco Session.
