@@ -40,8 +40,10 @@ test('routes that return secrets or bearer value require wallet:admin and are no
   );
 
   expect(sensitive.map((route) => `${route.method} ${route.path}`).toSorted()).toEqual([
+    'GET /v1/operations/melt/{operationId}/result',
     'POST /v1/admin/wallet/initialize',
     'POST /v1/admin/wallet/recovery-material',
+    'POST /v1/operations/melt/{operationId}/execute',
   ]);
   for (const route of sensitive) {
     expect([route.path, route.capability, route.responseCacheControl]).toEqual([
@@ -74,7 +76,7 @@ test('operation identifiers are unique and every operation documents its errors'
   }
 });
 
-test('describes exactly the implemented lifecycle, Wallet, and interface routes', () => {
+test('describes exactly the implemented v1 routes and components', () => {
   expect(Object.keys(document.paths).toSorted()).toEqual([
     '/health',
     '/v1/admin/process/stop',
@@ -91,11 +93,38 @@ test('describes exactly the implemented lifecycle, Wallet, and interface routes'
     '/v1/mints/trust',
     '/v1/mints/untrust',
     '/v1/openapi.json',
+    '/v1/operations/melt',
+    '/v1/operations/melt/in-flight',
+    '/v1/operations/melt/prepared',
+    '/v1/operations/melt/{operationId}',
+    '/v1/operations/melt/{operationId}/cancel',
+    '/v1/operations/melt/{operationId}/execute',
+    '/v1/operations/melt/{operationId}/reclaim',
+    '/v1/operations/melt/{operationId}/refresh',
+    '/v1/operations/melt/{operationId}/result',
+    '/v1/operations/mint',
+    '/v1/operations/mint/in-flight',
+    '/v1/operations/mint/pending',
+    '/v1/operations/mint/{operationId}',
+    '/v1/operations/mint/{operationId}/execute',
+    '/v1/operations/mint/{operationId}/refresh',
+    '/v1/quotes/melt',
+    '/v1/quotes/melt/pending',
+    '/v1/quotes/melt/{quoteId}',
+    '/v1/quotes/melt/{quoteId}/refresh',
+    '/v1/quotes/mint',
+    '/v1/quotes/mint/pending',
+    '/v1/quotes/mint/{quoteId}',
+    '/v1/quotes/mint/{quoteId}/refresh',
     '/v1/status',
   ]);
   expect(Object.keys(document.components.schemas).toSorted()).toEqual([
     'Balances',
+    'CreateMeltQuoteRequest',
+    'CreateMintQuoteRequest',
+    'EmptyCommandRequest',
     'Error',
+    'ExecuteMeltOperationResponse',
     'Health',
     'History',
     'HistoryPage',
@@ -104,10 +133,21 @@ test('describes exactly the implemented lifecycle, Wallet, and interface routes'
     'KnownMint',
     'KnownMints',
     'LifecycleStatus',
+    'MeltOperation',
+    'MeltOperations',
+    'MeltQuote',
+    'MeltResult',
     'MintInformation',
+    'MintOperation',
+    'MintOperations',
+    'MintQuote',
     'MintTrustRequest',
     'OpenApiDocument',
     'PaymentMethodCapabilities',
+    'PendingMeltQuotes',
+    'PendingMintQuotes',
+    'PrepareMeltOperationRequest',
+    'PrepareMintOperationRequest',
     'ProcessShutdownRequest',
     'ProcessShutdownResponse',
     'RegisterMintRequest',

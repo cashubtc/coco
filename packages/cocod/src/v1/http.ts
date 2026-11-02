@@ -13,6 +13,9 @@ import { openApiDocumentSchema } from './resource-schemas.js';
 import { balanceRoutes } from './resources/balances.js';
 import { historyRoutes } from './resources/history.js';
 import { mintRoutes } from './resources/mints.js';
+import { quoteRoutes } from './resources/quotes.js';
+import { mintOperationRoutes } from './resources/mint-operations.js';
+import { meltOperationRoutes } from './resources/melt-operations.js';
 import { defineResourceRoute, type ResourceRoute } from './resources/shared.js';
 import {
   healthSchema,
@@ -145,6 +148,9 @@ const RESOURCE_ROUTES: readonly ResourceRoute[] = [
   ...balanceRoutes,
   ...mintRoutes,
   ...historyRoutes,
+  ...quoteRoutes,
+  ...mintOperationRoutes,
+  ...meltOperationRoutes,
 ];
 
 /** Returns all v1 route metadata without constructing a runtime or executable handlers. */

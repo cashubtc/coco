@@ -2,11 +2,12 @@
 
 Status: accepted and implemented for the authenticated TCP transport, legacy compatibility,
 Wallet and Coco Session lifecycle, Wallet Recovery Material, OpenAPI description, and Cocod
-Process shutdown described here. The later balance, mint, quote, operation, history, and event resources remain proposed.
+Process shutdown described here, plus Mint/Melt Quotes and Operations. Balance, mint management,
+Send/Receive, Payment Request, history, and v1 event resources remain proposed.
 
 This document specifies cocod's machine-oriented network interface. The implemented first revision
-covers the Wallet and Coco Session lifecycle; later revisions will specify balances, mints, quotes,
-operations, history, and events.
+covers the Wallet and Coco Session lifecycle and Quote-backed Operations; later revisions will
+specify the remaining Wallet resources.
 
 Normative requirements use **MUST**, **MUST NOT**, **SHOULD**, and **MAY**.
 
@@ -22,7 +23,6 @@ Normative requirements use **MUST**, **MUST NOT**, **SHOULD**, and **MAY**.
 
 - Mirroring every method on Coco's `Manager` class.
 - Supporting multiple Wallets in one cocod process.
-- Defining payment, quote, or operation resources in this first revision.
 - Identifying or revoking individual Cocod Clients in the first interface version.
 - Importing a Wallet from existing Wallet Recovery Material through the network interface.
 - Providing native TLS termination.
@@ -300,13 +300,74 @@ local and remote clients use the same HTTP resources and authentication.
 `code` is stable interface data. `message` is diagnostic text and clients MUST NOT branch on it.
 `details` is optional and its schema depends on `code`.
 
+## Quote-backed Wallet resources
+
+### Representation
+
+- Responses are stable cocod documents. They MUST NOT contain proofs, proof secrets, blinded
+  messages, serialized output data, or repository rows. Melt preimages appear only in administrative execute and result responses.
+- Paginated collections accept `offset` and `limit` and return `{ items, offset, limit }`. Pages are
+  not snapshots; concurrent changes may shift later pages.
+- `GET` requests MUST NOT initiate financial transitions.
+- Undeclared query parameters, and repeats of a non-repeatable parameter, return
+  `400 invalid_request` with the parameter name in `details.parameter`.
+- Commands without inputs accept no body or an empty JSON object.
+
+### Preparation and execution
+
+Creating an Operation prepares it as far as its type allows and returns `201 Created`; it MUST NOT
+also execute it. Preparation is not a dry run: it persists the Operation and may reserve proofs.
+Execution is an explicit command. Operation types keep their real Coco states; preparing a Mint
+Operation yields a durable `pending` Operation rather than a renamed `prepared` one.
+
+```text
+create Quote when required
+        |
+        v
+create and prepare Operation ---> inspect amounts, fees, and state ---> cancel when supported
+        |
+        v
+execute explicitly
+        |
+        v
+inspect, refresh, or retrieve the result
+```
+
+### Lifecycle failures
+
+| Condition                                                | Status | Code                             |
+| -------------------------------------------------------- | ------ | -------------------------------- |
+| Operation or Quote is missing                            | 404    | `not_found`                      |
+| Command unavailable in the Operation's current state     | 409    | `invalid_operation_state`        |
+| Operation changed concurrently under its lock            | 409    | `operation_conflict`             |
+| Another command for the Operation is running             | 409    | `operation_in_progress`          |
+| Operation or Quote is coordinated by a Mint Swap         | 409    | `operation_coordinated`          |
+| Selected Mint is unknown or untrusted                    | 409    | `mint_unavailable`               |
+| Coco rejected the Wallet request as invalid              | 400    | `invalid_request`                |
+| Mint answered with a protocol error                      | 409    | `mint_rejected`                  |
+| Mint could not be reached or failed                      | 502    | `mint_unreachable`               |
+| Result is not available in the Operation's current state | 409    | `operation_result_not_available` |
+
+`invalid_operation_state` details carry `operationType`, `operationId`, the observed `state`, and
+`expectedStates`, plus `quoteState` when the Melt Quote's state rather than the Operation's own state
+blocks the command. `mint_rejected` details carry the Mint's NUT error code as `mintErrorCode`, or its
+HTTP status as `mintStatus`.
+
+`mint_unreachable` is retryable, except for commands that may already have reached the Mint, such as
+execute. Their outcome is uncertain: the Operation is authoritative and the client MUST read or
+refresh it before choosing another command.
+
+The daemon uses Bun's maximum idle timeout of 255 seconds so a command waiting on a Mint
+is not disconnected by the 10 second default. A lost response still requires reading or refreshing
+the Operation before retrying. See [the route reference](API.md#v1-quote-backed-operations).
+
 ## Interface description
 
 Authenticated `GET /v1/openapi.json` requires `wallet:read` and returns an OpenAPI 3.1 document
 from the route metadata and runtime schemas. It remains available in every Wallet and Coco
 Session state. The committed copy, [openapi-v1.json](openapi-v1.json), describes only the implemented
-lifecycle, balances, Known Mint, history, and description routes; legacy routes retain their
-separate contract.
+lifecycle, balances, Known Mint, history, Quote-backed Operations, and description routes;
+legacy routes retain their separate contract.
 
 Run `bun run generate:interface` from `packages/cocod` after changing route metadata or schemas.
 `bun run check:interface` and the Cocod tests check the committed document against runtime metadata.

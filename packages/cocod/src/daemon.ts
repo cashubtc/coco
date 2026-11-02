@@ -17,6 +17,12 @@ import {
 import { buildV1FallbackHandler, buildV1Routes, createV1RouteDefinitions } from './v1/http.js';
 import packageJson from '../package.json' with { type: 'json' };
 
+/**
+ * Bun's maximum. Its 10 second default closes the connection of a command still waiting on a Mint,
+ * such as a Lightning payment, while the command keeps running.
+ */
+const HTTP_IDLE_TIMEOUT_SECONDS = 255;
+
 export async function startDaemon() {
   const logger = createDaemonLogger();
   let listener: ListenerConfig;
@@ -103,6 +109,7 @@ export async function startDaemon() {
     server = Bun.serve({
       hostname: listener.hostname,
       port: listener.port,
+      idleTimeout: HTTP_IDLE_TIMEOUT_SECONDS,
       routes: { ...legacyRoutes, ...v1Routes },
       fetch: buildV1FallbackHandler(credentials, legacyFallback, httpLogger),
     });

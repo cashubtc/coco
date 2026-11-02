@@ -27,6 +27,7 @@
     "nostr-tools": "^2.22.1"
   },
   "devDependencies": {
-    "@cashu/cashu-ts": "5.0.0-rc.4"
+    "@cashu/cashu-ts": "5.0.0-rc.4",
+    "fake-bolt11": "0.1.0"
   }
 }
