@@ -14,6 +14,7 @@ import { sha256 } from '@noble/hashes/sha2.js';
 
 type Method = 'bolt11' | 'bolt12' | 'onchain';
 type WireOutput = { id: string; amount: number; B_: string };
+type WireSignature = { id: string; amount: number; C_: string };
 
 export interface FakeMintQuote {
   quote: string;
@@ -45,7 +46,8 @@ export interface BatchMintRequestBody {
  * - `unsupported`: HTTP 404 without a NUT code, as from a mint without the endpoint;
  * - `unparseable` / `wrong-shape`: HTTP 200 with a non-JSON body / without `signatures`;
  * - `unauthorized` / `rate-limited`: HTTP 401 / 429 without processing;
- * - `{ code }`: reject with a NUT error code without issuing.
+ * - `{ code }`: reject with a NUT error code without issuing;
+ * - `{ issueAfter }`: lose the connection while issuance waits for a controlled commit signal.
  */
 export type BatchMintBehavior =
   | 'issue'
@@ -58,7 +60,8 @@ export type BatchMintBehavior =
   | 'wrong-shape'
   | 'unauthorized'
   | 'rate-limited'
-  | { code: number; detail?: string };
+  | { code: number; detail?: string }
+  | { issueAfter: Promise<void> };
 
 export type RestoreBehavior = 'all' | 'none' | 'partial' | 'unavailable';
 
@@ -80,8 +83,11 @@ export class FakeBatchMint {
   readonly batchBehaviors: BatchMintBehavior[] = [];
   restoreBehavior: RestoreBehavior = 'all';
   quoteCheckBehavior: 'ok' | 'unavailable' = 'ok';
-  /** Transform the batch response at the HTTP boundary to exercise recovery evidence failures. */
-  batchQuoteCheckResponse?: (quotes: Record<string, unknown>[]) => unknown;
+  /** Corrupt Restore at the HTTP boundary, preserving the real parser and recovery checks. */
+  restoreResponse?: (response: { outputs: WireOutput[]; signatures: WireSignature[] }) => unknown;
+  restoredProofState: 'UNSPENT' | 'PENDING' | 'SPENT' = 'UNSPENT';
+  onBatchReceived?: () => void;
+  private pendingIssuance?: Promise<unknown>;
   /** `legacy` verifies NUT-20 signatures as mints that predate the amended message do. */
   quoteSignatureFormat: 'amended' | 'legacy' = 'amended';
   nut29: { max_batch_size?: number; methods?: Method[] } | null = {
@@ -191,7 +197,7 @@ export class FakeBatchMint {
       if (this.nut29?.max_batch_size && body.quotes.length > this.nut29.max_batch_size)
         return error(11017, 'batch too large');
       const quotes = (body.quotes as string[]).map((quoteId) => this.quoteResponse(quoteId));
-      return json(this.batchQuoteCheckResponse ? this.batchQuoteCheckResponse(quotes) : quotes);
+      return json(quotes);
     }
     const quoteMatch = path.match(/^\/v1\/mint\/quote\/(\w+)\/(.+)$/);
     if (quoteMatch) {
@@ -222,11 +228,19 @@ export class FakeBatchMint {
       let outputs = (body.outputs as WireOutput[]).filter((output) => this.signed.has(output.B_));
       if (this.restoreBehavior === 'none') outputs = [];
       if (this.restoreBehavior === 'partial') outputs = outputs.slice(0, 1);
-      return json({ outputs, signatures: outputs.map((output) => this.signed.get(output.B_)) });
+      const response = {
+        outputs,
+        signatures: outputs.map((output) => this.signed.get(output.B_)!),
+      };
+      return json(this.restoreResponse ? this.restoreResponse(response) : response);
     }
     if (path === '/v1/checkstate') {
       return json({
-        states: (body.Ys as string[]).map((Y) => ({ Y, state: 'UNSPENT', witness: null })),
+        states: (body.Ys as string[]).map((Y) => ({
+          Y,
+          state: this.restoredProofState,
+          witness: null,
+        })),
       });
     }
     return json({ error: `unhandled ${path}` }, 404);
@@ -239,6 +253,7 @@ export class FakeBatchMint {
     error: (code: number, detail: string) => Response,
   ): Promise<Response> {
     this.batchRequests.push(structuredClone(body));
+    this.onBatchReceived?.();
     const behavior = this.batchBehaviors.shift() ?? 'issue';
     if (behavior === 'network') throw new TypeError('fetch failed');
     if (behavior === 'server') return json({ error: 'internal error' }, 500);
@@ -247,7 +262,13 @@ export class FakeBatchMint {
     if (behavior === 'wrong-shape') return json({ promises: [] });
     if (behavior === 'unauthorized') return json({ error: 'unauthorized' }, 401);
     if (behavior === 'rate-limited') return json({ error: 'slow down' }, 429);
-    if (typeof behavior === 'object') return error(behavior.code, behavior.detail ?? 'rejected');
+    if (typeof behavior === 'object') {
+      if ('code' in behavior) return error(behavior.code, behavior.detail ?? 'rejected');
+      this.pendingIssuance = behavior.issueAfter.then(() => this.issue(method, body));
+      throw new TypeError('connection reset while issuance is processing');
+    }
+    // Model the mint's serialized writes: a replay waits for the original commit.
+    await this.pendingIssuance;
     if (new Set(body.quotes).size !== body.quotes.length) return error(11016, 'duplicate quote');
     if (this.nut29?.max_batch_size && body.quotes.length > this.nut29.max_batch_size)
       return error(11017, 'batch too large');

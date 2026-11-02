@@ -330,18 +330,29 @@ Admission failures throw `BatchMintAdmissionError` (with a `reason`),
 Outcomes:
 
 - `finalized`: the complete proof set is saved, attributed to the batch.
-- `failed`: the mint definitively rejected the exact request; every member's
-  reservation is released and the quotes can be claimed again.
-- `executing`: network errors, timeouts, server errors and malformed or invalid
-  responses are ambiguous. Recovery uses locally saved proofs, then NUT-09
-  Restore of the persisted outputs, then NUT-29 batch quote checks of exactly
-  its members. Checks respect the current advertised batch size, so a reduced
-  limit may require several check requests. Recovery replays the identical
-  issuance request only when nothing was restored and every member is still
-  claimable, and marks the batch `failed` when complete valid observations show
-  a member is no longer claimable. Missing, malformed, stale or unavailable
-  evidence keeps it `executing`; recovery never falls back to individual quote
-  checks.
+- `failed`: the initial submission was definitively rejected, or recovery received a qualifying
+  issuance rejection followed by an empty Restore response. Reservations are released; members
+  can be claimed again if their quotes remain claimable.
+- `executing`: the outcome remains unresolved and reservations are retained.
+
+Recovery first checks for complete locally saved proofs, then replays the exact original batch
+with the same members, amounts and outputs. It does not check quotes or allocate new outputs.
+A complete valid response finalizes. Network errors, timeouts, server errors, malformed responses,
+and other ambiguous replay results end that recovery run without Restore or reservation release.
+
+An issuance-related rejection (outputs already signed, quote already issued, or CDK's duplicate
+output response) triggers Restore of the persisted outputs. Complete valid unspent signatures
+finalize; an explicitly empty response marks the batch failed unless matching proofs are already
+saved locally. Partial, invalid, unavailable, pending or spent results keep it executing for a later
+recovery run. Other replay rejections, such as changed batch limits or insufficient reusable quote
+balance, also remain unresolved; Wallet Restore can recover already issued proofs for subsequent
+local finalization.
+
+The empty-result rule assumes the mint serializes competing requests and exposes committed
+signatures before rejecting a replay for prior issuance. A mint that rejects early or returns stale
+Restore results can cause a false failure requiring separate Wallet Restore. This is an accepted
+mint compatibility assumption, not a timeout-based guarantee. Recovery adds no timer or internal
+retry loop.
 
 Each member keeps its own `type: 'mint'` history entry with its own `quoteId`,
 `paymentRequest` and `amount`, the batch's state, `operationId` and

@@ -429,7 +429,7 @@ cannot deadlock on the coordinator's child locks. Delivery remains best effort, 
 `BatchMintOperationService` coordinates one atomic NUT-29 issuance for an exact ordered group of
 Mint Quotes ([ADR-0014](packages/core/docs/adr/0014-model-batch-minting-as-a-standalone-atomic-operation.md)).
 It receives the shared runner, read-only batch and proof queries, seed loading, the Quote Lifecycle's
-quote checks, mint metadata, and the Wallet factory. Preflight rejects malformed groups,
+canonical quote lookup, mint metadata, and the Wallet factory. Preflight rejects malformed groups,
 untrusted mints and groups the mint's NUT-29 metadata does not admit (a malformed or single-quote
 batch size admits none), takes the mint lock for same-session coordination with legacy output
 allocators, and fixes the ID, keys, seed and timestamp. Admission takes no Quote Identity lock: its
@@ -449,19 +449,23 @@ Submission sends exactly the persisted members, amounts and outputs through cash
 and cashu-ts retries with the legacy NUT-20 message for mints that predate the amended one.
 `applyBatchMintResult`
 validates the complete proof set against the persisted plan and atomically saves the proofs
-(attributed to the batch) and finalizes; it never fabricates remote accounting. Only an allowlisted
-NUT error code that proves non-issuance permits `failBatchMint`, which releases every reservation.
-Codes that may follow an earlier issuance, transport and server errors, malformed responses and
-invalid results keep `executing` through `deferBatchMintRecovery`.
+(attributed to the batch) and finalizes; it never fabricates remote accounting. Initial submission
+may fail on an allowlisted definitive rejection. Recovery treats those errors separately because a
+rejected replay does not disprove an earlier issuance.
 
-Recovery holds the operation lock and uses locally saved proofs first, then NUT-09 Restore of the
-persisted outputs; any restored proofs must form the complete set. With zero restored, a fresh
-quote check of each member records Quote Observations before the coordinator reads claim facts
-excluding the batch's own reservations: any unclaimable member proves non-issuance and fails the
-batch, and only an all-claimable group replays the identical request. Recovery runs with Mint
-recovery at startup and through `ops.mint.batch.recovery.run()`; there is no retry scheduler.
-Recovery is explicit work, so that check is target-isolated (ADR-0006): one single-quote check per
-member, so the session's quote-check batch marker cannot stall recovery.
+Recovery holds the operation lock and uses complete locally saved proofs first, then replays the
+Exact Operation Request. Ambiguous responses end the run with `executing` and its reservations.
+Only the issuance-related codes specified in ADR-0014 lead to NUT-09 Restore. Complete valid unspent
+outputs finalize; an explicitly empty Restore response permits `failBatchMint` under ADR-0014's
+mint ordering assumption. The failure transaction rereads matching local proofs and retains executing
+if any are present, so concurrent Wallet Restore cannot be mistaken for absence. Partial, invalid,
+unavailable or non-unspent results remain unresolved. Replay, Restore and proof-state checks stay
+outside transactions; settlement, failure and deferral each own one `run()`.
+
+There are no recovery quote checks, timer or internal retry loop. Startup and
+`ops.mint.batch.recovery.run()` each make a bounded recovery pass. A mint that returns a qualifying
+rejection before competing issuance completes or serves stale Restore data can violate the accepted
+ordering assumption; this is not a general inference of non-issuance from missing signatures.
 
 Mint Swap creation rejects a destination quote held by an `executing` Batch Mint Operation, and
 batch admission rejects quotes an active Mint Swap coordinates. Standalone Mint preparation,

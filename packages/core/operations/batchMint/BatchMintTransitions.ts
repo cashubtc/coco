@@ -191,11 +191,18 @@ export const applyBatchMintResult = defineTransition<
   return { operation, proofs: candidates, changed: true };
 });
 
-/** Call only with positive non-issuance evidence; this releases every member's reservation. */
+/** Call with initial rejection or ordered empty Restore evidence (ADR-0014); releases reservations. */
 export const failBatchMint = defineTransition<FailBatchMintInput, FailBatchMintResult>(
   async (tx, input) => {
     const current = await requireOperation(tx, input.operationId);
     if (current.state !== 'executing') return { operation: current, changed: false };
+    // Independently saved proofs contradict absence, even if only part of the set is local.
+    // Recheck in the failure transaction so a concurrent Wallet Restore cannot be overlooked.
+    const saved = await tx.proofs.getProofsBySecrets(
+      current.mintUrl,
+      getSecretsFromSerializedOutputData(current.outputData).keepSecrets,
+    );
+    if (saved.length > 0) return { operation: current, changed: false };
     const operation: FailedBatchMintOperation = {
       ...current,
       state: 'failed',
