@@ -8,6 +8,7 @@ import {
 import type { MintService } from '@core/services/MintService.ts';
 import type { ProofQueries } from '@core/proofs/ProofQueries.ts';
 import { createKeyChain } from '@core/proofs/KeysetSelection.ts';
+import { feeCoveredSendAmount } from '@core/proofs/ProofSelection.ts';
 import type { MintMetadata } from '@core/mints/MintMetadata.ts';
 import {
   applySendResult,
@@ -73,7 +74,6 @@ import { OperationIdLock } from '../OperationIdLock';
 import { normalizeUnitAmount, type UnitAmount } from '../../amounts.ts';
 import type { SendOperationQueries } from './SendOperationQueries.ts';
 import type { SendRemote, SendRemoteSession } from './SendRemote.ts';
-import { feeCoveredSendAmount } from './SendFeePlanning.ts';
 
 // Explicit request-validation rejections from NUT error_codes.md. Unknown errors
 // do not establish non-effect and must retain the request for recovery.
@@ -241,16 +241,19 @@ export class SendOperationService {
         const keys = this.activeKeys(metadata, operation.unit);
         const seed = await this.loadSeed();
         const receiverAmount = coverReceiverFees ? operation.amount : undefined;
-        const plannedOperation = receiverAmount
-          ? {
-              ...operation,
-              amount: feeCoveredSendAmount(
-                receiverAmount,
-                keys,
-                createKeyChain(operation.mintUrl, operation.unit, metadata.keysets),
-              ),
-            }
-          : operation;
+        // P2PK outputs are randomized in preflight. Unlocked Sends defer fee planning until
+        // authoritative selection determines that existing proofs cannot be sent directly.
+        const plannedOperation =
+          receiverAmount && operation.method === 'p2pk'
+            ? {
+                ...operation,
+                amount: feeCoveredSendAmount(
+                  receiverAmount,
+                  keys,
+                  createKeyChain(operation.mintUrl, operation.unit, metadata.keysets),
+                ),
+              }
+            : operation;
         const plan = handler.prepare({
           operation: plannedOperation,
           activeKeys: keys,

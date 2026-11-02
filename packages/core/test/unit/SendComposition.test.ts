@@ -1,4 +1,4 @@
-import { Amount } from '@cashu/cashu-ts';
+import { Amount, OutputData } from '@cashu/cashu-ts';
 import { Database } from 'bun:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { SqlStorageRepositories } from '../../../sql-storage/src/repositories.ts';
@@ -144,6 +144,12 @@ describe.each(['memory', 'sqlite'] as const)('Send transaction composition (%s)'
     sendInput.activeKeys = { id: feeKeysetId, unit: 'sat', keys: testMintKeypairs };
     sendInput.operation.amount = Amount.from(7);
     sendInput.receiverAmount = Amount.from(7);
+    // Fixed P2PK outputs planned without the authoritative redemption fee must still reject.
+    sendInput.fixedSendOutputs = OutputData.createP2PKData(
+      { kind: 'P2PK', data: testMintKeypairs['1'] },
+      Amount.from(7),
+      sendInput.activeKeys,
+    );
     await expect(
       runner.run(async (tx) => {
         // Catching this validation failure must still poison the attempt, including earlier writes.

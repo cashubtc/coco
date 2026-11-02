@@ -3,7 +3,11 @@ import { normalizeUnit } from '@core/amounts.ts';
 import { ProofValidationError } from '@core/models/Error.ts';
 import { createKeyChain } from '@core/proofs/KeysetSelection.ts';
 import type { ProofQueries } from '@core/proofs/ProofQueries.ts';
-import { selectProofInputs, calculateProofFee } from '@core/proofs/ProofSelection.ts';
+import {
+  selectProofInputs,
+  calculateProofFee,
+  type ReceiverFeePolicy,
+} from '@core/proofs/ProofSelection.ts';
 import type { KeysetRepository, ProofRepository } from '@core/repositories';
 import type { CoreProof } from '@core/types.ts';
 import { normalizeMintUrl } from '@core/utils.ts';
@@ -31,8 +35,8 @@ export interface SelectAndReserveProofsInput {
   operationId: string;
   amount: Amount;
   forceSwap: boolean;
-  /** Opt-in net target for Payment Requests; amount remains the planned swap gross value. */
-  receiverAmount?: Amount;
+  /** Opt-in receiver fee coverage for Payment Requests. */
+  receiver?: ReceiverFeePolicy;
 }
 
 export interface SelectAndReserveForMeltInput {
@@ -60,6 +64,7 @@ export interface ScopedProofs extends ProofQueries {
   importRestored(mintUrl: string, proofs: CoreProof[]): Promise<RestoredProofChanges>;
   saveCreated(mintUrl: string, proofs: CoreProof[]): Promise<void>;
   selectAndReserve(input: SelectAndReserveProofsInput): Promise<{
+    sendAmount: Amount;
     proofs: CoreProof[];
     fee: Amount;
     needsSwap: boolean;
@@ -190,7 +195,7 @@ export class RepositoryScopedProofs implements ScopedProofs {
       createKeyChain(input.mintUrl, input.unit, keysets),
       this.selectProofs,
       input.forceSwap,
-      input.receiverAmount,
+      input.receiver,
     );
     const secrets = selected.proofs.map((proof) => proof.secret);
     if (new Set(secrets).size !== secrets.length) {

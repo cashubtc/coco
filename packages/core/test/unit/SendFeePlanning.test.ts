@@ -1,8 +1,11 @@
 import { Amount, selectProofsRGLI } from '@cashu/cashu-ts';
 import { describe, expect, it } from 'bun:test';
-import { feeCoveredSendAmount } from '../../operations/send/SendFeePlanning.ts';
 import { createKeyChain } from '../../proofs/KeysetSelection.ts';
-import { calculateProofFee, selectProofInputs } from '../../proofs/ProofSelection.ts';
+import {
+  calculateProofFee,
+  feeCoveredSendAmount,
+  selectProofInputs,
+} from '../../proofs/ProofSelection.ts';
 import { testMintKeypairs, testMintKeysetId } from '../fixtures/MintMetadata.ts';
 
 const mintUrl = 'https://mint.test';
@@ -48,9 +51,14 @@ describe('Send fee calculations', () => {
       chain,
       selectProofsRGLI,
       false,
-      Amount.from(net),
+      { amount: Amount.from(net) },
     );
-    expect(selected).toEqual({ proofs, fee: Amount.zero(), needsSwap: false });
+    expect(selected).toEqual({
+      proofs,
+      fee: Amount.zero(),
+      needsSwap: false,
+      sendAmount: Amount.from(8),
+    });
   });
 
   it.each([8000, 16000])('rejects a %i-ppk fee that consumes every denomination', (feePpk) => {

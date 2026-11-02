@@ -73,7 +73,12 @@ export const prepareSend = defineTransition<PrepareSendInput, PrepareSendResult>
       operationId: operation.id,
       amount: operation.amount,
       forceSwap: input.forceSwap,
-      receiverAmount: input.receiverAmount,
+      receiver: input.receiverAmount
+        ? {
+            amount: input.receiverAmount,
+            swapOutputKeys: input.fixedSendOutputs ? undefined : input.activeKeys,
+          }
+        : undefined,
     });
     const inputAmount = sumProofs(selected.proofs);
     const inputProofSecrets = selected.proofs.map((proof) => proof.secret);
@@ -86,8 +91,8 @@ export const prepareSend = defineTransition<PrepareSendInput, PrepareSendResult>
         unit: operation.unit,
         activeKeys: input.activeKeys,
         seed: input.seed,
-        keepAmount: inputAmount.subtract(operation.amount.add(selected.fee)),
-        sendAmount: operation.amount,
+        keepAmount: inputAmount.subtract(selected.sendAmount.add(selected.fee)),
+        sendAmount: selected.sendAmount,
         fixedSendOutputs: input.fixedSendOutputs,
       });
       outputData = allocation.outputData;
@@ -108,7 +113,7 @@ export const prepareSend = defineTransition<PrepareSendInput, PrepareSendResult>
 
     const prepared: PreparedSendOperation = {
       ...operation,
-      amount: selected.needsSwap ? operation.amount : inputAmount,
+      amount: selected.sendAmount,
       state: 'prepared',
       revision: 0,
       updatedAt: operation.updatedAt,

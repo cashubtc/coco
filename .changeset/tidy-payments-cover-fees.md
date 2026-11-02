@@ -5,7 +5,9 @@
 
 Cover receiver redemption input fees when preparing Payment Requests, including unlocked and P2PK
 payments, fixed and caller-chosen amounts, and direct or swap-backed sends. Reject incomplete
-funding before delivery and commit the final reservations and output plan atomically.
+funding before delivery and commit the final reservations and output plan atomically. Try existing
+proofs before planning unlocked swap outputs, so an uneconomic active keyset does not prevent a
+direct payment using older proofs that already cover the receiver's fees.
 
 Resolved requests retain their net amount and unit. Send amounts are gross outgoing value; the
 existing Send fee remains the separate payer-side preparation cost. Ordinary Send amounts and
