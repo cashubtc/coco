@@ -137,7 +137,7 @@ export class MintOperationWatcherService {
   /** Declare local ownership immediately; this watcher owns asynchronous activation and errors. */
   registerInterest(interest: QuoteWatchInterest): void {
     if (!this.running) return;
-    void this.watchMintQuotes([interest], interest.owner);
+    this.watchInBackground([interest], interest.owner, 'Failed to register mint quote interest');
   }
 
   /** Withdraw every declaration before waiting for acquisition, trust checks, or cleanup. */
@@ -149,7 +149,18 @@ export class MintOperationWatcherService {
   retryFailedInterests(): void {
     if (!this.running) return;
     const failed = this.records.values().filter((record) => record.failed);
-    void this.watchMintQuotes(failed, null);
+    this.watchInBackground(failed, null, 'Failed to retry mint quote watches');
+  }
+
+  /** Run activation that no caller awaits: the watcher drains it on stop and reports its failures. */
+  private watchInBackground(
+    quotes: WatchableMintQuote[],
+    owner: QuoteWatchOwner | null,
+    message: string,
+  ): void {
+    this.own(this.watchMintQuotes(quotes, owner)).catch((err) => {
+      this.logger?.error(message, { count: quotes.length, err });
+    });
   }
 
   private isActive(generation: number): boolean {
@@ -176,16 +187,14 @@ export class MintOperationWatcherService {
       if (operation.state !== 'pending') return;
       if (!operation.quoteId) return;
 
-      try {
-        void this.own(this.watchOperations([operation as PendingMintOperation]));
-      } catch (err) {
+      this.own(this.watchOperations([operation as PendingMintOperation])).catch((err) => {
         this.logger?.error('Failed to start watching pending mint operation', {
           operationId: operation.id,
           mintUrl: operation.mintUrl,
           quoteId: operation.quoteId,
           err,
         });
-      }
+      });
     });
 
     this.offQuoteUpdated = this.bus.on('mint-quote:updated', async ({ quote }) => {

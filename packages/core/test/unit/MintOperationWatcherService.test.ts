@@ -1359,4 +1359,30 @@ describe('MintOperationWatcherService', () => {
       }),
     );
   });
+
+  it('reports background activation failures from registered interests', async () => {
+    const error = mock(() => {});
+    const logger = new NullLogger();
+    logger.error = error;
+    const watcher = new MintOperationWatcherService(
+      { subscribe } as unknown as SubscriptionManager,
+      { isTrustedMint: mock(async () => true) } as unknown as MintService,
+      { getPendingOperations: mock(async () => []) } as unknown as MintOperationService,
+      makeQuoteLifecycle(),
+      bus,
+      logger,
+    );
+    await watcher.start();
+
+    watcher.registerInterest({
+      mintUrl: 'not a url',
+      method: 'bolt11',
+      quoteId,
+      owner: { kind: 'mint-swap', id: 'invalid', recovery: false },
+    });
+    await watcher.stop();
+
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(subscribe).not.toHaveBeenCalled();
+  });
 });
