@@ -21,6 +21,8 @@ import type { Logger } from '../../logging/Logger';
 import { generateSubId, normalizeMintUrl } from '../../utils';
 import {
   OperationInProgressError,
+  OperationNotFoundError,
+  OperationStateError,
   ProofValidationError,
   UnknownMintError,
 } from '../../models/Error';
@@ -209,7 +211,7 @@ export class MintOperationService {
     while (true) {
       const operation = await this.dependencies.mintOperationQueries.getById(operationId);
       if (!operation) {
-        throw new Error(`Operation ${operationId} not found`);
+        throw new OperationNotFoundError('mint', operationId);
       }
 
       if (isTerminalOperation(operation)) {
@@ -240,7 +242,13 @@ export class MintOperationService {
       }
 
       if (operation.state !== 'pending') {
-        throw new Error(
+        throw new OperationStateError(
+          {
+            operationType: 'mint',
+            operationId,
+            state: operation.state,
+            expectedStates: ['pending'],
+          },
           `Cannot execute operation ${operationId}: expected state 'pending' but found '${operation.state}'`,
         );
       }
@@ -265,11 +273,18 @@ export class MintOperationService {
       if (operation && isTerminalOperation(operation)) {
         return operation;
       }
-      if (!operation || operation.state !== 'pending') {
-        throw new Error(
-          `Cannot execute operation ${operationId}: expected state 'pending' but found '${
-            operation?.state ?? 'not found'
-          }'`,
+      if (!operation) {
+        throw new OperationNotFoundError('mint', operationId);
+      }
+      if (operation.state !== 'pending') {
+        throw new OperationStateError(
+          {
+            operationType: 'mint',
+            operationId,
+            state: operation.state,
+            expectedStates: ['pending'],
+          },
+          `Cannot execute operation ${operationId}: expected state 'pending' but found '${operation.state}'`,
         );
       }
       if (!(await this.dependencies.mintService.isTrustedMint(operation.mintUrl))) {
@@ -333,7 +348,7 @@ export class MintOperationService {
     await this.assertCanResolve(operationId);
     const operation = await this.dependencies.mintOperationQueries.getById(operationId);
     if (!operation) {
-      throw new Error(`Operation ${operationId} not found`);
+      throw new OperationNotFoundError('mint', operationId);
     }
 
     if (isTerminalOperation(operation)) {
@@ -359,7 +374,13 @@ export class MintOperationService {
       );
     }
 
-    throw new Error(
+    throw new OperationStateError(
+      {
+        operationType: 'mint',
+        operationId,
+        state: operation.state,
+        expectedStates: ['pending', 'executing'],
+      },
       `Cannot finalize operation ${operationId} in state '${operation.state}'. Expected 'pending' or 'executing'.`,
     );
   }
@@ -744,7 +765,7 @@ export class MintOperationService {
       const current = await this.dependencies.mintOperationQueries.getById(operation.id);
       if (!current || current.state !== 'pending') {
         if (current) return current;
-        throw new Error(`Operation ${operation.id} not found`);
+        throw new OperationNotFoundError('mint', operation.id);
       }
 
       const pending = current as PendingMintOperation;
@@ -900,11 +921,18 @@ export class MintOperationService {
   async observePendingOperation(operationId: string): Promise<PendingMintCheckResult> {
     await this.assertCanResolve(operationId);
     const op = await this.getOperation(operationId);
-    if (!op || op.state !== 'pending') {
-      throw new Error(
-        `Cannot check operation ${operationId}: expected state 'pending' but found '${
-          op?.state ?? 'not found'
-        }'`,
+    if (!op) {
+      throw new OperationNotFoundError('mint', operationId);
+    }
+    if (op.state !== 'pending') {
+      throw new OperationStateError(
+        {
+          operationType: 'mint',
+          operationId,
+          state: op.state,
+          expectedStates: ['pending'],
+        },
+        `Cannot check operation ${operationId}: expected state 'pending' but found '${op.state}'`,
       );
     }
     const handler = this.dependencies.handlerProvider.get(op.method);
