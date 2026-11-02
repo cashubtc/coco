@@ -44,6 +44,7 @@
       },
       "devDependencies": {
         "@cashu/cashu-ts": "5.0.0-rc.4",
+        "fake-bolt11": "0.1.0",
       },
       "peerDependencies": {
         "@cashu/coco-core": "workspace:*",

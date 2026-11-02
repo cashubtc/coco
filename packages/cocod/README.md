@@ -123,7 +123,7 @@ upgrading and delete the copy once you're settled.
 
 - CLI: `src/cli.ts`
 - Daemon: `src/daemon.ts`
-- Lifecycle HTTP interface: `src/v1`
+- Lifecycle and Quote-backed Operation HTTP interface: `src/v1`
 - Legacy command routes: `src/routes.ts`
 - Transport: authenticated HTTP over one TCP listener
 
@@ -182,6 +182,20 @@ bun run typecheck
 # Tests
 bun test
 ```
+
+The Quote-backed Operation tests use real Coco services and SQLite. Default tests use an in-process
+HTTP Mint for unpaid Quote and boundary cases. To exercise paid BOLT11 issuance, BOLT11 Melt
+execution, and on-chain result retrieval against an isolated local CDK Mint with the fakewallet backend (automatic test payments):
+
+```bash
+COCOD_TEST_MINT_URL=http://127.0.0.1:<isolated-mint-port> bun test packages/cocod/test/integration/v1-quote-operations-mint.test.ts
+```
+
+Run this command from the repository root after the workspace build. The suite registers and funds
+its Wallet through Coco APIs and `/v1` Quote/Operation routes; it does not need mint-management
+HTTP routes. CDK fakewallet returns an empty BOLT11 preimage; that case returns
+`operation_result_not_available`, while on-chain settlement supplies an outpoint. It is separate
+from the integration runner's package matrix.
 
 ## Docs
 

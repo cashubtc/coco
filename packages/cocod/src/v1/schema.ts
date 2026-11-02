@@ -36,6 +36,7 @@ export const V1_ERROR_CODES = [
   'operation_conflict',
   'operation_in_progress',
   'operation_coordinated',
+  'operation_result_not_available',
   'mint_unavailable',
   'mint_unreachable',
   'mint_rejected',

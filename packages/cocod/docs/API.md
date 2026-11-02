@@ -135,3 +135,36 @@ Balances report spendable, reserved, and total amounts as decimal strings for ea
 History returns safe projections without tokens, payment requests, metadata, or error text; list
 responses use `{ items, offset, limit }`. See the
 [Wallet resource contract](network-interface-v1.md#wallet-information-and-known-mints) for details.
+
+## V1 Quote-backed Operations
+
+All routes below require a running Coco Session. `read` means `wallet:read`, `admin` means
+`wallet:admin`, and `idem` means an optional `Idempotency-Key` header. Every create request
+for a Quote includes the `method` discriminator. Commands without inputs accept no body or `{}`.
+
+Quotes (`{type}` is `mint` or `melt`; a Quote is addressed by `quoteId` and `mintUrl`):
+
+- `POST /v1/quotes/mint` - admin, idem, `201`; `bolt11` `{ amount, unit?, mintUrl?, locked? }`,
+  `bolt12` `{ amount?, unit?, mintUrl?, description? }`, or `onchain` `{ unit?, mintUrl? }`
+- `POST /v1/quotes/melt` - admin, idem, `201`; `bolt11` `{ invoice, amountSats? }`, `bolt12`
+  `{ offer, amountSats? }`, or `onchain` `{ address, amountSats }`, each with `unit?` (the funding
+  unit, default `sat`) and `mintUrl?`. `amountSats` is always denominated in satoshis.
+- `GET /v1/quotes/{type}/pending?method=&offset=&limit=` - read
+- `GET /v1/quotes/{type}/{quoteId}?mintUrl=` - read
+- `POST /v1/quotes/{type}/{quoteId}/refresh?mintUrl=` - admin, idem
+
+Operations (`{id}` is Coco's Operation ID; collections accept `offset` and `limit`):
+
+- Mint: `POST /v1/operations/mint` `{ mintUrl, quoteId, amount }` (admin, idem, `201`, yields a
+  `pending` Operation); `GET /v1/operations/mint/pending`, `/in-flight`, `/{id}` (read);
+  `POST /v1/operations/mint/{id}/execute`, `/refresh` (admin, idem)
+- Melt: `POST /v1/operations/melt` `{ mintUrl, quoteId, feeIndex? }` (admin, idem, `201`;
+  `feeIndex` is required for on-chain Quotes and rejected otherwise);
+  `GET /v1/operations/melt/prepared`, `/in-flight`, `/{id}` (read); `GET /v1/operations/melt/{id}/result`
+  (admin, no-store; the preimage or outpoint); `POST /v1/operations/melt/{id}/execute` (admin, idem,
+  no-store), `/cancel`, `/refresh`, `/reclaim` (admin, idem)
+
+Ordinary documents omit proofs, secrets, output data, raw Mint error text, and payment preimages.
+Melt execute returns `{ operation, result? }`; result reads return the preimage or outpoint only
+when the finalized Operation has one, otherwise `409 operation_result_not_available`.
+The execute and result endpoints return `Cache-Control: no-store` even on errors.
