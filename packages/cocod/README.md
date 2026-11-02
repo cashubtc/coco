@@ -123,7 +123,8 @@ upgrading and delete the copy once you're settled.
 
 - CLI: `src/cli.ts`
 - Daemon: `src/daemon.ts`
-- Routes: `src/routes.ts`
+- Lifecycle HTTP interface: `src/v1`
+- Legacy command routes: `src/routes.ts`
 - Transport: authenticated HTTP over one TCP listener
 
 Defaults:
@@ -185,7 +186,8 @@ bun test
 ## Docs
 
 - [API and command reference](docs/API.md)
-- [Machine-readable daemon contract](docs/daemon-api.json)
+- [OpenAPI description of the implemented v1 interface](docs/openapi-v1.json)
+- [Machine-readable legacy daemon contract](docs/daemon-api.json)
 - [Network interface v1](docs/network-interface-v1.md)
 
 ## License

@@ -93,6 +93,7 @@ browser CORS.
 
 - `GET /health` (public)
 - `GET /v1/status`
+- `GET /v1/openapi.json` (authenticated OpenAPI 3.1 description)
 - `POST /v1/admin/wallet/initialize`
 - `POST /v1/admin/wallet/recovery-material`
 - `POST /v1/admin/session/start`
@@ -114,4 +115,5 @@ browser CORS.
 - `POST /npc/username`
 
 For the remaining operational legacy request/response details, see `docs/daemon-api.json`. The
-generated structured lifecycle description is `docs/lifecycle-api-v1.json`.
+generated OpenAPI description of the implemented v1 routes is `docs/openapi-v1.json`, also
+served at authenticated `GET /v1/openapi.json`. It remains available without a running Coco Session.

@@ -17,7 +17,7 @@ import {
   defineV1Route,
   type LifecycleStatusDocument,
   type RuntimeSchema,
-  type V1LifecycleRuntime,
+  type V1Runtime,
 } from '../../src/v1/http.js';
 import { deferred } from '../helpers/deferred.js';
 import { createTestLogger } from '../helpers/logger.js';
@@ -33,10 +33,11 @@ afterEach(async () => {
 
 describe('v1 HTTP route interface', () => {
   test('declares lifecycle routes with their runtime schemas and capabilities', () => {
+    const lifecyclePaths = /^\/(health|v1\/status|v1\/admin\/.+)$/;
     const routes = createLifecycleTestRouteDefinitions(
       statusRuntime(unconfiguredStatus()),
       '0.0.17',
-    );
+    ).filter((route) => lifecyclePaths.test(route.path));
 
     expect(
       routes.map(
@@ -1014,20 +1015,22 @@ describe('v1 HTTP route interface', () => {
     expect(JSON.stringify(debug.mock.calls)).not.toContain('open sesame');
     expect(debug).toHaveBeenCalledWith('request.received', {
       input: { passphrase: '[REDACTED]', label: 'visible' },
+      params: {},
     });
   });
 });
 
-function statusRuntime(status: CocodStatus): V1LifecycleRuntime {
+function statusRuntime(status: CocodStatus): V1Runtime {
   return lifecycleRuntime(() => status);
 }
 
 function lifecycleRuntime(
   getStatus: () => CocodStatus,
-  overrides: Partial<V1LifecycleRuntime> = {},
-): V1LifecycleRuntime {
+  overrides: Partial<V1Runtime> = {},
+): V1Runtime {
   return {
     getStatus,
+    getRunningSession: () => null,
     initializeWallet: async () => {
       throw new Error('initializeWallet was not expected');
     },

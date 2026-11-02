@@ -1,0 +1,681 @@
+{
+  "openapi": "3.1.0",
+  "info": { "title": "cocod", "version": "0.0.17", "x-interface-version": "1" },
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "getHealth",
+        "security": [],
+        "x-cocod-capability": null,
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Health" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/status": {
+      "get": {
+        "operationId": "getStatus",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:read",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/LifecycleStatus" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/wallet/initialize": {
+      "post": {
+        "operationId": "postAdminWalletInitialize",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:admin",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the original result of a repeated identical request within this Cocod Process.",
+            "schema": { "type": "string", "pattern": "^[\\x21-\\x7e]{1,255}$" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/InitializeWalletRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "headers": { "Cache-Control": { "schema": { "const": "no-store" } } },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/InitializeWalletResponse" }
+              }
+            }
+          },
+          "202": {
+            "description": "Success",
+            "headers": { "Cache-Control": { "schema": { "const": "no-store" } } },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/InitializeWalletResponse" }
+              }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/wallet/recovery-material": {
+      "post": {
+        "operationId": "postAdminWalletRecoveryMaterial",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:admin",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/WalletRecoveryMaterialRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": { "Cache-Control": { "schema": { "const": "no-store" } } },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/WalletRecoveryMaterialResponse" }
+              }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/session/start": {
+      "post": {
+        "operationId": "postAdminSessionStart",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:admin",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the original result of a repeated identical request within this Cocod Process.",
+            "schema": { "type": "string", "pattern": "^[\\x21-\\x7e]{1,255}$" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/StartSessionRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/LifecycleStatus" } }
+            }
+          },
+          "202": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/LifecycleStatus" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/session/stop": {
+      "post": {
+        "operationId": "postAdminSessionStop",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:admin",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the original result of a repeated identical request within this Cocod Process.",
+            "schema": { "type": "string", "pattern": "^[\\x21-\\x7e]{1,255}$" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/StopSessionRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/LifecycleStatus" } }
+            }
+          },
+          "202": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/LifecycleStatus" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/process/stop": {
+      "post": {
+        "operationId": "postAdminProcessStop",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:admin",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the original result of a repeated identical request within this Cocod Process.",
+            "schema": { "type": "string", "pattern": "^[\\x21-\\x7e]{1,255}$" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ProcessShutdownRequest" }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ProcessShutdownResponse" }
+              }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/openapi.json": {
+      "get": {
+        "operationId": "getOpenapiJson",
+        "summary": "OpenAPI description of this interface",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:read",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/OpenApiDocument" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["error"],
+        "properties": {
+          "error": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["code", "message", "retryable"],
+            "properties": {
+              "code": {
+                "enum": [
+                  "unauthenticated",
+                  "forbidden",
+                  "invalid_request",
+                  "not_found",
+                  "method_not_allowed",
+                  "internal_error",
+                  "invalid_idempotency_key",
+                  "idempotency_key_conflict",
+                  "idempotency_capacity_exceeded",
+                  "wallet_already_configured",
+                  "wallet_not_configured",
+                  "passphrase_required",
+                  "wallet_unlock_failed",
+                  "session_transition_in_progress",
+                  "session_restart_required",
+                  "process_shutting_down",
+                  "wallet_locked",
+                  "session_stopped",
+                  "invalid_operation_state",
+                  "operation_conflict",
+                  "operation_in_progress",
+                  "operation_coordinated",
+                  "mint_unavailable",
+                  "mint_unreachable",
+                  "mint_rejected",
+                  "coco_error"
+                ]
+              },
+              "message": { "type": "string" },
+              "retryable": { "type": "boolean" },
+              "details": {
+                "type": "object",
+                "additionalProperties": true,
+                "required": [],
+                "properties": {}
+              }
+            }
+          }
+        }
+      },
+      "Health": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["status", "interfaceVersion"],
+        "properties": { "status": { "const": "ok" }, "interfaceVersion": { "const": "1" } }
+      },
+      "LifecycleStatus": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["daemon", "wallet", "seedAccess", "cocoSession"],
+            "properties": {
+              "daemon": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["version", "interfaceVersion"],
+                "properties": {
+                  "version": { "type": "string" },
+                  "interfaceVersion": { "const": "1" }
+                }
+              },
+              "wallet": { "type": "null" },
+              "seedAccess": { "type": "null" },
+              "cocoSession": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["state", "startedAt", "lastFailure"],
+                "properties": {
+                  "state": { "enum": ["stopped", "starting", "running", "stopping", "failed"] },
+                  "startedAt": {
+                    "anyOf": [
+                      { "type": "null" },
+                      {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                      }
+                    ]
+                  },
+                  "lastFailure": {
+                    "anyOf": [
+                      { "type": "null" },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["code", "message", "occurredAt"],
+                        "properties": {
+                          "code": { "type": "string" },
+                          "message": { "type": "string" },
+                          "occurredAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["daemon", "wallet", "seedAccess", "cocoSession"],
+            "properties": {
+              "daemon": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["version", "interfaceVersion"],
+                "properties": {
+                  "version": { "type": "string" },
+                  "interfaceVersion": { "const": "1" }
+                }
+              },
+              "wallet": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["configuredAt"],
+                "properties": {
+                  "configuredAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  }
+                }
+              },
+              "seedAccess": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["state", "requiresPassphrase"],
+                "properties": {
+                  "state": { "enum": ["locked", "available"] },
+                  "requiresPassphrase": { "type": "boolean" }
+                }
+              },
+              "cocoSession": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["state", "startedAt", "lastFailure"],
+                "properties": {
+                  "state": { "enum": ["stopped", "starting", "running", "stopping", "failed"] },
+                  "startedAt": {
+                    "anyOf": [
+                      { "type": "null" },
+                      {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                      }
+                    ]
+                  },
+                  "lastFailure": {
+                    "anyOf": [
+                      { "type": "null" },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["code", "message", "occurredAt"],
+                        "properties": {
+                          "code": { "type": "string" },
+                          "message": { "type": "string" },
+                          "occurredAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "InitializeWalletRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [],
+        "properties": { "passphrase": { "type": "string", "x-sensitive": true } }
+      },
+      "InitializeWalletResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["generatedMnemonic", "status"],
+        "properties": {
+          "generatedMnemonic": { "type": "string", "x-sensitive": true },
+          "status": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["daemon", "wallet", "seedAccess", "cocoSession"],
+                "properties": {
+                  "daemon": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["version", "interfaceVersion"],
+                    "properties": {
+                      "version": { "type": "string" },
+                      "interfaceVersion": { "const": "1" }
+                    }
+                  },
+                  "wallet": { "type": "null" },
+                  "seedAccess": { "type": "null" },
+                  "cocoSession": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["state", "startedAt", "lastFailure"],
+                    "properties": {
+                      "state": { "enum": ["stopped", "starting", "running", "stopping", "failed"] },
+                      "startedAt": {
+                        "anyOf": [
+                          { "type": "null" },
+                          {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                          }
+                        ]
+                      },
+                      "lastFailure": {
+                        "anyOf": [
+                          { "type": "null" },
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["code", "message", "occurredAt"],
+                            "properties": {
+                              "code": { "type": "string" },
+                              "message": { "type": "string" },
+                              "occurredAt": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["daemon", "wallet", "seedAccess", "cocoSession"],
+                "properties": {
+                  "daemon": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["version", "interfaceVersion"],
+                    "properties": {
+                      "version": { "type": "string" },
+                      "interfaceVersion": { "const": "1" }
+                    }
+                  },
+                  "wallet": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["configuredAt"],
+                    "properties": {
+                      "configuredAt": {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                      }
+                    }
+                  },
+                  "seedAccess": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["state", "requiresPassphrase"],
+                    "properties": {
+                      "state": { "enum": ["locked", "available"] },
+                      "requiresPassphrase": { "type": "boolean" }
+                    }
+                  },
+                  "cocoSession": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["state", "startedAt", "lastFailure"],
+                    "properties": {
+                      "state": { "enum": ["stopped", "starting", "running", "stopping", "failed"] },
+                      "startedAt": {
+                        "anyOf": [
+                          { "type": "null" },
+                          {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                          }
+                        ]
+                      },
+                      "lastFailure": {
+                        "anyOf": [
+                          { "type": "null" },
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["code", "message", "occurredAt"],
+                            "properties": {
+                              "code": { "type": "string" },
+                              "message": { "type": "string" },
+                              "occurredAt": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "WalletRecoveryMaterialRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [],
+        "properties": { "passphrase": { "type": "string", "x-sensitive": true } }
+      },
+      "WalletRecoveryMaterialResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["mnemonic"],
+        "properties": { "mnemonic": { "type": "string", "x-sensitive": true } }
+      },
+      "StartSessionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [],
+        "properties": { "passphrase": { "type": "string", "x-sensitive": true } }
+      },
+      "StopSessionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [],
+        "properties": {}
+      },
+      "ProcessShutdownRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [],
+        "properties": {}
+      },
+      "ProcessShutdownResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["status"],
+        "properties": { "status": { "const": "stopping" } }
+      },
+      "OpenApiDocument": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["openapi", "info", "paths", "components"],
+        "properties": {
+          "openapi": { "const": "3.1.0" },
+          "info": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": [],
+            "properties": {}
+          },
+          "paths": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": [],
+            "properties": {}
+          },
+          "components": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": [],
+            "properties": {}
+          }
+        }
+      }
+    },
+    "securitySchemes": { "clientCredential": { "type": "http", "scheme": "bearer" } }
+  }
+}

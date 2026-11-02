@@ -1,8 +1,8 @@
 # Cocod Network Interface v1
 
 Status: accepted and implemented for the authenticated TCP transport, legacy compatibility,
-Wallet and Coco Session lifecycle, Wallet Recovery Material, and Cocod Process shutdown described
-here. The later balance, mint, quote, operation, history, and event resources remain proposed.
+Wallet and Coco Session lifecycle, Wallet Recovery Material, OpenAPI description, and Cocod
+Process shutdown described here. The later balance, mint, quote, operation, history, and event resources remain proposed.
 
 This document specifies cocod's machine-oriented network interface. The implemented first revision
 covers the Wallet and Coco Session lifecycle; later revisions will specify balances, mints, quotes,
@@ -243,8 +243,9 @@ invalidates every copied credential.
 - Clients send the opaque credential in the `Authorization: Bearer` header.
 - Client credentials MUST be read from a mode-`0600` file rather than command arguments.
 
-Authentication proves which client is calling cocod. It does not by itself grant Wallet Seed
-Access.
+Authentication proves that the bearer has Cocod Owner authority. Because v1 clients share one
+credential, it does not identify which Cocod Client is calling, and it does not by itself grant
+Wallet Seed Access.
 
 Browser clients are outside v1 scope. Cocod does not emit permissive CORS headers and clients MUST
 NOT expose the shared administrative credential to browser storage or browser application code.
@@ -278,6 +279,10 @@ local and remote clients use the same HTTP resources and authentication.
 - Successful responses contain the documented resource directly, not an `{ output }` envelope.
 - Error responses use the common error document below.
 - Sensitive request fields MUST be redacted from structured logs.
+- Undeclared query parameters and repeats of a non-repeatable parameter return
+  `400 invalid_request` with the parameter name in `details.parameter`.
+- Sensitive routes return `Cache-Control: no-store` on successes and errors, including
+  authentication and validation failures.
 
 ```json
 {
@@ -294,6 +299,26 @@ local and remote clients use the same HTTP resources and authentication.
 
 `code` is stable interface data. `message` is diagnostic text and clients MUST NOT branch on it.
 `details` is optional and its schema depends on `code`.
+
+## Interface description
+
+Authenticated `GET /v1/openapi.json` requires `wallet:read` and returns an OpenAPI 3.1 document
+from the route metadata and runtime schemas. It remains available in every Wallet and Coco
+Session state. The committed copy, [openapi-v1.json](openapi-v1.json), describes only the implemented
+lifecycle routes and the description endpoint; legacy routes retain their separate contract.
+
+Run `bun run generate:interface` from `packages/cocod` after changing route metadata or schemas.
+`bun run check:interface` and the Cocod tests check the committed document against runtime metadata.
+Resource families added later should own their schemas alongside their routes, re-exporting shared
+names through `src/v1/resource-schemas.ts` when needed; common schema nodes live in
+`src/v1/schema-nodes.ts`.
+
+Within v1, new routes and optional response fields are additive. Removing or renaming a route or
+field, adding required inputs, or narrowing accepted values requires a new interface version.
+
+The shared Coco error mapper uses typed errors to select stable codes; it never infers codes from
+messages. It exposes fixed diagnostic phrases, preserving underlying errors only as internal causes.
+Resource-specific endpoints and their error contracts arrive with the later resource slices.
 
 ## Health
 
@@ -350,7 +375,7 @@ third-party responses.
 
 Creates the single Wallet owned by this cocod process. This command requires `wallet:admin`.
 
-Proposed request:
+Request:
 
 ```json
 {
@@ -361,7 +386,7 @@ Proposed request:
 Omitting `passphrase` enables unattended Coco Session start. Providing a non-empty passphrase
 requires explicit session start after process restart.
 
-Proposed behavior:
+Behavior:
 
 - The state directory MUST be mode `0700`; secret-bearing files MUST be mode `0600`.
 - Configuration writes MUST be atomic.
@@ -392,7 +417,7 @@ For a Wallet configured with a passphrase:
 
 A Wallet without a passphrase uses an empty JSON object.
 
-Proposed behavior:
+Behavior:
 
 - A Wallet without a passphrase returns its mnemonic to an authenticated administrative client.
 - A Wallet with a passphrase requires and validates that passphrase on every retrieval. The Client
@@ -422,7 +447,7 @@ For a Wallet configured with a passphrase:
 
 A Wallet without a passphrase uses an empty JSON object.
 
-Proposed behavior:
+Behavior:
 
 - When a passphrase is configured, cocod validates it and acquires Wallet Seed Access before
   accepting the transition. Otherwise no unlocking material is required.
@@ -448,7 +473,7 @@ acquired.
 Stops Wallet-dependent work, disposes the Coco Session, and removes seed bytes retained by that
 session from reachable application state. This command requires `wallet:admin`.
 
-Proposed behavior:
+Behavior:
 
 - A running session transitions to `stopping` and returns `202 Accepted` with status.
 - Calling stop while the session is `stopped` is idempotent and returns `200 OK` with status.
@@ -500,7 +525,9 @@ every state.
 ## Concurrency and retries
 
 - Lifecycle mutation requests SHOULD include an `Idempotency-Key` header.
-- Repeating the same key and request returns the original result.
+- Repeating the same key and request returns the original result. Request identity includes the
+  method, concrete path, parsed parameters, and body. A resource availability check takes
+  precedence over replay; lifecycle commands retain their existing replay behavior.
 - Reusing a key with a different request returns `idempotency_key_conflict`.
 - Idempotency records live only for the lifetime of one Cocod Process. After a restart, clients
   reconcile lifecycle state through `GET /v1/status`; cocod does not promise to replay the original
@@ -571,9 +598,10 @@ restore proofs.
 
 After the lifecycle is accepted, extend this document in this order:
 
-1. Common identifiers, amounts, timestamps, pagination, errors, and idempotency.
+1. Resource-specific identifiers, amounts, pagination, and errors on the shared HTTP foundation.
 2. Balance snapshots and mint trust/capability resources.
 3. Mint and Melt Quotes as durable resources.
 4. Mint, Melt, Send, and Receive Operations with explicit lifecycle commands.
 5. Payment requests, history, and safe live events.
-6. Generated OpenAPI and client compatibility policy.
+
+Each slice extends the generated OpenAPI document only when its routes are implemented.
