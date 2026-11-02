@@ -305,7 +305,8 @@ local and remote clients use the same HTTP resources and authentication.
 Authenticated `GET /v1/openapi.json` requires `wallet:read` and returns an OpenAPI 3.1 document
 from the route metadata and runtime schemas. It remains available in every Wallet and Coco
 Session state. The committed copy, [openapi-v1.json](openapi-v1.json), describes only the implemented
-lifecycle routes and the description endpoint; legacy routes retain their separate contract.
+lifecycle, balances, Known Mint, history, and description routes; legacy routes retain their
+separate contract.
 
 Run `bun run generate:interface` from `packages/cocod` after changing route metadata or schemas.
 `bun run check:interface` and the Cocod tests check the committed document against runtime metadata.
@@ -318,7 +319,54 @@ field, adding required inputs, or narrowing accepted values requires a new inter
 
 The shared Coco error mapper uses typed errors to select stable codes; it never infers codes from
 messages. It exposes fixed diagnostic phrases, preserving underlying errors only as internal causes.
-Resource-specific endpoints and their error contracts arrive with the later resource slices.
+The Wallet information and Known Mint routes below use these shared errors.
+
+## Wallet information and Known Mints
+
+These implemented resources require a running Coco Session. Reads require `wallet:read`; Mint
+registration and trust commands require `wallet:admin` and accept an optional `Idempotency-Key`.
+They coexist with the legacy routes during migration.
+
+### Balances
+
+`GET /v1/balances` returns `{ items }`, with one document per Mint and unit containing `mintUrl`,
+`unit`, `spendable`, `reserved`, and `total`. Amounts are decimal strings. Reserved value is ready
+proof value assigned to an Operation; total is spendable plus reserved. Pending, inflight, and
+spent proofs are excluded. Repeatable `mintUrl` and `unit` parameters restrict the result;
+`trustedOnly=true` restricts it to Trusted Mints. Mint URLs are normalized by Coco.
+
+### Known Mints
+
+- `GET /v1/mints?trustedOnly=true` lists only Trusted Mints; omit the filter to list all Known Mints.
+- `POST /v1/mints` accepts `{ mintUrl, trusted? }`, registers a Known Mint, and returns it with
+  `200 OK`. Registration is idempotent. A new Known Mint is untrusted unless the request sets
+  `trusted`; omitting it for an existing Known Mint preserves its trust decision.
+- `POST /v1/mints/trust` and `POST /v1/mints/untrust` accept `{ mintUrl }`. Trusting or untrusting
+  an unknown Mint returns `404 not_found`. A committed trust change succeeds even if Coco's
+  subsequent metadata refresh fails.
+- `GET /v1/mints/info?mintUrl=…` returns `{ mintUrl, info }` for a Known Mint. Coco may refresh stale
+  metadata while resolving this read.
+- `GET /v1/mints/payment-method-capabilities?mintUrl=…` returns `{ mintUrl, items }` containing
+  enabled NUT-04/NUT-05 methods and units. Amount bounds are decimal strings or `null`.
+
+Known Mint documents contain `mintUrl`, `name`, `trusted`, `createdAt`, and `updatedAt`.
+Unknown Mint information or capability reads return `404 not_found` without registering it.
+An unreachable Mint returns `502 mint_unreachable` with `retryable: true` and `Retry-After: 1`.
+
+### History
+
+`GET /v1/history?offset=0&limit=20` returns `{ items, offset, limit }`, newest first. `offset` is
+nonnegative; `limit` is 1–100 and defaults to 20. Equal timestamps retain Coco's descending ID
+order. Pages are not snapshots: concurrent changes may shift subsequent pages.
+
+`GET /v1/history/{historyEntryId}` returns one projected entry, or `404 not_found`. IDs use Coco's
+operation-prefixed form (such as `send:{operationId}`) or `legacy:{legacyHistoryId}`. URL-encode
+the complete ID as one path segment. Malformed IDs or parameters return `400 invalid_request`.
+
+History documents expose ID, type, source, state, Mint URL, unit, decimal-string amount, and UTC
+timestamps, with nonempty Operation and Quote IDs when applicable. They omit tokens, proof
+secrets, payment requests, metadata, and error text. Stored legacy history remains readable;
+entries superseded by current Operations follow Coco's deduplication rules.
 
 ## Health
 

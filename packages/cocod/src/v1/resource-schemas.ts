@@ -47,3 +47,5 @@ export const openApiDocumentSchema = namedSchema<Record<string, unknown>>(
     { additionalProperties: true },
   ),
 );
+
+export * from './resources/wallet-schemas.js';

@@ -74,7 +74,7 @@ test('operation identifiers are unique and every operation documents its errors'
   }
 });
 
-test('describes exactly the implemented lifecycle and interface routes', () => {
+test('describes exactly the implemented lifecycle, Wallet, and interface routes', () => {
   expect(Object.keys(document.paths).toSorted()).toEqual([
     '/health',
     '/v1/admin/process/stop',
@@ -82,18 +82,35 @@ test('describes exactly the implemented lifecycle and interface routes', () => {
     '/v1/admin/session/stop',
     '/v1/admin/wallet/initialize',
     '/v1/admin/wallet/recovery-material',
+    '/v1/balances',
+    '/v1/history',
+    '/v1/history/{historyEntryId}',
+    '/v1/mints',
+    '/v1/mints/info',
+    '/v1/mints/payment-method-capabilities',
+    '/v1/mints/trust',
+    '/v1/mints/untrust',
     '/v1/openapi.json',
     '/v1/status',
   ]);
   expect(Object.keys(document.components.schemas).toSorted()).toEqual([
+    'Balances',
     'Error',
     'Health',
+    'History',
+    'HistoryPage',
     'InitializeWalletRequest',
     'InitializeWalletResponse',
+    'KnownMint',
+    'KnownMints',
     'LifecycleStatus',
+    'MintInformation',
+    'MintTrustRequest',
     'OpenApiDocument',
+    'PaymentMethodCapabilities',
     'ProcessShutdownRequest',
     'ProcessShutdownResponse',
+    'RegisterMintRequest',
     'StartSessionRequest',
     'StopSessionRequest',
     'WalletRecoveryMaterialRequest',
@@ -162,4 +179,23 @@ test('OpenAPI retains path templates, parameter constraints, and optional empty 
     ],
   });
   expect(() => generateV1OpenApiDocument([route, route], 'test')).toThrow('Duplicate route');
+});
+
+test('Wallet routes advertise read/admin boundaries and repeatable balance filters', () => {
+  for (const route of routes.filter(({ path }) =>
+    /^\/v1\/(balances|mints|history)(\/|$)/.test(path),
+  )) {
+    expect(route.capability).toBe(route.method === 'GET' ? 'wallet:read' : 'wallet:admin');
+    expect(route.idempotencyKey).toBe(route.method === 'GET' ? null : 'optional');
+  }
+  expect(document.paths['/v1/balances']!.get).toMatchObject({
+    parameters: [
+      expect.objectContaining({ name: 'mintUrl', in: 'query', explode: true }),
+      expect.objectContaining({ name: 'unit', in: 'query', explode: true }),
+      expect.objectContaining({ name: 'trustedOnly', schema: { type: 'boolean' } }),
+    ],
+  });
+  expect(document.paths['/v1/history/{historyEntryId}']!.get).toMatchObject({
+    parameters: [expect.objectContaining({ name: 'historyEntryId', in: 'path', required: true })],
+  });
 });
