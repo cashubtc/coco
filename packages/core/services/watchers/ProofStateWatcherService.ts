@@ -368,11 +368,11 @@ export class ProofStateWatcherService {
                   : false;
               if (!handledBySend && this.isActive(generation)) {
                 await this.proofs.setProofState(mintUrl, [secret], 'spent');
+                this.logger?.info('Marked inflight proof as spent from mint notification', {
+                  mintUrl,
+                  subId,
+                });
               }
-              this.logger?.info('Marked inflight proof as spent from mint notification', {
-                mintUrl,
-                subId,
-              });
               if (this.isActive(generation)) await this.stopWatching(key);
             } catch (err) {
               this.logger?.error('Failed to mark inflight proof as spent', { mintUrl, subId, err });

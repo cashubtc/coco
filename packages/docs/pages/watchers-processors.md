@@ -96,7 +96,9 @@ once its parent stops and releases it to ordinary processing; an active parent c
 instead. It does not add polling for pending or incomplete quotes.
 
 `initializeExistingPendingOperationsOnStart: false` skips startup discovery while preserving listeners
-for newly pending operations and subsequent quote observations.
+for operations that become pending during this run, including later quote observations for them.
+Operations already pending before the processor started are not tracked, so a quote observation does
+not advance them; use an explicit operation check such as `coco.ops.melt.refresh()` instead.
 
 ## ProofStateWatcher
 
@@ -120,6 +122,11 @@ The same proof-watcher behavior applies when `coco.dispose()` disables it. Neith
 already-started proof updates or Send completion; shutdown is not a completion barrier for those
 operations. Keep caller-owned storage available while such work finishes. Other watchers and
 processors retain their own shutdown behavior.
+
+The Mint and Melt quote watchers instead drain the work they own, including publishing quote events
+from their notifications. Do not await their disable methods or `coco.dispose()` from an awaited
+`mint-quote:updated` or `melt-quote:updated` listener: shutdown would wait on the listener that is
+waiting on shutdown.
 
 ## Pausing and Resuming Subscriptions
 

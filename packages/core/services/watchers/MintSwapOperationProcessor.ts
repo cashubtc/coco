@@ -206,11 +206,12 @@ export class MintSwapOperationProcessor {
     } catch (error) {
       removal = Promise.reject(error);
     }
-    const cleanup = removal.catch(() => {
+    const cleanup = removal.catch((err) => {
       this.logger?.warn('Mint Swap quote interest cleanup failed', {
         operationId: registration.interest.owner.id,
         mintUrl: registration.interest.mintUrl,
         quoteId: registration.interest.quoteId,
+        err,
       });
     });
     this.retiredInterests.add(cleanup);
