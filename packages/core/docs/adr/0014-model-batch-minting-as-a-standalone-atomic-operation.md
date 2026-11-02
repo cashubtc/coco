@@ -12,6 +12,6 @@ replacing a prepared Mint Operation's outputs would break its exact-request reco
 Output Allocation and Mint Quote Reservation commit together as `executing`. Coco submits only those
 exact members, amounts and outputs, signed at submission as a Mint Operation is, never splits them,
 and never falls back to Mint Operations for them.
-Automatic claiming is the planned main consumer in the next slice (#573), where it may
-afterwards claim still-claimable members individually. Members keep per-quote mint history entries so batching does not change what a
+Automatic claiming is the main consumer and may afterwards claim still-claimable members
+individually. Members keep per-quote mint history entries so batching does not change what a
 Wallet's history shows. This supersedes the retired ADR-0009 and ADR-0010.

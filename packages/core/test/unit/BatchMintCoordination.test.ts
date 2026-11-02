@@ -186,8 +186,8 @@ describe('Batch Mint admission races', () => {
     expect(h.mint.quotes.get('b')!.amountIssued).toBe(6);
   });
 
-  {
-    it('keeps standalone automatic claiming away from reserved batch quotes', async () => {
+  for (const batchMintQuotes of [true, false]) {
+    it(`keeps automatic claiming away from reserved quotes with batchMintQuotes: ${batchMintQuotes}`, async () => {
       for (const quote of ['a', 'b'])
         await h.quote({ quote, method: 'bolt11', amount: 10, amountPaid: 10 });
       h.mint.batchBehaviors.push('network');
@@ -199,7 +199,7 @@ describe('Batch Mint admission races', () => {
       expect(executing.state).toBe('executing');
 
       await h.quote({ quote: 'unreserved', method: 'bolt11', amount: 10, amountPaid: 10 });
-      await h.coco.enableMintOperationProcessor();
+      await h.coco.enableMintOperationProcessor({ batchMintQuotes });
       await h.coco.waitForMintOperationProcessor();
 
       expect((await h.coco.ops.mint.batch.get(executing.id))?.state).toBe('executing');
