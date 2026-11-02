@@ -151,6 +151,8 @@ export function runBatchMintPersistenceContract(
         ];
         const invalid: BatchMintOperation[] = [
           { ...fixtures('other').executing, id: existing.id },
+          { ...fixtures('empty').executing, members: [] },
+          { ...fixtures('singleton').executing, members: [first] },
           {
             ...fixtures('duplicate-quote').executing,
             members: [first, { ...second, quoteId: first.quoteId }, third],
@@ -160,6 +162,8 @@ export function runBatchMintPersistenceContract(
           await expectRejects(() => repository.create(operation), expect);
         }
         expect(comparable(await repository.getById(existing.id))).toBe(comparable(existing));
+        expect(await repository.getById('empty')).toBe(null);
+        expect(await repository.getById('singleton')).toBe(null);
         expect(await repository.getById('duplicate-quote')).toBe(null);
         expect(
           await repository.listByQuote({ mintUrl: MINT_URL, quoteId: first.quoteId }),
