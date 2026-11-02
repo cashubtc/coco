@@ -14,6 +14,11 @@ export interface CocoConfig {
   webSocketFactory?: WebSocketFactory;
   plugins?: Plugin[];
   outputDataCreator?: OutputDataCreator;
+  requestRateLimit?: {
+    disabled?: boolean;
+    capacity?: number;
+    refillPerMinute?: number;
+  };
   watchers?: {
     mintOperationWatcher?: {
       disabled?: boolean;
@@ -58,6 +63,7 @@ export interface CocoConfig {
 - webSocketFactory (optional): A factory function that should return a `WebSocketLike` instance that will be used by Coco to establish websocket connections. If the global `WebSocket` is not present and `webSocketFactory` is undefined coco will fallback to polling.
 - plugins (optional): An array of `Plugin` that can be used to inject functionality in Coco. See [Plugins](./plugins.md) for more information.
 - outputDataCreator (optional): A session-wide strategy used only to construct Cashu output material. See [Custom output construction](#custom-output-construction).
+- requestRateLimit (optional): Limits outgoing requests to each mint. See [Request rate limit](#request-rate-limit).
 - watchers (optional): Can be used to disable or configure the available watchers. See [Watchers & Processors](./watchers-processors.md) for more information
 - processors (optional): Can be used to disable or configure the available processors. See [Watchers & Processors](./watchers-processors.md) for more information
 
@@ -69,6 +75,23 @@ recovery, ordinary processors and automatic quote claiming leave children of act
 the parent, so disabling this processor also pauses them; see
 [Mint Swap Operations](https://github.com/cashubtc/coco/blob/master/TRANSACTION_DESIGN.md#mint-swap-operations). Scan defaults are `processIntervalMs: 1000`,
 `sweepIntervalMs: 30000`, and `batchSize: 25`; durable retry deadlines remain authoritative.
+
+## Request rate limit
+
+Coco limits requests to each mint with a token bucket so a busy wallet does not flood a mint.
+By default up to `capacity: 20` requests may be sent at once; after that, requests queue in order and
+are released at `refillPerMinute: 20`. Each mint has its own limit.
+
+```ts
+const coco = await initializeCoco({
+  repo,
+  seedGetter,
+  requestRateLimit: { capacity: 50, refillPerMinute: 120 },
+});
+```
+
+Set `requestRateLimit: { disabled: true }` to send every request immediately. Do this only for a mint
+you operate or test against; public mints may apply their own limits.
 
 ## Custom output construction
 
