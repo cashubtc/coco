@@ -16,6 +16,12 @@ the atomic write set, and reusable capabilities/transitions own its domain invar
 scope type or gateway is required. Scoped repository contracts may directly provide narrow local
 persistence capabilities when another wrapper would add no behavior.
 
+P2PK import and deletion resolve legacy public-key aliases inside the transaction owned by
+`KeyRingService`. Import returns the persisted keypair after commit, preserving its identity and
+derivation metadata, and rejects writes that would overwrite a mint quote key. Read-only lookup
+and signing share the alias algorithm through narrow key access; it cannot open transactions or
+mutate storage.
+
 ## Considered Options
 
 Mandatory gateways provided an explicit committed-result interface but duplicated every transition

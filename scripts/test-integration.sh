@@ -4,9 +4,11 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-BASE_PORT=3338
 MINTD_IMAGE="cashubtc/mintd:0.17.0-rc.0"
 MINT_CONFIG_FILES=()
+MINT_START_ATTEMPTS=5
+# Identifies this run's containers and temp files, so concurrent runs from other worktrees are left alone.
+RUN_ID="$$-${RANDOM}${RANDOM}"
 
 # Platform flag (arm64 hosts need linux/amd64 for mintd image)
 case "$(uname -m)" in
@@ -105,18 +107,26 @@ is_browser_test_package() {
     return 1
 }
 
-# Ensure Playwright browsers are installed
-ensure_playwright_browsers() {
-    log_info "Ensuring Playwright browsers are installed..."
-    cd "$PROJECT_ROOT"
-    bun --cwd packages/indexeddb playwright install --with-deps \
-        chromium firefox webkit 2>/dev/null || {
-        log_warn "Failed to install all browsers, trying without deps..."
-        bun --cwd packages/indexeddb playwright install chromium firefox webkit || {
-            log_error "Failed to install Playwright browsers"
-            return 1
-        }
-    }
+# Check the Playwright browsers that packages/indexeddb/vitest.config.ts selects are installed.
+# Installing them can change system packages, so that stays an explicit step for the caller.
+check_playwright_browsers() {
+    local browsers="chromium"
+    if [ -n "${CI:-}" ]; then
+        browsers="chromium firefox webkit"
+    fi
+
+    cd "$PROJECT_ROOT/packages/indexeddb"
+    # shellcheck disable=SC2016
+    if ! BROWSERS="$browsers" bun -e '
+        import { existsSync } from "node:fs";
+        import * as playwright from "playwright";
+        const isMissing = (name) => !existsSync(playwright[name].executablePath());
+        process.exit(process.env.BROWSERS.split(" ").some(isMissing) ? 1 : 0);
+    '; then
+        log_error "Playwright browsers for the indexeddb tests are not installed. Install them with:"
+        log_error "  bun --cwd packages/indexeddb playwright install $browsers"
+        return 1
+    fi
 }
 
 # Discover integration test files
@@ -138,25 +148,23 @@ list_tests() {
     done
 }
 
-# Start a mint container for a specific package
-start_mint_container() {
-    local package_name=$1
+mint_container_name() {
+    echo "cdk-mint-${RUN_ID}-$1"
+}
+
+# Asks the OS for a free host port. Another process can still claim it before Docker binds it, so
+# start_mint_container retries with a new port.
+find_free_port() {
+    bun -e 'const server = Bun.listen({ hostname: "0.0.0.0", port: 0, socket: { data() {} } }); console.log(server.port); server.stop(true);'
+}
+
+run_mint_container() {
+    local container_name=$1
     local port=$2
     local custom_unit="${3:-}"
-    local container_name="cdk-mint-${package_name}"
-    local mint_url="http://localhost:${port}"
-
-    log_info "Starting mint container for $package_name on port $port..."
-    if [ -n "$custom_unit" ]; then
-        log_info "Mint will support custom unit: $custom_unit"
-    fi
-
-    # Stop and remove existing container if it exists
-    docker stop "$container_name" 2>/dev/null || true
-    docker rm "$container_name" 2>/dev/null || true
 
     if [ -n "$custom_unit" ]; then
-        local config_file="${TMPDIR:-/tmp}/coco-integration-mint-${package_name}-${port}.toml"
+        local config_file="${TMPDIR:-/tmp}/coco-integration-${container_name}.toml"
         write_custom_unit_mint_config "$port" "$custom_unit" "$config_file"
         MINT_CONFIG_FILES+=("$config_file")
 
@@ -181,6 +189,38 @@ start_mint_container() {
             -e CDK_MINTD_MNEMONIC='abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about' \
             "$MINTD_IMAGE"
     fi
+}
+
+# Start a mint container for a specific package and set STARTED_MINT_URL
+start_mint_container() {
+    local package_name=$1
+    local custom_unit="${2:-}"
+    local container_name
+    container_name=$(mint_container_name "$package_name")
+    local port=""
+    local attempt
+
+    if [ -n "$custom_unit" ]; then
+        log_info "Mint will support custom unit: $custom_unit"
+    fi
+
+    for ((attempt = 1; attempt <= MINT_START_ATTEMPTS; attempt++)); do
+        port=$(find_free_port)
+        log_info "Starting mint container for $package_name on port $port..."
+        if run_mint_container "$container_name" "$port" "$custom_unit"; then
+            break
+        fi
+
+        # A failed bind leaves the created container behind, holding the name.
+        docker rm -f "$container_name" >/dev/null 2>&1 || true
+        if [ "$attempt" -eq "$MINT_START_ATTEMPTS" ]; then
+            log_error "Failed to start mint container after $MINT_START_ATTEMPTS attempts"
+            return 1
+        fi
+        log_warn "Mint container failed to start on port $port, retrying with a new port..."
+    done
+
+    local mint_url="http://localhost:${port}"
 
     # Wait for mint to be ready
     log_info "Waiting for mint to be ready..."
@@ -190,6 +230,7 @@ start_mint_container() {
     while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
         if curl -f -s "${mint_url}/v1/info" > /dev/null 2>&1; then
             log_info "Mint is ready!"
+            STARTED_MINT_URL="$mint_url"
             return 0
         fi
 
@@ -208,7 +249,8 @@ start_mint_container() {
 # Stop and remove a mint container
 stop_mint_container() {
     local package_name=$1
-    local container_name="cdk-mint-${package_name}"
+    local container_name
+    container_name=$(mint_container_name "$package_name")
 
     log_info "Stopping mint container for $package_name..."
     docker stop "$container_name" 2>/dev/null || true
@@ -218,12 +260,10 @@ stop_mint_container() {
 # Run a specific integration test
 run_test() {
     local package_name=$1
-    local port=$2
-    local test_pattern="${3:-}"
-    local log_level="${4:-}"
-    local custom_unit="${5:-}"
+    local test_pattern="${2:-}"
+    local log_level="${3:-}"
+    local custom_unit="${4:-}"
     local test_file
-    local mint_url="http://localhost:${port}"
 
     # Find the test file for this package
     test_file=$(discover_integration_tests | grep "^${package_name}|" | cut -d'|' -f2)
@@ -241,9 +281,10 @@ run_test() {
     fi
 
     # Start mint container for this test
-    if ! start_mint_container "$package_name" "$port" "$custom_unit"; then
+    if ! start_mint_container "$package_name" "$custom_unit"; then
         return 1
     fi
+    local mint_url="$STARTED_MINT_URL"
 
     # Package roots are always under packages/<name>, even when the test file
     # lives outside src/test (for example packages/core/test/integration).
@@ -362,7 +403,6 @@ run_all_tests() {
     local failed=0
     local total=0
     local temp_file
-    local port=$BASE_PORT
 
     # Create temp file to store results (avoids subshell variable issues)
     temp_file=$(mktemp)
@@ -371,20 +411,19 @@ run_all_tests() {
     while IFS='|' read -r package test_file; do
         [ -z "$package" ] && continue
         total=$((total + 1))
-        log_test "Running integration tests for: $package (port $port)"
+        log_test "Running integration tests for: $package"
         if [ -n "$test_pattern" ]; then
             log_test "Filtering tests matching: $test_pattern"
         fi
         if [ -n "$log_level" ]; then
             log_test "Log level: $log_level"
         fi
-        if run_test "$package" "$port" "$test_pattern" "$log_level" "$custom_unit"; then
+        if run_test "$package" "$test_pattern" "$log_level" "$custom_unit"; then
             log_info "✓ $package tests passed"
         else
             log_error "✗ $package tests failed"
             failed=$((failed + 1))
         fi
-        port=$((port + 1))
         echo ""
     done < "$temp_file"
 
@@ -399,22 +438,18 @@ run_all_tests() {
     fi
 }
 
-# Cleanup function - stop all mint containers
+# Cleanup function - stop this run's mint containers
 cleanup() {
     log_info "Cleaning up mint containers..."
     cd "$PROJECT_ROOT"
-    # Stop all containers matching the pattern
     local containers
-    containers=$(docker ps -a --filter "name=cdk-mint-" --format "{{.Names}}" 2>/dev/null || true)
+    containers=$(docker ps -a --filter "name=cdk-mint-${RUN_ID}-" --format "{{.Names}}" 2>/dev/null || true)
     if [ -n "$containers" ]; then
         echo "$containers" | while read -r container; do
             [ -n "$container" ] && docker stop "$container" 2>/dev/null || true
             [ -n "$container" ] && docker rm "$container" 2>/dev/null || true
         done
     fi
-    # Also clean up old compose-based container if it exists
-    docker stop cdk-mint 2>/dev/null || true
-    docker rm cdk-mint 2>/dev/null || true
     for config_file in "${MINT_CONFIG_FILES[@]}"; do
         rm -f "$config_file"
     done
@@ -543,8 +578,8 @@ bun run build
 cd "$PROJECT_ROOT/packages/sqlite-bun"
 bun run build
 
-# Check if any browser tests will be run and install Playwright if needed
-check_and_install_playwright() {
+# Check if any browser tests will be run
+uses_browser_tests() {
     if [ "$COMMAND" = "all" ]; then
         # Check all packages for browser tests
         while IFS='|' read -r package test_file; do
@@ -570,9 +605,8 @@ check_and_install_playwright() {
     echo "false"
 }
 
-if [ "$(check_and_install_playwright)" = "true" ]; then
-    if ! ensure_playwright_browsers; then
-        log_error "Failed to install Playwright browsers"
+if [ "$(uses_browser_tests)" = "true" ]; then
+    if ! check_playwright_browsers; then
         exit 1
     fi
 fi
@@ -583,7 +617,7 @@ if [ "$COMMAND" = "all" ]; then
         exit 1
     fi
 else
-    if ! run_test "$COMMAND" "$BASE_PORT" "$TEST_PATTERN" "$LOG_LEVEL" "$CUSTOM_UNIT_VALUE"; then
+    if ! run_test "$COMMAND" "$TEST_PATTERN" "$LOG_LEVEL" "$CUSTOM_UNIT_VALUE"; then
         exit 1
     fi
 fi

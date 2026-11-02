@@ -6,7 +6,7 @@ import {
   type OutputDataLike,
   type SerializedBlindedSignature,
 } from '@cashu/cashu-ts';
-import { describe, it, beforeEach, expect, mock } from 'bun:test';
+import { describe, it, beforeEach, afterEach, expect, mock } from 'bun:test';
 
 import { CocoInitializationError, initializeCoco, type CocoConfig, Manager } from '../../Manager';
 import { PaymentRequestsApi } from '../../api/PaymentRequestsApi';
@@ -29,6 +29,19 @@ describe('initializeCoco', () => {
   let repositories: MemoryRepositories;
   let seedGetter: () => Promise<Uint8Array>;
   let baseConfig: Pick<CocoConfig, 'repo' | 'seedGetter'>;
+
+  // Dispose every Manager a test creates, so its processor timers cannot fire into later suites
+  // that control `setTimeout`.
+  const managers: Manager[] = [];
+  async function createManager(config: CocoConfig): Promise<Manager> {
+    const manager = await initializeCoco(config);
+    managers.push(manager);
+    return manager;
+  }
+
+  afterEach(async () => {
+    await Promise.all(managers.splice(0).map((manager) => manager.dispose()));
+  });
 
   beforeEach(() => {
     repositories = new MemoryRepositories();
@@ -155,7 +168,7 @@ describe('initializeCoco', () => {
         },
       };
 
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         ...disabledRuntime,
         seedGetter: async () => outputCreatorSeed,
@@ -245,7 +258,7 @@ describe('initializeCoco', () => {
       let manager: Manager | undefined;
 
       try {
-        manager = await initializeCoco({
+        manager = await createManager({
           ...baseConfig,
           ...disabledRuntime,
           seedGetter: async () => outputCreatorSeed,
@@ -265,7 +278,7 @@ describe('initializeCoco', () => {
     });
 
     it('should enable all watchers and processors by default', async () => {
-      const manager = await initializeCoco(baseConfig);
+      const manager = await createManager(baseConfig);
 
       // Check that manager is created
       expect(manager).toBeInstanceOf(Manager);
@@ -292,7 +305,7 @@ describe('initializeCoco', () => {
         init: initSpy,
       });
 
-      await initializeCoco({
+      await createManager({
         ...baseConfig,
         repo: mockRepo,
       });
@@ -309,7 +322,7 @@ describe('initializeCoco', () => {
       });
 
       try {
-        await initializeCoco({
+        await createManager({
           ...baseConfig,
           ...disabledRuntime,
           plugins: [
@@ -345,7 +358,7 @@ describe('initializeCoco', () => {
       Manager.prototype.dispose = dispose;
 
       try {
-        await initializeCoco({
+        await createManager({
           ...baseConfig,
           ...disabledRuntime,
         });
@@ -373,7 +386,7 @@ describe('initializeCoco', () => {
       });
 
       try {
-        await initializeCoco({
+        await createManager({
           ...baseConfig,
           ...disabledRuntime,
           plugins: [
@@ -398,7 +411,7 @@ describe('initializeCoco', () => {
     });
 
     it('should expose the dedicated payment requests api', async () => {
-      const manager = await initializeCoco(baseConfig);
+      const manager = await createManager(baseConfig);
 
       expect(manager.paymentRequests).toBeInstanceOf(PaymentRequestsApi);
 
@@ -408,7 +421,7 @@ describe('initializeCoco', () => {
     });
 
     it('should expose the dedicated quotes api', async () => {
-      const manager = await initializeCoco(baseConfig);
+      const manager = await createManager(baseConfig);
 
       expect(manager.quotes).toBeInstanceOf(QuoteApi);
 
@@ -418,7 +431,7 @@ describe('initializeCoco', () => {
     });
 
     it('should allocate keys atomically through the public keyring api', async () => {
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         ...disabledRuntime,
         seedGetter: async () => new Uint8Array(64),
@@ -445,7 +458,7 @@ describe('initializeCoco', () => {
         },
       };
 
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         plugins: [plugin],
         watchers: {
@@ -501,7 +514,7 @@ describe('initializeCoco', () => {
         },
       };
 
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         plugins: [plugin],
         watchers: {
@@ -536,7 +549,7 @@ describe('initializeCoco', () => {
         }),
       );
 
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         watchers: {
           mintOperationWatcher: { disabled: true },
@@ -556,7 +569,7 @@ describe('initializeCoco', () => {
     });
 
     it('projects mint history remote state from canonical quotes', async () => {
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         watchers: {
           mintOperationWatcher: { disabled: true },
@@ -608,7 +621,7 @@ describe('initializeCoco', () => {
     });
 
     it('does not project history for quote-only updates', async () => {
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         watchers: {
           mintOperationWatcher: { disabled: true },
@@ -655,7 +668,7 @@ describe('initializeCoco', () => {
     });
 
     it('should use NullLogger by default', async () => {
-      const manager = await initializeCoco(baseConfig);
+      const manager = await createManager(baseConfig);
 
       expect(manager['logger']).toBeInstanceOf(NullLogger);
       expect(manager.ops.send).toBeDefined();
@@ -670,7 +683,7 @@ describe('initializeCoco', () => {
 
     it('should accept custom logger', async () => {
       const customLogger = new NullLogger();
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         logger: customLogger,
       });
@@ -686,7 +699,7 @@ describe('initializeCoco', () => {
       const counters = { init: 0, ready: 0 };
       const extension = { ok: true };
 
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         plugins: [
           {
@@ -763,7 +776,7 @@ describe('initializeCoco', () => {
         updatedAt: now,
       } satisfies FinalizedReceiveOperation);
 
-      await initializeCoco({
+      await createManager({
         ...baseConfig,
         watchers: {
           mintOperationWatcher: { disabled: true },
@@ -869,7 +882,7 @@ describe('initializeCoco', () => {
 
   describe('melt watcher and settlement lifecycle', () => {
     it('starts melt quote watching and settlement processing by default', async () => {
-      const manager = await initializeCoco(baseConfig);
+      const manager = await createManager(baseConfig);
 
       expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
       expect(manager['meltSettlementProcessor']?.isRunning()).toBe(true);
@@ -962,7 +975,7 @@ describe('initializeCoco', () => {
     });
 
     it('settles a pending melt operation from a canonical melt quote update', async () => {
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         watchers: {
           mintOperationWatcher: { disabled: true },
@@ -1017,250 +1030,36 @@ describe('initializeCoco', () => {
     });
   });
 
-  describe('watchers configuration', () => {
-    it('should disable mintOperationWatcher when explicitly disabled', async () => {
-      const manager = await initializeCoco({
-        ...baseConfig,
-        watchers: {
-          mintOperationWatcher: { disabled: true },
-        },
-      });
+  const components = [
+    'mintOperationWatcher',
+    'proofStateWatcher',
+    'meltQuoteWatcher',
+    'mintOperationProcessor',
+    'meltSettlementProcessor',
+  ] as const;
+  type Component = (typeof components)[number];
 
-      expect(manager['mintOperationWatcher']).toBeUndefined();
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
-      expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
-      expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
-      expect(manager['meltSettlementProcessor']?.isRunning()).toBe(true);
+  function disabling(name: Component): Pick<CocoConfig, 'watchers' | 'processors'> {
+    return name.endsWith('Watcher')
+      ? { watchers: { [name]: { disabled: true } } }
+      : { processors: { [name]: { disabled: true } } };
+  }
 
-      await manager.dispose();
-    });
+  function expectRunningExcept(manager: Manager, disabled: Component): void {
+    for (const name of components) {
+      if (name === disabled) {
+        expect(manager[name]).toBeUndefined();
+      } else {
+        expect(manager[name]?.isRunning()).toBe(true);
+      }
+    }
+  }
 
-    it('should disable proofStateWatcher when explicitly disabled', async () => {
-      const manager = await initializeCoco({
-        ...baseConfig,
-        watchers: {
-          proofStateWatcher: { disabled: true },
-        },
-      });
+  describe('watchers and processors configuration', () => {
+    it.each([...components])('does not start %s when it is disabled', async (name) => {
+      const manager = await createManager({ ...baseConfig, ...disabling(name) });
 
-      expect(manager['proofStateWatcher']).toBeUndefined();
-      expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-      expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
-
-      await manager.disableMintOperationWatcher();
-      await manager.disableMintOperationProcessor();
-    });
-
-    it('should disable meltQuoteWatcher when explicitly disabled', async () => {
-      const manager = await initializeCoco({
-        ...baseConfig,
-        watchers: {
-          meltQuoteWatcher: { disabled: true },
-        },
-      });
-
-      expect(manager['meltQuoteWatcher']).toBeUndefined();
-      expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
-      expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
-      expect(manager['meltSettlementProcessor']?.isRunning()).toBe(true);
-
-      await manager.dispose();
-    });
-
-    it('should disable all watchers when all are explicitly disabled', async () => {
-      const manager = await initializeCoco({
-        ...baseConfig,
-        watchers: {
-          mintOperationWatcher: { disabled: true },
-          proofStateWatcher: { disabled: true },
-          meltQuoteWatcher: { disabled: true },
-        },
-      });
-
-      expect(manager['mintOperationWatcher']).toBeUndefined();
-      expect(manager['proofStateWatcher']).toBeUndefined();
-      expect(manager['meltQuoteWatcher']).toBeUndefined();
-      expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
-      expect(manager['meltSettlementProcessor']?.isRunning()).toBe(true);
-
-      await manager.dispose();
-    });
-
-    it('should pass options to mintOperationWatcher when not disabled', async () => {
-      const manager = await initializeCoco({
-        ...baseConfig,
-        watchers: {
-          mintOperationWatcher: {
-            watchExistingPendingOnStart: false,
-          },
-        },
-      });
-
-      expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-
-      await manager.dispose();
-    });
-
-    it('should enable with options even when disabled is explicitly false', async () => {
-      const manager = await initializeCoco({
-        ...baseConfig,
-        watchers: {
-          mintOperationWatcher: {
-            disabled: false,
-            watchExistingPendingOnStart: true,
-          },
-        },
-      });
-
-      expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-
-      await manager.dispose();
-    });
-
-    it('should pass options to meltQuoteWatcher when not disabled', async () => {
-      const manager = await initializeCoco({
-        ...baseConfig,
-        watchers: {
-          meltQuoteWatcher: {
-            watchExistingPendingQuotesOnStart: false,
-          },
-        },
-      });
-
-      expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
-
-      await manager.dispose();
-    });
-  });
-
-  describe('processors configuration', () => {
-    it('should disable mintOperationProcessor when explicitly disabled', async () => {
-      const manager = await initializeCoco({
-        ...baseConfig,
-        processors: {
-          mintOperationProcessor: { disabled: true },
-        },
-      });
-
-      expect(manager['mintOperationProcessor']).toBeUndefined();
-      expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
-
-      await manager.disableMintOperationWatcher();
-      await manager.disableProofStateWatcher();
-    });
-
-    it('should disable meltSettlementProcessor when explicitly disabled', async () => {
-      const manager = await initializeCoco({
-        ...baseConfig,
-        processors: {
-          meltSettlementProcessor: { disabled: true },
-        },
-      });
-
-      expect(manager['meltSettlementProcessor']).toBeUndefined();
-      expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
-      expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
-      expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
-
-      await manager.dispose();
-    });
-
-    it('should pass options to mintOperationProcessor when not disabled', async () => {
-      const manager = await initializeCoco({
-        ...baseConfig,
-        processors: {
-          mintOperationProcessor: {
-            processIntervalMs: 5000,
-            maxRetries: 3,
-          },
-        },
-      });
-
-      expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
-
-      await manager.dispose();
-    });
-
-    it('should enable with options even when disabled is explicitly false', async () => {
-      const manager = await initializeCoco({
-        ...baseConfig,
-        processors: {
-          mintOperationProcessor: {
-            disabled: false,
-            processIntervalMs: 1000,
-          },
-        },
-      });
-
-      expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
-
-      await manager.dispose();
-    });
-
-    it('should pass options to meltSettlementProcessor when not disabled', async () => {
-      const manager = await initializeCoco({
-        ...baseConfig,
-        processors: {
-          meltSettlementProcessor: {
-            initializeExistingPendingOperationsOnStart: false,
-          },
-        },
-      });
-
-      expect(manager['meltSettlementProcessor']?.isRunning()).toBe(true);
-
-      await manager.dispose();
-    });
-  });
-
-  describe('mixed configuration', () => {
-    it('should handle mixed enabled/disabled watchers and processors', async () => {
-      const manager = await initializeCoco({
-        ...baseConfig,
-        watchers: {
-          mintOperationWatcher: { disabled: true },
-          proofStateWatcher: { disabled: false },
-        },
-        processors: {
-          mintOperationProcessor: { disabled: false },
-        },
-      });
-
-      expect(manager['mintOperationWatcher']).toBeUndefined();
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
-      expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
-
-      await manager.disableProofStateWatcher();
-      await manager.disableMintOperationProcessor();
-    });
-
-    it('should support options with mixed configuration', async () => {
-      const manager = await initializeCoco({
-        ...baseConfig,
-        watchers: {
-          mintOperationWatcher: {
-            watchExistingPendingOnStart: false,
-          },
-          proofStateWatcher: { disabled: true },
-        },
-        processors: {
-          mintOperationProcessor: {
-            processIntervalMs: 10000,
-            maxRetries: 5,
-          },
-        },
-      });
-
-      expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-      expect(manager['proofStateWatcher']).toBeUndefined();
-      expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
-      expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
-      expect(manager['meltSettlementProcessor']?.isRunning()).toBe(true);
-
-      await manager.dispose();
+      expectRunningExcept(manager, name);
     });
   });
 
@@ -1273,7 +1072,7 @@ describe('initializeCoco', () => {
         onInit: pluginInitMock,
       };
 
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         plugins: [plugin],
       });
@@ -1287,7 +1086,7 @@ describe('initializeCoco', () => {
     });
 
     it('should reject duplicate plugin instance registration', async () => {
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         watchers: {
           mintOperationWatcher: { disabled: true },
@@ -1310,7 +1109,7 @@ describe('initializeCoco', () => {
 
   describe('dispose', () => {
     it('should stop owned watchers, processors, and active subscriptions', async () => {
-      const manager = await initializeCoco(baseConfig);
+      const manager = await createManager(baseConfig);
       const subscriptionInternals = manager.subscriptions as unknown as {
         subscriptions: Map<string, unknown>;
         activeByMint: Map<string, Set<string>>;
@@ -1345,7 +1144,7 @@ describe('initializeCoco', () => {
       const onDispose = mock(() => {});
       const cleanup = mock(() => {});
 
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         plugins: [
           {
@@ -1365,7 +1164,7 @@ describe('initializeCoco', () => {
     });
 
     it('should not recreate subscription transports during plugin cleanup', async () => {
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         plugins: [
           {
@@ -1401,7 +1200,7 @@ describe('initializeCoco', () => {
     });
 
     it('should not restart background work after disposal', async () => {
-      const manager = await initializeCoco(baseConfig);
+      const manager = await createManager(baseConfig);
 
       await manager.dispose();
       await manager.resumeSubscriptions();
@@ -1419,77 +1218,9 @@ describe('initializeCoco', () => {
     });
   });
 
-  describe('edge cases', () => {
-    it('should handle empty watchers config object', async () => {
-      const manager = await initializeCoco({
-        ...baseConfig,
-        watchers: {},
-      });
-
-      expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
-      expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
-
-      await manager.dispose();
-    });
-
-    it('should handle empty processors config object', async () => {
-      const manager = await initializeCoco({
-        ...baseConfig,
-        processors: {},
-      });
-
-      expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
-      expect(manager['meltSettlementProcessor']?.isRunning()).toBe(true);
-
-      await manager.dispose();
-    });
-
-    it('should handle empty config objects for both watchers and processors', async () => {
-      const manager = await initializeCoco({
-        ...baseConfig,
-        watchers: {},
-        processors: {},
-      });
-
-      expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
-      expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
-      expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
-      expect(manager['meltSettlementProcessor']?.isRunning()).toBe(true);
-
-      await manager.dispose();
-    });
-
-    it('should handle all features disabled', async () => {
-      const manager = await initializeCoco({
-        ...baseConfig,
-        watchers: {
-          mintOperationWatcher: { disabled: true },
-          proofStateWatcher: { disabled: true },
-          meltQuoteWatcher: { disabled: true },
-        },
-        processors: {
-          mintOperationProcessor: { disabled: true },
-          meltSettlementProcessor: { disabled: true },
-        },
-      });
-
-      expect(manager['mintOperationWatcher']).toBeUndefined();
-      expect(manager['proofStateWatcher']).toBeUndefined();
-      expect(manager['meltQuoteWatcher']).toBeUndefined();
-      expect(manager['mintOperationProcessor']).toBeUndefined();
-      expect(manager['meltSettlementProcessor']).toBeUndefined();
-
-      // Should still have API access
-      expect(manager.mint).toBeDefined();
-      expect(manager.wallet).toBeDefined();
-    });
-  });
-
   describe('API availability', () => {
     it('should expose all public APIs regardless of watcher/processor config', async () => {
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         watchers: {
           mintOperationWatcher: { disabled: true },
@@ -1509,7 +1240,7 @@ describe('initializeCoco', () => {
     });
 
     it('exposes typed event subscription helpers and manager-owned event side effects', async () => {
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         watchers: {
           mintOperationWatcher: { disabled: true },
@@ -1571,7 +1302,7 @@ describe('initializeCoco', () => {
     });
 
     it('requeues pending mint operations from canonical accounting', async () => {
-      const manager = await initializeCoco({
+      const manager = await createManager({
         ...baseConfig,
         watchers: {
           mintOperationWatcher: { disabled: true },
@@ -1613,7 +1344,7 @@ describe('initializeCoco', () => {
 
   describe('pause and resume subscriptions', () => {
     it('should pause and stop all watchers and processors', async () => {
-      const manager = await initializeCoco(baseConfig);
+      const manager = await createManager(baseConfig);
 
       expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
       expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
@@ -1632,7 +1363,7 @@ describe('initializeCoco', () => {
     });
 
     it('should resume and restart all watchers and processors', async () => {
-      const manager = await initializeCoco(baseConfig);
+      const manager = await createManager(baseConfig);
 
       await manager.pauseSubscriptions();
       await manager.resumeSubscriptions();
@@ -1647,7 +1378,7 @@ describe('initializeCoco', () => {
     });
 
     it('should be idempotent - multiple pause calls should not error', async () => {
-      const manager = await initializeCoco(baseConfig);
+      const manager = await createManager(baseConfig);
 
       await manager.pauseSubscriptions();
       await manager.pauseSubscriptions();
@@ -1662,7 +1393,7 @@ describe('initializeCoco', () => {
     });
 
     it('should be idempotent - multiple resume calls should not error', async () => {
-      const manager = await initializeCoco(baseConfig);
+      const manager = await createManager(baseConfig);
 
       await manager.pauseSubscriptions();
       await manager.resumeSubscriptions();
@@ -1679,7 +1410,7 @@ describe('initializeCoco', () => {
     });
 
     it('should handle resume without prior pause (OS connection teardown scenario)', async () => {
-      const manager = await initializeCoco(baseConfig);
+      const manager = await createManager(baseConfig);
 
       // Simulate OS killing connections - just call resume without pause
       await manager.resumeSubscriptions();
@@ -1693,97 +1424,16 @@ describe('initializeCoco', () => {
       await manager.dispose();
     });
 
-    it('should respect original configuration - disabled watchers stay disabled', async () => {
-      const manager = await initializeCoco({
-        ...baseConfig,
-        watchers: {
-          mintOperationWatcher: { disabled: true },
-          proofStateWatcher: { disabled: false },
-          meltQuoteWatcher: { disabled: false },
-        },
-        processors: {
-          mintOperationProcessor: { disabled: false },
-          meltSettlementProcessor: { disabled: false },
-        },
-      });
+    it.each([...components])(
+      'keeps a disabled %s disabled across pause and resume',
+      async (name) => {
+        const manager = await createManager({ ...baseConfig, ...disabling(name) });
 
-      expect(manager['mintOperationWatcher']).toBeUndefined();
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
-      expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
-      expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
-      expect(manager['meltSettlementProcessor']?.isRunning()).toBe(true);
+        await manager.pauseSubscriptions();
+        await manager.resumeSubscriptions();
 
-      await manager.pauseSubscriptions();
-      await manager.resumeSubscriptions();
-
-      // mintOperationWatcher should remain undefined (was disabled)
-      expect(manager['mintOperationWatcher']).toBeUndefined();
-      // Others should be running again
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
-      expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
-      expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
-      expect(manager['meltSettlementProcessor']?.isRunning()).toBe(true);
-
-      await manager.dispose();
-    });
-
-    it('should respect original configuration - disabled processor stays disabled', async () => {
-      const manager = await initializeCoco({
-        ...baseConfig,
-        watchers: {
-          mintOperationWatcher: { disabled: false },
-          proofStateWatcher: { disabled: false },
-          meltQuoteWatcher: { disabled: false },
-        },
-        processors: {
-          mintOperationProcessor: { disabled: true },
-          meltSettlementProcessor: { disabled: true },
-        },
-      });
-
-      expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
-      expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
-      expect(manager['mintOperationProcessor']).toBeUndefined();
-      expect(manager['meltSettlementProcessor']).toBeUndefined();
-
-      await manager.pauseSubscriptions();
-      await manager.resumeSubscriptions();
-
-      // Watchers should be running again
-      expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
-      expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
-      // Processor should remain undefined (was disabled)
-      expect(manager['mintOperationProcessor']).toBeUndefined();
-      expect(manager['meltSettlementProcessor']).toBeUndefined();
-
-      await manager.dispose();
-    });
-
-    it('should handle all features disabled', async () => {
-      const manager = await initializeCoco({
-        ...baseConfig,
-        watchers: {
-          mintOperationWatcher: { disabled: true },
-          proofStateWatcher: { disabled: true },
-          meltQuoteWatcher: { disabled: true },
-        },
-        processors: {
-          mintOperationProcessor: { disabled: true },
-          meltSettlementProcessor: { disabled: true },
-        },
-      });
-
-      await manager.pauseSubscriptions();
-      await manager.resumeSubscriptions();
-
-      // All should remain undefined
-      expect(manager['mintOperationWatcher']).toBeUndefined();
-      expect(manager['proofStateWatcher']).toBeUndefined();
-      expect(manager['meltQuoteWatcher']).toBeUndefined();
-      expect(manager['mintOperationProcessor']).toBeUndefined();
-      expect(manager['meltSettlementProcessor']).toBeUndefined();
-    });
+        expectRunningExcept(manager, name);
+      },
+    );
   });
 });

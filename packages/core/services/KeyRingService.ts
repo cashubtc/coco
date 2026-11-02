@@ -1,12 +1,12 @@
 import type { Proof } from '@cashu/cashu-ts';
-import { schnorr } from '@noble/curves/secp256k1.js';
-import { bytesToHex } from '@noble/curves/utils.js';
 import type { Logger } from '@core/logging';
 import type { Keypair, KeypairPurpose } from '@core/models/Keypair';
 import type { CoreTransactionRunner } from '../transactions/CoreTransaction.ts';
 import type { KeypairQueries } from '../keypairs/KeypairQueries.ts';
 import type { KeypairDerivation } from '../keypairs/KeypairDerivation.ts';
 import type { P2pkSigner } from '../keypairs/P2pkSigner.ts';
+import { findP2pkKeyPair } from '../keypairs/P2pkKeyLookup.ts';
+import { canonicalPublicKeyHex } from '../keypairs/PublicKeyEncoding.ts';
 
 export class KeyRingService {
   constructor(
@@ -56,16 +56,16 @@ export class KeyRingService {
     if (secretKey.length !== 32) {
       throw new Error('Secret key must be exactly 32 bytes');
     }
-    const publicKeyHex = this.getPublicKeyHex(secretKey);
-    await this.transactionRunner.run((tx) =>
+    const publicKeyHex = canonicalPublicKeyHex(secretKey);
+    const keyPair = await this.transactionRunner.run((tx) =>
       tx.keypairs.importP2pk({
         publicKeyHex,
         secretKey,
         purpose: 'p2pk',
       }),
     );
-    this.logger?.debug('Key pair added', { publicKeyHex });
-    return { publicKeyHex, secretKey, purpose: 'p2pk' };
+    this.logger?.debug('Key pair added', { publicKeyHex: keyPair.publicKeyHex });
+    return keyPair;
   }
 
   async removeKeyPair(publicKey: string): Promise<void> {
@@ -78,7 +78,7 @@ export class KeyRingService {
     if (!publicKey || typeof publicKey !== 'string') {
       throw new Error('Public key is required and must be a string');
     }
-    return this.keypairQueries.getPersistedKeyPair(publicKey, 'p2pk');
+    return findP2pkKeyPair(this.keypairQueries, publicKey);
   }
 
   async getMintQuoteKeyPair(publicKey: string): Promise<Keypair | null> {
@@ -100,15 +100,5 @@ export class KeyRingService {
     const signedProof = await this.signer.signProof(proof, publicKey);
     this.logger?.debug('Proof signed successfully', { publicKey });
     return signedProof;
-  }
-
-  /**
-   * Converts a secret key to its corresponding public key in SEC1 compressed format.
-   * Note: schnorr.getPublicKey() returns a 32-byte x-only public key (BIP340).
-   * We prepend '02' to create a 33-byte SEC1 compressed format as expected by Cashu.
-   */
-  private getPublicKeyHex(secretKey: Uint8Array): string {
-    const publicKey = schnorr.getPublicKey(secretKey);
-    return '02' + bytesToHex(publicKey);
   }
 }

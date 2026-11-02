@@ -48,7 +48,7 @@
     "typecheck": "tsc --noEmit",
     "test": "bun run --cwd ../.. build:test:core && bun test",
     "test:unit": "bun run --cwd ../.. build:test:core && bun test test/unit",
-    "test:integration": "bun test test/integration",
+    "test:integration": "bash ../../scripts/test-integration.sh core",
     "prepublishOnly": "bun run build"
   },
   "sideEffects": false,
