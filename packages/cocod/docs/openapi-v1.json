@@ -2178,6 +2178,29 @@
           }
         }
       }
+    },
+    "/v1/events": {
+      "get": {
+        "operationId": "getEvents",
+        "summary": "Server-sent resource invalidations for the running Coco Session",
+        "security": [{ "clientCredential": [] }],
+        "x-cocod-capability": "wallet:read",
+        "responses": {
+          "200": {
+            "description": "Server-sent events; each `data` line carries one document.",
+            "headers": { "Cache-Control": { "schema": { "const": "no-store" } } },
+            "content": {
+              "text/event-stream": { "schema": { "$ref": "#/components/schemas/ResourceEvent" } }
+            }
+          },
+          "default": {
+            "description": "Error document; `error.code` is stable interface data.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -4086,6 +4109,168 @@
             ]
           }
         }
+      },
+      "ResourceEvent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "timestamp", "data"],
+            "properties": {
+              "type": { "const": "history.updated" },
+              "timestamp": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+              },
+              "data": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "type",
+                  "source",
+                  "state",
+                  "mintUrl",
+                  "unit",
+                  "amount",
+                  "createdAt",
+                  "updatedAt"
+                ],
+                "properties": {
+                  "id": { "type": "string", "minLength": 1, "maxLength": 512 },
+                  "type": { "enum": ["mint", "melt", "send", "receive"] },
+                  "source": { "enum": ["operation", "legacy"] },
+                  "operationId": { "type": "string", "minLength": 1, "maxLength": 512 },
+                  "quoteId": { "type": "string", "minLength": 1, "maxLength": 512 },
+                  "state": { "type": "string" },
+                  "mintUrl": { "type": "string" },
+                  "unit": { "type": "string", "minLength": 1, "maxLength": 32 },
+                  "amount": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20 },
+                  "createdAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  },
+                  "updatedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "timestamp", "data"],
+            "properties": {
+              "type": { "const": "operation.updated" },
+              "timestamp": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+              },
+              "data": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["operationType", "operationId", "mintUrl"],
+                "properties": {
+                  "operationType": { "enum": ["mint", "melt", "send", "receive"] },
+                  "operationId": { "type": "string", "minLength": 1, "maxLength": 512 },
+                  "mintUrl": {
+                    "type": "string",
+                    "format": "uri",
+                    "pattern": "^https?://",
+                    "maxLength": 2048
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "timestamp", "data"],
+            "properties": {
+              "type": { "const": "quote.updated" },
+              "timestamp": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+              },
+              "data": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["quoteType", "mintUrl", "method", "quoteId"],
+                "properties": {
+                  "quoteType": { "enum": ["mint", "melt"] },
+                  "mintUrl": {
+                    "type": "string",
+                    "format": "uri",
+                    "pattern": "^https?://",
+                    "maxLength": 2048
+                  },
+                  "method": { "type": "string" },
+                  "quoteId": { "type": "string", "minLength": 1, "maxLength": 512 }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "timestamp", "data"],
+            "properties": {
+              "type": { "const": "mint.updated" },
+              "timestamp": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+              },
+              "data": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["mintUrl"],
+                "properties": {
+                  "mintUrl": {
+                    "type": "string",
+                    "format": "uri",
+                    "pattern": "^https?://",
+                    "maxLength": 2048
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "timestamp", "data"],
+            "properties": {
+              "type": { "const": "balance.updated" },
+              "timestamp": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+              },
+              "data": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["mintUrl"],
+                "properties": {
+                  "mintUrl": {
+                    "type": "string",
+                    "format": "uri",
+                    "pattern": "^https?://",
+                    "maxLength": 2048
+                  }
+                }
+              }
+            }
+          }
+        ]
       }
     },
     "securitySchemes": { "clientCredential": { "type": "http", "scheme": "bearer" } }

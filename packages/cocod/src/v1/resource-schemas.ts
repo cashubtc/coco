@@ -51,3 +51,4 @@ export const openApiDocumentSchema = namedSchema<Record<string, unknown>>(
 export * from './resources/wallet-schemas.js';
 export * from './resources/quote-operation-schemas.js';
 export * from './resources/transfer-schemas.js';
+export * from './resources/event-schemas.js';

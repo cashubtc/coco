@@ -7,6 +7,7 @@ import {
   defineV1Route,
   V1HttpError,
   V1HttpResponse,
+  V1HttpStreamResponse,
   type ResponseHeaders,
   type V1HttpErrorOptions,
   type V1RouteDefinition,
@@ -211,6 +212,10 @@ async function runV1Route(
       definition.handler(input, {
         request,
         params,
+        reauthorize: async () =>
+          definition.capability === null ||
+          (await credentials.authorize(authorizationHeader, definition.capability)) ===
+            'authorized',
       });
     const result =
       definition.idempotencyKey === 'optional'
@@ -223,6 +228,27 @@ async function runV1Route(
             options.idempotency,
           )
         : await invokeHandler();
+    if (result instanceof V1HttpStreamResponse) {
+      if (
+        definition.responseMediaType !== 'text/event-stream' ||
+        !definition.successStatuses?.includes(200)
+      ) {
+        // A rejected stream still owns subscriptions and a timer until it is cancelled.
+        await result.body.cancel();
+        throw new Error(`${definition.method} ${definition.path} returned an undocumented stream`);
+      }
+      const responseHeaders = new Headers();
+      responseHeaders.set('Content-Type', 'text/event-stream');
+      responseHeaders.set('X-Request-ID', requestId);
+      const response = withCachePolicy(
+        new Response(result.body, { status: 200, headers: responseHeaders }),
+      );
+      logCompleted(requestLogger, startedAt, response.status);
+      return response;
+    }
+    if (definition.responseMediaType === 'text/event-stream') {
+      throw new Error(`${definition.method} ${definition.path} did not return its event stream`);
+    }
     const routeResponse = result instanceof V1HttpResponse ? result : new V1HttpResponse(result);
     if (!definition.successStatuses?.includes(routeResponse.status)) {
       throw new Error(
