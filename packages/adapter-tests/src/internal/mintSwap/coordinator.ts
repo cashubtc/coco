@@ -34,7 +34,6 @@ import { cashuNormalizedBolt11Fixture } from '../../../../core/test/normalizedMi
 import type { MintAdapter } from '../../../../core/infra/MintAdapter.ts';
 import type { MintService } from '../../../../core/services/MintService.ts';
 import type { WalletService } from '../../../../core/services/WalletService.ts';
-import type { ProofService } from '../../../../core/services/ProofService.ts';
 
 import type { MintSwapContractOptions, MintSwapTestRunner } from './contract.ts';
 
@@ -76,7 +75,6 @@ export function runMintSwapCoordinatorContract(
           meltQuoteRepository: repositories.meltQuoteRepository,
           proofRepository: repositories.proofRepository,
           // These legacy dependencies are unused by Melt observation recording/refresh.
-          proofService: {} as ProofService,
           mintService: dependencies.mintService as MintService,
           walletService: dependencies.walletService as WalletService,
           meltHandlerProvider: new MeltHandlerProvider({
@@ -1508,7 +1506,6 @@ export function runMintSwapCoordinatorContract(
           meltQuoteRepository: repositories.meltQuoteRepository,
           proofRepository: repositories.proofRepository,
           // These legacy dependencies are unused by Mint observation recording/refresh.
-          proofService: {} as ProofService,
           mintService: dependencies.mintService as MintService,
           walletService: dependencies.walletService as WalletService,
         });
@@ -1660,7 +1657,6 @@ export function runMintSwapCoordinatorContract(
           mintQuoteRepository: repositories.mintQuoteRepository,
           meltQuoteRepository: repositories.meltQuoteRepository,
           proofRepository: repositories.proofRepository,
-          proofService: {} as ProofService,
           mintService: dependencies.mintService as MintService,
           walletService: dependencies.walletService as WalletService,
         });

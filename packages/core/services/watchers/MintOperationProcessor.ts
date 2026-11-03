@@ -4,6 +4,7 @@ import type { MintMethod, MintOperationService } from '@core/operations/mint';
 import { MintOperationError, NetworkError } from '../../models/Error';
 import { isMintSwapQuiescentState } from '../../operations/mintSwap/MintSwapOperation.ts';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
+import type { MintService } from '../MintService.ts';
 
 interface QueueItem {
   mintUrl: string;
@@ -36,10 +37,12 @@ export interface MintOperationProcessorOptions {
 export class MintOperationProcessor {
   private readonly mintOperations: MintOperationService;
   private readonly quoteLifecycle: QuoteLifecycle;
+  private readonly mintService: Pick<MintService, 'isTrustedMint'>;
   private readonly bus: EventBus<CoreEvents>;
   private readonly logger?: Logger;
 
   private running = false;
+  private stopping?: Promise<void>;
   private queue: QueueItem[] = [];
   private processing = false;
   private processingTimer?: ReturnType<typeof setTimeout>;
@@ -67,12 +70,14 @@ export class MintOperationProcessor {
   constructor(
     mintOperations: MintOperationService,
     quoteLifecycle: QuoteLifecycle,
+    mintService: Pick<MintService, 'isTrustedMint'>,
     bus: EventBus<CoreEvents>,
     logger?: Logger,
     options?: MintOperationProcessorOptions,
   ) {
     this.mintOperations = mintOperations;
     this.quoteLifecycle = quoteLifecycle;
+    this.mintService = mintService;
     this.bus = bus;
     this.logger = logger;
 
@@ -99,6 +104,7 @@ export class MintOperationProcessor {
   }
 
   async start(): Promise<void> {
+    if (this.stopping) await this.stopping;
     if (this.running) return;
     this.running = true;
     this.logger?.info('MintOperationProcessor started');
@@ -117,14 +123,7 @@ export class MintOperationProcessor {
         return;
       }
 
-      const quote = await this.quoteLifecycle.getMintQuote(
-        operation.mintUrl,
-        operation.method,
-        operation.quoteId,
-      );
-      if (quote) {
-        this.scheduleQuoteClaim(operation.mintUrl, operation.method, operation.quoteId);
-      }
+      this.scheduleQuoteClaim(operation.mintUrl, operation.method, operation.quoteId);
     });
 
     // Subscribe to explicit operation requeue events.
@@ -154,10 +153,24 @@ export class MintOperationProcessor {
     this.scheduleNextProcess();
   }
 
-  async stop(): Promise<void> {
-    if (!this.running) return;
+  stop(): Promise<void> {
+    if (this.stopping) return this.stopping;
+    if (!this.running) return Promise.resolve();
     this.running = false;
+    const task = this.finishStop();
+    this.stopping = task;
+    void task.then(
+      () => {
+        this.stopping = undefined;
+      },
+      () => {
+        this.stopping = undefined;
+      },
+    );
+    return task;
+  }
 
+  private async finishStop(): Promise<void> {
     // Unsubscribe from events
     if (this.offQuoteUpdated) {
       try {
@@ -301,7 +314,7 @@ export class MintOperationProcessor {
   }
 
   private scheduleQuoteClaim(mintUrl: string, method: MintMethod, quoteId: string): void {
-    if (!this.autoClaimMintQuotes) {
+    if (!this.running || !this.autoClaimMintQuotes) {
       return;
     }
 
@@ -328,6 +341,7 @@ export class MintOperationProcessor {
           method,
           quoteId,
         );
+        if (!this.running) return;
         if (assessment?.status !== 'claimable' && assessment?.status !== 'complete') {
           this.logger?.debug('Mint quote has no locally claimable value', {
             mintUrl,
@@ -365,11 +379,39 @@ export class MintOperationProcessor {
   private schedulePendingQuoteClaims(): void {
     const task = (async () => {
       try {
-        // The quote claim path rechecks the parent and resumes the quote once it stops.
-        await this.mintOperations.claimPendingMintQuotes(
-          { autoClaimRemaining: true },
-          ({ mintUrl, method, quoteId }) => this.scheduleQuoteClaim(mintUrl, method, quoteId),
-        );
+        // Completed quotes are absent from the quote backlog but can still have pending
+        // operations (for example after issuance in another session).
+        const [quotes, operations] = await Promise.all([
+          this.quoteLifecycle.getPendingMintQuotes(),
+          this.mintOperations.getPendingOperations(),
+        ]);
+        const interests = new Map<
+          string,
+          { mintUrl: string; method: MintMethod; quoteId: string }
+        >();
+        for (const interest of [...quotes, ...operations]) {
+          interests.set(`${interest.mintUrl}::${interest.method}::${interest.quoteId}`, interest);
+        }
+        // Startup discovery claims only for trusted mints; claiming would contact the mint.
+        const trustedByMint = new Map<string, boolean>();
+        for (const interest of interests.values()) {
+          if (!this.running) return;
+          let trusted = trustedByMint.get(interest.mintUrl);
+          if (trusted === undefined) {
+            trusted = await this.mintService.isTrustedMint(interest.mintUrl);
+            trustedByMint.set(interest.mintUrl, trusted);
+            if (!this.running) return;
+          }
+          if (!trusted) {
+            this.logger?.debug('Skipping pending mint quote claim for untrusted mint', {
+              mintUrl: interest.mintUrl,
+              method: interest.method,
+              quoteId: interest.quoteId,
+            });
+            continue;
+          }
+          this.scheduleQuoteClaim(interest.mintUrl, interest.method, interest.quoteId);
+        }
       } catch (error) {
         this.logger?.warn('Failed to claim pending mint quotes on startup', {
           error: error instanceof Error ? error.message : String(error),

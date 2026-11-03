@@ -551,7 +551,6 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
         mintQuoteRepository: repositories.mintQuoteRepository,
         meltQuoteRepository: repositories.meltQuoteRepository,
         proofRepository: repositories.proofRepository,
-        proofService: {} as QuoteLifecycleDeps['proofService'],
         mintService: mintService as unknown as MintService,
         walletService: walletService as unknown as WalletService,
         mintAdapter,
@@ -1294,7 +1293,7 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
     });
     const processor = new MeltSettlementProcessor(service, bus, undefined, {
       interestRegistrar: {
-        registerOperationInterest: async ({ operationId }) => {
+        registerOperationInterest: ({ operationId }) => {
           registeredOperations.push(operationId);
         },
         removeOperationInterest: async () => {},

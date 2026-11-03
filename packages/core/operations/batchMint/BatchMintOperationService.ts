@@ -51,7 +51,7 @@ const DEFINITIVE_REJECTION_CODES = new Set([
  * Replay responses that order Restore after issuance/deduplication. Includes legacy outputs-signed
  * (10002), current outputs-signed (11003), quote-issued (20002), and CDK's duplicate-output mapping
  * (20006). The mint must serialize competing exact requests and expose signatures when rejecting
- * their replay; empty Restore is terminal only under this assumption (ADR-0014).
+ * their replay; empty Restore is terminal only under this assumption (ADR-0016).
  */
 const RESTORE_AFTER_REPLAY_CODES = new Set([10002, 11003, 20002, 20006]);
 
@@ -396,7 +396,7 @@ export class BatchMintOperationService {
     return (await this.dependencies.batchMintQueries.getById(operation.id)) ?? operation;
   }
 
-  /** Restore only after a replay response covered by ADR-0014's issuance ordering assumption. */
+  /** Restore only after a replay response covered by ADR-0016's issuance ordering assumption. */
   private async restoreRejectedReplay(
     operation: ExecutingBatchMintOperation,
     rejection: MintOperationError,

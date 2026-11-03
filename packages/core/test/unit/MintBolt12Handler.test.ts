@@ -1,4 +1,10 @@
-import { Amount, OutputData, type MintQuoteBolt12Response, type Wallet } from '@cashu/cashu-ts';
+import {
+  Amount,
+  OutputData,
+  type MintQuoteBolt12Response,
+  type Proof,
+  type Wallet,
+} from '@cashu/cashu-ts';
 import { bytesToHex } from '@noble/curves/utils.js';
 import { beforeEach, describe, expect, it, mock, type Mock } from 'bun:test';
 import { EventBus } from '../../events/EventBus';
@@ -15,7 +21,6 @@ import { mintQuoteFromBolt12Response } from '../../models/MintQuote';
 import type { ProofRepository } from '../../repositories';
 import type { KeyRingService } from '../../services/KeyRingService';
 import type { MintService } from '../../services/MintService';
-import type { ProofService } from '../../services/ProofService';
 import type { WalletService } from '../../services/WalletService';
 import type {
   ExecuteContext,
@@ -34,7 +39,7 @@ describe('MintBolt12Handler', () => {
   let handler: MintBolt12Handler;
   let wallet: Wallet;
   let mintAdapter: MintAdapter;
-  let proofService: ProofService;
+  let restoreOutputs: Mock<() => Promise<Proof[]>>;
   let proofRepository: ProofRepository;
   let walletService: WalletService;
   let mintService: MintService;
@@ -87,7 +92,6 @@ describe('MintBolt12Handler', () => {
   const buildFetchRemoteQuoteContext = (): FetchRemoteMintQuoteContext<'bolt12'> => ({
     quote: mintQuoteFromBolt12Response(mintUrl, quote()),
     mintAdapter,
-    proofService,
     proofRepository,
     walletService,
     mintService,
@@ -139,11 +143,7 @@ describe('MintBolt12Handler', () => {
   ): RecoverExecutingContext<'bolt12'> => ({
     ...buildExecuteContext(remoteQuote),
     localClaimabilityFacts,
-    restoreOutputs: () =>
-      proofService.recoverProofsFromOutputData(mintUrl, outputData, {
-        unit: 'sat',
-        persistRecoveredProofs: false,
-      }),
+    restoreOutputs,
     recordQuoteSnapshot: mock(async () => {}),
   });
 
@@ -155,11 +155,7 @@ describe('MintBolt12Handler', () => {
     mintAdapter = {
       checkMintQuote: mock(async () => quote()),
     } as unknown as MintAdapter;
-    proofService = {
-      createOutputsAndIncrementCounters: mock(async () => ({ keep: outputData.keep, send: [] })),
-      saveProofs: mock(async () => {}),
-      recoverProofsFromOutputData: mock(async () => []),
-    } as unknown as ProofService;
+    restoreOutputs = mock(async (): Promise<Proof[]> => []);
     keyRingService = {
       generateMintQuoteKeyPair: mock(async () => ({ publicKeyHex: pubkey, secretKey })),
       getMintQuoteKeyPair: mock(async () => ({ publicKeyHex: pubkey, secretKey })),
@@ -177,7 +173,6 @@ describe('MintBolt12Handler', () => {
       wallet,
       mintAdapter,
       logger,
-      proofService,
       proofRepository,
       walletService,
       mintService,
@@ -225,7 +220,6 @@ describe('MintBolt12Handler', () => {
         wallet,
         mintAdapter,
         logger,
-        proofService,
         proofRepository,
         walletService,
         mintService,
@@ -252,7 +246,6 @@ describe('MintBolt12Handler', () => {
         wallet,
         mintAdapter,
         logger,
-        proofService,
         proofRepository,
         walletService,
         mintService,
@@ -276,7 +269,6 @@ describe('MintBolt12Handler', () => {
         wallet,
         mintAdapter,
         logger,
-        proofService,
         proofRepository,
         walletService,
         mintService,
@@ -299,7 +291,6 @@ describe('MintBolt12Handler', () => {
       wallet,
       mintAdapter,
       logger,
-      proofService,
       proofRepository,
       walletService,
       mintService,
@@ -476,7 +467,6 @@ describe('MintBolt12Handler', () => {
 
     expect(result).toMatchObject({ status: 'ISSUED', proofs: expect.any(Array) });
     expect(wallet.mintProofsBolt12).toHaveBeenCalled();
-    expect(proofService.saveProofs).not.toHaveBeenCalled();
   });
 
   it('fails recovery when the mint rejects BOLT12 issuance with quote expired', async () => {
@@ -495,7 +485,6 @@ describe('MintBolt12Handler', () => {
       error: `Recovered: BOLT12 quote ${quoteId} expired while executing mint`,
     });
     expect(wallet.mintProofsBolt12).toHaveBeenCalledTimes(1);
-    expect(proofService.saveProofs).not.toHaveBeenCalled();
   });
 
   it('leaves non-protocol expiry errors unresolved during BOLT12 recovery', async () => {
@@ -513,7 +502,6 @@ describe('MintBolt12Handler', () => {
       status: 'UNRESOLVED',
       error: 'Authentication session expired',
     });
-    expect(proofService.saveProofs).not.toHaveBeenCalled();
   });
 
   it('does not retry balance already consumed by finalized local operations', async () => {

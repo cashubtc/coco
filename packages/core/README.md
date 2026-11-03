@@ -122,6 +122,10 @@ in the future. Watchers commit canonical quote observations; the parent then coo
 recovery using those observations and shared child locks. Exact authorized recovery interests
 remain observable after trust revocation without trusting the mint again.
 
+Parent and ordinary operation interests are accepted synchronously. Watchers own asynchronous
+subscription setup and its diagnostics, so slow or failed setup does not block cached parent
+progression. Enabling a watcher can resolve while operation-owned setup is pending. Removing an
+interest revokes its permission immediately and waits for required cleanup; other owners retain theirs.
 Disabling a watcher stops ongoing observation, not parent coordination or explicit recovery.
 Periodic parent scans do not replace a disabled watcher with quote polling. Bounded startup
 recovery and explicit `refresh(id)` / `recovery.run()` can still make target-isolated checks;

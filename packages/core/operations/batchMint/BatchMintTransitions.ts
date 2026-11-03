@@ -191,7 +191,7 @@ export const applyBatchMintResult = defineTransition<
   return { operation, proofs: candidates, changed: true };
 });
 
-/** Call with initial rejection or ordered empty Restore evidence (ADR-0014); releases reservations. */
+/** Call with initial rejection or ordered empty Restore evidence (ADR-0016); releases reservations. */
 export const failBatchMint = defineTransition<FailBatchMintInput, FailBatchMintResult>(
   async (tx, input) => {
     const current = await requireOperation(tx, input.operationId);

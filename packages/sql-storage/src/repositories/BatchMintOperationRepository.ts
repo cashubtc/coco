@@ -128,30 +128,34 @@ export class SqliteBatchMintOperationRepository implements BatchMintOperationRep
   }
 
   private async select(where: string, params: SqlParams): Promise<BatchMintOperation[]> {
-    const rows = await this.db.all<BatchMintOperationRow>(
-      `SELECT * FROM ${OPERATIONS} WHERE ${where}`,
-      params,
-    );
-    if (rows.length === 0) return [];
-    const members = await this.db.all<BatchMintMemberRow>(
-      `SELECT operationId, ordinal, quoteId, amount, request, pubkey FROM ${MEMBERS}
-       WHERE operationId IN (SELECT id FROM ${OPERATIONS} WHERE ${where})
-       ORDER BY operationId, ordinal ASC`,
-      params,
-    );
-    const byOperation = new Map<string, BatchMintMember[]>();
-    for (const row of members) {
-      const list = byOperation.get(row.operationId) ?? [];
-      list.push({
-        ordinal: row.ordinal,
-        quoteId: row.quoteId,
-        amount: deserializeAmount(row.amount),
-        request: row.request,
-        pubkey: row.pubkey,
-      });
-      byOperation.set(row.operationId, list);
-    }
-    return rows.map((row) => fromRow(row, byOperation.get(row.id) ?? [])).sort(compareCreated);
+    // Keep the state predicate stable across both reads. A scoped handle reuses its Wallet
+    // transaction; a root read takes its own snapshot so a concurrent update cannot drop members.
+    return this.db.transaction(async (tx) => {
+      const rows = await tx.all<BatchMintOperationRow>(
+        `SELECT * FROM ${OPERATIONS} WHERE ${where}`,
+        params,
+      );
+      if (rows.length === 0) return [];
+      const members = await tx.all<BatchMintMemberRow>(
+        `SELECT operationId, ordinal, quoteId, amount, request, pubkey FROM ${MEMBERS}
+         WHERE operationId IN (SELECT id FROM ${OPERATIONS} WHERE ${where})
+         ORDER BY operationId, ordinal ASC`,
+        params,
+      );
+      const byOperation = new Map<string, BatchMintMember[]>();
+      for (const row of members) {
+        const list = byOperation.get(row.operationId) ?? [];
+        list.push({
+          ordinal: row.ordinal,
+          quoteId: row.quoteId,
+          amount: deserializeAmount(row.amount),
+          request: row.request,
+          pubkey: row.pubkey,
+        });
+        byOperation.set(row.operationId, list);
+      }
+      return rows.map((row) => fromRow(row, byOperation.get(row.id) ?? [])).sort(compareCreated);
+    });
   }
 }
 
