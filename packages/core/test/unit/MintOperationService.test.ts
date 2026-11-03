@@ -50,7 +50,6 @@ import {
 import { QuoteLifecycle } from '../../quotes/QuoteLifecycle';
 import type { MintService } from '../../services/MintService';
 import type { WalletService } from '../../services/WalletService';
-import type { ProofService } from '../../services/ProofService';
 import type { MintAdapter } from '../../infra/MintAdapter';
 import type { Logger } from '../../logging/Logger';
 import { serializeOutputData, deserializeOutputData } from '../../utils';
@@ -66,7 +65,6 @@ describe('MintOperationService', () => {
   let operationRepo: MintOperationRepository;
   let quoteRepo: MintQuoteRepository;
   let proofRepo: ProofRepository;
-  let proofService: ProofService;
   let mintService: MintService;
   let walletService: WalletService;
   let mintAdapter: MintAdapter;
@@ -377,19 +375,6 @@ describe('MintOperationService', () => {
       get: mock(() => handler),
     } as unknown as MintHandlerProvider;
 
-    proofService = {
-      saveProofs: mock(async (_mintUrl: string, proofs: CoreProof[]) => {
-        await proofRepo.saveProofs(mintUrl, proofs);
-      }),
-      recoverProofsFromOutputData: mock(async (_mintUrl: string, _outputData, options) => {
-        if (!options?.createdByOperationId) {
-          return [];
-        }
-        await proofRepo.saveProofs(mintUrl, [toCoreProof('out-1', options.createdByOperationId)]);
-        return [makeProof('out-1')];
-      }),
-    } as unknown as ProofService;
-
     mintService = {
       isTrustedMint: mock(async () => true),
       refreshAndCommitIfStale: mock(async () => ({
@@ -431,7 +416,6 @@ describe('MintOperationService', () => {
       mintQuoteRepository: quoteRepo,
       meltQuoteRepository: {} as any,
       proofRepository: proofRepo,
-      proofService,
       mintService,
       walletService,
       mintAdapter,

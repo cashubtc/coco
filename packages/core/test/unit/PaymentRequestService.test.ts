@@ -16,7 +16,7 @@ import type {
   PreparedSendOperation,
   SendOperationService,
 } from '../../operations/send';
-import type { ProofService } from '../../services/ProofService';
+import type { BalanceQueries } from '../../proofs/BalanceQueries';
 import type { MintService } from '../../services/MintService';
 import { PaymentRequestError } from '../../models/Error';
 
@@ -27,7 +27,7 @@ describe('PaymentRequestService', () => {
 
   let service: PaymentRequestService;
   let mockSendOperationService: SendOperationService;
-  let mockProofService: ProofService;
+  let mockBalanceQueries: BalanceQueries;
   let mockMintService: MintService;
   const originalFetch = globalThis.fetch;
 
@@ -199,7 +199,7 @@ describe('PaymentRequestService', () => {
       rollback: mock(async () => undefined),
     } as unknown as SendOperationService;
 
-    mockProofService = {
+    mockBalanceQueries = {
       getBalancesByMint: mock(async () => ({
         [testMintUrl]: {
           spendable: Amount.from(1000),
@@ -214,7 +214,7 @@ describe('PaymentRequestService', () => {
           unit: 'sat',
         },
       })),
-    } as unknown as ProofService;
+    } as unknown as BalanceQueries;
 
     mockMintService = {
       supportsNut: mock(async (mintUrl: string, nut: 11) => nut === 11 && mintUrl === testMintUrl),
@@ -228,7 +228,7 @@ describe('PaymentRequestService', () => {
 
     service = new PaymentRequestService(
       mockSendOperationService,
-      mockProofService,
+      mockBalanceQueries,
       mockMintService,
     );
 
@@ -484,16 +484,16 @@ describe('PaymentRequestService', () => {
     });
 
     it('should return an empty payable mint list if no matching mints are found', async () => {
-      (mockProofService.getBalancesByMint as unknown as ReturnType<typeof mock>).mockImplementation(
-        async () => ({
-          [testMintUrl]: {
-            spendable: Amount.from(50),
-            reserved: Amount.zero(),
-            total: Amount.from(50),
-            unit: 'sat',
-          },
-        }),
-      );
+      (
+        mockBalanceQueries.getBalancesByMint as unknown as ReturnType<typeof mock>
+      ).mockImplementation(async () => ({
+        [testMintUrl]: {
+          spendable: Amount.from(50),
+          reserved: Amount.zero(),
+          total: Amount.from(50),
+          unit: 'sat',
+        },
+      }));
 
       const pr = new PaymentRequest([], 'request-id-6', 100, 'sat', [testMintUrl]);
       const encoded = pr.toEncodedRequest();
@@ -512,7 +512,7 @@ describe('PaymentRequestService', () => {
       const result = await service.parse(encoded);
 
       expect(result.unit).toBe('usd');
-      expect(mockProofService.getBalancesByMint).toHaveBeenCalledWith({
+      expect(mockBalanceQueries.getBalancesByMint).toHaveBeenCalledWith({
         trustedOnly: true,
         units: ['usd'],
       });

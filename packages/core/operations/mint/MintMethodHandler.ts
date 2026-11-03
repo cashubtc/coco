@@ -9,7 +9,6 @@ import type {
 } from '@cashu/cashu-ts';
 import type { DeferPublication } from '../../events/DeferredPublication.ts';
 import type { ProofRepository } from '../../repositories';
-import type { ProofService } from '../../services/ProofService';
 import type { WalletService } from '../../services/WalletService';
 import type { MintService } from '../../services/MintService';
 import type { EventBus } from '../../events/EventBus';
@@ -126,7 +125,6 @@ export interface MintMethodMeta<M extends MintMethod = MintMethod> {
 
 export interface BaseHandlerDeps {
   proofRepository: ProofRepository;
-  proofService: ProofService;
   walletService: WalletService;
   mintService: MintService;
   mintAdapter: MintAdapter;
