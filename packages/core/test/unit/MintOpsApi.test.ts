@@ -1,6 +1,7 @@
 import { Amount } from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it, mock } from 'bun:test';
 import { MintOpsApi } from '../../api/MintOpsApi.ts';
+import type { BatchMintOpsApi } from '../../api/BatchMintOpsApi.ts';
 import type { MintOperationService } from '../../operations/mint/MintOperationService.ts';
 import type {
   ExecutingMintOperation,
@@ -96,7 +97,7 @@ describe('MintOpsApi', () => {
       isRecoveryInProgress: mock(() => false),
     } as unknown as MintOperationService;
 
-    api = new MintOpsApi(mintOperationService);
+    api = new MintOpsApi(mintOperationService, {} as BatchMintOpsApi);
   });
 
   it('prepare targets an existing canonical quote and returns a pending mint operation', async () => {

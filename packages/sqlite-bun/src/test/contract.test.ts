@@ -22,6 +22,7 @@ import {
   runMeltQuoteRepositoryContract,
   runMintSwapPersistenceContract,
   runBatchMintPersistenceContract,
+  runBatchMintHistoryContract,
   createBatchMintFixtures,
 } from '@cashu/coco-adapter-tests';
 import { RepositoryTransactionConflictError } from '@cashu/coco-core/adapter';
@@ -98,6 +99,7 @@ runKeypairAllocationContract(
 );
 
 runBatchMintPersistenceContract({ createRepositories }, { describe, it, expect });
+runBatchMintHistoryContract({ createRepositories }, { describe, it, expect });
 
 describe('Batch Mint read consistency', () => {
   for (const state of ['finalized', 'failed'] as const) {

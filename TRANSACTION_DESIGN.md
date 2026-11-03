@@ -276,9 +276,13 @@ ownership, and active keys inside the transaction, then persists the pending ope
 Output Allocation. New preparation does not persist an intermediate init row. Legacy init rows
 remain readable and are cleaned up through a scoped transition.
 
-`beginMintExecution` rechecks canonical quote accounting and sibling operations in the same scope
-that records executing. This creates the Mint Quote Reservation; pending operations reserve no
-balance. State checks and updates share the adapter's serialized write transaction, without relying
+`beginMintExecution` rechecks canonical quote accounting and the quote's local claim facts in the
+same scope that records executing. This creates the Mint Quote Reservation; pending operations
+reserve no balance. Every claimability decision reads those facts through the one scoped query
+`tx.mintQuoteClaims`, which counts finalized and `executing` claims from both Mint Operations and
+Batch Mint Operations; informational checks outside a transition read it in a read-only `run()`.
+Required `tx.batchMintOperations` is bound to the same adapter transaction in Memory and all
+persistent adapters, like Mint Swap persistence. State checks and updates share the adapter's serialized write transaction, without relying
 on an in-memory operation or quote lock for correctness. Standalone Mint preparation retains the
 shared mint lock for compatibility with same-session legacy output allocators; their cross-session
 counter safety remains part of the owning legacy migrations.
@@ -434,6 +438,55 @@ Parent and child change snapshots are captured within each attempt and published
 lock release, so reentrant listeners
 cannot deadlock on the coordinator's child locks. Delivery remains best effort, without an outbox.
 
+## Batch Mint Operations
+
+`BatchMintOperationService` coordinates one atomic NUT-29 issuance for an exact ordered group of
+Mint Quotes ([ADR-0016](packages/core/docs/adr/0016-model-batch-minting-as-a-standalone-atomic-operation.md)).
+It receives the shared runner, read-only batch and proof queries, seed loading, the Quote Lifecycle's
+canonical quote lookup, mint metadata, and the Wallet factory. Preflight rejects malformed groups,
+untrusted mints and groups the mint's NUT-29 metadata does not admit (a malformed or single-quote
+batch size admits none), takes the mint lock for same-session coordination with legacy output
+allocators, and fixes the ID, keys, seed and timestamp. Admission takes no Quote Identity lock: its
+checks and writes share the serialized Wallet transaction, which alone chooses one winner.
+
+`tx.perform(admitBatchMint, input)` rechecks trust and, per member in caller order, Mint Swap
+exclusivity through `assertOrdinaryChildWork`, the canonical quote's method and unit, the absence
+of a nonterminal standalone Mint Operation, claimability from `tx.mintQuoteClaims` through
+`assessMintQuoteClaim` (`holdsAtomicQuote`: an atomic quote admits no other reservation), NUT-04
+limits and Wallet-owned NUT-20 keys. It then allocates
+one aggregate output plan and creates the operation as `executing`. That one commit is the Mint
+Quote Reservation for every member; neither signatures nor private keys are persisted. A concurrent standalone
+claim or batch for the same quote reads the same scope, so only one commits.
+
+Submission sends exactly the persisted members, amounts and outputs through cashu-ts
+`prepareBatchMint` and `completeBatchMint`. As for a Mint Operation, the Wallet signs at submission,
+and cashu-ts retries with the legacy NUT-20 message for mints that predate the amended one.
+`applyBatchMintResult`
+validates the complete proof set against the persisted plan and atomically saves the proofs
+(attributed to the batch) and finalizes; it never fabricates remote accounting. Initial submission
+may fail on an allowlisted definitive rejection. Recovery treats those errors separately because a
+rejected replay does not disprove an earlier issuance.
+
+Recovery holds the operation lock and uses complete locally saved proofs first, then replays the
+Exact Operation Request. Ambiguous responses end the run with `executing` and its reservations.
+Only the issuance-related codes specified in ADR-0016 lead to NUT-09 Restore. Complete valid unspent
+outputs finalize; an explicitly empty Restore response permits `failBatchMint` under ADR-0016's
+mint ordering assumption. The failure transaction rereads matching local proofs and retains executing
+if any are present, so concurrent Wallet Restore cannot be mistaken for absence. Partial, invalid,
+unavailable or non-unspent results remain unresolved. Replay, Restore and proof-state checks stay
+outside transactions; settlement, failure and deferral each own one `run()`.
+
+There are no recovery quote checks, timer or internal retry loop. Startup and
+`ops.mint.batch.recovery.run()` each make a bounded recovery pass. A mint that returns a qualifying
+rejection before competing issuance completes or serves stale Restore data can violate the accepted
+ordering assumption; this is not a general inference of non-issuance from missing signatures.
+
+Mint Swap creation rejects a destination quote held by an `executing` Batch Mint Operation, and
+batch admission rejects quotes an active Mint Swap coordinates. Standalone Mint preparation,
+execution and automatic claiming read batch reservations and finalized members through
+`tx.mintQuoteClaims`. Events (`batch-mint-op:*`, `proofs:saved`, `counter:updated`) are published
+after commit; batches emit no `mint-op:*` events.
+
 ## Files and Dependencies
 
 ```text
@@ -446,6 +499,10 @@ operations/mint/
   MintOperationService.ts                     # workflow orchestration
   MintTransitions.ts                         # preparation, issuance, settlement, and recovery
   MintTransitionTypes.ts                     # named Mint transition inputs and results
+operations/batchMint/
+  BatchMintOperationService.ts               # admission preflight, submission, recovery, events
+  BatchMintTransitions.ts                    # admission, settlement, failure, and deferral
+  BatchMintTransitionTypes.ts                # named Batch Mint transition inputs and results
 operations/melt/
   MeltOperationService.ts                    # Melt saga coordinator
   MeltTransitions.ts                         # reservation, authorization, settlement, and recovery
@@ -459,6 +516,7 @@ transactions/
   outputs/ScopedOutputs.ts                    # output allocation including counters
   keypairs/ScopedKeypairs.ts                  # keypair allocation and scoped persistence
   mints/ScopedMintMetadata.ts                 # metadata application and trust checks
+  mintQuoteClaims/ScopedMintQuoteClaims.ts    # shared local Mint Quote claim facts and claim rules
 ```
 
 Names describe authority and lifetime:
@@ -557,8 +615,8 @@ Before completing a change involving Wallet persistence, operation coordination,
 
 ## Migration and Verification
 
-Send, Mint, Melt, Receive, and Restore transitions, the Mint Swap coordinator, KeyRing mutations,
-and mint metadata refresh use coordinator-owned transactions.
+Send, Mint, Melt, Receive, and Restore transitions, the Mint Swap and Batch Mint coordinators,
+KeyRing mutations, and mint metadata refresh use coordinator-owned transactions.
 Payment Request Receive parent/attempt/child atomicity and MintService add/forced-update/trust/delete
 paths remain for their owning migrations.
 Those migrations should reuse domain capabilities and branded transitions, rather than add domain gateways.
@@ -585,10 +643,3 @@ Restore and legacy counter migration above. That migration is complete: ProofSer
 CounterService are removed, and plugins have no proof or counter write path
 ([ADR-0015](packages/core/docs/adr/0015-plugins-get-no-direct-proof-or-counter-authority.md)). `CoreTransaction`, `Transition`, their helpers, and the runner remain internal implementation details.
 They must not be exported from package entry points.
-
-## Batch Mint persistence
-
-Required `tx.batchMintOperations` uses the same Wallet transaction scope as the other repositories.
-`tx.mintQuoteClaims.getFacts` combines finalized issuance and executing reservations from Mint
-Operations and Batch Mint members. Standalone Mint and Mint Swap claim decisions use these shared
-facts. This persistence slice does not yet expose batch execution or automatic claiming.

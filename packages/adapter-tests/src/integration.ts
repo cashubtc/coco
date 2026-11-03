@@ -385,6 +385,20 @@ function isMintQuoteReady(quote: MintQuote | null | undefined): quote is MintQuo
   return quote.state === 'PAID' || quote.state === 'ISSUED';
 }
 
+async function awaitMintQuotesPaid(
+  manager: Manager,
+  mintUrl: string,
+  quotes: readonly MintQuote[],
+): Promise<void> {
+  const deadline = Date.now() + MINT_QUOTE_READY_TIMEOUT_MS;
+  for (const { quoteId } of quotes) {
+    while (!isMintQuoteReady(await manager.quotes.mint.refresh({ mintUrl, quoteId }))) {
+      if (Date.now() > deadline) throw new Error(`Mint quote ${quoteId} was not paid in time`);
+      await new Promise((resolve) => setTimeout(resolve, MINT_QUOTE_READY_REFRESH_INTERVAL_MS));
+    }
+  }
+}
+
 async function getMintQuoteForOperation(
   manager: Manager,
   operation: PreparedMintOperation,
@@ -680,6 +694,50 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           await dispose();
         }
       });
+
+      it('should claim locked and unlocked quotes in one NUT-29 batch with one optimised output set', async () => {
+        const { repositories, dispose } = await createRepositories();
+        try {
+          mgr = await initializeCoco({
+            repo: repositories,
+            seedGetter,
+            logger,
+            processors: { mintOperationProcessor: { disabled: true } },
+          });
+          await mgr.mint.addMint(mintUrl, { trusted: true });
+          const create = (locked: boolean) =>
+            mgr!.quotes.mint.create({
+              mintUrl,
+              amount: 21,
+              unit: testUnit,
+              method: 'bolt11',
+              locked,
+            });
+          const quotes = [await create(true), await create(false), await create(true)];
+          await awaitMintQuotesPaid(mgr, mintUrl, quotes);
+
+          const operation = await mgr.ops.mint.batch.execute({
+            mintUrl,
+            method: 'bolt11',
+            members: quotes.map(({ quoteId }) => ({ quoteId })),
+          });
+
+          expect(operation.state).toBe('finalized');
+          // Three separate splits of 21 (16 + 4 + 1) would need nine outputs.
+          expect(operation.outputData.keep).toHaveLength(6);
+          expect(await getMintTotalBalance(mgr, mintUrl, testUnit)).toBe(63);
+          const observed = await mgr.quotes.mint.refresh({ mintUrl, quoteId: quotes[0]!.quoteId });
+          expect(observed.state).toBe('ISSUED');
+        } finally {
+          if (mgr) {
+            await mgr.pauseSubscriptions();
+            await mgr.dispose();
+            mgr = undefined;
+          }
+          await dispose();
+        }
+        // The Manager's limiter allows a burst of 20 requests, then one every 3 seconds.
+      }, 20000);
 
       it('should use events API to await mint quote paid', async () => {
         const { repositories, dispose } = await createRepositories();

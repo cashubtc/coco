@@ -10,7 +10,7 @@ import type { MintMethod } from '../mint/MintMethodHandler.ts';
  *
  * - executing: Admission, Output Allocation and Mint Quote Reservations committed together; the exact NUT-29 request may have reached the mint.
  * - finalized: The complete validated proof set and each member's local issuance committed.
- * - failed: The mint definitively rejected the exact request; reservations are released.
+ * - failed: Initial submission was definitively rejected, or a qualifying replay rejection was followed by empty Restore under ADR-0016; reservations are released.
  *
  * There is no init, prepared or abort state.
  */

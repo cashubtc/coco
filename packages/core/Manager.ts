@@ -38,6 +38,7 @@ import { ReceiveOperationService } from './operations/receive/ReceiveOperationSe
 import { MintScopedLock } from './operations/MintScopedLock';
 import { OperationIdLock } from './operations/OperationIdLock.ts';
 import { MintSwapOperationService } from './operations/mintSwap/MintSwapOperationService.ts';
+import { BatchMintOperationService } from './operations/batchMint/BatchMintOperationService.ts';
 import type { MintSwapOperationRepository } from './operations/mintSwap/MintSwapOperationRepository.ts';
 import {
   MintSwapOperationProcessor,
@@ -76,6 +77,7 @@ import {
   ReceiveOpsApi,
   MeltOpsApi,
   MintOpsApi,
+  BatchMintOpsApi,
   MintSwapOpsApi,
   QuoteApi,
   PaymentRequestsApi,
@@ -362,6 +364,7 @@ export class Manager {
   private meltOperationService: MeltOperationService;
   private meltOperationRepository: MeltOperationRepository;
   private mintOperationService: MintOperationService;
+  private batchMintOperationService: BatchMintOperationService;
   private mintOperationRepository: MintOperationRepository;
   private receiveOperationService: ReceiveOperationService;
   private receiveOperationRepository: ReceiveOperationRepository;
@@ -440,6 +443,7 @@ export class Manager {
     this.authService = core.authService;
     this.mintOperationService = core.mintOperationService;
     this.mintSwapOperationService = core.mintSwapOperationService;
+    this.batchMintOperationService = core.batchMintOperationService;
     this.mintOperationRepository = core.mintOperationRepository;
     this.proofRepository = repositories.proofRepository;
     this.balanceQueries = core.balanceQueries;
@@ -801,8 +805,10 @@ export class Manager {
     this.proofStateWatcher = undefined;
   }
 
+  /** Recover Mint Operations, then in-flight Batch Mint Operations. */
   async recoverPendingMintOperations(): Promise<void> {
     await this.mintOperationService.recoverPendingOperations();
+    await this.batchMintOperationService.recoverInFlight();
   }
 
   async recoverPendingPaymentRequestReceiveAttempts(): Promise<void> {
@@ -1085,6 +1091,7 @@ export class Manager {
     authService: AuthService;
     mintOperationService: MintOperationService;
     mintSwapOperationService: MintSwapOperationService;
+    batchMintOperationService: BatchMintOperationService;
     mintOperationRepository: MintOperationRepository;
     balanceQueries: BalanceQueries;
     transactionRunner: CoreTransactionRunner;
@@ -1245,6 +1252,20 @@ export class Manager {
     });
     const meltOperationRepository = repositories.meltOperationRepository;
 
+    const batchMintOperationService = new BatchMintOperationService({
+      transactionRunner,
+      batchMintQueries: repositories.batchMint.operationRepository,
+      proofQueries: repositories.proofRepository,
+      quoteLifecycle,
+      mintService,
+      walletService,
+      keyRingService,
+      loadSeed: () => seedService.getSeed(),
+      eventBus: this.eventBus,
+      logger: this.getChildLogger('BatchMintOperationService'),
+      mintScopedLock,
+    });
+
     const mintOperationLogger = this.getChildLogger('MintOperationService');
     const mintOperationService = new MintOperationService({
       handlerProvider: mintHandlerProvider,
@@ -1345,6 +1366,7 @@ export class Manager {
       authService,
       mintOperationService,
       mintSwapOperationService,
+      batchMintOperationService,
       mintOperationRepository,
       balanceQueries,
       transactionRunner,
@@ -1376,7 +1398,10 @@ export class Manager {
     const history = new HistoryApi(this.historyService);
     const send = new SendOpsApi(this.sendOperationService);
     const receive = new ReceiveOpsApi(this.receiveOperationService);
-    const mintOps = new MintOpsApi(this.mintOperationService);
+    const mintOps = new MintOpsApi(
+      this.mintOperationService,
+      new BatchMintOpsApi(this.batchMintOperationService),
+    );
     const melt = new MeltOpsApi(this.meltOperationService);
     const mintSwap = new MintSwapOpsApi(
       this.mintSwapOperationService,

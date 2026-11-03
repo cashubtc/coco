@@ -92,7 +92,21 @@ After that commit, trust revocation cannot interrupt the authorized request or i
 source payment may have succeeded before its observation was persisted. Recovery retains all exact
 request and ownership checks, never restores trust, and never blindly redispatches source payment.
 
-Send, Mint, Melt, Receive, the Mint Swap coordinator, KeyRing, and mint metadata refresh use this model.
+Batch Mint persistence (`batchMint.operationRepository`, exposed as `tx.batchMintOperations`) and
+the shared Mint Quote claim-facts query `tx.mintQuoteClaims` are likewise required parts of every
+Wallet transaction scope. Every Mint Quote claimability decision, standalone or batched, reads its
+claim facts through that one query in the scope that authorizes it, so a standalone claim and a
+Batch Mint admission for the same quote cannot both commit. Adapter migrations govern the persisted
+Batch Mint format ([ADR-0016](0016-model-batch-minting-as-a-standalone-atomic-operation.md)).
+
+Send, Mint, Melt, Receive, the Mint Swap and Batch Mint coordinators, KeyRing, and mint metadata
+refresh use this model. The Batch Mint coordinator commits admission, Output Allocation and every
+member's Mint Quote Reservation in one `run()`, and settlement, failure and deferral in one `run()`
+each; NUT-20 signing, exact replay, Restore and proof-state checks stay outside transactions.
+Batch recovery uses saved proofs, then exact replay and conditional Restore (ADR-0016), without
+quote checks. Empty Restore permits failure only after a qualifying replay rejection under the
+accepted mint ordering assumption. Failure rechecks local output proofs inside its transaction;
+any saved evidence retains executing. Ambiguous replay or Restore results retain reservations.
 Mint Swap composes exact child preparation, authorization, and settlement through the same runner
 scope. Manager shares its child locks with ordinary Mint/Melt services in one effect-driving Coco
 Session per Wallet store. Existing host/session guards retain their scope; Core does not add a

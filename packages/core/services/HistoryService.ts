@@ -3,6 +3,7 @@ import { EventBus } from '../events/EventBus';
 import type { CoreEvents } from '../events/types';
 import type { HistoryEntry, OperationHistoryEntry } from '@core/models/History';
 import {
+  projectBatchMintOperation,
   projectMeltOperation,
   projectMintOperation,
   projectReceiveOperation,
@@ -11,6 +12,7 @@ import {
 import type { Logger } from '@core/logging';
 import type { MeltOperation } from '@core/operations/melt';
 import type { MintOperation } from '@core/operations/mint';
+import type { BatchMintOperation } from '@core/operations/batchMint/BatchMintOperation';
 import type { ReceiveOperation } from '@core/operations/receive/ReceiveOperation';
 import type { SendOperation } from '@core/operations/send/SendOperation';
 import type { Token } from '@cashu/cashu-ts';
@@ -68,6 +70,17 @@ export class HistoryService {
       return this.emitProjectedMint(mintUrl, operation);
     });
 
+    // Each Batch Mint Member is its own mint history entry sharing the batch's outcome.
+    this.eventBus.on('batch-mint-op:executing', ({ mintUrl, operation }) => {
+      return this.emitProjectedBatchMint(mintUrl, operation);
+    });
+    this.eventBus.on('batch-mint-op:finalized', ({ mintUrl, operation }) => {
+      return this.emitProjectedBatchMint(mintUrl, operation);
+    });
+    this.eventBus.on('batch-mint-op:failed', ({ mintUrl, operation }) => {
+      return this.emitProjectedBatchMint(mintUrl, operation);
+    });
+
     this.eventBus.on('receive-op:finalized', ({ mintUrl, operation }) => {
       return this.emitProjectedReceive(mintUrl, operation);
     });
@@ -94,6 +107,15 @@ export class HistoryService {
 
   private async emitProjectedMint(mintUrl: string, operation: MintOperation): Promise<void> {
     await this.emitProjectedEntry(mintUrl, projectMintOperation(operation), 'mint', operation.id);
+  }
+
+  private async emitProjectedBatchMint(
+    mintUrl: string,
+    operation: BatchMintOperation,
+  ): Promise<void> {
+    for (const entry of projectBatchMintOperation(operation)) {
+      await this.emitProjectedEntry(mintUrl, entry, 'mint', operation.id);
+    }
   }
 
   private async emitProjectedReceive(mintUrl: string, operation: ReceiveOperation): Promise<void> {
