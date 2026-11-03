@@ -10,9 +10,11 @@ import { initializeCoco, Manager } from '../../Manager.ts';
 import { meltQuoteFromBolt11Response } from '../../models/MeltQuote.ts';
 import type { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
+import type { WsRequest } from '../../infra/SubscriptionProtocol.ts';
 import type { PendingMeltOperation } from '../../operations/melt/MeltOperation.ts';
 import type { Repositories } from '../../repositories/index.ts';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
+import { buildYHexMapsForSecrets } from '../../utils.ts';
 import { mintQuoteFromBolt11Fixture } from '../normalizedMintQuoteFixtures.ts';
 
 const mintUrl = 'https://background.test';
@@ -46,6 +48,9 @@ describe.each(['memory', 'sqlite'] as const)('background progression (%s)', (ada
   let meltState: 'PENDING' | 'PAID' | 'UNPAID';
   let mintState: 'UNPAID' | 'PAID' | 'ISSUED';
   let proofState: 'UNSPENT' | 'SPENT';
+  let socketRequests: WsRequest[];
+  let receiveSocketMessage: (event: { data: string }) => void;
+  let subscribed: Promise<WsRequest>;
 
   beforeEach(async () => {
     database = adapter === 'sqlite' ? new Database(':memory:') : undefined;
@@ -103,6 +108,11 @@ describe.each(['memory', 'sqlite'] as const)('background progression (%s)', (ada
       feePpk: 0,
     });
     requests = [];
+    socketRequests = [];
+    let subscriptionSent!: (request: WsRequest) => void;
+    subscribed = new Promise((resolve) => {
+      subscriptionSent = resolve;
+    });
     meltState = 'PENDING';
     mintState = 'PAID';
     proofState = 'SPENT';
@@ -174,13 +184,18 @@ describe.each(['memory', 'sqlite'] as const)('background progression (%s)', (ada
           },
         },
       ],
-      // Keep the real hybrid/polling transport; the socket deliberately supplies no observations.
+      // Keep the real hybrid/polling transport; tests control only protocol-boundary messages.
       webSocketFactory: () => ({
-        send() {},
+        send(data) {
+          const request = JSON.parse(data) as WsRequest;
+          socketRequests.push(request);
+          if (request.method === 'subscribe') subscriptionSent(request);
+        },
         close() {},
         removeEventListener() {},
         addEventListener(type, listener) {
           if (type === 'open') queueMicrotask(() => listener({}));
+          if (type === 'message') receiveSocketMessage = listener;
         },
       }),
     });
@@ -465,6 +480,77 @@ describe.each(['memory', 'sqlite'] as const)('background progression (%s)', (ada
         ),
       ).toBe(true);
       expect(requests.some((path) => path.startsWith('/v1/mint/quote/'))).toBe(false);
+    },
+  );
+
+  it.each(['disableProofStateWatcher', 'dispose'] as const)(
+    'allows an awaited proof-state listener to call %s and releases the wire subscription',
+    async (stop) => {
+      const secrets = ['spent-before-shutdown', 'still-inflight-after-shutdown'];
+      await repo.proofRepository.saveProofs(
+        mintUrl,
+        secrets.map((secret) => ({
+          id: keysetId,
+          amount: Amount.from(1),
+          C: keys['1'],
+          secret,
+          mintUrl,
+          unit: 'sat',
+          state: 'inflight' as const,
+        })),
+      );
+      // Startup checks leave both proofs inflight, so the real watcher acquires a subscription.
+      proofState = 'UNSPENT';
+      await coco.enableProofStateWatcher();
+      const subscription = await subscribed;
+      // Subscription setup commits its local bookkeeping after the wire request is sent.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      let eventsReceived = 0;
+      const stopped = new Promise<void>((resolve, reject) => {
+        coco.on('proofs:state-changed', async ({ state }) => {
+          if (state !== 'spent') return;
+          eventsReceived += 1;
+          try {
+            await coco[stop]();
+            resolve();
+          } catch (error) {
+            reject(error);
+          }
+        });
+      });
+      const { yHexBySecret } = buildYHexMapsForSecrets(secrets);
+      const notifySpent = (secret: string) =>
+        receiveSocketMessage({
+          data: JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'subscribe',
+            params: {
+              subId: subscription.params.subId,
+              payload: { Y: yHexBySecret.get(secret), state: 'SPENT' },
+            },
+          }),
+        });
+
+      notifySpent(secrets[0]!);
+      await stopped;
+
+      expect((await repo.proofRepository.getProofBySecret(mintUrl, secrets[0]!))?.state).toBe(
+        'spent',
+      );
+      expect(
+        socketRequests.filter(
+          (request) =>
+            request.method === 'unsubscribe' && request.params.subId === subscription.params.subId,
+        ),
+      ).toHaveLength(1);
+
+      // A late notification must not change the remaining proof or publish another event.
+      notifySpent(secrets[1]!);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect((await repo.proofRepository.getProofBySecret(mintUrl, secrets[1]!))?.state).toBe(
+        'inflight',
+      );
+      expect(eventsReceived).toBe(1);
     },
   );
 

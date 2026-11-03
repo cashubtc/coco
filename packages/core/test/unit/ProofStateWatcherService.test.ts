@@ -81,43 +81,6 @@ describe('ProofStateWatcherService', () => {
     expect(subscribe).toHaveBeenCalledTimes(1);
   });
 
-  it('allows an awaited proof-state listener to stop the watcher', async () => {
-    const secret = 'stop-from-listener';
-    let notify!: (payload: { Y: string; state: 'SPENT' }) => Promise<void>;
-    const unsubscribe = mock(async () => {});
-    const subscribe = mock(async (_mintUrl, _kind, _filters, callback) => {
-      notify = callback;
-      return { subId: 'stop-from-listener', unsubscribe };
-    });
-    const setProofState = mock(async (mintUrl: string, secrets: string[], state: 'spent') => {
-      await bus.emit('proofs:state-changed', { mintUrl, secrets, state });
-    });
-    const watcher = new ProofStateWatcherService(
-      { subscribe } as unknown as SubscriptionManager,
-      { isTrustedMint: async () => true } as unknown as MintService,
-      { setProofState } as unknown as ProofService,
-      {} as ProofRepository,
-      bus,
-      undefined,
-      { watchExistingInflightOnStart: false },
-    );
-    await watcher.start();
-    await watcher.watchProof(mintUrlA, [secret]);
-    const stoppedInListener = mock(async () => {
-      await watcher.stop();
-      expect(watcher.isRunning()).toBe(false);
-    });
-    bus.on('proofs:state-changed', stoppedInListener);
-
-    const Y = buildYHexMapsForSecrets([secret]).yHexBySecret.get(secret)!;
-    await notify({ Y, state: 'SPENT' });
-
-    expect(stoppedInListener).toHaveBeenCalledTimes(1);
-    expect(unsubscribe).toHaveBeenCalledTimes(1);
-    await notify({ Y, state: 'SPENT' });
-    expect(setProofState).toHaveBeenCalledTimes(1);
-  });
-
   it('waits for subscription cleanup already started by a notification', async () => {
     const secret = 'cleanup-in-progress';
     let notify!: (payload: { Y: string; state: 'SPENT' }) => Promise<void>;
