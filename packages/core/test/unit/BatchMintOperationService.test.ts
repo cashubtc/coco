@@ -335,6 +335,19 @@ describe('Batch Mint Operations', () => {
 
     beforeEach(setupPair);
 
+    it('leaves interrupted Batch Mint recovery to an explicit call after networking repair', async () => {
+      h.mint.batchBehaviors.push('network');
+      const executing = await executePair();
+      expect(executing.state).toBe('executing');
+      const requestsBeforeRepair = h.mint.requests.length;
+      await h.coco.ensureSubscriptions();
+      expect(h.mint.requests).toHaveLength(requestsBeforeRepair);
+      expect((await h.coco.ops.mint.batch.get(executing.id))?.state).toBe('executing');
+      await h.coco.ops.mint.batch.recovery.run();
+      expect((await h.coco.ops.mint.batch.get(executing.id))?.state).toBe('finalized');
+      expect(h.mint.batchRequests).toHaveLength(2);
+    });
+
     it('marks a definitive rejection failed and releases its reservations without fallback', async () => {
       h.mint.batchBehaviors.push({ code: 20007, detail: 'quote expired' });
 

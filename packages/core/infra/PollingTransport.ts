@@ -65,7 +65,7 @@ export class PollingTransport implements RealTimeTransport {
   private readonly intervalByMint = new Map<string, number>();
   // Track unsubscribed subIds to prevent re-enqueuing tasks that are currently being processed
   private readonly unsubscribedByMint = new Map<string, Set<string>>();
-  private paused = false;
+  private readonly activeSubIdsByMint = new Map<string, Set<string>>();
 
   constructor(
     mintAdapter: MintAdapter,
@@ -99,18 +99,6 @@ export class PollingTransport implements RealTimeTransport {
     }
     if (!set.has(handler)) set.add(handler);
 
-    // Emit synthetic open exactly once per mint
-    if (event === 'open') {
-      const already = (map.get('open')?.size ?? 0) > 0;
-      if (!already) {
-        queueMicrotask(() => {
-          try {
-            handler({ type: 'open' });
-          } catch {}
-        });
-      }
-    }
-
     // Ensure scheduler exists
     this.ensureScheduler(mintUrl);
   }
@@ -138,6 +126,16 @@ export class PollingTransport implements RealTimeTransport {
         this.emit(mintUrl, 'message', { data: JSON.stringify(resp) });
         return;
       }
+
+      // WS reconnect replays logical interests through Hybrid. Retain the existing
+      // polling opportunity (including one in flight) instead of scheduling it twice.
+      let active = this.activeSubIdsByMint.get(mintUrl);
+      if (!active) {
+        active = new Set();
+        this.activeSubIdsByMint.set(mintUrl, active);
+      }
+      if (active.has(subId)) return;
+      active.add(subId);
 
       const scheduler = this.ensureScheduler(mintUrl);
 
@@ -217,6 +215,7 @@ export class PollingTransport implements RealTimeTransport {
 
     if (req.method === 'unsubscribe') {
       const subId = (req.params as any).subId as string;
+      if (!this.activeSubIdsByMint.get(mintUrl)?.delete(subId)) return;
       const scheduler = this.ensureScheduler(mintUrl);
       scheduler.queue = scheduler.queue.filter((t) => t.subId !== subId);
 
@@ -272,6 +271,7 @@ export class PollingTransport implements RealTimeTransport {
     this.subToYsByMint.clear();
     this.intervalByMint.clear();
     this.unsubscribedByMint.clear();
+    this.activeSubIdsByMint.clear();
   }
 
   closeMint(mintUrl: string): void {
@@ -286,19 +286,12 @@ export class PollingTransport implements RealTimeTransport {
     this.subToYsByMint.delete(mintUrl);
     this.intervalByMint.delete(mintUrl);
     this.unsubscribedByMint.delete(mintUrl);
+    this.activeSubIdsByMint.delete(mintUrl);
   }
 
-  pause(): void {
-    this.paused = true;
-    for (const scheduler of this.schedByMint.values()) this.clearTimer(scheduler);
-  }
-
-  resume(): void {
-    this.paused = false;
-    // Trigger maybeRun for all mints with schedulers to restart polling
-    for (const mintUrl of this.schedByMint.keys()) {
-      void this.maybeRun(mintUrl);
-    }
+  /** Re-arm existing schedules, preserving deadlines and any in-flight opportunity. */
+  ensure(): void {
+    for (const mintUrl of this.schedByMint.keys()) void this.maybeRun(mintUrl);
   }
 
   /**
@@ -343,7 +336,6 @@ export class PollingTransport implements RealTimeTransport {
   private scheduleNext(mintUrl: string, scheduler: MintScheduler): void {
     this.clearTimer(scheduler);
     if (
-      this.paused ||
       this.schedByMint.get(mintUrl) !== scheduler ||
       scheduler.running ||
       scheduler.queue.length === 0
@@ -362,7 +354,6 @@ export class PollingTransport implements RealTimeTransport {
   }
 
   private async maybeRun(mintUrl: string): Promise<void> {
-    if (this.paused) return;
     const s = this.schedByMint.get(mintUrl);
     if (!s || s.running) return;
     this.clearTimer(s);
@@ -384,6 +375,7 @@ export class PollingTransport implements RealTimeTransport {
     } catch (err) {
       this.logger?.error('Polling task error', { mintUrl, err });
       if (
+        task.batch ||
         (this.getMintQuoteMethod(task.kind) && this.mintQuotePolling) ||
         task.kind.endsWith('_melt_quote')
       ) {
@@ -429,6 +421,11 @@ export class PollingTransport implements RealTimeTransport {
     const unsubscribed = this.unsubscribedByMint.get(mintUrl);
     const removedSubIds = new Set<string>();
     for (const task of opportunity) {
+      // Removing the last proof interest can retire the in-flight batch sentinel.
+      // New proof interests may already have queued its replacement before it finishes.
+      if (task.batch && (!scheduler.hasProofBatchTask || scheduler.queue.some((t) => t.batch))) {
+        continue;
+      }
       if (task.subId && unsubscribed?.has(task.subId)) {
         removedSubIds.add(task.subId);
       } else {

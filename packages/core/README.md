@@ -113,7 +113,7 @@ already-authorized source work and redeem funded destination value.
 Coco packages are intended to be used with lock-step versioning; Mint Swap has no separate API
 activation flag. Automatic parent recovery is enabled by default. To use only explicit parent
 recovery, set `processors.mintSwapOperationProcessor.disabled: true`. That skips automatic parent
-startup/resume passes and timers while keeping preparation, execution, reads, cancellation and
+startup passes and timers while keeping preparation, execution, reads, cancellation and
 explicit recovery available. Ordinary Mint/Melt recovery retains its own configuration.
 The processor options `processIntervalMs` (1000), `sweepIntervalMs` (30000) and `batchSize` (25)
 control scanning, not persisted retry/backoff policy. The processor registers parent-owned quote
@@ -142,7 +142,7 @@ a paid source recovers forward. Cancellation can still incur a completed pre-swa
 `needs_attention` outcome requires inspection and is not successful settlement. A waiter timeout
 only ends observation; it never cancels, executes or recovers the swap. Waiters support `signal`
 and `pollIntervalMs`, and reject on disposal, a missing operation or a read failure.
-The timeout includes a final local read. Disposal drains admitted commands and pause/resume work
+The timeout includes a final local read. Disposal drains admitted commands and local subscription repair
 before completing.
 
 `mint-swap:updated` carries `{ operationId, revision, state }` after commit and lock release.
@@ -319,7 +319,7 @@ If you prefer manual wiring, construct `Manager` directly and call `initPlugins(
   and melt lifecycles.
 - `manager.quotes.mint` and `manager.quotes.melt` expose canonical quote lookup,
   creation, and refresh workflows.
-- `manager.on(...)` exposes typed `CoreEvents`, including subscription,
+- `manager.on(...)` exposes typed `CoreEvents`, including
   operation, proof, quote, history, mint, and auth-session events.
 
 ### Storage
@@ -342,10 +342,28 @@ for setup and storage-security guidance.
 - `enableMeltQuoteWatcher()`, `disableMeltQuoteWatcher()`
 - `enableMeltSettlementProcessor()`, `disableMeltSettlementProcessor()`
 - `enableProofStateWatcher()`, `disableProofStateWatcher()`
-- `pauseSubscriptions()`, `resumeSubscriptions()`
+- `ensureSubscriptions(): Promise<void>`
 - `use(plugin: Plugin): void` with `Plugin` from `@cashu/coco-core/plugin`
 - `initPlugins(): Promise<void>`
 - `dispose(): Promise<void>`
+
+`ensureSubscriptions()` is the app-foreground networking repair hook. It replaces sockets even when
+apparently alive, replays current subscriptions, and ensures polling schedules run. Overlapping calls
+coalesce. The promise resolves after local initiation, without waiting for remote connectivity,
+catch-up or operation completion; offline calls are safe. Current callbacks and owner settings are
+preserved. It does not restart watchers/processors, rediscover interests, or run Operation Recovery.
+Already-started polling may still commit observations and normal delivery may advance operations.
+
+This replaces the removed `pauseSubscriptions()` / `resumeSubscriptions()` APIs and
+`subscriptions:paused` / `subscriptions:resumed` events. Plugins use
+`ServiceMap.subscriptions.ensureSubscriptions()` in place of subscription `pause()` / `resume()`.
+There is no equivalent coordinated background quieting API: removing a background pause leaves
+enabled polling and work running. Individual owner controls remain available, including staged
+enabling after Restore readiness; `dispose()` is final shutdown. App-owned plugin synchronization,
+paid-quote requeueing and catch-up must remain explicit. Standalone Mint
+and Batch Mint recovery formerly run by resume are now independent explicit calls to
+`ops.mint.recovery.run()` and `ops.mint.batch.recovery.run()` when needed. See the
+[foreground and transport migration guide](../docs/starting/subscriptions.md).
 
 ### OpsApi
 
@@ -535,7 +553,6 @@ include:
 - `melt-op:pending` → `{ mintUrl, operationId, operation }`
 - `melt-op:finalized` → `{ mintUrl, operationId, operation }`
 - `melt-op:rolled-back` → `{ mintUrl, operationId, operation }`
-- `subscriptions:paused` / `subscriptions:resumed`
 - `auth-session:updated` / `auth-session:deleted` / `auth-session:expired`
 
 ## Plugins

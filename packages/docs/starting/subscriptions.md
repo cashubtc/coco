@@ -31,49 +31,93 @@ const coco = await initializeCoco({
 });
 ```
 
-## Managing Subscription Lifecycle
+## Foreground networking repair
 
-Coco provides APIs to pause and resume subscriptions for better resource management:
+Call `ensureSubscriptions()` when your app returns to the foreground. The OS may have silently
+cut a WebSocket even when it still appears open.
 
 ```ts
-// Pause all subscriptions when app goes to background
-await coco.pauseSubscriptions();
-
-// Resume all subscriptions when app comes to foreground
-await coco.resumeSubscriptions();
+await coco.ensureSubscriptions();
 ```
 
-This is particularly useful for:
+This replaces WebSocket connections, replays current logical subscriptions when replacements open,
+and ensures polling timers are running. Registrations and callbacks survive, overlapping calls
+coalesce, and polling retains its cadence without overlapping an in-flight request. Hybrid polling
+runs at the fast interval until the new socket opens, then uses the slow interval.
 
-- **Mobile apps**: Save battery when the app is backgrounded
-- **Web apps**: Reduce resource usage when the browser tab is hidden
-- **Desktop apps**: Pause when the window is minimized
+The promise resolves once **local repair has been initiated**. It does not wait for remote
+connectivity, observation catch-up, or operation completion, and is safe to call offline.
+Watchers and processors keep their current enabled/disabled state and interests. Repair does not
+rerun startup discovery or Operation Recovery. Normal observations can still persist canonical
+quote state and trigger enabled processors; requests already in flight may finish their commits.
 
-### Example: React Native App Lifecycle
+### React Native
 
 ```ts
 import { AppState } from 'react-native';
 
-// Listen for app state changes
-AppState.addEventListener('change', async (nextAppState) => {
-  if (nextAppState === 'background') {
-    await coco.pauseSubscriptions();
-  } else if (nextAppState === 'active') {
-    await coco.resumeSubscriptions();
-  }
+const listener = AppState.addEventListener('change', async (nextAppState) => {
+  if (nextAppState === 'active') await coco.ensureSubscriptions();
 });
+
+// When the component or lifecycle owner unmounts:
+listener.remove();
 ```
 
-### Example: Web Browser Visibility
+### Browser visibility
 
 ```ts
-document.addEventListener('visibilitychange', async () => {
-  if (document.hidden) {
-    await coco.pauseSubscriptions();
-  } else {
-    await coco.resumeSubscriptions();
-  }
-});
+const onVisibilityChange = async () => {
+  if (!document.hidden) await coco.ensureSubscriptions();
+};
+document.addEventListener('visibilitychange', onVisibilityChange);
+
+// When the lifecycle owner is removed:
+document.removeEventListener('visibilitychange', onVisibilityChange);
 ```
 
-See [Watchers & Processors](../pages/watchers-processors.md) for more details on pause/resume behavior.
+The React provider does not automatically invoke foreground repair. Register the appropriate
+platform handler in your app. Use individual watcher/processor enable and disable methods for
+intentional background policy, and `dispose()` for final shutdown. Repair is a no-op after Manager
+disposal starts; a disposed Coco Session cannot be restarted.
+
+## Migration from pause and resume
+
+`Manager.pauseSubscriptions()` and `Manager.resumeSubscriptions()` have been removed, along with
+`SubscriptionManager.pause()` / `resume()` (also reachable through plugin `ServiceMap.subscriptions`)
+and the `subscriptions:paused` / `subscriptions:resumed` events. There is no deprecation shim or
+replacement lifecycle event: initiating repair does not establish readiness.
+
+Replace foreground resume calls with `await coco.ensureSubscriptions()`. Remove background pause
+calls, or explicitly disable the owners your app intends to stop and enable them when appropriate.
+Repair preserves runtime choices; it does not restore the original initialization configuration.
+Replace teardown calls with `await coco.dispose()`.
+
+This migration is **not behavior-equivalent** to background pause/resume. There is no replacement
+for its coordinated background quieting: removing a background pause (including one delayed by a
+grace period) leaves polling and enabled background work running, subject to OS scheduling.
+`ensureSubscriptions()` never suspends them. Individual disable methods only stop their respective
+owners; they are not a global pause for all transports or plugin registrations. The app must choose
+its own background policy. Final `dispose()` ends the Coco Session, so it is not temporary suspension.
+
+Keep app-owned foreground catch-up separate and in the order your app requires. Plugin start/sync,
+explicit quote refresh or operation recovery, and `requeuePaidMintQuotes()` are not performed by
+`ensureSubscriptions()`. Its completion is not a barrier before which those tasks are synchronized.
+Applications that stage owner enable calls after Restore or counter readiness must retain that
+sequencing; repair neither advances the readiness gate nor enables disabled owners.
+
+The old resume path unconditionally ran standalone Mint and Batch Mint recovery. Repair deliberately
+omits those sweeps. When your application needs explicit recovery, call it independently:
+
+```ts
+await coco.ops.mint.recovery.run();
+await coco.ops.mint.batch.recovery.run();
+```
+
+Startup recovery in `initializeCoco()` remains unchanged. Plugins can initiate the same networking
+repair with `await ctx.services.subscriptions.ensureSubscriptions()`. Injected `RealTimeTransport`
+implementations must replace `pause()` / `resume()` with synchronous `ensure(): void`: initiate local
+repair, preserve polling interests, fence retired callbacks, and emit `open` for each fresh connection
+so current registrations can be replayed. Replayed subscriptions must not duplicate polling tasks.
+
+See [Watchers & Processors](../pages/watchers-processors.md) for owner controls and shutdown behavior.

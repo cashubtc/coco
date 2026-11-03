@@ -533,7 +533,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
     afterEach(async () => {
       if (mgr) {
-        await mgr.pauseSubscriptions();
         await mgr.dispose();
         mgr = undefined;
       }
@@ -568,7 +567,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(trustedMints).toHaveLength(1);
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -595,7 +593,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(await mgr.mint.isTrustedMint(mintUrl)).toBe(false);
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -626,7 +623,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           await eventPromise;
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -687,7 +683,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(await getMintTotalBalance(mgr, mintUrl, testUnit)).toBeGreaterThanOrEqual(100);
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -730,7 +725,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(observed.state).toBe('ISSUED');
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -777,7 +771,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(await getMintTotalBalance(mgr, mintUrl, testUnit)).toBe(63);
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -810,7 +803,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(await getMintTotalBalance(mgr, mintUrl, testUnit)).toBeGreaterThanOrEqual(50);
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -893,7 +885,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(storedQuote.reusable).toBe(true);
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -968,7 +959,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(storedQuote.reusable).toBe(true);
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -1067,7 +1057,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
             mintUrl,
             amount: { amount: 25, unit: customUnit },
           });
-          await mgr!.pauseSubscriptions();
           await mgr!.dispose();
 
           mgr = await initializeCoco({
@@ -2175,7 +2164,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           unsubscribe();
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -2205,7 +2193,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           unsubscribe();
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -2260,7 +2247,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           unsubSaved();
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -2302,7 +2288,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(await getMintTotalBalance(mgr, mintUrl, testUnit)).toBeGreaterThanOrEqual(150);
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -2310,7 +2295,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         }
       });
 
-      it('should handle pause and resume subscriptions', async () => {
+      it('repairs subscriptions and continues automatic minting', async () => {
         const { repositories, dispose } = await createRepositories();
         try {
           mgr = await initializeCoco({
@@ -2321,15 +2306,13 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
           await mgr.mint.addMint(mintUrl, { trusted: true });
 
-          await mgr.pauseSubscriptions();
-          await mgr.resumeSubscriptions();
+          await mgr.ensureSubscriptions();
 
           await mintAmount(mgr!, mintUrl, 100, testUnit);
 
           expect(await getMintTotalBalance(mgr, mintUrl, testUnit)).toBeGreaterThanOrEqual(100);
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -2370,7 +2353,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           const pendingOperation = await mgr!.ops.send.get(operationId!);
           expect(pendingOperation!.state).toBe('pending');
 
-          await mgr.pauseSubscriptions();
           await mgr.dispose();
           mgr = undefined;
 
@@ -2398,7 +2380,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(finalized!.state).toBe('finalized');
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -2435,7 +2416,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       }
 
       async function stopSession() {
-        await mgr?.pauseSubscriptions();
         await mgr?.dispose();
         mgr = undefined;
       }
@@ -2738,7 +2718,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(await getMintTotalBalance(mgr, mintUrl, testUnit)).toBeGreaterThanOrEqual(400);
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -2765,7 +2744,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(keypair.secretKey.length).toBe(32);
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -2790,7 +2768,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(retrieved?.secretKey).toBeDefined();
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -2813,7 +2790,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(retrieved).toBe(null);
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -2840,7 +2816,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(latest?.publicKeyHex).toBe(kp3.publicKeyHex);
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -2862,7 +2837,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(latest).toBe(null);
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -2893,7 +2867,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(publicKeys).toContain(kp3.publicKeyHex);
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -2930,7 +2903,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(removed).toBe(null);
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -2957,7 +2929,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           const kp1_1 = await mgr1.keyring.generateKeyPair(true);
           const kp1_2 = await mgr1.keyring.generateKeyPair(true);
 
-          await mgr1.pauseSubscriptions();
           await mgr1.dispose();
 
           // Second manager with same seed generates keypairs
@@ -2970,7 +2941,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           const kp2_1 = await mgr2.keyring.generateKeyPair(true);
           const kp2_2 = await mgr2.keyring.generateKeyPair(true);
 
-          await mgr2.pauseSubscriptions();
           await mgr2.dispose();
 
           // Keypairs should be identical (deterministic derivation)
@@ -3011,7 +2981,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(retrievedAfter?.derivationIndex).toBe(originalDerivationIndex);
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -3038,7 +3007,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           const derivedKp = await mgr1.keyring.generateKeyPair(true);
           expect(derivedKp.secretKey).toBeDefined();
 
-          await mgr1.pauseSubscriptions();
           await mgr1.dispose();
 
           // Second manager: add the key first (without derivation index), then generate
@@ -3066,7 +3034,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(retrievedAfter).toBeDefined();
           expect(retrievedAfter?.derivationIndex).toBeDefined();
 
-          await mgr2.pauseSubscriptions();
           await mgr2.dispose();
         } finally {
           await dispose1();
@@ -3327,7 +3294,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         expect(storedTokenBeforeRestart.token).toBeDefined();
         expect(storedTokenBeforeRestart.token?.proofs.length).toBeGreaterThan(0);
 
-        await mgr!.pauseSubscriptions();
         await mgr!.dispose();
         mgr = undefined;
 
@@ -3522,7 +3488,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           unsubscribe();
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }

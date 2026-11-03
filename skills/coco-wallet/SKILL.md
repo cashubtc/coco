@@ -67,10 +67,10 @@ initialization against that Wallet store until the old runtime has been terminat
 has otherwise been established. Preserve the database and recovery material. Storage initialization
 can also fail before a session exists, so handle ordinary errors as well.
 
-For temporary suspension, await `coco.pauseSubscriptions()` and later
-`coco.resumeSubscriptions()`. Pause stops background observation and processing; it does not
-dispose the session or prevent explicit API calls. Gate app actions separately when suspending.
-Final shutdown uses `dispose()`; a disposed session cannot be resumed.
+On app foreground, await `coco.ensureSubscriptions()` to initiate networking repair while
+preserving current owners and interests. Completion is local, not remote readiness or catch-up.
+Use individual owner controls for background policy and explicit recovery APIs for reconciliation;
+see [Background services](references/background-services.md). Final shutdown uses `dispose()`.
 
 **Done when:** restarting opens the same Wallet and database, unavailable storage has a visible
 error state, and session ownership prevents duplicate initialization or abandoned sessions.

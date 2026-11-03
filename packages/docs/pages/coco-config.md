@@ -70,7 +70,7 @@ export interface CocoConfig {
 
 The Mint Swap API is always available. `processors.mintSwapOperationProcessor` controls automatic
 recovery and defaults to enabled, including on restart with unfinished swaps. Setting `disabled: true`
-skips automatic parent startup/resume passes and timers; all explicit commands remain available,
+skips automatic parent startup passes and timers; all explicit commands remain available,
 including preparation, execution, `ops.mintSwap.refresh(id)` and `ops.mintSwap.recovery.run()`. Generic Mint/Melt
 recovery, ordinary processors and automatic quote claiming leave children of active Mint Swaps to
 the parent, so disabling this processor also pauses them; see

@@ -490,7 +490,6 @@ describe('QuoteLifecycle mint quote polling', () => {
         quoteLifecycle,
       );
       transport.on(mintUrl, 'message', (event) => notifications.push(JSON.parse(event.data)));
-      transport.pause();
       try {
         transport.send(mintUrl, {
           jsonrpc: '2.0',
@@ -502,7 +501,6 @@ describe('QuoteLifecycle mint quote polling', () => {
           },
           id: 1,
         });
-        transport.resume();
         await waitFor(() =>
           notifications.some(({ params }) => params?.payload?.quote === 'quote-a'),
         );
@@ -1051,7 +1049,6 @@ describe('QuoteLifecycle mint quote polling', () => {
       quoteLifecycle,
     );
     transport.on(mintUrl, 'message', (event) => notifications.push(JSON.parse(event.data)));
-    transport.pause();
 
     transport.send(mintUrl, {
       jsonrpc: '2.0',
@@ -1063,7 +1060,6 @@ describe('QuoteLifecycle mint quote polling', () => {
       },
       id: 1,
     });
-    transport.resume();
     await waitFor(() => notifications.some(({ params }) => params?.payload?.quote === 'quote-b'));
 
     expect(mintAdapter.checkMintQuoteBatch).toHaveBeenCalledTimes(1);
@@ -1101,7 +1097,6 @@ describe('QuoteLifecycle mint quote polling', () => {
       quoteLifecycle,
     );
     transport.on(mintUrl, 'message', (event) => notifications.push(JSON.parse(event.data)));
-    transport.pause();
     transport.send(mintUrl, {
       jsonrpc: '2.0',
       method: 'subscribe',
@@ -1112,7 +1107,6 @@ describe('QuoteLifecycle mint quote polling', () => {
       },
       id: 1,
     });
-    transport.resume();
     await waitFor(
       () => (mintAdapter.checkMintQuoteBatch as ReturnType<typeof mock>).mock.calls.length === 1,
     );
