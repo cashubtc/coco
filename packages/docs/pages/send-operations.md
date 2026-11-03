@@ -84,6 +84,28 @@ console.log(token.memo); // "Dinner"
 Memos are trimmed before persistence. Whitespace-only memos are treated as
 omitted.
 
+### Covering Receiver Fees
+
+By default, `amount` is the face value of the outgoing token. Set `coverReceiverFees: true` when
+the receiver must have at least that amount after redeeming the token:
+
+```ts
+const prepared = await coco.ops.send.prepare({
+  mintUrl,
+  amount: 7,
+  coverReceiverFees: true,
+});
+```
+
+At a mint charging 100 input-fee ppk, this can produce an 8-sat token that redeems for 7 sats.
+`prepared.amount` is the gross token value. `prepared.fee` remains the separate payer-side swap
+fee; it does not include the receiver's fee allowance. The Wallet must fund both.
+
+The option works with direct proofs, `forceSwap`, and P2PK targets. For P2PK, the entire outgoing
+amount, including the fee allowance, is locked to the target. Omitting the option or setting it
+to false keeps face-value semantics. Payment Requests enable this option automatically.
+Execution and recovery reuse the prepared plan.
+
 ### Forcing a Swap
 
 Default sends reuse ready proofs when they exactly match the requested amount. To reissue the

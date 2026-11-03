@@ -13,13 +13,11 @@ import type {
   PaymentRequestReceiveAttemptRepository,
 } from './repositories';
 import {
-  CounterService,
   MintService,
   MintOperationWatcherService,
   MintOperationProcessor,
   MeltQuoteWatcherService,
   MeltSettlementProcessor,
-  ProofService,
   WalletService,
   SeedService,
   WalletRestoreService,
@@ -92,7 +90,10 @@ import {
   mintQuoteToMethodSnapshot,
 } from './models/MintQuote.ts';
 import { assessMintQuoteClaimability } from './models/MintQuoteClaimability.ts';
-import { RepositoryCoreTransactionRunner } from './transactions/CoreTransaction.ts';
+import {
+  RepositoryCoreTransactionRunner,
+  type CoreTransactionRunner,
+} from './transactions/CoreTransaction.ts';
 import { KeypairDerivation } from './keypairs/KeypairDerivation.ts';
 import { KeypairP2pkSigner } from './keypairs/P2pkSigner.ts';
 
@@ -147,7 +148,7 @@ export interface CocoConfig {
     /** Proof state watcher (enabled by default) */
     proofStateWatcher?: {
       disabled?: boolean;
-      /** When enabled, scan existing inflight proofs on start (default: true) */
+      /** Scan existing inflight proofs and pending Sends on start (default: true). */
       watchExistingInflightOnStart?: boolean;
     };
     /** Melt quote watcher (enabled by default) */
@@ -172,11 +173,13 @@ export interface CocoConfig {
       maxRetries?: number;
       baseRetryDelayMs?: number;
       initialEnqueueDelayMs?: number;
+      /** Automatically claim cached and newly observed Mint Quote value (default: true). */
       autoClaimMintQuotes?: boolean;
     };
     /** Melt settlement processor (enabled by default) */
     meltSettlementProcessor?: {
       disabled?: boolean;
+      /** Discover pending Melts from persisted evidence; live listeners remain enabled. */
       initializeExistingPendingOperationsOnStart?: boolean;
     };
   };
@@ -331,7 +334,6 @@ export class Manager {
   readonly ext: PluginExtensions;
   private mintService: MintService;
   private walletService: WalletService;
-  private proofService: ProofService;
   private walletRestoreService: WalletRestoreService;
   private keyRingService: KeyRingService;
   private eventBus: EventBus<CoreEvents>;
@@ -350,7 +352,6 @@ export class Manager {
   private proofStateWatcher?: ProofStateWatcherService;
   private historyService: HistoryService;
   private seedService: SeedService;
-  private counterService: CounterService;
   private tokenService: TokenService;
   private paymentRequestService: PaymentRequestService;
   private paymentRequestReceiveService: PaymentRequestReceiveService;
@@ -368,6 +369,7 @@ export class Manager {
   private paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
   private proofRepository: Repositories['proofRepository'];
   private balanceQueries: BalanceQueries;
+  private transactionRunner: CoreTransactionRunner;
   private readonly pluginHost: PluginHost = new PluginHost();
   private subscriptionsPaused = false;
   private subscriptionLifecycle: Promise<void> = Promise.resolve();
@@ -417,11 +419,9 @@ export class Manager {
     const core = this.buildCoreServices(repositories, seedGetter);
     this.mintService = core.mintService;
     this.walletService = core.walletService;
-    this.proofService = core.proofService;
     this.walletRestoreService = core.walletRestoreService;
     this.keyRingService = core.keyRingService;
     this.seedService = core.seedService;
-    this.counterService = core.counterService;
     this.legacyMintQuoteRepository = core.legacyMintQuoteRepository;
     this.historyService = core.historyService;
     this.paymentRequestService = core.paymentRequestService;
@@ -443,6 +443,7 @@ export class Manager {
     this.mintOperationRepository = core.mintOperationRepository;
     this.proofRepository = repositories.proofRepository;
     this.balanceQueries = core.balanceQueries;
+    this.transactionRunner = core.transactionRunner;
     this.subscriptions = this.createSubscriptionManager(webSocketFactory, subscriptions);
     const apis = this.buildApis();
     this.mint = apis.mint;
@@ -498,15 +499,14 @@ export class Manager {
     const services: ServiceMap = {
       mintService: this.mintService,
       walletService: this.walletService,
-      proofService: this.proofService,
       keyRingService: this.keyRingService,
       seedService: this.seedService,
       walletRestoreService: this.walletRestoreService,
       paymentRequestService: this.paymentRequestService,
-      counterService: this.counterService,
       meltOperationService: this.meltOperationService,
       mintOperationService: this.mintOperationService,
       quotes: this.quotes,
+      balances: this.wallet.balances,
       historyService: this.historyService,
       sendOperationService: this.sendOperationService,
       receiveOperationService: this.receiveOperationService,
@@ -592,6 +592,7 @@ export class Manager {
     if (this.mintSwapOperationProcessor === processor) this.mintSwapOperationProcessor = undefined;
   }
 
+  /** Enable observation; parent-owned subscription setup may still be pending on return. */
   async enableMintOperationWatcher(options?: {
     watchExistingPendingOnStart?: boolean;
     watchExistingPendingQuotesOnStart?: boolean;
@@ -599,6 +600,7 @@ export class Manager {
     if (this.disposed) return;
     if (this.mintOperationWatcher) {
       if (!this.mintOperationWatcher.isRunning()) await this.mintOperationWatcher.stop();
+      else this.mintOperationWatcher.retryFailedInterests();
       return;
     }
     const watcherLogger = this.logger.child
@@ -648,6 +650,7 @@ export class Manager {
     this.mintOperationProcessor = new MintOperationProcessor(
       this.mintOperationService,
       this.quoteLifecycle,
+      this.mintService,
       this.eventBus,
       processorLogger,
       options,
@@ -662,6 +665,11 @@ export class Manager {
     this.mintOperationProcessor = undefined;
   }
 
+  /**
+   * Enable quote observation and attach pending-operation interests. Operation-owned interests
+   * are accepted synchronously; their subscription setup may still be pending when this resolves.
+   * Setup errors are reported by the watcher and do not block cached-evidence progression.
+   */
   async enableMeltQuoteWatcher(options?: {
     watchExistingPendingQuotesOnStart?: boolean;
   }): Promise<void> {
@@ -672,6 +680,7 @@ export class Manager {
         return;
       }
       await this.meltSettlementProcessor?.setInterestRegistrar(this.meltQuoteWatcher);
+      this.meltQuoteWatcher.retryFailedInterests();
       await this.rebindMintSwapObservation();
       return;
     }
@@ -713,6 +722,7 @@ export class Manager {
     });
   }
 
+  /** Enable cached-evidence progression without waiting for operation quote subscriptions. */
   async enableMeltSettlementProcessor(options?: {
     initializeExistingPendingOperationsOnStart?: boolean;
   }): Promise<boolean> {
@@ -757,8 +767,21 @@ export class Manager {
     this.proofStateWatcher = new ProofStateWatcherService(
       this.subscriptions,
       this.mintService,
-      this.proofService,
       this.proofRepository,
+      {
+        sendOperations: this.sendOperationRepository,
+        meltOperations: this.meltOperationRepository,
+        mintOperations: this.mintOperationRepository,
+        receiveOperations: this.receiveOperationRepository,
+        mintSwapOperations: this.mintSwapOperationRepository,
+      },
+      this.transactionRunner,
+      {
+        checkProofStates: async (mintUrl, unit, proofs) => {
+          const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl, unit);
+          return wallet.checkProofsStates(proofs);
+        },
+      },
       this.eventBus,
       watcherLogger,
       { watchExistingInflightOnStart: options?.watchExistingInflightOnStart ?? true },
@@ -767,6 +790,11 @@ export class Manager {
     await this.proofStateWatcher.start();
   }
 
+  /**
+   * Stop proof observation and release subscriptions, including acquisitions in progress.
+   * Already-started notification processing and operation checks may finish and publish events
+   * after this resolves. Safe to await from a proof or Send event listener.
+   */
   async disableProofStateWatcher(): Promise<void> {
     if (!this.proofStateWatcher) return;
     await this.proofStateWatcher.stop();
@@ -1037,8 +1065,6 @@ export class Manager {
     mintService: MintService;
     seedService: SeedService;
     walletService: WalletService;
-    counterService: CounterService;
-    proofService: ProofService;
     tokenService: TokenService;
     walletRestoreService: WalletRestoreService;
     keyRingService: KeyRingService;
@@ -1061,11 +1087,10 @@ export class Manager {
     mintSwapOperationService: MintSwapOperationService;
     mintOperationRepository: MintOperationRepository;
     balanceQueries: BalanceQueries;
+    transactionRunner: CoreTransactionRunner;
   } {
     const mintLogger = this.getChildLogger('MintService');
     const walletLogger = this.getChildLogger('WalletService');
-    const counterLogger = this.getChildLogger('CounterService');
-    const proofLogger = this.getChildLogger('ProofService');
     const walletRestoreLogger = this.getChildLogger('WalletRestoreService');
     const keyRingLogger = this.getChildLogger('KeyRingService');
     const historyLogger = this.getChildLogger('HistoryService');
@@ -1107,26 +1132,9 @@ export class Manager {
       (mintUrl: string) => this.mintAdapter.getAuthProvider(mintUrl),
       this.outputDataCreator,
     );
-    const counterService = new CounterService(
-      repositories.counterRepository,
-      counterLogger,
-      this.eventBus,
-    );
     const balanceQueries = new StoredBalanceQueries(
       repositories.proofRepository,
       repositories.mintRepository,
-    );
-    const proofService = new ProofService(
-      counterService,
-      repositories.proofRepository,
-      walletService,
-      mintService,
-      p2pkSigner,
-      seedService,
-      proofLogger,
-      this.eventBus,
-      this.outputDataCreator,
-      balanceQueries,
     );
 
     // One shared instance across every counter-consuming operation service so that
@@ -1212,7 +1220,6 @@ export class Manager {
       mintQuoteRepository: repositories.mintQuoteRepository,
       meltQuoteRepository: repositories.meltQuoteRepository,
       proofRepository: repositories.proofRepository,
-      proofService,
       mintService,
       walletService,
       mintAdapter: this.mintAdapter,
@@ -1287,7 +1294,7 @@ export class Manager {
     const paymentRequestLogger = this.getChildLogger('PaymentRequestService');
     const paymentRequestService = new PaymentRequestService(
       sendOperationService,
-      proofService,
+      balanceQueries,
       mintService,
       paymentRequestLogger,
     );
@@ -1318,8 +1325,6 @@ export class Manager {
       mintService,
       seedService,
       walletService,
-      counterService,
-      proofService,
       tokenService,
       walletRestoreService,
       keyRingService,
@@ -1342,6 +1347,7 @@ export class Manager {
       mintSwapOperationService,
       mintOperationRepository,
       balanceQueries,
+      transactionRunner,
     };
   }
 
@@ -1360,12 +1366,11 @@ export class Manager {
     const wallet = new WalletApi(
       this.mintService,
       this.walletService,
-      this.proofService,
       this.walletRestoreService,
       this.receiveOperationService,
       this.tokenService,
-      walletApiLogger,
       this.balanceQueries,
+      walletApiLogger,
     );
     const keyring = new KeyRingApi(this.keyRingService);
     const history = new HistoryApi(this.historyService);

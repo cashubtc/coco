@@ -20,8 +20,9 @@ import {
   type QuoteWatchInterest,
   type QuoteWatchIdentity,
 } from './QuoteWatchInterests.ts';
+import { QuoteWatchRecords } from './QuoteWatchRecords.ts';
 
-type QuoteKey = string;
+type QuoteKey = string; // `${mintUrl}::${method}::${quoteId}`
 
 interface WatchableMeltQuote {
   mintUrl: string;
@@ -43,6 +44,7 @@ interface QuoteWatchRecord {
   subscriptionKind: SubscriptionKind;
   start?: Promise<void>;
   stop?: UnsubscribeHandler;
+  failed?: boolean;
 }
 
 export interface MeltQuoteWatcherOptions {
@@ -139,10 +141,11 @@ export class MeltQuoteWatcherService {
   private readonly options: Required<MeltQuoteWatcherOptions>;
 
   private running = false;
+  private generation = 0;
   private stopping?: Promise<void>;
   private readonly work = new Set<Promise<unknown>>();
   private readonly interests = new QuoteWatchInterests();
-  private readonly watchRecordByKey = new Map<QuoteKey, QuoteWatchRecord>();
+  private readonly records: QuoteWatchRecords<QuoteWatchRecord>;
   private offQuoteUpdated?: () => void;
   private offUntrusted?: () => void;
 
@@ -162,42 +165,44 @@ export class MeltQuoteWatcherService {
     this.options = {
       watchExistingPendingQuotesOnStart: options?.watchExistingPendingQuotesOnStart ?? true,
     };
+    this.records = new QuoteWatchRecords({
+      label: 'melt',
+      interests: this.interests,
+      isTrustedMint: (mintUrl) => this.mintService.isTrustedMint(mintUrl),
+      logger,
+    });
   }
 
-  /** Exact recovery permission, not a query about transport presence. */
+  /** Exact authorized observation permission, independent of subscription readiness. */
   hasRecoveryInterest(quote: QuoteWatchIdentity): boolean {
     return this.running && this.interests.hasRecovery(quoteWatchKey(quote));
   }
 
-  private own<T>(work: Promise<T>): Promise<T> {
-    this.work.add(work);
-    void work.then(
-      () => this.work.delete(work),
-      () => this.work.delete(work),
+  private own<T>(task: Promise<T>): Promise<T> {
+    this.work.add(task);
+    void task.then(
+      () => this.work.delete(task),
+      () => this.work.delete(task),
     );
-    return work;
+    return task;
   }
 
-  async registerInterest(interest: QuoteWatchInterest): Promise<void> {
-    await this.own(this.watchMeltQuotes([interest], interest.owner));
+  /** Declare local ownership immediately; this watcher owns asynchronous activation and errors. */
+  registerInterest(interest: QuoteWatchInterest): void {
+    if (!this.running) return;
+    void this.addWatchInterest(interest, interest.owner);
   }
 
-  async removeInterest(owner: QuoteWatchOwner): Promise<void> {
-    for (const key of this.interests.keysFor(owner)) {
-      this.interests.remove(key, owner);
-      const record = this.watchRecordByKey.get(key);
-      if (!this.interests.hasAny(key)) {
-        await this.stopWatching(key);
-      } else if (record && !this.interests.hasRecovery(key)) {
-        const trusted = await this.mintService.isTrustedMint(record.mintUrl);
-        // Registration can add a recovery owner while the trust read is pending.
-        if (
-          !trusted &&
-          !this.interests.hasRecovery(key) &&
-          this.watchRecordByKey.get(key) === record
-        )
-          await this.stopWatching(key);
-      }
+  /** Withdraw every declaration before waiting for acquisition, trust checks, or cleanup. */
+  removeInterest(owner: QuoteWatchOwner): Promise<void> {
+    return this.own(this.records.removeInterest(owner));
+  }
+
+  /** Retry failed activation on an explicit enable; skipped untrusted interests stay skipped. */
+  retryFailedInterests(): void {
+    if (!this.running) return;
+    for (const record of this.records.values()) {
+      if (record.failed) void this.activateWatchRecord(record, this.getPolicy(record.method));
     }
   }
 
@@ -206,18 +211,18 @@ export class MeltQuoteWatcherService {
   }
 
   async start(): Promise<void> {
-    // A concurrent stop wins; a later explicit start can acquire a new set of resources.
     if (this.stopping) {
       await this.stopping;
       return;
     }
     if (this.running) return;
     this.running = true;
+    const generation = ++this.generation;
     this.logger?.info('MeltQuoteWatcherService started');
 
     this.offQuoteUpdated = this.bus.on('melt-quote:updated', async ({ quote }) => {
       try {
-        await this.own(this.handleCanonicalQuoteUpdate(quote));
+        if (this.isActive(generation)) await this.own(this.handleCanonicalQuoteUpdate(quote));
       } catch (err) {
         this.logger?.error('Failed to handle canonical melt quote update', {
           mintUrl: quote.mintUrl,
@@ -230,7 +235,8 @@ export class MeltQuoteWatcherService {
 
     this.offUntrusted = this.bus.on('mint:untrusted', async ({ mintUrl }) => {
       try {
-        await this.own(this.handleMintUntrusted(mintUrl));
+        if (this.isActive(generation))
+          await this.own(this.handleMintUntrusted(mintUrl, generation));
       } catch (err) {
         this.logger?.error('Failed to stop watching melt quotes on untrust', { mintUrl, err });
       }
@@ -239,6 +245,7 @@ export class MeltQuoteWatcherService {
     if (this.options.watchExistingPendingQuotesOnStart) {
       try {
         const quotes = await this.quoteLifecycle.getPendingMeltQuotes();
+        if (!this.isActive(generation)) return;
         await this.watchMeltQuotes(
           quotes.map((quote) => ({
             mintUrl: quote.mintUrl,
@@ -257,18 +264,21 @@ export class MeltQuoteWatcherService {
   stop(): Promise<void> {
     if (this.stopping) return this.stopping;
     if (!this.running) return Promise.resolve();
-    const stopping = this.stopOwnedResources();
-    this.stopping = stopping;
-    const finished = () => {
-      if (this.stopping === stopping) this.stopping = undefined;
-    };
-    void stopping.then(finished, finished);
-    return stopping;
+    this.running = false;
+    const task = this.finishStop();
+    this.stopping = task;
+    void task.then(
+      () => {
+        this.stopping = undefined;
+      },
+      () => {
+        this.stopping = undefined;
+      },
+    );
+    return task;
   }
 
-  private async stopOwnedResources(): Promise<void> {
-    this.running = false;
-
+  private async finishStop(): Promise<void> {
     if (this.offQuoteUpdated) {
       try {
         this.offQuoteUpdated();
@@ -285,38 +295,31 @@ export class MeltQuoteWatcherService {
       }
     }
 
-    const keys = Array.from(this.watchRecordByKey.keys());
-    for (const key of keys) {
-      await this.stopWatching(key);
-    }
-    while (this.work.size) await Promise.allSettled([...this.work]);
+    await this.records.stopAll();
+    while (this.work.size > 0) await Promise.allSettled([...this.work]);
     this.interests.clear();
     this.logger?.info('MeltQuoteWatcherService stopped');
   }
 
-  /** @internal Registers future operation-owned interest without wiring operation settlement. */
-  async registerOperationInterest(interest: MeltQuoteOperationInterest): Promise<void> {
-    await this.own(
-      this.watchMeltQuotes(
-        [
-          {
-            mintUrl: interest.mintUrl,
-            method: interest.method,
-            quoteId: interest.quoteId,
-          },
-        ],
-        { kind: 'operation', id: interest.operationId },
-      ),
-    );
+  /**
+   * @internal Declare observation interest synchronously. Return means local acceptance, not
+   * subscription readiness or remote acceptance. This watcher owns setup and reports failures.
+   * A repeated declaration may retry failed or previously skipped setup; it does not start a loop.
+   */
+  registerOperationInterest(interest: MeltQuoteOperationInterest): void {
+    this.registerInterest({ ...interest, owner: { kind: 'operation', id: interest.operationId } });
   }
 
-  /** @internal Removes future operation-owned interest and stops the watch if no interest remains. */
-  async removeOperationInterest(operationId: string): Promise<void> {
-    await this.removeInterest({ kind: 'operation', id: operationId });
+  /** @internal Ordinary and parent owners have independent identities and cleanup. */
+  removeOperationInterest(operationId: string): Promise<void> {
+    return this.removeInterest({ kind: 'operation', id: operationId });
+  }
+
+  private isActive(generation: number): boolean {
+    return this.running && this.generation === generation;
   }
 
   private async handleCanonicalQuoteUpdate(quote: MeltQuote): Promise<void> {
-    if (!this.running) return;
     const key = toKey(quote.mintUrl, quote.method, quote.quoteId);
 
     if (quote.state === 'PAID' && Array.isArray(quote.change)) {
@@ -350,50 +353,48 @@ export class MeltQuoteWatcherService {
     quotes: WatchableMeltQuote[],
     interest: QuoteWatchOwner,
   ): Promise<void> {
-    if (!this.running) return;
-    if (quotes.length === 0) return;
-
-    for (const input of quotes) {
-      if (!this.running) return;
-      const quote = { ...input, mintUrl: normalizeMintUrl(input.mintUrl) };
-      const key = toKey(quote.mintUrl, quote.method, quote.quoteId);
-      this.interests.add(key, interest);
-      const canonical =
-        quote.quote ??
-        (await this.quoteLifecycle.getMeltQuote(quote.mintUrl, quote.method, quote.quoteId));
-      if (!this.running) return;
-      if (!this.interests.hasAny(key)) continue;
-      if (canonical?.state === 'PAID' && Array.isArray(canonical.change)) {
-        this.interests.remove(key, CANONICAL_INTEREST);
-        await this.stopWatching(key);
-        continue;
-      }
-      if (interest.kind === 'canonical' && quote.quote && isExpiredMeltQuote(quote.quote)) {
-        this.interests.remove(key, CANONICAL_INTEREST);
-        if (!this.interests.hasAny(key)) {
-          await this.stopWatching(key);
-        }
-        continue;
-      }
-
-      const existing = this.watchRecordByKey.get(key);
-      if (existing) {
-        if (interest.kind !== 'canonical') await existing.start;
-        continue;
-      }
-
-      const policy = this.getPolicy(quote.method);
-      const record = this.ensureWatchRecord(quote, policy);
-
-      record.start = this.own(this.startWatchingRecord(record, policy));
-      try {
-        await record.start;
-      } finally {
-        if (this.watchRecordByKey.get(key) === record) {
-          record.start = undefined;
-        }
-      }
+    const generation = this.generation;
+    for (const quote of quotes) {
+      if (!this.isActive(generation)) return;
+      await this.addWatchInterest(quote, interest);
     }
+  }
+
+  private addWatchInterest(input: WatchableMeltQuote, interest: QuoteWatchOwner): Promise<void> {
+    if (!this.running) return Promise.resolve();
+    const quote = { ...input, mintUrl: normalizeMintUrl(input.mintUrl) };
+    const key = quoteWatchKey(quote);
+    this.interests.add(key, interest);
+    if (quote.quote?.state === 'PAID' && Array.isArray(quote.quote.change)) {
+      this.interests.remove(key, CANONICAL_INTEREST);
+      return this.stopWatching(key);
+    }
+    if (interest.kind === 'canonical' && quote.quote && isExpiredMeltQuote(quote.quote)) {
+      this.interests.remove(key, CANONICAL_INTEREST);
+      return this.interests.hasAny(key) ? Promise.resolve() : this.stopWatching(key);
+    }
+    const policy = this.getPolicy(quote.method);
+    const record = this.ensureWatchRecord(quote, policy);
+    // An acquisition can itself publish a canonical observation. Never join that acquisition
+    // from its canonical event listener, which would wait on its own publication.
+    if (record.start) return interest.kind === 'canonical' ? Promise.resolve() : record.start;
+    if (record.stop) return Promise.resolve();
+    return this.activateWatchRecord(record, policy, quote.quote);
+  }
+
+  /** `known` is a canonical quote the caller already holds; activation then skips the reread. */
+  private activateWatchRecord(
+    record: QuoteWatchRecord,
+    policy: MeltQuoteWatchPolicy,
+    known?: MeltQuote,
+  ): Promise<void> {
+    record.failed = false;
+    const task = this.own(this.startWatchingRecord(record, policy, known));
+    record.start = task;
+    void task.then(() => {
+      if (record.start === task) record.start = undefined;
+    });
+    return task;
   }
 
   private getPolicy<M extends MeltMethod>(method: M): MeltQuoteWatchPolicy<M> {
@@ -404,42 +405,51 @@ export class MeltQuoteWatcherService {
     quote: WatchableMeltQuote,
     policy: MeltQuoteWatchPolicy,
   ): QuoteWatchRecord {
-    const key = toKey(quote.mintUrl, quote.method, quote.quoteId);
-    let record = this.watchRecordByKey.get(key);
-    if (!record) {
-      record = {
-        mintUrl: quote.mintUrl,
-        method: quote.method,
-        quoteId: quote.quoteId,
-        subscriptionKind: policy.subscriptionKind,
-      };
-      this.watchRecordByKey.set(key, record);
-    }
+    return this.records.ensure(toKey(quote.mintUrl, quote.method, quote.quoteId), () => ({
+      mintUrl: quote.mintUrl,
+      method: quote.method,
+      quoteId: quote.quoteId,
+      subscriptionKind: policy.subscriptionKind,
+    }));
+  }
 
-    return record;
+  private current(record: QuoteWatchRecord): boolean {
+    return this.running && this.records.isCurrent(record);
   }
 
   private async startWatchingRecord(
     record: QuoteWatchRecord,
     policy: MeltQuoteWatchPolicy,
+    known?: MeltQuote,
   ): Promise<void> {
     const key = toKey(record.mintUrl, record.method, record.quoteId);
 
     let unsubscribe: UnsubscribeHandler | undefined;
     try {
+      // A replacement must not reuse a physical subscription that an old record is still closing.
+      const retired = this.records.retiredCleanup(key);
+      if (retired) await retired;
+      if (!this.current(record)) return;
+
       const trusted = await this.mintService.isTrustedMint(record.mintUrl);
+      if (!this.current(record)) return;
       if (!trusted && !this.interests.hasRecovery(key)) {
         this.logger?.debug('Skipping melt quote watch for untrusted mint', {
           mintUrl: record.mintUrl,
           quoteId: record.quoteId,
         });
-        if (this.watchRecordByKey.get(key) === record) {
-          this.removeWatchRecord(key);
-        }
         return;
       }
 
-      if (!this.running || this.watchRecordByKey.get(key) !== record) {
+      // Settling canonical updates retire this record, so a supplied quote is safe for this check.
+      const quote =
+        known ??
+        (await this.quoteLifecycle.getMeltQuote(record.mintUrl, record.method, record.quoteId));
+      if (!this.current(record)) return;
+      if (quote?.state === 'PAID' && Array.isArray(quote.change)) {
+        this.interests.remove(key, CANONICAL_INTEREST);
+        // Retire synchronously, but do not await our own acquisition.
+        void this.stopWatching(key);
         return;
       }
 
@@ -448,19 +458,23 @@ export class MeltQuoteWatcherService {
         policy.subscriptionKind,
         [record.quoteId],
         async (payload) => {
-          if (this.running && this.watchRecordByKey.get(key) === record)
-            await this.own(this.handleSubscriptionPayload(record, payload));
+          await this.own(this.handleSubscriptionPayload(record, payload));
         },
       );
       unsubscribe = subscription.unsubscribe;
     } catch (err) {
-      if (this.watchRecordByKey.get(key) === record) {
-        this.removeWatchRecord(key);
-      }
-      throw err;
+      if (this.records.isCurrent(record)) record.failed = true;
+      this.logger?.warn('Failed to start melt quote watch', {
+        mintUrl: record.mintUrl,
+        method: record.method,
+        quoteId: record.quoteId,
+        owners: this.interests.owners(key),
+        err,
+      });
+      return;
     }
 
-    if (!this.running || this.watchRecordByKey.get(key) !== record) {
+    if (!this.current(record)) {
       try {
         await unsubscribe?.();
       } catch (err) {
@@ -485,7 +499,7 @@ export class MeltQuoteWatcherService {
     payload: unknown,
   ): Promise<void> {
     const key = toKey(record.mintUrl, record.method, record.quoteId);
-    if (!this.running || this.watchRecordByKey.get(key) !== record) return;
+    if (!this.current(record)) return;
     const policy = this.getPolicy(record.method);
     if (
       !hasMeltQuotePayload(record.method, payload) ||
@@ -501,7 +515,8 @@ export class MeltQuoteWatcherService {
           payload as MeltMethodQuoteSnapshot<typeof record.method>,
         ),
       );
-      if (!this.running || this.watchRecordByKey.get(key) !== record) return;
+
+      if (!this.current(record)) return;
 
       if (quote.state === 'PAID' && Array.isArray(quote.change)) {
         this.interests.remove(key, CANONICAL_INTEREST);
@@ -525,48 +540,34 @@ export class MeltQuoteWatcherService {
     }
   }
 
-  private async stopWatching(key: QuoteKey): Promise<void> {
-    const record = this.watchRecordByKey.get(key);
-    if (!record) {
-      return;
-    }
-
-    this.removeWatchRecord(key);
-    try {
-      await record.stop?.();
-    } catch (err) {
-      this.logger?.warn('Unsubscribe melt quote watcher failed', { key, err });
-    }
+  private stopWatching(key: QuoteKey): Promise<void> {
+    return this.records.stopWatching(key);
   }
 
-  private removeWatchRecord(key: QuoteKey): void {
-    this.watchRecordByKey.delete(key);
-  }
-
-  private async handleMintUntrusted(mintUrl: string): Promise<void> {
+  private async handleMintUntrusted(mintUrl: string, generation: number): Promise<void> {
     const normalized = normalizeMintUrl(mintUrl);
-    const recovery = [...this.watchRecordByKey]
-      .filter(([key, record]) => record.mintUrl === normalized && this.interests.hasRecovery(key))
-      .map(([, record]) => record);
-    // Manager closes all transports on untrust. Retire those stale handles and rebuild
-    // only exact recovery observations, including quotes formerly inside a shared batch.
+    const recovery = this.records
+      .values()
+      .filter(
+        (record) =>
+          record.mintUrl === normalized && this.interests.hasRecovery(quoteWatchKey(record)),
+      );
+    // Manager has closed this mint's transport. Retire every old record before rebuilding
+    // only interests whose exact recovery permission is still owned after cleanup.
     await this.stopWatchingMint(normalized);
-    if (this.running) await this.watchMeltQuotes(recovery, CANONICAL_INTEREST);
+    if (!this.isActive(generation)) return;
+    for (const quote of recovery) {
+      if (!this.isActive(generation)) return;
+      if (!this.interests.hasRecovery(quoteWatchKey(quote))) continue;
+      const policy = this.getPolicy(quote.method);
+      const record = this.ensureWatchRecord(quote, policy);
+      // A declaration during cleanup may already have started or installed the replacement.
+      if (record.start) await record.start;
+      else if (!record.stop) await this.activateWatchRecord(record, policy);
+    }
   }
 
-  async stopWatchingMint(mintUrl: string): Promise<void> {
-    this.logger?.info('Stopping all melt quote watchers for mint', { mintUrl });
-    const normalizedMint = normalizeMintUrl(mintUrl);
-    const keysToStop: QuoteKey[] = [];
-
-    for (const [key, record] of this.watchRecordByKey) {
-      if (record.mintUrl === normalizedMint) {
-        keysToStop.push(key);
-      }
-    }
-
-    for (const key of keysToStop) {
-      await this.stopWatching(key);
-    }
+  stopWatchingMint(mintUrl: string): Promise<void> {
+    return this.records.stopWatchingMint(mintUrl);
   }
 }

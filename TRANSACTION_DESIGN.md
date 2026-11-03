@@ -248,7 +248,8 @@ Re-running Restore reconciles eligible pending records: fresh observations leave
 `PENDING`, release them to ready on `UNSPENT`, or mark them spent on `SPENT`. Each application
 rechecks current local state and operation ownership inside the keyset transaction. Automatic
 pending-proof watching and its subscription lifecycle are deferred to a separate change; the
-existing proof watcher continues to handle inflight proofs only.
+existing proof watcher continues to handle inflight proofs only. It treats a proof whose referenced
+operations are missing or terminal as unowned, rechecking that inside the reconciling transaction.
 
 Pending proofs are excluded from the existing `spendable`, `reserved`, and `total` balances, just as
 inflight proofs are. They contribute to those balances only after becoming ready. A separate pending
@@ -258,13 +259,13 @@ Publish proof-saved, proof-state-changed, and counter-updated events only for ac
 changes. Matching existing proofs and unchanged counters produce no duplicate update events.
 Listener failures follow the existing post-commit publication policy and do not undo the Restore.
 
-Remove `CounterService.overwriteCounter()` when its Restore caller moves, without retaining a
-compatibility wrapper. Receive now owns its transactional Output Allocation, and Sweep delegates
-exchanges through Receive's public coordinator methods. Legacy plugin-facing ProofService allocation helpers and
-CounterService remain; migrate their remaining callers, then remove CounterService and its
-plugin-facing entry once no callers remain. These removals
-intentionally change the plugin-facing service API. Restore's migration alone does not establish
-exclusive Output Allocation or prevent later stale writes by legacy counter callers.
+`CounterService.overwriteCounter()` was removed when its Restore caller moved, without a
+compatibility wrapper. Receive owns its transactional Output Allocation, and Sweep delegates
+exchanges through Receive's public coordinator methods. The removal is complete: ProofService,
+CounterService and their `proofService` and `counterService` plugin keys no longer exist, so no
+legacy caller can allocate outputs or write counters outside a coordinator-owned transaction.
+Plugins read balances through `balances` and get no proof or counter write path. See
+[ADR-0015](packages/core/docs/adr/0015-plugins-get-no-direct-proof-or-counter-authority.md).
 
 ## Mint Operations
 
@@ -320,7 +321,10 @@ records each remote quote observation before calling `applyMeltPending`, `applyM
 `releaseMeltAfterNonPayment`. Paid settlement validates NUT-08 change against the persisted output
 plan and atomically saves change, spends the exact Melt inputs, and finalizes the operation.
 
-Only fresh positive `UNPAID` evidence permits release. Prepared cancellation is safe because no
+Only fresh positive `UNPAID` evidence permits release. Background Melt progression consumes cached
+PAID settlement evidence, but confirms nonpayment under the shared operation lock before release.
+This applies to standalone operations and to Mint Swap source children released to ordinary
+resolution; an active parent coordinates its child instead. Prepared cancellation is safe because no
 remote effect was authorized. Timeouts, transport errors, malformed responses, incomplete pre-swap
 restoration, and contradictory proof/quote observations retain operation-owned value and use
 `deferMeltRecovery`. Recovery restores remote output candidates outside transactions, then passes
@@ -405,10 +409,20 @@ Coco uses lock-step package versioning, so the Mint Swap API has no feature acti
 Initial source payment requires an explicit `execute` call. The Mint Swap processor is enabled by
 default and can be disabled independently without restricting explicit commands. It honors
 persisted due times and registers exact parent quote interests with the existing Mint/Melt watchers,
-including parents whose due time is still ahead. Prepared observation never authorizes payment.
+including parents whose due time is still ahead. Ordinary operation and parent interests use the same
+synchronous declaration contract: local acceptance does not promise subscription readiness. Watchers
+own trust checks, acquisition, setup diagnostics, failure retries on existing triggers, and late cleanup.
+Parent scans install routing and declare all interests without awaiting acquisition; retired cleanup
+also stays outside the progression queue. Withdrawal revokes logical ownership synchronously while its
+returned promise drains required physical cleanup. Parent stop and watcher stop retain their drain
+guarantees. Shared owners cannot remove one another's interests or revive retired records.
+Prepared observation never authorizes payment.
 Watchers commit canonical observations; parent callbacks only request later coordination scans.
-Disabling a watcher does not introduce replacement polling in the parent. Bounded startup recovery
-respects automatic eligibility; explicit refresh/recovery can request immediate observation.
+Disabling a watcher does not introduce replacement polling in the parent. Normal scans use cached
+canonical evidence. Startup also uses complete paid source evidence and sufficient funded-destination
+accounting before considering remote recovery. Startup still falls back to bounded recovery for
+unresolved evidence, including fresh accounting for an already-authorized destination; it respects
+automatic eligibility and retry deadlines. Explicit refresh/recovery retains immediate observation.
 Necessary operation recovery effects remain available. Fresh positive `UNPAID` confirmation under
 the shared source lock remains required before releasing inputs, independently of watcher state.
 Exact authorized recovery interests can survive trust revocation, including Manager's transport
@@ -566,8 +580,10 @@ Behavior tests cover memory and persistent adapters:
 - Ambiguous remote outcomes retain exact recovery material and owned resources.
 
 Public APIs, package exports, persisted formats, and protocol behavior do not change with this
-internal composition model, except for the explicitly accepted Mint Swap child-command restriction, proof-state addition, and plugin-facing removals in the
-Restore and legacy counter migration above. `CoreTransaction`, `Transition`, their helpers, and the runner remain internal implementation details.
+internal composition model, except for the explicitly accepted Mint Swap child-command restriction, proof-state addition and plugin-facing removals in the
+Restore and legacy counter migration above. That migration is complete: ProofService and
+CounterService are removed, and plugins have no proof or counter write path
+([ADR-0015](packages/core/docs/adr/0015-plugins-get-no-direct-proof-or-counter-authority.md)). `CoreTransaction`, `Transition`, their helpers, and the runner remain internal implementation details.
 They must not be exported from package entry points.
 
 ## Batch Mint persistence
