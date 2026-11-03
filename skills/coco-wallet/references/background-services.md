@@ -60,10 +60,7 @@ Choose all six owners and their options during initialization for the Coco Sessi
 The Mint, Melt and Proof watcher pairs and the Mint, Melt settlement and Mint Swap processor
 pairs of runtime enable/disable methods are removed. `disabled: true` omits an owner throughout
 the session. A different selection requires a new Session, with its normal startup recovery.
-
-Direct `Manager` construction remains, but its former manual activation sequence has no agreed
-migration yet. Flag that unresolved dependency before adopting this break; no public activation
-method or factory-only requirement has replaced it. No persistence migration is required.
+No persistence migration is required.
 
 Use `ensureSubscriptions()` on app foreground. It replaces stale sockets, replays existing
 registrations, and ensures polling runs while preserving current owner settings and interests.
@@ -72,8 +69,7 @@ It does not rerun startup discovery or operation recovery. Normal observations m
 canonical state and trigger enabled processors; already-started polling commits may finish.
 
 The old pause/resume APIs and events are removed. Migration loses coordinated background quieting:
-removing a background pause leaves enabled polling and work running. Temporary background suspension and import preparation for applications that formerly staged
-enables after Restore remain separate decisions. Keep app-owned foreground plugin sync, paid-quote
+removing a background pause leaves enabled polling and work running. Keep app-owned foreground plugin sync, paid-quote
 requeueing and catch-up explicit; networking repair does not perform them. Teardown uses `dispose()`. If the app depended on resume's
 standalone Mint and Batch Mint recovery, call `ops.mint.recovery.run()` and
 `ops.mint.batch.recovery.run()` explicitly when needed. Final shutdown cannot be repaired or resumed.

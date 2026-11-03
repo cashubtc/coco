@@ -9,8 +9,7 @@ replaced independently, requiring dependency rebinding, transfer of observation 
 coordination between draining owners and replacement owners. Select these owners and their options
 during initialization for the lifetime of a Coco Session, retire both public enable and disable
 controls, and remove the corresponding internal restart machinery. Startup configuration still
-allows an owner to be omitted for the entire session. The fixed-owner runtime is implemented; the manual construction/activation migration below
-remains unresolved before shipping.
+allows an owner to be omitted for the entire session.
 
 Owner disable flags retain their existing scope: they omit the selected Background Watcher or
 Background Processor, without suppressing the initializer's existing one-time Operation Recovery

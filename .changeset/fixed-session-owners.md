@@ -13,7 +13,3 @@ Existing one-time Send, Melt, payment-request Receive, Mint/Batch recovery still
 owners are omitted. Mint Swap automatic recovery keeps its existing selection semantics. Explicit
 operations and recovery APIs remain available. Proof watcher shutdown still allows started work to
 finish under ADR-0014; other drain guarantees are unchanged. No persistence migration is needed.
-
-Unresolved before shipping: direct Manager construction remains, but migration from its documented
-manual activation sequence has not been decided. No public activation API or factory-only creation
-requirement is introduced. Import preparation (#604) and temporary suspension remain separate work.

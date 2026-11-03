@@ -96,14 +96,12 @@ This migration is **not behavior-equivalent** to background pause/resume. There 
 for its coordinated background quieting: removing a background pause (including one delayed by a
 grace period) leaves polling and enabled background work running, subject to OS scheduling.
 `ensureSubscriptions()` never suspends them. There is no per-owner runtime toggle or global pause for transports and plugin registrations.
-Temporary background suspension remains separate work. Final `dispose()` ends the Coco Session, so it is not temporary suspension.
+Final `dispose()` ends the Coco Session, so it is not temporary suspension.
 
 Keep app-owned foreground catch-up separate and in the order your app requires. Plugin start/sync,
 explicit quote refresh or operation recovery, and `requeuePaidMintQuotes()` are not performed by
 `ensureSubscriptions()`. Its completion is not a barrier before which those tasks are synchronized.
-Applications that previously staged owner enables after Restore need an import preparation migration;
-that API remains undecided (#604). Direct Manager construction and its manual activation migration
-also remain unresolved before shipping. See the [fixed-owner migration](../pages/watchers-processors.md#fixed-owner-migration-and-unresolved-manual-setup).
+See the [fixed-owner migration](../pages/watchers-processors.md#fixed-owner-migration).
 
 The old resume path unconditionally ran standalone Mint and Batch Mint recovery. Repair deliberately
 omits those sweeps. When your application needs explicit recovery, call it independently:

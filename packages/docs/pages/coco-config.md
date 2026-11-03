@@ -153,5 +153,5 @@ requires a new Session. The six runtime enable/disable pairs are removed.
 
 Disabling all owners still permits existing one-time startup Operation Recovery (Send, Melt,
 payment-request Receive, Mint and Batch Mint) and its mint interactions. Mint Swap automatic recovery
-retains its own selection. See [migration and unresolved manual setup](./watchers-processors.md#fixed-owner-migration-and-unresolved-manual-setup)
+retains its own selection. See the [fixed-owner migration](./watchers-processors.md#fixed-owner-migration)
 before adopting this breaking change. There is no persistence migration.

@@ -85,7 +85,7 @@ Setup failures are logged with quote and operation context. There is no new retr
 pending-operation declaration can retry failed or skipped setup. Existing quote events and parent
 scans also retain their declaration paths. No automatic registration retry timer is added. Ordinary
 network failure is different from local registration failure: subscription setup does not wait for
-remote acceptance. Transport setup repair and storage-read retry policy remain separate work.
+remote acceptance.
 
 Removing operation interest withdraws it immediately and waits for any cleanup it requires. Canonical
 and other operation interests keep shared watches active. Stopping or untrusting the watcher
@@ -152,7 +152,7 @@ and `dispose()` for final shutdown. Foreground repair does not replace backgroun
 app-owned plugin synchronization, paid-quote requeueing and catch-up. See
 [Subscriptions](../starting/subscriptions.md) for foreground examples and the networking migration.
 
-## Fixed-owner migration and unresolved manual setup
+## Fixed-owner migration
 
 All six public pairs are removed: `enableMintOperationWatcher` / `disableMintOperationWatcher`,
 `enableMeltQuoteWatcher` / `disableMeltQuoteWatcher`, `enableProofStateWatcher` /
@@ -164,14 +164,6 @@ Move selection and options into `initializeCoco({ watchers, processors })`. Repl
 calls to individual disables with `await coco.dispose()`. A different selection requires a new
 Coco Session, including its normal startup recovery. There is no persistence migration.
 
-**Unresolved before shipping:** direct `new Manager(...)` construction is retained, but the former
-manual `initPlugins()` plus per-owner enable sequence has no agreed migration. This refactor does
-not make construction start automatic work, add a public activation method, or decide factory-only
-initialization. Applications using manual activation need that decision before adopting the break.
-
-Applications staging enables after Restore must resolve their import preparation before adopting
-fixed owners. Issue #604 is only a feature consideration; no `initializeCocoWithRestore` API is
-accepted or implemented here. Temporary background suspension is separate work, and
 `ensureSubscriptions()` never activates an omitted owner or performs a recovery sweep.
 
 ### Shared Mint Swap observation

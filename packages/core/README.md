@@ -284,7 +284,7 @@ Selection and options remain fixed. Omitted config uses defaults; `disabled: tru
 for the entire session. All six enable/disable pairs have been removed. One-time startup Operation
 Recovery still runs even when every owner is disabled; Mint Swap automatic recovery retains its own
 selection. Explicit operation/recovery APIs remain available. No persistence migration is needed.
-See [fixed-owner migration](../docs/pages/watchers-processors.md#fixed-owner-migration-and-unresolved-manual-setup).
+See [fixed-owner migration](../docs/pages/watchers-processors.md#fixed-owner-migration).
 
 ### initializeCoco options
 
@@ -300,10 +300,6 @@ See [fixed-owner migration](../docs/pages/watchers-processors.md#fixed-owner-mig
 - `processors`: select processors (`mintOperationProcessor`, `meltSettlementProcessor`, `mintSwapOperationProcessor`)
   and tune intervals
 - `subscriptions`: polling intervals for hybrid WebSocket + polling (`slowPollingIntervalMs`, `fastPollingIntervalMs`)
-
-**Unresolved before shipping:** direct `Manager` construction remains available, but the documented
-manual activation migration is undecided. Construction does not activate owners. No public start
-method or factory-only requirement has been introduced; see ADR-0017.
 
 ## Architecture
 

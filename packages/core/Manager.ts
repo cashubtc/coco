@@ -617,7 +617,7 @@ export class Manager {
     return this.eventBus.off(event, handler);
   }
 
-  /** Internal initializer wiring; the manual construction migration remains unresolved (ADR-0017). */
+  /** Internal initializer wiring for the session's fixed owners (ADR-0017). */
   async [initializeSession](): Promise<void> {
     // Initialize plugin system (must complete before watchers for extensions to be available)
     await this.initPlugins();
@@ -985,8 +985,8 @@ export class Manager {
       bolt12: new MintBolt12Handler(keyRingService),
     });
     const quoteLifecycle = new QuoteLifecycle({
-      // Read the current watcher's ownership so disabling or replacing it immediately
-      // removes its old recovery permissions from QuoteLifecycle's polling trust check.
+      // QuoteLifecycle's polling trust check defers to the session's Mint Operation Watcher,
+      // when one was selected at initialization.
       hasMintRecoveryInterest: (method, identity) =>
         this.mintOperationWatcher?.hasRecoveryInterest({ ...identity, method }) ?? false,
       mintHandlerProvider,
