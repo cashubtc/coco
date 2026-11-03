@@ -3,25 +3,30 @@ import { beforeEach, describe, expect, it } from 'bun:test';
 import { MemoryHistoryRepository } from '../../repositories/memory/MemoryHistoryRepository';
 import { MemoryMeltOperationRepository } from '../../repositories/memory/MemoryMeltOperationRepository';
 import { MemoryMintOperationRepository } from '../../repositories/memory/MemoryMintOperationRepository';
+import { MemoryMintSwapOperationRepository } from '../../repositories/memory/MemoryMintSwapOperationRepository.ts';
 import { MemorySendOperationRepository } from '../../repositories/memory/MemorySendOperationRepository';
 import type { PreparedMeltOperation } from '../../operations/melt';
 import type { PendingMintOperation } from '../../operations/mint';
 import type { PreparedSendOperation } from '../../operations/send/SendOperation';
+import { mintSwapFixtures } from '../fixtures/MintSwap.ts';
 
 describe('MemoryHistoryRepository', () => {
   let sendOperationRepository: MemorySendOperationRepository;
   let meltOperationRepository: MemoryMeltOperationRepository;
   let mintOperationRepository: MemoryMintOperationRepository;
+  let mintSwapOperationRepository: MemoryMintSwapOperationRepository;
   let historyRepository: MemoryHistoryRepository;
 
   beforeEach(() => {
     sendOperationRepository = new MemorySendOperationRepository();
     meltOperationRepository = new MemoryMeltOperationRepository();
     mintOperationRepository = new MemoryMintOperationRepository();
+    mintSwapOperationRepository = new MemoryMintSwapOperationRepository();
     historyRepository = new MemoryHistoryRepository({
       sendOperationRepository,
       meltOperationRepository,
       mintOperationRepository,
+      mintSwapOperationRepository,
     });
   });
 
@@ -157,6 +162,70 @@ describe('MemoryHistoryRepository', () => {
     const history = await historyRepository.getPaginatedHistoryEntries(10, 0);
 
     expect(history.map((entry) => entry.id)).toEqual(['mint:mint-op-1', 'melt:melt-op-1']);
+  });
+
+  it('groups a Mint Swap before pagination and preserves exact child direct lookup', async () => {
+    const parent = mintSwapFixtures('grouped', 5_000).prepared;
+    const source = makePreparedMeltOperation(parent.sourceOperationId, 'source-quote', 5_100);
+    const destination = makePendingMintOperation(
+      parent.destinationOperationId,
+      'destination-quote',
+      5_200,
+    );
+    await mintSwapOperationRepository.create(parent);
+    await meltOperationRepository.create(source);
+    await mintOperationRepository.create(destination);
+
+    const history = await historyRepository.getPaginatedHistoryEntries(10, 0);
+
+    expect(history.map((entry) => entry.id)).toEqual(['mint-swap:grouped']);
+    expect(history[0]).toMatchObject({
+      state: 'prepared',
+      sourceChild: { operationId: source.id, present: true, state: 'prepared' },
+      destinationChild: { operationId: destination.id, present: true, state: 'pending' },
+    });
+    expect(await historyRepository.getHistoryEntryById(`melt:${source.id}`)).toMatchObject({
+      operationId: source.id,
+    });
+    expect(await historyRepository.getHistoryEntryById(`mint:${destination.id}`)).toMatchObject({
+      operationId: destination.id,
+    });
+    expect(await historyRepository.getHistoryEntryById('mint-swap:grouped')).toEqual(history[0]!);
+  });
+
+  it('keeps terminal parents visible with missing children', async () => {
+    const parent = mintSwapFixtures('terminal', 6_000).completed;
+    await mintSwapOperationRepository.create(parent);
+
+    expect(await historyRepository.getPaginatedHistoryEntries(10, 0)).toMatchObject([
+      {
+        id: 'mint-swap:terminal',
+        state: 'completed',
+        sourceChild: { operationId: parent.sourceOperationId, present: false },
+        destinationChild: { operationId: parent.destinationOperationId, present: false },
+      },
+    ]);
+  });
+
+  it('deduplicates legacy children before suppressing the linked operation row', async () => {
+    const parent = mintSwapFixtures('legacy', 7_000).prepared;
+    const source = makePreparedMeltOperation(parent.sourceOperationId, 'source-quote', 7_100);
+    await mintSwapOperationRepository.create(parent);
+    await meltOperationRepository.create(source);
+    await historyRepository.addLegacyHistoryEntry({
+      legacyHistoryId: 3,
+      type: 'melt',
+      mintUrl: source.mintUrl,
+      unit: source.unit,
+      amount: source.amount,
+      createdAt: 7_050,
+      quoteId: source.quoteId,
+      state: 'PAID',
+    });
+
+    expect(
+      (await historyRepository.getPaginatedHistoryEntries(10, 0)).map((entry) => entry.id),
+    ).toEqual(['mint-swap:legacy']);
   });
 
   function makePreparedSendOperation(id: string, createdAt: number): PreparedSendOperation {
