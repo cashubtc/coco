@@ -359,7 +359,7 @@ ID and amount rather than treating the first finalization as completion of the q
 For per-quote UI updates, `history:updated` covers both claim types with one entry per quote.
 To preserve standalone automatic claims and their `mint-op:*` events during migration, set
 `processors.mintOperationProcessor.batchMintQuotes: false` when initializing Coco (or pass
-`batchMintQuotes: false` to `enableMintOperationProcessor`). Explicit `coco.ops.mint.batch` calls
+`batchMintQuotes: false` in `processors.mintOperationProcessor` at initialization). Explicit `coco.ops.mint.batch` calls
 still emit batch events, and existing in-flight batches still recover as batches.
 
 ## Batch Mint Operations (`coco.ops.mint.batch`)

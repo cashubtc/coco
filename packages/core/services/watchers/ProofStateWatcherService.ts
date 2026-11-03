@@ -76,10 +76,9 @@ export class ProofStateWatcherService {
   private readonly bus: EventBus<CoreEvents>;
   private readonly logger?: Logger;
   private readonly options: ProofStateWatcherOptions;
-  private sendOperationService?: SendOperationService;
 
   private running = false;
-  private generation = 0;
+  private started = false;
   private stopping?: Promise<void>;
   private unsubscribeByKey = new Map<ProofKey, UnsubscribeHandler>();
   private inflightByKey = new Set<ProofKey>();
@@ -103,6 +102,7 @@ export class ProofStateWatcherService {
     bus: EventBus<CoreEvents>,
     logger?: Logger,
     options: ProofStateWatcherOptions = { watchExistingInflightOnStart: true },
+    private readonly sendOperationService?: SendOperationService,
   ) {
     this.subs = subs;
     this.mintService = mintService;
@@ -112,15 +112,7 @@ export class ProofStateWatcherService {
     this.remote = remote;
     this.bus = bus;
     this.logger = logger;
-    this.options = options;
-  }
-
-  /**
-   * Set the SendOperationService for auto-finalizing send operations.
-   * This is set after construction to avoid circular dependencies.
-   */
-  setSendOperationService(service: SendOperationService): void {
-    this.sendOperationService = service;
+    this.options = { ...options };
   }
 
   isRunning(): boolean {
@@ -128,17 +120,16 @@ export class ProofStateWatcherService {
   }
 
   async start(): Promise<void> {
-    if (this.stopping) await this.stopping;
-    if (this.running) return;
+    if (this.started || this.stopping) return;
+    this.started = true;
     this.running = true;
-    const generation = ++this.generation;
     this.logger?.info('ProofStateWatcherService started');
 
     // React to proofs being marked inflight via state change
     this.offProofsStateChanged = this.bus.on(
       'proofs:state-changed',
       ({ mintUrl, secrets, state }) =>
-        this.runIfActive(generation, async () => {
+        this.runIfActive(async () => {
           try {
             if (!this.running) return;
             if (state === 'inflight') {
@@ -156,7 +147,7 @@ export class ProofStateWatcherService {
 
               // Stop watching if we already are
               for (const secret of secrets) {
-                if (!this.isActive(generation)) return;
+                if (!this.running) return;
                 const key = toKey(mintUrl, secret);
                 try {
                   await this.stopWatching(key);
@@ -168,7 +159,7 @@ export class ProofStateWatcherService {
                   });
                 }
 
-                if (!this.isActive(generation)) return;
+                if (!this.running) return;
                 if (!this.sendOperationService) continue;
 
                 try {
@@ -186,7 +177,7 @@ export class ProofStateWatcherService {
               }
 
               for (const operationId of operationIds) {
-                await this.tryFinalizeSendOperation(mintUrl, operationId, generation);
+                await this.tryFinalizeSendOperation(mintUrl, operationId);
               }
             }
           } catch (err) {
@@ -197,7 +188,7 @@ export class ProofStateWatcherService {
 
     // React to proofs being saved with inflight state (e.g., from swap operations)
     this.offProofsSaved = this.bus.on('proofs:saved', ({ mintUrl, proofs }) =>
-      this.runIfActive(generation, async () => {
+      this.runIfActive(async () => {
         try {
           if (!this.running) return;
           const inflightSecrets = proofs.filter((p) => p.state === 'inflight').map((p) => p.secret);
@@ -220,7 +211,7 @@ export class ProofStateWatcherService {
 
     // Stop watching proofs when mint is untrusted
     this.offUntrusted = this.bus.on('mint:untrusted', ({ mintUrl }) =>
-      this.runIfActive(generation, async () => {
+      this.runIfActive(async () => {
         try {
           await this.stopWatchingMint(mintUrl);
         } catch (err) {
@@ -231,18 +222,18 @@ export class ProofStateWatcherService {
 
     this.offSendPending = this.bus.on('send:pending', ({ operation }) => {
       // Send publishes while holding its operation lock. Run discovery after publication returns.
-      if (!this.isActive(generation)) return;
+      if (!this.running) return;
       const timer = setTimeout(() => {
         this.pendingTimers.delete(timer);
-        void this.runIfActive(generation, () => this.discoverPendingSend(operation.id, generation));
+        void this.runIfActive(() => this.discoverPendingSend(operation.id));
       }, 0);
       this.pendingTimers.add(timer);
     });
 
     this.offSendFinalized = this.bus.on('send:finalized', ({ operationId }) =>
-      this.runIfActive(generation, async () => {
+      this.runIfActive(async () => {
         for (const [key, sendOperationId] of this.sendOperationByProofKey) {
-          if (!this.isActive(generation)) return;
+          if (!this.running) return;
           if (sendOperationId !== operationId) continue;
           this.sendOperationByProofKey.delete(key);
           await this.stopWatching(key);
@@ -251,11 +242,9 @@ export class ProofStateWatcherService {
     );
 
     if (this.options.watchExistingInflightOnStart ?? true) {
-      void this.runIfActive(generation, () => this.bootstrapInflightProofs(generation)).catch(
-        (err) => {
-          this.logger?.warn('Failed to bootstrap inflight proof watchers', { err });
-        },
-      );
+      void this.runIfActive(() => this.bootstrapInflightProofs()).catch((err) => {
+        this.logger?.warn('Failed to bootstrap inflight proof watchers', { err });
+      });
     }
   }
 
@@ -266,18 +255,9 @@ export class ProofStateWatcherService {
    */
   stop(): Promise<void> {
     if (this.stopping) return this.stopping;
-    if (!this.running) return Promise.resolve();
     this.running = false;
     const task = this.finishStop();
     this.stopping = task;
-    void task.then(
-      () => {
-        this.stopping = undefined;
-      },
-      () => {
-        this.stopping = undefined;
-      },
-    );
     return task;
   }
 
@@ -337,12 +317,8 @@ export class ProofStateWatcherService {
     this.logger?.info('ProofStateWatcherService stopped');
   }
 
-  private isActive(generation: number): boolean {
-    return this.running && this.generation === generation;
-  }
-
-  private runIfActive(generation: number, work: () => Promise<void>): Promise<void> {
-    return this.isActive(generation) ? work() : Promise.resolve();
+  private runIfActive(work: () => Promise<void>): Promise<void> {
+    return this.running ? work() : Promise.resolve();
   }
 
   watchProof(mintUrl: string, secrets: string[]): Promise<void> {
@@ -355,7 +331,7 @@ export class ProofStateWatcherService {
     owningOperations: OwningOperationCache,
   ): Promise<void> {
     if (!this.running) return Promise.resolve();
-    const task = this.acquireProofWatch(mintUrl, secrets, this.generation, owningOperations);
+    const task = this.acquireProofWatch(mintUrl, secrets, owningOperations);
     this.acquisitionTasks.add(task);
     void task.then(
       () => this.acquisitionTasks.delete(task),
@@ -367,14 +343,13 @@ export class ProofStateWatcherService {
   private async acquireProofWatch(
     mintUrl: string,
     secrets: string[],
-    generation: number,
     owningOperations: OwningOperationCache,
   ): Promise<void> {
-    if (!this.isActive(generation)) return;
+    if (!this.running) return;
 
     // Only watch proofs for trusted mints
     const trusted = await this.mintService.isTrustedMint(mintUrl);
-    if (!this.isActive(generation)) return;
+    if (!this.running) return;
     if (!trusted) {
       this.logger?.debug('Skipping watch for untrusted mint', { mintUrl });
       return;
@@ -392,7 +367,7 @@ export class ProofStateWatcherService {
     for (const secret of toWatch) this.acquiringKeys.add(toKey(mintUrl, secret));
     try {
       const watchable = await this.selectWatchable(mintUrl, toWatch, owningOperations);
-      if (!this.isActive(generation) || watchable.length === 0) return;
+      if (!this.running || watchable.length === 0) return;
       // Compute Y hex for all secrets and build maps
       const { secretByYHex, yHexBySecret } = buildYHexMapsForSecrets(watchable);
       const filters = Array.from(secretByYHex.keys());
@@ -402,7 +377,7 @@ export class ProofStateWatcherService {
         'proof_state',
         filters,
         (payload) =>
-          this.runIfActive(generation, async () => {
+          this.runIfActive(async () => {
             if (payload.state !== 'SPENT') return;
             const secret = secretByYHex.get(payload.Y);
             if (!secret) return;
@@ -412,23 +387,23 @@ export class ProofStateWatcherService {
             try {
               const [proof] = await this.proofRepository.getProofsBySecrets(mintUrl, [secret]);
               const route = await this.resolveRoute(mintUrl, secret, proof);
-              if (!this.isActive(generation)) return;
+              if (!this.running) return;
               await this.applySpentEvidence(mintUrl, secret, route);
               this.logger?.info('Applied SPENT evidence from mint notification', {
                 mintUrl,
                 subId,
                 route: route?.kind,
               });
-              if (this.isActive(generation)) await this.stopWatching(key);
+              if (this.running) await this.stopWatching(key);
             } catch (err) {
               this.logger?.error('Failed to apply SPENT evidence', { mintUrl, subId, err });
             } finally {
-              if (generation === this.generation) this.inflightByKey.delete(key);
+              this.inflightByKey.delete(key);
             }
           }),
       );
 
-      if (!this.isActive(generation)) {
+      if (!this.running) {
         await unsubscribe();
         return;
       }
@@ -468,24 +443,21 @@ export class ProofStateWatcherService {
     }
   }
 
-  private async bootstrapInflightProofs(generation: number): Promise<void> {
-    if (!this.isActive(generation)) return;
+  private async bootstrapInflightProofs(): Promise<void> {
+    if (!this.running) return;
     this.logger?.info('Bootstrapping inflight proof watchers');
 
     // Send discovery may contact the mint per operation; do not delay inflight proof observation.
-    await Promise.all([
-      this.discoverPendingSends(generation),
-      this.watchExistingInflightProofs(generation),
-    ]);
+    await Promise.all([this.discoverPendingSends(), this.watchExistingInflightProofs()]);
   }
 
-  private async discoverPendingSends(generation: number): Promise<void> {
+  private async discoverPendingSends(): Promise<void> {
     if (!this.sendOperationService) return;
     try {
       const operations = await this.sendOperationService.getPendingOperations();
       for (const operation of operations) {
-        if (!this.isActive(generation)) return;
-        if (operation.state === 'pending') await this.discoverPendingSend(operation.id, generation);
+        if (!this.running) return;
+        if (operation.state === 'pending') await this.discoverPendingSend(operation.id);
       }
     } catch (err) {
       this.logger?.warn('Failed to discover pending Sends on startup', { err });
@@ -497,9 +469,9 @@ export class ProofStateWatcherService {
    * proofs goes to the Send; unowned proofs, including those whose referenced operations are missing
    * or terminal, are reconciled; proofs other live operations own are skipped.
    */
-  private async watchExistingInflightProofs(generation: number): Promise<void> {
+  private async watchExistingInflightProofs(): Promise<void> {
     const inflightProofs = await this.proofRepository.getInflightProofs();
-    if (!this.isActive(generation) || inflightProofs.length === 0) return;
+    if (!this.running || inflightProofs.length === 0) return;
 
     const owningOperations: OwningOperationCache = new Map();
     const batches = new Map<string, { mintUrl: string; unit: string; proofs: WatchableProof[] }>();
@@ -507,7 +479,7 @@ export class ProofStateWatcherService {
     for (const proof of inflightProofs) {
       if (!proof.mintUrl || !proof.secret) continue;
       const route = await this.resolveRoute(proof.mintUrl, proof.secret, proof, owningOperations);
-      if (!this.isActive(generation)) return;
+      if (!this.running) return;
       if (!isWatchable(route)) continue;
       const unit = normalizeUnit(proof.unit, { defaultUnit: DEFAULT_UNIT });
       const batchKey = `${proof.mintUrl}::${unit}`;
@@ -520,9 +492,9 @@ export class ProofStateWatcherService {
     }
 
     for (const { mintUrl, unit, proofs } of batches.values()) {
-      if (!this.isActive(generation)) return;
+      if (!this.running) return;
       try {
-        await this.checkExistingProofs(mintUrl, unit, proofs, generation);
+        await this.checkExistingProofs(mintUrl, unit, proofs);
       } catch (err) {
         this.logger?.warn('Failed to check inflight proofs for mint', {
           mintUrl,
@@ -534,7 +506,7 @@ export class ProofStateWatcherService {
     }
 
     for (const [mintUrl, secrets] of byMint.entries()) {
-      if (!this.isActive(generation)) return;
+      if (!this.running) return;
       try {
         // Rereads proof state, since the check above may have reconciled some proofs.
         await this.watchProofs(mintUrl, secrets, owningOperations);
@@ -552,15 +524,14 @@ export class ProofStateWatcherService {
     mintUrl: string,
     unit: string,
     proofs: WatchableProof[],
-    generation: number,
   ): Promise<void> {
-    if (!(await this.mintService.isTrustedMint(mintUrl)) || !this.isActive(generation)) return;
+    if (!(await this.mintService.isTrustedMint(mintUrl)) || !this.running) return;
     const states = await this.remote.checkProofStates(
       mintUrl,
       unit,
       proofs.map(({ proof }) => proof),
     );
-    if (!this.isActive(generation)) return;
+    if (!this.running) return;
     if (!Array.isArray(states) || states.length !== proofs.length) {
       this.logger?.warn('Malformed proof state check response', {
         mintUrl,
@@ -578,7 +549,7 @@ export class ProofStateWatcherService {
       );
     }
     for (const { proof, route } of spent) {
-      if (route.kind !== 'send' || !this.isActive(generation)) continue;
+      if (route.kind !== 'send' || !this.running) continue;
       try {
         await this.applySpentEvidence(mintUrl, proof.secret, route);
       } catch (err) {
@@ -696,7 +667,6 @@ export class ProofStateWatcherService {
   }
 
   async stopWatchingMint(mintUrl: string): Promise<void> {
-    const generation = this.generation;
     this.logger?.info('Stopping all proof watchers for mint', { mintUrl });
     const prefix = `${mintUrl}::`;
     const keysToStop: ProofKey[] = [];
@@ -715,7 +685,6 @@ export class ProofStateWatcherService {
     }
 
     for (const key of keysToStop) {
-      if (generation !== this.generation) return;
       await this.stopWatching(key);
     }
 
@@ -738,30 +707,26 @@ export class ProofStateWatcherService {
     );
   }
 
-  private async discoverPendingSend(operationId: string, generation: number): Promise<void> {
-    if (!this.isActive(generation) || !this.sendOperationService) return;
+  private async discoverPendingSend(operationId: string): Promise<void> {
+    if (!this.running || !this.sendOperationService) return;
     try {
       const operation = await this.sendOperationService.getOperation(operationId);
-      if (!this.isActive(generation) || operation?.state !== 'pending') return;
+      if (!this.running || operation?.state !== 'pending') return;
       const secrets = getSendProofSecrets(operation);
       if (isLegacyTokenlessP2pkSend(operation)) {
-        if (
-          !(await this.mintService.isTrustedMint(operation.mintUrl)) ||
-          !this.isActive(generation)
-        )
-          return;
+        if (!(await this.mintService.isTrustedMint(operation.mintUrl)) || !this.running) return;
         // Legacy tokenless sends may have no proof rows. The operation retains the exact outputs
         // needed for observation, and its service validates them when applying completion.
         await this.sendOperationService.checkPendingOperation(operation);
-        if (!this.isActive(generation)) return;
+        if (!this.running) return;
         const latest = await this.sendOperationService.getOperation(operationId);
-        if (!this.isActive(generation) || latest?.state !== 'pending') return;
+        if (!this.running || latest?.state !== 'pending') return;
         for (const secret of secrets) {
           this.sendOperationByProofKey.set(toKey(operation.mintUrl, secret), operationId);
         }
         await this.watchProof(operation.mintUrl, secrets);
       } else {
-        await this.tryFinalizeSendOperation(operation.mintUrl, operationId, generation);
+        await this.tryFinalizeSendOperation(operation.mintUrl, operationId);
       }
     } catch (err) {
       this.logger?.warn('Failed to discover pending Send', { operationId, err });
@@ -771,17 +736,13 @@ export class ProofStateWatcherService {
   /**
    * Check if all send proofs for an operation are spent and finalize it if so.
    */
-  private async tryFinalizeSendOperation(
-    mintUrl: string,
-    operationId: string,
-    generation: number,
-  ): Promise<void> {
-    if (!this.isActive(generation) || !this.sendOperationService) return;
+  private async tryFinalizeSendOperation(mintUrl: string, operationId: string): Promise<void> {
+    if (!this.running || !this.sendOperationService) return;
 
     try {
       const operation = await this.sendOperationService.getOperation(operationId);
 
-      if (!this.isActive(generation) || !operation || operation.state !== 'pending') return;
+      if (!this.running || !operation || operation.state !== 'pending') return;
 
       // Operation must have prepared data to derive send secrets
       if (!hasPreparedData(operation)) return;
@@ -796,7 +757,7 @@ export class ProofStateWatcherService {
         sendProofs.length === expectedProofCount &&
         sendProofs.every((proof) => proof.state === 'spent');
 
-      if (this.isActive(generation) && allSpent) {
+      if (this.running && allSpent) {
         this.logger?.info('All send proofs spent, finalizing operation', { operationId });
         await this.sendOperationService.finalize(operationId);
       }

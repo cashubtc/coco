@@ -136,9 +136,9 @@ export interface CocoConfig {
    */
   outputDataCreator?: OutputDataCreator;
   /**
-   * Watcher configuration (all enabled by default)
+   * Session-lifetime watcher selection and options (all enabled by default)
    * - Omit to use defaults (enabled)
-   * - Set `disabled: true` to disable
+   * - Set `disabled: true` to omit this owner for the entire session
    * - Provide options to customize behavior
    */
   watchers?: {
@@ -161,9 +161,9 @@ export interface CocoConfig {
     };
   };
   /**
-   * Processor configuration (all enabled by default)
+   * Session-lifetime processor selection and options (all enabled by default)
    * - Omit to use defaults (enabled)
-   * - Set `disabled: true` to disable
+   * - Set `disabled: true` to omit this owner for the entire session
    * - Provide options to customize behavior
    */
   processors?: {
@@ -242,6 +242,8 @@ export class CocoInitializationError extends Error {
   }
 }
 
+const initializeSession = Symbol('initializeSession');
+
 /**
  * Initializes and configures a new Coco Cashu manager instance
  * @param config - Configuration options including repositories, seed, and optional features
@@ -264,56 +266,7 @@ export async function initializeCoco(config: CocoConfig): Promise<Manager> {
   );
 
   try {
-    // Initialize plugin system (must complete before watchers for extensions to be available)
-    await coco.initPlugins();
-
-    // Reconcile legacy mint quote rows into mint operations before any watcher,
-    // processor, or mint recovery path starts.
-    await coco.reconcileLegacyMintQuotes();
-
-    // Enable watchers (default: all enabled unless explicitly disabled)
-    const mintOperationWatcherConfig = config.watchers?.mintOperationWatcher;
-    if (!mintOperationWatcherConfig?.disabled) {
-      await coco.enableMintOperationWatcher(mintOperationWatcherConfig);
-    }
-
-    const proofStateWatcherConfig = config.watchers?.proofStateWatcher;
-    if (!proofStateWatcherConfig?.disabled) {
-      await coco.enableProofStateWatcher(proofStateWatcherConfig);
-    }
-
-    const meltQuoteWatcherConfig = config.watchers?.meltQuoteWatcher;
-    if (!meltQuoteWatcherConfig?.disabled) {
-      await coco.enableMeltQuoteWatcher(meltQuoteWatcherConfig);
-    }
-
-    // Enable processors (default: all enabled unless explicitly disabled)
-    const mintOperationProcessorConfig = config.processors?.mintOperationProcessor;
-    if (!mintOperationProcessorConfig?.disabled) {
-      await coco.enableMintOperationProcessor(mintOperationProcessorConfig);
-    }
-
-    const meltSettlementProcessorConfig = config.processors?.meltSettlementProcessor;
-    if (!meltSettlementProcessorConfig?.disabled) {
-      await coco.enableMeltSettlementProcessor(meltSettlementProcessorConfig);
-    }
-
-    // Recover any pending send operations from previous session
-    await coco.ops.send.recovery.run();
-
-    // Recover any pending melt operations from previous session
-    await coco.ops.melt.recovery.run();
-
-    // Recover pending receive operations and payment-request receive attempts from previous session
-    await coco.recoverPendingPaymentRequestReceiveAttempts();
-
-    // Recover any pending mint operations from previous session
-    await coco.recoverPendingMintOperations();
-
-    // Recover persisted swaps by default unless automatic parent recovery is disabled.
-    const mintSwapProcessor = config.processors?.mintSwapOperationProcessor;
-    if (!mintSwapProcessor?.disabled)
-      await coco.enableMintSwapOperationProcessor(mintSwapProcessor);
+    await coco[initializeSession]();
 
     return coco;
   } catch (error) {
@@ -347,17 +300,17 @@ export class Manager {
   private eventBus: EventBus<CoreEvents>;
   private logger: Logger;
   readonly subscriptions: SubscriptionManager;
-  private mintOperationWatcher?: MintOperationWatcherService;
-  private mintOperationProcessor?: MintOperationProcessor;
-  private mintSwapOperationProcessor?: MintSwapOperationProcessor;
+  private readonly mintOperationWatcher?: MintOperationWatcherService;
+  private readonly mintOperationProcessor?: MintOperationProcessor;
+  private readonly mintSwapOperationProcessor?: MintSwapOperationProcessor;
   private mintSwapOperationService: MintSwapOperationService;
   private mintSwapOperationRepository: MintSwapOperationRepository;
   private readonly mintSwapDisposal = new AbortController();
-  private meltQuoteWatcher?: MeltQuoteWatcherService;
-  private meltSettlementProcessor?: MeltSettlementProcessor;
+  private readonly meltQuoteWatcher?: MeltQuoteWatcherService;
+  private readonly meltSettlementProcessor?: MeltSettlementProcessor;
   private legacyMintQuoteRepository: LegacyMintQuoteRepository;
   private quoteLifecycle: QuoteLifecycle;
-  private proofStateWatcher?: ProofStateWatcherService;
+  private readonly proofStateWatcher?: ProofStateWatcherService;
   private historyService: HistoryService;
   private seedService: SeedService;
   private tokenService: TokenService;
@@ -382,7 +335,6 @@ export class Manager {
   private transactionRunner: CoreTransactionRunner;
   private readonly pluginHost: PluginHost = new PluginHost();
   private subscriptionRepair?: Promise<void>;
-  private originalProcessorConfig: CocoConfig['processors'];
   private readonly mintRequestProvider: MintRequestProvider;
   private readonly mintAdapter: MintAdapter;
   private disposed = false;
@@ -419,7 +371,6 @@ export class Manager {
       this.getChildLogger('MintAdapter'),
     );
 
-    this.originalProcessorConfig = processors;
     if (plugins && plugins.length > 0) {
       for (const p of plugins) this.pluginHost.use(p);
     }
@@ -454,6 +405,101 @@ export class Manager {
     this.balanceQueries = core.balanceQueries;
     this.transactionRunner = core.transactionRunner;
     this.subscriptions = this.createSubscriptionManager(webSocketFactory, subscriptions);
+    if (!watchers?.mintOperationWatcher?.disabled) {
+      this.mintOperationWatcher = new MintOperationWatcherService(
+        this.subscriptions,
+        this.mintService,
+        this.mintOperationService,
+        this.quoteLifecycle,
+        this.eventBus,
+        this.getChildLogger('MintOperationWatcherService'),
+        {
+          watchExistingPendingOnStart:
+            watchers?.mintOperationWatcher?.watchExistingPendingOnStart ?? true,
+          watchExistingPendingQuotesOnStart:
+            watchers?.mintOperationWatcher?.watchExistingPendingQuotesOnStart ?? true,
+        },
+      );
+    }
+    if (!watchers?.proofStateWatcher?.disabled) {
+      this.proofStateWatcher = new ProofStateWatcherService(
+        this.subscriptions,
+        this.mintService,
+        this.proofRepository,
+        {
+          sendOperations: this.sendOperationRepository,
+          meltOperations: this.meltOperationRepository,
+          mintOperations: this.mintOperationRepository,
+          receiveOperations: this.receiveOperationRepository,
+          mintSwapOperations: this.mintSwapOperationRepository,
+        },
+        this.transactionRunner,
+        {
+          checkProofStates: async (mintUrl, unit, proofs) => {
+            const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl, unit);
+            return wallet.checkProofsStates(proofs);
+          },
+        },
+        this.eventBus,
+        this.getChildLogger('ProofStateWatcherService'),
+        {
+          watchExistingInflightOnStart:
+            watchers?.proofStateWatcher?.watchExistingInflightOnStart ?? true,
+        },
+        this.sendOperationService,
+      );
+    }
+    if (!watchers?.meltQuoteWatcher?.disabled) {
+      this.meltQuoteWatcher = new MeltQuoteWatcherService(
+        this.subscriptions,
+        this.mintService,
+        this.quoteLifecycle,
+        this.eventBus,
+        this.getChildLogger('MeltQuoteWatcherService'),
+        {
+          watchExistingPendingQuotesOnStart:
+            watchers?.meltQuoteWatcher?.watchExistingPendingQuotesOnStart ?? true,
+        },
+      );
+    }
+    if (!processors?.mintOperationProcessor?.disabled) {
+      this.mintOperationProcessor = new MintOperationProcessor(
+        this.mintOperationService,
+        this.quoteLifecycle,
+        this.mintService,
+        this.eventBus,
+        this.getChildLogger('MintOperationProcessor'),
+        processors?.mintOperationProcessor,
+        this.batchMintQuoteClaims,
+      );
+    }
+    if (!processors?.meltSettlementProcessor?.disabled) {
+      this.meltSettlementProcessor = new MeltSettlementProcessor(
+        this.meltOperationService,
+        this.eventBus,
+        this.getChildLogger('MeltSettlementProcessor'),
+        {
+          initializeExistingPendingOperationsOnStart:
+            processors?.meltSettlementProcessor?.initializeExistingPendingOperationsOnStart ?? true,
+          interestRegistrar: this.meltQuoteWatcher,
+        },
+      );
+    }
+    if (!processors?.mintSwapOperationProcessor?.disabled) {
+      this.mintSwapOperationProcessor = new MintSwapOperationProcessor(
+        this.mintSwapOperationService,
+        this.mintSwapOperationRepository,
+        this.eventBus,
+        this.getChildLogger('MintSwapOperationProcessor'),
+        processors?.mintSwapOperationProcessor,
+        {
+          mint: this.mintOperationWatcher,
+          melt: this.meltQuoteWatcher,
+          source: this.meltOperationRepository,
+          destination: this.mintOperationRepository,
+        },
+      );
+    }
     const apis = this.buildApis();
     this.mint = apis.mint;
     this.wallet = apis.wallet;
@@ -529,6 +575,11 @@ export class Manager {
     await this.pluginHost.ready();
   }
 
+  /**
+   * End this Session and release its resources. The proof watcher may finish already-started
+   * processing afterward (ADR-0014); keep storage available for that work. Other owners retain
+   * their drain guarantees. This is not a barrier for every explicit operation.
+   */
   async dispose(): Promise<void> {
     if (this.disposePromise) {
       await this.disposePromise;
@@ -544,17 +595,17 @@ export class Manager {
     this.disposed = true;
     this.mintSwapDisposal.abort(new Error('Mint Swap runtime is disposed'));
     await Promise.all([
-      this.disableMintSwapOperationProcessor(),
+      this.mintSwapOperationProcessor?.stop(),
       this.mintSwapOperationService.dispose(),
       // Finish any admitted local transport repair before final transport closure.
       this.subscriptionRepair?.catch(() => {}),
     ]);
 
-    await this.disableMintOperationWatcher();
-    await this.disableProofStateWatcher();
-    await this.disableMeltSettlementProcessor();
-    await this.disableMeltQuoteWatcher();
-    await this.disableMintOperationProcessor();
+    await this.mintOperationWatcher?.stop();
+    await this.proofStateWatcher?.stop();
+    await this.meltSettlementProcessor?.stop();
+    await this.meltQuoteWatcher?.stop();
+    await this.mintOperationProcessor?.stop();
     await this.pluginHost.dispose();
     this.subscriptions.closeAll();
   }
@@ -566,249 +617,32 @@ export class Manager {
     return this.eventBus.off(event, handler);
   }
 
-  /** Start persisted-swap recovery; options are validated and applied on each fresh start. */
-  async enableMintSwapOperationProcessor(
-    options?: MintSwapOperationProcessorOptions,
-  ): Promise<boolean> {
-    if (this.disposed) return false;
-    if (!this.mintSwapOperationProcessor) {
-      this.mintSwapOperationProcessor = new MintSwapOperationProcessor(
-        this.mintSwapOperationService,
-        this.mintSwapOperationRepository,
-        this.eventBus,
-        this.getChildLogger('MintSwapOperationProcessor'),
-        options ?? this.originalProcessorConfig?.mintSwapOperationProcessor,
-        {
-          mint: this.mintOperationWatcher,
-          melt: this.meltQuoteWatcher,
-          source: this.meltOperationRepository,
-          destination: this.mintOperationRepository,
-        },
-      );
-    }
-    const processor = this.mintSwapOperationProcessor;
-    if (processor.isRunning()) return false;
-    await processor.start();
-    return processor.isRunning();
-  }
+  /** Internal initializer wiring; the manual construction migration remains unresolved (ADR-0017). */
+  async [initializeSession](): Promise<void> {
+    // Initialize plugin system (must complete before watchers for extensions to be available)
+    await this.initPlugins();
 
-  /** Stop automatic parent recovery. Explicit commands and generic children retain their policy. */
-  async disableMintSwapOperationProcessor(): Promise<void> {
-    const processor = this.mintSwapOperationProcessor;
-    await processor?.stop();
-    // Retain the instance while draining so overlapping starts cannot bypass its stop.
-    if (this.mintSwapOperationProcessor === processor) this.mintSwapOperationProcessor = undefined;
-  }
+    // Reconcile legacy mint quote rows into mint operations before any watcher,
+    // processor, or mint recovery path starts.
+    await this.reconcileLegacyMintQuotes();
 
-  /** Enable observation; parent-owned subscription setup may still be pending on return. */
-  async enableMintOperationWatcher(options?: {
-    watchExistingPendingOnStart?: boolean;
-    watchExistingPendingQuotesOnStart?: boolean;
-  }): Promise<void> {
-    if (this.disposed) return;
-    if (this.mintOperationWatcher) {
-      if (!this.mintOperationWatcher.isRunning()) await this.mintOperationWatcher.stop();
-      else this.mintOperationWatcher.retryFailedInterests();
-      return;
-    }
-    const watcherLogger = this.logger.child
-      ? this.logger.child({ module: 'MintOperationWatcherService' })
-      : this.logger;
-    this.mintOperationWatcher = new MintOperationWatcherService(
-      this.subscriptions,
-      this.mintService,
-      this.mintOperationService,
-      this.quoteLifecycle,
-      this.eventBus,
-      watcherLogger,
-      {
-        watchExistingPendingOnStart: options?.watchExistingPendingOnStart ?? true,
-        watchExistingPendingQuotesOnStart: options?.watchExistingPendingQuotesOnStart ?? true,
-      },
-    );
-    await this.mintOperationWatcher.start();
-    await this.rebindMintSwapObservation();
-  }
+    // Activate the selected owners once, in the established startup order.
+    await this.mintOperationWatcher?.start();
+    await this.proofStateWatcher?.start();
+    await this.meltQuoteWatcher?.start();
+    await this.mintOperationProcessor?.start();
+    await this.meltSettlementProcessor?.start();
 
-  async disableMintOperationWatcher(): Promise<void> {
-    if (!this.mintOperationWatcher) return;
-    const watcher = this.mintOperationWatcher;
-    const stopping = watcher.stop();
-    try {
-      await this.rebindMintSwapObservation();
-    } finally {
-      await stopping;
-      // Keep the draining instance visible to overlapping disable/dispose calls.
-      if (this.mintOperationWatcher === watcher) this.mintOperationWatcher = undefined;
-    }
-  }
-
-  async enableMintOperationProcessor(options?: {
-    processIntervalMs?: number;
-    maxRetries?: number;
-    baseRetryDelayMs?: number;
-    initialEnqueueDelayMs?: number;
-    autoClaimMintQuotes?: boolean;
-    batchMintQuotes?: boolean;
-  }): Promise<boolean> {
-    if (this.disposed) return false;
-    if (this.mintOperationProcessor?.isRunning()) return false;
-    const processorLogger = this.logger.child
-      ? this.logger.child({ module: 'MintOperationProcessor' })
-      : this.logger;
-    this.mintOperationProcessor = new MintOperationProcessor(
-      this.mintOperationService,
-      this.quoteLifecycle,
-      this.mintService,
-      this.eventBus,
-      processorLogger,
-      options,
-      this.batchMintQuoteClaims,
-    );
-    await this.mintOperationProcessor.start();
-    return true;
-  }
-
-  async disableMintOperationProcessor(): Promise<void> {
-    if (!this.mintOperationProcessor) return;
-    await this.mintOperationProcessor.stop();
-    this.mintOperationProcessor = undefined;
-  }
-
-  /**
-   * Enable quote observation and attach pending-operation interests. Operation-owned interests
-   * are accepted synchronously; their subscription setup may still be pending when this resolves.
-   * Setup errors are reported by the watcher and do not block cached-evidence progression.
-   */
-  async enableMeltQuoteWatcher(options?: {
-    watchExistingPendingQuotesOnStart?: boolean;
-  }): Promise<void> {
-    if (this.disposed) return;
-    if (this.meltQuoteWatcher) {
-      if (!this.meltQuoteWatcher.isRunning()) {
-        await this.meltQuoteWatcher.stop();
-        return;
-      }
-      await this.meltSettlementProcessor?.setInterestRegistrar(this.meltQuoteWatcher);
-      this.meltQuoteWatcher.retryFailedInterests();
-      await this.rebindMintSwapObservation();
-      return;
-    }
-    const watcherLogger = this.logger.child
-      ? this.logger.child({ module: 'MeltQuoteWatcherService' })
-      : this.logger;
-    this.meltQuoteWatcher = new MeltQuoteWatcherService(
-      this.subscriptions,
-      this.mintService,
-      this.quoteLifecycle,
-      this.eventBus,
-      watcherLogger,
-      {
-        watchExistingPendingQuotesOnStart: options?.watchExistingPendingQuotesOnStart ?? true,
-      },
-    );
-    await this.meltQuoteWatcher.start();
-    await this.rebindMintSwapObservation();
-    await this.meltSettlementProcessor?.setInterestRegistrar(this.meltQuoteWatcher);
-  }
-
-  async disableMeltQuoteWatcher(): Promise<void> {
-    if (!this.meltQuoteWatcher) return;
-    const watcher = this.meltQuoteWatcher;
-    const stopping = watcher.stop();
-    try {
-      await this.meltSettlementProcessor?.setInterestRegistrar(undefined);
-      await this.rebindMintSwapObservation();
-    } finally {
-      await stopping;
-      if (this.meltQuoteWatcher === watcher) this.meltQuoteWatcher = undefined;
-    }
-  }
-
-  private async rebindMintSwapObservation(): Promise<void> {
-    await this.mintSwapOperationProcessor?.setInterestRegistrars({
-      mint: this.mintOperationWatcher?.isRunning() ? this.mintOperationWatcher : undefined,
-      melt: this.meltQuoteWatcher?.isRunning() ? this.meltQuoteWatcher : undefined,
-    });
-  }
-
-  /** Enable cached-evidence progression without waiting for operation quote subscriptions. */
-  async enableMeltSettlementProcessor(options?: {
-    initializeExistingPendingOperationsOnStart?: boolean;
-  }): Promise<boolean> {
-    if (this.disposed) return false;
-    if (this.meltSettlementProcessor?.isRunning()) return false;
-    const processorLogger = this.logger.child
-      ? this.logger.child({ module: 'MeltSettlementProcessor' })
-      : this.logger;
-    this.meltSettlementProcessor = new MeltSettlementProcessor(
-      this.meltOperationService,
-      this.eventBus,
-      processorLogger,
-      {
-        initializeExistingPendingOperationsOnStart:
-          options?.initializeExistingPendingOperationsOnStart ?? true,
-        interestRegistrar: this.meltQuoteWatcher,
-      },
-    );
-    await this.meltSettlementProcessor.start();
-    return true;
-  }
-
-  async disableMeltSettlementProcessor(): Promise<void> {
-    if (!this.meltSettlementProcessor) return;
-    await this.meltSettlementProcessor.stop();
-    this.meltSettlementProcessor = undefined;
+    // Startup recovery is independent of watcher and ordinary processor selection.
+    await this.ops.send.recovery.run();
+    await this.ops.melt.recovery.run();
+    await this.recoverPendingPaymentRequestReceiveAttempts();
+    await this.recoverPendingMintOperations();
+    await this.mintSwapOperationProcessor?.start();
   }
 
   async waitForMintOperationProcessor(): Promise<void> {
-    if (!this.mintOperationProcessor) return;
-    await this.mintOperationProcessor.waitForCompletion();
-  }
-
-  async enableProofStateWatcher(options?: {
-    watchExistingInflightOnStart?: boolean;
-  }): Promise<void> {
-    if (this.disposed) return;
-    if (this.proofStateWatcher?.isRunning()) return;
-    const watcherLogger = this.logger.child
-      ? this.logger.child({ module: 'ProofStateWatcherService' })
-      : this.logger;
-    this.proofStateWatcher = new ProofStateWatcherService(
-      this.subscriptions,
-      this.mintService,
-      this.proofRepository,
-      {
-        sendOperations: this.sendOperationRepository,
-        meltOperations: this.meltOperationRepository,
-        mintOperations: this.mintOperationRepository,
-        receiveOperations: this.receiveOperationRepository,
-        mintSwapOperations: this.mintSwapOperationRepository,
-      },
-      this.transactionRunner,
-      {
-        checkProofStates: async (mintUrl, unit, proofs) => {
-          const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl, unit);
-          return wallet.checkProofsStates(proofs);
-        },
-      },
-      this.eventBus,
-      watcherLogger,
-      { watchExistingInflightOnStart: options?.watchExistingInflightOnStart ?? true },
-    );
-    this.proofStateWatcher.setSendOperationService(this.sendOperationService);
-    await this.proofStateWatcher.start();
-  }
-
-  /**
-   * Stop proof observation and release subscriptions, including acquisitions in progress.
-   * Already-started notification processing and operation checks may finish and publish events
-   * after this resolves. Safe to await from a proof or Send event listener.
-   */
-  async disableProofStateWatcher(): Promise<void> {
-    if (!this.proofStateWatcher) return;
-    await this.proofStateWatcher.stop();
-    this.proofStateWatcher = undefined;
+    await this.mintOperationProcessor?.waitForCompletion();
   }
 
   /** Recover Mint Operations, then in-flight Batch Mint Operations. */
@@ -893,7 +727,7 @@ export class Manager {
 
   /**
    * Repair networking after returning to the foreground, even if sockets appear alive.
-   * Preserves current registrations and enabled/disabled watchers and processors.
+   * Preserves current registrations and the fixed watcher and processor selection.
    * Resolves after local repair is initiated; does not wait for remote connectivity,
    * observation catch-up, or operation completion. Safe offline. Overlapping calls coalesce.
    * Does not run startup discovery or operation recovery. No-op once disposal starts.

@@ -100,10 +100,6 @@ class MeltSettlementInterestRegistry {
   getAllOperationIds(): string[] {
     return Array.from(this.quoteKeyByOperationId.keys());
   }
-
-  getAllOperations(): OperationQuoteInterest[] {
-    return Array.from(this.operationById.values());
-  }
 }
 
 export class MeltSettlementProcessor {
@@ -111,10 +107,10 @@ export class MeltSettlementProcessor {
   private readonly bus: EventBus<CoreEvents>;
   private readonly logger?: Logger;
   private readonly options: Required<Omit<MeltSettlementProcessorOptions, 'interestRegistrar'>>;
-  private interestRegistrar?: OperationInterestRegistrar;
+  private readonly interestRegistrar?: OperationInterestRegistrar;
 
   private running = false;
-  private generation = 0;
+  private started = false;
   private stopping?: Promise<void>;
   private offPending?: () => void;
   private offQuoteUpdated?: () => void;
@@ -150,31 +146,10 @@ export class MeltSettlementProcessor {
     return this.running;
   }
 
-  /**
-   * @internal Rebinds the watcher that owns operation quote subscriptions. Rebinding the same
-   * watcher is a no-op; that watcher's own enable path retries its failed setup.
-   */
-  async setInterestRegistrar(interestRegistrar?: OperationInterestRegistrar): Promise<void> {
-    if (this.interestRegistrar === interestRegistrar) return;
-
-    const previousRegistrar = this.interestRegistrar;
-    this.interestRegistrar = interestRegistrar;
-    // Removal withdraws declarations synchronously; only physical cleanup is awaited. Bind the
-    // replacement before awaiting old cleanup so it cannot delay or mutate the new interests.
-    const cleanup = previousRegistrar
-      ? this.interests
-          .getAllOperationIds()
-          .map((operationId) => this.removeOperationWatchInterest(previousRegistrar, operationId))
-      : [];
-    if (this.running) this.registerTrackedOperationInterests();
-    await Promise.all(cleanup);
-  }
-
   async start(): Promise<void> {
-    if (this.stopping) await this.stopping;
-    if (this.running) return;
+    if (this.started || this.stopping) return;
+    this.started = true;
     this.running = true;
-    this.generation++;
     this.logger?.info('MeltSettlementProcessor started');
 
     this.offPending = this.bus.on('melt-op:pending', async ({ operation }) => {
@@ -223,18 +198,9 @@ export class MeltSettlementProcessor {
 
   stop(): Promise<void> {
     if (this.stopping) return this.stopping;
-    if (!this.running) return Promise.resolve();
     this.running = false;
     const task = this.finishStop();
     this.stopping = task;
-    void task.then(
-      () => {
-        this.stopping = undefined;
-      },
-      () => {
-        this.stopping = undefined;
-      },
-    );
     return task;
   }
 
@@ -273,15 +239,14 @@ export class MeltSettlementProcessor {
   }
 
   private async initializeExistingPendingOperations(): Promise<void> {
-    const generation = this.generation;
     try {
       const operations = await this.meltOperations.getPendingOperations();
-      if (!this.running || generation !== this.generation) {
+      if (!this.running) {
         return;
       }
 
       for (const operation of operations) {
-        if (!this.running || generation !== this.generation) {
+        if (!this.running) {
           return;
         }
         if (isPendingMeltOperation(operation)) {
@@ -355,13 +320,6 @@ export class MeltSettlementProcessor {
       checks.push(this.checkInterestedOperation(operationId, interest));
     }
     await Promise.all(checks);
-  }
-
-  private registerTrackedOperationInterests(): void {
-    for (const operation of this.interests.getAllOperations()) {
-      if (!this.running) return;
-      this.registerOperationWatchInterest(operation);
-    }
   }
 
   private registerOperationWatchInterest(operation: OperationQuoteInterest): void {

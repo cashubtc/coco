@@ -1,4 +1,4 @@
-import type { Manager, Logger, UnitAmountLike, MintQuote } from '@cashu/coco-core';
+import type { Manager, Logger, UnitAmountLike, MintQuote, CocoConfig } from '@cashu/coco-core';
 import type { Repositories } from '@cashu/coco-core/adapter';
 import {
   initializeCoco,
@@ -756,7 +756,13 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           }
           await awaitMintQuotesPaid(mgr, mintUrl, quotes);
 
-          await mgr.enableMintOperationProcessor({ processIntervalMs: 20 });
+          await mgr.dispose();
+          mgr = await initializeCoco({
+            repo: repositories,
+            seedGetter,
+            logger,
+            processors: { mintOperationProcessor: { processIntervalMs: 20 } },
+          });
           await mgr.waitForMintOperationProcessor();
 
           const batchIds = new Set<string>();
@@ -1298,17 +1304,19 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
     });
 
     describe('Proof State Checks', () => {
+      let proofRepository: Repositories['proofRepository'];
       let repositoriesDispose: (() => Promise<void>) | undefined;
 
       beforeEach(async () => {
         const { repositories, dispose } = await createRepositories();
         repositoriesDispose = dispose;
+        proofRepository = repositories.proofRepository;
         mgr = await initializeCoco({
           repo: repositories,
           seedGetter,
           logger,
           watchers: {
-            proofStateWatcher: { disabled: true },
+            proofStateWatcher: {},
           },
         });
 
@@ -1332,15 +1340,13 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         });
         const { token } = await mgr!.ops.send.execute(preparedSend.id);
 
-        await mgr!.wallet.receive(token);
-
-        const proofRepository = (mgr as any).proofRepository as Repositories['proofRepository'];
-
-        const beforeStates = await Promise.all(
-          token.proofs.map((proof) => proofRepository.getProofBySecret(mintUrl, proof.secret)),
+        const beforeStates = await proofRepository.getProofsBySecrets(
+          mintUrl,
+          token.proofs.map((proof) => proof.secret),
         );
-        const inflightCount = beforeStates.filter((proof) => proof?.state === 'inflight').length;
-        expect(inflightCount).toBeGreaterThan(0);
+        expect(beforeStates.filter((proof) => proof.state === 'inflight').length).toBeGreaterThan(
+          0,
+        );
 
         // The proof watcher hands SPENT evidence for Send-owned proofs to the Send.
         const finalized = new Promise<void>((resolve) => {
@@ -1350,7 +1356,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
             resolve();
           });
         });
-        await mgr!.enableProofStateWatcher();
+        await mgr!.wallet.receive(token);
         await finalized;
 
         expect((await mgr!.ops.send.get(preparedSend.id))?.state).toBe('finalized');
@@ -2389,8 +2395,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
     });
 
     describe('Background progression', () => {
-      // Owners start after initializeCoco, so the startup recovery sweeps cannot account for
-      // anything these tests assert.
+      // Live work starts after initialization with fixed owner selection. Startup cases reopen
+      // a Session explicitly and retain its normal Operation Recovery.
       const ownersDisabled = {
         watchers: {
           mintOperationWatcher: { disabled: true },
@@ -2403,13 +2409,19 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         },
       };
 
-      async function startSession(repo: Repositories) {
+      async function startSession(
+        repo: Repositories,
+        selection: Pick<CocoConfig, 'watchers' | 'processors' | 'plugins'> = {},
+      ) {
         const manager = await initializeCoco({
           repo,
           seedGetter,
           logger,
           subscriptions: watcherTestSubscriptions,
           ...ownersDisabled,
+          watchers: { ...ownersDisabled.watchers, ...selection.watchers },
+          processors: { ...ownersDisabled.processors, ...selection.processors },
+          plugins: selection.plugins,
         });
         await manager.mint.addMint(mintUrl, { trusted: true });
         return manager;
@@ -2420,10 +2432,13 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         mgr = undefined;
       }
 
-      async function withSession(run: (manager: Manager, repo: Repositories) => Promise<void>) {
+      async function withSession(
+        run: (manager: Manager, repo: Repositories) => Promise<void>,
+        selection: Pick<CocoConfig, 'watchers' | 'processors'> = {},
+      ) {
         const { repositories, dispose } = await createRepositories();
         try {
-          mgr = await startSession(repositories);
+          mgr = await startSession(repositories, selection);
           await run(mgr, repositories);
         } finally {
           await stopSession();
@@ -2451,7 +2466,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       }
 
       it('claims a cached paid quote without an operation on processor startup', async () => {
-        await withSession(async (manager) => {
+        await withSession(async (manager, repo) => {
           const quote = await manager.quotes.mint.create({
             mintUrl,
             amount: 40,
@@ -2460,7 +2475,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           });
           await refreshUntilReady(manager, quote.quoteId);
 
-          await manager.enableMintOperationProcessor();
+          await manager.dispose();
+          manager = mgr = await startSession(repo, { processors: { mintOperationProcessor: {} } });
           await manager.waitForMintOperationProcessor();
 
           const operations = await manager.ops.mint.listByQuote({
@@ -2473,69 +2489,82 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       }, 30000);
 
       it('advances a pending Mint from an explicit quote refresh with its watcher disabled', async () => {
-        await withSession(async (manager) => {
-          const operation = await prepareMintOperation(manager, mintUrl, 40, testUnit);
-          await manager.enableMintOperationProcessor();
-          await manager.waitForMintOperationProcessor();
-          expect((await manager.ops.mint.get(operation.id))?.state).toBe('pending');
+        await withSession(
+          async (manager) => {
+            const operation = await prepareMintOperation(manager, mintUrl, 40, testUnit);
 
-          await refreshUntilReady(manager, operation.quoteId);
-          await manager.waitForMintOperationProcessor();
+            await manager.waitForMintOperationProcessor();
+            expect((await manager.ops.mint.get(operation.id))?.state).toBe('pending');
 
-          expect((await manager.ops.mint.get(operation.id))?.state).toBe('finalized');
-        });
+            await refreshUntilReady(manager, operation.quoteId);
+            await manager.waitForMintOperationProcessor();
+
+            expect((await manager.ops.mint.get(operation.id))?.state).toBe('finalized');
+          },
+          { processors: { mintOperationProcessor: {} } },
+        );
       }, 30000);
 
       it('records Mint watcher observations without advancing while its processor is disabled', async () => {
-        await withSession(async (manager) => {
-          const operation = await prepareMintOperation(manager, mintUrl, 40, testUnit);
-          const observed = waitForEvent<{ quote: MintQuote }>(
-            manager,
-            'mint-quote:updated',
-            ({ quote }) => quote.quoteId === operation.quoteId && isMintQuoteReady(quote),
-          );
+        await withSession(
+          async (manager) => {
+            const operation = await prepareMintOperation(manager, mintUrl, 40, testUnit);
+            const observed = waitForEvent<{ quote: MintQuote }>(
+              manager,
+              'mint-quote:updated',
+              ({ quote }) => quote.quoteId === operation.quoteId && isMintQuoteReady(quote),
+            );
 
-          await manager.enableMintOperationWatcher();
-          await observed;
-          await manager.disableMintOperationWatcher();
+            await observed;
+            await manager.dispose();
 
-          expect((await manager.ops.mint.get(operation.id))?.state).toBe('pending');
-          expect(await getMintTotalBalance(manager, mintUrl, testUnit)).toBe(0);
-        });
+            expect((await manager.ops.mint.get(operation.id))?.state).toBe('pending');
+            expect(await getMintTotalBalance(manager, mintUrl, testUnit)).toBe(0);
+          },
+          { watchers: { mintOperationWatcher: {} } },
+        );
       }, 30000);
 
       it('suppresses automatic Mint claims while allowing explicit execution', async () => {
-        await withSession(async (manager) => {
-          const operation = await prepareMintOperation(manager, mintUrl, 40, testUnit);
-          await refreshUntilReady(manager, operation.quoteId);
+        await withSession(
+          async (manager) => {
+            const operation = await prepareMintOperation(manager, mintUrl, 40, testUnit);
+            await refreshUntilReady(manager, operation.quoteId);
 
-          await manager.enableMintOperationProcessor({ autoClaimMintQuotes: false });
-          await manager.quotes.mint.refresh({ mintUrl, quoteId: operation.quoteId });
-          await manager.waitForMintOperationProcessor();
-          expect((await manager.ops.mint.get(operation.id))?.state).toBe('pending');
+            await manager.quotes.mint.refresh({ mintUrl, quoteId: operation.quoteId });
+            await manager.waitForMintOperationProcessor();
+            expect((await manager.ops.mint.get(operation.id))?.state).toBe('pending');
 
-          expect((await manager.ops.mint.execute(operation.id)).state).toBe('finalized');
-        });
+            expect((await manager.ops.mint.execute(operation.id)).state).toBe('finalized');
+          },
+          { processors: { mintOperationProcessor: { autoClaimMintQuotes: false } } },
+        );
       }, 30000);
 
       it('processes an explicit Mint requeue while automatic claiming is disabled', async () => {
-        await withSession(async (manager) => {
-          const operation = await prepareMintOperation(manager, mintUrl, 40, testUnit);
-          await refreshUntilReady(manager, operation.quoteId);
-          await manager.enableMintOperationProcessor({
-            autoClaimMintQuotes: false,
-            initialEnqueueDelayMs: 0,
-          });
+        await withSession(
+          async (manager) => {
+            const operation = await prepareMintOperation(manager, mintUrl, 40, testUnit);
+            await refreshUntilReady(manager, operation.quoteId);
 
-          const { requeued } = await manager.requeuePaidMintQuotes(mintUrl);
-          await manager.waitForMintOperationProcessor();
+            const { requeued } = await manager.requeuePaidMintQuotes(mintUrl);
+            await manager.waitForMintOperationProcessor();
 
-          expect(requeued).toContain(operation.quoteId);
-          expect((await manager.ops.mint.get(operation.id))?.state).toBe('finalized');
-        });
+            expect(requeued).toContain(operation.quoteId);
+            expect((await manager.ops.mint.get(operation.id))?.state).toBe('finalized');
+          },
+          {
+            processors: {
+              mintOperationProcessor: {
+                autoClaimMintQuotes: false,
+                initialEnqueueDelayMs: 0,
+              },
+            },
+          },
+        );
       }, 30000);
 
-      it('completes a pending Send whose proofs are already spent locally', async () => {
+      it('completes a pending Send with locally spent proofs during Session startup', async () => {
         await withSession(async (manager, repo) => {
           const { operation, token } = await fundedPendingSend(manager);
           // The local proof update committed before an interruption left the Send pending.
@@ -2544,36 +2573,32 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
             token.proofs.map((proof) => proof.secret),
             'spent',
           );
-          const finalized = waitForEvent<{ operationId: string }>(
-            manager,
-            'send:finalized',
-            (payload) => payload.operationId === operation.id,
-          );
-
-          await manager.enableProofStateWatcher();
-          await finalized;
+          await manager.dispose();
+          manager = mgr = await startSession(repo, { watchers: { proofStateWatcher: {} } });
 
           expect((await manager.ops.send.get(operation.id))?.state).toBe('finalized');
         });
       }, 30000);
 
       it('observes newly pending Sends with its startup scan disabled', async () => {
-        await withSession(async (manager) => {
-          await manager.enableProofStateWatcher({ watchExistingInflightOnStart: false });
-          const { operation, token } = await fundedPendingSend(manager);
-          const finalized = waitForEvent<{ operationId: string }>(
-            manager,
-            'send:finalized',
-            (payload) => payload.operationId === operation.id,
-          );
+        await withSession(
+          async (manager) => {
+            const { operation, token } = await fundedPendingSend(manager);
+            const finalized = waitForEvent<{ operationId: string }>(
+              manager,
+              'send:finalized',
+              (payload) => payload.operationId === operation.id,
+            );
 
-          const recipient = new Wallet(createTestMint(mintUrl), { unit: testUnit });
-          await recipient.loadMint();
-          await recipient.receive(token);
-          await finalized;
+            const recipient = new Wallet(createTestMint(mintUrl), { unit: testUnit });
+            await recipient.loadMint();
+            await recipient.receive(token);
+            await finalized;
 
-          expect((await manager.ops.send.get(operation.id))?.state).toBe('finalized');
-        });
+            expect((await manager.ops.send.get(operation.id))?.state).toBe('finalized');
+          },
+          { watchers: { proofStateWatcher: { watchExistingInflightOnStart: false } } },
+        );
       }, 30000);
 
       describe('legacy tokenless P2PK Sends', () => {
@@ -2616,23 +2641,14 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(await getMintSpendableBalance(manager, mintUrl, testUnit)).toBe(spendable);
         }
 
-        it('completes one already redeemed before the watcher starts', async () => {
+        it('completes one already redeemed before the Session starts', async () => {
           await withSession(async (manager, repo) => {
             const { operation, token, redeem } = await persistLegacySend(manager, repo);
             const spendable = await getMintSpendableBalance(manager, mintUrl, testUnit);
 
             await stopSession();
-            mgr = await startSession(repo);
-            // Redeem after the startup recovery sweep, which would otherwise complete this Send.
             await redeem();
-            const finalized = waitForEvent<{ operationId: string }>(
-              mgr,
-              'send:finalized',
-              (payload) => payload.operationId === operation.id,
-            );
-            await mgr.enableProofStateWatcher();
-            await finalized;
-
+            mgr = await startSession(repo, { watchers: { proofStateWatcher: {} } });
             await expectCompleted(mgr, repo, operation.id, token, spendable);
           });
         }, 30000);
@@ -2643,26 +2659,36 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
             const spendable = await getMintSpendableBalance(manager, mintUrl, testUnit);
 
             await stopSession();
-            const restarted = await startSession(repo);
-            mgr = restarted;
-            // Observe acquisition only; the subscription and its notifications stay real.
+            let acquired!: () => void;
             const subscribed = new Promise<void>((resolve) => {
-              const subscribe = restarted.subscriptions.subscribe.bind(restarted.subscriptions);
-              restarted.subscriptions.subscribe = (async (
-                ...args: Parameters<typeof subscribe>
-              ) => {
-                const subscription = await subscribe(...args);
-                if (args[1] === 'proof_state') resolve();
-                return subscription;
-              }) as typeof subscribe;
+              acquired = resolve;
             });
+            const restarted = await startSession(repo, {
+              watchers: { proofStateWatcher: {} },
+              plugins: [
+                {
+                  name: 'observe-acquisition',
+                  required: ['subscriptions'],
+                  onReady: ({ services }) => {
+                    const subscribe = services.subscriptions.subscribe.bind(services.subscriptions);
+                    services.subscriptions.subscribe = (async (
+                      ...args: Parameters<typeof subscribe>
+                    ) => {
+                      const subscription = await subscribe(...args);
+                      if (args[1] === 'proof_state') acquired();
+                      return subscription;
+                    }) as typeof subscribe;
+                  },
+                },
+              ],
+            });
+            mgr = restarted;
             const finalized = waitForEvent<{ operationId: string }>(
               restarted,
               'send:finalized',
               (payload) => payload.operationId === operation.id,
             );
 
-            await restarted.enableProofStateWatcher();
             await subscribed;
             expect((await restarted.ops.send.get(operation.id))?.state).toBe('pending');
 

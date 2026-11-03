@@ -1,3 +1,4 @@
+import type { CocoConfig } from '../../Manager.ts';
 import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import { Amount } from '@cashu/cashu-ts';
 import type { BatchMintBehavior } from '../fixtures/BatchMintMint.ts';
@@ -54,6 +55,21 @@ describe('Automatic Batch Mint claiming', () => {
     h = await createBatchMintHarness();
   });
 
+  async function openSession(
+    processor: NonNullable<CocoConfig['processors']>['mintOperationProcessor'],
+    plugins?: CocoConfig['plugins'],
+    watchers?: CocoConfig['watchers'],
+  ) {
+    await h.dispose();
+    h = await createBatchMintHarness({
+      repo: h.repo,
+      mint: h.mint,
+      plugins,
+      watchers,
+      processors: { mintOperationProcessor: processor },
+    });
+  }
+
   afterEach(async () => {
     await h.dispose();
     h.uninstall();
@@ -89,7 +105,7 @@ describe('Automatic Batch Mint claiming', () => {
     it('claims each chunk within the batch limit as one Batch Mint Operation', async () => {
       for (const quote of ['a', 'b', 'c', 'd']) await paid(quote);
 
-      await h.coco.enableMintOperationProcessor({ processIntervalMs: PROCESS_INTERVAL_MS });
+      await openSession({ processIntervalMs: PROCESS_INTERVAL_MS });
       await h.coco.waitForMintOperationProcessor();
 
       expect(mintCalls()).toEqual([{ batch: ['a', 'b', 'c'] }, { single: 'd' }]);
@@ -126,7 +142,7 @@ describe('Automatic Batch Mint claiming', () => {
       for (const quote of ['x', 'y'])
         await h.quote({ quote, method: 'bolt12', amountPaid: 10, pubkey: ownedKey.publicKeyHex });
 
-      await h.coco.enableMintOperationProcessor({ processIntervalMs: PROCESS_INTERVAL_MS });
+      await openSession({ processIntervalMs: PROCESS_INTERVAL_MS });
       await h.coco.waitForMintOperationProcessor();
 
       const calls = mintCalls();
@@ -150,7 +166,7 @@ describe('Automatic Batch Mint claiming', () => {
           pubkey: ownedKey.publicKeyHex,
         });
 
-      await h.coco.enableMintOperationProcessor({ processIntervalMs: PROCESS_INTERVAL_MS });
+      await openSession({ processIntervalMs: PROCESS_INTERVAL_MS });
       await h.coco.waitForMintOperationProcessor();
 
       expect(
@@ -176,7 +192,7 @@ describe('Automatic Batch Mint claiming', () => {
   describe('Mint Operation Processor', () => {
     it('collects claims from quote updates over one processing turn and groups them', async () => {
       for (const quote of ['a', 'b', 'c', 'd']) await unpaid(quote);
-      await h.coco.enableMintOperationProcessor({ processIntervalMs: PROCESS_INTERVAL_MS });
+      await openSession({ processIntervalMs: PROCESS_INTERVAL_MS });
       await h.coco.waitForMintOperationProcessor();
       expect(mintCalls()).toEqual([]);
 
@@ -192,7 +208,7 @@ describe('Automatic Batch Mint claiming', () => {
     });
 
     it('claims a quote whose Mint Operation was just prepared without waiting for the turn', async () => {
-      await h.coco.enableMintOperationProcessor({ processIntervalMs: 60_000 });
+      await openSession({ processIntervalMs: 60_000 });
       await h.coco.waitForMintOperationProcessor();
       await paid('p');
 
@@ -209,12 +225,20 @@ describe('Automatic Batch Mint claiming', () => {
       for (const quote of ['a', 'b', 'c']) await paid(quote);
       h.mint.batchBehaviors.push({ code: 20007, detail: 'quote expired' });
       // Another device claims `c` while the batch is being rejected.
-      h.coco.on('batch-mint-op:failed', async () => {
+      const onFailed = async () => {
         h.mint.quotes.get('c')!.amountIssued = 10;
         await h.persist('c');
-      });
+      };
 
-      await h.coco.enableMintOperationProcessor({ processIntervalMs: PROCESS_INTERVAL_MS });
+      await openSession({ processIntervalMs: PROCESS_INTERVAL_MS }, [
+        {
+          name: 'batch-race',
+          required: ['eventBus'],
+          onReady: ({ services }) => {
+            services.eventBus.on('batch-mint-op:failed', onFailed);
+          },
+        },
+      ]);
       await h.coco.waitForMintOperationProcessor();
 
       expect(mintCalls()).toEqual([{ batch: ['a', 'b', 'c'] }, { single: 'a' }, { single: 'b' }]);
@@ -251,7 +275,7 @@ describe('Automatic Batch Mint claiming', () => {
         });
       };
 
-      await h.coco.enableMintOperationProcessor({ processIntervalMs: PROCESS_INTERVAL_MS });
+      await openSession({ processIntervalMs: PROCESS_INTERVAL_MS });
       await h.coco.waitForMintOperationProcessor();
 
       expect(h.mint.batchRequests.map(({ quotes }) => quotes)).toEqual([['a', 'b', 'c']]);
@@ -266,13 +290,13 @@ describe('Automatic Batch Mint claiming', () => {
 
   describe('batching unavailable marker', () => {
     /** Startup batch of `a` and `b` answered with `behavior`, then a later turn pays `d` and `e`. */
-    const runTwoTurns = async (behavior: BatchMintBehavior) => {
+    const runTwoTurns = async (behavior: BatchMintBehavior, watchers?: CocoConfig['watchers']) => {
       await paid('a');
       await paid('b');
       await unpaid('d');
       await unpaid('e');
       h.mint.batchBehaviors.push(behavior);
-      await h.coco.enableMintOperationProcessor({ processIntervalMs: PROCESS_INTERVAL_MS });
+      await openSession({ processIntervalMs: PROCESS_INTERVAL_MS }, undefined, watchers);
       await h.coco.waitForMintOperationProcessor();
       await inOneProcessingTurn(() => payAndRefresh('d', 'e'));
       await h.coco.waitForMintOperationProcessor();
@@ -291,13 +315,10 @@ describe('Automatic Batch Mint claiming', () => {
     });
 
     it('keeps watcher quote checks batched after mint batching becomes unavailable', async () => {
-      await runTwoTurns({ code: 11017 });
-      await h.coco.disableMintOperationProcessor();
       const quoteIds = ['watch-a', 'watch-b', 'watch-c'];
-      for (const quoteId of quoteIds) {
-        await unpaid(quoteId);
-        h.mint.quotes.get(quoteId)!.amountPaid = 10;
-      }
+      for (const quoteId of quoteIds) await unpaid(quoteId);
+      await runTwoTurns({ code: 11017 }, { mintOperationWatcher: {} });
+      const requestsBeforePayment = h.mint.requests.length;
       const observed = new Set<string>();
       const paidObservations = new Promise<void>((resolve) => {
         h.coco.on('mint-quote:updated', ({ quoteId, quote }) => {
@@ -305,13 +326,13 @@ describe('Automatic Batch Mint claiming', () => {
           if (observed.size === quoteIds.length) resolve();
         });
       });
-
-      await h.coco.enableMintOperationWatcher();
+      for (const quoteId of quoteIds) h.mint.quotes.get(quoteId)!.amountPaid = 10;
       await paidObservations;
-      await h.coco.disableMintOperationWatcher();
+      await h.coco.dispose();
 
-      // Quote-check batching stays available independently of mint batching.
+      // The same Session retains its unavailable mint-batching marker while quote checks batch.
       const checks = h.mint.requests
+        .slice(requestsBeforePayment)
         .filter(({ path }) => path === '/v1/mint/quote/bolt11/check')
         .map(({ body }) => (body as { quotes: string[] }).quotes);
       expect(
@@ -336,7 +357,7 @@ describe('Automatic Batch Mint claiming', () => {
       for (const quote of ['a', 'b', 'c', 'd', 'e']) await paid(quote);
       h.mint.batchBehaviors.push('unsupported');
 
-      await h.coco.enableMintOperationProcessor({ processIntervalMs: PROCESS_INTERVAL_MS });
+      await openSession({ processIntervalMs: PROCESS_INTERVAL_MS });
       await h.coco.waitForMintOperationProcessor();
 
       expect(mintCalls()).toEqual([{ batch: ['a', 'b', 'c'] }, { single: 'd' }, { single: 'e' }]);
@@ -348,7 +369,7 @@ describe('Automatic Batch Mint claiming', () => {
       for (const quote of ['f', 'g']) await paid(quote);
 
       h = await createBatchMintHarness({ repo: h.repo, mint: h.mint });
-      await h.coco.enableMintOperationProcessor({ processIntervalMs: PROCESS_INTERVAL_MS });
+      await openSession({ processIntervalMs: PROCESS_INTERVAL_MS });
       await h.coco.waitForMintOperationProcessor();
 
       expect(h.mint.batchRequests.map(({ quotes }) => quotes).slice(-1)).toEqual([['f', 'g']]);
@@ -364,10 +385,24 @@ describe('Automatic Batch Mint claiming', () => {
   });
 
   describe('configuration and lifecycle', () => {
+    it('keeps processor options fixed when the caller mutates its configuration', async () => {
+      const options = { autoClaimMintQuotes: false, processIntervalMs: PROCESS_INTERVAL_MS };
+      await openSession(options);
+      options.autoClaimMintQuotes = true;
+      for (const quote of ['fixed-a', 'fixed-b']) await paid(quote);
+      await h.coco.ensureSubscriptions();
+      await h.coco.quotes.mint.refresh({ mintUrl: h.mint.mintUrl, quoteId: 'fixed-a' });
+      await h.coco.waitForMintOperationProcessor();
+      expect(mintCalls()).toEqual([]);
+      expect(
+        await h.coco.ops.mint.listByQuote({ mintUrl: h.mint.mintUrl, quoteId: 'fixed-a' }),
+      ).toEqual([]);
+    });
+
     it('claims one standalone Mint Operation per quote with batchMintQuotes: false', async () => {
       for (const quote of ['a', 'b']) await paid(quote);
       for (const quote of ['c', 'd', 'e', 'f']) await unpaid(quote);
-      await h.coco.enableMintOperationProcessor({
+      await openSession({
         processIntervalMs: PROCESS_INTERVAL_MS,
         batchMintQuotes: false,
       });
@@ -393,9 +428,9 @@ describe('Automatic Batch Mint claiming', () => {
       expect(explicit.state).toBe('finalized');
     });
 
-    it('discards collected claims on stop, and the next start claims them together', async () => {
+    it('discards collected claims on disposal, and a new Session claims them together', async () => {
       for (const quote of ['a', 'b', 'c']) await unpaid(quote);
-      await h.coco.enableMintOperationProcessor({ processIntervalMs: PROCESS_INTERVAL_MS });
+      await openSession({ processIntervalMs: PROCESS_INTERVAL_MS });
       await h.coco.waitForMintOperationProcessor();
 
       // Resolves once the stop started mid-batch has drained the processor's owned work.
@@ -405,7 +440,7 @@ describe('Automatic Batch Mint claiming', () => {
           // `c` is collected for the next turn, then the processor stops mid-batch.
           await inOneProcessingTurn(async () => {
             await payAndRefresh('c');
-            resolve(h.coco.disableMintOperationProcessor());
+            resolve(h.coco.dispose());
           });
         };
       });
@@ -417,14 +452,14 @@ describe('Automatic Batch Mint claiming', () => {
 
       // The next start's sweep finds `c` still unclaimed and claims it with `d`.
       await paid('d');
-      await h.coco.enableMintOperationProcessor({ processIntervalMs: PROCESS_INTERVAL_MS });
+      await openSession({ processIntervalMs: PROCESS_INTERVAL_MS });
       await h.coco.waitForMintOperationProcessor();
       expect(mintCalls()).toEqual([{ batch: ['a', 'b'] }, { batch: ['c', 'd'] }]);
     });
 
     it('discards collected claims for a mint that is untrusted, even if trusted again', async () => {
       for (const quote of ['a', 'b']) await unpaid(quote);
-      await h.coco.enableMintOperationProcessor({ processIntervalMs: PROCESS_INTERVAL_MS });
+      await openSession({ processIntervalMs: PROCESS_INTERVAL_MS });
       await h.coco.waitForMintOperationProcessor();
 
       await unpaid('c');

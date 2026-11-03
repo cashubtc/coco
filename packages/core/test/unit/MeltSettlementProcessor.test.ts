@@ -462,7 +462,7 @@ describe('MeltSettlementProcessor', () => {
     expect(advancePendingOperation).not.toHaveBeenCalled();
   });
 
-  it('ignores discovery from a previous run when restarted before that read finishes', async () => {
+  it('ignores discovery that completes after final stop', async () => {
     let releaseDiscovery!: (operations: PendingMeltOperation[]) => void;
     getPendingOperations.mockImplementationOnce(
       () =>
@@ -535,7 +535,16 @@ describe('MeltSettlementProcessor', () => {
       { watchExistingPendingQuotesOnStart: false },
     );
     await watcher.start();
-    await processor.setInterestRegistrar(watcher);
+    processor = new MeltSettlementProcessor(
+      {
+        canResolve: async () => true,
+        advancePendingOperation,
+        getPendingOperations,
+      } as unknown as MeltOperationService,
+      bus,
+      logger,
+      { interestRegistrar: watcher },
+    );
     await processor.start();
     await emitPending();
     await flushDeferredInitialChecks();
@@ -546,32 +555,6 @@ describe('MeltSettlementProcessor', () => {
     await stopping;
     expect(subscribe).not.toHaveBeenCalled();
     await watcher.stop();
-  });
-
-  it('registers a replacement immediately while old registrar cleanup is pending', async () => {
-    await processor.start();
-    await emitPending();
-    let resolveRemoval!: () => void;
-    removeOperationInterest.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          resolveRemoval = resolve;
-        }),
-    );
-    const replacement = {
-      registerOperationInterest: mock(() => {}),
-      removeOperationInterest: mock(async () => {}),
-    };
-    const rebinding = processor.setInterestRegistrar(replacement);
-    expect(replacement.registerOperationInterest).toHaveBeenCalledTimes(1);
-    await emitPending();
-    expect(replacement.registerOperationInterest).toHaveBeenCalledTimes(2);
-    resolveRemoval();
-    await rebinding;
-    expect(replacement.removeOperationInterest).not.toHaveBeenCalled();
-    await processor.setInterestRegistrar(replacement);
-    expect(replacement.registerOperationInterest).toHaveBeenCalledTimes(2);
-    await processor.stop();
   });
 
   it('evaluates cached evidence even when observation registration fails', async () => {

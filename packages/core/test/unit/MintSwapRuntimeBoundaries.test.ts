@@ -12,7 +12,7 @@ import { flagMintSwapAttention } from '../../operations/mintSwap/MintSwapTransit
 import { MintService } from '../../services/MintService.ts';
 import { MintOperationService } from '../../operations/mint/MintOperationService.ts';
 import { MeltOperationService } from '../../operations/melt/MeltOperationService.ts';
-import { initializeCoco, Manager } from '../../Manager.ts';
+import { initializeCoco, Manager, type CocoConfig } from '../../Manager.ts';
 import type { Repositories } from '../../repositories/index.ts';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 import { meltQuoteFromBolt11Response } from '../../models/MeltQuote.ts';
@@ -94,19 +94,29 @@ describe('Mint Swap real runtime boundaries', () => {
     mock.restore();
   });
 
-  async function setup(
-    logger?: Logger,
+  async function setup({
+    logger,
     prepared = true,
-    repo: Repositories = new MemoryRepositories(),
+    repo = new MemoryRepositories(),
     initialize = true,
-  ) {
+    ...selection
+  }: Pick<CocoConfig, 'watchers' | 'processors' | 'subscriptions'> & {
+    logger?: Logger;
+    prepared?: boolean;
+    repo?: Repositories;
+    initialize?: boolean;
+  } = {}) {
     const fixture = await mintSwapFixture(repo, { initialize });
     fixture.preparation.seed = new Uint8Array(64).fill(2);
-    if (prepared) {
+    const prepareAfterInitialization =
+      prepared &&
+      !!selection.processors?.mintSwapOperationProcessor &&
+      !selection.processors.mintSwapOperationProcessor.disabled;
+    if (prepared && !prepareAfterInitialization) {
       await fixture.create();
       await fixture.prepare();
     }
-    let sourceState: 'PENDING' | 'PAID' | 'UNPAID' = 'PAID';
+    let sourceState: 'PENDING' | 'PAID' | 'UNPAID' = 'UNPAID';
     let destinationState: 'UNPAID' | 'PAID' | 'ISSUED' = 'UNPAID';
     const sourceResponse = (quoteId = 'source-quote') => ({
       quote: quoteId,
@@ -161,7 +171,7 @@ describe('Mint Swap real runtime boundaries', () => {
         return new SubscriptionManager(
           new PollingTransport(
             this.mintAdapter,
-            { intervalMs: 60_000 },
+            { intervalMs: selection.subscriptions?.fastPollingIntervalMs ?? 60_000 },
             undefined,
             this.quoteLifecycle,
           ),
@@ -169,20 +179,94 @@ describe('Mint Swap real runtime boundaries', () => {
         );
       },
     );
+    if (!initialize) {
+      sourceState = 'PAID';
+      destinationState = 'PAID';
+    }
+    sourceCheck.mockClear();
+    destinationCheck.mockClear();
+    melt.mockClear();
+    issuance.mockClear();
+    let events!: import('../../events/EventBus.ts').EventBus<
+      import('../../events/types.ts').CoreEvents
+    >;
     const manager = await initializeCoco({
       repo,
       seedGetter: async () => new Uint8Array(64).fill(2),
       logger,
+      plugins: [
+        {
+          name: 'fixture-events',
+          required: ['eventBus'],
+          onReady: ({ services }) => {
+            events = services.eventBus;
+          },
+        },
+      ],
       ...mintSwapRuntimeConfig,
       processors: {
         ...mintSwapRuntimeConfig.processors,
         mintSwapOperationProcessor: { disabled: true },
+        ...selection.processors,
+      },
+      watchers: {
+        ...mintSwapRuntimeConfig.watchers,
+        ...(selection.watchers?.mintOperationWatcher
+          ? {
+              mintOperationWatcher: {
+                watchExistingPendingOnStart: false,
+                watchExistingPendingQuotesOnStart: false,
+                ...selection.watchers.mintOperationWatcher,
+              },
+            }
+          : {}),
+        ...(selection.watchers?.meltQuoteWatcher
+          ? {
+              meltQuoteWatcher: {
+                watchExistingPendingQuotesOnStart: false,
+                ...selection.watchers.meltQuoteWatcher,
+              },
+            }
+          : {}),
       },
     });
+    sourceState = 'PAID';
     destinationState = 'PAID';
+    if (prepareAfterInitialization) {
+      await fixture.create();
+      await fixture.prepare();
+    }
     managers.push(manager);
     return {
       manager,
+      async publishQuotes(kind?: 'mint' | 'melt') {
+        if (!kind || kind === 'mint') {
+          const quote = await manager.quotes.mint.get({
+            mintUrl: fixture.parent.destinationMintUrl,
+            quoteId: 'destination-quote',
+          });
+          if (quote)
+            await events.emit('mint-quote:updated', {
+              mintUrl: quote.mintUrl,
+              method: quote.method,
+              quoteId: quote.quoteId,
+              quote,
+            });
+        }
+        if (!kind || kind === 'melt') {
+          const quote = await manager.quotes.melt.get({
+            mintUrl: fixture.parent.sourceMintUrl,
+            quoteId: 'source-quote',
+          });
+          if (quote)
+            await events.emit('melt-quote:updated', {
+              mintUrl: quote.mintUrl,
+              method: quote.method,
+              quoteId: quote.quoteId,
+              quote,
+            });
+        }
+      },
       runtime: manager as unknown as Runtime,
       repo,
       fixture,
@@ -205,7 +289,8 @@ describe('Mint Swap real runtime boundaries', () => {
     for (const setupOutcome of ['blocked', 'failed'] as const) {
       it(`advances cached parent evidence at ${phase} while destination observation setup is ${setupOutcome}`, async () => {
         const env = await setup();
-        const { manager, runtime, fixture, repo, sourceCheck, destinationCheck, issuance } = env;
+        let { manager, runtime } = env;
+        const { fixture, repo, sourceCheck, destinationCheck, issuance } = env;
         env.setSourceState('PENDING');
         await manager.ops.mintSwap.execute('swap');
         await runtime.mintSwapOperationService.reconcileInBackground('swap');
@@ -224,25 +309,50 @@ describe('Mint Swap real runtime boundaries', () => {
         const entered = deferred();
         const release = deferred();
         const unsubscribe = mock(async () => {});
-        const subscribe = spyOn(manager.subscriptions, 'subscribe').mockImplementation(async () => {
+        const progressed = deferred();
+        const subscribe = mock(async () => {
           entered.resolve();
           await release.promise;
           if (setupOutcome === 'failed') throw new Error('Observation setup unavailable');
           return { subId: 'delayed-parent', unsubscribe };
         });
-        const progressed = deferred();
-        manager.on('mint-swap:updated', ({ state }) => {
-          if (state === 'destination_pending') progressed.resolve();
-        });
         try {
-          await manager.enableMintOperationWatcher({
-            watchExistingPendingOnStart: false,
-            watchExistingPendingQuotesOnStart: false,
-          });
+          await manager.dispose();
           sourceCheck.mockClear();
           destinationCheck.mockClear();
           if (phase === 'startup') spyOn(Date, 'now').mockReturnValue(30_000);
-          await within(manager.enableMintSwapOperationProcessor({ processIntervalMs: 5 }));
+          manager = await within(
+            initializeCoco({
+              repo,
+              seedGetter: async () => new Uint8Array(64).fill(2),
+              ...mintSwapRuntimeConfig,
+              watchers: {
+                ...mintSwapRuntimeConfig.watchers,
+                mintOperationWatcher: {
+                  watchExistingPendingOnStart: false,
+                  watchExistingPendingQuotesOnStart: false,
+                },
+              },
+              processors: {
+                ...mintSwapRuntimeConfig.processors,
+                mintSwapOperationProcessor: { processIntervalMs: 5 },
+              },
+              plugins: [
+                {
+                  name: 'observe-startup',
+                  required: ['eventBus', 'subscriptions'],
+                  onReady: ({ services }) => {
+                    services.subscriptions.subscribe = subscribe;
+                    services.eventBus.on('mint-swap:updated', ({ state }) => {
+                      if (state === 'destination_pending') progressed.resolve();
+                    });
+                  },
+                },
+              ],
+            }),
+          );
+          managers.push(manager);
+          runtime = manager as unknown as Runtime;
           await within(entered.promise);
           if (phase === 'runtime') expect(await manager.ops.mintSwap.get('swap')).toEqual(pending);
           if (setupOutcome === 'failed') {
@@ -262,7 +372,7 @@ describe('Mint Swap real runtime boundaries', () => {
           expect(destinationCheck).not.toHaveBeenCalled();
           expect(subscribe).toHaveBeenCalled();
           let stopped = false;
-          const stopping = manager.disableMintSwapOperationProcessor().then(() => {
+          const stopping = manager.dispose().then(() => {
             stopped = true;
           });
           await new Promise<void>((resolve) => setImmediate(resolve));
@@ -272,15 +382,22 @@ describe('Mint Swap real runtime boundaries', () => {
           if (setupOutcome === 'blocked') expect(unsubscribe).toHaveBeenCalledTimes(1);
         } finally {
           release.resolve();
-          await manager.disableMintSwapOperationProcessor();
-          await manager.disableMintOperationWatcher();
+          await manager.dispose();
         }
       });
     }
   }
 
   it('advances a parent past another parent whose destination observation setup is blocked', async () => {
-    const env = await setup();
+    const env = await setup({
+      watchers: {
+        mintOperationWatcher: {
+          watchExistingPendingOnStart: false,
+          watchExistingPendingQuotesOnStart: false,
+        },
+      },
+      processors: { mintSwapOperationProcessor: { processIntervalMs: 5 } },
+    });
     const { manager, repo } = env;
     // 'swap' sorts first, so a scan that awaited its setup would never reach 'swap-b'.
     const other = await mintSwapFixture(repo, { suffix: '-b' });
@@ -320,12 +437,7 @@ describe('Mint Swap real runtime boundaries', () => {
       if (operationId === 'swap-b' && state === 'destination_pending') progressed.resolve();
     });
     try {
-      await manager.enableMintOperationWatcher({
-        watchExistingPendingOnStart: false,
-        watchExistingPendingQuotesOnStart: false,
-      });
       spyOn(Date, 'now').mockReturnValue(30_000);
-      await within(manager.enableMintSwapOperationProcessor({ processIntervalMs: 5 }));
       await within(entered.promise);
       await within(progressed.promise);
       expect((await repo.meltOperationRepository.getById('source-child-b'))?.state).toBe(
@@ -337,8 +449,7 @@ describe('Mint Swap real runtime boundaries', () => {
       );
     } finally {
       release.resolve();
-      await manager.disableMintSwapOperationProcessor();
-      await manager.disableMintOperationWatcher();
+      await manager.dispose();
     }
   });
 
@@ -367,25 +478,25 @@ describe('Mint Swap real runtime boundaries', () => {
       const directory = mkdtempSync(join(tmpdir(), 'mint-swap-startup-'));
       directories.push(directory);
       const path = join(directory, 'wallet.sqlite');
-      const before = await setup(undefined, true, openStore(path));
+      const before = await setup({ prepared: true, repo: openStore(path) });
       await persist(before);
       expect((await before.manager.ops.mintSwap.get('swap'))?.state).toBe(expectedState);
       await within(before.manager.dispose());
       databases.pop()!.close();
 
       spyOn(Date, 'now').mockReturnValue(30_000);
-      const after = await setup(undefined, false, openStore(path), false);
-      after.sourceCheck.mockClear();
-      after.destinationCheck.mockClear();
-      after.melt.mockClear();
-      after.issuance.mockClear();
-      await within(after.manager.enableMintSwapOperationProcessor({ processIntervalMs: 60_000 }));
+      const after = await setup({
+        prepared: false,
+        repo: openStore(path),
+        initialize: false,
+        processors: { mintSwapOperationProcessor: { processIntervalMs: 60_000 } },
+      });
       // The parent completes on a later scan, once it observes the issued destination accounting.
       expect((await after.manager.ops.mintSwap.get('swap'))?.state).toBe('destination_pending');
       expect((await after.manager.ops.melt.get('source-child'))?.state).toBe('finalized');
       expect((await after.manager.ops.mint.get('destination-child'))?.state).toBe('finalized');
       expect(after.melt).not.toHaveBeenCalled();
-      await within(after.manager.disableMintSwapOperationProcessor());
+      await within(after.manager.dispose());
       return after;
     }
 
@@ -562,7 +673,12 @@ describe('Mint Swap real runtime boundaries', () => {
       destinationCheck,
       issuance,
       destinationResponse,
-    } = await setup();
+    } = await setup({
+      processors: {
+        mintOperationProcessor: { initialEnqueueDelayMs: 0 },
+        meltSettlementProcessor: {},
+      },
+    });
     setSourceState('PENDING');
     await manager.ops.mintSwap.execute('swap');
     const parent = await manager.ops.mintSwap.get('swap');
@@ -572,8 +688,6 @@ describe('Mint Swap real runtime boundaries', () => {
     sourceCheck.mockClear();
     destinationCheck.mockClear();
     setSourceState('PAID');
-    await manager.enableMintOperationProcessor({ initialEnqueueDelayMs: 0 });
-    await manager.enableMeltSettlementProcessor();
     // The canonical quote can still be observed while ordinary advancement is excluded.
     await runtime.quoteLifecycle.recordMintQuoteSnapshot(
       'https://destination.test',
@@ -583,8 +697,6 @@ describe('Mint Swap real runtime boundaries', () => {
     await manager.ops.mint.recovery.run();
     await manager.ops.melt.recovery.run();
     expect(await runtime.mintOperationService.claimPendingMintQuotes()).toEqual([]);
-    await manager.disableMintOperationProcessor();
-    await manager.disableMeltSettlementProcessor();
     expect(await manager.ops.mintSwap.get('swap')).toEqual(parent);
     expect(await manager.ops.melt.get('source-child')).toEqual(source);
     expect(await manager.ops.mint.get('destination-child')).toEqual(destination);
@@ -600,8 +712,9 @@ describe('Mint Swap real runtime boundaries', () => {
   });
 
   it('resumes a settlement check skipped while the parent was active when it stops', async () => {
-    const { manager, runtime, repo, setSourceState, sourceCheck } = await setup();
-    await manager.enableMeltSettlementProcessor();
+    const { manager, runtime, repo, setSourceState, sourceCheck } = await setup({
+      processors: { meltSettlementProcessor: {} },
+    });
     const skips = observeSkips(MeltOperationService.prototype, (id) => id === 'source-child');
     setSourceState('PENDING');
     await manager.ops.mintSwap.execute('swap');
@@ -638,8 +751,11 @@ describe('Mint Swap real runtime boundaries', () => {
 
   it('resumes a skipped destination claim when the parent stops', async () => {
     const { manager, runtime, repo, setDestinationState, issuance, destinationResponse } =
-      await setup();
-    await manager.enableMintOperationProcessor({ initialEnqueueDelayMs: 0, processIntervalMs: 20 });
+      await setup({
+        processors: {
+          mintOperationProcessor: { initialEnqueueDelayMs: 0, processIntervalMs: 20 },
+        },
+      });
     setDestinationState('UNPAID');
     await manager.ops.mintSwap.execute('swap');
     expect((await manager.ops.mint.get('destination-child'))?.state).toBe('pending');
@@ -673,7 +789,11 @@ describe('Mint Swap real runtime boundaries', () => {
 
   it('resumes a destination quote skipped by the startup claim sweep when the parent stops', async () => {
     const { manager, runtime, repo, setDestinationState, issuance, destinationResponse } =
-      await setup();
+      await setup({
+        processors: {
+          mintOperationProcessor: { initialEnqueueDelayMs: 0, processIntervalMs: 20 },
+        },
+      });
     setDestinationState('UNPAID');
     await manager.ops.mintSwap.execute('swap');
     setDestinationState('PAID');
@@ -688,7 +808,6 @@ describe('Mint Swap real runtime boundaries', () => {
       (target) => typeof target !== 'string' && target.quoteId === 'destination-quote',
     );
     // Startup discovery schedules the processor's quote claim, which skips the active parent's quote.
-    await manager.enableMintOperationProcessor({ initialEnqueueDelayMs: 0, processIntervalMs: 20 });
     await within(skips(1));
     expect(issuance).not.toHaveBeenCalled();
     const finalized = deferred();
@@ -708,7 +827,7 @@ describe('Mint Swap real runtime boundaries', () => {
 
   for (const kind of ['mint', 'melt'] as const) {
     it(`rechecks the ${kind} quote's parent after preparation preflight`, async () => {
-      const { manager, fixture } = await setup(undefined, false);
+      const { manager, fixture } = await setup({ prepared: false });
       const entered = deferred();
       const release = deferred();
       const metadata = await fixture.dependencies.mintService.refreshAndCommitIfStale(
@@ -736,7 +855,7 @@ describe('Mint Swap real runtime boundaries', () => {
     });
 
     it(`refuses a parent claim after an ordinary ${kind} plan commits`, async () => {
-      const { manager, fixture } = await setup(undefined, false);
+      const { manager, fixture } = await setup({ prepared: false });
       spyOn(MintService.prototype, 'refreshAndCommitIfStale').mockImplementation(
         fixture.dependencies.mintService.refreshAndCommitIfStale,
       );
@@ -749,8 +868,11 @@ describe('Mint Swap real runtime boundaries', () => {
   }
 
   for (const kind of ['mint', 'melt'] as const) {
-    it(`drains an already-disabling ${kind} watcher before Manager disposal completes`, async () => {
-      const { manager } = await setup();
+    it(`drains ${kind} watcher cleanup for overlapping Manager disposal calls`, async () => {
+      const env = await setup({
+        watchers: { [kind === 'mint' ? 'mintOperationWatcher' : 'meltQuoteWatcher']: {} },
+      });
+      const { manager } = env;
       const entered = deferred();
       const release = deferred();
       const subscribe = manager.subscriptions.subscribe.bind(manager.subscriptions);
@@ -765,10 +887,9 @@ describe('Mint Swap real runtime boundaries', () => {
           },
         };
       });
-      if (kind === 'mint') await manager.enableMintOperationWatcher();
-      else await manager.enableMeltQuoteWatcher();
-      const disabling =
-        kind === 'mint' ? manager.disableMintOperationWatcher() : manager.disableMeltQuoteWatcher();
+      await env.publishQuotes(kind);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const firstDisposal = manager.dispose();
       await within(entered.promise);
       let disposed = false;
       const disposal = manager.dispose().then(() => {
@@ -778,21 +899,36 @@ describe('Mint Swap real runtime boundaries', () => {
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
       const completedBeforeCleanup = disposed;
       release.resolve();
-      await within(Promise.all([disabling, disposal]));
+      await within(Promise.all([firstDisposal, disposal]));
       expect(completedBeforeCleanup).toBe(false);
     });
   }
 
   it('rebuilds exact parent observations after Manager closes an untrusted mint', async () => {
     const env = await setup();
-    const { manager, runtime, repo, fixture } = env;
+    let { manager, runtime } = env;
+    const { repo, fixture } = env;
     env.setSourceState('PENDING');
     await manager.ops.mintSwap.execute('swap');
     await runtime.mintSwapOperationService.reconcileInBackground('swap');
     const before = await manager.ops.mintSwap.get('swap');
-    await manager.enableMintOperationWatcher();
-    await manager.enableMeltQuoteWatcher();
-    await manager.enableMintSwapOperationProcessor({ processIntervalMs: 60_000 });
+    await manager.dispose();
+    manager = await initializeCoco({
+      repo,
+      seedGetter: async () => new Uint8Array(64).fill(2),
+      ...mintSwapRuntimeConfig,
+      watchers: {
+        ...mintSwapRuntimeConfig.watchers,
+        mintOperationWatcher: {},
+        meltQuoteWatcher: {},
+      },
+      processors: {
+        ...mintSwapRuntimeConfig.processors,
+        mintSwapOperationProcessor: { processIntervalMs: 60_000 },
+      },
+    });
+    managers.push(manager);
+    runtime = manager as unknown as Runtime;
     expect(await manager.ops.mintSwap.get('swap')).toEqual(before);
     await manager.mint.untrustMint(fixture.parent.sourceMintUrl);
     await manager.mint.untrustMint(fixture.parent.destinationMintUrl);
@@ -826,7 +962,7 @@ describe('Mint Swap real runtime boundaries', () => {
     expect(
       (await repo.mintRepository.getMintByUrl(fixture.parent.destinationMintUrl))?.trusted,
     ).toBe(false);
-    await manager.disableMintSwapOperationProcessor();
+    await manager.dispose();
     await expect(
       runtime.quoteLifecycle.checkMintQuotesForPolling('bolt11', [
         { mintUrl: fixture.parent.destinationMintUrl, quoteId: 'destination-quote' },
@@ -836,16 +972,36 @@ describe('Mint Swap real runtime boundaries', () => {
 
   it('advances from watcher-committed destination accounting without another parent quote check', async () => {
     const env = await setup();
-    const { manager, runtime, sourceCheck, destinationCheck, repo } = env;
+    let { manager, runtime } = env;
+    const { sourceCheck, destinationCheck, repo } = env;
     await manager.ops.mintSwap.execute('swap');
     expect((await manager.ops.mintSwap.get('swap'))?.state).toBe('destination_pending');
     await runtime.mintSwapOperationService.reconcileInBackground('swap');
     const observed = deferred();
-    manager.on('mint-quote:updated', ({ quote }) => {
-      if (quote.quoteId === 'destination-quote' && quote.amountIssued.equals(8)) observed.resolve();
+    await manager.dispose();
+    manager = await initializeCoco({
+      repo,
+      seedGetter: async () => new Uint8Array(64).fill(2),
+      ...mintSwapRuntimeConfig,
+      watchers: { ...mintSwapRuntimeConfig.watchers, mintOperationWatcher: {} },
+      processors: {
+        ...mintSwapRuntimeConfig.processors,
+        mintSwapOperationProcessor: { processIntervalMs: 5 },
+      },
+      plugins: [
+        {
+          name: 'observe-issuance',
+          required: ['eventBus'],
+          onReady: ({ services }) => {
+            services.eventBus.on('mint-quote:updated', ({ quote }) => {
+              if (quote.quoteId === 'destination-quote' && quote.amountIssued.equals(8))
+                observed.resolve();
+            });
+          },
+        },
+      ],
     });
-    await manager.enableMintOperationWatcher();
-    await manager.enableMintSwapOperationProcessor({ processIntervalMs: 5 });
+    managers.push(manager);
     await within(observed.promise);
     sourceCheck.mockClear();
     destinationCheck.mockClear();
@@ -896,7 +1052,9 @@ describe('Mint Swap real runtime boundaries', () => {
   }
 
   it('publishes created quotes after the prepared parent is committed and unlocked', async () => {
-    const { manager, fixture, sourceResponse, destinationResponse } = await setup(undefined, false);
+    const { manager, fixture, sourceResponse, destinationResponse } = await setup({
+      prepared: false,
+    });
     spyOn(Wallet.prototype, 'createLockedMintQuote').mockImplementation(
       async (_amount, ownedPubkey) => ({
         ...destinationResponse(),
@@ -962,7 +1120,7 @@ describe('Mint Swap real runtime boundaries', () => {
       logs.push(args);
     };
     const logger: Logger = { debug: log, info: log, warn: log, error: log, child: () => logger };
-    const { manager } = await setup(logger);
+    const { manager } = await setup({ logger });
     const marker = 'private-listener-error-marker';
     manager.on('melt-quote:updated', () => {
       throw new Error(marker);
@@ -992,7 +1150,10 @@ describe('Mint Swap real runtime boundaries', () => {
   });
 
   it('allows quote reentrancy with ordinary watchers and processors enabled', async () => {
-    const env = await setup();
+    const env = await setup({
+      watchers: { mintOperationWatcher: {}, meltQuoteWatcher: {} },
+      processors: { mintOperationProcessor: {}, meltSettlementProcessor: {} },
+    });
     const { manager } = env;
     env.setSourceState('UNPAID');
     env.setDestinationState('UNPAID');
@@ -1003,10 +1164,6 @@ describe('Mint Swap real runtime boundaries', () => {
         return env.sourceResponse();
       },
     );
-    await manager.enableMintOperationWatcher();
-    await manager.enableMeltQuoteWatcher();
-    await manager.enableMintOperationProcessor();
-    await manager.enableMeltSettlementProcessor();
     let called = false;
     const unblock = deferred();
     const off = manager.on('melt-quote:updated', async () => {
@@ -1027,7 +1184,10 @@ describe('Mint Swap real runtime boundaries', () => {
 
   for (const leg of ['source', 'destination'] as const) {
     it(`uses the active ${leg} watcher observation without a duplicate request`, async () => {
-      const env = await setup();
+      const env = await setup({
+        subscriptions: { fastPollingIntervalMs: 20 },
+        watchers: { meltQuoteWatcher: {}, mintOperationWatcher: {} },
+      });
       const { manager, runtime, issuance, sourceCheck, destinationCheck } = env;
       if (leg === 'source') env.setSourceState('PENDING');
       else issuance.mockRejectedValue(new Error('response lost'));
@@ -1043,15 +1203,14 @@ describe('Mint Swap real runtime boundaries', () => {
         return response.promise as never;
       });
       try {
-        if (leg === 'source') await manager.enableMeltQuoteWatcher();
-        else await manager.enableMintOperationWatcher();
+        await env.publishQuotes(leg === 'source' ? 'melt' : 'mint');
+        await manager.ensureSubscriptions();
         await within(entered.promise);
         await within(runtime.mintSwapOperationService.reconcileInBackground('swap'));
         expect(check).toHaveBeenCalledTimes(1);
       } finally {
         response.resolve(leg === 'source' ? env.sourceResponse() : env.destinationResponse());
-        await manager.disableMeltQuoteWatcher();
-        await manager.disableMintOperationWatcher();
+        await manager.dispose();
       }
     });
   }
@@ -1078,15 +1237,18 @@ describe('Mint Swap real runtime boundaries', () => {
   for (const parentEnabled of [false, true]) {
     for (const remoteState of ['PAID', 'PENDING', 'UNPAID', 'UNAVAILABLE'] as const) {
       it(`confirms pending source release through ordinary Melt processing once the parent stops (parent=${parentEnabled}, remote=${remoteState})`, async () => {
-        const env = await setup();
+        const env = await setup({
+          processors: {
+            mintSwapOperationProcessor: { disabled: !parentEnabled, processIntervalMs: 60_000 },
+            meltSettlementProcessor: {},
+          },
+        });
         const { manager, runtime, repo, fixture, sourceCheck } = env;
         env.setSourceState('UNPAID');
         const earlierResponse = env.sourceResponse();
         env.setSourceState('PENDING');
         await manager.ops.mintSwap.execute('swap');
         expect((await repo.meltOperationRepository.getById('source-child'))?.state).toBe('pending');
-        if (parentEnabled)
-          await manager.enableMintSwapOperationProcessor({ processIntervalMs: 60_000 });
         spyOn(Date, 'now').mockReturnValue(11_000);
         await runtime.quoteLifecycle.recordMeltQuoteObservation(
           meltQuoteFromBolt11Response(fixture.parent.sourceMintUrl, earlierResponse),
@@ -1102,7 +1264,6 @@ describe('Mint Swap real runtime boundaries', () => {
           env.setSourceState(remoteState);
           return env.sourceResponse();
         });
-        await manager.enableMeltSettlementProcessor();
         // The active parent coordinates its source child, so ordinary processing skips it.
         await new Promise<void>((resolve) => setTimeout(resolve, 20));
         expect(sourceCheck).not.toHaveBeenCalled();
@@ -1117,7 +1278,7 @@ describe('Mint Swap real runtime boundaries', () => {
         expect((await manager.ops.mintSwap.refresh('swap')).state).toBe('needs_attention');
         await within(confirmation.promise);
         // The public stop drains the admitted check, including canonical commit and settlement.
-        await manager.disableMeltSettlementProcessor();
+        await manager.dispose();
         expect(sourceCheck).toHaveBeenCalledTimes(1);
         const child = await repo.meltOperationRepository.getById('source-child');
         const proofs = await repo.proofRepository.getProofsBySecrets(fixture.parent.sourceMintUrl, [
@@ -1141,7 +1302,7 @@ describe('Mint Swap real runtime boundaries', () => {
   for (const observationTiming of ['during payment', 'after payment'] as const) {
     for (const remoteState of ['PAID', 'UNPAID', 'UNAVAILABLE'] as const) {
       it(`confirms source non-payment when a watcher response arrives ${observationTiming} and the source is ${remoteState}`, async () => {
-        const env = await setup();
+        const env = await setup({ watchers: { meltQuoteWatcher: {} } });
         const { manager, runtime, repo, fixture, sourceCheck } = env;
         env.setSourceState('UNPAID');
         const oldResponse = env.sourceResponse();
@@ -1173,7 +1334,7 @@ describe('Mint Swap real runtime boundaries', () => {
           throw new Error('Source response unavailable');
         });
         try {
-          await manager.enableMeltQuoteWatcher();
+          await env.publishQuotes('melt');
           await within(pollEntered.promise);
           const executed = await within(manager.ops.mintSwap.execute('swap'));
           expect(executed.state).toBe('source_pending');
@@ -1228,7 +1389,7 @@ describe('Mint Swap real runtime boundaries', () => {
           }
         } finally {
           pollResponse.resolve(oldResponse);
-          await manager.disableMeltQuoteWatcher();
+          await manager.dispose();
         }
       });
     }

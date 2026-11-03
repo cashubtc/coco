@@ -70,7 +70,6 @@ interface QuoteWatchRecord {
   subscriptionKind: SubscriptionKind;
   start?: Promise<void>;
   stop?: UnsubscribeHandler;
-  failed?: boolean;
 }
 
 export class MintOperationWatcherService {
@@ -83,7 +82,7 @@ export class MintOperationWatcherService {
   private readonly options: MintOperationWatcherOptions;
 
   private running = false;
-  private generation = 0;
+  private started = false;
   private stopping?: Promise<void>;
   private readonly interests = new QuoteWatchInterests();
   private readonly work = new Set<Promise<unknown>>();
@@ -145,13 +144,6 @@ export class MintOperationWatcherService {
     return this.own(this.records.removeInterest(owner));
   }
 
-  /** Retry failed activation on an explicit enable; skipped untrusted interests stay skipped. */
-  retryFailedInterests(): void {
-    if (!this.running) return;
-    const failed = this.records.values().filter((record) => record.failed);
-    this.watchInBackground(failed, null, 'Failed to retry mint quote watches');
-  }
-
   /** Run activation that no caller awaits: the watcher drains it on stop and reports its failures. */
   private watchInBackground(
     quotes: WatchableMintQuote[],
@@ -163,27 +155,18 @@ export class MintOperationWatcherService {
     });
   }
 
-  private isActive(generation: number): boolean {
-    return this.running && this.generation === generation;
-  }
-
   isRunning(): boolean {
     return this.running;
   }
 
   async start(): Promise<void> {
-    // A concurrent stop wins; a later explicit start can acquire a new set of resources.
-    if (this.stopping) {
-      await this.stopping;
-      return;
-    }
-    if (this.running) return;
+    if (this.started || this.stopping) return;
+    this.started = true;
     this.running = true;
-    const generation = ++this.generation;
     this.logger?.info('MintOperationWatcherService started');
 
     this.offPending = this.bus.on('mint-op:pending', ({ operation }) => {
-      if (!this.isActive(generation)) return;
+      if (!this.running) return;
       if (operation.state !== 'pending') return;
       if (!operation.quoteId) return;
 
@@ -198,7 +181,7 @@ export class MintOperationWatcherService {
     });
 
     this.offQuoteUpdated = this.bus.on('mint-quote:updated', async ({ quote }) => {
-      if (!this.isActive(generation)) return;
+      if (!this.running) return;
       const policy = this.getPolicy(quote.method);
       if (!policy) return;
 
@@ -223,7 +206,7 @@ export class MintOperationWatcherService {
     for (const event of ['mint-op:finalized', 'mint-op:failed'] as const) {
       this.offEnded.push(
         this.bus.on(event, ({ operationId }) => {
-          if (!this.isActive(generation)) return;
+          if (!this.running) return;
           return this.own(this.removeInterest({ kind: 'operation', id: operationId }));
         }),
       );
@@ -232,8 +215,7 @@ export class MintOperationWatcherService {
     // Stop watching operations when mint is untrusted
     this.offUntrusted = this.bus.on('mint:untrusted', async ({ mintUrl }) => {
       try {
-        if (this.isActive(generation))
-          await this.own(this.handleMintUntrusted(mintUrl, generation));
+        if (this.running) await this.own(this.handleMintUntrusted(mintUrl));
       } catch (err) {
         this.logger?.error('Failed to stop watching mint operations on untrust', { mintUrl, err });
       }
@@ -243,7 +225,7 @@ export class MintOperationWatcherService {
       // Also watch any pending mint operations on startup (only for trusted mints)
       try {
         const pending = await this.mintOperations.getPendingOperations();
-        if (!this.isActive(generation)) return;
+        if (!this.running) return;
         const byMint = new Map<string, PendingMintOperation[]>();
         for (const operation of pending) {
           if (!operation.quoteId) continue;
@@ -256,7 +238,7 @@ export class MintOperationWatcherService {
         }
         for (const [mintUrl, operations] of byMint.entries()) {
           const trusted = await this.mintService.isTrustedMint(mintUrl);
-          if (!this.isActive(generation)) return;
+          if (!this.running) return;
           if (!trusted) {
             this.logger?.debug('Skipping pending mint operations for untrusted mint', {
               mintUrl,
@@ -280,11 +262,11 @@ export class MintOperationWatcherService {
       }
     }
 
-    if (!this.isActive(generation)) return;
+    if (!this.running) return;
     if (this.options.watchExistingPendingQuotesOnStart) {
       try {
         const quotes = await this.quoteLifecycle.getPendingMintQuotes();
-        if (!this.isActive(generation)) return;
+        if (!this.running) return;
         await this.watchMintQuotes(quotes);
       } catch (err) {
         this.logger?.error('Failed to load pending mint quotes to watch', { err });
@@ -294,13 +276,8 @@ export class MintOperationWatcherService {
 
   stop(): Promise<void> {
     if (this.stopping) return this.stopping;
-    if (!this.running) return Promise.resolve();
     const stopping = this.stopOwnedResources();
     this.stopping = stopping;
-    const finished = () => {
-      if (this.stopping === stopping) this.stopping = undefined;
-    };
-    void stopping.then(finished, finished);
     return stopping;
   }
 
@@ -381,7 +358,6 @@ export class MintOperationWatcherService {
       // Several operations can share one reusable quote; one record needs one subscription.
       if (grouped.has(record)) continue;
       grouped.add(record);
-      record.failed = false;
       const groupKey = `${quote.mintUrl}::${policy.subscriptionKind}`;
       let group = groups.get(groupKey);
       if (!group) groups.set(groupKey, (group = []));
@@ -465,7 +441,6 @@ export class MintOperationWatcherService {
     } catch (error) {
       for (const record of batch) {
         if (!this.current(record)) continue;
-        record.failed = true;
         this.logger?.warn('Failed to start mint quote watch', {
           mintUrl: record.mintUrl,
           method: record.method,
@@ -523,7 +498,7 @@ export class MintOperationWatcherService {
     return this.records.stopWatching(key);
   }
 
-  private async handleMintUntrusted(mintUrl: string, generation: number): Promise<void> {
+  private async handleMintUntrusted(mintUrl: string): Promise<void> {
     const normalized = normalizeMintUrl(mintUrl);
     const recovery = this.records
       .values()
@@ -534,7 +509,7 @@ export class MintOperationWatcherService {
     // Manager closes the mint transport. Keep logical authorization, retire stale handles,
     // and rebuild only the interests still authorized when cleanup completes.
     await this.stopWatchingMint(normalized);
-    if (!this.isActive(generation)) return;
+    if (!this.running) return;
     await this.watchMintQuotes(
       recovery.filter((record) => this.interests.hasRecovery(quoteWatchKey(record))),
       null,

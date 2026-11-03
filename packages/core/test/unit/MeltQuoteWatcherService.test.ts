@@ -242,7 +242,7 @@ describe('MeltQuoteWatcherService', () => {
     await watcher.stop();
   });
 
-  it('does not resume startup discovery from a previous run', async () => {
+  it('does not resume discovery or accept declarations after final stop', async () => {
     const discovery = deferred<MeltQuote[]>();
     const getPendingMeltQuotes = mock(async () => [] as MeltQuote[]);
     getPendingMeltQuotes.mockImplementationOnce(() => discovery.promise);
@@ -254,7 +254,9 @@ describe('MeltQuoteWatcherService', () => {
     await firstStart;
     expect(subscribe).not.toHaveBeenCalled();
     watcher.registerOperationInterest(operationInterest());
-    await waitForSubscribeCalls(1);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(subscribe).not.toHaveBeenCalled();
+    expect(getPendingMeltQuotes).toHaveBeenCalledTimes(1);
     await watcher.stop();
   });
 
@@ -293,7 +295,7 @@ describe('MeltQuoteWatcherService', () => {
     await watcher.stop();
   });
 
-  it('retries failed activation only on existing declaration or enable triggers', async () => {
+  it('retries failed activation only on existing declaration triggers', async () => {
     const failure = new Error('subscription unavailable');
     subscribe.mockRejectedValueOnce(failure);
     const logger = new NullLogger();
@@ -310,15 +312,15 @@ describe('MeltQuoteWatcherService', () => {
       owners: [{ kind: 'operation', id: 'melt-op-1' }],
       err: failure,
     });
-    watcher.retryFailedInterests();
+    watcher.registerOperationInterest(operationInterest());
     await waitForSubscribeCalls(2);
     await new Promise<void>((resolve) => setImmediate(resolve));
-    watcher.retryFailedInterests();
+    watcher.registerOperationInterest(operationInterest());
     expect(subscribe).toHaveBeenCalledTimes(2);
     await watcher.stop();
   });
 
-  it('does not retry an untrusted skip on enable, but does on a repeated declaration', async () => {
+  it('retries an untrusted skip only on a repeated declaration', async () => {
     const isTrustedMint = mock(async () => false);
     const watcher = makeWatcher({
       mintService: { isTrustedMint } as unknown as MintService,
@@ -328,7 +330,6 @@ describe('MeltQuoteWatcherService', () => {
     watcher.registerOperationInterest(operationInterest());
     await new Promise<void>((resolve) => setImmediate(resolve));
     isTrustedMint.mockResolvedValue(true);
-    watcher.retryFailedInterests();
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(isTrustedMint).toHaveBeenCalledTimes(1);
     expect(subscribe).not.toHaveBeenCalled();
@@ -426,9 +427,9 @@ describe('MeltQuoteWatcherService', () => {
     await waitForSubscribeCalls(1);
     acquisition.resolve();
     await failed.promise;
-    // The failed activation settles before the next explicit enable trigger.
+    // The failed activation settles before the next declaration.
     await new Promise<void>((resolve) => setImmediate(resolve));
-    watcher.retryFailedInterests();
+    watcher.registerInterest(interest);
     await waitForSubscribeCalls(2);
     await watcher.stop();
     expect(unsubscribe).toHaveBeenCalledTimes(1);
