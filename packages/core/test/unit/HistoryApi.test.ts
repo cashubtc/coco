@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, mock } from 'bun:test';
 import { HistoryApi } from '../../api/HistoryApi';
 import type { HistoryEntry, LegacyHistoryEntry } from '../../models/History';
 import type { HistoryService } from '../../services';
+import { projectMintSwapHistoryEntry } from '../../repositories/MintSwapHistoryProjection.ts';
+import { mintSwapFixtures } from '../fixtures/MintSwap.ts';
 
 describe('HistoryApi', () => {
   let api: HistoryApi;
@@ -42,6 +44,15 @@ describe('HistoryApi', () => {
 
     await expect(api.getOperationIdForHistoryEntry(entry.id)).resolves.toBe('operation-1');
     expect(historyService.getHistoryEntryById).toHaveBeenCalledWith(entry.id);
+  });
+
+  it('returns the parent operation ID for grouped Mint Swap history', async () => {
+    const entry = projectMintSwapHistoryEntry(mintSwapFixtures('grouped').prepared, null, null);
+    (
+      historyService.getHistoryEntryById as unknown as ReturnType<typeof mock>
+    ).mockResolvedValueOnce(entry);
+
+    await expect(api.getOperationIdForHistoryEntry(entry.id)).resolves.toBe('grouped');
   });
 
   it('returns null for legacy history without an operation ID', async () => {

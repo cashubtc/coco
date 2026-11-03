@@ -16,18 +16,24 @@ import type {
   PendingSendOperation,
   PreparedSendOperation,
 } from '../../operations/send/SendOperation';
+import type { MintSwapOperation } from '../../operations/mintSwap/MintSwapOperation.ts';
+import type { MintSwapOperationRepository } from '../../operations/mintSwap/MintSwapOperationRepository.ts';
+import { projectMintSwapHistoryEntry } from '../../repositories/MintSwapHistoryProjection.ts';
+import { mintSwapFixtures } from '../fixtures/MintSwap.ts';
 
 describe('HistoryService', () => {
   let service: HistoryService;
   let eventBus: EventBus<CoreEvents>;
   let historyUpdateEvents: Array<{ mintUrl: string; entry: HistoryEntry }>;
   let repositoryEntries: Map<string, HistoryEntry>;
+  let linkedParents: Map<string, MintSwapOperation>;
 
   const mintUrl = 'https://mint.test';
   const receiveProofs = [{ id: 'keyset-1', amount: Amount.from(42), secret: 'secret-1', C: 'C-1' }];
 
   beforeEach(() => {
     repositoryEntries = new Map();
+    linkedParents = new Map();
     historyUpdateEvents = [];
     eventBus = new EventBus<CoreEvents>();
     eventBus.on('history:updated', (payload) => {
@@ -44,7 +50,13 @@ describe('HistoryService', () => {
       },
     };
 
-    service = new HistoryService(historyRepository, eventBus);
+    const mintSwapOperationRepository = {
+      async getByChild(kind: 'mint' | 'melt', operationId: string) {
+        return linkedParents.get(`${kind}:${operationId}`) ?? null;
+      },
+    } as MintSwapOperationRepository;
+
+    service = new HistoryService(historyRepository, mintSwapOperationRepository, eventBus);
   });
 
   it('emits deterministic operation-backed send entries from send lifecycle events', async () => {
@@ -178,6 +190,38 @@ describe('HistoryService', () => {
       state: 'failed',
       error: 'expired',
     });
+  });
+
+  it('rereads and emits the grouped row for parent hints', async () => {
+    const parent = mintSwapFixtures('hinted').prepared;
+    const entry = projectMintSwapHistoryEntry(parent, null, null);
+    repositoryEntries.set(entry.id, entry);
+
+    await eventBus.emit('mint-swap:updated', {
+      operationId: parent.id,
+      revision: parent.revision,
+      state: parent.state,
+    });
+
+    expect(historyUpdateEvents).toEqual([{ mintUrl: parent.destinationMintUrl, entry }]);
+  });
+
+  it('emits a stopped grouped parent instead of its exact child row', async () => {
+    const parent = mintSwapFixtures('stopped').needs_attention;
+    const child = makePreparedMeltOperation(parent.sourceOperationId, 'source-quote');
+    const entry = projectMintSwapHistoryEntry(parent, child, null);
+    repositoryEntries.set(entry.id, entry);
+    linkedParents.set(`melt:${child.id}`, parent);
+
+    await eventBus.emit('melt-op:prepared', {
+      mintUrl: child.mintUrl,
+      operationId: child.id,
+      operation: child,
+    });
+
+    expect(historyUpdateEvents).toHaveLength(1);
+    expect(historyUpdateEvents[0]).toEqual({ mintUrl: parent.destinationMintUrl, entry });
+    expect(historyUpdateEvents[0]?.entry.id).not.toBe(`melt:${child.id}`);
   });
 
   it('ignores receive prepared and emits only terminal receive history', async () => {

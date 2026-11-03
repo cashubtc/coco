@@ -16,18 +16,22 @@ import type { BatchMintOperation } from '@core/operations/batchMint/BatchMintOpe
 import type { ReceiveOperation } from '@core/operations/receive/ReceiveOperation';
 import type { SendOperation } from '@core/operations/send/SendOperation';
 import type { Token } from '@cashu/cashu-ts';
+import type { MintSwapOperationRepository } from '@core/operations/mintSwap/MintSwapOperationRepository';
 
 export class HistoryService {
   private readonly historyRepository: HistoryProjectionRepository;
+  private readonly mintSwapOperationRepository: MintSwapOperationRepository;
   private readonly logger?: Logger;
   private readonly eventBus: EventBus<CoreEvents>;
 
   constructor(
     historyRepository: HistoryProjectionRepository,
+    mintSwapOperationRepository: MintSwapOperationRepository,
     eventBus: EventBus<CoreEvents>,
     logger?: Logger,
   ) {
     this.historyRepository = historyRepository;
+    this.mintSwapOperationRepository = mintSwapOperationRepository;
     this.logger = logger;
     this.eventBus = eventBus;
 
@@ -45,29 +49,29 @@ export class HistoryService {
     });
 
     this.eventBus.on('melt-op:prepared', ({ mintUrl, operation }) => {
-      return this.emitProjectedMelt(mintUrl, operation);
+      return this.emitProjectedMeltOrParent(mintUrl, operation);
     });
     this.eventBus.on('melt-op:pending', ({ mintUrl, operation }) => {
-      return this.emitProjectedMelt(mintUrl, operation);
+      return this.emitProjectedMeltOrParent(mintUrl, operation);
     });
     this.eventBus.on('melt-op:finalized', ({ mintUrl, operation }) => {
-      return this.emitProjectedMelt(mintUrl, operation);
+      return this.emitProjectedMeltOrParent(mintUrl, operation);
     });
     this.eventBus.on('melt-op:rolled-back', ({ mintUrl, operation }) => {
-      return this.emitProjectedMelt(mintUrl, operation);
+      return this.emitProjectedMeltOrParent(mintUrl, operation);
     });
 
     this.eventBus.on('mint-op:pending', ({ mintUrl, operation }) => {
-      return this.emitProjectedMint(mintUrl, operation);
+      return this.emitProjectedMintOrParent(mintUrl, operation);
     });
     this.eventBus.on('mint-op:executing', ({ mintUrl, operation }) => {
-      return this.emitProjectedMint(mintUrl, operation);
+      return this.emitProjectedMintOrParent(mintUrl, operation);
     });
     this.eventBus.on('mint-op:finalized', ({ mintUrl, operation }) => {
-      return this.emitProjectedMint(mintUrl, operation);
+      return this.emitProjectedMintOrParent(mintUrl, operation);
     });
     this.eventBus.on('mint-op:failed', ({ mintUrl, operation }) => {
-      return this.emitProjectedMint(mintUrl, operation);
+      return this.emitProjectedMintOrParent(mintUrl, operation);
     });
 
     // Each Batch Mint Member is its own mint history entry sharing the batch's outcome.
@@ -87,6 +91,10 @@ export class HistoryService {
     this.eventBus.on('receive-op:rolled-back', ({ mintUrl, operation }) => {
       return this.emitProjectedReceive(mintUrl, operation);
     });
+
+    this.eventBus.on('mint-swap:updated', ({ operationId }) => {
+      return this.emitMintSwapById(operationId);
+    });
   }
 
   async getPaginatedHistory(offset = 0, limit = 25): Promise<HistoryEntry[]> {
@@ -105,8 +113,54 @@ export class HistoryService {
     await this.emitProjectedEntry(mintUrl, projectMeltOperation(operation), 'melt', operation.id);
   }
 
+  private async emitProjectedMeltOrParent(
+    mintUrl: string,
+    operation: MeltOperation,
+  ): Promise<void> {
+    try {
+      const parent = await this.mintSwapOperationRepository.getByChild('melt', operation.id);
+      if (parent) return this.emitMintSwapById(parent.id);
+      await this.emitProjectedMelt(mintUrl, operation);
+    } catch (err) {
+      this.logMintSwapProjectionFailure(operation.id, err);
+    }
+  }
+
   private async emitProjectedMint(mintUrl: string, operation: MintOperation): Promise<void> {
     await this.emitProjectedEntry(mintUrl, projectMintOperation(operation), 'mint', operation.id);
+  }
+
+  private async emitProjectedMintOrParent(
+    mintUrl: string,
+    operation: MintOperation,
+  ): Promise<void> {
+    try {
+      const parent = await this.mintSwapOperationRepository.getByChild('mint', operation.id);
+      if (parent) return this.emitMintSwapById(parent.id);
+      await this.emitProjectedMint(mintUrl, operation);
+    } catch (err) {
+      this.logMintSwapProjectionFailure(operation.id, err);
+    }
+  }
+
+  private async emitMintSwapById(operationId: string): Promise<void> {
+    try {
+      const entry = await this.historyRepository.getHistoryEntryById(`mint-swap:${operationId}`);
+      if (!entry) return;
+      if (entry.source !== 'operation' || entry.type !== 'mint-swap') {
+        throw new Error(`Expected Mint Swap history entry for ${operationId}`);
+      }
+      await this.emitProjectedEntry(entry.mintUrl, entry, 'mint-swap', operationId);
+    } catch (err) {
+      this.logMintSwapProjectionFailure(operationId, err);
+    }
+  }
+
+  private logMintSwapProjectionFailure(operationId: string, err: unknown): void {
+    this.logger?.error('Failed to emit Mint Swap history projection', {
+      operationId,
+      err,
+    });
   }
 
   private async emitProjectedBatchMint(

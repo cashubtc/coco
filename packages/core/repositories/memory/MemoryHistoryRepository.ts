@@ -23,9 +23,11 @@ import type { BatchMintOperation } from '../../operations/batchMint/BatchMintOpe
 import type { MemoryBatchMintOperationRepository } from './MemoryBatchMintOperationRepository.ts';
 import type { MemoryMeltOperationRepository } from './MemoryMeltOperationRepository';
 import type { MemoryMintOperationRepository } from './MemoryMintOperationRepository';
+import type { MemoryMintSwapOperationRepository } from './MemoryMintSwapOperationRepository.ts';
 import type { MemoryReceiveOperationRepository } from './MemoryReceiveOperationRepository';
 import { cloneMemoryValue, COPY_MEMORY_REPOSITORY_STATE } from './MemoryRepositoryTransaction.ts';
 import type { MemorySendOperationRepository } from './MemorySendOperationRepository';
+import { projectMintSwapHistoryEntry } from '../MintSwapHistoryProjection.ts';
 
 type OperationRepositories = {
   sendOperationRepository?: MemorySendOperationRepository;
@@ -34,6 +36,7 @@ type OperationRepositories = {
   mintQuoteRepository?: MintQuoteRepository;
   receiveOperationRepository?: MemoryReceiveOperationRepository;
   batchMintOperationRepository?: MemoryBatchMintOperationRepository;
+  mintSwapOperationRepository?: MemoryMintSwapOperationRepository;
 };
 
 export class MemoryHistoryRepository implements HistoryProjectionRepository {
@@ -68,6 +71,13 @@ export class MemoryHistoryRepository implements HistoryProjectionRepository {
       return entries.find((entry) => entry.id === id) ?? null;
     }
 
+    if (parsed.type === 'mint-swap') {
+      const parent = await this.operationRepositories.mintSwapOperationRepository?.getById(
+        parsed.operationId,
+      );
+      return parent ? this.projectMintSwapOperation(parent) : null;
+    }
+
     return this.projectOperationById(parsed.type, parsed.operationId);
   }
 
@@ -98,10 +108,27 @@ export class MemoryHistoryRepository implements HistoryProjectionRepository {
   }
 
   private async getProjectedEntries(): Promise<HistoryEntry[]> {
-    const operationEntries = await this.getOperationEntries();
-    const dedupedLegacyEntries = this.dedupeLegacyEntries(operationEntries);
+    const ordinaryEntries = await this.getOperationEntries();
+    const dedupedLegacyEntries = this.dedupeLegacyEntries(ordinaryEntries);
+    const parents = (await this.operationRepositories.mintSwapOperationRepository?.getAll()) ?? [];
+    const ownedChildIds = new Set<string>();
+    const parentEntries: HistoryEntry[] = [];
 
-    return [...operationEntries, ...dedupedLegacyEntries].sort(compareHistoryEntries);
+    for (const parent of parents) {
+      ownedChildIds.add(this.operationKey('melt', parent.sourceOperationId));
+      ownedChildIds.add(this.operationKey('mint', parent.destinationOperationId));
+      parentEntries.push(await this.projectMintSwapOperation(parent));
+    }
+
+    const visibleOrdinaryEntries = ordinaryEntries.filter(
+      (entry) =>
+        entry.source !== 'operation' ||
+        !ownedChildIds.has(this.operationKey(entry.type, entry.operationId)),
+    );
+
+    return [...parentEntries, ...visibleOrdinaryEntries, ...dedupedLegacyEntries].sort(
+      compareHistoryEntries,
+    );
   }
 
   private async getOperationEntries(): Promise<HistoryEntry[]> {
@@ -143,7 +170,7 @@ export class MemoryHistoryRepository implements HistoryProjectionRepository {
   }
 
   private async projectOperationById(
-    type: HistoryType,
+    type: Exclude<HistoryType, 'mint-swap'>,
     operationId: string,
   ): Promise<HistoryEntry | null> {
     switch (type) {
@@ -168,6 +195,16 @@ export class MemoryHistoryRepository implements HistoryProjectionRepository {
         return operation ? projectReceiveOperation(operation) : null;
       }
     }
+  }
+
+  private async projectMintSwapOperation(
+    parent: Awaited<ReturnType<MemoryMintSwapOperationRepository['getAll']>>[number],
+  ): Promise<HistoryEntry> {
+    const [sourceChild, destinationChild] = await Promise.all([
+      this.operationRepositories.meltOperationRepository?.getById(parent.sourceOperationId),
+      this.operationRepositories.mintOperationRepository?.getById(parent.destinationOperationId),
+    ]);
+    return projectMintSwapHistoryEntry(parent, sourceChild ?? null, destinationChild ?? null);
   }
 
   private async projectMintOperation(operation: MintOperation): Promise<HistoryEntry | null> {
