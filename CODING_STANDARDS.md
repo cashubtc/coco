@@ -95,8 +95,8 @@ continuing discovery after a restart.
 
 The proof-state watcher is the one documented exception to draining started work on shutdown; see
 [ADR-0014](packages/core/docs/adr/0014-let-proof-watcher-shutdown-finish-started-work.md). It does
-not change other owners' documented drain guarantees. Keep networking repair separate from owner enable/disable and final
-shutdown. Apply the incremental legacy policy above when reviewing existing lifecycles.
+not change other owners' documented drain guarantees. Apply the incremental legacy policy above when
+reviewing existing lifecycles.
 
 Use structured diagnostic context. **Never log the seed returned by `seedGetter`**, including through
 copies, cached values, encodings, object dumps or error context. This also applies to debug logging.

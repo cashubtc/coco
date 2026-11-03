@@ -424,16 +424,8 @@ and `melt-op:rolled-back` listeners before calling `manager.ops.melt.execute()`
 if the UI needs to observe every terminal transition.
 
 `manager.dispose()` is terminal. After disposing a manager, do not call
-`ensureSubscriptions()`, enable watchers or processors, register plugins, or
+`resumeSubscriptions()`, enable watchers or processors, register plugins, or
 reuse the instance for wallet work. Create a new manager instead.
-
-## Foreground subscription repair
-
-`ensureSubscriptions()` replaces `pauseSubscriptions()` / `resumeSubscriptions()` and the old
-subscription pause/resume events. It only initiates networking repair, preserving current owners and
-interests without discovery or operation recovery. Move any required standalone Mint and Batch Mint
-recovery into explicit calls. See the [subscription migration guide](subscriptions.md#migration-from-pause-and-resume)
-for foreground examples, plugin contracts, and return semantics.
 
 ## Operation-backed history
 
