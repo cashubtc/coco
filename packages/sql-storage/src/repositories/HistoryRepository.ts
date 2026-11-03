@@ -3,14 +3,18 @@ import type {
   HistoryRepository,
   HistoryType,
   LegacyHistoryRowInput,
+  MeltOperation,
+  MintOperation,
 } from '@cashu/coco-core/adapter';
 import type { Token } from '@cashu/cashu-ts';
 import {
   deserializeAmount,
+  deserializeMintSwapOperation,
   deserializeToken,
   operationHistoryId,
   parseHistoryEntryId,
   projectLegacyHistoryRow,
+  projectMintSwapHistoryEntry,
 } from '@cashu/coco-core/adapter';
 import type { SqlDatabase } from '../index.ts';
 
@@ -34,9 +38,29 @@ type HistoryProjectionRow = {
   remoteState: string | null;
   error: string | null;
   batchMintOperationId: string | null;
+  mintSwapRecordJson: string | null;
+  sourceChildId: string | null;
+  sourceChildState: string | null;
+  sourceChildUpdatedAt: number | null;
+  destinationChildId: string | null;
+  destinationChildState: string | null;
+  destinationChildUpdatedAt: number | null;
 };
 
-const projectionSelect = `
+function projectionSelect(suppressOwnedChildren: boolean): string {
+  const sourceVisibility = suppressOwnedChildren
+    ? `AND NOT EXISTS (
+         SELECT 1 FROM coco_cashu_mint_swap_operations swap
+         WHERE swap.sourceOperationId = melt.id
+       )`
+    : '';
+  const destinationVisibility = suppressOwnedChildren
+    ? `AND NOT EXISTS (
+         SELECT 1 FROM coco_cashu_mint_swap_operations swap
+         WHERE swap.destinationOperationId = op.id
+       )`
+    : '';
+  return `
   SELECT *
   FROM (
     SELECT
@@ -58,7 +82,14 @@ const projectionSelect = `
       id AS operationId,
       NULL AS remoteState,
       error,
-      NULL AS batchMintOperationId
+      NULL AS batchMintOperationId,
+      NULL AS mintSwapRecordJson,
+      NULL AS sourceChildId,
+      NULL AS sourceChildState,
+      NULL AS sourceChildUpdatedAt,
+      NULL AS destinationChildId,
+      NULL AS destinationChildState,
+      NULL AS destinationChildUpdatedAt
     FROM coco_cashu_send_operations
     WHERE state != 'init'
 
@@ -83,9 +114,17 @@ const projectionSelect = `
       id AS operationId,
       NULL AS remoteState,
       error,
-      NULL AS batchMintOperationId
-    FROM coco_cashu_melt_operations
+      NULL AS batchMintOperationId,
+      NULL AS mintSwapRecordJson,
+      NULL AS sourceChildId,
+      NULL AS sourceChildState,
+      NULL AS sourceChildUpdatedAt,
+      NULL AS destinationChildId,
+      NULL AS destinationChildState,
+      NULL AS destinationChildUpdatedAt
+    FROM coco_cashu_melt_operations melt
     WHERE state IN ('prepared', 'executing', 'pending', 'finalized', 'rolling_back', 'rolled_back')
+    ${sourceVisibility}
 
     UNION ALL
 
@@ -108,13 +147,21 @@ const projectionSelect = `
       op.id AS operationId,
       q.state AS remoteState,
       op.error,
-      NULL AS batchMintOperationId
+      NULL AS batchMintOperationId,
+      NULL AS mintSwapRecordJson,
+      NULL AS sourceChildId,
+      NULL AS sourceChildState,
+      NULL AS sourceChildUpdatedAt,
+      NULL AS destinationChildId,
+      NULL AS destinationChildState,
+      NULL AS destinationChildUpdatedAt
     FROM coco_cashu_mint_operations op
     LEFT JOIN coco_cashu_canonical_mint_quotes q
       ON q.mintUrl = op.mintUrl
      AND q.method = op.method
      AND q.quoteId = op.quoteId
     WHERE op.state != 'init'
+    ${destinationVisibility}
 
     UNION ALL
 
@@ -137,7 +184,14 @@ const projectionSelect = `
       op.id AS operationId,
       q.state AS remoteState,
       op.error,
-      op.id AS batchMintOperationId
+      op.id AS batchMintOperationId,
+      NULL AS mintSwapRecordJson,
+      NULL AS sourceChildId,
+      NULL AS sourceChildState,
+      NULL AS sourceChildUpdatedAt,
+      NULL AS destinationChildId,
+      NULL AS destinationChildState,
+      NULL AS destinationChildUpdatedAt
     FROM coco_cashu_batch_mint_members m
     JOIN coco_cashu_batch_mint_operations op ON op.id = m.operationId
     LEFT JOIN coco_cashu_canonical_mint_quotes q
@@ -166,7 +220,14 @@ const projectionSelect = `
       id AS operationId,
       NULL AS remoteState,
       error,
-      NULL AS batchMintOperationId
+      NULL AS batchMintOperationId,
+      NULL AS mintSwapRecordJson,
+      NULL AS sourceChildId,
+      NULL AS sourceChildState,
+      NULL AS sourceChildUpdatedAt,
+      NULL AS destinationChildId,
+      NULL AS destinationChildState,
+      NULL AS destinationChildUpdatedAt
     FROM coco_cashu_receive_operations
     WHERE state IN ('finalized', 'rolled_back')
 
@@ -191,7 +252,14 @@ const projectionSelect = `
       h.operationId,
       NULL AS remoteState,
       NULL AS error,
-      NULL AS batchMintOperationId
+      NULL AS batchMintOperationId,
+      NULL AS mintSwapRecordJson,
+      NULL AS sourceChildId,
+      NULL AS sourceChildState,
+      NULL AS sourceChildUpdatedAt,
+      NULL AS destinationChildId,
+      NULL AS destinationChildState,
+      NULL AS destinationChildUpdatedAt
     FROM coco_cashu_history h
     WHERE NOT (
       h.operationId IS NOT NULL AND EXISTS (
@@ -250,8 +318,43 @@ const projectionSelect = `
         WHERE opq.type = h.type AND opq.mintUrl = h.mintUrl AND opq.quoteId = h.quoteId
       )
     )
+
+    UNION ALL
+
+    SELECT
+      'operation' AS source,
+      'mint-swap:' || swap.id AS id,
+      NULL AS legacyHistoryId,
+      'mint-swap' AS type,
+      '' AS mintUrl,
+      'sat' AS unit,
+      0 AS amount,
+      swap.createdAt AS createdAt,
+      swap.updatedAt AS updatedAt,
+      swap.state,
+      NULL AS quoteId,
+      NULL AS paymentRequest,
+      NULL AS tokenJson,
+      NULL AS inputProofsJson,
+      NULL AS metadata,
+      swap.id AS operationId,
+      NULL AS remoteState,
+      NULL AS error,
+      NULL AS batchMintOperationId,
+      swap.recordJson AS mintSwapRecordJson,
+      source.id AS sourceChildId,
+      source.state AS sourceChildState,
+      source.updatedAt * 1000 AS sourceChildUpdatedAt,
+      destination.id AS destinationChildId,
+      destination.state AS destinationChildState,
+      destination.updatedAt * 1000 AS destinationChildUpdatedAt
+    FROM coco_cashu_mint_swap_operations swap
+    LEFT JOIN coco_cashu_melt_operations source ON source.id = swap.sourceOperationId
+    LEFT JOIN coco_cashu_mint_operations destination
+      ON destination.id = swap.destinationOperationId
   )
 `;
+}
 
 function parseToken(tokenJson: string | null): Token | undefined {
   return tokenJson ? deserializeToken(JSON.parse(tokenJson)) : undefined;
@@ -297,7 +400,7 @@ export class SqliteHistoryRepository implements HistoryRepository {
 
   async getPaginatedHistoryEntries(limit: number, offset: number): Promise<HistoryEntry[]> {
     const rows = await this.db.all<HistoryProjectionRow>(
-      `${projectionSelect}
+      `${projectionSelect(true)}
        ORDER BY createdAt DESC, id DESC
        LIMIT ? OFFSET ?`,
       [limit, offset],
@@ -312,7 +415,7 @@ export class SqliteHistoryRepository implements HistoryRepository {
 
     if (parsed.source === 'legacy') {
       const row = await this.db.get<HistoryProjectionRow>(
-        `${projectionSelect}
+        `${projectionSelect(true)}
          WHERE source = 'legacy' AND legacyHistoryId = ?
          LIMIT 1`,
         [parsed.legacyHistoryId],
@@ -322,7 +425,7 @@ export class SqliteHistoryRepository implements HistoryRepository {
 
     if (parsed.source === 'batch-mint') {
       const row = await this.db.get<HistoryProjectionRow>(
-        `${projectionSelect}
+        `${projectionSelect(true)}
          WHERE source = 'operation' AND batchMintOperationId = ? AND id = ?
          LIMIT 1`,
         [parsed.operationId, id],
@@ -331,7 +434,7 @@ export class SqliteHistoryRepository implements HistoryRepository {
     }
 
     const row = await this.db.get<HistoryProjectionRow>(
-      `${projectionSelect}
+      `${projectionSelect(parsed.type === 'mint-swap')}
        WHERE source = 'operation' AND type = ? AND operationId = ? AND batchMintOperationId IS NULL
        LIMIT 1`,
       [parsed.type, parsed.operationId],
@@ -343,6 +446,26 @@ export class SqliteHistoryRepository implements HistoryRepository {
 function rowToEntry(row: HistoryProjectionRow): HistoryEntry {
   if (row.source === 'legacy') {
     return projectLegacyHistoryRow(rowToLegacyInput(row));
+  }
+
+  if (row.type === 'mint-swap') {
+    if (!row.mintSwapRecordJson) throw new TypeError('Mint Swap history row is missing its record');
+    const parent = deserializeMintSwapOperation(row.mintSwapRecordJson);
+    const sourceChild = row.sourceChildId
+      ? ({
+          id: row.sourceChildId,
+          state: row.sourceChildState,
+          updatedAt: row.sourceChildUpdatedAt,
+        } as MeltOperation)
+      : null;
+    const destinationChild = row.destinationChildId
+      ? ({
+          id: row.destinationChildId,
+          state: row.destinationChildState,
+          updatedAt: row.destinationChildUpdatedAt,
+        } as MintOperation)
+      : null;
+    return projectMintSwapHistoryEntry(parent, sourceChild, destinationChild);
   }
 
   const base = {
@@ -409,6 +532,7 @@ function rowToEntry(row: HistoryProjectionRow): HistoryEntry {
 }
 
 function rowToLegacyInput(row: HistoryProjectionRow): LegacyHistoryRowInput {
+  if (row.type === 'mint-swap') throw new TypeError('Legacy Mint Swap history is unsupported');
   return {
     legacyHistoryId: row.legacyHistoryId ?? row.id.slice('legacy:'.length),
     type: row.type,
