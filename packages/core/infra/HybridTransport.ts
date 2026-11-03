@@ -18,30 +18,19 @@ export interface HybridTransportOptions {
  * HybridTransport runs both WebSocket and polling transports in parallel.
  *
  * - WebSocket: Primary transport for real-time updates. One-shot per mint—no reconnection on failure.
- * - Polling: Backup transport always running. Starts slow (20s), speeds up (5s) if WS fails.
+ * - Polling: Backup transport always running. Runs fast (5s) until WS opens, then slows down (20s).
  * - Deduplication: Both transports emit the same notifications, so we deduplicate at this layer.
  */
 export class HybridTransport implements RealTimeTransport {
   private readonly wsTransport: RealTimeTransport;
   private readonly pollingTransport: PollingTransport;
-  private readonly logger?: Logger;
   private readonly options: Required<HybridTransportOptions>;
-
-  // Track WS state per mint
-  private readonly wsFailedByMint = new Set<string>();
-  private readonly wsConnectedByMint = new Set<string>();
 
   // Track whether we've registered internal WS handlers for a mint
   private readonly hasInternalHandlersByMint = new Set<string>();
 
   // Deduplication: track last notification signature per (mintUrl, subId, identifier)
   private readonly lastNotificationSignatureByKey = new Map<string, string>();
-
-  // Track 'open' events to dedupe (PollingTransport emits synthetic open immediately)
-  private readonly hasEmittedOpenByMint = new Set<string>();
-
-  // Track paused state to avoid marking WS as failed during intentional pause
-  private paused = false;
 
   constructor(
     wsFactory: WebSocketFactory,
@@ -50,7 +39,6 @@ export class HybridTransport implements RealTimeTransport {
     logger?: Logger,
     mintQuotePolling?: MintQuotePollingOperation,
   ) {
-    this.logger = logger;
     this.options = {
       slowPollingIntervalMs: options?.slowPollingIntervalMs ?? 20000,
       fastPollingIntervalMs: options?.fastPollingIntervalMs ?? 5000,
@@ -59,10 +47,10 @@ export class HybridTransport implements RealTimeTransport {
     // Disable reconnection - we rely on polling as fallback
     this.wsTransport = new WsConnectionManager(wsFactory, logger, { disableReconnect: true });
 
-    // Create PollingTransport with slow interval initially
+    // Poll at the fast interval until a socket actually opens.
     this.pollingTransport = new PollingTransport(
       mintAdapter,
-      { intervalMs: this.options.slowPollingIntervalMs },
+      { intervalMs: this.options.fastPollingIntervalMs },
       logger,
       mintQuotePolling,
     );
@@ -72,12 +60,9 @@ export class HybridTransport implements RealTimeTransport {
     // Create deduplication wrapper for the handler
     const wrappedHandler = this.createDedupeHandler(mintUrl, event, handler);
 
-    // Register wrapped handler on BOTH transports
+    this.ensureInternalHandlers(mintUrl);
     this.wsTransport.on(mintUrl, event, wrappedHandler);
     this.pollingTransport.on(mintUrl, event, wrappedHandler);
-
-    // Register internal WS state handlers (only once per mint)
-    this.ensureInternalHandlers(mintUrl);
   }
 
   send(mintUrl: string, req: WsRequest): void {
@@ -91,11 +76,8 @@ export class HybridTransport implements RealTimeTransport {
     this.pollingTransport.closeAll();
 
     // Clear all state
-    this.wsFailedByMint.clear();
-    this.wsConnectedByMint.clear();
     this.hasInternalHandlersByMint.clear();
     this.lastNotificationSignatureByKey.clear();
-    this.hasEmittedOpenByMint.clear();
   }
 
   closeMint(mintUrl: string): void {
@@ -103,10 +85,7 @@ export class HybridTransport implements RealTimeTransport {
     this.pollingTransport.closeMint(mintUrl);
 
     // Clear per-mint state
-    this.wsFailedByMint.delete(mintUrl);
-    this.wsConnectedByMint.delete(mintUrl);
     this.hasInternalHandlersByMint.delete(mintUrl);
-    this.hasEmittedOpenByMint.delete(mintUrl);
 
     // Clear deduplication state for this mint (keys start with mintUrl::)
     for (const key of this.lastNotificationSignatureByKey.keys()) {
@@ -116,27 +95,13 @@ export class HybridTransport implements RealTimeTransport {
     }
   }
 
-  pause(): void {
-    // Set paused BEFORE closing transports so handleWsFailure() knows to skip
-    this.paused = true;
-
-    this.wsTransport.pause();
-    this.pollingTransport.pause();
-
-    // Clear transient state so it resets properly on resume
-    // WS close events fired during pause are ignored (checked paused flag in handleWsFailure)
-    this.wsFailedByMint.clear();
-    this.wsConnectedByMint.clear();
-    this.hasEmittedOpenByMint.clear();
-    // Keep hasInternalHandlersByMint - handlers are still registered
-    // Keep lastNotificationSignatureByKey - we want to dedupe across pause/resume
-  }
-
-  resume(): void {
-    this.paused = false;
-
-    this.wsTransport.resume();
-    this.pollingTransport.resume();
+  ensure(): void {
+    // A delivered observation may have failed downstream. Permit fresh evidence to
+    // reach callbacks again; canonical quote merging remains authoritative.
+    this.lastNotificationSignatureByKey.clear();
+    for (const mintUrl of this.hasInternalHandlersByMint) this.handleWsFailure(mintUrl);
+    this.wsTransport.ensure();
+    this.pollingTransport.ensure();
   }
 
   /**
@@ -149,31 +114,19 @@ export class HybridTransport implements RealTimeTransport {
 
     // Track successful WS connection
     this.wsTransport.on(mintUrl, 'open', () => {
-      this.wsConnectedByMint.add(mintUrl);
+      this.pollingTransport.setIntervalForMint(mintUrl, this.options.slowPollingIntervalMs);
     });
 
-    // Track WS close - mark as failed (no reconnect, polling compensates)
-    this.wsTransport.on(mintUrl, 'close', () => {
-      this.handleWsFailure(mintUrl);
-    });
+    // Use fallback cadence on WS errors or closure (no automatic reconnect)
+    for (const event of ['close', 'error'] as const) {
+      this.wsTransport.on(mintUrl, event, () => this.handleWsFailure(mintUrl));
+    }
   }
 
   /**
-   * Handle WS failure - mark as failed and speed up polling.
+   * Use fallback cadence until a fresh socket opens.
    */
   private handleWsFailure(mintUrl: string): void {
-    // Don't mark as failed during intentional pause - WS will reconnect on resume
-    if (this.paused) return;
-    if (this.wsFailedByMint.has(mintUrl)) return; // Already failed
-    this.wsFailedByMint.add(mintUrl);
-    this.updatePollingInterval(mintUrl);
-    this.logger?.info('HybridTransport: WS failed, polling will compensate', { mintUrl });
-  }
-
-  /**
-   * Speed up polling for a mint after WS failure.
-   */
-  private updatePollingInterval(mintUrl: string): void {
     this.pollingTransport.setIntervalForMint(mintUrl, this.options.fastPollingIntervalMs);
   }
 
@@ -186,16 +139,7 @@ export class HybridTransport implements RealTimeTransport {
     originalHandler: (evt: any) => void,
   ): (evt: any) => void {
     return (evt: any) => {
-      // Dedupe 'open' events - only emit once per mint
-      if (event === 'open') {
-        if (this.hasEmittedOpenByMint.has(mintUrl)) return;
-        this.hasEmittedOpenByMint.add(mintUrl);
-        originalHandler(evt);
-        return;
-      }
-
-      // Pass through close/error events without deduplication
-      if (event === 'close' || event === 'error') {
+      if (event !== 'message') {
         originalHandler(evt);
         return;
       }

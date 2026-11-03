@@ -7,7 +7,7 @@ configured recovery processor. The coordinator itself stays outside package entr
 
 The API is always available; initial source payment requires an explicit `execute` call.
 Automatic parent recovery is enabled by default. The processor setting can disable automatic
-parent startup/resume passes and timers while leaving all explicit commands available.
+parent startup passes and timers while leaving all explicit commands available.
 
 `prepare(intent)` requires a stable parent ID, distinct trusted source/destination mints, a positive
 exact receive amount in sat, and an optional conservative source debit cap. It allocates a committed
@@ -45,7 +45,8 @@ sufficient destination funding/completion accounting, but retains bounded recove
 observations and an already-authorized destination's accounting. Explicit refresh/recovery still
 observes immediately. Fresh source UNPAID confirmation under the shared child lock remains required before releasing inputs.
 
-Manager orders overlapping pause/resume requests and drains admitted lifecycle changes on disposal.
+Manager coalesces networking repair without restarting owners or running recovery, and drains
+admitted local repair on disposal.
 Do not await a lifecycle change from an awaited operation/lifecycle listener whose work it must drain.
 
 `mint-swap:updated` is a minimal committed `{ operationId, revision, state }` hint, including initial

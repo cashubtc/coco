@@ -955,7 +955,6 @@ describe('initializeCoco', () => {
 
       const manager = new Manager(repositories, seedGetter, new NullLogger());
       await manager.initPlugins();
-      manager.subscriptions.pause();
       manager['mintService'].isTrustedMint = mock(async () => true);
       const advancePendingOperation = mock(async () => 'stay_pending' as const);
       manager['meltOperationService'].advancePendingOperation = advancePendingOperation;
@@ -998,7 +997,6 @@ describe('initializeCoco', () => {
 
       const manager = new Manager(repositories, seedGetter, new NullLogger());
       await manager.initPlugins();
-      manager.subscriptions.pause();
       manager['mintService'].isTrustedMint = mock(async () => true);
       const advancePendingOperation = mock(async () => 'stay_pending' as const);
       manager['meltOperationService'].advancePendingOperation = advancePendingOperation;
@@ -1033,7 +1031,6 @@ describe('initializeCoco', () => {
           mintOperationProcessor: { disabled: true },
         },
       });
-      manager.subscriptions.pause();
       manager['mintService'].isTrustedMint = mock(async () => true);
 
       const operation = makePendingMeltOperation('melt-op-settle', 'melt-quote-settle');
@@ -1164,7 +1161,6 @@ describe('initializeCoco', () => {
         transportByMint: Map<string, unknown>;
       };
 
-      manager.subscriptions.pause();
       await manager.subscriptions.subscribe('https://mint.test', 'bolt11_mint_quote', ['quote-1']);
 
       expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
@@ -1219,7 +1215,6 @@ describe('initializeCoco', () => {
             name: 'subscription-cleanup-plugin',
             required: ['subscriptions'] as const,
             onInit: async ({ services }) => {
-              services.subscriptions.pause();
               const subscription = await services.subscriptions.subscribe(
                 'https://mint.test',
                 'bolt11_mint_quote',
@@ -1251,7 +1246,7 @@ describe('initializeCoco', () => {
       const manager = await createManager(baseConfig);
 
       await manager.dispose();
-      await manager.resumeSubscriptions();
+      await manager.ensureSubscriptions();
       await manager.enableMintOperationWatcher();
       await manager.enableProofStateWatcher();
       await manager.enableMintOperationProcessor();
@@ -1388,100 +1383,5 @@ describe('initializeCoco', () => {
       expect(result.requeued).toEqual([operation.quoteId]);
       expect(requeuedOperationIds).toEqual([operation.id]);
     });
-  });
-
-  describe('pause and resume subscriptions', () => {
-    it('should pause and stop all watchers and processors', async () => {
-      const manager = await createManager(baseConfig);
-
-      expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
-      expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
-      expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
-      expect(manager['meltSettlementProcessor']?.isRunning()).toBe(true);
-
-      await manager.pauseSubscriptions();
-
-      // After pause, watchers and processor are disabled (set to undefined)
-      expect(manager['mintOperationWatcher']).toBeUndefined();
-      expect(manager['proofStateWatcher']).toBeUndefined();
-      expect(manager['meltQuoteWatcher']).toBeUndefined();
-      expect(manager['mintOperationProcessor']).toBeUndefined();
-      expect(manager['meltSettlementProcessor']).toBeUndefined();
-    });
-
-    it('should resume and restart all watchers and processors', async () => {
-      const manager = await createManager(baseConfig);
-
-      await manager.pauseSubscriptions();
-      await manager.resumeSubscriptions();
-
-      expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
-      expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
-      expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
-      expect(manager['meltSettlementProcessor']?.isRunning()).toBe(true);
-
-      await manager.dispose();
-    });
-
-    it('should be idempotent - multiple pause calls should not error', async () => {
-      const manager = await createManager(baseConfig);
-
-      await manager.pauseSubscriptions();
-      await manager.pauseSubscriptions();
-      await manager.pauseSubscriptions();
-
-      // After pause, watchers and processor are disabled (set to undefined)
-      expect(manager['mintOperationWatcher']).toBeUndefined();
-      expect(manager['proofStateWatcher']).toBeUndefined();
-      expect(manager['meltQuoteWatcher']).toBeUndefined();
-      expect(manager['mintOperationProcessor']).toBeUndefined();
-      expect(manager['meltSettlementProcessor']).toBeUndefined();
-    });
-
-    it('should be idempotent - multiple resume calls should not error', async () => {
-      const manager = await createManager(baseConfig);
-
-      await manager.pauseSubscriptions();
-      await manager.resumeSubscriptions();
-      await manager.resumeSubscriptions();
-      await manager.resumeSubscriptions();
-
-      expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
-      expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
-      expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
-      expect(manager['meltSettlementProcessor']?.isRunning()).toBe(true);
-
-      await manager.dispose();
-    });
-
-    it('should handle resume without prior pause (OS connection teardown scenario)', async () => {
-      const manager = await createManager(baseConfig);
-
-      // Simulate OS killing connections - just call resume without pause
-      await manager.resumeSubscriptions();
-
-      expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
-      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
-      expect(manager['meltQuoteWatcher']?.isRunning()).toBe(true);
-      expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
-      expect(manager['meltSettlementProcessor']?.isRunning()).toBe(true);
-
-      await manager.dispose();
-    });
-
-    it.each([...components])(
-      'keeps a disabled %s disabled across pause and resume',
-      async (name) => {
-        const manager = await createManager({ ...baseConfig, ...disabling(name) });
-
-        await manager.pauseSubscriptions();
-        await manager.resumeSubscriptions();
-
-        expectRunningExcept(manager, name);
-      },
-    );
   });
 });

@@ -113,7 +113,7 @@ describe('PollingTransport scheduler wake-ups', () => {
     timer.callback();
   }
 
-  it('requeues a failed Melt observation at the existing cadence and honors pause/unsubscribe', async () => {
+  it('requeues a failed Melt observation at the existing cadence and honors unsubscribe', async () => {
     const adapter = createMockMintAdapter();
     const melt = mock(async () => {
       throw new Error('offline');
@@ -132,7 +132,6 @@ describe('PollingTransport scheduler wake-ups', () => {
     fireNextTimer(1020);
     await settle();
     expect(melt).toHaveBeenCalledTimes(2);
-    transport.pause();
     now = 1040;
     await settle();
     expect(melt).toHaveBeenCalledTimes(2);
@@ -142,7 +141,7 @@ describe('PollingTransport scheduler wake-ups', () => {
       params: { subId: 'melt' },
       id: 2,
     });
-    transport.resume();
+    transport.ensure();
     await settle();
     expect(melt).toHaveBeenCalledTimes(2);
   });
@@ -164,13 +163,13 @@ describe('PollingTransport scheduler wake-ups', () => {
     expect([...timers.values()].map(({ delay }) => delay)).toEqual([20]);
   });
 
-  it('keeps one wake-up across new interests and repeated resume calls', async () => {
+  it('keeps one wake-up across new interests and repeated repair calls', async () => {
     subscribeToQuotes(transport, mintUrl, 'bolt11', 'first', ['quote-a']);
     await settle();
     now = 1010;
     subscribeToQuotes(transport, mintUrl, 'bolt11', 'second', ['quote-b']);
-    transport.resume();
-    transport.resume();
+    transport.ensure();
+    transport.ensure();
     await settle();
     expect(check).toHaveBeenCalledTimes(1);
     expect(timers.size).toBe(1);
@@ -181,15 +180,14 @@ describe('PollingTransport scheduler wake-ups', () => {
     expect(timers.size).toBe(1);
   });
 
-  it('cancels paused timers and resumes at the remaining deadline', async () => {
+  it('replaces stale timers while preserving the remaining deadline', async () => {
     subscribeToQuotes(transport, mintUrl, 'bolt11', 'sub', ['quote']);
     await settle();
     const staleCallback = [...timers.values()][0]!.callback;
-    transport.pause();
-    expect(timers.size).toBe(0);
+    expect(timers.size).toBe(1);
 
     now = 1010;
-    transport.resume();
+    transport.ensure();
     staleCallback();
     await settle();
     expect(check).toHaveBeenCalledTimes(1);
@@ -199,12 +197,12 @@ describe('PollingTransport scheduler wake-ups', () => {
     expect(check).toHaveBeenCalledTimes(2);
   });
 
-  it('resumes immediately after the deadline and cancels an overdue wake-up', async () => {
+  it('repairs immediately after the deadline and cancels an overdue wake-up', async () => {
     subscribeToQuotes(transport, mintUrl, 'bolt11', 'sub', ['quote']);
     await settle();
     now = 1030;
-    transport.resume();
-    transport.resume();
+    transport.ensure();
+    transport.ensure();
     await settle();
     expect(check).toHaveBeenCalledTimes(2);
     expect([...timers.values()].map(({ delay }) => delay)).toEqual([20]);
@@ -221,18 +219,16 @@ describe('PollingTransport scheduler wake-ups', () => {
     subscribeToQuotes(transport, mintUrl, 'bolt11', 'sub', ['quote']);
     await settle();
     now = 1030;
-    transport.pause();
-    transport.resume();
+    transport.ensure();
     subscribeToQuotes(transport, mintUrl, 'bolt11', 'late', ['quote-b']);
     expect(check).toHaveBeenCalledTimes(1);
     expect(timers.size).toBe(0);
-    transport.pause();
     finish();
     await settle();
-    expect(timers.size).toBe(0);
+    expect(timers.size).toBe(1);
 
     now = 1040;
-    transport.resume();
+    transport.ensure();
     expect([...timers.values()].map(({ delay }) => delay)).toEqual([10]);
     fireNextTimer(1050);
     await settle();
@@ -296,7 +292,7 @@ describe('PollingTransport scheduler wake-ups', () => {
       finish();
       await settle();
       expect(timers.size).toBe(0);
-      transport.resume();
+      transport.ensure();
       expect(check).toHaveBeenCalledTimes(1);
     });
   }
@@ -602,7 +598,7 @@ describe('PollingTransport mint quote batching', () => {
             method,
             quoteIds: identities.map(({ quoteId }) => quoteId),
           });
-          transport.pause();
+          transport.closeAll();
           return failedPollingResult(
             mintUrl,
             identities.map(({ quoteId }) => quoteId),
@@ -614,7 +610,6 @@ describe('PollingTransport mint quote batching', () => {
     transport = new PollingTransport(adapter, { intervalMs: 1 }, new NullLogger(), polling);
 
     transport.on(mintUrl, 'message', () => {});
-    transport.pause();
     subscribeToQuotes(transport, mintUrlVariant, 'bolt11', 'bolt11-sub', [
       'quote-b',
       'quote-a',
@@ -622,7 +617,6 @@ describe('PollingTransport mint quote batching', () => {
       'quote-c',
     ]);
     subscribeToQuotes(transport, mintUrl, 'bolt12', 'bolt12-sub', ['quote-z']);
-    transport.resume();
     await waitFor(() => calls.length === 1);
 
     expect(calls).toEqual([{ mintUrl, method: 'bolt11', quoteIds: ['quote-b', 'quote-a'] }]);
@@ -639,7 +633,7 @@ describe('PollingTransport mint quote batching', () => {
         checkMintQuotesForPolling: mock(
           async (_method: MintMethod, identities: readonly QuoteIdentity[]) => {
             calls.push(identities.map(({ quoteId }) => quoteId));
-            transport.pause();
+            transport.closeAll();
             return failedPollingResult(
               mintUrl,
               identities.map(({ quoteId }) => quoteId),
@@ -655,9 +649,7 @@ describe('PollingTransport mint quote batching', () => {
       );
 
       transport.on(mintUrl, 'message', () => {});
-      transport.pause();
       subscribeToQuotes(transport, mintUrl, method, `${method}-sub`, ['quote-a', 'quote-b']);
-      transport.resume();
       await waitFor(() => calls.length === 1);
 
       expect(calls).toEqual([['quote-a', 'quote-b']]);
@@ -673,7 +665,7 @@ describe('PollingTransport mint quote batching', () => {
       checkMintQuotesForPolling: mock(
         async (_method: MintMethod, identities: readonly QuoteIdentity[]) => {
           calls.push(identities.map(({ quoteId }) => quoteId));
-          transport.pause();
+          transport.closeAll();
           return failedPollingResult(
             mintUrl,
             identities.map(({ quoteId }) => quoteId),
@@ -690,9 +682,7 @@ describe('PollingTransport mint quote batching', () => {
     const quoteIds = Array.from({ length: 101 }, (_, index) => `quote-${index}`);
 
     transport.on(mintUrl, 'message', () => {});
-    transport.pause();
     subscribeToQuotes(transport, mintUrl, 'bolt11', 'capped-sub', quoteIds);
-    transport.resume();
     await waitFor(() => calls.length === 1);
 
     expect(calls[0]).toEqual(quoteIds.slice(0, 100));
@@ -711,7 +701,7 @@ describe('PollingTransport mint quote batching', () => {
       checkMintQuotesForPolling: mock(
         async (_method: MintMethod, identities: readonly QuoteIdentity[]) => {
           calls.push(identities.map(({ quoteId }) => quoteId));
-          transport.pause();
+          transport.closeAll();
           return failedPollingResult(
             mintUrl,
             identities.map(({ quoteId }) => quoteId),
@@ -727,9 +717,7 @@ describe('PollingTransport mint quote batching', () => {
     );
 
     transport.on(mintUrl, 'message', () => {});
-    transport.pause();
     subscribeToQuotes(transport, mintUrl, 'bolt11', 'retry-sub', ['quote-a', 'quote-b']);
-    transport.resume();
     await waitFor(() => calls.length === 1);
 
     expect(getMintQuotePollingLimit).toHaveBeenCalledTimes(2);
@@ -745,7 +733,7 @@ describe('PollingTransport mint quote batching', () => {
       checkMintQuotesForPolling: mock(
         async (_method: MintMethod, identities: readonly QuoteIdentity[]) => {
           calls.push(identities.map(({ quoteId }) => quoteId));
-          if (calls.length === 2) transport.pause();
+          if (calls.length === 2) transport.closeAll();
           return failedPollingResult(
             mintUrl,
             identities.map(({ quoteId }) => quoteId),
@@ -761,9 +749,7 @@ describe('PollingTransport mint quote batching', () => {
     );
 
     transport.on(mintUrl, 'message', () => {});
-    transport.pause();
     subscribeToQuotes(transport, mintUrl, 'bolt11', 'single-sub', ['quote-a', 'quote-b']);
-    transport.resume();
     await waitFor(() => calls.length === 2);
 
     expect(calls).toEqual([['quote-a'], ['quote-b']]);
@@ -778,7 +764,7 @@ describe('PollingTransport mint quote batching', () => {
       checkMintQuotesForPolling: mock(
         async (_method: MintMethod, identities: readonly QuoteIdentity[]) => {
           calls.push(identities.map(({ quoteId }) => quoteId));
-          if (calls.length === 3) transport.pause();
+          if (calls.length === 3) transport.closeAll();
           return failedPollingResult(
             mintUrl,
             identities.map(({ quoteId }) => quoteId),
@@ -794,9 +780,7 @@ describe('PollingTransport mint quote batching', () => {
     );
 
     transport.on(mintUrl, 'message', () => {});
-    transport.pause();
     subscribeToQuotes(transport, mintUrl, 'bolt11', 'fair-sub', ['quote-a', 'quote-b', 'quote-c']);
-    transport.resume();
     await waitFor(() => calls.length === 3);
 
     expect(calls).toEqual([
@@ -820,7 +804,7 @@ describe('PollingTransport mint quote batching', () => {
         async (_method: MintMethod, identities: readonly QuoteIdentity[]) => {
           calls.push(identities.map(({ quoteId }) => quoteId));
           if (calls.length === 1) await firstCheck;
-          if (calls.length === 2) transport.pause();
+          if (calls.length === 2) transport.closeAll();
           return failedPollingResult(
             mintUrl,
             identities.map(({ quoteId }) => quoteId),
@@ -836,9 +820,7 @@ describe('PollingTransport mint quote batching', () => {
     );
 
     transport.on(mintUrl, 'message', () => {});
-    transport.pause();
     subscribeToQuotes(transport, mintUrl, 'bolt11', 'existing-sub', ['quote-a', 'quote-b']);
-    transport.resume();
     await waitFor(() => calls.length === 1);
 
     subscribeToQuotes(transport, mintUrl, 'bolt11', 'late-sub', ['quote-c']);
@@ -860,7 +842,7 @@ describe('PollingTransport mint quote batching', () => {
       checkMintQuotesForPolling: mock(
         async (_method: MintMethod, identities: readonly QuoteIdentity[]) => {
           startedAt.push(Date.now());
-          if (startedAt.length === 2) transport.pause();
+          if (startedAt.length === 2) transport.closeAll();
           return failedPollingResult(
             mintUrl,
             identities.map(({ quoteId }) => quoteId),
@@ -897,7 +879,7 @@ describe('PollingTransport mint quote batching', () => {
         async (_method: MintMethod, identities: readonly QuoteIdentity[]) => {
           calls.push(identities.map(({ quoteId }) => quoteId));
           if (calls.length === 1) await firstCheck;
-          if (calls.length === 2) transport.pause();
+          if (calls.length === 2) transport.closeAll();
           return {
             outcomes: identities.map(({ mintUrl: identityMintUrl, quoteId }) => ({
               status: 'updated' as const,
@@ -924,10 +906,8 @@ describe('PollingTransport mint quote batching', () => {
     );
 
     transport.on(mintUrl, 'message', (event) => messages.push(JSON.parse(event.data)));
-    transport.pause();
     subscribeToQuotes(transport, mintUrl, 'bolt11', 'removed-sub', ['quote-a']);
     subscribeToQuotes(transport, mintUrl, 'bolt11', 'sibling-sub', ['quote-b']);
-    transport.resume();
     await waitFor(() => calls.length === 1);
 
     transport.send(mintUrl, {

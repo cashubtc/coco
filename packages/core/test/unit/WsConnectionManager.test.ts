@@ -1,4 +1,4 @@
-import { describe, it, expect, mock, beforeEach } from 'bun:test';
+import { describe, it, expect } from 'bun:test';
 import { WsConnectionManager, type WebSocketLike } from '../../infra/WsConnectionManager';
 import { NullLogger } from '../../logging';
 
@@ -63,170 +63,14 @@ class MockWebSocket implements WebSocketLike {
   }
 }
 
-describe('WsConnectionManager pause/resume', () => {
-  let wsManager: WsConnectionManager;
-  let mockSocket: MockWebSocket;
-  let wsFactory: (url: string) => WebSocketLike;
-
-  beforeEach(() => {
-    mockSocket = new MockWebSocket();
-    wsFactory = mock((url: string) => mockSocket);
-    wsManager = new WsConnectionManager(wsFactory, new NullLogger());
-  });
-
-  it('should close all sockets when paused', () => {
-    const mintUrl = 'https://mint.example.com';
-    wsManager.on(mintUrl, 'open', () => {});
-    mockSocket.triggerOpen();
-
-    expect(mockSocket.closed).toBe(false);
-
-    wsManager.pause();
-
-    expect(mockSocket.closed).toBe(true);
-    expect(mockSocket.closeCode).toBe(1000);
-    expect(mockSocket.closeReason).toBe('Paused');
-  });
-
-  it('should clear reconnect timers when paused', async () => {
-    const mintUrl = 'https://mint.example.com';
-    wsManager.on(mintUrl, 'open', () => {});
-    mockSocket.triggerOpen();
-
-    // Trigger close to schedule reconnect
-    mockSocket.triggerClose();
-
-    // Pause should clear any scheduled reconnects
-    wsManager.pause();
-
-    // Wait a bit to ensure no reconnect happens
-    await new Promise((resolve) => setTimeout(resolve, 100));
-
-    // Factory should have been called only once (initial connection)
-    expect(wsFactory).toHaveBeenCalledTimes(1);
-  });
-
-  it('should not trigger reconnection on close when paused', async () => {
-    const mintUrl = 'https://mint.example.com';
-    wsManager.on(mintUrl, 'open', () => {});
-    mockSocket.triggerOpen();
-
-    wsManager.pause();
-
-    // Wait to ensure no reconnect is scheduled
-    await new Promise((resolve) => setTimeout(resolve, 100));
-
-    // Should have been called only once (initial)
-    expect(wsFactory).toHaveBeenCalledTimes(1);
-  });
-
-  it('should reconnect all mints with listeners on resume', () => {
-    const mintUrl1 = 'https://mint1.example.com';
-    const mintUrl2 = 'https://mint2.example.com';
-    let callCount = 0;
-
-    const factory = (url: string): WebSocketLike => {
-      callCount++;
-      return new MockWebSocket();
-    };
-
-    wsManager = new WsConnectionManager(factory, new NullLogger());
-
-    // Set up listeners for two mints
-    wsManager.on(mintUrl1, 'open', () => {});
-    wsManager.on(mintUrl2, 'open', () => {});
-
-    const callCountAfterSetup = callCount;
-
-    // Pause (which closes sockets)
-    wsManager.pause();
-
-    // Resume should reconnect both
-    wsManager.resume();
-
-    // Should have called factory for both mints after resume
-    expect(callCount).toBeGreaterThan(callCountAfterSetup);
-  });
-
-  it('should allow reconnection on close after resume', async () => {
-    const mintUrl = 'https://mint.example.com';
-    let socket1: MockWebSocket;
-    let socket2: MockWebSocket;
-    let callCount = 0;
-
-    const factory = (url: string): WebSocketLike => {
-      callCount++;
-      if (callCount === 1) {
-        socket1 = new MockWebSocket();
-        return socket1;
-      } else {
-        socket2 = new MockWebSocket();
-        return socket2;
-      }
-    };
-
-    wsManager = new WsConnectionManager(factory, new NullLogger());
-    wsManager.on(mintUrl, 'open', () => {});
-
-    socket1!.triggerOpen();
-    expect(callCount).toBe(1);
-
-    wsManager.pause();
-    wsManager.resume();
-
-    // Resume should create new socket
-    expect(callCount).toBeGreaterThanOrEqual(2);
-
-    // Trigger close after resume - should schedule reconnect
-    if (socket2!) {
-      socket2!.triggerClose();
-    }
-
-    // Wait for reconnect delay
-    await new Promise((resolve) => setTimeout(resolve, 1100));
-
-    // Should have attempted reconnect
-    expect(callCount).toBeGreaterThanOrEqual(2);
-  });
-
-  it('should handle multiple pause calls idempotently', () => {
-    const mintUrl = 'https://mint.example.com';
-    wsManager.on(mintUrl, 'open', () => {});
-    mockSocket.triggerOpen();
-
-    wsManager.pause();
-    const firstCloseCode = mockSocket.closeCode;
-
-    // Reset mock socket for second pause
-    mockSocket.closed = false;
-
-    wsManager.pause();
-    wsManager.pause();
-
-    // Should not error or cause issues
-    expect(firstCloseCode).toBe(1000);
-  });
-
-  it('should handle multiple resume calls idempotently', () => {
-    const mintUrl = 'https://mint.example.com';
-    wsManager.on(mintUrl, 'open', () => {});
-
-    wsManager.pause();
-    wsManager.resume();
-    wsManager.resume();
-    wsManager.resume();
-
-    // Should not error
-    expect(true).toBe(true);
-  });
-});
-
 describe('WsConnectionManager disableReconnect option', () => {
   it('should reconnect by default when disableReconnect is not set', async () => {
     let callCount = 0;
+    let socket!: MockWebSocket;
     const factory = (url: string): WebSocketLike => {
       callCount++;
-      return new MockWebSocket();
+      socket = new MockWebSocket();
+      return socket;
     };
 
     const wsManager = new WsConnectionManager(factory, new NullLogger());
@@ -236,8 +80,6 @@ describe('WsConnectionManager disableReconnect option', () => {
     expect(callCount).toBe(1);
 
     // Simulate connection then close
-    const sockets = (wsManager as any).sockets;
-    const socket = sockets.get(mintUrl) as MockWebSocket;
     socket.triggerOpen();
     socket.triggerClose();
 
@@ -250,9 +92,11 @@ describe('WsConnectionManager disableReconnect option', () => {
 
   it('should not reconnect when disableReconnect is true', async () => {
     let callCount = 0;
+    let socket!: MockWebSocket;
     const factory = (url: string): WebSocketLike => {
       callCount++;
-      return new MockWebSocket();
+      socket = new MockWebSocket();
+      return socket;
     };
 
     const wsManager = new WsConnectionManager(factory, new NullLogger(), {
@@ -264,8 +108,6 @@ describe('WsConnectionManager disableReconnect option', () => {
     expect(callCount).toBe(1);
 
     // Simulate connection then close
-    const sockets = (wsManager as any).sockets;
-    const socket = sockets.get(mintUrl) as MockWebSocket;
     socket.triggerOpen();
     socket.triggerClose();
 
@@ -301,11 +143,13 @@ describe('WsConnectionManager disableReconnect option', () => {
     expect(callCount).toBe(1);
   });
 
-  it('should still allow manual reconnect via resume when disableReconnect is true', () => {
+  it('should still allow manual repair when disableReconnect is true', () => {
     let callCount = 0;
+    let socket!: MockWebSocket;
     const factory = (url: string): WebSocketLike => {
       callCount++;
-      return new MockWebSocket();
+      socket = new MockWebSocket();
+      return socket;
     };
 
     const wsManager = new WsConnectionManager(factory, new NullLogger(), {
@@ -316,11 +160,9 @@ describe('WsConnectionManager disableReconnect option', () => {
     wsManager.on(mintUrl, 'open', () => {});
     expect(callCount).toBe(1);
 
-    // Pause and resume should still work
-    wsManager.pause();
-    wsManager.resume();
+    wsManager.ensure();
 
-    // Resume creates new connections for mints with listeners
+    // Repair creates new connections for mints with listeners
     expect(callCount).toBe(2);
   });
 });

@@ -187,8 +187,8 @@ import type { Plugin, PluginEventBus } from '@cashu/coco-core/plugin';
 class MyPluginApi {
   constructor(private eventBus: PluginEventBus) {}
 
-  onSubscriptionsResumed(handler: () => void): () => void {
-    return this.eventBus.on('subscriptions:resumed', handler);
+  onHistoryUpdated(handler: () => void): () => void {
+    return this.eventBus.on('history:updated', handler);
   }
 
   async fetchData() {
@@ -219,7 +219,7 @@ const manager = await initializeCoco({
 });
 
 // Access the plugin's API
-const unsubscribe = manager.ext.myPlugin.onSubscriptionsResumed(() => {});
+const unsubscribe = manager.ext.myPlugin.onHistoryUpdated(() => {});
 const result = await manager.ext.myPlugin.fetchData();
 ```
 
@@ -234,8 +234,8 @@ import type { Plugin, PluginEventBus, PluginExtensions } from '@cashu/coco-core/
 // Define your API class
 export class MyPluginApi {
   constructor(private eventBus: PluginEventBus) {}
-  onSubscriptionsResumed(handler: () => void): () => void {
-    return this.eventBus.on('subscriptions:resumed', handler);
+  onHistoryUpdated(handler: () => void): () => void {
+    return this.eventBus.on('history:updated', handler);
   }
   async fetchData(): Promise<{ data: string }> {
     /* ... */

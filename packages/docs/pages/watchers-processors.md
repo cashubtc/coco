@@ -142,51 +142,19 @@ from their notifications. Do not await their disable methods or `coco.dispose()`
 `mint-quote:updated` or `melt-quote:updated` listener: shutdown would wait on the listener that is
 waiting on shutdown.
 
-## Pausing and Resuming Subscriptions
+## Repairing foreground networking
 
-For energy efficiency and battery savings (especially on mobile devices), you can pause and resume all subscriptions, watchers, and processors. This is particularly useful when your app is backgrounded or minimized:
+Call `await coco.ensureSubscriptions()` after returning to the foreground. It replaces potentially
+stale WebSockets and ensures polling continues, preserving current interests and owner settings.
+Its promise covers local initiation only, so it is safe offline and does not promise catch-up or
+operation completion. Existing polling requests may still commit canonical observations.
 
-```ts
-// Pause all subscriptions, watchers, and processors
-await coco.pauseSubscriptions();
-
-// Resume all subscriptions, watchers, and processors
-await coco.resumeSubscriptions();
-```
-
-### What happens during pause?
-
-When `pauseSubscriptions()` is called:
-
-- All WebSocket connections are closed immediately
-- Reconnection attempts are disabled to save battery
-- All watchers (`MintOperationWatcher`, `MeltQuoteWatcher`, `ProofStateWatcher`) are stopped
-- The `MintOperationProcessor` and `MeltSettlementProcessor` are stopped
-
-### What happens during resume?
-
-When `resumeSubscriptions()` is called:
-
-- All subscriptions are re-established (WebSockets or polling)
-- Watchers are restarted based on their original configuration
-- Processors are restarted based on their original configuration
-- Startup and resume backlogs are handled by operation recovery, watcher scans, and processor discovery
-- Everything returns to its previous state before pausing
-
-### Use Cases
-
-This feature is designed for scenarios where:
-
-- Your app is backgrounded or minimized by the user
-- The operating system might automatically close connections to save resources
-- You want to explicitly save battery when real-time updates aren't needed
-- You need to ensure proper functionality when the app is foregrounded again
-
-### Important Notes
-
-- Both methods are idempotent - calling them multiple times has no adverse effects
-- Subscriptions created while paused will be automatically activated when resumed
-- The resume operation ensures everything is running properly, even if connections were torn down by the OS
+Repair does not restart watchers or processors, rerun startup discovery, or recover operations.
+Use the individual enable/disable controls above for owner policy, explicit operation recovery for
+reconciliation, and `dispose()` for final shutdown. These controls remain available for staged
+enabling after Restore readiness. Foreground repair does not replace coordinated background quieting
+or app-owned plugin synchronization, paid-quote requeueing and catch-up. See [Subscriptions](../starting/subscriptions.md)
+for foreground examples and migration from the removed pause/resume APIs and events.
 
 ### Shared Mint Swap observation
 

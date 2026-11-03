@@ -390,6 +390,103 @@ describe.each(['memory', 'sqlite'] as const)('background progression (%s)', (ada
     expect(requests).toEqual(['/v1/melt/quote/bolt11/melt']);
   });
 
+  it('repairs watcher delivery while keeping a processor explicitly disabled', async () => {
+    await seedMelt('PENDING');
+    await coco.enableMeltSettlementProcessor();
+    await coco.disableMeltSettlementProcessor();
+    await coco.enableMeltQuoteWatcher();
+    const subscription = await subscribed;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await coco.ensureSubscriptions();
+    const observed = new Promise<void>((resolve) =>
+      coco.on('melt-quote:updated', ({ quote }) => {
+        if (quote.state === 'PAID') resolve();
+      }),
+    );
+    receiveSocketMessage({
+      data: JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'subscribe',
+        params: { subId: subscription.params.subId, payload: remoteMelt('PAID') },
+      }),
+    });
+    await observed;
+    await coco.disableMeltQuoteWatcher();
+    expect((await coco.quotes.melt.get({ mintUrl, quoteId: 'melt' }))?.state).toBe('PAID');
+    expect((await coco.ops.melt.get('melt-op'))?.state).toBe('pending');
+    expect(requests).toEqual(['/v1/melt/quote/bolt11/melt']);
+  });
+
+  it('keeps runtime-disabled owners disabled even when initialization enabled them', async () => {
+    await coco.dispose();
+    coco = await initializeCoco({
+      repo,
+      seedGetter: async () => seed,
+      watchers: { ...disabledRuntime.watchers, meltQuoteWatcher: { disabled: false } },
+      processors: { ...disabledRuntime.processors, meltSettlementProcessor: { disabled: false } },
+      webSocketFactory: () => ({
+        send() {},
+        close() {},
+        addEventListener() {},
+        removeEventListener() {},
+      }),
+    });
+    await coco.disableMeltQuoteWatcher();
+    await coco.disableMeltSettlementProcessor();
+    await seedMelt('PENDING');
+    meltState = 'PAID';
+    await coco.ensureSubscriptions();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(requests).toEqual([]);
+    expect((await coco.ops.melt.get('melt-op'))?.state).toBe('pending');
+
+    const observed = new Promise<void>((resolve) =>
+      coco.on('melt-quote:updated', ({ quote }) => {
+        if (quote.state === 'PAID') resolve();
+      }),
+    );
+    await coco.enableMeltQuoteWatcher();
+    await observed;
+    await coco.disableMeltQuoteWatcher();
+    expect((await coco.ops.melt.get('melt-op'))?.state).toBe('pending');
+    await coco.enableMeltSettlementProcessor();
+    await finishMeltChecks();
+    expect((await coco.ops.melt.get('melt-op'))?.state).toBe('finalized');
+    expect(requests).toEqual(['/v1/melt/quote/bolt11/melt']);
+  });
+
+  it('preserves enabled owners without rerunning their startup discovery', async () => {
+    await coco.enableMeltQuoteWatcher();
+    await coco.enableMeltSettlementProcessor();
+    // Records arrive without a live event, after both startup scans. Repair must not discover them.
+    await seedMelt('PENDING');
+    meltState = 'PAID';
+    await coco.ensureSubscriptions();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(requests).toEqual([]);
+    expect(socketRequests).toEqual([]);
+    expect((await coco.ops.melt.get('melt-op'))?.state).toBe('pending');
+
+    // A normal committed event still reaches the already-enabled processor and watcher.
+    const completed = new Promise<void>((resolve) => coco.on('melt-op:finalized', () => resolve()));
+    const operation = (await coco.ops.melt.get('melt-op'))!;
+    await events.emit('melt-op:pending', { mintUrl, operationId: operation.id, operation });
+    await completed;
+    expect((await coco.ops.melt.get('melt-op'))?.state).toBe('finalized');
+    expect(requests).toEqual(['/v1/melt/quote/bolt11/melt']);
+  });
+
+  it('leaves standalone Mint recovery independent of networking repair', async () => {
+    const operation = await seedMint();
+    await coco.ensureSubscriptions();
+    expect((await coco.ops.mint.get(operation.id))?.state).toBe('pending');
+    expect(requests).toEqual([]);
+    await coco.ops.mint.recovery.run();
+    expect((await coco.ops.mint.get(operation.id))?.state).toBe('finalized');
+    expect(requests).toContain('/v1/mint/quote/bolt11/mint');
+    expect(requests).toContain('/v1/mint/bolt11');
+  });
+
   it('settles complete polling evidence with both owners enabled without refetching', async () => {
     await seedMelt('PENDING');
     await coco.enableMeltSettlementProcessor();

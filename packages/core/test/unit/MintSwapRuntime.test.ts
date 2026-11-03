@@ -60,8 +60,7 @@ describe('Mint Swap Manager runtime', () => {
   it('observes prepared swaps on startup and resume without authorizing payment', async () => {
     const { manager, fixture } = await setup({ prepare: true });
     expect((await manager.ops.mintSwap.get('swap'))?.state).toBe('prepared');
-    await manager.pauseSubscriptions();
-    await manager.resumeSubscriptions();
+    await manager.ensureSubscriptions();
     expect((await manager.ops.mintSwap.get('swap'))?.state).toBe('prepared');
     expect(fixture.requests).not.toContain('melt');
     expect((await manager.ops.mintSwap.cancel('swap')).state).toBe('cancelled');
@@ -70,8 +69,7 @@ describe('Mint Swap Manager runtime', () => {
   it('recovers persisted preparation explicitly with automatic work disabled', async () => {
     const { repo, manager, fixture } = await setup({ automatic: false });
     await fixture.create();
-    await manager.pauseSubscriptions();
-    await manager.resumeSubscriptions();
+    await manager.ensureSubscriptions();
     expect((await repo.mintSwap.operationRepository.getById('swap'))?.state).toBe('preparing');
     expect((await manager.ops.mintSwap.refresh('swap')).state).toBe('prepared');
     expect(fixture.requests).not.toContain('melt');
@@ -139,7 +137,7 @@ describe('Mint Swap Manager runtime', () => {
     });
   }
 
-  it('retains future retry deadlines on startup, resume and parent hints', async () => {
+  it('retains future retry deadlines on startup, repair and parent hints', async () => {
     const { repo, fixture, manager } = await setup({
       automatic: false,
       prepare: true,
@@ -157,8 +155,7 @@ describe('Mint Swap Manager runtime', () => {
     managers.push(background);
     // Parent scheduling must retain the deadline even if a child recovery has advanced.
     expect((await background.ops.mintSwap.get('swap'))?.retry).toEqual(before!.retry);
-    await background.pauseSubscriptions();
-    await background.resumeSubscriptions();
+    await background.ensureSubscriptions();
     expect((await background.ops.mintSwap.get('swap'))?.retry).toEqual(before!.retry);
   });
 
@@ -401,53 +398,6 @@ describe('Mint Swap Manager runtime', () => {
     expect((await repo.mintSwap.operationRepository.getById('swap'))?.state).toBe('prepared');
     await expect(manager.ops.mintSwap.prepare(fixture.parent)).rejects.toThrow('disposed');
     expect(hints).toEqual([0, 1]);
-  });
-
-  it('orders an overlapping resume after pause has drained', async () => {
-    const { manager } = await setup({ prepare: true });
-    const entered = deferred();
-    const release = deferred();
-    spyOn(manager, 'disableMintOperationWatcher').mockImplementationOnce(async () => {
-      entered.resolve();
-      await release.promise;
-    });
-    const pausing = manager.pauseSubscriptions();
-    await entered.promise;
-    let resumed = false;
-    const resuming = manager.resumeSubscriptions().then(() => {
-      resumed = true;
-    });
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    const resumedBeforePause = resumed;
-    release.resolve();
-    await Promise.all([pausing, resuming]);
-    expect(resumedBeforePause).toBe(false);
-    // Already running: resume must not finish with recovery silently stopped by the older pause.
-    expect(await manager.enableMintSwapOperationProcessor()).toBe(false);
-  });
-
-  it('drains an admitted resume before disposal completes', async () => {
-    const { manager } = await setup({ prepare: true });
-    await manager.pauseSubscriptions();
-    const entered = deferred();
-    const release = deferred();
-    manager.once('subscriptions:resumed', async () => {
-      entered.resolve();
-      await release.promise;
-    });
-    const resuming = manager.resumeSubscriptions();
-    await entered.promise;
-    let disposed = false;
-    const disposal = manager.dispose().then(() => {
-      disposed = true;
-    });
-    // Let disposal reach its drain rather than depending on a particular microtask count.
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    const disposedBeforeResume = disposed;
-    release.resolve();
-    await Promise.all([resuming, disposal]);
-    expect(disposedBeforeResume).toBe(false);
-    expect(await manager.enableMintSwapOperationProcessor()).toBe(false);
   });
 
   it('keeps parent notifications reentrant and excludes handler payloads from diagnostics', async () => {

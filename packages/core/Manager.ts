@@ -381,9 +381,7 @@ export class Manager {
   private balanceQueries: BalanceQueries;
   private transactionRunner: CoreTransactionRunner;
   private readonly pluginHost: PluginHost = new PluginHost();
-  private subscriptionsPaused = false;
-  private subscriptionLifecycle: Promise<void> = Promise.resolve();
-  private originalWatcherConfig: CocoConfig['watchers'];
+  private subscriptionRepair?: Promise<void>;
   private originalProcessorConfig: CocoConfig['processors'];
   private readonly mintRequestProvider: MintRequestProvider;
   private readonly mintAdapter: MintAdapter;
@@ -421,7 +419,6 @@ export class Manager {
       this.getChildLogger('MintAdapter'),
     );
 
-    this.originalWatcherConfig = watchers;
     this.originalProcessorConfig = processors;
     if (plugins && plugins.length > 0) {
       for (const p of plugins) this.pluginHost.use(p);
@@ -545,13 +542,12 @@ export class Manager {
 
   private async disposeOwnedResources(): Promise<void> {
     this.disposed = true;
-    this.subscriptionsPaused = true;
     this.mintSwapDisposal.abort(new Error('Mint Swap runtime is disposed'));
     await Promise.all([
       this.disableMintSwapOperationProcessor(),
       this.mintSwapOperationService.dispose(),
-      // An admitted resume may still be acquiring resources or publishing lifecycle events.
-      this.subscriptionLifecycle,
+      // Finish any admitted local transport repair before final transport closure.
+      this.subscriptionRepair?.catch(() => {}),
     ]);
 
     await this.disableMintOperationWatcher();
@@ -574,7 +570,7 @@ export class Manager {
   async enableMintSwapOperationProcessor(
     options?: MintSwapOperationProcessorOptions,
   ): Promise<boolean> {
-    if (this.disposed || this.subscriptionsPaused) return false;
+    if (this.disposed) return false;
     if (!this.mintSwapOperationProcessor) {
       this.mintSwapOperationProcessor = new MintSwapOperationProcessor(
         this.mintSwapOperationService,
@@ -895,97 +891,23 @@ export class Manager {
     return { reconciled, skipped };
   }
 
-  /** Serialize pause/resume requests; final disposal closes admission and drains this queue. */
-  private changeSubscriptions(work: () => Promise<void>): Promise<void> {
+  /**
+   * Repair networking after returning to the foreground, even if sockets appear alive.
+   * Preserves current registrations and enabled/disabled watchers and processors.
+   * Resolves after local repair is initiated; does not wait for remote connectivity,
+   * observation catch-up, or operation completion. Safe offline. Overlapping calls coalesce.
+   * Does not run startup discovery or operation recovery. No-op once disposal starts.
+   */
+  ensureSubscriptions(): Promise<void> {
     if (this.disposed) return Promise.resolve();
-    const change = this.subscriptionLifecycle.then(async () => {
-      if (!this.disposed) await work();
+    if (this.subscriptionRepair) return this.subscriptionRepair;
+    const repair = Promise.resolve().then(async () => {
+      if (!this.disposed) await this.subscriptions.ensureSubscriptions();
     });
-    // Report failure to its caller without poisoning later lifecycle changes or cleanup.
-    this.subscriptionLifecycle = change.catch(() => {});
-    return change;
-  }
-
-  pauseSubscriptions(): Promise<void> {
-    return this.changeSubscriptions(() => this.pauseOwnedSubscriptions());
-  }
-
-  private async pauseOwnedSubscriptions(): Promise<void> {
-    if (this.subscriptionsPaused) {
-      this.logger.debug('Subscriptions already paused');
-      return;
-    }
-    this.subscriptionsPaused = true;
-    this.logger.info('Pausing subscriptions');
-
-    // Pause transport layer
-    this.subscriptions.pause();
-
-    // Close parent scheduling before detaching its observation resources.
-    await this.disableMintSwapOperationProcessor();
-
-    // Disable watchers
-    await this.disableMintOperationWatcher();
-    await this.disableProofStateWatcher();
-    await this.disableMeltSettlementProcessor();
-    await this.disableMeltQuoteWatcher();
-
-    // Disable processor
-    await this.disableMintOperationProcessor();
-
-    this.logger.info('Subscriptions paused');
-    await this.eventBus.emit('subscriptions:paused', undefined);
-  }
-
-  resumeSubscriptions(): Promise<void> {
-    return this.changeSubscriptions(() => this.resumeOwnedSubscriptions());
-  }
-
-  private async resumeOwnedSubscriptions(): Promise<void> {
-    if (this.disposed) {
-      this.logger.debug('Cannot resume subscriptions after manager disposal');
-      return;
-    }
-    this.subscriptionsPaused = false;
-    this.logger.info('Resuming subscriptions');
-    await this.eventBus.emit('subscriptions:resumed', undefined);
-
-    // Resume transport layer
-    this.subscriptions.resume();
-
-    // Re-enable watchers based on original configuration (idempotent)
-    const mintOperationWatcherConfig = this.originalWatcherConfig?.mintOperationWatcher;
-    if (!mintOperationWatcherConfig?.disabled) {
-      await this.enableMintOperationWatcher(mintOperationWatcherConfig);
-    }
-
-    const proofStateWatcherConfig = this.originalWatcherConfig?.proofStateWatcher;
-    if (!proofStateWatcherConfig?.disabled) {
-      await this.enableProofStateWatcher(proofStateWatcherConfig);
-    }
-
-    const meltQuoteWatcherConfig = this.originalWatcherConfig?.meltQuoteWatcher;
-    if (!meltQuoteWatcherConfig?.disabled) {
-      await this.enableMeltQuoteWatcher(meltQuoteWatcherConfig);
-    }
-
-    // Re-enable processor based on original configuration (idempotent)
-    const mintOperationProcessorConfig = this.originalProcessorConfig?.mintOperationProcessor;
-    if (!mintOperationProcessorConfig?.disabled) {
-      await this.enableMintOperationProcessor(mintOperationProcessorConfig);
-    }
-
-    const meltSettlementProcessorConfig = this.originalProcessorConfig?.meltSettlementProcessor;
-    if (!meltSettlementProcessorConfig?.disabled) {
-      await this.enableMeltSettlementProcessor(meltSettlementProcessorConfig);
-    }
-
-    await this.recoverPendingMintOperations();
-    const mintSwapProcessor = this.originalProcessorConfig?.mintSwapOperationProcessor;
-    if (!mintSwapProcessor?.disabled)
-      await this.enableMintSwapOperationProcessor(mintSwapProcessor);
-
-    this.logger.info('Subscriptions resumed');
+    this.subscriptionRepair = repair.finally(() => {
+      this.subscriptionRepair = undefined;
+    });
+    return this.subscriptionRepair;
   }
 
   private getChildLogger(moduleName: string): Logger {

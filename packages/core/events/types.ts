@@ -118,8 +118,6 @@ export interface CoreEvents {
     operationId: string;
     operation: FailedBatchMintOperation;
   };
-  'subscriptions:paused': void;
-  'subscriptions:resumed': void;
   'auth-session:updated': { mintUrl: string };
   'auth-session:deleted': { mintUrl: string };
   'auth-session:expired': { mintUrl: string };

@@ -127,8 +127,8 @@ ordinary Melt processor advances the child after its parent stops. Authorized re
 interests permit observation of exact quotes after trust revocation, without restoring mint trust.
 Parent update hints are captured in the owning transaction and published after commit and
 lock release; local polling and complete active sweeps tolerate lost hints. No outbox or new schema
-is introduced. Manager orders pause/resume changes and drains admitted lifecycle and parent work on
-disposal. An observation timeout only ends waiting; it does not change the persisted operation.
+is introduced. Manager coalesces networking-only subscription repair and drains admitted local repair and parent
+work on disposal. Repair preserves current owners and interests without discovery or Operation Recovery. An observation timeout only ends waiting; it does not change the persisted operation.
 Payment Request Receive parent/attempt/child atomicity and MintService
 add/forced-update/trust/delete paths remain for their
 owning migrations.

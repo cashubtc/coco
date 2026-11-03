@@ -56,7 +56,7 @@ function createManagerMock(): Manager {
     },
     on: vi.fn(),
     off: vi.fn(),
-    pauseSubscriptions: vi.fn().mockResolvedValue(undefined),
+    ensureSubscriptions: vi.fn().mockResolvedValue(undefined),
     dispose: vi.fn().mockResolvedValue(undefined),
   } as unknown as Manager;
 }
@@ -127,7 +127,7 @@ describe('CocoCashuProvider', () => {
 
     unmount();
 
-    expect(manager.pauseSubscriptions).not.toHaveBeenCalled();
+    expect(manager.ensureSubscriptions).not.toHaveBeenCalled();
     expect(manager.dispose).not.toHaveBeenCalled();
   });
 
@@ -151,7 +151,7 @@ describe('CocoCashuProvider', () => {
     await waitForAssertion(() => {
       expect(manager.dispose).toHaveBeenCalledTimes(1);
     });
-    expect(manager.pauseSubscriptions).not.toHaveBeenCalled();
+    expect(manager.ensureSubscriptions).not.toHaveBeenCalled();
   });
 
   it('tears down an owned manager that resolves after unmount', async () => {
@@ -179,6 +179,6 @@ describe('CocoCashuProvider', () => {
     await waitForAssertion(() => {
       expect(manager.dispose).toHaveBeenCalledTimes(1);
     });
-    expect(manager.pauseSubscriptions).not.toHaveBeenCalled();
+    expect(manager.ensureSubscriptions).not.toHaveBeenCalled();
   });
 });

@@ -399,7 +399,7 @@ authorization. Parent coordinators keep composing child transitions directly, un
 locks and the transitions' own child-state and proof invariants.
 
 Disabling the parent processor pauses automatic progression of active parents' children along with
-the parent's existing startup/resume recovery; explicit parent refresh and recovery remain available,
+the parent's existing startup recovery; explicit parent refresh and recovery remain available,
 and generic child recovery does not bypass the pause. Separating startup repair from routine
 progression remains a separate migration.
 
@@ -431,7 +431,9 @@ Necessary operation recovery effects remain available. Fresh positive `UNPAID` c
 the shared source lock remains required before releasing inputs, independently of watcher state.
 Exact authorized recovery interests can survive trust revocation, including Manager's transport
 closure and shared Mint polling admission; unrelated untrusted quotes gain no permission.
-Manager serializes pause/resume changes and drains admitted lifecycle and parent work on disposal.
+Manager coalesces networking-only `ensureSubscriptions()` calls and drains admitted local repair
+and parent work on disposal. Repair preserves owners and interests without startup discovery or
+Operation Recovery.
 A local observation timeout only ends waiting; it does not change the persisted operation.
 
 Parent and child change snapshots are captured within each attempt and published after commit and

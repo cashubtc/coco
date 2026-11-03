@@ -66,17 +66,24 @@ Enable calls accept their service's startup/configuration options. Enabling an a
 service does not replace its options; await disable before enabling with a different policy.
 Serialize these changes through the session owner.
 
-Use `pauseSubscriptions()` / `resumeSubscriptions()` for coordinated suspension, following the
-main skill's lifecycle rules. Resume uses the session's original watcher/processor configuration,
-not a snapshot of later runtime toggles. Put persistent policy in the initialization config;
-if the app changes it at runtime, explicitly reconcile the intended policy after resume.
-Pause does not block explicit wallet actions or undo already submitted remote work. Final
-shutdown uses `dispose()` and cannot be resumed.
+Use `ensureSubscriptions()` on app foreground. It replaces stale sockets, replays existing
+registrations, and ensures polling runs while preserving current owner settings and interests.
+It resolves after local initiation, even offline, without waiting for connectivity or catch-up.
+It does not rerun startup discovery or operation recovery. Normal observations may still persist
+canonical state and trigger enabled processors; already-started polling commits may finish.
+
+The old pause/resume APIs and events are removed. Migration loses coordinated background quieting:
+removing a background pause leaves enabled polling and work running. Individual owner controls
+remain available, but do not globally pause all transports or plugin interests. Preserve staged
+enabling after Restore readiness and app-owned foreground plugin sync, paid-quote requeueing and
+catch-up; networking repair does not perform them. Teardown uses `dispose()`. If the app depended on resume's
+standalone Mint and Batch Mint recovery, call `ops.mint.recovery.run()` and
+`ops.mint.batch.recovery.run()` explicitly when needed. Final shutdown cannot be repaired or resumed.
 
 ## Diagnose stalled work
 
 Load the canonical quote and existing operation before choosing an action. Check whether the
-quote changed but the operation did not, whether background services are paused or disabled,
+quote changed but the operation did not, whether background services are disabled,
 whether startup discovery was skipped, and whether authentication or mint trust needs attention.
 An observed quote payment alone does not prove proofs were stored or a melt finalized.
 
@@ -87,6 +94,6 @@ flow's state-specific rules; prepared work still needs a decision, and ambiguous
 reconciliation of the existing operation before another attempt. See
 [Shared mint and melt lifecycle](quote-operations.md) and [Mint authentication](auth.md).
 
-**Done when:** the selected policy progresses new and persisted work, pause/resume restores the
+**Done when:** the selected policy progresses new and persisted work, foreground repair preserves the
 intended policy, and a delayed observation or retry never becomes an unproven failure or a new
 replacement payment.
