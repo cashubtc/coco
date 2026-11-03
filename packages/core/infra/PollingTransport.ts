@@ -375,6 +375,7 @@ export class PollingTransport implements RealTimeTransport {
     } catch (err) {
       this.logger?.error('Polling task error', { mintUrl, err });
       if (
+        task.batch ||
         (this.getMintQuoteMethod(task.kind) && this.mintQuotePolling) ||
         task.kind.endsWith('_melt_quote')
       ) {

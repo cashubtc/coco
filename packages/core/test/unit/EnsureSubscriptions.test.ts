@@ -268,13 +268,55 @@ describe('Manager.ensureSubscriptions networking repair', () => {
   );
 
   it.each(['hybrid', 'polling'] as const)(
-    'does not duplicate proof opportunities when interests change during an in-flight %s repair',
+    'retains failed proof polling across offline %s repair',
     async (mode) => {
+      await start(mode);
+      respond = async () => {
+        throw new TypeError('offline');
+      };
+      const received: unknown[] = [];
+      await coco.subscriptions.subscribe(mintUrl, 'proof_state', ['proof'], (p) => {
+        received.push(p);
+      });
+      await settle();
+      expect(requests).toEqual([['proof']]);
+
+      await Promise.all([coco.ensureSubscriptions(), coco.ensureSubscriptions()]);
+      expect(requests).toHaveLength(1);
+      expect([...timers.values()].map((t) => t.delay)).toEqual([20]);
+      // Retain the opportunity even if another attempt fails before connectivity returns.
+      fire(1020);
+      await settle();
+      expect(requests).toHaveLength(2);
+      expect(received).toEqual([]);
+
+      respond = async () => {};
+      now = 1030;
+      await coco.ensureSubscriptions();
+      if (mode === 'hybrid') sockets.at(-1)!.emit('open');
+      expect(requests).toHaveLength(2);
+      expect([...timers.values()].map((t) => t.delay)).toEqual([10]);
+      fire(1040);
+      await settle();
+      expect(requests).toEqual([['proof'], ['proof'], ['proof']]);
+      expect(received).toEqual([expect.objectContaining({ Y: 'proof', state: 'UNSPENT' })]);
+      expect([...timers.values()].map((t) => t.delay)).toEqual([mode === 'hybrid' ? 100 : 20]);
+    },
+  );
+
+  it.each([
+    ['hybrid', false],
+    ['polling', false],
+    ['hybrid', true],
+    ['polling', true],
+  ] as const)(
+    'does not duplicate proof opportunities when interests change during %s repair (poll fails=%s)',
+    async (mode, fails) => {
       await start(mode);
       let finish!: () => void;
       respond = () =>
-        new Promise<void>((resolve) => {
-          finish = resolve;
+        new Promise<void>((resolve, reject) => {
+          finish = () => (fails ? reject(new TypeError('offline')) : resolve());
         });
       const removedPayloads: unknown[] = [];
       const removed = await coco.subscriptions.subscribe(mintUrl, 'proof_state', ['old'], (p) => {
@@ -295,6 +337,29 @@ describe('Manager.ensureSubscriptions networking repair', () => {
       expect(requests).toEqual([['old'], ['new'], ['quote'], ['new'], ['quote']]);
       expect(removedPayloads).toEqual([]);
       expect(timers.size).toBe(1);
+    },
+  );
+
+  it.each(['unsubscribe', 'dispose'] as const)(
+    'does not restart a failed in-flight proof poll after %s',
+    async (stop) => {
+      await start('polling');
+      let fail!: () => void;
+      respond = () =>
+        new Promise<void>((_resolve, reject) => {
+          fail = () => reject(new TypeError('offline'));
+        });
+      const subscription = await coco.subscriptions.subscribe(mintUrl, 'proof_state', ['proof']);
+      await settle();
+      if (stop === 'dispose') await coco.dispose();
+      else await subscription.unsubscribe();
+      fail();
+      await settle();
+      now = 1100;
+      await coco.ensureSubscriptions();
+      await settle();
+      expect(requests).toEqual([['proof']]);
+      expect(timers.size).toBe(0);
     },
   );
 
