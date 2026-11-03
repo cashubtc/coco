@@ -1,3 +1,4 @@
+import type { CocoConfig } from '../../Manager.ts';
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { Amount } from '@cashu/cashu-ts';
 import { mintSwapFixture } from '../../../adapter-tests/src/internal/mintSwap/fixture.ts';
@@ -72,6 +73,17 @@ describe('Batch Mint and Mint Swap exclusivity', () => {
       await h.quote({ quote: 'b', method: 'bolt11', amount: 10, amountPaid: 10 });
     });
 
+    async function openSession(
+      processor: NonNullable<CocoConfig['processors']>['mintOperationProcessor'],
+    ) {
+      await h.dispose();
+      h = await createBatchMintHarness({
+        repo: h.repo,
+        mint: h.mint,
+        processors: { mintOperationProcessor: processor },
+      });
+    }
+
     afterEach(async () => {
       await h.dispose();
       h.uninstall();
@@ -107,6 +119,17 @@ describe('Batch Mint admission races', () => {
   beforeEach(async () => {
     h = await createBatchMintHarness();
   });
+
+  async function openSession(
+    processor: NonNullable<CocoConfig['processors']>['mintOperationProcessor'],
+  ) {
+    await h.dispose();
+    h = await createBatchMintHarness({
+      repo: h.repo,
+      mint: h.mint,
+      processors: { mintOperationProcessor: processor },
+    });
+  }
 
   afterEach(async () => {
     await h.dispose();
@@ -199,11 +222,14 @@ describe('Batch Mint admission races', () => {
       expect(executing.state).toBe('executing');
 
       await h.quote({ quote: 'unreserved', method: 'bolt11', amount: 10, amountPaid: 10 });
-      await h.coco.enableMintOperationProcessor({ batchMintQuotes, processIntervalMs: 20 });
+      // A new Session also replays the ambiguous batch once during startup recovery.
+      h.mint.batchBehaviors.push('network');
+      await openSession({ batchMintQuotes, processIntervalMs: 20 });
       await h.coco.waitForMintOperationProcessor();
 
       expect((await h.coco.ops.mint.batch.get(executing.id))?.state).toBe('executing');
-      expect(h.mint.batchRequests).toHaveLength(1);
+      expect(h.mint.batchRequests).toHaveLength(2);
+      expect(h.mint.batchRequests[1]).toEqual(h.mint.batchRequests[0]);
       expect(
         h.mint.requests
           .filter(({ path }) => path === '/v1/mint/bolt11')

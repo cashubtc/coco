@@ -26,6 +26,23 @@ import type { WalletService } from '../../services';
 import type { CoreProof, MintInfo } from '../../types';
 import { makeOutputDataCreator } from '../fixtures/OutputDataCreator.ts';
 
+const retiredControls = [
+  'enableMintOperationWatcher',
+  'disableMintOperationWatcher',
+  'enableMeltQuoteWatcher',
+  'disableMeltQuoteWatcher',
+  'enableProofStateWatcher',
+  'disableProofStateWatcher',
+  'enableMintOperationProcessor',
+  'disableMintOperationProcessor',
+  'enableMeltSettlementProcessor',
+  'disableMeltSettlementProcessor',
+  'enableMintSwapOperationProcessor',
+  'disableMintSwapOperationProcessor',
+] as const;
+type AssertNever<T extends never> = T;
+type NoPublicOwnerControls = AssertNever<Extract<keyof Manager, (typeof retiredControls)[number]>>;
+
 describe('initializeCoco', () => {
   let repositories: MemoryRepositories;
   let seedGetter: () => Promise<Uint8Array>;
@@ -292,12 +309,6 @@ describe('initializeCoco', () => {
       // Verify processors are running
       expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
       expect(manager['meltSettlementProcessor']?.isRunning()).toBe(true);
-
-      await manager.disableMintOperationWatcher();
-      await manager.disableProofStateWatcher();
-      await manager.disableMeltQuoteWatcher();
-      await manager.disableMintOperationProcessor();
-      await manager.disableMeltSettlementProcessor();
     });
 
     it('should initialize repositories', async () => {
@@ -315,10 +326,10 @@ describe('initializeCoco', () => {
     });
 
     it('should dispose a partially initialized Manager when startup fails', async () => {
-      const originalReconcile = Manager.prototype.reconcileLegacyMintQuotes;
+      const originalReconcile = repositories.legacyMintQuoteRepository.getPendingLegacyMintQuotes;
       const startupError = new Error('legacy quote reconciliation failed');
       const onDispose = mock(async () => {});
-      Manager.prototype.reconcileLegacyMintQuotes = mock(async () => {
+      repositories.legacyMintQuoteRepository.getPendingLegacyMintQuotes = mock(async () => {
         throw startupError;
       });
 
@@ -340,7 +351,7 @@ describe('initializeCoco', () => {
         expect((error as CocoInitializationError).cleanupState).toBe('confirmed');
         expect((error as CocoInitializationError).cause).toBe(startupError);
       } finally {
-        Manager.prototype.reconcileLegacyMintQuotes = originalReconcile;
+        repositories.legacyMintQuoteRepository.getPendingLegacyMintQuotes = originalReconcile;
       }
 
       expect(onDispose).toHaveBeenCalledTimes(1);
@@ -349,11 +360,11 @@ describe('initializeCoco', () => {
     it('should report when partial initialization cleanup fails', async () => {
       const originalDispose = Manager.prototype.dispose;
       const cleanupError = new Error('cleanup failed');
-      const originalReconcile = Manager.prototype.reconcileLegacyMintQuotes;
+      const originalReconcile = repositories.legacyMintQuoteRepository.getPendingLegacyMintQuotes;
       const dispose = mock(async () => {
         throw cleanupError;
       });
-      Manager.prototype.reconcileLegacyMintQuotes = mock(async () => {
+      repositories.legacyMintQuoteRepository.getPendingLegacyMintQuotes = mock(async () => {
         throw new Error('legacy quote reconciliation failed');
       });
       Manager.prototype.dispose = dispose;
@@ -369,7 +380,7 @@ describe('initializeCoco', () => {
         expect((error as CocoInitializationError).cleanupState).toBe('unconfirmed');
         expect((error as CocoInitializationError).cause).toBeInstanceOf(AggregateError);
       } finally {
-        Manager.prototype.reconcileLegacyMintQuotes = originalReconcile;
+        repositories.legacyMintQuoteRepository.getPendingLegacyMintQuotes = originalReconcile;
         Manager.prototype.dispose = originalDispose;
       }
 
@@ -377,12 +388,12 @@ describe('initializeCoco', () => {
     });
 
     it('should report plugin cleanup failures as unconfirmed initialization cleanup', async () => {
-      const originalReconcile = Manager.prototype.reconcileLegacyMintQuotes;
+      const originalReconcile = repositories.legacyMintQuoteRepository.getPendingLegacyMintQuotes;
       const originalConsoleError = console.error;
       const startupError = new Error('legacy quote reconciliation failed');
       const cleanupError = new Error('plugin cleanup failed');
       console.error = mock(() => {});
-      Manager.prototype.reconcileLegacyMintQuotes = mock(async () => {
+      repositories.legacyMintQuoteRepository.getPendingLegacyMintQuotes = mock(async () => {
         throw startupError;
       });
 
@@ -406,7 +417,7 @@ describe('initializeCoco', () => {
         expect((error as CocoInitializationError).cleanupState).toBe('unconfirmed');
         expect((error as CocoInitializationError).cause).toBeInstanceOf(AggregateError);
       } finally {
-        Manager.prototype.reconcileLegacyMintQuotes = originalReconcile;
+        repositories.legacyMintQuoteRepository.getPendingLegacyMintQuotes = originalReconcile;
         console.error = originalConsoleError;
       }
     });
@@ -415,20 +426,12 @@ describe('initializeCoco', () => {
       const manager = await createManager(baseConfig);
 
       expect(manager.paymentRequests).toBeInstanceOf(PaymentRequestsApi);
-
-      await manager.disableMintOperationWatcher();
-      await manager.disableProofStateWatcher();
-      await manager.disableMintOperationProcessor();
     });
 
     it('should expose the dedicated quotes api', async () => {
       const manager = await createManager(baseConfig);
 
       expect(manager.quotes).toBeInstanceOf(QuoteApi);
-
-      await manager.disableMintOperationWatcher();
-      await manager.disableProofStateWatcher();
-      await manager.disableMintOperationProcessor();
     });
 
     it('should allocate keys atomically through the public keyring api', async () => {
@@ -723,10 +726,6 @@ describe('initializeCoco', () => {
       expect(manager.ops.receive).toBeDefined();
       expect(manager.ops.mint).toBeDefined();
       expect(manager.ops.melt).toBeDefined();
-
-      await manager.disableMintOperationWatcher();
-      await manager.disableProofStateWatcher();
-      await manager.disableMintOperationProcessor();
     });
 
     it('should accept custom logger', async () => {
@@ -737,10 +736,6 @@ describe('initializeCoco', () => {
       });
 
       expect(manager['logger']).toBe(customLogger);
-
-      await manager.disableMintOperationWatcher();
-      await manager.disableProofStateWatcher();
-      await manager.disableMintOperationProcessor();
     });
 
     it('should initialize plugins once before returning', async () => {
@@ -938,88 +933,6 @@ describe('initializeCoco', () => {
       await manager.dispose();
     });
 
-    it('resumes pending canonical melt quote watches and pending operation interest on startup', async () => {
-      await repositories.init();
-      const canonicalQuote = makeMeltQuote('melt-canonical-startup', 'PENDING');
-      const expiredOperationQuote = makeMeltQuote('melt-expired-operation-startup', 'PENDING', {
-        expired: true,
-      });
-      const expiredOperation = makePendingMeltOperation(
-        'melt-op-expired-startup',
-        expiredOperationQuote.quoteId,
-      );
-
-      await repositories.meltQuoteRepository.upsertMeltQuote(canonicalQuote);
-      await repositories.meltQuoteRepository.upsertMeltQuote(expiredOperationQuote);
-      await repositories.meltOperationRepository.create(expiredOperation);
-
-      const manager = new Manager(repositories, seedGetter, new NullLogger());
-      await manager.initPlugins();
-      manager['mintService'].isTrustedMint = mock(async () => true);
-      const advancePendingOperation = mock(async () => 'stay_pending' as const);
-      manager['meltOperationService'].advancePendingOperation = advancePendingOperation;
-
-      await manager.enableMeltQuoteWatcher();
-      await manager.enableMeltSettlementProcessor();
-      await flushDeferredInitialChecks();
-
-      const subscriptionInternals = manager.subscriptions as unknown as {
-        subscriptions: Map<string, { kind: string; filters: string[] }>;
-      };
-      const subscriptions = Array.from(subscriptionInternals.subscriptions.values());
-
-      expect(subscriptions).toHaveLength(2);
-      expect(subscriptions.map((subscription) => subscription.kind).sort()).toEqual([
-        'bolt11_melt_quote',
-        'bolt11_melt_quote',
-      ]);
-      expect(subscriptions.map((subscription) => subscription.filters[0]).sort()).toEqual([
-        'melt-canonical-startup',
-        'melt-expired-operation-startup',
-      ]);
-      expect(advancePendingOperation).toHaveBeenCalledWith(expiredOperation.id);
-
-      await manager.dispose();
-    });
-
-    it('attaches melt quote watching when settlement processing starts first', async () => {
-      await repositories.init();
-      const expiredOperationQuote = makeMeltQuote('melt-expired-operation-first', 'PENDING', {
-        expired: true,
-      });
-      const expiredOperation = makePendingMeltOperation(
-        'melt-op-expired-first',
-        expiredOperationQuote.quoteId,
-      );
-
-      await repositories.meltQuoteRepository.upsertMeltQuote(expiredOperationQuote);
-      await repositories.meltOperationRepository.create(expiredOperation);
-
-      const manager = new Manager(repositories, seedGetter, new NullLogger());
-      await manager.initPlugins();
-      manager['mintService'].isTrustedMint = mock(async () => true);
-      const advancePendingOperation = mock(async () => 'stay_pending' as const);
-      manager['meltOperationService'].advancePendingOperation = advancePendingOperation;
-
-      await manager.enableMeltSettlementProcessor();
-      await manager.enableMeltQuoteWatcher();
-      await flushDeferredInitialChecks();
-
-      const subscriptionInternals = manager.subscriptions as unknown as {
-        subscriptions: Map<string, { kind: string; filters: string[] }>;
-      };
-      const subscriptions = Array.from(subscriptionInternals.subscriptions.values());
-
-      expect(subscriptions).toHaveLength(1);
-      expect(subscriptions.map((subscription) => subscription.kind)).toEqual(['bolt11_melt_quote']);
-      expect(subscriptions.map((subscription) => subscription.filters[0])).toEqual([
-        'melt-expired-operation-first',
-      ]);
-      expect(advancePendingOperation).toHaveBeenCalledWith(expiredOperation.id);
-
-      await manager.dispose();
-    });
-
     it('settles a pending melt operation from a canonical melt quote update', async () => {
       const manager = await createManager({
         ...baseConfig,
@@ -1101,6 +1014,11 @@ describe('initializeCoco', () => {
   }
 
   describe('watchers and processors configuration', () => {
+    it('retires all runtime owner controls while retaining direct construction', async () => {
+      const manager = new Manager(repositories, seedGetter);
+      for (const control of retiredControls) expect(control in manager).toBe(false);
+      await manager.dispose();
+    });
     it.each([...components])('does not start %s when it is disabled', async (name) => {
       const manager = await createManager({ ...baseConfig, ...disabling(name) });
 
@@ -1174,11 +1092,11 @@ describe('initializeCoco', () => {
 
       await manager.dispose();
 
-      expect(manager['mintOperationWatcher']).toBeUndefined();
-      expect(manager['proofStateWatcher']).toBeUndefined();
-      expect(manager['meltQuoteWatcher']).toBeUndefined();
-      expect(manager['mintOperationProcessor']).toBeUndefined();
-      expect(manager['meltSettlementProcessor']).toBeUndefined();
+      expect(manager['mintOperationWatcher']?.isRunning()).toBe(false);
+      expect(manager['proofStateWatcher']?.isRunning()).toBe(false);
+      expect(manager['meltQuoteWatcher']?.isRunning()).toBe(false);
+      expect(manager['mintOperationProcessor']?.isRunning()).toBe(false);
+      expect(manager['meltSettlementProcessor']?.isRunning()).toBe(false);
       expect(subscriptionInternals.subscriptions.size).toBe(0);
       expect(subscriptionInternals.activeByMint.size).toBe(0);
       expect(subscriptionInternals.transportByMint.size).toBe(0);
@@ -1247,17 +1165,12 @@ describe('initializeCoco', () => {
 
       await manager.dispose();
       await manager.ensureSubscriptions();
-      await manager.enableMintOperationWatcher();
-      await manager.enableProofStateWatcher();
-      await manager.enableMintOperationProcessor();
-      await manager.enableMeltQuoteWatcher();
-      await manager.enableMeltSettlementProcessor();
 
-      expect(manager['mintOperationWatcher']).toBeUndefined();
-      expect(manager['proofStateWatcher']).toBeUndefined();
-      expect(manager['meltQuoteWatcher']).toBeUndefined();
-      expect(manager['mintOperationProcessor']).toBeUndefined();
-      expect(manager['meltSettlementProcessor']).toBeUndefined();
+      expect(manager['mintOperationWatcher']?.isRunning()).toBe(false);
+      expect(manager['proofStateWatcher']?.isRunning()).toBe(false);
+      expect(manager['meltQuoteWatcher']?.isRunning()).toBe(false);
+      expect(manager['mintOperationProcessor']?.isRunning()).toBe(false);
+      expect(manager['meltSettlementProcessor']?.isRunning()).toBe(false);
     });
   });
 

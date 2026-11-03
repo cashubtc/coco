@@ -24,7 +24,7 @@ describe('Mint Swap automatic recovery', () => {
     return value;
   }
 
-  it('registers future-deadline parents and rebinds ownership without touching retry evidence', async () => {
+  it('registers future-deadline parents without touching retry evidence', async () => {
     const fixture = await mintSwapFixture(new MemoryRepositories());
     await fixture.create();
     await fixture.prepare();
@@ -64,55 +64,10 @@ describe('Mint Swap automatic recovery', () => {
     });
     expect(melt.registerInterest).toHaveBeenCalledTimes(1);
     expect(service.reconcileInBackground).not.toHaveBeenCalled();
-    await runtime.setInterestRegistrars({ melt });
-    expect(mint.removeInterest).toHaveBeenCalledTimes(1);
-    await runtime.setInterestRegistrars({ mint, melt });
-    expect(mint.registerInterest).toHaveBeenCalledTimes(2);
     expect(await fixture.repositories.mintSwap.operationRepository.getById('swap')).toEqual(before);
     await runtime.stop();
-    expect(mint.removeInterest).toHaveBeenCalledTimes(2);
+    expect(mint.removeInterest).toHaveBeenCalledTimes(1);
     expect(melt.removeInterest).toHaveBeenCalledTimes(1);
-  });
-
-  it('rebuilds recovery permission from current children when a watcher is enabled', async () => {
-    const fixture = await mintSwapFixture(new MemoryRepositories());
-    await fixture.create();
-    await fixture.prepare();
-    const mint = { registerInterest: mock(() => {}), removeInterest: mock(async () => {}) };
-    const service = { reconcileInBackground: mock(async () => {}) };
-    const runtime = processor(
-      service,
-      fixture.repositories.mintSwap.operationRepository,
-      fixture.events,
-      undefined,
-      { processIntervalMs: 60_000 },
-      {
-        mint,
-        source: fixture.repositories.meltOperationRepository,
-        destination: fixture.repositories.mintOperationRepository,
-      },
-    );
-    await runtime.start();
-    const parent = await fixture.repositories.mintSwap.operationRepository.getById('swap');
-    expect(mint.registerInterest).toHaveBeenLastCalledWith({
-      ...parent!.destinationQuote,
-      owner: { kind: 'mint-swap', id: 'swap', recovery: false },
-    });
-    await runtime.setInterestRegistrars({});
-    // Ordinary child execution can authorize the exact child while parent hints are lost.
-    await fixture.runner.run((tx) =>
-      tx.perform(beginMeltExecution, {
-        operationId: 'source-child',
-        now: 1001,
-      }),
-    );
-    await runtime.setInterestRegistrars({ mint });
-    expect(mint.registerInterest).toHaveBeenLastCalledWith({
-      ...parent!.destinationQuote,
-      owner: { kind: 'mint-swap', id: 'swap', recovery: true },
-    });
-    expect(service.reconcileInBackground).toHaveBeenCalledTimes(1);
-    expect(await fixture.repositories.mintSwap.operationRepository.getById('swap')).toEqual(parent);
   });
 
   it('releases partially declared ownership after a registrar rejects declaration', async () => {
@@ -453,7 +408,7 @@ describe('Mint Swap automatic recovery', () => {
     expect(discovery).toHaveBeenCalledTimes(1);
   });
 
-  it('drains its current worker before stop and resumes only a new generation', async () => {
+  it('drains its current worker on final stop and cannot restart', async () => {
     const repo = new MemoryRepositories();
     await repo.mintSwap.operationRepository.create(mintSwapFixtures().prepared);
     const entered = deferred();
@@ -480,6 +435,6 @@ describe('Mint Swap automatic recovery', () => {
     expect(calls).toBe(1);
     expect(runtime.isRunning()).toBe(false);
     await runtime.start();
-    expect(calls).toBe(2);
+    expect(calls).toBe(1);
   });
 });

@@ -1,21 +1,18 @@
 # Watchers and Processors
 
-By default, when using `initializeCoco()`, all watchers and processors are automatically enabled. If you're instantiating the `Manager` class directly, you can manually enable them:
+`initializeCoco()` selects all Background Watchers and Background Processors by default.
+Selection **and options are fixed for the lifetime of that Coco Session**. Set `disabled: true`
+to omit an owner for the entire session. There are no runtime enable/disable controls.
 
-```ts
-await coco.enableMintOperationProcessor();
-await coco.enableMeltSettlementProcessor();
-await coco.enableProofStateWatcher();
-await coco.enableMintOperationWatcher();
-await coco.enableMeltQuoteWatcher();
-```
-
-`initializeCoco()` also recovers pending `coco.ops.send`, `coco.ops.receive`, and `coco.ops.melt`
-operations during startup, so most apps do not need to trigger recovery manually.
+The initializer still runs one-time Send, Melt, payment-request Receive (including pending Receive),
+and Mint/Batch Mint Operation Recovery, even when every owner is disabled. Mint Swap automatic
+recovery retains its separate `mintSwapOperationProcessor.disabled` selection. Disabled owners do
+not promise initialization without mint requests or operation advancement. Explicit operations and
+recovery APIs remain available.
 
 Watchers observe the mint and persist canonical evidence before notifying processors. Processors
 reassess persisted evidence at startup and on runtime events; event payloads do not override current
-Wallet state. Mint and Melt watchers and processors can be enabled independently. With a processor
+Wallet state. Mint and Melt watchers and processors can be selected independently at initialization. With a processor
 enabled and its watcher disabled, cached evidence or an explicit quote refresh can drive advancement.
 With only the watcher enabled, observations update quotes without automatically advancing operations.
 With both disabled, explicit operation APIs such as `refresh()` and `checkPayment()` remain available.
@@ -35,6 +32,7 @@ const coco = await initializeCoco({
   processors: {
     mintOperationProcessor: { disabled: true },
     meltSettlementProcessor: { disabled: true },
+    mintSwapOperationProcessor: { disabled: true },
   },
 });
 ```
@@ -80,12 +78,14 @@ rolls back.
 
 The Melt processor declares operation-owned observation interest synchronously. The watcher owns
 asynchronous trust checks and subscription setup; registration means local acceptance, not readiness
-or remote subscription acceptance. Enabling either owner can therefore return while setup for those
+or remote subscription acceptance. Initialization can therefore return while setup for those
 operation-owned interests is still pending. Cached-evidence progression does not wait for setup.
 
 Setup failures are logged with quote and operation context. There is no new retry loop: another
-pending-operation declaration can retry failed or skipped setup, while enabling the same running
-watcher again retries failed setup only. An untrusted skip is not retried by that enable call.
+pending-operation declaration can retry failed or skipped setup. Existing quote events and parent
+scans also retain their declaration paths. No automatic registration retry timer is added. Ordinary
+network failure is different from local registration failure: subscription setup does not wait for
+remote acceptance.
 
 Removing operation interest withdraws it immediately and waits for any cleanup it requires. Canonical
 and other operation interests keep shared watches active. Stopping or untrusting the watcher
@@ -124,21 +124,18 @@ original input metadata and exact output allocation; it does not fabricate proof
 `watchExistingInflightOnStart: false` skips the startup proof and Send scan. Live proof events and newly
 pending Sends remain observed while the watcher runs.
 
-`await coco.disableProofStateWatcher()` stops accepting new notifications and discovery work, cancels
-pending discovery timers, and releases subscriptions, including those acquired during shutdown. It
-waits for subscription acquisition and cleanup, but does not wait for already-started notification
-processing or operation checks. These calls can finish Wallet updates and publish events after the
-watcher stops. An event listener can therefore await `disableProofStateWatcher()` without waiting on
-its own completion. A restarted watcher does not resume discovery or accept subscription callbacks
-from its previous run.
+`await coco.dispose()` stops proof observation and discovery, cancels pending discovery timers,
+and releases subscriptions, including those acquired during shutdown. Proof watcher shutdown waits
+for subscription acquisition and cleanup, but does not drain already-started notification processing
+or operation checks. Those calls may finish Wallet updates and publish events afterward. A proof or
+Send completion listener can await disposal without waiting on its own completion (ADR-0014).
 
-The same proof-watcher behavior applies when `coco.dispose()` disables it. Neither method cancels
-already-started proof updates or Send completion; shutdown is not a completion barrier for those
-operations. Keep caller-owned storage available while such work finishes. Other watchers and
-processors retain their own shutdown behavior.
+Disposal is not a completion barrier for started proof updates or Send completion. Keep caller-owned
+storage available while that work finishes. Other owners retain their own drain guarantees. Disposal
+is neither process death nor a universal barrier against explicit commands.
 
 The Mint and Melt quote watchers instead drain the work they own, including publishing quote events
-from their notifications. Do not await their disable methods or `coco.dispose()` from an awaited
+from their notifications. Do not await `coco.dispose()` from an awaited
 `mint-quote:updated` or `melt-quote:updated` listener: shutdown would wait on the listener that is
 waiting on shutdown.
 
@@ -150,19 +147,33 @@ Its promise covers local initiation only, so it is safe offline and does not pro
 operation completion. Existing polling requests may still commit canonical observations.
 
 Repair does not restart watchers or processors, rerun startup discovery, or recover operations.
-Use the individual enable/disable controls above for owner policy, explicit operation recovery for
-reconciliation, and `dispose()` for final shutdown. These controls remain available for staged
-enabling after Restore readiness. Foreground repair does not replace coordinated background quieting
-or app-owned plugin synchronization, paid-quote requeueing and catch-up. See [Subscriptions](../starting/subscriptions.md)
-for foreground examples and migration from the removed pause/resume APIs and events.
+Use initialization configuration for owner selection, explicit operation recovery for reconciliation,
+and `dispose()` for final shutdown. Foreground repair does not replace background suspension or
+app-owned plugin synchronization, paid-quote requeueing and catch-up. See
+[Subscriptions](../starting/subscriptions.md) for foreground examples and the networking migration.
+
+## Fixed-owner migration
+
+All six public pairs are removed: `enableMintOperationWatcher` / `disableMintOperationWatcher`,
+`enableMeltQuoteWatcher` / `disableMeltQuoteWatcher`, `enableProofStateWatcher` /
+`disableProofStateWatcher`, `enableMintOperationProcessor` / `disableMintOperationProcessor`,
+`enableMeltSettlementProcessor` / `disableMeltSettlementProcessor`, and
+`enableMintSwapOperationProcessor` / `disableMintSwapOperationProcessor`.
+
+Move selection and options into `initializeCoco({ watchers, processors })`. Replace final-cleanup
+calls to individual disables with `await coco.dispose()`. A different selection requires a new
+Coco Session, including its normal startup recovery. There is no persistence migration.
+
+`ensureSubscriptions()` never activates an omitted owner or performs a recovery sweep.
 
 ### Shared Mint Swap observation
 
 Mint Swap parents declare interests in the existing Mint and Melt quote watchers. These use the same
 synchronous local acceptance contract as ordinary operation interests; setup and failure diagnostics
 belong to the watcher. Parent progression from cached evidence does not await subscription acquisition.
-Disabling the parent withdraws its interests while preserving ordinary owners, and waits for required
-cleanup. Watcher enable calls may finish while operation-owned acquisition is still pending.
+Final disposal withdraws parent interests and waits for required cleanup. Interest withdrawal also
+happens as parents progress, preserving shared interests. Initialization may finish while
+operation-owned acquisition is still pending. Selected watcher dependencies never change.
 
 Normal parent scans use cached evidence. Startup prefers sufficient cached evidence but currently
 retains bounded recovery for unresolved observations and already-authorized destination accounting.

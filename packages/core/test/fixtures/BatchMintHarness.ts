@@ -1,5 +1,5 @@
 import { Amount } from '@cashu/cashu-ts';
-import { initializeCoco, type Manager } from '../../Manager.ts';
+import { initializeCoco, type Manager, type CocoConfig } from '../../Manager.ts';
 import type { CoreEvents } from '../../events/types.ts';
 import {
   mintQuoteFromBolt11Response,
@@ -24,6 +24,9 @@ type QuoteSpec = Omit<FakeMintQuote, 'request' | 'expiry' | 'amountIssued' | 'un
 export async function createBatchMintHarness(
   options: {
     repo?: MemoryRepositories;
+    watchers?: CocoConfig['watchers'];
+    plugins?: CocoConfig['plugins'];
+    processors?: CocoConfig['processors'];
     mint?: FakeBatchMint;
     /** NUT-29 settings the mint advertises when it is added. */
     nut29?: FakeBatchMint['nut29'];
@@ -35,6 +38,7 @@ export async function createBatchMintHarness(
   const repo = options.repo ?? new MemoryRepositories();
   const coco = await initializeCoco({
     repo,
+    plugins: options.plugins,
     seedGetter: async () => new Uint8Array(64).fill(5),
     requestRateLimit: { disabled: true },
     subscriptions: { slowPollingIntervalMs: 10, fastPollingIntervalMs: 10 },
@@ -42,11 +46,13 @@ export async function createBatchMintHarness(
       mintOperationWatcher: { disabled: true },
       proofStateWatcher: { disabled: true },
       meltQuoteWatcher: { disabled: true },
+      ...options.watchers,
     },
     processors: {
       mintOperationProcessor: { disabled: true },
       meltSettlementProcessor: { disabled: true },
       mintSwapOperationProcessor: { disabled: true },
+      ...options.processors,
     },
   });
   if (!options.repo) {

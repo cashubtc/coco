@@ -70,7 +70,12 @@ describe('Mint Swap runtime persistent restart', () => {
           name: 'MintSwapChildOperationError',
           parentOperationId: 'swap',
         });
-        await manager.enableMintSwapOperationProcessor();
+        await manager.dispose();
+        manager = await initializeCoco({
+          repo,
+          seedGetter: fixture.dependencies.loadSeed,
+          ...mintSwapRuntimeConfig,
+        });
         const recovered = await manager.ops.mintSwap.get('swap');
         expect(recovered?.state).toBe(paid ? 'completed' : 'cancelled');
         expect(recovered?.sourceOperationId).toBe(original?.sourceOperationId);

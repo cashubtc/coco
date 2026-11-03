@@ -159,87 +159,6 @@ describe('Mint Swap Manager runtime', () => {
     expect((await background.ops.mintSwap.get('swap'))?.retry).toEqual(before!.retry);
   });
 
-  it('applies and validates new recovery options after stopping the processor', async () => {
-    const { manager } = await setup({ automatic: false });
-    let elapsed = 0;
-    spyOn(performance, 'now').mockImplementation(() => elapsed);
-    let tick = () => {};
-    const schedule = spyOn(globalThis, 'setTimeout').mockImplementation(((callback: () => void) => {
-      tick = callback;
-      return 123;
-    }) as unknown as typeof setTimeout);
-    spyOn(globalThis, 'clearTimeout').mockImplementation(() => {});
-    const active = spyOn(MemoryMintSwapOperationRepository.prototype, 'listActive');
-    const due = spyOn(MemoryMintSwapOperationRepository.prototype, 'listDue');
-
-    await manager.enableMintSwapOperationProcessor({
-      processIntervalMs: 100_000,
-      sweepIntervalMs: 90_000,
-      batchSize: 25,
-    });
-    await manager.disableMintSwapOperationProcessor();
-    const scansBeforeInvalidOptions = active.mock.calls.length;
-    for (const options of [
-      { processIntervalMs: 0 },
-      { sweepIntervalMs: Infinity },
-      { batchSize: 0 },
-    ]) {
-      await expect(manager.enableMintSwapOperationProcessor(options)).rejects.toBeInstanceOf(
-        TypeError,
-      );
-    }
-    expect(active).toHaveBeenCalledTimes(scansBeforeInvalidOptions);
-
-    const options = { processIntervalMs: 5, sweepIntervalMs: 20, batchSize: 7 };
-    expect(await manager.enableMintSwapOperationProcessor(options)).toBe(true);
-    expect(schedule).toHaveBeenLastCalledWith(expect.any(Function), 5);
-    elapsed = 5;
-    tick();
-    await manager.disableMintSwapOperationProcessor();
-    expect(due).toHaveBeenLastCalledWith(Date.now(), 7);
-
-    await manager.enableMintSwapOperationProcessor(options);
-    const scansBeforeSweep = active.mock.calls.length;
-    elapsed = 25;
-    tick();
-    await manager.disableMintSwapOperationProcessor();
-    expect(active).toHaveBeenCalledTimes(scansBeforeSweep + 1);
-  });
-
-  it('drains a stopping processor before allowing a newly configured restart', async () => {
-    const { manager, repo } = await setup({ automatic: false });
-    const entered = deferred();
-    const release = deferred();
-    const queries = repo.mintSwap.operationRepository;
-    const listActive = queries.listActive.bind(queries);
-    const active = spyOn(
-      MemoryMintSwapOperationRepository.prototype,
-      'listActive',
-    ).mockImplementationOnce(async () => {
-      entered.resolve();
-      await release.promise;
-      return listActive();
-    });
-    const starting = manager.enableMintSwapOperationProcessor({ processIntervalMs: 100_000 });
-    await entered.promise;
-    let stopped = false;
-    const stopping = manager.disableMintSwapOperationProcessor().then(() => {
-      stopped = true;
-    });
-    const overlapping = manager.enableMintSwapOperationProcessor({ processIntervalMs: 5 });
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    const stoppedBeforeDrain = stopped;
-    const scansBeforeDrain = active.mock.calls.length;
-    release.resolve();
-    const [started, , restarted] = await Promise.all([starting, stopping, overlapping]);
-    expect(stoppedBeforeDrain).toBe(false);
-    expect(scansBeforeDrain).toBe(1);
-    expect(started).toBe(false);
-    expect(restarted).toBe(false);
-    expect(await manager.enableMintSwapOperationProcessor({ processIntervalMs: 5 })).toBe(true);
-    expect(active).toHaveBeenCalledTimes(2);
-  });
-
   it('rejects ordinary Melt execution while the parent holds the source lock', async () => {
     let meltService!: MeltOperationService;
     const { manager, fixture } = await setup({
@@ -366,7 +285,7 @@ describe('Mint Swap Manager runtime', () => {
     await operation;
     await disposal;
     expect(disposed).toBe(true);
-    expect(await manager.enableMintSwapOperationProcessor()).toBe(false);
+    await manager.ensureSubscriptions();
   });
 
   it('drains preparation preflight and its committed callbacks before disposal', async () => {

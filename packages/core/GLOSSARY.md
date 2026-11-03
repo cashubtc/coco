@@ -138,10 +138,14 @@ Observation.
 _Avoid_: Claim deadline, quote invalidity
 
 **Background Watcher**:
-A session-scoped automatic observer that keeps wallet state progressing without a direct caller
-waiting on a specific result. Disabling a Background Watcher does not disable explicit caller
-operations for the same domain work.
+A session-scoped automatic observer that reconciles local quote or proof state with evidence from
+a mint. Explicit caller operations remain available independently of automatic observation.
 _Avoid_: Subscriptions, processors
+
+**Background Processor**:
+A session-scoped automatic coordinator that advances wallet operations from local state and events.
+Advancement may require further mint interactions through the operation's own rules.
+_Avoid_: Background Watcher, subscriptions
 
 **Restore**:
 The act of reconstructing a wallet's proofs for a mint from the wallet's deterministic secrets and the mint's state. Restore is distinct from operation recovery and does not create a persistent restored state.

@@ -47,7 +47,7 @@ runs at the fast interval until the new socket opens, then uses the slow interva
 
 The promise resolves once **local repair has been initiated**. It does not wait for remote
 connectivity, observation catch-up, or operation completion, and is safe to call offline.
-Watchers and processors keep their current enabled/disabled state and interests. Repair does not
+Watchers and processors keep their initial selection and interests. Repair does not
 rerun startup discovery or Operation Recovery. Normal observations can still persist canonical
 quote state and trigger enabled processors; requests already in flight may finish their commits.
 
@@ -77,8 +77,7 @@ document.removeEventListener('visibilitychange', onVisibilityChange);
 ```
 
 The React provider does not automatically invoke foreground repair. Register the appropriate
-platform handler in your app. Use individual watcher/processor enable and disable methods for
-intentional background policy, and `dispose()` for final shutdown. Repair is a no-op after Manager
+platform handler in your app. Select watchers and processors during initialization, and use `dispose()` for final shutdown. Repair is a no-op after Manager
 disposal starts; a disposed Coco Session cannot be restarted.
 
 ## Migration from pause and resume
@@ -89,22 +88,20 @@ and the `subscriptions:paused` / `subscriptions:resumed` events. There is no dep
 replacement lifecycle event: initiating repair does not establish readiness.
 
 Replace foreground resume calls with `await coco.ensureSubscriptions()`. Remove background pause
-calls, or explicitly disable the owners your app intends to stop and enable them when appropriate.
-Repair preserves runtime choices; it does not restore the original initialization configuration.
+calls only after deciding your app's background policy. Repair preserves the session's fixed owners
+and their interests; it never activates an owner omitted at initialization.
 Replace teardown calls with `await coco.dispose()`.
 
 This migration is **not behavior-equivalent** to background pause/resume. There is no replacement
 for its coordinated background quieting: removing a background pause (including one delayed by a
 grace period) leaves polling and enabled background work running, subject to OS scheduling.
-`ensureSubscriptions()` never suspends them. Individual disable methods only stop their respective
-owners; they are not a global pause for all transports or plugin registrations. The app must choose
-its own background policy. Final `dispose()` ends the Coco Session, so it is not temporary suspension.
+`ensureSubscriptions()` never suspends them. There is no per-owner runtime toggle or global pause for transports and plugin registrations.
+Final `dispose()` ends the Coco Session, so it is not temporary suspension.
 
 Keep app-owned foreground catch-up separate and in the order your app requires. Plugin start/sync,
 explicit quote refresh or operation recovery, and `requeuePaidMintQuotes()` are not performed by
 `ensureSubscriptions()`. Its completion is not a barrier before which those tasks are synchronized.
-Applications that stage owner enable calls after Restore or counter readiness must retain that
-sequencing; repair neither advances the readiness gate nor enables disabled owners.
+See the [fixed-owner migration](../pages/watchers-processors.md#fixed-owner-migration).
 
 The old resume path unconditionally ran standalone Mint and Batch Mint recovery. Repair deliberately
 omits those sweeps. When your application needs explicit recovery, call it independently:

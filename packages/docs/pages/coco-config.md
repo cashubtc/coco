@@ -144,3 +144,14 @@ factor, secret, optional `ephemeralE`, and `toProof()` method. Coco persists onl
 fields. When a later operation reads persisted output data, Coco reconstructs the standard
 `cashu-ts` `OutputData`, so its built-in `toProof()` implementation may be used instead. Custom
 object identity and a custom `toProof()` implementation are not preserved across serialization.
+
+## Fixed session configuration
+
+Watcher and processor selection and options are fixed at initialization. `disabled: true` omits the
+owner for the entire Coco Session; `ensureSubscriptions()` never activates it. Changing selection
+requires a new Session. The six runtime enable/disable pairs are removed.
+
+Disabling all owners still permits existing one-time startup Operation Recovery (Send, Melt,
+payment-request Receive, Mint and Batch Mint) and its mint interactions. Mint Swap automatic recovery
+retains its own selection. See the [fixed-owner migration](./watchers-processors.md#fixed-owner-migration)
+before adopting this breaking change. There is no persistence migration.

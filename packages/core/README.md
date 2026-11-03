@@ -264,31 +264,27 @@ console.log('reserved balance', balances['https://nofees.testnut.cashu.space']?.
 
 ### Watchers & processors (optional)
 
-Start background watchers or processors to automatically react to changes:
+Select Background Watchers and Background Processors once for the Coco Session:
 
 ```ts
-// Watch mint operation quote updates on startup and while running (default true)
-await manager.enableMintOperationWatcher({ watchExistingPendingOnStart: true });
+const manager = await initializeCoco({
+  repo,
+  seedGetter,
+  watchers: { proofStateWatcher: { disabled: true } },
+  processors: {
+    mintOperationProcessor: { processIntervalMs: 3000, batchMintQuotes: true },
+  },
+});
 
-// Process queued mint operations from live events (auto-enabled by initializeCoco).
-// Quotes claimed automatically are batched through NUT-29 when the mint supports it
-// (`batchMintQuotes`, default true); `false` claims one mint operation per quote.
-await manager.enableMintOperationProcessor({ processIntervalMs: 3000, batchMintQuotes: true });
-
-// Watch canonical melt quote updates and settle pending melt operations
-await manager.enableMeltQuoteWatcher();
-await manager.enableMeltSettlementProcessor();
-
-// Watch proof state updates (e.g., to move inflight proofs to spent)
-await manager.enableProofStateWatcher();
-
-// Later, you can stop them
-await manager.disableMintOperationWatcher();
-await manager.disableMintOperationProcessor();
-await manager.disableMeltQuoteWatcher();
-await manager.disableMeltSettlementProcessor();
-await manager.disableProofStateWatcher();
+// Final session cleanup
+await manager.dispose();
 ```
+
+Selection and options remain fixed. Omitted config uses defaults; `disabled: true` omits that owner
+for the entire session. All six enable/disable pairs have been removed. One-time startup Operation
+Recovery still runs even when every owner is disabled; Mint Swap automatic recovery retains its own
+selection. Explicit operation/recovery APIs remain available. No persistence migration is needed.
+See [fixed-owner migration](../docs/pages/watchers-processors.md#fixed-owner-migration).
 
 ### initializeCoco options
 
@@ -299,19 +295,16 @@ await manager.disableProofStateWatcher();
 - `logger`: optional logger (defaults to `NullLogger`)
 - `webSocketFactory`: optional WebSocket factory
 - `plugins`: optional plugin list
-- `watchers`: enable/disable watcher services (`mintOperationWatcher`, `meltQuoteWatcher`,
+- `watchers`: select watcher services for the session (`mintOperationWatcher`, `meltQuoteWatcher`,
   `proofStateWatcher`)
-- `processors`: enable/disable processors (`mintOperationProcessor`, `meltSettlementProcessor`)
+- `processors`: select processors (`mintOperationProcessor`, `meltSettlementProcessor`, `mintSwapOperationProcessor`)
   and tune intervals
 - `subscriptions`: polling intervals for hybrid WebSocket + polling (`slowPollingIntervalMs`, `fastPollingIntervalMs`)
-
-If you prefer manual wiring, construct `Manager` directly and call `initPlugins()` before enabling watchers/processors.
 
 ## Architecture
 
 - `Manager` is the app-facing facade. It exposes `mint`, `wallet`, `auth`,
-  `quotes`, `paymentRequests`, `ops`, `history`, and `keyring` APIs plus watcher
-  and processor helpers.
+  `quotes`, `paymentRequests`, `ops`, `history`, and `keyring` APIs plus session disposal and networking repair.
 - `initializeCoco` wires the manager from a `CocoConfig`, including
   repositories, seed access, logging, subscriptions, plugins, watchers, and
   processors.
@@ -336,12 +329,7 @@ for setup and storage-security guidance.
   `keyring`
 - `ext: PluginExtensions` from `@cashu/coco-core/plugin`
 - `on/once/off` for `CoreEvents`
-- `enableMintOperationWatcher()`, `disableMintOperationWatcher()`
-- `enableMintOperationProcessor()`, `disableMintOperationProcessor()`,
-  `waitForMintOperationProcessor()`
-- `enableMeltQuoteWatcher()`, `disableMeltQuoteWatcher()`
-- `enableMeltSettlementProcessor()`, `disableMeltSettlementProcessor()`
-- `enableProofStateWatcher()`, `disableProofStateWatcher()`
+- `waitForMintOperationProcessor()`
 - `ensureSubscriptions(): Promise<void>`
 - `use(plugin: Plugin): void` with `Plugin` from `@cashu/coco-core/plugin`
 - `initPlugins(): Promise<void>`
@@ -358,8 +346,8 @@ This replaces the removed `pauseSubscriptions()` / `resumeSubscriptions()` APIs 
 `subscriptions:paused` / `subscriptions:resumed` events. Plugins use
 `ServiceMap.subscriptions.ensureSubscriptions()` in place of subscription `pause()` / `resume()`.
 There is no equivalent coordinated background quieting API: removing a background pause leaves
-enabled polling and work running. Individual owner controls remain available, including staged
-enabling after Restore readiness; `dispose()` is final shutdown. App-owned plugin synchronization,
+enabled polling and work running. Owner configuration is fixed at initialization; `dispose()` is final shutdown. Import preparation
+and temporary background suspension require separate decisions. App-owned plugin synchronization,
 paid-quote requeueing and catch-up must remain explicit. Standalone Mint
 and Batch Mint recovery formerly run by resume are now independent explicit calls to
 `ops.mint.recovery.run()` and `ops.mint.batch.recovery.run()` when needed. See the
@@ -607,11 +595,8 @@ const quotePlugin: Plugin<['quotes']> = {
 ### Using plugins
 
 ```ts
-// Pass plugins at construction
-const manager = new Manager(repos, seedGetter, logger, undefined, [myPlugin]);
-
-// Or register later
-manager.use(myPlugin);
+// Initialize plugins before automatic owners start
+const manager = await initializeCoco({ repo: repos, seedGetter, logger, plugins: [myPlugin] });
 
 // Dispose (runs onDispose and registered cleanups)
 await manager.dispose();

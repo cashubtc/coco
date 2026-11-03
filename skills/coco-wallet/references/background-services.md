@@ -23,7 +23,9 @@ Pass `watchers` and `processors` in the `initializeCoco()` config. Each entry su
 `disabled: true`; omitting it keeps that service enabled. Disabling a watcher stops that source
 of automatic observation. Disabling a processor leaves observed quote state without that
 automatic operation advancement. Neither setting cancels persisted operations or disables
-explicit quote/operation APIs. Startup Operation Recovery is separate and still runs.
+explicit quote/operation APIs. Startup Operation Recovery for Send, Melt, payment-request Receive, Mint and Batch Mint is separate
+and still runs even with every owner omitted. Mint Swap automatic recovery retains its own
+`processors.mintSwapOperationProcessor.disabled` selection.
 
 For app-controlled mint claims, use `processors.mintOperationProcessor.autoClaimMintQuotes: false`
 and follow [Reusable quote claims](quote-operations.md#reusable-quote-claims). That reference owns
@@ -54,17 +56,11 @@ Use the installed `CocoConfig` declarations for supported options and the
 
 ## Control the running session
 
-For individual services, await the corresponding Manager methods:
-
-- `enableMintOperationWatcher()` / `disableMintOperationWatcher()`.
-- `enableMintOperationProcessor()` / `disableMintOperationProcessor()`.
-- `enableMeltQuoteWatcher()` / `disableMeltQuoteWatcher()`.
-- `enableMeltSettlementProcessor()` / `disableMeltSettlementProcessor()`.
-- `enableProofStateWatcher()` / `disableProofStateWatcher()`.
-
-Enable calls accept their service's startup/configuration options. Enabling an already running
-service does not replace its options; await disable before enabling with a different policy.
-Serialize these changes through the session owner.
+Choose all six owners and their options during initialization for the Coco Session's lifetime.
+The Mint, Melt and Proof watcher pairs and the Mint, Melt settlement and Mint Swap processor
+pairs of runtime enable/disable methods are removed. `disabled: true` omits an owner throughout
+the session. A different selection requires a new Session, with its normal startup recovery.
+No persistence migration is required.
 
 Use `ensureSubscriptions()` on app foreground. It replaces stale sockets, replays existing
 registrations, and ensures polling runs while preserving current owner settings and interests.
@@ -73,10 +69,8 @@ It does not rerun startup discovery or operation recovery. Normal observations m
 canonical state and trigger enabled processors; already-started polling commits may finish.
 
 The old pause/resume APIs and events are removed. Migration loses coordinated background quieting:
-removing a background pause leaves enabled polling and work running. Individual owner controls
-remain available, but do not globally pause all transports or plugin interests. Preserve staged
-enabling after Restore readiness and app-owned foreground plugin sync, paid-quote requeueing and
-catch-up; networking repair does not perform them. Teardown uses `dispose()`. If the app depended on resume's
+removing a background pause leaves enabled polling and work running. Keep app-owned foreground plugin sync, paid-quote
+requeueing and catch-up explicit; networking repair does not perform them. Teardown uses `dispose()`. If the app depended on resume's
 standalone Mint and Batch Mint recovery, call `ops.mint.recovery.run()` and
 `ops.mint.batch.recovery.run()` explicitly when needed. Final shutdown cannot be repaired or resumed.
 

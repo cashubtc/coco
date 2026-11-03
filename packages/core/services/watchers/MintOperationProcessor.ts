@@ -52,6 +52,7 @@ export class MintOperationProcessor {
   private readonly logger?: Logger;
 
   private running = false;
+  private started = false;
   private stopping?: Promise<void>;
   private queue: QueueItem[] = [];
   private processing = false;
@@ -121,8 +122,8 @@ export class MintOperationProcessor {
   }
 
   async start(): Promise<void> {
-    if (this.stopping) await this.stopping;
-    if (this.running) return;
+    if (this.started || this.stopping) return;
+    this.started = true;
     this.running = true;
     this.logger?.info('MintOperationProcessor started');
 
@@ -176,18 +177,9 @@ export class MintOperationProcessor {
 
   stop(): Promise<void> {
     if (this.stopping) return this.stopping;
-    if (!this.running) return Promise.resolve();
     this.running = false;
     const task = this.finishStop();
     this.stopping = task;
-    void task.then(
-      () => {
-        this.stopping = undefined;
-      },
-      () => {
-        this.stopping = undefined;
-      },
-    );
     return task;
   }
 
@@ -244,7 +236,7 @@ export class MintOperationProcessor {
     }
     this.quotesAwaitingParentStop.clear();
 
-    // Discard claims collected for a turn that will not run; the next start's sweep finds them.
+    // Discard claims collected for a turn that will not run.
     if (this.collectionTimer) {
       clearTimeout(this.collectionTimer);
       this.collectionTimer = undefined;

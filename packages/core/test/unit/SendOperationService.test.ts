@@ -305,8 +305,8 @@ describe('SendOperationService', () => {
         eventBus,
         logger,
         { watchExistingInflightOnStart: false },
+        service,
       );
-      watcher.setSendOperationService(service);
       await watcher.start();
 
       const events: string[] = [];

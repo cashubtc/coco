@@ -131,6 +131,7 @@ describe('ProofStateWatcherService lifecycle', () => {
       proofRepository?: ProofRepository;
       options?: ProofStateWatcherOptions;
       mintService?: MintService;
+      sendOperations?: SendOperationService;
     } = {},
   ) =>
     new ProofStateWatcherService(
@@ -143,6 +144,7 @@ describe('ProofStateWatcherService lifecycle', () => {
       bus,
       undefined,
       overrides.options ?? { watchExistingInflightOnStart: false },
+      overrides.sendOperations,
     );
 
   it('drains acquisition and unsubscribes a late subscription before stopping', async () => {
@@ -226,7 +228,7 @@ describe('ProofStateWatcherService lifecycle', () => {
     expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
 
-  it('lets started processing finish without affecting a restarted watcher', async () => {
+  it('lets started processing finish after final stop without accepting more work', async () => {
     const secret = 'finish-after-stop';
     await repositories.proofRepository.saveProofs(mintUrlA, [makeProof({ secret })]);
     const callbacks: Notify[] = [];
@@ -274,14 +276,13 @@ describe('ProofStateWatcherService lifecycle', () => {
     expect((await repositories.proofRepository.getProofBySecret(mintUrlA, secret))?.state).toBe(
       'spent',
     );
-    // The committed reconciliation publishes the spent state, which releases the restarted watch.
-    expect(unsubscribes[1]).toHaveBeenCalledTimes(1);
+    expect(unsubscribes).toHaveLength(1);
     expect(run).toHaveBeenCalledTimes(1);
     await watcher.stop();
-    expect(unsubscribes[1]).toHaveBeenCalledTimes(1);
+    expect(unsubscribes[0]).toHaveBeenCalledTimes(1);
   });
 
-  it('does not resume an old startup scan after a restart', async () => {
+  it('does not resume startup discovery after final stop', async () => {
     let releaseScan!: (operations: { id: string; state: 'pending' }[]) => void;
     let enteredScan!: () => void;
     const entered = new Promise<void>((resolve) => {
@@ -306,24 +307,21 @@ describe('ProofStateWatcherService lifecycle', () => {
     const watcher = createWatcher({} as SubscriptionManager, {
       proofRepository: { getInflightProofs } as unknown as ProofRepository,
       options: { watchExistingInflightOnStart: true },
+      sendOperations: { getPendingOperations, getOperation } as unknown as SendOperationService,
     });
-    watcher.setSendOperationService({
-      getPendingOperations,
-      getOperation,
-    } as unknown as SendOperationService);
     await watcher.start();
     await entered;
     await watcher.stop();
     getPendingOperations.mockImplementation(async () => []);
     await watcher.start();
     await checked;
-    // Starting a new scan must not make the original scan eligible to continue.
+    // A late discovery cannot resume after final stop.
     releaseScan([{ id: 'old-send', state: 'pending' }]);
     await firstScan;
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(getOperation).not.toHaveBeenCalled();
-    // Each start scans inflight proofs once; Send discovery does not delay that scan.
-    expect(getInflightProofs).toHaveBeenCalledTimes(2);
+    // Startup scans inflight proofs once; final stop cannot start another scan.
+    expect(getInflightProofs).toHaveBeenCalledTimes(1);
     await watcher.stop();
   });
 
@@ -424,7 +422,7 @@ describe('ProofStateWatcherService Send finalization', () => {
     bus = new EventBus<CoreEvents>();
   });
 
-  const createWatcher = (proofRepository: ProofRepository) =>
+  const createWatcher = (proofRepository: ProofRepository, sendOperations: SendOperationService) =>
     new ProofStateWatcherService(
       {} as SubscriptionManager,
       {} as MintService,
@@ -435,6 +433,7 @@ describe('ProofStateWatcherService Send finalization', () => {
       bus,
       new NullLogger(),
       { watchExistingInflightOnStart: false },
+      sendOperations,
     );
 
   it('finalizes a pending send operation when the batched send proofs are all spent', async () => {
@@ -448,11 +447,13 @@ describe('ProofStateWatcherService Send finalization', () => {
     const finalize = mock(async () => {});
     const getOperation = mock(async () => pendingSend('send-op-1', ['spent-1', 'spent-2']));
 
-    const watcher = createWatcher({
-      getProofBySecret,
-      getProofsBySecrets,
-    } as unknown as ProofRepository);
-    watcher.setSendOperationService({ getOperation, finalize } as unknown as SendOperationService);
+    const watcher = createWatcher(
+      {
+        getProofBySecret,
+        getProofsBySecrets,
+      } as unknown as ProofRepository,
+      { getOperation, finalize } as unknown as SendOperationService,
+    );
 
     await watcher.start();
     await bus.emit('proofs:state-changed', {
@@ -482,11 +483,13 @@ describe('ProofStateWatcherService Send finalization', () => {
     const finalize = mock(async () => {});
     const getOperation = mock(async () => pendingSend('send-op-1', ['spent-1', 'spent-2']));
 
-    const watcher = createWatcher({
-      getProofBySecret,
-      getProofsBySecrets,
-    } as unknown as ProofRepository);
-    watcher.setSendOperationService({ getOperation, finalize } as unknown as SendOperationService);
+    const watcher = createWatcher(
+      {
+        getProofBySecret,
+        getProofsBySecrets,
+      } as unknown as ProofRepository,
+      { getOperation, finalize } as unknown as SendOperationService,
+    );
 
     await watcher.start();
     await bus.emit('proofs:state-changed', {
@@ -528,11 +531,13 @@ describe('ProofStateWatcherService Send finalization', () => {
       pendingSend(operationId, operationId === 'send-op-1' ? ['spent-1'] : ['spent-2']),
     );
 
-    const watcher = createWatcher({
-      getProofBySecret,
-      getProofsBySecrets,
-    } as unknown as ProofRepository);
-    watcher.setSendOperationService({ getOperation, finalize } as unknown as SendOperationService);
+    const watcher = createWatcher(
+      {
+        getProofBySecret,
+        getProofsBySecrets,
+      } as unknown as ProofRepository,
+      { getOperation, finalize } as unknown as SendOperationService,
+    );
 
     await watcher.start();
     await bus.emit('proofs:state-changed', {
@@ -561,11 +566,13 @@ describe('ProofStateWatcherService Send finalization', () => {
     const finalize = mock(async () => {});
     const getOperation = mock(async () => pendingSend('send-op-1', ['spent-1', 'spent-2']));
 
-    const watcher = createWatcher({
-      getProofBySecret,
-      getProofsBySecrets,
-    } as unknown as ProofRepository);
-    watcher.setSendOperationService({ getOperation, finalize } as unknown as SendOperationService);
+    const watcher = createWatcher(
+      {
+        getProofBySecret,
+        getProofsBySecrets,
+      } as unknown as ProofRepository,
+      { getOperation, finalize } as unknown as SendOperationService,
+    );
 
     await watcher.start();
     await bus.emit('proofs:state-changed', {
@@ -648,8 +655,6 @@ describe.each(['memory', 'sqlite'] as const)(
         bus,
         new NullLogger(),
         { watchExistingInflightOnStart: input.watchExistingInflightOnStart ?? false },
-      );
-      watcher.setSendOperationService(
         (input.send ?? sendService({}, async () => false)) as unknown as SendOperationService,
       );
       return watcher;
