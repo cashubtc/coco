@@ -26,6 +26,9 @@ The returned `ResolvedPaymentRequest` contains:
 - **allowedMints** - List of allowed mints from the request
 - **payableMints** - Trusted mints with enough balance for the nominal requested amount. For P2PK
   requests, this also requires NUT-11 support. Preparation checks affordability including all fees.
+  A request without an amount is checked against zero unless you pass the amount you intend to pay,
+  as in `paymentRequests.parse(paymentRequest, { amount: 50 })`. The request stays amountless, so
+  pass the amount to `paymentRequests.prepare()` as well.
 - **spendingCondition** - Optional NUT-10 requirement details. Valid P2PK
   requirements are exposed as normalized P2PK options; unsupported or malformed
   requirements are exposed as diagnostics.

@@ -177,17 +177,7 @@ export class MintService {
     if (exists) {
       // If trusted option was explicitly provided and differs from current state, update it
       if (options?.trusted !== undefined && exists.trusted !== options.trusted) {
-        await this.mintRepo.setMintTrusted(mintUrl, options.trusted);
-        this.logger?.info('Updated mint trust status', { mintUrl, trusted: options.trusted });
-        // Emit trust change events
-        if (options.trusted) {
-          await this.eventBus?.emit('mint:trusted', { mintUrl });
-        } else {
-          await this.eventBus?.emit('mint:untrusted', { mintUrl });
-        }
-        const updated = await this.ensureUpdatedMint(mintUrl);
-        await this.eventBus?.emit('mint:updated', updated);
-        return updated;
+        return this.changeTrust(mintUrl, options.trusted);
       }
       return this.ensureUpdatedMint(mintUrl);
     }
@@ -540,19 +530,38 @@ export class MintService {
   }
 
   async trustMint(mintUrl: string): Promise<void> {
-    mintUrl = normalizeMintUrl(mintUrl);
-    this.logger?.info('Trusting mint', { mintUrl });
-    await this.mintRepo.setMintTrusted(mintUrl, true);
-    await this.eventBus?.emit('mint:trusted', { mintUrl });
-    await this.eventBus?.emit('mint:updated', await this.ensureUpdatedMint(mintUrl));
+    await this.changeTrust(normalizeMintUrl(mintUrl), true);
   }
 
   async untrustMint(mintUrl: string): Promise<void> {
-    mintUrl = normalizeMintUrl(mintUrl);
-    this.logger?.info('Untrusting mint', { mintUrl });
-    await this.mintRepo.setMintTrusted(mintUrl, false);
-    await this.eventBus?.emit('mint:untrusted', { mintUrl });
-    await this.eventBus?.emit('mint:updated', await this.ensureUpdatedMint(mintUrl));
+    await this.changeTrust(normalizeMintUrl(mintUrl), false);
+  }
+
+  /**
+   * Commits a trust decision, then refreshes stale metadata on a best-effort basis.
+   *
+   * Once the trust decision is stored, a failed metadata refresh is logged and the stored
+   * metadata is returned, so a committed change is never reported as a failed command. Without
+   * stored metadata there is no committed Known Mint to report, and the refresh failure propagates.
+   */
+  private async changeTrust(
+    mintUrl: string,
+    trusted: boolean,
+  ): Promise<{ mint: Mint; keysets: Keyset[] }> {
+    this.logger?.info(trusted ? 'Trusting mint' : 'Untrusting mint', { mintUrl });
+    await this.mintRepo.setMintTrusted(mintUrl, trusted);
+    await this.eventBus?.emit(trusted ? 'mint:trusted' : 'mint:untrusted', { mintUrl });
+    let metadata: { mint: Mint; keysets: Keyset[] };
+    try {
+      metadata = await this.ensureUpdatedMint(mintUrl);
+    } catch (error) {
+      const stored = await this.metadata.queries.getMetadata(mintUrl);
+      if (!stored) throw error;
+      this.logger?.warn('Mint metadata refresh failed after a trust change', { mintUrl, error });
+      metadata = stored;
+    }
+    await this.eventBus?.emit('mint:updated', metadata);
+    return metadata;
   }
 
   private getNutMethodSettings(mintInfo: MintInfo, nut: 4 | 5): NutMethodSettings | undefined {
