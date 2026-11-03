@@ -325,6 +325,9 @@ for setup and storage-security guidance.
 
 ### Manager
 
+Create a Manager with `initializeCoco(config)` or the equivalent `Manager.create(config)`. Its
+constructor is private.
+
 - `mint`, `wallet`, `auth`, `quotes`, `paymentRequests`, `ops`, `history`, and
   `keyring`
 - `ext: PluginExtensions` from `@cashu/coco-core/plugin`
@@ -332,7 +335,6 @@ for setup and storage-security guidance.
 - `waitForMintOperationProcessor()`
 - `ensureSubscriptions(): Promise<void>`
 - `use(plugin: Plugin): void` with `Plugin` from `@cashu/coco-core/plugin`
-- `initPlugins(): Promise<void>`
 - `dispose(): Promise<void>`
 
 `ensureSubscriptions()` is the app-foreground networking repair hook. It replaces sockets even when

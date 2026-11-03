@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import { MintSwapChildOperationError } from '../../operations/mintSwap/MintSwapErrors.ts';
-import { initializeCoco, Manager, type CocoConfig } from '../../Manager.ts';
+import { initializeCoco, type CocoConfig, type Manager } from '../../Manager.ts';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 import { MemoryMintSwapOperationRepository } from '../../repositories/memory/MemoryMintSwapOperationRepository.ts';
 import { MintSwapIntentConflictError } from '../../operations/mintSwap/MintSwapErrors.ts';
@@ -416,11 +416,14 @@ describe('Mint Swap Manager runtime', () => {
     expect(await fixture.repositories.mintSwap.operationRepository.getById('swap')).toBeNull();
   });
 
-  it('keeps attention queryable and direct constructor recovery compatible', async () => {
+  it('keeps attention queryable when automatic Mint Swap processing is omitted', async () => {
     const repo = new MemoryRepositories();
-    await repo.init();
     await repo.mintSwap.operationRepository.create(mintSwapFixtures().needs_attention);
-    const manager = new Manager(repo, async () => new Uint8Array(32));
+    const manager = await initializeCoco({
+      repo,
+      seedGetter: async () => new Uint8Array(32),
+      processors: { mintSwapOperationProcessor: { disabled: true } },
+    });
     managers.push(manager);
     expect((await manager.ops.mintSwap.listActive())[0]?.state).toBe('needs_attention');
     expect((await manager.ops.mintSwap.refresh('swap')).state).toBe('needs_attention');

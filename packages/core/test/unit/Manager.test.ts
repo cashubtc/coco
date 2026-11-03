@@ -42,6 +42,7 @@ const retiredControls = [
 ] as const;
 type AssertNever<T extends never> = T;
 type NoPublicOwnerControls = AssertNever<Extract<keyof Manager, (typeof retiredControls)[number]>>;
+type NoManualActivation = AssertNever<Extract<keyof Manager, 'initPlugins'>>;
 
 describe('initializeCoco', () => {
   let repositories: MemoryRepositories;
@@ -1014,10 +1015,14 @@ describe('initializeCoco', () => {
   }
 
   describe('watchers and processors configuration', () => {
-    it('retires all runtime owner controls while retaining direct construction', async () => {
-      const manager = new Manager(repositories, seedGetter);
+    it('retires runtime owner controls and direct construction', async () => {
+      // @ts-expect-error Managers are created through Manager.create() or initializeCoco().
+      const construct = () => new Manager(baseConfig);
+      void construct;
+
+      const manager = await Manager.create(baseConfig);
+      managers.push(manager);
       for (const control of retiredControls) expect(control in manager).toBe(false);
-      await manager.dispose();
     });
     it.each([...components])('does not start %s when it is disabled', async (name) => {
       const manager = await createManager({ ...baseConfig, ...disabling(name) });
