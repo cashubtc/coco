@@ -32,7 +32,11 @@ transaction and ownership model; it does not sandbox plugins.
 
 ## Consequences
 
-`CounterRepository` and Output Allocation through `ScopedOutputs` are unchanged. Ownership needs a
-live operation: once a proof's referenced operations are missing or terminal, the proof watcher
-reconciles it as unowned, as the removed `ProofService` path did. The `WalletApi`
-constructor requires `BalanceQueries` and no longer accepts a `ProofService`.
+`CounterRepository` and Output Allocation through `ScopedOutputs` are unchanged. The proof watcher
+now observes only pending Sends. The former compatibility path that marked
+unowned inflight proofs spent is retired: missing or terminal operation references no longer
+receive automatic reconciliation. Current supported operation flows retain an Owning Operation
+while their proofs are inflight. Restore still imports unowned ready or pending proofs and owns
+their reconciliation; those states are outside the proof watcher. This deliberately leaves
+historical orphaned inflight records unchanged rather than retaining a general proof mutation path.
+The `WalletApi` constructor requires `BalanceQueries` and no longer accepts a `ProofService`.

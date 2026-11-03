@@ -151,7 +151,7 @@ export interface CocoConfig {
     /** Proof state watcher (enabled by default) */
     proofStateWatcher?: {
       disabled?: boolean;
-      /** Scan existing inflight proofs and pending Sends on start (default: true). */
+      /** Scan pending Sends and their proofs on start (default: true). */
       watchExistingInflightOnStart?: boolean;
     };
     /** Melt quote watcher (enabled by default) */
@@ -425,15 +425,7 @@ export class Manager {
       this.proofStateWatcher = new ProofStateWatcherService(
         this.subscriptions,
         this.mintService,
-        this.proofRepository,
-        {
-          sendOperations: this.sendOperationRepository,
-          meltOperations: this.meltOperationRepository,
-          mintOperations: this.mintOperationRepository,
-          receiveOperations: this.receiveOperationRepository,
-          mintSwapOperations: this.mintSwapOperationRepository,
-        },
-        this.transactionRunner,
+        this.sendOperationService,
         {
           checkProofStates: async (mintUrl, unit, proofs) => {
             const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl, unit);
@@ -446,7 +438,6 @@ export class Manager {
           watchExistingInflightOnStart:
             watchers?.proofStateWatcher?.watchExistingInflightOnStart ?? true,
         },
-        this.sendOperationService,
       );
     }
     if (!watchers?.meltQuoteWatcher?.disabled) {

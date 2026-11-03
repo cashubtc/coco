@@ -166,3 +166,9 @@ Initial pending-proof reconciliation happens through repeated Restore, inside it
 Automatic pending-proof watching and its lifecycle changes are deferred to a separate migration.
 
 [Transaction Design](../../../../TRANSACTION_DESIGN.md) defines the implementation and review contract.
+
+Send's proof observation entry point composes proof-state application and resulting completion
+through `completePendingSend` in one transaction. Its background watcher owns no proof writes or
+transaction runner; targets only guide observation. The final proof update and Send completion
+remain atomic, unlike independently committed canonical Quote Observations. The retired unowned
+inflight compatibility path is documented in ADR-0015.

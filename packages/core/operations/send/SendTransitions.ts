@@ -449,7 +449,8 @@ export const completePendingSend = defineTransition<
       }
     }
     const owned = current.needsSwap
-      ? proof?.createdByOperationId === current.id
+      ? proof?.createdByOperationId === current.id &&
+        (proof.usedByOperationId == null || proof.usedByOperationId === current.id)
       : proof && canCompleteWithInput(proof, current.id);
     if (
       !proof ||

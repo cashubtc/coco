@@ -15,6 +15,7 @@ import type { PendingMeltOperation } from '../../operations/melt/MeltOperation.t
 import type { Repositories } from '../../repositories/index.ts';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 import { buildYHexMapsForSecrets } from '../../utils.ts';
+import { pendingSend } from '../fixtures/SendOperation.ts';
 import { mintQuoteFromBolt11Fixture } from '../normalizedMintQuoteFixtures.ts';
 
 const mintUrl = 'https://background.test';
@@ -624,18 +625,18 @@ describe.each(['memory', 'sqlite'] as const)('background progression (%s)', (ada
     'allows an awaited proof-state listener to call %s and releases the wire subscription',
     async (stop) => {
       const secrets = ['spent-before-shutdown', 'still-inflight-after-shutdown'];
-      await repo.proofRepository.saveProofs(
+      const proofs = secrets.map((secret) => ({
+        id: keysetId,
+        amount: Amount.from(1),
+        C: keys['1'],
+        secret,
         mintUrl,
-        secrets.map((secret) => ({
-          id: keysetId,
-          amount: Amount.from(1),
-          C: keys['1'],
-          secret,
-          mintUrl,
-          unit: 'sat',
-          state: 'inflight' as const,
-        })),
-      );
+        unit: 'sat',
+        state: 'inflight' as const,
+        usedByOperationId: 'shutdown-send',
+      }));
+      await repo.proofRepository.saveProofs(mintUrl, proofs);
+      await repo.sendOperationRepository.create(pendingSend('shutdown-send', proofs));
       // Startup checks leave both proofs inflight, so the real watcher acquires a subscription.
       proofState = 'UNSPENT';
       await openSession({ watchers: { proofStateWatcher: {} } });

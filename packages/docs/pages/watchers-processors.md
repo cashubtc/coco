@@ -116,10 +116,16 @@ not advance them; use an explicit operation check such as `coco.ops.melt.refresh
 
 ## ProofStateWatcher
 
-This module observes inflight proof state and invokes the Send operation service for completion. Its
+This module observes proofs belonging to pending Sends and submits SPENT evidence to the Send
+operation service. The proof changes and any resulting Send completion commit atomically; the
+watcher never writes proofs itself. Its
 startup scan also discovers pending Sends whose proofs are already locally spent and supported legacy
 tokenless P2PK Sends whose output proof rows were not retained. Legacy completion still requires the
 original input metadata and exact output allocation; it does not fabricate proofs or a token.
+
+Unowned inflight proofs, including records whose referenced operations are missing or terminal,
+are no longer automatically reconciled. This retires the old compatibility fallback. Restore's
+unowned ready and pending proofs are unaffected; other operation types retain their own recovery.
 
 `watchExistingInflightOnStart: false` skips the startup proof and Send scan. Live proof events and newly
 pending Sends remain observed while the watcher runs.

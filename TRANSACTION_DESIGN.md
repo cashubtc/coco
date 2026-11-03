@@ -248,8 +248,10 @@ Re-running Restore reconciles eligible pending records: fresh observations leave
 `PENDING`, release them to ready on `UNSPENT`, or mark them spent on `SPENT`. Each application
 rechecks current local state and operation ownership inside the keyset transaction. Automatic
 pending-proof watching and its subscription lifecycle are deferred to a separate change; the
-existing proof watcher continues to handle inflight proofs only. It treats a proof whose referenced
-operations are missing or terminal as unowned, rechecking that inside the reconciling transaction.
+existing proof watcher handles pending Send observations only. It delegates spent evidence and
+completion to Send; it has no transaction runner or proof write authority. Unowned inflight proofs,
+including missing or terminal operation references, no longer receive automatic reconciliation
+(ADR-0015).
 
 Pending proofs are excluded from the existing `spendable`, `reserved`, and `total` balances, just as
 inflight proofs are. They contribute to those balances only after becoming ready. A separate pending
@@ -652,3 +654,17 @@ Restore and legacy counter migration above. That migration is complete: ProofSer
 CounterService are removed, and plugins have no proof or counter write path
 ([ADR-0015](packages/core/docs/adr/0015-plugins-get-no-direct-proof-or-counter-authority.md)). `CoreTransaction`, `Transition`, their helpers, and the runner remain internal implementation details.
 They must not be exported from package entry points.
+
+## Send proof observation
+
+The proof watcher schedules observation for pending Sends using targets supplied by Send. Targets
+are informational: `applyProofStateObservation` validates exact proof membership and the completion
+transition rechecks current operation state and proof ownership inside one transaction. Partial
+observations commit spent proof state while leaving the Send pending; the last proof observation,
+Send completion, and reservation release commit together. Events follow commit.
+
+`advancePendingOperation` uses the same transition for complete locally persisted evidence without
+polling ordinary Sends. Supported legacy tokenless P2PK Sends retain bounded remote verification
+of their exact output allocation. Subscription targets may be derived without recreating proof rows.
+The watcher retains its ADR-0014 shutdown semantics and defers pending-event discovery until Send's
+publication returns. This does not add a standalone Send processor or change startup recovery.
