@@ -4,6 +4,7 @@ import type {
   MintSwapOperationRepository,
 } from '@cashu/coco-core/adapter';
 import {
+  normalizeMintUrl,
   compareMintSwapCreated,
   compareMintSwapDue,
   deserializeMintSwapOperation,
@@ -37,6 +38,27 @@ export class IdbMintSwapOperationRepository implements MintSwapOperationReposito
 
   async getById(id: string): Promise<MintSwapOperation | null> {
     const row = await this.table().get(id);
+    return row ? fromRow(row) : null;
+  }
+
+  async getByChild(kind: 'mint' | 'melt', operationId: string): Promise<MintSwapOperation | null> {
+    const index = kind === 'mint' ? 'destinationOperationId' : 'sourceOperationId';
+    const row = await this.table().where(index).equals(operationId).first();
+    return row ? fromRow(row) : null;
+  }
+
+  async getByQuote(
+    kind: 'mint' | 'melt',
+    quote: Parameters<MintSwapOperationRepository['getByQuote']>[1],
+  ): Promise<MintSwapOperation | null> {
+    const index =
+      kind === 'mint'
+        ? '[destinationQuoteMintUrl+destinationQuoteMethod+destinationQuoteId]'
+        : '[sourceQuoteMintUrl+sourceQuoteMethod+sourceQuoteId]';
+    const row = await this.table()
+      .where(index)
+      .equals([normalizeMintUrl(quote.mintUrl), quote.method, quote.quoteId])
+      .first();
     return row ? fromRow(row) : null;
   }
 

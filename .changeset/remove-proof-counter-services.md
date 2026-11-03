@@ -3,7 +3,7 @@
 ---
 
 Remove `ProofService` and `CounterService` from core and the plugin API. Plugins get no direct proof
-or counter authority (ADR-0014).
+or counter authority (ADR-0015).
 
 - Removed the `ProofService` and `CounterService` classes and their exports, including
   `selectProofsToSend`, `calculateSendAmountWithFees`, `unblindAndSaveChangeProofs`,

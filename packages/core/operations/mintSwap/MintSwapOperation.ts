@@ -257,3 +257,27 @@ export function isMintSwapAutomaticState(state: MintSwapOperationState): boolean
 export function isMintSwapTerminalState(state: MintSwapOperationState): boolean {
   return state === 'completed' || state === 'cancelled' || state === 'failed';
 }
+
+/** Terminal and needs_attention parents have no outgoing transitions and never act again. */
+export function isMintSwapQuiescentState(state: MintSwapOperationState): boolean {
+  return isMintSwapTerminalState(state) || state === 'needs_attention';
+}
+
+/**
+ * `resolve` covers recovery, release and issuance into this Wallet. `effect` authorizes a new
+ * source payment: Melt preparation against a quote or execution of a prepared Melt.
+ */
+export type OrdinaryChildAuthority = 'resolve' | 'effect';
+
+/**
+ * An active parent excludes all ordinary work. A quiescent parent can never act again, so its
+ * children return to ordinary resolution; its source payment stays blocked because a stopped
+ * parent may have recorded evidence against paying it.
+ */
+export function allowsOrdinaryWork(
+  parent: MintSwapOperation | null,
+  authority: OrdinaryChildAuthority,
+): boolean {
+  if (!parent) return true;
+  return authority === 'resolve' && isMintSwapQuiescentState(parent.state);
+}

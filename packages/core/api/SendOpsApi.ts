@@ -8,6 +8,7 @@ import type {
 import type { SendMethod, SendMethodData } from '../operations/send/SendMethodHandler';
 import type {
   ExecuteSendOptions,
+  PrepareSendOptions,
   SendOperationService,
 } from '../operations/send/SendOperationService';
 import { parseUnitAmount, type UnitAmountLike } from '../amounts.ts';
@@ -18,10 +19,10 @@ export type SendTarget = {
   [M in NonDefaultSendMethod]: { type: M } & SendMethodData<M>;
 }[NonDefaultSendMethod];
 
-export interface PrepareSendInput {
+export interface PrepareSendInput extends PrepareSendOptions {
   /** Mint to send from. */
   mintUrl: string;
-  /** Amount to send. Bare amounts use `sat` unless `unit` is set. */
+  /** Face value, or receiver net target when coverReceiverFees is true. Bare amounts default to sat. */
   amount: UnitAmountLike;
   /** Unit to send. */
   unit?: string;
@@ -79,7 +80,9 @@ export class SendOpsApi {
       parsed,
       this.getCreateOptions(input),
     );
-    return this.sendOperationService.prepare(initOp);
+    return this.sendOperationService.prepare(initOp, {
+      coverReceiverFees: input.coverReceiverFees,
+    });
   }
 
   /**

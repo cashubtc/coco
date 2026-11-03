@@ -16,6 +16,12 @@ the atomic write set, and reusable capabilities/transitions own its domain invar
 scope type or gateway is required. Scoped repository contracts may directly provide narrow local
 persistence capabilities when another wrapper would add no behavior.
 
+P2PK import and deletion resolve legacy public-key aliases inside the transaction owned by
+`KeyRingService`. Import returns the persisted keypair after commit, preserving its identity and
+derivation metadata, and rejects writes that would overwrite a mint quote key. Read-only lookup
+and signing share the alias algorithm through narrow key access; it cannot open transactions or
+mutate storage.
+
 ## Considered Options
 
 Mandatory gateways provided an explicit committed-result interface but duplicated every transition
@@ -100,10 +106,10 @@ watchers own asynchronous activation, diagnostics, and late cleanup. Parent scan
 declarations do not await retired physical cleanup, but stop drains it. Withdrawal immediately revokes
 logical ownership while preserving shared owners. A disabled watcher does not recruit a replacement
 parent quote poller. Startup uses sufficient cached evidence first, retaining a bounded recovery
-fallback for unresolved evidence until #559 separates startup repair. Explicit recovery and necessary
+fallback for unresolved evidence. Explicit recovery and necessary
 recovery effects remain available. Source proof release
 still requires fresh positive `UNPAID` confirmation under the shared child lock, including when the
-ordinary Melt processor advances the child independently. Authorized recovery
+ordinary Melt processor advances the child after its parent stops. Authorized recovery
 interests permit observation of exact quotes after trust revocation, without restoring mint trust.
 Parent update hints are captured in the owning transaction and published after commit and
 lock release; local polling and complete active sweeps tolerate lost hints. No outbox or new schema
@@ -116,13 +122,19 @@ Consistent fail-fast rejection of nested transactions remains follow-up work and
 nesting from legitimate concurrent calls. Mint Swap runtime adds public APIs/configuration/events;
 it does not change the persisted parent format.
 
+Mint Swap now exclusively coordinates its children while it can act, revising the earlier
+permission for independent ordinary child commands. Once the parent is terminal or
+`needs_attention`, its children return to ordinary resolution, but ordinary coordination never
+authorizes their source payment. No persisted format changes are introduced. The
+[Transaction Design](../../../../TRANSACTION_DESIGN.md) owns the detailed contract.
+
 The Restore migration adds an explicit exception
 to the public API compatibility policy: move Restore directly to scoped monotonic advancement and
 remove plugin-facing `overwriteCounter()`, without first reworking CounterService. Receive now
 owns transactional Output Allocation, and Sweep delegates exchanges through its coordinator methods.
 ProofService, CounterService and their plugin-facing entries have since been removed, so every
 Output Allocation goes through ScopedOutputs in its owning transaction. See
-[ADR-0014](0014-plugins-get-no-direct-proof-or-counter-authority.md).
+[ADR-0015](0015-plugins-get-no-direct-proof-or-counter-authority.md).
 
 Restore commits proof import and counter advancement together per keyset. Its coordinator opens
 one transaction, and a branded transition composes ScopedProofs and ScopedOutputs within that scope.

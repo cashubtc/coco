@@ -2,6 +2,7 @@ import type { EventBus, CoreEvents } from '@core/events';
 import type { Logger } from '../../logging/Logger.ts';
 import type { MintMethod, MintOperationService } from '@core/operations/mint';
 import { MintOperationError, NetworkError } from '../../models/Error';
+import { isMintSwapQuiescentState } from '../../operations/mintSwap/MintSwapOperation.ts';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
 import type { MintService } from '../MintService.ts';
 
@@ -49,9 +50,15 @@ export class MintOperationProcessor {
   private offPending?: () => void;
   private offRequeue?: () => void;
   private offUntrusted?: () => void;
+  private offMintSwapUpdated?: () => void;
   private claimingQuotes = new Set<string>();
   private quoteClaimsNeedingFollowUp = new Set<string>();
   private claimTasks = new Set<Promise<void>>();
+  /** Quote claims skipped because an active Mint Swap coordinates the quote. */
+  private quotesAwaitingParentStop = new Map<
+    string,
+    { mintUrl: string; method: MintMethod; quoteId: string }
+  >();
 
   private handlers = new Map<string, OperationHandler>();
   private readonly processIntervalMs: number;
@@ -129,6 +136,15 @@ export class MintOperationProcessor {
       this.clearMintFromQueue(mintUrl);
     });
 
+    // A stopped parent emits no quote event, so reschedule the claims it was coordinating.
+    this.offMintSwapUpdated = this.bus.on('mint-swap:updated', ({ state }) => {
+      if (!isMintSwapQuiescentState(state)) return;
+      const awaiting = Array.from(this.quotesAwaitingParentStop.values());
+      this.quotesAwaitingParentStop.clear();
+      for (const { mintUrl, method, quoteId } of awaiting)
+        this.scheduleQuoteClaim(mintUrl, method, quoteId);
+    });
+
     if (this.autoClaimMintQuotes) {
       this.schedulePendingQuoteClaims();
     }
@@ -195,6 +211,17 @@ export class MintOperationProcessor {
         this.offUntrusted = undefined;
       }
     }
+
+    if (this.offMintSwapUpdated) {
+      try {
+        this.offMintSwapUpdated();
+      } catch {
+        // ignore
+      } finally {
+        this.offMintSwapUpdated = undefined;
+      }
+    }
+    this.quotesAwaitingParentStop.clear();
 
     // Clear processing timer
     if (this.processingTimer) {
@@ -305,6 +332,10 @@ export class MintOperationProcessor {
     this.claimingQuotes.add(key);
     const task = (async () => {
       try {
+        // Mark before reading the parent so a parent stop committed during the read reschedules it.
+        this.quotesAwaitingParentStop.set(key, { mintUrl, method, quoteId });
+        if (!(await this.mintOperations.canResolve({ mintUrl, method, quoteId }))) return;
+        this.quotesAwaitingParentStop.delete(key);
         const assessment = await this.mintOperations.getMintQuoteClaimability(
           mintUrl,
           method,
@@ -440,6 +471,7 @@ export class MintOperationProcessor {
   private async processItem(item: QueueItem): Promise<void> {
     const { mintUrl, operationId, method } = item;
 
+    if (!(await this.mintOperations.canResolve(operationId))) return;
     const handler = this.handlers.get(method);
     if (!handler) {
       this.logger?.warn('No handler registered for mint method', {

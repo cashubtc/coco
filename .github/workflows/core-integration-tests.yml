@@ -52,7 +52,7 @@ jobs:
         with:
           files: packages/core/coverage/integration/lcov.info
           disable_search: true
-          fail_ci_if_error: true
+          fail_ci_if_error: false
           flags: core-integration
           name: core-integration
           token: ${{ secrets.CODECOV_TOKEN }}

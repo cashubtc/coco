@@ -209,6 +209,7 @@ describe('RepositoryCoreTransactionRunner', () => {
       const repositories = new MemoryRepositories();
       await repositories.keyRingRepository.setPersistedKeyPair(importedKey('existing'));
       const blocked = gate();
+      const writeStarted = gate();
       const failed = gate();
       const failure =
         outcome === 'retry'
@@ -226,11 +227,13 @@ describe('RepositoryCoreTransactionRunner', () => {
                 scope.keyRingRepository,
               );
               scope.keyRingRepository.setPersistedKeyPair = async (keypair) => {
+                writeStarted.release();
                 await blocked.promise;
                 await save(keypair);
                 writesFinished++;
               };
               scope.keyRingRepository.deletePersistedKeyPair = async () => {
+                await writeStarted.promise;
                 failed.release();
                 throw failure;
               };

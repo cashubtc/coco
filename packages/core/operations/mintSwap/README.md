@@ -25,7 +25,9 @@ The coordinator requires the same source and destination `OperationIdLock` insta
 ordinary child services, and the shared `MintScopedLock`. Locks are acquired outside transactions.
 Only one Coco Session may drive effects for a Wallet store. These locks do not provide cross-process
 remote fencing. Cocod and React keep their existing host/session guards; no new universal lock
-provider is required. Ordinary child commands can still advance their exact operation independently.
+provider is required. While the parent is active, it exclusively coordinates its children; see
+[Transaction Design](../../../../TRANSACTION_DESIGN.md) for how ordinary commands, processors and
+recovery treat them.
 
 The processor uses a 1-second due cadence and a 30-second complete active sweep, yielding every 25
 attempts. Complete sweeps observe prepared parents and visit the entire eligible snapshot so a busy
@@ -40,9 +42,8 @@ Repeated declarations and explicit watcher enable can retry failed setup without
 
 Normal scans consume cached canonical evidence. Startup prefers complete paid source evidence and
 sufficient destination funding/completion accounting, but retains bounded recovery for unresolved
-observations and an already-authorized destination's accounting. This is a temporary split: #559 moves
-and narrows startup repair. Explicit refresh/recovery still observes immediately. Fresh source UNPAID
-confirmation under the shared child lock remains required before releasing inputs.
+observations and an already-authorized destination's accounting. Explicit refresh/recovery still
+observes immediately. Fresh source UNPAID confirmation under the shared child lock remains required before releasing inputs.
 
 Manager orders overlapping pause/resume requests and drains admitted lifecycle changes on disposal.
 Do not await a lifecycle change from an awaited operation/lifecycle listener whose work it must drain.

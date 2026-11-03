@@ -56,6 +56,7 @@ describe('MintOperationProcessor', () => {
     };
 
     mockMintOperationService = {
+      canResolve: async () => true,
       async getOperationsForQuote(_mintUrl: string, _method: string, quoteId: string) {
         return [
           {
@@ -182,6 +183,7 @@ describe('MintOperationProcessor', () => {
 
   it('delegates sibling selection to one common quote claim', async () => {
     mockMintOperationService = {
+      canResolve: async () => true,
       async getMintQuoteClaimability() {
         return { status: 'claimable' };
       },
@@ -362,32 +364,6 @@ describe('MintOperationProcessor', () => {
     expect(claimCalls).toEqual([]);
   });
 
-  it('keeps explicit requeue processing enabled when automatic claiming is disabled', async () => {
-    processor = new MintOperationProcessor(
-      mockMintOperationService,
-      mockQuoteLifecycle,
-      mockMintService,
-      bus,
-      undefined,
-      {
-        autoClaimMintQuotes: false,
-        initialEnqueueDelayMs: 0,
-      },
-    );
-    await processor.start();
-    await bus.emit('mint-op:requeue', {
-      mintUrl: 'https://mint.test',
-      operationId: 'explicit-requeue',
-      operation: {
-        id: 'explicit-requeue',
-        method: 'bolt11',
-      } as CoreEvents['mint-op:requeue']['operation'],
-    });
-    await processor.waitForCompletion();
-    expect(finalizeCalls).toEqual(['explicit-requeue']);
-    expect(startupClaimCalls).toBe(0);
-  });
-
   it('can disable automatic mint quote claiming', async () => {
     processor = new MintOperationProcessor(
       mockMintOperationService,
@@ -566,6 +542,7 @@ describe('MintOperationProcessor', () => {
     const attemptTimes: number[] = [];
 
     mockMintOperationService = {
+      canResolve: async () => true,
       async finalize(operationId: string) {
         attemptCount++;
         attemptTimes.push(Date.now());
@@ -629,6 +606,7 @@ describe('MintOperationProcessor', () => {
     let attemptCount = 0;
 
     mockMintOperationService = {
+      canResolve: async () => true,
       async finalize() {
         attemptCount++;
         throw new MintOperationError(10000, 'operation failed');

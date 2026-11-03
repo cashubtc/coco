@@ -201,6 +201,20 @@ export interface CocoConfig {
      */
     fastPollingIntervalMs?: number;
   };
+  /**
+   * Per-mint limit on outgoing HTTP requests, as a token bucket: up to `capacity` requests may be
+   * sent at once, then requests queue and are released as tokens refill. Limits apply to each mint
+   * independently.
+   * - Omit to use the defaults (`capacity: 20`, `refillPerMinute: 20`)
+   * - Set `disabled: true` to send requests without queueing
+   */
+  requestRateLimit?: {
+    disabled?: boolean;
+    /** Maximum burst size (default: 20) */
+    capacity?: number;
+    /** Sustained request rate (default: 20) */
+    refillPerMinute?: number;
+  };
 }
 
 export type CocoInitializationCleanupState = 'confirmed' | 'unconfirmed';
@@ -238,6 +252,7 @@ export async function initializeCoco(config: CocoConfig): Promise<Manager> {
     config.processors,
     config.subscriptions,
     config.outputDataCreator,
+    config.requestRateLimit,
   );
 
   try {
@@ -375,6 +390,7 @@ export class Manager {
     processors?: CocoConfig['processors'],
     subscriptions?: CocoConfig['subscriptions'],
     outputDataCreator?: OutputDataCreator,
+    requestRateLimit?: CocoConfig['requestRateLimit'],
   ) {
     validateMintSwapProcessorConfiguration(processors?.mintSwapOperationProcessor);
     this.mintSwapOperationRepository = repositories.mintSwap.operationRepository;
@@ -385,8 +401,9 @@ export class Manager {
     // Create shared request provider and mint adapter first
     // These are shared across WalletService and SubscriptionManager (polling)
     this.mintRequestProvider = new MintRequestProvider({
-      capacity: 20,
-      refillPerMinute: 20,
+      capacity: requestRateLimit?.capacity ?? 20,
+      refillPerMinute: requestRateLimit?.refillPerMinute ?? 20,
+      disabled: requestRateLimit?.disabled,
       logger: this.getChildLogger('RequestRateLimiter'),
     });
     this.mintAdapter = new MintAdapter(

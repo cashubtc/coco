@@ -454,9 +454,9 @@ describe('PluginHost', () => {
 
   it('offers read-only balances but no proof or counter services', () => {
     const offered: ServiceKey[] = ['balances'];
-    // @ts-expect-error Plugins get no direct proof authority (ADR-0014).
+    // @ts-expect-error Plugins get no direct proof authority (ADR-0015).
     const proofKey: ServiceKey = 'proofService';
-    // @ts-expect-error Plugins get no counter authority (ADR-0014).
+    // @ts-expect-error Plugins get no counter authority (ADR-0015).
     const counterKey: ServiceKey = 'counterService';
     expect(offered).toEqual(['balances']);
     void proofKey;

@@ -91,11 +91,14 @@ matching PAID observations normalize omitted change to empty change at the obser
 incomplete stored evidence must be enriched by a valid observation or explicit refresh. Settlement
 still validates quote identity and proof ownership through the operation service and may fetch
 metadata to unblind change. Before releasing inputs from UNPAID evidence, it confirms nonpayment
-under the shared operation lock. This narrow safety check also applies to ordinary processing of a
-Mint Swap source child; it does not add polling for pending or incomplete quotes.
+under the shared operation lock. This narrow safety check also applies to a Mint Swap source child
+once its parent stops and releases it to ordinary processing; an active parent coordinates its child
+instead. It does not add polling for pending or incomplete quotes.
 
 `initializeExistingPendingOperationsOnStart: false` skips startup discovery while preserving listeners
-for newly pending operations and subsequent quote observations.
+for operations that become pending during this run, including later quote observations for them.
+Operations already pending before the processor started are not tracked, so a quote observation does
+not advance them; use an explicit operation check such as `coco.ops.melt.refresh()` instead.
 
 ## ProofStateWatcher
 
@@ -119,6 +122,11 @@ The same proof-watcher behavior applies when `coco.dispose()` disables it. Neith
 already-started proof updates or Send completion; shutdown is not a completion barrier for those
 operations. Keep caller-owned storage available while such work finishes. Other watchers and
 processors retain their own shutdown behavior.
+
+The Mint and Melt quote watchers instead drain the work they own, including publishing quote events
+from their notifications. Do not await their disable methods or `coco.dispose()` from an awaited
+`mint-quote:updated` or `melt-quote:updated` listener: shutdown would wait on the listener that is
+waiting on shutdown.
 
 ## Pausing and Resuming Subscriptions
 
@@ -176,5 +184,4 @@ cleanup. Watcher enable calls may finish while operation-owned acquisition is st
 
 Normal parent scans use cached evidence. Startup prefers sufficient cached evidence but currently
 retains bounded recovery for unresolved observations and already-authorized destination accounting.
-The separate repair-only migration is tracked in #559. Explicit refresh/recovery remains available,
-and source proof release still requires fresh nonpayment confirmation under the shared child lock.
+Explicit refresh/recovery remains available, and source proof release still requires fresh nonpayment confirmation under the shared child lock.

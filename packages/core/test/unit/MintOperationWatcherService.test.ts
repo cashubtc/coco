@@ -1359,4 +1359,49 @@ describe('MintOperationWatcherService', () => {
       }),
     );
   });
+
+  it('reports background activation failures from registered interests', async () => {
+    const error = mock(() => {});
+    const logger = new NullLogger();
+    logger.error = error;
+    const watcher = new MintOperationWatcherService(
+      { subscribe } as unknown as SubscriptionManager,
+      { isTrustedMint: mock(async () => true) } as unknown as MintService,
+      { getPendingOperations: mock(async () => []) } as unknown as MintOperationService,
+      makeQuoteLifecycle(),
+      bus,
+      logger,
+    );
+    await watcher.start();
+
+    watcher.registerInterest({
+      mintUrl: 'not a url',
+      method: 'bolt11',
+      quoteId,
+      owner: { kind: 'mint-swap', id: 'invalid', recovery: false },
+    });
+    await watcher.stop();
+
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(subscribe).not.toHaveBeenCalled();
+  });
+
+  it('acquires one subscription per quote when many pending operations share it', async () => {
+    const operations = Array.from({ length: 101 }, (_, index) => ({
+      ...makeBolt12Operation(),
+      id: `mint-op-bolt12-${index}`,
+    }));
+    const watcher = makeWatcher({
+      mintOperations: {
+        getPendingOperations: mock(async () => operations),
+      } as unknown as MintOperationService,
+    });
+
+    await watcher.start();
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    expect(subscribe.mock.calls[0]?.[2]).toEqual([quoteId]);
+
+    await watcher.stop();
+    expect(unsubscribe).toHaveBeenCalledTimes(subscribe.mock.calls.length);
+  });
 });

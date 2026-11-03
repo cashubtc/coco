@@ -124,8 +124,8 @@ const balancePlugin: Plugin<['balances']> = {
 };
 ```
 
-Plugins get no direct proof or counter authority. Value enters or leaves a wallet only through
-operations, so proofs always change inside an operation's transaction.
+Plugins get no direct proof or counter authority. Plugins move value through operations, which
+own their proof changes and commit them transactionally.
 
 ## Migrating from `proofService` and `counterService`
 

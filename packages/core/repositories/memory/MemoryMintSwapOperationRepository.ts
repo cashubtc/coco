@@ -1,3 +1,4 @@
+import { normalizeMintUrl } from '../../utils.ts';
 import {
   isMintSwapAutomaticState,
   isMintSwapTerminalState,
@@ -9,7 +10,7 @@ import { validateMintSwapTransition } from '../../operations/mintSwap/validateMi
 import { MintSwapIdentityConflictError } from '../../operations/mintSwap/MintSwapErrors.ts';
 import { COPY_MEMORY_REPOSITORY_STATE } from './MemoryRepositoryTransaction.ts';
 
-function quoteKey(quote: MintSwapOperation['sourceQuote']): string {
+function quoteKey(quote: Parameters<MintSwapOperationRepository['getByQuote']>[1]): string {
   return JSON.stringify([quote.mintUrl, quote.method, quote.quoteId]);
 }
 
@@ -24,10 +25,10 @@ function compareCreated(a: MintSwapOperation, b: MintSwapOperation): number {
  */
 export class MemoryMintSwapOperationRepository implements MintSwapOperationRepository {
   private readonly operations = new Map<string, MintSwapOperation>();
-  private readonly sourceQuotes = new Set<string>();
-  private readonly destinationQuotes = new Set<string>();
-  private readonly sourceChildren = new Set<string>();
-  private readonly destinationChildren = new Set<string>();
+  private readonly sourceQuotes = new Map<string, string>();
+  private readonly destinationQuotes = new Map<string, string>();
+  private readonly sourceChildren = new Map<string, string>();
+  private readonly destinationChildren = new Map<string, string>();
 
   [COPY_MEMORY_REPOSITORY_STATE](source: MemoryMintSwapOperationRepository): void {
     this.operations.clear();
@@ -40,7 +41,7 @@ export class MemoryMintSwapOperationRepository implements MintSwapOperationRepos
       'destinationChildren',
     ] as const) {
       this[key].clear();
-      for (const value of source[key]) this[key].add(value);
+      for (const [value, id] of source[key]) this[key].set(value, id);
     }
   }
 
@@ -59,15 +60,29 @@ export class MemoryMintSwapOperationRepository implements MintSwapOperationRepos
       throw new MintSwapIdentityConflictError('destination_child');
 
     this.operations.set(parsed.id, parsed);
-    this.sourceQuotes.add(sourceQuote);
-    this.destinationQuotes.add(destinationQuote);
-    this.sourceChildren.add(parsed.sourceOperationId);
-    this.destinationChildren.add(parsed.destinationOperationId);
+    this.sourceQuotes.set(sourceQuote, parsed.id);
+    this.destinationQuotes.set(destinationQuote, parsed.id);
+    this.sourceChildren.set(parsed.sourceOperationId, parsed.id);
+    this.destinationChildren.set(parsed.destinationOperationId, parsed.id);
   }
 
   async getById(id: string): Promise<MintSwapOperation | null> {
     const operation = this.operations.get(id);
     return operation ? parseMintSwapOperation(operation) : null;
+  }
+
+  async getByChild(kind: 'mint' | 'melt', operationId: string): Promise<MintSwapOperation | null> {
+    const id = (kind === 'mint' ? this.destinationChildren : this.sourceChildren).get(operationId);
+    return id ? this.getById(id) : null;
+  }
+
+  async getByQuote(
+    kind: 'mint' | 'melt',
+    quote: Parameters<MintSwapOperationRepository['getByQuote']>[1],
+  ): Promise<MintSwapOperation | null> {
+    const key = quoteKey({ ...quote, mintUrl: normalizeMintUrl(quote.mintUrl) });
+    const id = (kind === 'mint' ? this.destinationQuotes : this.sourceQuotes).get(key);
+    return id ? this.getById(id) : null;
   }
 
   async transition(

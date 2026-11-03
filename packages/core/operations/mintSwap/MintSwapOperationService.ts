@@ -62,7 +62,7 @@ import {
   flagMintSwapAttention,
 } from './MintSwapTransitions.ts';
 
-// Startup retains the bounded recovery fallback until #559 moves repair to its own owner.
+// Startup retains a bounded recovery fallback for unresolved evidence.
 // Ordinary scans consume cached observations; explicit commands retain immediate refresh.
 type ObservationPolicy = 'cached' | 'startup' | 'refresh';
 

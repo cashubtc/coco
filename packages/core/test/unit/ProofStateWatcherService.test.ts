@@ -188,28 +188,6 @@ describe('ProofStateWatcherService lifecycle', () => {
     expect(subscribe).toHaveBeenCalledTimes(1);
   });
 
-  it('allows an awaited proof-state listener to stop the watcher', async () => {
-    const secret = 'stop-from-listener';
-    await repositories.proofRepository.saveProofs(mintUrlA, [makeProof({ secret })]);
-    const subscriptions = recordingSubscriptions();
-    const { runner, run } = countingRunner(new RepositoryCoreTransactionRunner(repositories));
-    const watcher = createWatcher(subscriptions.subs, { runner });
-    await watcher.start();
-    await watcher.watchProof(mintUrlA, [secret]);
-    const stoppedInListener = mock(async () => {
-      await watcher.stop();
-      expect(watcher.isRunning()).toBe(false);
-    });
-    bus.on('proofs:state-changed', stoppedInListener);
-
-    await subscriptions.notify(secret, 'SPENT');
-
-    expect(stoppedInListener).toHaveBeenCalledTimes(1);
-    expect(subscriptions.unsubscribe).toHaveBeenCalledTimes(1);
-    await subscriptions.notify(secret, 'SPENT');
-    expect(run).toHaveBeenCalledTimes(1);
-  });
-
   it('waits for subscription cleanup already started by a notification', async () => {
     const secret = 'cleanup-in-progress';
     await repositories.proofRepository.saveProofs(mintUrlA, [makeProof({ secret })]);

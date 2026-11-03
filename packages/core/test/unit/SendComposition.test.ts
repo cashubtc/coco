@@ -1,4 +1,4 @@
-import { Amount } from '@cashu/cashu-ts';
+import { Amount, OutputData } from '@cashu/cashu-ts';
 import { Database } from 'bun:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { SqlStorageRepositories } from '../../../sql-storage/src/repositories.ts';
@@ -128,6 +128,39 @@ describe.each(['memory', 'sqlite'] as const)('Send transaction composition (%s)'
       (await repositories.proofRepository.getProofBySecret(mintUrl, 'composed-input'))
         ?.usedByOperationId,
     ).toBe('composed-send');
+  });
+
+  it('rolls back reservation and Output Allocation when authoritative fees invalidate preflight', async () => {
+    const feeKeysetId = testMintKeysetId('sat', { input_fee_ppk: 100 });
+    await repositories.keysetRepository.addKeyset({
+      mintUrl,
+      id: feeKeysetId,
+      unit: 'sat',
+      keypairs: testMintKeypairs,
+      active: true,
+      feePpk: 100,
+    });
+    const sendInput = input();
+    sendInput.activeKeys = { id: feeKeysetId, unit: 'sat', keys: testMintKeypairs };
+    sendInput.operation.amount = Amount.from(7);
+    sendInput.receiverAmount = Amount.from(7);
+    // Fixed P2PK outputs planned without the authoritative redemption fee must still reject.
+    sendInput.fixedSendOutputs = OutputData.createP2PKData(
+      { kind: 'P2PK', data: testMintKeypairs['1'] },
+      Amount.from(7),
+      sendInput.activeKeys,
+    );
+    await expect(
+      runner.run(async (tx) => {
+        // Catching this validation failure must still poison the attempt, including earlier writes.
+        try {
+          await tx.perform(prepareSend, sendInput);
+        } catch {}
+      }),
+    ).rejects.toThrow('Prepared Send does not cover receiver input fees');
+    await expectRolledBack();
+    expect(await repositories.counterRepository.getCounter(mintUrl, feeKeysetId)).toBeNull();
+    expect(opens).toBe(1);
   });
 
   it('rolls back all domains when a later transition rejects', async () => {

@@ -1,4 +1,4 @@
-import { Amount, deriveKeysetId, OutputData } from '@cashu/cashu-ts';
+import { Amount, deriveKeysetId } from '@cashu/cashu-ts';
 import { Database } from 'bun:sqlite';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -10,12 +10,11 @@ import { initializeCoco, Manager } from '../../Manager.ts';
 import { meltQuoteFromBolt11Response } from '../../models/MeltQuote.ts';
 import type { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
+import type { WsRequest } from '../../infra/SubscriptionProtocol.ts';
 import type { PendingMeltOperation } from '../../operations/melt/MeltOperation.ts';
-import type { PendingSendOperation } from '../../operations/send/SendOperation.ts';
 import type { Repositories } from '../../repositories/index.ts';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
-import { serializeOutputData } from '../../utils.ts';
-import { pendingSend } from '../fixtures/SendOperation.ts';
+import { buildYHexMapsForSecrets } from '../../utils.ts';
 import { mintQuoteFromBolt11Fixture } from '../normalizedMintQuoteFixtures.ts';
 
 const mintUrl = 'https://background.test';
@@ -34,8 +33,11 @@ const disabledRuntime = {
   },
 };
 
-// These workflows use the Session facade and real storage, transactions, handlers and events.
-// Enabling owners after initializeCoco isolates their discovery from the unchanged recovery sweeps.
+// These workflows need responses a real mint cannot produce on demand: conflicting or incomplete
+// evidence, pending Melts, and proof that no redundant request was made. The shared integration suite
+// covers the rest against a real mint. They use the Session facade and real storage, transactions,
+// handlers and events. Enabling owners after initializeCoco isolates their discovery from the
+// unchanged recovery sweeps.
 describe.each(['memory', 'sqlite'] as const)('background progression (%s)', (adapter) => {
   let repo: Repositories;
   let database: Database | undefined;
@@ -46,6 +48,9 @@ describe.each(['memory', 'sqlite'] as const)('background progression (%s)', (ada
   let meltState: 'PENDING' | 'PAID' | 'UNPAID';
   let mintState: 'UNPAID' | 'PAID' | 'ISSUED';
   let proofState: 'UNSPENT' | 'SPENT';
+  let socketRequests: WsRequest[];
+  let receiveSocketMessage: (event: { data: string }) => void;
+  let subscribed: Promise<WsRequest>;
 
   beforeEach(async () => {
     database = adapter === 'sqlite' ? new Database(':memory:') : undefined;
@@ -103,6 +108,11 @@ describe.each(['memory', 'sqlite'] as const)('background progression (%s)', (ada
       feePpk: 0,
     });
     requests = [];
+    socketRequests = [];
+    let subscriptionSent!: (request: WsRequest) => void;
+    subscribed = new Promise((resolve) => {
+      subscriptionSent = resolve;
+    });
     meltState = 'PENDING';
     mintState = 'PAID';
     proofState = 'SPENT';
@@ -174,13 +184,18 @@ describe.each(['memory', 'sqlite'] as const)('background progression (%s)', (ada
           },
         },
       ],
-      // Keep the real hybrid/polling transport; the socket deliberately supplies no observations.
+      // Keep the real hybrid/polling transport; tests control only protocol-boundary messages.
       webSocketFactory: () => ({
-        send() {},
+        send(data) {
+          const request = JSON.parse(data) as WsRequest;
+          socketRequests.push(request);
+          if (request.method === 'subscribe') subscriptionSent(request);
+        },
         close() {},
         removeEventListener() {},
         addEventListener(type, listener) {
           if (type === 'open') queueMicrotask(() => listener({}));
+          if (type === 'message') receiveSocketMessage = listener;
         },
       }),
     });
@@ -468,108 +483,76 @@ describe.each(['memory', 'sqlite'] as const)('background progression (%s)', (ada
     },
   );
 
-  it('discovers claimable quote-only Mint records on startup', async () => {
-    await repo.mintQuoteRepository.upsertMintQuote(
-      mintQuoteFromBolt11Fixture(mintUrl, {
-        ...remoteMint('PAID'),
-        amount: Amount.from(1),
-      }),
-    );
-    await coco.enableMintOperationProcessor();
-    await coco.waitForMintOperationProcessor();
-    expect((await coco.ops.mint.listByQuote({ mintUrl, quoteId: 'mint' }))[0]?.state).toBe(
-      'finalized',
-    );
-    expect(requests).toEqual(['/v1/mint/bolt11']);
-  });
-
-  it('advances Mint operations from explicit quote observations with its watcher disabled', async () => {
-    const operation = await seedMint();
-    await coco.enableMintOperationProcessor();
-    await coco.waitForMintOperationProcessor();
-    expect((await coco.ops.mint.get(operation.id))?.state).toBe('pending');
-    await coco.quotes.mint.refresh({ mintUrl, quoteId: 'mint' });
-    await coco.waitForMintOperationProcessor();
-    expect((await coco.ops.mint.get(operation.id))?.state).toBe('finalized');
-    expect(requests).toEqual(['/v1/mint/quote/bolt11/mint', '/v1/mint/bolt11']);
-  });
-
-  it('persists Mint watcher observations with its processor disabled', async () => {
-    const operation = await seedMint();
-    const observed = new Promise<void>((resolve) =>
-      coco.on('mint-quote:updated', ({ quote }) => {
-        if (quote.amountPaid.equals(Amount.from(1))) resolve();
-      }),
-    );
-    await coco.enableMintOperationWatcher();
-    await observed;
-    await coco.disableMintOperationWatcher();
-    expect((await coco.ops.mint.get(operation.id))?.state).toBe('pending');
-    expect(requests).toEqual(['/v1/mint/quote/bolt11/mint']);
-  });
-
-  it('suppresses automatic startup and live Mint claims while allowing explicit execution', async () => {
-    const operation = await seedMint('PAID');
-    await coco.enableMintOperationProcessor({ autoClaimMintQuotes: false });
-    await coco.quotes.mint.refresh({ mintUrl, quoteId: 'mint' });
-    await coco.waitForMintOperationProcessor();
-    expect((await coco.ops.mint.get(operation.id))?.state).toBe('pending');
-    expect(requests).toEqual(['/v1/mint/quote/bolt11/mint']);
-    expect((await coco.ops.mint.execute(operation.id)).state).toBe('finalized');
-  });
-
-  it('processes an explicit Mint requeue when automatic claiming is disabled', async () => {
-    const operation = await seedMint('PAID');
-    await coco.enableMintOperationProcessor({
-      autoClaimMintQuotes: false,
-      initialEnqueueDelayMs: 0,
-    });
-    await events.emit('mint-op:requeue', { mintUrl, operationId: operation.id, operation });
-    await coco.waitForMintOperationProcessor();
-    expect((await coco.ops.mint.get(operation.id))?.state).toBe('finalized');
-    expect(requests).toEqual(['/v1/mint/bolt11']);
-  });
-
-  it('discovers pending Sends with proofs already spent locally', async () => {
-    const proof = {
-      id: keysetId,
-      amount: Amount.from(1),
-      C: keys['1'],
-      secret: 'sent',
-      mintUrl,
-      unit: 'sat',
-      state: 'spent' as const,
-      usedByOperationId: 'send-op',
-    };
-    await repo.proofRepository.saveProofs(mintUrl, [proof]);
-    await repo.sendOperationRepository.create(pendingSend('send-op', [proof]));
-    const completed = new Promise<void>((resolve) => coco.on('send:finalized', () => resolve()));
-    await coco.enableProofStateWatcher();
-    await completed;
-    expect((await coco.ops.send.get('send-op'))?.state).toBe('finalized');
-    expect(requests).toEqual([]);
-  });
-
-  it('keeps live Send observation enabled when startup scanning is disabled', async () => {
-    await coco.enableProofStateWatcher({ watchExistingInflightOnStart: false });
-    await repo.proofRepository.saveProofs(mintUrl, [
-      {
-        id: keysetId,
-        amount: Amount.from(1),
-        C: keys['1'],
-        secret: 'live-send',
+  it.each(['disableProofStateWatcher', 'dispose'] as const)(
+    'allows an awaited proof-state listener to call %s and releases the wire subscription',
+    async (stop) => {
+      const secrets = ['spent-before-shutdown', 'still-inflight-after-shutdown'];
+      await repo.proofRepository.saveProofs(
         mintUrl,
-        unit: 'sat',
-        state: 'ready',
-      },
-    ]);
-    const operation = await coco.ops.send.prepare({ mintUrl, amount: 1 });
-    const completed = new Promise<void>((resolve) => coco.on('send:finalized', () => resolve()));
-    await coco.ops.send.execute(operation.id);
-    await completed;
-    expect((await coco.ops.send.get(operation.id))?.state).toBe('finalized');
-    expect(requests).toEqual(['/v1/checkstate']);
-  });
+        secrets.map((secret) => ({
+          id: keysetId,
+          amount: Amount.from(1),
+          C: keys['1'],
+          secret,
+          mintUrl,
+          unit: 'sat',
+          state: 'inflight' as const,
+        })),
+      );
+      // Startup checks leave both proofs inflight, so the real watcher acquires a subscription.
+      proofState = 'UNSPENT';
+      await coco.enableProofStateWatcher();
+      const subscription = await subscribed;
+      // Subscription setup commits its local bookkeeping after the wire request is sent.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      let eventsReceived = 0;
+      const stopped = new Promise<void>((resolve, reject) => {
+        coco.on('proofs:state-changed', async ({ state }) => {
+          if (state !== 'spent') return;
+          eventsReceived += 1;
+          try {
+            await coco[stop]();
+            resolve();
+          } catch (error) {
+            reject(error);
+          }
+        });
+      });
+      const { yHexBySecret } = buildYHexMapsForSecrets(secrets);
+      const notifySpent = (secret: string) =>
+        receiveSocketMessage({
+          data: JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'subscribe',
+            params: {
+              subId: subscription.params.subId,
+              payload: { Y: yHexBySecret.get(secret), state: 'SPENT' },
+            },
+          }),
+        });
+
+      notifySpent(secrets[0]!);
+      await stopped;
+
+      expect((await repo.proofRepository.getProofBySecret(mintUrl, secrets[0]!))?.state).toBe(
+        'spent',
+      );
+      expect(
+        socketRequests.filter(
+          (request) =>
+            request.method === 'unsubscribe' && request.params.subId === subscription.params.subId,
+        ),
+      ).toHaveLength(1);
+
+      // A late notification must not change the remaining proof or publish another event.
+      notifySpent(secrets[1]!);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect((await repo.proofRepository.getProofBySecret(mintUrl, secrets[1]!))?.state).toBe(
+        'inflight',
+      );
+      expect(eventsReceived).toBe(1);
+    },
+  );
 
   it.each(['disableProofStateWatcher', 'dispose'] as const)(
     'allows an awaited Send completion listener to call %s',
@@ -602,52 +585,6 @@ describe.each(['memory', 'sqlite'] as const)('background progression (%s)', (ada
     },
   );
 
-  it('discovers legacy tokenless P2PK Sends without retained output proof rows', async () => {
-    const output = OutputData.createDeterministicData(Amount.from(1), seed, 0, {
-      id: keysetId,
-      keys,
-    });
-    const operation: PendingSendOperation = {
-      id: 'legacy-send',
-      state: 'pending',
-      mintUrl,
-      unit: 'sat',
-      method: 'p2pk',
-      methodData: { pubkey: keys['1'] },
-      amount: Amount.from(1),
-      fee: Amount.zero(),
-      inputAmount: Amount.from(1),
-      inputProofSecrets: ['old-input'],
-      needsSwap: true,
-      outputData: serializeOutputData({ keep: [], send: output }),
-      createdAt: 1,
-      updatedAt: 2,
-    };
-    await repo.proofRepository.saveProofs(mintUrl, [
-      {
-        id: keysetId,
-        amount: Amount.from(1),
-        C: keys['1'],
-        secret: 'old-input',
-        mintUrl,
-        unit: 'sat',
-        state: 'spent',
-        usedByOperationId: operation.id,
-      },
-    ]);
-    await repo.sendOperationRepository.create(operation);
-    const completed = new Promise<void>((resolve) => coco.on('send:finalized', () => resolve()));
-    await coco.enableProofStateWatcher();
-    await completed;
-    expect((await coco.ops.send.get(operation.id))?.state).toBe('finalized');
-    expect(
-      await repo.proofRepository.getProofsBySecrets(
-        mintUrl,
-        output.map((data) => new TextDecoder().decode(data.secret)),
-      ),
-    ).toEqual([]);
-    expect(requests).toEqual(['/v1/checkstate']);
-  });
   it('reloads persisted startup evidence in a fresh Session without a recovery sweep', async () => {
     let directory: string | undefined;
     try {

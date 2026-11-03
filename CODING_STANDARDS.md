@@ -10,10 +10,9 @@ boundary when it avoids worsening that boundary and reports relevant deviations.
 does not require migrating its whole module. Follow the owning design's migration scope.
 
 For domain changes, follow [domain routing](docs/agents/domain.md) for vocabulary and relevant ADRs.
-ADRs describe the architecture established by merged changes. Merge an ADR or glossary change that
-depends on new behavior with the implementation that establishes it. Keep unimplemented proposals in
-the issue tracker. Resolve conflicts explicitly rather than copying a legacy example or treating a
-stale comment as the contract.
+Distinguish an accepted design from its implementation status: an ADR can constrain future work without
+proving that a feature already exists. Resolve conflicts explicitly rather than copying a legacy example
+or treating a stale comment as the contract.
 
 ## Package boundaries
 
@@ -94,12 +93,10 @@ results. Define and document whether already-started processing is drained or al
 already-submitted remote requests may complete. Keep stopped runs from installing resources or
 continuing discovery after a restart.
 
-The proof-state watcher waits for subscription acquisition and cleanup, but does not drain started
-notification processing or operation checks. Those calls may finish Wallet updates and publish
-events after the watcher stops, including when disabled during Session disposal. Event listeners can
-therefore await watcher shutdown without shutdown waiting on those same listeners. This lifecycle
-exception does not change other owners' documented drain guarantees. Define pause/resume separately
-from final shutdown. Apply the incremental legacy policy above when reviewing existing lifecycles.
+The proof-state watcher is the one documented exception to draining started work on shutdown; see
+[ADR-0014](packages/core/docs/adr/0014-let-proof-watcher-shutdown-finish-started-work.md). It does
+not change other owners' documented drain guarantees. Define pause/resume separately from final
+shutdown. Apply the incremental legacy policy above when reviewing existing lifecycles.
 
 Use structured diagnostic context. **Never log the seed returned by `seedGetter`**, including through
 copies, cached values, encodings, object dumps or error context. This also applies to debug logging.
@@ -107,10 +104,20 @@ copies, cached values, encodings, object dumps or error context. This also appli
 ## Test behavior
 
 Add or update tests with behavior changes whenever practical.
-Prefer real behavior tests, especially the integration suite, for workflows and interactions. Focused
-unit tests are valuable for complex behavior. Choose the boundary that demonstrates the guarantee under
-change; doubles must not remove the persistence, protocol or lifecycle behavior the test is meant to
-prove. Avoid tests that merely mirror implementation or repeat trivial delegation.
+Name the public boundary that demonstrates the guarantee under change before writing the test, then
+choose the first fit from this order:
+
+1. The public surface (`Manager`, `ops.*`) against the real mint, in the integration suite. This is the
+   default for workflows and interactions.
+2. The same public surface with an in-process fake at a system boundary (transport, clock, storage
+   failure), for failures, races and interrupted states a real mint cannot produce on demand. Use the
+   real repositories and services behind the boundary.
+3. A unit test, only for pure logic or a state-transition table.
+
+Doubles must not remove the persistence, protocol or lifecycle behavior the test is meant to prove. Do
+not mock Coco's own services or collaborators: such a test checks the mock, not the behavior. Avoid tests
+that merely mirror implementation, read private fields, or repeat trivial delegation, and do not add
+tests only to reach a coverage target.
 
 Assert observable outcomes and relevant failure behavior. For recovery changes, exercise the historical
 records or interrupted states that the change actually promises to handle, guided by the risk assessment
@@ -120,8 +127,10 @@ do not require every backend or duplicate equivalent assertions
 by default. Type-level contracts also need compiler verification.
 
 Use the affected scripts and CI selection to establish what actually runs. A test's presence in a
-directory is not evidence that a particular CI job executes it. Report relevant verification and any
-remaining uncertainty.
+directory is not evidence that a particular CI job executes it. Report exact verification commands and
+results, including suites and storage backends exercised, relevant mint fee and unit configuration,
+work left to CI, and any remaining uncertainty. Distinguish direct execution of a package's test entry
+from running the integration runner's package matrix.
 
 ## Keep guidance accurate
 

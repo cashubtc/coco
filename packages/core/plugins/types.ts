@@ -29,7 +29,7 @@ export type ServiceKey = keyof ServiceMap;
  * renaming, or narrowing a key in this map is a public plugin API change.
  *
  * Plugins get no direct proof or counter authority: value enters or leaves a Wallet only through
- * operation services, and `balances` is read-only. See ADR-0014.
+ * operation services, and `balances` is read-only. See ADR-0015.
  */
 export interface ServiceMap {
   mintService: MintService;
