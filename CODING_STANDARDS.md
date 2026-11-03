@@ -87,11 +87,16 @@ uncertain remote outcome. In core and adapters, prefer the existing domain error
 appropriate for internal preconditions that need no separate caller behavior. Keep unavoidable message-matching
 compatibility logic isolated and tested. Respect each flow's documented retry and recovery policy.
 
-After an owner's `stop()` or `dispose()` resolves, it must not start new owned work or deliver late
-callbacks. Account for resources acquired while shutdown is awaiting other work, release those
-resources, and await owned work where necessary to establish the guarantee. Already-submitted remote
-requests may complete. Define pause/resume separately from final shutdown. Apply the incremental legacy
-policy above when reviewing existing lifecycle implementations.
+After an owner's `stop()` or `dispose()` resolves, it must not accept new work or leave subscriptions
+and timers active. Account for resources acquired during shutdown and release late acquisition
+results. Define and document whether already-started processing is drained or allowed to finish;
+already-submitted remote requests may complete. Keep stopped runs from installing resources or
+continuing discovery after a restart.
+
+The proof-state watcher is the one documented exception to draining started work on shutdown; see
+[ADR-0014](packages/core/docs/adr/0014-let-proof-watcher-shutdown-finish-started-work.md). It does
+not change other owners' documented drain guarantees. Define pause/resume separately from final
+shutdown. Apply the incremental legacy policy above when reviewing existing lifecycles.
 
 Use structured diagnostic context. **Never log the seed returned by `seedGetter`**, including through
 copies, cached values, encodings, object dumps or error context. This also applies to debug logging.
