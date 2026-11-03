@@ -39,6 +39,7 @@ import { MintScopedLock } from './operations/MintScopedLock';
 import { OperationIdLock } from './operations/OperationIdLock.ts';
 import { MintSwapOperationService } from './operations/mintSwap/MintSwapOperationService.ts';
 import { BatchMintOperationService } from './operations/batchMint/BatchMintOperationService.ts';
+import { BatchMintQuoteClaims } from './operations/batchMint/BatchMintQuoteClaims.ts';
 import type { MintSwapOperationRepository } from './operations/mintSwap/MintSwapOperationRepository.ts';
 import {
   MintSwapOperationProcessor,
@@ -177,6 +178,11 @@ export interface CocoConfig {
       initialEnqueueDelayMs?: number;
       /** Automatically claim cached and newly observed Mint Quote value (default: true). */
       autoClaimMintQuotes?: boolean;
+      /**
+       * Claim compatible quotes together through Batch Mint Operations (default `true`). `false`
+       * claims one standalone Mint Operation per quote; `ops.mint.batch` stays available.
+       */
+      batchMintQuotes?: boolean;
     };
     /** Melt settlement processor (enabled by default) */
     meltSettlementProcessor?: {
@@ -365,6 +371,7 @@ export class Manager {
   private meltOperationRepository: MeltOperationRepository;
   private mintOperationService: MintOperationService;
   private batchMintOperationService: BatchMintOperationService;
+  private batchMintQuoteClaims: BatchMintQuoteClaims;
   private mintOperationRepository: MintOperationRepository;
   private receiveOperationService: ReceiveOperationService;
   private receiveOperationRepository: ReceiveOperationRepository;
@@ -444,6 +451,7 @@ export class Manager {
     this.mintOperationService = core.mintOperationService;
     this.mintSwapOperationService = core.mintSwapOperationService;
     this.batchMintOperationService = core.batchMintOperationService;
+    this.batchMintQuoteClaims = core.batchMintQuoteClaims;
     this.mintOperationRepository = core.mintOperationRepository;
     this.proofRepository = repositories.proofRepository;
     this.balanceQueries = core.balanceQueries;
@@ -645,6 +653,7 @@ export class Manager {
     baseRetryDelayMs?: number;
     initialEnqueueDelayMs?: number;
     autoClaimMintQuotes?: boolean;
+    batchMintQuotes?: boolean;
   }): Promise<boolean> {
     if (this.disposed) return false;
     if (this.mintOperationProcessor?.isRunning()) return false;
@@ -658,6 +667,7 @@ export class Manager {
       this.eventBus,
       processorLogger,
       options,
+      this.batchMintQuoteClaims,
     );
     await this.mintOperationProcessor.start();
     return true;
@@ -1092,6 +1102,7 @@ export class Manager {
     mintOperationService: MintOperationService;
     mintSwapOperationService: MintSwapOperationService;
     batchMintOperationService: BatchMintOperationService;
+    batchMintQuoteClaims: BatchMintQuoteClaims;
     mintOperationRepository: MintOperationRepository;
     balanceQueries: BalanceQueries;
     transactionRunner: CoreTransactionRunner;
@@ -1282,6 +1293,14 @@ export class Manager {
       mintScopedLock,
       operationIdLock: destinationOperationLock,
     });
+    const batchMintQuoteClaims = new BatchMintQuoteClaims({
+      mintOperations: mintOperationService,
+      batchMintOperations: batchMintOperationService,
+      quoteLifecycle,
+      mintService,
+      transactionRunner,
+      logger: this.getChildLogger('BatchMintQuoteClaims'),
+    });
     const mintOperationRepository = repositories.mintOperationRepository;
     const mintSwapOperationService = new MintSwapOperationService({
       transactionRunner,
@@ -1367,6 +1386,7 @@ export class Manager {
       mintOperationService,
       mintSwapOperationService,
       batchMintOperationService,
+      batchMintQuoteClaims,
       mintOperationRepository,
       balanceQueries,
       transactionRunner,

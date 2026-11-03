@@ -1,4 +1,4 @@
-import { Amount, type Proof } from '@cashu/cashu-ts';
+import { Amount, CTSError, type Proof } from '@cashu/cashu-ts';
 import { bytesToHex } from '@noble/curves/utils.js';
 import type { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
@@ -6,8 +6,10 @@ import { restoreOutputProofs } from '../../infra/ProofRestore.ts';
 import type { Logger } from '../../logging/Logger.ts';
 import {
   BatchMintAdmissionError,
+  HttpResponseError,
   MintOperationError,
   MintQuoteKeyError,
+  NetworkError,
   ProofValidationError,
   UnknownMintError,
 } from '../../models/Error.ts';
@@ -55,6 +57,27 @@ const DEFINITIVE_REJECTION_CODES = new Set([
  */
 const RESTORE_AFTER_REPLAY_CODES = new Set([10002, 11003, 20002, 20006]);
 
+/**
+ * Whether a failed submission shows the mint cannot batch this request at all: `11017` (batch too
+ * large), an unsupported endpoint, or a response that cannot be read as a batch mint result.
+ * Network, authentication, rate-limit and server failures, and other NUT codes, are not evidence.
+ * This classification is independent of whether the outcome is definitive.
+ */
+function isBatchMintIncompatibility(error: unknown): boolean {
+  // MintOperationError extends HttpResponseError, so NUT codes are classified first.
+  if (error instanceof MintOperationError) return error.code === 11017;
+  if (error instanceof NetworkError) return false;
+  if (error instanceof HttpResponseError)
+    return (
+      (error.status >= 200 && error.status < 300) ||
+      error.status === 404 ||
+      error.status === 405 ||
+      error.status === 501
+    );
+  // cashu-ts rejects an unreadable success response (missing or mismatched signatures) this way.
+  return error instanceof CTSError;
+}
+
 export interface ExecuteBatchMintInput {
   mintUrl: string;
   method: MintMethod;
@@ -90,6 +113,8 @@ export class BatchMintOperationService {
   private readonly mintScopedLock: MintScopedLock;
   private readonly operationIdLock: OperationIdLock;
   private recoveryInProgress = false;
+  /** Mint-and-method groups whose batch endpoint proved incompatible during this Coco Session. */
+  private readonly unavailableMethodsByMint = new Map<string, Set<MintMethod>>();
 
   constructor(private readonly dependencies: BatchMintOperationServiceDependencies) {
     this.mintScopedLock = dependencies.mintScopedLock ?? new MintScopedLock();
@@ -172,6 +197,28 @@ export class BatchMintOperationService {
 
   async listInFlight(): Promise<BatchMintOperation[]> {
     return this.dependencies.batchMintQueries.listInFlight();
+  }
+
+  /**
+   * @internal Whether automatic claiming should claim this mint and method through standalone Mint
+   * Operations for the rest of the Coco Session, after a submission showed incompatibility. The
+   * marker is never persisted and is separate from the NUT-29 quote-check marker; explicit
+   * `execute` calls ignore it.
+   */
+  isBatchMintUnavailable(mintUrl: string, method: MintMethod): boolean {
+    return this.unavailableMethodsByMint.get(normalizeMintUrl(mintUrl))?.has(method) === true;
+  }
+
+  private markBatchMintUnavailable(mintUrl: string, method: MintMethod, error: unknown): void {
+    const methods = this.unavailableMethodsByMint.get(mintUrl) ?? new Set<MintMethod>();
+    if (methods.has(method)) return;
+    methods.add(method);
+    this.unavailableMethodsByMint.set(mintUrl, methods);
+    this.dependencies.logger?.warn('Disabling automatic batch minting for the Coco Session', {
+      mintUrl,
+      method,
+      error: message(error),
+    });
   }
 
   /**
@@ -306,6 +353,8 @@ export class BatchMintOperationService {
       submitted = true;
       proofs = await wallet.completeBatchMint(preview);
     } catch (error) {
+      if (submitted && isBatchMintIncompatibility(error))
+        this.markBatchMintUnavailable(operation.mintUrl, operation.method, error);
       if (submitted && error instanceof MintOperationError) {
         if (context === 'initial' && DEFINITIVE_REJECTION_CODES.has(error.code))
           return this.fail(operation, error.message, String(error.code));

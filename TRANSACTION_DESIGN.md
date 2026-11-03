@@ -481,6 +481,12 @@ There are no recovery quote checks, timer or internal retry loop. Startup and
 rejection before competing issuance completes or serves stale Restore data can violate the accepted
 ordering assumption; this is not a general inference of non-issuance from missing signatures.
 
+`BatchMintQuoteClaims` owns automatic claiming through batches for the Mint Operation Processor's
+processing turns and startup sweep. It depends on the Batch Mint coordinator and on Mint's
+standalone `claimMintQuote`; Mint does not depend on either. Its eligibility pre-check reads claim
+facts in a read-only `run()`, and admission rereads them. A rejected or failed batch falls back to
+standalone claims for its members.
+
 Mint Swap creation rejects a destination quote held by an `executing` Batch Mint Operation, and
 batch admission rejects quotes an active Mint Swap coordinates. Standalone Mint preparation,
 execution and automatic claiming read batch reservations and finalized members through
@@ -503,6 +509,7 @@ operations/batchMint/
   BatchMintOperationService.ts               # admission preflight, submission, recovery, events
   BatchMintTransitions.ts                    # admission, settlement, failure, and deferral
   BatchMintTransitionTypes.ts                # named Batch Mint transition inputs and results
+  BatchMintQuoteClaims.ts                    # automatic grouping, chunking, and standalone fallback
 operations/melt/
   MeltOperationService.ts                    # Melt saga coordinator
   MeltTransitions.ts                         # reservation, authorization, settlement, and recovery

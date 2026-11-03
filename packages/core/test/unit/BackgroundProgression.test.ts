@@ -457,9 +457,14 @@ describe.each(['memory', 'sqlite'] as const)('background progression (%s)', (ada
     expect(requests).toEqual(['/v1/melt/quote/bolt11/melt']);
   });
 
-  it.each(['PAID', 'ISSUED'] as const)(
-    'discovers pending Mint operations with cached %s quotes',
-    async (state) => {
+  it.each([
+    ['PAID', true],
+    ['PAID', false],
+    ['ISSUED', true],
+    ['ISSUED', false],
+  ] as const)(
+    'discovers pending Mint operations with cached %s quotes (batching %s)',
+    async (state, batchMintQuotes) => {
       const operation = await seedMint();
       await repo.mintQuoteRepository.upsertMintQuote(
         mintQuoteFromBolt11Fixture(mintUrl, {
@@ -471,7 +476,7 @@ describe.each(['memory', 'sqlite'] as const)('background progression (%s)', (ada
       mintState = state;
       // Restored proofs must still be unspent for the ISSUED path.
       proofState = 'UNSPENT';
-      await coco.enableMintOperationProcessor();
+      await coco.enableMintOperationProcessor({ batchMintQuotes, processIntervalMs: 20 });
       await coco.waitForMintOperationProcessor();
       expect((await coco.ops.mint.get(operation.id))?.state).toBe('finalized');
       expect(

@@ -739,6 +739,52 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         // The Manager's limiter allows a burst of 20 requests, then one every 3 seconds.
       }, 20000);
 
+      it('should claim quotes paid before startup as one Batch Mint Operation', async () => {
+        const { repositories, dispose } = await createRepositories();
+        try {
+          mgr = await initializeCoco({
+            repo: repositories,
+            seedGetter,
+            logger,
+            processors: { mintOperationProcessor: { disabled: true } },
+          });
+          await mgr.mint.addMint(mintUrl, { trusted: true });
+          const quotes = [];
+          for (let index = 0; index < 3; index += 1) {
+            quotes.push(
+              await mgr.quotes.mint.create({
+                mintUrl,
+                amount: 21,
+                unit: testUnit,
+                method: 'bolt11',
+              }),
+            );
+          }
+          await awaitMintQuotesPaid(mgr, mintUrl, quotes);
+
+          await mgr.enableMintOperationProcessor({ processIntervalMs: 20 });
+          await mgr.waitForMintOperationProcessor();
+
+          const batchIds = new Set<string>();
+          for (const { quoteId } of quotes) {
+            const [batch, ...others] = await mgr.ops.mint.batch.listByQuote({ mintUrl, quoteId });
+            expect(others).toHaveLength(0);
+            expect(batch?.state).toBe('finalized');
+            batchIds.add(batch!.id);
+            expect(await mgr.ops.mint.listByQuote({ mintUrl, quoteId })).toHaveLength(0);
+          }
+          expect(batchIds.size).toBe(1);
+          expect(await getMintTotalBalance(mgr, mintUrl, testUnit)).toBe(63);
+        } finally {
+          if (mgr) {
+            await mgr.pauseSubscriptions();
+            await mgr.dispose();
+            mgr = undefined;
+          }
+          await dispose();
+        }
+      });
+
       it('should use events API to await mint quote paid', async () => {
         const { repositories, dispose } = await createRepositories();
         try {

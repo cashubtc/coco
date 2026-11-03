@@ -51,6 +51,20 @@ restore previously issued outputs; those effects are separate from observing quo
 It still handles explicit operation requeue events. Disabling the processor suppresses both kinds
 of processor-owned work.
 
+With `batchMintQuotes` (default `true`), claims from quote updates are collected over one processing
+turn (`processIntervalMs`) and, like the startup sweep, grouped into Batch Mint Operations per mint,
+method and unit when the mint supports NUT-29 batch minting. See
+[Coco config](./coco-config.md) for the fallback rules.
+
+::: warning Payment waiters must handle batch completion
+With automatic batching enabled, a successfully claimed quote may emit `batch-mint-op:finalized`
+without any `mint-op:finalized` event. A waiter listening only to `mint-op:*` can hang even though
+the proofs have been saved. Handle both event families by mint URL and quote ID, or set
+`processors.mintOperationProcessor.batchMintQuotes: false` to retain standalone automatic claims.
+See [Awaiting automatically claimed payments](./mint-operations.md#awaiting-automatically-claimed-payments)
+for subscription, persisted-state reconciliation and cleanup guidance.
+:::
+
 ## MintOperationWatcher
 
 This module watches pending Mint Operations and Mint Quotes via WebSockets and polling, persists remote
