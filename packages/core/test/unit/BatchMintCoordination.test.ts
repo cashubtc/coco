@@ -199,7 +199,7 @@ describe('Batch Mint admission races', () => {
       expect(executing.state).toBe('executing');
 
       await h.quote({ quote: 'unreserved', method: 'bolt11', amount: 10, amountPaid: 10 });
-      await h.coco.enableMintOperationProcessor({ batchMintQuotes });
+      await h.coco.enableMintOperationProcessor({ batchMintQuotes, processIntervalMs: 20 });
       await h.coco.waitForMintOperationProcessor();
 
       expect((await h.coco.ops.mint.batch.get(executing.id))?.state).toBe('executing');

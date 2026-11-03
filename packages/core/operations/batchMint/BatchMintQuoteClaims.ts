@@ -15,8 +15,8 @@ export interface BatchMintQuoteClaimsDependencies {
   /** Standalone claims, and whether an active Mint Swap coordinates a quote. */
   mintOperations: Pick<MintOperationService, 'claimMintQuote' | 'canResolve'>;
   batchMintOperations: Pick<BatchMintOperationService, 'execute' | 'isBatchMintUnavailable'>;
-  quoteLifecycle: Pick<QuoteLifecycle, 'getMintQuote' | 'getPendingMintQuotes'>;
-  mintService: Pick<MintService, 'isTrustedMint' | 'getNut29BatchMintLimit'>;
+  quoteLifecycle: Pick<QuoteLifecycle, 'getMintQuote'>;
+  mintService: Pick<MintService, 'getNut29BatchMintLimit'>;
   /** Informational claim-fact reads only; admission rereads them in its own scope. */
   transactionRunner: CoreTransactionRunner;
   logger?: Logger;
@@ -24,7 +24,7 @@ export interface BatchMintQuoteClaimsDependencies {
 
 /**
  * Automatic claiming of paid Mint Quotes through Batch Mint Operations, used by the Mint Operation
- * Processor's processing turns and startup sweep when `batchMintQuotes` is on.
+ * Processor's processing turns, including startup discovery, when `batchMintQuotes` is on.
  *
  * Quotes that are claimable, have no nonterminal Mint Operation, and whose mint advertises NUT-29
  * batch minting for the method are grouped by mint, method and unit in the given order, and each
@@ -35,30 +35,6 @@ export interface BatchMintQuoteClaimsDependencies {
  */
 export class BatchMintQuoteClaims {
   constructor(private readonly dependencies: BatchMintQuoteClaimsDependencies) {}
-
-  /**
-   * The startup sweep. `onCoordinatedQuote` receives quotes skipped because an active Mint Swap
-   * coordinates them, so the processor can resume them once the parent stops.
-   */
-  async claimPendingMintQuotes(onCoordinatedQuote?: (quote: MintQuoteRef) => void): Promise<void> {
-    const refs: MintQuoteRef[] = [];
-    for (const quote of await this.dependencies.quoteLifecycle.getPendingMintQuotes()) {
-      const ref = { mintUrl: quote.mintUrl, method: quote.method, quoteId: quote.quoteId };
-      if (!(await this.dependencies.mintOperations.canResolve(ref))) {
-        onCoordinatedQuote?.(ref);
-        continue;
-      }
-      if (!(await this.dependencies.mintService.isTrustedMint(quote.mintUrl))) {
-        this.dependencies.logger?.debug('Skipping pending mint quote for untrusted mint', {
-          mintUrl: quote.mintUrl,
-          method: quote.method,
-        });
-        continue;
-      }
-      refs.push(ref);
-    }
-    await this.claimMintQuotes(refs);
-  }
 
   async claimMintQuotes(refs: readonly MintQuoteRef[]): Promise<void> {
     const seen = new Set<string>();

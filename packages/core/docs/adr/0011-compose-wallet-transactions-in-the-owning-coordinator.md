@@ -97,13 +97,13 @@ the shared Mint Quote claim-facts query `tx.mintQuoteClaims` are likewise requir
 Wallet transaction scope. Every Mint Quote claimability decision, standalone or batched, reads its
 claim facts through that one query in the scope that authorizes it, so a standalone claim and a
 Batch Mint admission for the same quote cannot both commit. Adapter migrations govern the persisted
-Batch Mint format ([ADR-0014](0014-model-batch-minting-as-a-standalone-atomic-operation.md)).
+Batch Mint format ([ADR-0016](0016-model-batch-minting-as-a-standalone-atomic-operation.md)).
 
 Send, Mint, Melt, Receive, the Mint Swap and Batch Mint coordinators, KeyRing, and mint metadata
 refresh use this model. The Batch Mint coordinator commits admission, Output Allocation and every
 member's Mint Quote Reservation in one `run()`, and settlement, failure and deferral in one `run()`
 each; NUT-20 signing, exact replay, Restore and proof-state checks stay outside transactions.
-Batch recovery uses saved proofs, then exact replay and conditional Restore (ADR-0014), without
+Batch recovery uses saved proofs, then exact replay and conditional Restore (ADR-0016), without
 quote checks. Empty Restore permits failure only after a qualifying replay rejection under the
 accepted mint ordering assumption. Failure rechecks local output proofs inside its transaction;
 any saved evidence retains executing. Ambiguous replay or Restore results retain reservations.
@@ -115,9 +115,15 @@ so the Mint Swap API has no feature activation gate. Initial source payment requ
 `execute` call. The parent processor is enabled by default and can be disabled without restricting
 explicit commands. It registers interests in the existing Mint/Melt watchers and consumes committed
 canonical quote updates without initiating prepared source payment. Interests are rebuilt independently
-of durable retry deadlines. A disabled watcher does not recruit a replacement parent quote poller;
-bounded startup/explicit recovery and necessary recovery effects remain available. Source proof release
-still requires fresh positive `UNPAID` confirmation under the shared child lock. Authorized recovery
+of durable retry deadlines. Ordinary and parent interests are synchronous local declarations;
+watchers own asynchronous activation, diagnostics, and late cleanup. Parent scans and replacement
+declarations do not await retired physical cleanup, but stop drains it. Withdrawal immediately revokes
+logical ownership while preserving shared owners. A disabled watcher does not recruit a replacement
+parent quote poller. Startup uses sufficient cached evidence first, retaining a bounded recovery
+fallback for unresolved evidence. Explicit recovery and necessary
+recovery effects remain available. Source proof release
+still requires fresh positive `UNPAID` confirmation under the shared child lock, including when the
+ordinary Melt processor advances the child after its parent stops. Authorized recovery
 interests permit observation of exact quotes after trust revocation, without restoring mint trust.
 Parent update hints are captured in the owning transaction and published after commit and
 lock release; local polling and complete active sweeps tolerate lost hints. No outbox or new schema
@@ -138,12 +144,11 @@ authorizes their source payment. No persisted format changes are introduced. The
 
 The Restore migration adds an explicit exception
 to the public API compatibility policy: move Restore directly to scoped monotonic advancement and
-remove plugin-facing `overwriteCounter()`, without first reworking CounterService. After migrating
-the remaining legacy output allocators, remove CounterService and its plugin-facing entry. Until
-those callers migrate, Restore's scoped advancement alone cannot prevent their stale counter writes
-or make their output derivation and later counter increment one atomic Output Allocation. Receive now
+remove plugin-facing `overwriteCounter()`, without first reworking CounterService. Receive now
 owns transactional Output Allocation, and Sweep delegates exchanges through its coordinator methods.
-The legacy plugin-facing allocation helpers remain outside that migration.
+ProofService, CounterService and their plugin-facing entries have since been removed, so every
+Output Allocation goes through ScopedOutputs in its owning transaction. See
+[ADR-0015](0015-plugins-get-no-direct-proof-or-counter-authority.md).
 
 Restore commits proof import and counter advancement together per keyset. Its coordinator opens
 one transaction, and a branded transition composes ScopedProofs and ScopedOutputs within that scope.

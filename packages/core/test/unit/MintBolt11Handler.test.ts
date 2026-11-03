@@ -1,7 +1,7 @@
 import { Amount, RateLimitError } from '@cashu/cashu-ts';
 import { bytesToHex } from '@noble/curves/utils.js';
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
-import { OutputData, type MintQuoteBolt11Response, type Wallet } from '@cashu/cashu-ts';
+import { OutputData, type MintQuoteBolt11Response, type Proof, type Wallet } from '@cashu/cashu-ts';
 import { MintBolt11Handler } from '../../infra/handlers/mint/MintBolt11Handler';
 import {
   MintOperationError,
@@ -18,7 +18,6 @@ import type {
   FetchRemoteMintQuoteContext,
 } from '../../operations/mint';
 import { serializeOutputData } from '../../utils';
-import type { ProofService } from '../../services/ProofService';
 import type { WalletService } from '../../services/WalletService';
 import type { MintService } from '../../services/MintService';
 import type { MintAdapter } from '../../infra';
@@ -36,7 +35,7 @@ describe('MintBolt11Handler', () => {
   let handler: MintBolt11Handler;
   let wallet: Wallet;
   let mintAdapter: MintAdapter;
-  let proofService: ProofService;
+  let restoreOutputs: Mock<() => Promise<Proof[]>>;
   let proofRepository: ProofRepository;
   let walletService: WalletService;
   let mintService: MintService;
@@ -108,7 +107,6 @@ describe('MintBolt11Handler', () => {
     createQuoteData: { amount: { amount: Amount.from(10), unit: 'sat' } },
     wallet,
     mintAdapter,
-    proofService,
     proofRepository,
     walletService,
     mintService,
@@ -138,7 +136,6 @@ describe('MintBolt11Handler', () => {
       updatedAt: Date.now(),
     },
     mintAdapter,
-    proofService,
     proofRepository,
     walletService,
     mintService,
@@ -155,11 +152,7 @@ describe('MintBolt11Handler', () => {
     },
     mintAdapter,
     logger,
-    restoreOutputs: () =>
-      proofService.recoverProofsFromOutputData(mintUrl, executingOperation.outputData, {
-        unit: 'sat',
-        persistRecoveredProofs: false,
-      }),
+    restoreOutputs,
     recordQuoteSnapshot: mock(async () => {}),
   });
 
@@ -208,11 +201,7 @@ describe('MintBolt11Handler', () => {
       checkMintQuote: mock(async (): Promise<MintQuoteBolt11Response> => quote),
     } as unknown as MintAdapter;
 
-    proofService = {
-      createOutputsAndIncrementCounters: mock(async () => ({ keep: outputData.keep, send: [] })),
-      saveProofs: mock(async () => {}),
-      recoverProofsFromOutputData: mock(async () => []),
-    } as unknown as ProofService;
+    restoreOutputs = mock(async (): Promise<Proof[]> => []);
 
     proofRepository = {} as ProofRepository;
     walletService = {} as WalletService;
@@ -405,7 +394,6 @@ describe('MintBolt11Handler', () => {
         error: `Recovered: quote ${quoteId} expired while executing mint`,
       });
       expect(wallet.mintProofsBolt11).toHaveBeenCalledTimes(1);
-      expect(proofService.saveProofs).not.toHaveBeenCalled();
     });
 
     it('leaves other mint operation errors unresolved during recovery', async () => {
@@ -420,7 +408,6 @@ describe('MintBolt11Handler', () => {
         error: 'Unknown quote',
       });
       expect(wallet.mintProofsBolt11).toHaveBeenCalledTimes(1);
-      expect(proofService.saveProofs).not.toHaveBeenCalled();
     });
 
     it('recovers locked issuance using accounting authority and the persisted key', async () => {
@@ -449,7 +436,6 @@ describe('MintBolt11Handler', () => {
         'B_out_1',
         'B_out_2',
       ]);
-      expect(proofService.saveProofs).not.toHaveBeenCalled();
     });
 
     it.each([
@@ -494,7 +480,7 @@ describe('MintBolt11Handler', () => {
           error: 'Recovered BOLT11 mint operation has mismatched NUT-20 quote ownership',
         });
         expect(wallet.mintProofsBolt11).not.toHaveBeenCalled();
-        expect(proofService.recoverProofsFromOutputData).not.toHaveBeenCalled();
+        expect(restoreOutputs).not.toHaveBeenCalled();
       },
     );
 
