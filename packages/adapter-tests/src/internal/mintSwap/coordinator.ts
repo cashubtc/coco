@@ -151,6 +151,52 @@ export function runMintSwapCoordinatorContract(
       expect(fixture.requests).toEqual([]);
     });
 
+    for (const expiredLeg of ['source', 'destination'] as const) {
+      it(`fails safely when the ${expiredLeg} quote expires while prepared`, async () => {
+        await fixture.create();
+        await fixture.prepare();
+        const { repositories } = fixture;
+        if (expiredLeg === 'source') {
+          const quote = await repositories.meltQuoteRepository.getMeltQuote(
+            sourceUrl,
+            'bolt11',
+            'source-quote',
+          );
+          await repositories.meltQuoteRepository.upsertMeltQuote({ ...quote!, expiry: 2 });
+        } else {
+          const quote = await repositories.mintQuoteRepository.getMintQuote(
+            destinationUrl,
+            'bolt11',
+            'destination-quote',
+          );
+          await repositories.mintQuoteRepository.upsertMintQuote({ ...quote!, expiry: 2 });
+        }
+        fixture.setTime(3_000);
+
+        const failed = await fixture.service().execute('swap');
+
+        expect(failed.state).toBe('failed');
+        expect(failed.failure?.code).toBe('preparation_rejected');
+        expect(failed.valueNeutral?.sourcePayment).toBe('not_authorized');
+        expect(failed.valueNeutral?.sourceProofs).toBe('released');
+        expect(failed.sourceOperationId).toBe('source-child');
+        expect(failed.destinationOperationId).toBe('destination-child');
+        expect((await repositories.meltOperationRepository.getById('source-child'))?.state).toBe(
+          'rolled_back',
+        );
+        expect(
+          (await repositories.mintOperationRepository.getById('destination-child'))?.state,
+        ).toBe('pending');
+        const sourceProof = await repositories.proofRepository.getProofBySecret(
+          sourceUrl,
+          'original',
+        );
+        expect(sourceProof?.state).toBe('ready');
+        expect(sourceProof?.usedByOperationId).toBeUndefined();
+        expect(fixture.requests).toEqual([]);
+      });
+    }
+
     for (const scan of ['recoverActive', 'recoverDue'] as const) {
       for (const leg of ['source', 'destination'] as const) {
         it(`${scan} continues with another parent while the ${leg} child is busy`, async () => {
@@ -409,7 +455,12 @@ export function runMintSwapCoordinatorContract(
       expect(states).toEqual(['executing', 'finalized']);
     });
 
-    for (const phase of ['authorization', 'source settlement', 'destination settlement'] as const) {
+    for (const phase of [
+      'source authorization',
+      'source settlement',
+      'destination authorization',
+      'destination settlement',
+    ] as const) {
       it(`recovers a failed ${phase} commit without replaying a committed remote effect`, async () => {
         await fixture.create();
         await fixture.prepare();
@@ -419,12 +470,16 @@ export function runMintSwapCoordinatorContract(
           run: (work) =>
             runner.run(async (tx) => {
               const result = await work(tx);
+              const parent = await tx.mintSwapOperations.getById('swap');
               const source = await tx.meltOperations.getById('source-child');
               const destination = await tx.mintOperations.getById('destination-child');
               if (
                 fail &&
-                ((phase === 'authorization' && source?.state === 'executing') ||
+                ((phase === 'source authorization' && source?.state === 'executing') ||
                   (phase === 'source settlement' && source?.state === 'finalized') ||
+                  (phase === 'destination authorization' &&
+                    parent?.state === 'destination_pending' &&
+                    destination?.state === 'executing') ||
                   (phase === 'destination settlement' && destination?.state === 'finalized'))
               ) {
                 fail = false;
@@ -434,7 +489,7 @@ export function runMintSwapCoordinatorContract(
             }),
         };
         const parent = await fixture.service().execute('swap');
-        if (phase === 'authorization') {
+        if (phase === 'source authorization') {
           expect(parent.state).toBe('prepared');
           expect(fixture.requests).toEqual([]);
           expect(
@@ -463,6 +518,13 @@ export function runMintSwapCoordinatorContract(
               )
             )?.state,
           ).toBe('PAID');
+        } else if (phase === 'destination authorization') {
+          expect(parent.state).toBe('destination_funded');
+          expect(
+            (await fixture.repositories.mintOperationRepository.getById('destination-child'))
+              ?.state,
+          ).toBe('pending');
+          expect(fixture.requests).not.toContain('mint');
         } else {
           expect(parent.state).toBe('destination_pending');
           expect(
@@ -482,6 +544,8 @@ export function runMintSwapCoordinatorContract(
         expect(fixture.requests.filter((request) => request === 'mint').length).toBeLessThanOrEqual(
           1,
         );
+        if (phase === 'destination authorization')
+          expect(fixture.requests.filter((request) => request === 'mint')).toHaveLength(1);
       });
     }
 
@@ -1245,6 +1309,53 @@ export function runMintSwapCoordinatorContract(
       ).toHaveLength(originalSecrets.length);
       expect(fixture.requests).toContain('recover-mint');
     });
+
+    for (const recovery of ['retryable incomplete', 'definitive rejection'] as const) {
+      it(`keeps destination recovery ${recovery === 'retryable incomplete' ? 'active for retryable incomplete evidence' : 'quiescent for definitive contradictory evidence'}`, async () => {
+        await fixture.create();
+        await fixture.prepare();
+        const handler = fixture.dependencies.mintHandlerProvider.get('bolt11');
+        handler.execute = async () => {
+          fixture.requests.push('mint');
+          throw new Error('issuance response lost');
+        };
+        expect((await fixture.service().execute('swap')).state).toBe('destination_pending');
+        const before =
+          await fixture.repositories.mintOperationRepository.getById('destination-child');
+        if (!before || before.state !== 'executing')
+          throw new Error('Expected an executing destination child');
+
+        handler.recoverExecuting = async () => {
+          fixture.requests.push('recover-mint');
+          return recovery === 'retryable incomplete'
+            ? {
+                status: 'UNRESOLVED',
+                error: 'restoration remains incomplete',
+                retryAfterMs: 1_000,
+              }
+            : { status: 'REJECTED', error: 'destination evidence is contradictory' };
+        };
+
+        const result = await fixture.service().reconcile('swap');
+        const after =
+          await fixture.repositories.mintOperationRepository.getById('destination-child');
+        if (!after || after.state !== 'executing')
+          throw new Error('Expected destination recovery to retain the executing child');
+        expect(after.outputData).toEqual(before.outputData);
+        expect(fixture.requests.filter((request) => request === 'mint')).toHaveLength(1);
+        expect(fixture.requests.filter((request) => request === 'recover-mint')).toHaveLength(1);
+        if (recovery === 'retryable incomplete') {
+          expect(result.state).toBe('destination_pending');
+          expect(result.retry.lastError?.code).toBe('destination_outcome_unknown');
+          expect(result.retry.nextAttemptAt).toBeGreaterThan(result.updatedAt);
+        } else {
+          expect(result.state).toBe('needs_attention');
+          expect(result.attention?.reason).toBe('contradictory_evidence');
+          expect(result.attention?.evidence.code).toBe('child_conflict');
+          expect(result.retry.nextAttemptAt).toBeNull();
+        }
+      });
+    }
 
     for (const leg of ['source', 'destination'] as const) {
       for (const remainsActive of [true, false]) {
