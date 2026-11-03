@@ -121,6 +121,23 @@ export {
   deserializeMintSwapOperation,
   serializeMintSwapOperation,
 } from './operations/mintSwap/MintSwapSerialization.ts';
+export type {
+  BatchMintMember,
+  BatchMintOperation,
+  BatchMintOperationFailure,
+  BatchMintOperationState,
+  ExecutingBatchMintOperation,
+  FailedBatchMintOperation,
+  FinalizedBatchMintOperation,
+} from './operations/batchMint/BatchMintOperation.ts';
+export type {
+  BatchMintOperationRepository,
+  BatchMintPersistence,
+} from './operations/batchMint/BatchMintOperationRepository.ts';
+export {
+  assertBatchMintOperation,
+  assertBatchMintUpdate,
+} from './operations/batchMint/BatchMintValidation.ts';
 export {
   MintSwapIdentityConflictError,
   type MintSwapIdentityKind,

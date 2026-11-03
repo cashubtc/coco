@@ -585,3 +585,10 @@ Restore and legacy counter migration above. That migration is complete: ProofSer
 CounterService are removed, and plugins have no proof or counter write path
 ([ADR-0015](packages/core/docs/adr/0015-plugins-get-no-direct-proof-or-counter-authority.md)). `CoreTransaction`, `Transition`, their helpers, and the runner remain internal implementation details.
 They must not be exported from package entry points.
+
+## Batch Mint persistence
+
+Required `tx.batchMintOperations` uses the same Wallet transaction scope as the other repositories.
+`tx.mintQuoteClaims.getFacts` combines finalized issuance and executing reservations from Mint
+Operations and Batch Mint members. Standalone Mint and Mint Swap claim decisions use these shared
+facts. This persistence slice does not yet expose batch execution or automatic claiming.
