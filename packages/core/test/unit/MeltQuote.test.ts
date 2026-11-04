@@ -89,6 +89,37 @@ describe('MeltQuote model', () => {
     }
   }
 
+  it.each(['bolt11', 'bolt12', 'onchain'] as const)(
+    'restores Amount change amounts from a raw %s watcher payload',
+    (method) => {
+      // NUT-17 notifications skip cashu-ts normalization, so change amounts arrive as JSON numbers.
+      const change = [
+        { id: 'keyset', amount: 1, C_: '02'.padEnd(66, '1') },
+      ] as unknown as SerializedBlindedSignature[];
+      const response = {
+        quote: 'quote',
+        request: 'request',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: 100,
+        state: 'PAID' as const,
+        fee_reserve: Amount.from(2),
+        payment_preimage: '',
+        change,
+      };
+      const quote =
+        method === 'onchain'
+          ? meltQuoteFromOnchainResponse(mintUrl, makeOnchainResponse(response))
+          : method === 'bolt11'
+            ? meltQuoteFromBolt11Response(mintUrl, response)
+            : meltQuoteFromBolt12Response(mintUrl, response);
+
+      const amount = quote.change?.[0]?.amount;
+      expect(amount).toBeInstanceOf(Amount);
+      expect(amount?.equals(1)).toBe(true);
+    },
+  );
+
   it('requires an explicit onchain fee index', () => {
     expect(() => resolveOnchainMeltFeeOption(makeOnchainQuote())).toThrow(
       'requires an explicit feeIndex',
