@@ -193,6 +193,42 @@ describe('routes', () => {
     }
   });
 
+  test('serializes grouped Mint Swap history without route-specific handling', async () => {
+    const entry = {
+      id: 'mint-swap:swap-1',
+      type: 'mint-swap',
+      source: 'operation',
+      operationId: 'swap-1',
+      createdAt: 1,
+      updatedAt: 4,
+      parentUpdatedAt: 3,
+      parentRevision: 7,
+      state: 'completed',
+      stateEnteredAt: 3,
+      mintUrl: 'https://destination.example/',
+      sourceMintUrl: 'https://source.example/',
+      destinationMintUrl: 'https://destination.example/',
+      amount: toAmount(32),
+      destinationAmount: toAmount(32),
+      unit: 'sat',
+      sourceOperationId: 'melt-1',
+      destinationOperationId: 'mint-1',
+      progress: { provenance: 'current', state: 'completed', stateEnteredAt: 3 },
+      sourceChild: { operationId: 'melt-1', present: true, state: 'finalized', updatedAt: 4 },
+      destinationChild: { operationId: 'mint-1', present: true, state: 'finalized', updatedAt: 4 },
+    };
+    const routes = createRouteHandlers(
+      runningRuntime({ history: { getPaginatedHistory: async () => [entry] } }),
+    );
+
+    const response = await routes['/history']!.GET!(new Request('http://localhost/history'));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      output: [{ ...entry, amount: '32', destinationAmount: '32' }],
+    });
+  });
+
   test('does not include bearer credentials or authorization headers in route logs', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'cocod-routes-redaction-'));
     try {
