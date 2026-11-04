@@ -13,7 +13,7 @@ afterEach(() => {
 });
 
 function operation(
-  state: 'preparing' | 'prepared' | 'completed',
+  state: 'preparing' | 'prepared' | 'completed' | 'cancelled',
   revision: number,
   id = 'swap',
 ): MintSwapOperation {
@@ -49,6 +49,24 @@ function operation(
     reserved: Amount.from(110),
   };
   if (state === 'prepared') return { ...base, state, sourceDebitBounds };
+  if (state === 'cancelled') {
+    return {
+      ...base,
+      state,
+      cancellationRequestedAt: base.stateEnteredAt,
+      lastSafe: {
+        state: 'prepared',
+        stateEnteredAt: base.stateEnteredAt,
+        sourceDebitBounds,
+      },
+      valueNeutral: {
+        sourcePayment: 'not_authorized',
+        sourceProofs: 'released',
+        verifiedAt: base.stateEnteredAt,
+      },
+      cancelledAt: base.stateEnteredAt,
+    };
+  }
   return {
     ...base,
     state,
@@ -136,6 +154,46 @@ describe('useMintSwapOperation', () => {
     expect(result.current.currentOperation?.revision).toBe(2);
   });
 
+  it('clears a recovered hydration error without erasing a later command error', async () => {
+    const mock = managerMock();
+    const hydrationError = new Error('local read unavailable');
+    const commandError = new Error('refresh failed');
+    const recovered = operation('prepared', 1);
+    const observed = operation('prepared', 2);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mock.mintSwap.get
+      .mockRejectedValueOnce(hydrationError)
+      .mockResolvedValueOnce(recovered)
+      .mockResolvedValueOnce(observed);
+    mock.mintSwap.refresh.mockRejectedValue(commandError);
+    const { result } = renderHook(() => useMintSwapOperation('swap'), {
+      wrapper: createHookWrapper(mock.manager),
+    });
+    await flush();
+
+    expect(result.current.status).toBe('error');
+    expect(result.current.error).toBe(hydrationError);
+    expect(result.current.currentOperation).toBeNull();
+
+    act(() => mock.emit());
+    await flush();
+    expect(result.current.currentOperation).toEqual(recovered);
+    expect(result.current.status).toBe('success');
+    expect(result.current.error).toBeNull();
+
+    await act(async () => {
+      await expect(result.current.refresh()).rejects.toThrow('refresh failed');
+    });
+    expect(result.current.status).toBe('error');
+    expect(result.current.error).toBe(commandError);
+
+    act(() => mock.emit());
+    await flush();
+    expect(result.current.currentOperation).toEqual(observed);
+    expect(result.current.status).toBe('error');
+    expect(result.current.error).toBe(commandError);
+  });
+
   it('runs explicit commands while passive observation never invokes effects', async () => {
     vi.useFakeTimers();
     const mock = managerMock();
@@ -197,7 +255,56 @@ describe('useMintSwapOperation', () => {
     expect(mock.mintSwap.refresh).not.toHaveBeenCalled();
   });
 
-  it('fences a late command after reset and allows same-ID idempotent prepare', async () => {
+  it('keeps passive waiter failures out of command status', async () => {
+    const mock = managerMock();
+    const prepared = operation('prepared', 1);
+    const executed = operation('prepared', 2);
+    mock.mintSwap.get.mockResolvedValue(prepared);
+    mock.mintSwap.execute.mockResolvedValue(executed);
+    mock.mintSwap.waitForOutcome.mockRejectedValue(new Error('wait transport failed'));
+    const { result } = renderHook(() => useMintSwapOperation(prepared), {
+      wrapper: createHookWrapper(mock.manager),
+    });
+    await flush();
+
+    await act(async () => {
+      await result.current.execute();
+    });
+    expect(result.current.status).toBe('success');
+
+    await act(async () => {
+      await expect(result.current.waitForOutcome()).rejects.toThrow('wait transport failed');
+    });
+    expect(result.current.status).toBe('success');
+    expect(result.current.error).toBeNull();
+  });
+
+  it('clears the execute result when cancellation succeeds', async () => {
+    const mock = managerMock();
+    const prepared = operation('prepared', 1);
+    const executed = operation('prepared', 2);
+    const cancelled = operation('cancelled', 3);
+    mock.mintSwap.get.mockResolvedValue(prepared);
+    mock.mintSwap.execute.mockResolvedValue(executed);
+    mock.mintSwap.cancel.mockResolvedValue(cancelled);
+    const { result } = renderHook(() => useMintSwapOperation(prepared), {
+      wrapper: createHookWrapper(mock.manager),
+    });
+    await flush();
+
+    await act(async () => {
+      await result.current.execute();
+    });
+    expect(result.current.executeResult).toEqual(executed);
+
+    await act(async () => {
+      await result.current.cancel();
+    });
+    expect(result.current.currentOperation).toEqual(cancelled);
+    expect(result.current.executeResult).toBeNull();
+  });
+
+  it('fences a late command after reset without releasing its command lock', async () => {
     const mock = managerMock();
     const deferred = createDeferred<MintSwapOperation>();
     const prepared = operation('prepared', 1);
@@ -216,6 +323,17 @@ describe('useMintSwapOperation', () => {
       });
     });
     act(() => result.current.reset());
+
+    await expect(
+      result.current.prepare({
+        id: 'swap',
+        sourceMintUrl: prepared.sourceMintUrl,
+        destinationMintUrl: prepared.destinationMintUrl,
+        destinationAmount: 100,
+      }),
+    ).rejects.toThrow('Operation already in progress');
+    expect(mock.mintSwap.prepare).toHaveBeenCalledTimes(1);
+
     deferred.resolve(prepared);
     await first;
     expect(result.current.currentOperation).toBeNull();
@@ -277,6 +395,45 @@ describe('useMintSwapOperation', () => {
     oldRead.resolve(operation('completed', 9));
     await flush();
     expect(result.current.currentOperation).toEqual(replacement);
+  });
+
+  it('keeps an old Manager command locked until its submitted effect settles', async () => {
+    const first = managerMock();
+    const second = managerMock();
+    const prepared = operation('prepared', 1);
+    const refreshed = operation('prepared', 2);
+    const oldCommand = createDeferred<MintSwapOperation>();
+    first.mintSwap.get.mockResolvedValue(prepared);
+    first.mintSwap.execute.mockReturnValue(oldCommand.promise);
+    second.mintSwap.get.mockResolvedValue(prepared);
+    second.mintSwap.refresh.mockResolvedValue(refreshed);
+    let selectedManager = first.manager;
+    const Wrapper = ({ children }: { children: ReactNode }) => (
+      <ManagerProvider manager={selectedManager}>{children}</ManagerProvider>
+    );
+    const { result, rerender } = renderHook(() => useMintSwapOperation('swap'), {
+      wrapper: Wrapper,
+    });
+    await flush();
+
+    let executing!: Promise<MintSwapOperation>;
+    act(() => {
+      executing = result.current.execute();
+    });
+    selectedManager = second.manager;
+    rerender();
+    await flush();
+
+    await expect(result.current.refresh()).rejects.toThrow('Operation already in progress');
+    expect(second.mintSwap.refresh).not.toHaveBeenCalled();
+
+    oldCommand.resolve(operation('completed', 2));
+    await executing;
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(second.mintSwap.refresh).toHaveBeenCalledWith('swap');
+    expect(result.current.currentOperation).toEqual(refreshed);
   });
 
   it('keeps one logical observer under StrictMode', async () => {

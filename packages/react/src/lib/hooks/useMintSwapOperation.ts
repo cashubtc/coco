@@ -58,7 +58,9 @@ export function useMintSwapOperation(
   const epochRef = useRef(0);
   const readStateRef = useRef<ReadState>({ epoch: 0, reading: false, requested: false });
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Epochs fence stale state updates, but a submitted effect keeps this lock until it settles.
   const commandRef = useRef<symbol | null>(null);
+  const hydrationErrorRef = useRef<Error | null>(null);
   const waitAbortRef = useRef(new AbortController());
 
   const [currentOperation, setCurrentOperation] = useState<MintSwapOperation | null>(
@@ -121,12 +123,19 @@ export function useMintSwapOperation(
           }
           if (!operation) throw new Error(`Operation ${operationId} not found`);
           bindOperation(operation);
+          if (hydrationErrorRef.current && mountedRef.current) {
+            hydrationErrorRef.current = null;
+            setError(null);
+            setStatus('success');
+          }
         }
       } catch (readError) {
         if (epoch === epochRef.current && selectedManager === managerRef.current) {
           console.error(readError);
           if (!currentOperationRef.current && mountedRef.current) {
-            setError(normalizeHookError(readError));
+            const normalized = normalizeHookError(readError);
+            hydrationErrorRef.current = normalized;
+            setError(normalized);
             setStatus('error');
           }
         }
@@ -155,9 +164,9 @@ export function useMintSwapOperation(
     stopPolling();
     waitAbortRef.current.abort(new Error('Mint Swap observer changed'));
     waitAbortRef.current = new AbortController();
-    commandRef.current = null;
 
     if (replacingManager) {
+      hydrationErrorRef.current = null;
       currentOperationRef.current = null;
       setCurrentOperation(null);
       setExecuteResult(null);
@@ -179,7 +188,6 @@ export function useMintSwapOperation(
       readStateRef.current = { epoch: epochRef.current, reading: false, requested: false };
       stopPolling();
       waitAbortRef.current.abort(new Error('Mint Swap observer disposed'));
-      commandRef.current = null;
     };
   }, [ensurePolling, manager, queueRead, stopPolling]);
 
@@ -191,6 +199,7 @@ export function useMintSwapOperation(
       if (commandRef.current) throw new Error('Operation already in progress');
       const token = Symbol('mint-swap-command');
       commandRef.current = token;
+      hydrationErrorRef.current = null;
       const selectedManager = managerRef.current;
       const epoch = epochRef.current;
       if (mountedRef.current) {
@@ -265,7 +274,7 @@ export function useMintSwapOperation(
     return runCommand(
       (selectedManager) => selectedManager.ops.mintSwap.cancel(id),
       (operation) => {
-        bindOperation(operation);
+        bindOperation(operation, { clearExecuteResult: true });
         ensurePolling();
       },
     );
@@ -290,16 +299,7 @@ export function useMintSwapOperation(
         }
         return outcome;
       } catch (waitError) {
-        const normalized = normalizeHookError(waitError);
-        if (
-          epoch === epochRef.current &&
-          selectedManager === managerRef.current &&
-          mountedRef.current
-        ) {
-          setError(normalized);
-          setStatus('error');
-        }
-        throw normalized;
+        throw normalizeHookError(waitError);
       }
     },
     [bindOperation],
@@ -313,7 +313,7 @@ export function useMintSwapOperation(
     stopPolling();
     waitAbortRef.current.abort(new Error('Mint Swap hook reset'));
     waitAbortRef.current = new AbortController();
-    commandRef.current = null;
+    hydrationErrorRef.current = null;
     boundOperationIdRef.current = null;
     currentOperationRef.current = null;
     if (mountedRef.current) {
