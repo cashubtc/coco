@@ -927,6 +927,24 @@ export function runMintSwapCoordinatorContract(
       expect(fixture.requests).toContain('observe-source');
     });
 
+    it('settles a paid source whose quote reports an empty payment preimage', async () => {
+      await fixture.create();
+      await fixture.prepare();
+      fixture.dependencies.meltHandlerProvider.get('bolt11').melt = async () => {
+        throw new Error('timeout');
+      };
+      expect((await fixture.service().execute('swap')).state).toBe('source_pending');
+      // Some mints, including CDK's fake wallet, report PAID with an empty preimage.
+      fixture.dependencies.quoteLifecycle.refreshMeltQuote = async () => {
+        const quote = await fixture.saveSource('PAID');
+        return fixture.repositories.meltQuoteRepository.upsertMeltQuote({
+          ...quote,
+          payment_preimage: '',
+        });
+      };
+      expect((await fixture.service().reconcile('swap')).state).toBe('destination_pending');
+    });
+
     it('leaves PENDING recoverable with a cancellation request, then cancels on fresh UNPAID', async () => {
       await fixture.create();
       await fixture.prepare();

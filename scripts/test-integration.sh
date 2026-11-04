@@ -7,6 +7,11 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 MINTD_IMAGE="cashubtc/mintd:0.17.0-rc.0"
 MINT_CONFIG_FILES=()
 MINT_START_ATTEMPTS=5
+MINT_MNEMONIC='abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
+# The second mint needs its own seed: a shared seed gives both mints identical keyset IDs.
+SECOND_MINT_MNEMONIC='zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong'
+# Packages whose integration tests also get a second mint, exposed as MINT_URL_2 (Mint Swap needs two).
+SECOND_MINT_PACKAGES=(core)
 # Identifies this run's containers and temp files, so concurrent runs from other worktrees are left alone.
 RUN_ID="$$-${RANDOM}${RANDOM}"
 
@@ -61,13 +66,14 @@ write_custom_unit_mint_config() {
     local port=$1
     local custom_unit=$2
     local config_file=$3
+    local mnemonic=$4
 
     cat > "$config_file" <<EOF
 [info]
 url = "http://localhost:${port}/"
 listen_host = "0.0.0.0"
 listen_port = 3338
-mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+mnemonic = "${mnemonic}"
 
 [database]
 engine = "sqlite"
@@ -152,6 +158,18 @@ mint_container_name() {
     echo "cdk-mint-${RUN_ID}-$1"
 }
 
+needs_second_mint() {
+    local package_name=$1
+    local candidate
+
+    for candidate in "${SECOND_MINT_PACKAGES[@]}"; do
+        if [ "$candidate" = "$package_name" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 # Asks the OS for a free host port. Another process can still claim it before Docker binds it, so
 # start_mint_container retries with a new port.
 find_free_port() {
@@ -162,10 +180,11 @@ run_mint_container() {
     local container_name=$1
     local port=$2
     local custom_unit="${3:-}"
+    local mnemonic="${4:-$MINT_MNEMONIC}"
 
     if [ -n "$custom_unit" ]; then
         local config_file="${TMPDIR:-/tmp}/coco-integration-${container_name}.toml"
-        write_custom_unit_mint_config "$port" "$custom_unit" "$config_file"
+        write_custom_unit_mint_config "$port" "$custom_unit" "$config_file" "$mnemonic"
         MINT_CONFIG_FILES+=("$config_file")
 
         docker run -d "${PLATFORM_FLAG[@]}" \
@@ -186,15 +205,17 @@ run_mint_container() {
             -e CDK_MINTD_LISTEN_PORT=3338 \
             -e CDK_MINTD_FAKE_WALLET_MIN_DELAY=0 \
             -e CDK_MINTD_FAKE_WALLET_MAX_DELAY=0 \
-            -e CDK_MINTD_MNEMONIC='abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about' \
+            -e CDK_MINTD_MNEMONIC="$mnemonic" \
             "$MINTD_IMAGE"
     fi
 }
 
-# Start a mint container for a specific package and set STARTED_MINT_URL
+# Start a mint container for a specific package and set STARTED_MINT_URL.
+# A package's second mint is started under the name "<package>-b".
 start_mint_container() {
     local package_name=$1
     local custom_unit="${2:-}"
+    local mnemonic="${3:-$MINT_MNEMONIC}"
     local container_name
     container_name=$(mint_container_name "$package_name")
     local port=""
@@ -207,7 +228,7 @@ start_mint_container() {
     for ((attempt = 1; attempt <= MINT_START_ATTEMPTS; attempt++)); do
         port=$(find_free_port)
         log_info "Starting mint container for $package_name on port $port..."
-        if run_mint_container "$container_name" "$port" "$custom_unit"; then
+        if run_mint_container "$container_name" "$port" "$custom_unit" "$mnemonic"; then
             break
         fi
 
@@ -286,6 +307,15 @@ run_test() {
         return 1
     fi
     local mint_url="$STARTED_MINT_URL"
+    local second_mint_url=""
+
+    if needs_second_mint "$package_name"; then
+        if ! start_mint_container "${package_name}-b" "$custom_unit" "$SECOND_MINT_MNEMONIC"; then
+            stop_mint_container "$package_name"
+            return 1
+        fi
+        second_mint_url="$STARTED_MINT_URL"
+    fi
 
     # Package roots are always under packages/<name>, even when the test file
     # lives outside src/test (for example packages/core/test/integration).
@@ -347,6 +377,11 @@ run_test() {
     else
         # Standard test command for non-browser packages (uses vitest or bun:test)
         export MINT_URL="$mint_url"
+        if [ -n "$second_mint_url" ]; then
+            export MINT_URL_2="$second_mint_url"
+        else
+            unset MINT_URL_2
+        fi
         if [ -n "$log_level" ]; then
             export TEST_LOG_LEVEL="$log_level"
         else
@@ -380,6 +415,7 @@ run_test() {
         fi
 
         unset MINT_URL
+        unset MINT_URL_2
         unset TEST_LOG_LEVEL
         unset CUSTOM_UNIT
     fi
@@ -388,8 +424,11 @@ run_test() {
         log_info "Coverage report generated: $coverage_dir/lcov.info"
     fi
 
-    # Stop the mint container
+    # Stop the mint containers
     stop_mint_container "$package_name"
+    if [ -n "$second_mint_url" ]; then
+        stop_mint_container "${package_name}-b"
+    fi
 
     return $test_result
 }
