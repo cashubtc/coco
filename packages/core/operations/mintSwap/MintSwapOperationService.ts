@@ -654,7 +654,7 @@ export class MintSwapOperationService {
                 changeProofs,
                 now,
                 finalizedData:
-                  quote.method === 'bolt11' && quote.payment_preimage
+                  quote.method === 'bolt11' && quote.payment_preimage != null
                     ? { preimage: quote.payment_preimage }
                     : undefined,
               },
