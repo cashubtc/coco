@@ -84,7 +84,8 @@ good default.
 
 ### Integration tests
 
-Integration tests run against a real local mint in Docker, so Docker must be installed and running:
+Integration tests run against a real local mint in Docker, so Docker must be installed and running.
+Core also gets a second mint, exposed as `MINT_URL_2`, for workflows such as Mint Swap that need two:
 
 ```bash
 bun run test:integration                         # every package
