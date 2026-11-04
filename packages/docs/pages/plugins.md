@@ -173,6 +173,11 @@ Applications can continue to use `manager.history.getOperationIdForHistoryEntry(
 That lookup accepts every history type, trims operation IDs, and returns `null` for
 missing entries or absent/blank IDs.
 
+`HistoryEntry` now includes `type: 'mint-swap'`; exhaustive plugin switches must add that case.
+History lists expose one grouped parent row and suppress its exact Mint/Melt children, while
+`getHistoryEntryById()` still permits direct parent and child lookup. Treat `history:updated` as an
+invalidation and reread the relevant page rather than splicing its entry into a sorted list.
+
 ## Plugin Extensions
 
 Plugins can register custom APIs that become accessible via `manager.ext`. This allows plugins to expose their own public interface to consumers.

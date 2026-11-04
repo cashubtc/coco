@@ -23,5 +23,5 @@ features:
   - title: Batteries Included
     details: Coco brings everything you need to build a Cashu wallet. Without the complexity
   - title: Lifecycle APIs
-    details: Use `manager.ops.send`, `manager.ops.receive`, and `manager.ops.melt` for recoverable operation workflows
+    details: Use Mint, Mint Swap, Send, Receive, and Melt operation APIs for durable, recoverable workflows
 ---
