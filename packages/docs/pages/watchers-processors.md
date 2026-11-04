@@ -169,6 +169,19 @@ sequence. Start every Coco Session with `initializeCoco()` or `Manager.create()`
 
 `ensureSubscriptions()` never activates an omitted owner or performs a recovery sweep.
 
+### Mint Swap processor
+
+`processors.mintSwapOperationProcessor` is enabled by default. Startup visits recoverable parents,
+the due loop follows persisted retry timing, and a complete sweep prevents active work from being
+starved by a busy prefix. Set `disabled: true` only when the application will drive `refresh` or
+`recovery.run()` explicitly. Owner selection is fixed for the Coco Session; there is no processor
+pause/resume API, and `ensureSubscriptions()` repairs networking without starting the processor.
+
+The processor never pays an untouched `prepared` parent: initial source payment requires explicit
+`ops.mintSwap.execute(id)`. Disabling it does not hand an active parent's exact children to the
+ordinary Mint or Melt processors. Those children return to ordinary resolution only after the
+parent stops. See [Mint Swap Operations](./mint-swap-operations.md).
+
 ### Shared Mint Swap observation
 
 Mint Swap parents declare interests in the existing Mint and Melt quote watchers. These use the same

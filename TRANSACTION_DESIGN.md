@@ -388,6 +388,11 @@ stop emits no child or quote event, so running processors remember work they ski
 when `mint-swap:updated` reports a stopped parent. The parent commits its stop inside any child lock
 it holds, and its record keeps that diagnosis.
 
+Mint Swap history is a read-time projection over the persisted parent and its exact children. It
+does not write a history aggregate, join an economic transaction, add an outbox, invoke recovery, or
+advance the parent revision. Child freshness may change the projected row's `updatedAt`; only the
+parent's persisted `revision` orders parent transitions.
+
 The coordinating parent comes from durable reverse lookups over immutable child IDs and quote
 references, including terminal and `needs_attention` parents; it is never inferred from an active
 scan or stored on the child. An operation ID matches only a parent's own child and a quote reference

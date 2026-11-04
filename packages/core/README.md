@@ -159,8 +159,14 @@ Mint Swap exclusively coordinates its children while it is active: ordinary Mint
 would change a child or use its quote reject with `MintSwapChildOperationError`; pass its
 `parentOperationId` to `ops.mintSwap`. Reads keep returning children. Once the parent is terminal or
 `needs_attention`, its children return to ordinary resolution, but no ordinary command pays its
-source (`parentStopped: true`). See [Mint Swap Operations](https://github.com/cashubtc/coco/blob/master/TRANSACTION_DESIGN.md#mint-swap-operations).
-History projection and React Mint Swap hooks are outside this slice.
+source (`parentStopped: true`). See the [Mint Swap Operations guide](../docs/pages/mint-swap-operations.md)
+and [transaction contract](../../TRANSACTION_DESIGN.md#mint-swap-operations).
+
+Paginated history groups a parent and its exact children into one `type: 'mint-swap'` list row.
+The two child rows remain directly readable by deterministic ID. `history:updated` and
+`mint-swap:updated` are best-effort invalidations: reread durable state rather than merging event
+payloads into a page. React applications can use `useMintSwapOperation`; its observation and wait
+paths are passive, while its explicit `refresh` command remains effect-driving.
 
 ## Protocol Support
 
@@ -381,6 +387,9 @@ and Batch Mint recovery formerly run by resume are now independent explicit call
   `listPrepared`, `listInFlight`, `refresh`, `cancel`, `reclaim`, `finalize`,
   plus `recovery` and `diagnostics`. Built-in methods: `bolt11`, `bolt12`,
   `onchain`.
+- `mintSwap`: `prepare`, explicit `execute`, local `get` and `listActive`,
+  effect-driving `refresh`, `cancel`, passive `waitForOutcome`, plus explicit
+  `recovery.run()`. See [Mint Swap Operations](../docs/pages/mint-swap-operations.md).
 
 Mint and melt quote lookups use `QuoteIdentity`, the methodless object shape
 `{ mintUrl, quoteId }`:
@@ -539,6 +548,7 @@ include:
 - `receive-op:finalized` → `{ mintUrl, operationId, operation }`
 - `receive-op:rolled-back` → `{ mintUrl, operationId, operation }`
 - `history:updated` → `{ mintUrl, entry }`
+- `mint-swap:updated` → `{ operationId, revision, state }`
 - `melt-op:prepared` → `{ mintUrl, operationId, operation }`
 - `melt-op:pending` → `{ mintUrl, operationId, operation }`
 - `melt-op:finalized` → `{ mintUrl, operationId, operation }`

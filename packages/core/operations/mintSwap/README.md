@@ -3,7 +3,10 @@
 This internal coordinator composes the persisted parent lifecycle through the shared Wallet
 transaction runner. Manager wires it to `ops.mintSwap`, shared child locks and the independently
 configured recovery processor. The coordinator itself stays outside package entry points. See the
-[public API contract](../../README.md#mint-swap-operations). Parent history and React hooks remain #420.
+[public API contract](../../README.md#mint-swap-operations), the
+[consumer guide](../../../docs/pages/mint-swap-operations.md), and the
+[React hooks guide](../../../docs/pages/react-hooks.md). History groups the parent and exact children
+at read time; it does not add a persisted aggregate.
 
 The API is always available; initial source payment requires an explicit `execute` call.
 Automatic parent recovery is enabled by default. The processor setting can disable automatic
