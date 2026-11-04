@@ -664,7 +664,14 @@ observations commit spent proof state while leaving the Send pending; the last p
 Send completion, and reservation release commit together. Events follow commit.
 
 `advancePendingOperation` uses the same transition for complete locally persisted evidence without
-polling ordinary Sends. Supported legacy tokenless P2PK Sends retain bounded remote verification
-of their exact output allocation. Subscription targets may be derived without recreating proof rows.
+polling. Legacy tokenless P2PK Sends wait for Operation Recovery or a new proof observation to verify
+their complete output allocation remotely; local advancement does not make that request.
+Subscription targets may be derived without recreating proof rows.
+
+Operation Recovery owns the startup mint checks. The proof watcher discovers subscriptions using
+local evidence and does not repeat those checks, either per Send or in a batch. Subscription setup
+therefore proceeds while recovery requests are still outstanding. The subscription transport keeps
+its existing polling and WebSocket observation paths. New observations still go through Send's
+validation, including complete-allocation verification for legacy tokenless P2PK records.
 The watcher retains its ADR-0014 shutdown semantics and defers pending-event discovery until Send's
 publication returns. This does not add a standalone Send processor or change startup recovery.

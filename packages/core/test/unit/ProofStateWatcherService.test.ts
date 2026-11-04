@@ -1,9 +1,6 @@
-import { Amount, type Proof, type ProofState } from '@cashu/cashu-ts';
+import { Amount, type ProofState } from '@cashu/cashu-ts';
 import { afterEach, describe, expect, it, mock } from 'bun:test';
-import {
-  ProofStateWatcherService,
-  type ProofStateRemote,
-} from '../../services/watchers/ProofStateWatcherService.ts';
+import { ProofStateWatcherService } from '../../services/watchers/ProofStateWatcherService.ts';
 import type { SubscriptionManager } from '../../infra/SubscriptionManager.ts';
 import type { CoreProof } from '../../types.ts';
 import { buildYHexMapsForSecrets } from '../../utils.ts';
@@ -35,25 +32,10 @@ async function harness(startup = false) {
     await acquire?.();
     return { subId: 'proofs', unsubscribe };
   });
-  const states = new Map<string, ProofState['state']>();
-  const checked = deferred();
-  const remote: ProofStateRemote = {
-    checkProofStates: mock(
-      async (_url: string, _unit: string, proofs: Pick<Proof, 'id' | 'secret'>[]) => {
-        checked.resolve();
-        return proofs.map(({ secret }) => ({
-          Y: yOf(secret),
-          state: states.get(secret) ?? 'UNSPENT',
-          witness: null,
-        }));
-      },
-    ),
-  };
   const watcher = new ProofStateWatcherService(
     { subscribe } as unknown as SubscriptionManager,
     env.repositories.mintRepository,
     env.service,
-    remote,
     env.eventBus,
     env.logger,
     { watchExistingInflightOnStart: startup },
@@ -75,14 +57,10 @@ async function harness(startup = false) {
   };
   return {
     ...env,
-    sendRemote: env.remote,
     watcher,
     subscribe,
     unsubscribe,
     subscribed,
-    checked,
-    states,
-    remote,
     seed,
     blockAcquisition: (run: () => Promise<void>) => {
       acquire = run;
@@ -168,7 +146,6 @@ describe('Proof watcher with real Send coordination', () => {
     expect((await h.service.getOperation('completed-locally'))?.state).toBe('finalized');
     expect((await h.service.getOperation('waiting'))?.state).toBe('pending');
     expect(h.remote.checkProofStates).not.toHaveBeenCalled();
-    expect(h.sendRemote.checkProofStates).not.toHaveBeenCalled();
     expect(h.subscribe).not.toHaveBeenCalled();
   });
 
@@ -218,19 +195,16 @@ describe('Proof watcher with real Send coordination', () => {
       expect(await h.stateOf(secret)).toBe('inflight');
   });
 
-  it('batches startup state checks by mint and unit and applies their evidence through Send', async () => {
+  it('discovers pending subscriptions and locally completed Sends without polling', async () => {
     const h = await setup(true);
+    await h.seed('completed-locally', ['spent'], 'spent');
     await h.seed('send', ['first', 'last']);
-    h.states.set('first', 'SPENT');
-    h.states.set('last', 'SPENT');
-    const done = deferred();
-    h.eventBus.on('send:finalized', () => {
-      done.resolve();
-    });
     await h.watcher.start();
-    await done.promise;
-    expect(h.remote.checkProofStates).toHaveBeenCalledTimes(1);
-    expect((await h.service.getOperation('send'))?.state).toBe('finalized');
+    await h.subscribed.promise;
+    expect(h.remote.checkProofStates).not.toHaveBeenCalled();
+    expect((await h.service.getOperation('completed-locally'))?.state).toBe('finalized');
+    expect((await h.service.getOperation('send'))?.state).toBe('pending');
+    expect(h.subscribe.mock.calls[0]![2]).toEqual([yOf('first'), yOf('last')]);
   });
 
   it('keeps startup discovery disabled while observing new pending Sends', async () => {

@@ -1,4 +1,4 @@
-import type { Proof, ProofState } from '@cashu/cashu-ts';
+import type { ProofState } from '@cashu/cashu-ts';
 import type { EventBus, CoreEvents } from '@core/events';
 import type { SubscriptionManager, UnsubscribeHandler } from '@core/infra/SubscriptionManager.ts';
 import type { Logger } from '../../logging/Logger.ts';
@@ -16,17 +16,8 @@ function toKey(mintUrl: string, secret: string): ProofKey {
 
 type ProofStateNotification = { Y: string; state: ProofState['state'] };
 
-/** Remote proof-state checks for the startup scan; no Wallet persistence authority. */
-export interface ProofStateRemote {
-  checkProofStates(
-    mintUrl: string,
-    unit: string,
-    proofs: Pick<Proof, 'id' | 'secret'>[],
-  ): Promise<ProofState[]>;
-}
-
 export interface ProofStateWatcherOptions {
-  /** Scan pending Sends and their proof observations on start (default: true). */
+  /** Discover subscriptions for pending Sends on start (default: true); recovery runs separately. */
   watchExistingInflightOnStart?: boolean;
 }
 
@@ -57,7 +48,6 @@ export class ProofStateWatcherService {
       | 'advancePendingOperation'
       | 'applyProofStateObservation'
     >,
-    private readonly remote: ProofStateRemote,
     private readonly bus: EventBus<CoreEvents>,
     private readonly logger?: Logger,
     options: ProofStateWatcherOptions = { watchExistingInflightOnStart: true },
@@ -322,64 +312,12 @@ export class ProofStateWatcherService {
 
   private async bootstrapInflightProofs(): Promise<void> {
     const operations = await this.sendOperationService.getPendingOperations();
-    if (!this.running) return;
-    // Reassess locally completed and legacy Sends without delaying the batched proof-state scan.
-    await Promise.all([
-      (async () => {
-        for (const operation of operations) {
-          if (!this.running) return;
-          await this.discoverPendingSend(operation.id);
-        }
-      })(),
-      this.checkExistingProofs(operations.map((operation) => operation.id)),
-    ]);
-  }
-
-  private async checkExistingProofs(operationIds: string[]): Promise<void> {
-    const batches = new Map<string, SendProofObservationTarget[]>();
-    for (const operationId of operationIds) {
-      const targets = await this.sendOperationService.getProofObservationTargets(operationId);
+    // Operation Recovery owns startup mint checks. Discovery uses only local evidence, so a
+    // stalled legacy check cannot delay subscriptions for other Sends. Transport polling remains
+    // responsible for observing current proof state alongside WebSocket notifications.
+    for (const operation of operations) {
       if (!this.running) return;
-      for (const target of targets) {
-        if (target.state !== 'inflight') continue;
-        const key = `${target.mintUrl}::${target.unit}`;
-        const batch = batches.get(key) ?? [];
-        batch.push(target);
-        batches.set(key, batch);
-      }
-    }
-    for (const targets of batches.values()) {
-      if (!this.running) return;
-      const { mintUrl, unit } = targets[0]!;
-      if (!(await this.mintService.isTrustedMint(mintUrl)) || !this.running) continue;
-      try {
-        const states = await this.remote.checkProofStates(mintUrl, unit, targets);
-        if (!this.running) return;
-        if (!Array.isArray(states) || states.length !== targets.length) {
-          throw new Error('Malformed proof state check response');
-        }
-        const spentBySend = new Map<string, string[]>();
-        for (const [index, target] of targets.entries()) {
-          if (states[index]?.state !== 'SPENT') continue;
-          const secrets = spentBySend.get(target.operationId) ?? [];
-          secrets.push(target.secret);
-          spentBySend.set(target.operationId, secrets);
-        }
-        for (const [operationId, secrets] of spentBySend) {
-          if (!this.running) return;
-          try {
-            await this.sendOperationService.applyProofStateObservation(operationId, secrets);
-          } catch (err) {
-            this.logger?.warn('Failed to apply startup Send proof observations', {
-              operationId,
-              mintUrl,
-              err,
-            });
-          }
-        }
-      } catch (err) {
-        this.logger?.warn('Failed to check Send proofs', { mintUrl, unit, err });
-      }
+      await this.discoverPendingSend(operation.id);
     }
   }
 

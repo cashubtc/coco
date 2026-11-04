@@ -1062,19 +1062,14 @@ export class SendOperationService {
   }
 
   /**
-   * Reassess persisted proof evidence without polling ordinary Sends. Legacy tokenless P2PK
-   * records need their existing bounded remote verification because output rows may be absent.
+   * Reassess persisted proof evidence without polling. Legacy tokenless P2PK records wait for
+   * Operation Recovery or a new observation to verify their complete allocation with the mint.
    * The completion transition rechecks state, exact proofs and ownership in its transaction.
    */
   async advancePendingOperation(operationId: string): Promise<void> {
     const operation = await this.operationQueries.getById(operationId);
     if (!operation || operation.state !== 'pending') return;
-    if (isLegacyTokenlessP2pkSend(operation)) {
-      if (await this.mintQueries.isTrustedMint(operation.mintUrl)) {
-        await this.checkPendingOperation(operation);
-      }
-      return;
-    }
+    if (isLegacyTokenlessP2pkSend(operation)) return;
     const secrets = getSendProofSecrets(operation);
     const proofs = await this.proofQueries.getProofsBySecrets(operation.mintUrl, secrets);
     if (

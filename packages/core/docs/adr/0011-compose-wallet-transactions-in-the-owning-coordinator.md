@@ -172,3 +172,8 @@ through `completePendingSend` in one transaction. Its background watcher owns no
 transaction runner; targets only guide observation. The final proof update and Send completion
 remain atomic, unlike independently committed canonical Quote Observations. The retired unowned
 inflight compatibility path is documented in ADR-0015.
+
+Send Operation Recovery owns startup mint checks. Proof watcher discovery uses local evidence and
+installs subscriptions without repeating recovery's requests. Local Send advancement does not poll;
+legacy tokenless P2PK verification remains in recovery and in the application of new observations.
+The subscription transport retains its existing polling and WebSocket observation paths.

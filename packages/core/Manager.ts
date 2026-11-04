@@ -151,7 +151,7 @@ export interface CocoConfig {
     /** Proof state watcher (enabled by default) */
     proofStateWatcher?: {
       disabled?: boolean;
-      /** Scan pending Sends and their proofs on start (default: true). */
+      /** Discover subscriptions for pending Sends on start (default: true); recovery runs separately. */
       watchExistingInflightOnStart?: boolean;
     };
     /** Melt quote watcher (enabled by default) */
@@ -426,12 +426,6 @@ export class Manager {
         this.subscriptions,
         this.mintService,
         this.sendOperationService,
-        {
-          checkProofStates: async (mintUrl, unit, proofs) => {
-            const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl, unit);
-            return wallet.checkProofsStates(proofs);
-          },
-        },
         this.eventBus,
         this.getChildLogger('ProofStateWatcherService'),
         {

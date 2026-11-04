@@ -14,10 +14,7 @@ import type {
 import { MintOperationError, NetworkError } from '../../models/Error.ts';
 import { makeOutputDataCreator } from '../fixtures/OutputDataCreator.ts';
 import { SendOpsApi } from '../../api/SendOpsApi.ts';
-import {
-  ProofStateWatcherService,
-  type ProofStateRemote,
-} from '../../services/watchers/ProofStateWatcherService.ts';
+import { ProofStateWatcherService } from '../../services/watchers/ProofStateWatcherService.ts';
 import type { SubscriptionManager, SubscriptionCallback } from '../../infra/SubscriptionManager.ts';
 
 type Environment = Awaited<ReturnType<typeof createSendEnvironment>>;
@@ -289,7 +286,6 @@ describe('SendOperationService', () => {
         subscriptions as unknown as SubscriptionManager,
         { isTrustedMint: async () => true },
         service,
-        {} as ProofStateRemote,
         eventBus,
         logger,
         { watchExistingInflightOnStart: false },
