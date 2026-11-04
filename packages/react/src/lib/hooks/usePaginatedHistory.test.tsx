@@ -98,6 +98,76 @@ describe('usePaginatedHistory', () => {
     expect(result.current.hasMore).toBe(false);
   });
 
+  it('serializes foreground page changes and commits the newest requested page', async () => {
+    const mock = historyManager();
+    const initial = createDeferred<HistoryEntry[]>();
+    const firstPage = createDeferred<HistoryEntry[]>();
+    const secondPage = createDeferred<HistoryEntry[]>();
+    const initialEntries = [entry('initial', 1)];
+    const pageOneEntries = [entry('page-one', 2)];
+    const pageTwoEntries = [entry('page-two', 3)];
+    mock.getPaginatedHistory
+      .mockReturnValueOnce(initial.promise)
+      .mockReturnValueOnce(firstPage.promise)
+      .mockReturnValueOnce(secondPage.promise);
+    const { result } = renderHook(() => usePaginatedHistory(2), {
+      wrapper: createHookWrapper(mock.manager),
+    });
+
+    let pageOneRead!: Promise<void>;
+    let pageTwoRead!: Promise<void>;
+    act(() => {
+      pageOneRead = result.current.goToPage(1);
+      pageTwoRead = result.current.goToPage(2);
+    });
+    expect(mock.getPaginatedHistory).toHaveBeenCalledTimes(1);
+
+    initial.resolve(initialEntries);
+    await flush();
+    expect(mock.getPaginatedHistory).toHaveBeenNthCalledWith(2, 2, 2);
+    expect(mock.getPaginatedHistory).toHaveBeenCalledTimes(2);
+
+    firstPage.resolve(pageOneEntries);
+    await flush();
+    expect(mock.getPaginatedHistory).toHaveBeenNthCalledWith(3, 4, 2);
+    expect(mock.getPaginatedHistory).toHaveBeenCalledTimes(3);
+
+    secondPage.resolve(pageTwoEntries);
+    await act(async () => {
+      await Promise.all([pageOneRead, pageTwoRead]);
+    });
+    expect(result.current.history).toEqual(pageTwoEntries);
+  });
+
+  it('runs a waiting foreground intent after the preceding read fails', async () => {
+    const mock = historyManager();
+    const failedPage = createDeferred<HistoryEntry[]>();
+    const recoveredPage = [entry('recovered-page', 3)];
+    mock.getPaginatedHistory
+      .mockResolvedValueOnce([entry('initial', 1)])
+      .mockReturnValueOnce(failedPage.promise)
+      .mockResolvedValueOnce(recoveredPage);
+    const { result } = renderHook(() => usePaginatedHistory(2), {
+      wrapper: createHookWrapper(mock.manager),
+    });
+    await flush();
+
+    let failedRead!: Promise<void>;
+    let recoveredRead!: Promise<void>;
+    act(() => {
+      failedRead = result.current.goToPage(1);
+      recoveredRead = result.current.goToPage(2);
+    });
+
+    await act(async () => {
+      failedPage.reject(new Error('page one failed'));
+      await expect(failedRead).rejects.toThrow('page one failed');
+      await recoveredRead;
+    });
+    expect(mock.getPaginatedHistory).toHaveBeenNthCalledWith(3, 4, 2);
+    expect(result.current.history).toEqual(recoveredPage);
+  });
+
   it('runs one queued invalidation after an in-flight failure', async () => {
     const mock = historyManager();
     const pending = createDeferred<HistoryEntry[]>();
@@ -142,14 +212,70 @@ describe('usePaginatedHistory', () => {
       <ManagerProvider manager={selectedManager}>{children}</ManagerProvider>
     );
     const { result, rerender } = renderHook(() => usePaginatedHistory(2), { wrapper: Wrapper });
+    let queuedPageRead!: Promise<void>;
+    act(() => {
+      queuedPageRead = result.current.goToPage(3);
+    });
     selectedManager = second.manager;
     rerender();
     await flush();
     expect(result.current.history).toEqual(replacement);
+    expect(second.getPaginatedHistory).toHaveBeenCalledTimes(1);
 
     oldRead.resolve([entry('stale', 9)]);
-    await flush();
+    await act(async () => {
+      await queuedPageRead;
+    });
     expect(result.current.history).toEqual(replacement);
+    expect(second.getPaginatedHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops a waiting page intent when the page size changes', async () => {
+    const mock = historyManager();
+    const oldRead = createDeferred<HistoryEntry[]>();
+    const replacement = [entry('replacement', 2)];
+    mock.getPaginatedHistory
+      .mockReturnValueOnce(oldRead.promise)
+      .mockResolvedValueOnce(replacement);
+    let selectedPageSize = 2;
+    const { result, rerender } = renderHook(() => usePaginatedHistory(selectedPageSize), {
+      wrapper: createHookWrapper(mock.manager),
+    });
+    let queuedPageRead!: Promise<void>;
+    act(() => {
+      queuedPageRead = result.current.goToPage(3);
+    });
+
+    selectedPageSize = 5;
+    rerender();
+    await flush();
+    expect(mock.getPaginatedHistory).toHaveBeenNthCalledWith(2, 0, 5);
+    expect(result.current.history).toEqual(replacement);
+
+    oldRead.resolve([entry('stale', 9)]);
+    await act(async () => {
+      await queuedPageRead;
+    });
+    expect(mock.getPaginatedHistory).toHaveBeenCalledTimes(2);
+    expect(result.current.history).toEqual(replacement);
+  });
+
+  it('does not dispatch a waiting page intent after unmount', async () => {
+    const mock = historyManager();
+    const oldRead = createDeferred<HistoryEntry[]>();
+    mock.getPaginatedHistory.mockReturnValue(oldRead.promise);
+    const { result, unmount } = renderHook(() => usePaginatedHistory(2), {
+      wrapper: createHookWrapper(mock.manager),
+    });
+    let queuedPageRead!: Promise<void>;
+    act(() => {
+      queuedPageRead = result.current.goToPage(3);
+    });
+
+    unmount();
+    oldRead.resolve([entry('stale', 9)]);
+    await queuedPageRead;
+    expect(mock.getPaginatedHistory).toHaveBeenCalledTimes(1);
   });
 
   it('keeps one logical history listener under StrictMode', async () => {
