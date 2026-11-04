@@ -1,5 +1,5 @@
 import { Amount } from '@cashu/cashu-ts';
-import { Manager } from '@cashu/coco-core';
+import { initializeCoco } from '@cashu/coco-core';
 import {
   type Mint,
   type Keyset,
@@ -86,29 +86,62 @@ function derivedKeypair(derivationIndex: number, purpose: KeypairPurpose) {
   } as const;
 }
 
-/** Exercise the real key-management gateway on an initialized adapter without starting watchers. */
+export interface KeypairAllocatorForTest {
+  allocate(purpose: KeypairPurpose): Promise<Keypair>;
+  dispose(): Promise<void>;
+}
+
+/**
+ * Open a Coco Session without background owners and expose the real key-management gateway on an
+ * initialized adapter. Open it before holding storage locks: session startup also uses storage.
+ */
+export async function openKeypairAllocatorForTest(
+  repositories: Repositories,
+): Promise<KeypairAllocatorForTest> {
+  let allocate: KeypairAllocatorForTest['allocate'] | undefined;
+  const manager = await initializeCoco({
+    repo: repositories,
+    seedGetter: async () => new Uint8Array(64),
+    plugins: [
+      {
+        name: 'keypair-allocation-contract',
+        required: ['keyRingService'],
+        onInit: ({ services: { keyRingService } }) => {
+          allocate = (purpose) =>
+            purpose === 'p2pk'
+              ? keyRingService.generateNewKeyPair({ dumpSecretKey: true })
+              : keyRingService.generateMintQuoteKeyPair();
+        },
+      },
+    ],
+    watchers: {
+      mintOperationWatcher: { disabled: true },
+      meltQuoteWatcher: { disabled: true },
+      proofStateWatcher: { disabled: true },
+    },
+    processors: {
+      mintOperationProcessor: { disabled: true },
+      meltSettlementProcessor: { disabled: true },
+      mintSwapOperationProcessor: { disabled: true },
+    },
+  });
+  if (!allocate) {
+    await manager.dispose();
+    throw new Error('Keypair allocation contract was not initialized');
+  }
+  return { allocate, dispose: () => manager.dispose() };
+}
+
+/** Allocate one keypair through a short-lived {@link openKeypairAllocatorForTest} session. */
 export async function allocateKeypairForTest(
   repositories: Repositories,
   purpose: KeypairPurpose,
 ): Promise<Keypair> {
-  const manager = new Manager(repositories, async () => new Uint8Array(64));
-  let allocate: (() => Promise<Keypair>) | undefined;
-  manager.use({
-    name: 'keypair-allocation-contract',
-    required: ['keyRingService'],
-    onInit: ({ services: { keyRingService } }) => {
-      allocate = () =>
-        purpose === 'p2pk'
-          ? keyRingService.generateNewKeyPair({ dumpSecretKey: true })
-          : keyRingService.generateMintQuoteKeyPair();
-    },
-  });
+  const allocator = await openKeypairAllocatorForTest(repositories);
   try {
-    await manager.initPlugins();
-    if (!allocate) throw new Error('Keypair allocation contract was not initialized');
-    return await allocate();
+    return await allocator.allocate(purpose);
   } finally {
-    await manager.dispose();
+    await allocator.dispose();
   }
 }
 
@@ -226,10 +259,13 @@ export function runKeypairAllocationContract(
     if (options.createSharedRepositories) {
       it('coordinates independent roots sharing one physical store', async () => {
         const { first, second, dispose } = await options.createSharedRepositories!();
+        // One session per root keeps startup out of the contention under test.
+        const firstAllocator = await openKeypairAllocatorForTest(first);
+        const secondAllocator = await openKeypairAllocatorForTest(second);
         try {
           const indexes = await Promise.all([
-            ...Array.from({ length: 50 }, () => allocateKeypairForTest(first, 'nut20_mint_quote')),
-            ...Array.from({ length: 50 }, () => allocateKeypairForTest(second, 'nut20_mint_quote')),
+            ...Array.from({ length: 50 }, () => firstAllocator.allocate('nut20_mint_quote')),
+            ...Array.from({ length: 50 }, () => secondAllocator.allocate('nut20_mint_quote')),
           ]);
           expectExactIndexRange(
             indexes.map((key) => key.derivationIndex!),
@@ -239,8 +275,8 @@ export function runKeypairAllocationContract(
           );
 
           const p2pk = await Promise.all([
-            allocateKeypairForTest(first, 'p2pk'),
-            allocateKeypairForTest(second, 'p2pk'),
+            firstAllocator.allocate('p2pk'),
+            secondAllocator.allocate('p2pk'),
           ]);
           expectExactIndexRange(
             p2pk.map((key) => key.derivationIndex!),
@@ -249,7 +285,11 @@ export function runKeypairAllocationContract(
             expect,
           );
         } finally {
-          await dispose();
+          try {
+            await Promise.all([firstAllocator.dispose(), secondAllocator.dispose()]);
+          } finally {
+            await dispose();
+          }
         }
       });
     }

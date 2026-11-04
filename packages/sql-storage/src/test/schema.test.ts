@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { Manager } from '@cashu/coco-core';
+import { initializeCoco } from '@cashu/coco-core';
 import { SqlStorageRepositories } from '../repositories.ts';
 import {
   ensureSchemaUpTo,
@@ -63,10 +63,20 @@ const EXPECTED_MIGRATION_IDS = [
 ] as const;
 
 async function allocateP2pkKey(db: SqlDatabase) {
-  const manager = new Manager(
-    new SqlStorageRepositories({ database: db }),
-    async () => new Uint8Array(64),
-  );
+  const manager = await initializeCoco({
+    repo: new SqlStorageRepositories({ database: db }),
+    seedGetter: async () => new Uint8Array(64),
+    watchers: {
+      mintOperationWatcher: { disabled: true },
+      meltQuoteWatcher: { disabled: true },
+      proofStateWatcher: { disabled: true },
+    },
+    processors: {
+      mintOperationProcessor: { disabled: true },
+      meltSettlementProcessor: { disabled: true },
+      mintSwapOperationProcessor: { disabled: true },
+    },
+  });
   try {
     return await manager.keyring.generateKeyPair(true);
   } finally {

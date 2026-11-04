@@ -24,9 +24,10 @@ allowance for already-started work to finish. Temporary background suspension an
 shutdown guarantees require separate decisions. In particular, this decision does not supersede
 [ADR-0014](0014-let-proof-watcher-shutdown-finish-started-work.md).
 
-Whether factories should become the only supported initialization path is deferred to a separate
-follow-up. This decision does not retire direct `Manager` construction or choose a replacement for
-the documented manual activation sequence; its migration remains to be resolved.
+Start every Coco Session through `Manager.create()`, which `initializeCoco()` delegates to. The
+`Manager` constructor is private, and the manual sequence of direct construction, `initPlugins()` and
+per-owner enables is retired rather than replaced. A Manager whose owners were never started would be
+a lifecycle state that fixed selection exists to remove.
 
 Do not add automatic watcher registration retry timers in this refactor. Removing enable controls
 also removes their explicit failed-activation retry trigger; preserve error reporting, retained

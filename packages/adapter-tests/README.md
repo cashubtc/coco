@@ -89,6 +89,8 @@ Transaction contract options:
 - `allocateKeypairForTest(repositories, purpose)` generates a deterministic key through key management
   on an initialized adapter. It creates and disposes its Coco Session without starting background
   watchers; allocation logic remains in core's scoped command.
+- `openKeypairAllocatorForTest(repositories)` keeps that Coco Session open and returns `allocate` and
+  `dispose`. Open it before a test holds storage locks, because session startup also uses storage.
 - `runAuthSessionRepositoryContract()` verifies the NUT-21/22 auth session
   persistence contract.
 - `runKeysetRepositoryContract()` verifies immutable key storage, empty-key backfilling,

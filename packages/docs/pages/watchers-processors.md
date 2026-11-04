@@ -173,6 +173,9 @@ Move selection and options into `initializeCoco({ watchers, processors })`. Repl
 calls to individual disables with `await coco.dispose()`. A different selection requires a new
 Coco Session, including its normal startup recovery. There is no persistence migration.
 
+Direct `new Manager(...)` construction and `initPlugins()` are removed with the manual activation
+sequence. Start every Coco Session with `initializeCoco()` or `Manager.create()`.
+
 `ensureSubscriptions()` never activates an omitted owner or performs a recovery sweep.
 
 ### Shared Mint Swap observation

@@ -332,30 +332,21 @@ Called when `manager.dispose()` is invoked. Use this for:
 
 ## Plugin Initialization Order
 
-When using `initializeCoco()`:
+`initializeCoco()` and `Manager.create()` start a Coco Session in this order:
 
 1. Manager is constructed with all services
-2. `manager.initPlugins()` is awaited:
+2. Plugins are initialized:
    - All plugins' `onInit` hooks run in registration order
    - All plugins' `onReady` hooks run in registration order
-3. Watchers and processors are enabled
+3. Selected watchers and processors start, and startup Operation Recovery runs
 4. Manager is returned, fully initialized
 
-This ensures that `manager.ext` contains all registered extensions before the manager is returned to the caller.
+This ensures that `manager.ext` contains all registered extensions before the manager is returned to
+the caller. Plugin hooks also run before any background work, so `onInit` can subscribe to events
+emitted during startup.
 
-## Direct Manager Instantiation
-
-If you instantiate `Manager` directly instead of using `initializeCoco()`, you must call `initPlugins()` manually:
-
-```ts
-const manager = new Manager(repositories, seedGetter, logger, webSocketFactory, [myPlugin]);
-
-// Required for plugins to initialize and extensions to be available
-await manager.initPlugins();
-
-// Now extensions are available
-manager.ext.myPlugin.doSomething();
-```
+`Manager` cannot be constructed directly. Pass plugins through `initializeCoco({ plugins })`, or
+register them later with `manager.use(plugin)`.
 
 ## Error Handling
 

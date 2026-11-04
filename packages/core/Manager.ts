@@ -242,45 +242,13 @@ export class CocoInitializationError extends Error {
   }
 }
 
-const initializeSession = Symbol('initializeSession');
-
 /**
- * Initializes and configures a new Coco Cashu manager instance
+ * Starts a Coco Session and returns its Manager. Equivalent to {@link Manager.create}.
  * @param config - Configuration options including repositories, seed, and optional features
  * @returns A fully initialized Manager instance
  */
 export async function initializeCoco(config: CocoConfig): Promise<Manager> {
-  validateMintSwapProcessorConfiguration(config.processors?.mintSwapOperationProcessor);
-  await config.repo.init();
-  const coco = new Manager(
-    config.repo,
-    config.seedGetter,
-    config.logger,
-    config.webSocketFactory,
-    config.plugins,
-    config.watchers,
-    config.processors,
-    config.subscriptions,
-    config.outputDataCreator,
-    config.requestRateLimit,
-  );
-
-  try {
-    await coco[initializeSession]();
-
-    return coco;
-  } catch (error) {
-    try {
-      await coco.dispose();
-    } catch (cleanupError) {
-      throw new CocoInitializationError(
-        'Coco initialization failed and cleanup could not be confirmed',
-        'unconfirmed',
-        new AggregateError([error, cleanupError]),
-      );
-    }
-    throw new CocoInitializationError('Coco initialization failed', 'confirmed', error);
-  }
+  return Manager.create(config);
 }
 
 export class Manager {
@@ -340,19 +308,58 @@ export class Manager {
   private disposed = false;
   private disposePromise?: Promise<void>;
   private readonly outputDataCreator?: OutputDataCreator;
-  constructor(
-    repositories: Repositories,
-    seedGetter: () => Promise<Uint8Array>,
-    logger?: Logger,
-    webSocketFactory?: WebSocketFactory,
-    plugins?: Plugin[],
-    watchers?: CocoConfig['watchers'],
-    processors?: CocoConfig['processors'],
-    subscriptions?: CocoConfig['subscriptions'],
-    outputDataCreator?: OutputDataCreator,
-    requestRateLimit?: CocoConfig['requestRateLimit'],
-  ) {
-    validateMintSwapProcessorConfiguration(processors?.mintSwapOperationProcessor);
+
+  /**
+   * Starts a Coco Session: initializes storage and plugins, starts the selected Background Watchers
+   * and Background Processors, and runs startup Operation Recovery. Selection and options are fixed
+   * for the session (ADR-0017); call {@link Manager.dispose} to end it.
+   * @param config - Configuration options including repositories, seed, and optional features
+   * @returns A fully initialized Manager instance
+   * @throws {CocoInitializationError} When initialization fails; reports whether cleanup completed.
+   */
+  static async create(config: CocoConfig): Promise<Manager> {
+    validateMintSwapProcessorConfiguration(config.processors?.mintSwapOperationProcessor);
+    await config.repo.init();
+    const coco = new Manager(config);
+
+    try {
+      await coco.initialize();
+
+      return coco;
+    } catch (error) {
+      try {
+        await coco.dispose();
+      } catch (cleanupError) {
+        throw new CocoInitializationError(
+          'Coco initialization failed and cleanup could not be confirmed',
+          'unconfirmed',
+          new AggregateError([error, cleanupError]),
+        );
+      }
+      throw new CocoInitializationError('Coco initialization failed', 'confirmed', error);
+    }
+  }
+
+  /**
+   * Not a supported way to create a Manager. Use {@link Manager.create} or `initializeCoco()`.
+   *
+   * Construction only wires services. It does not initialize storage or plugins, start Background
+   * Watchers or Background Processors, or run startup Operation Recovery. A Manager constructed by
+   * bypassing this private constructor is unsupported.
+   */
+  private constructor(config: CocoConfig) {
+    const {
+      repo: repositories,
+      seedGetter,
+      logger,
+      webSocketFactory,
+      plugins,
+      watchers,
+      processors,
+      subscriptions,
+      outputDataCreator,
+      requestRateLimit,
+    } = config;
     this.mintSwapOperationRepository = repositories.mintSwap.operationRepository;
     this.logger = logger ?? new NullLogger();
     this.eventBus = this.createEventBus();
@@ -530,12 +537,8 @@ export class Manager {
     this.pluginHost.use(plugin);
   }
 
-  /**
-   * Initialize the plugin system.
-   * This is called automatically by `initializeCoco()`.
-   * Only call this directly if you instantiate Manager without using the factory.
-   */
-  async initPlugins(): Promise<void> {
+  /** Initialize the plugin system before any owner starts so extensions are available. */
+  private async initPlugins(): Promise<void> {
     const services: ServiceMap = {
       mintService: this.mintService,
       walletService: this.walletService,
@@ -602,8 +605,8 @@ export class Manager {
     return this.eventBus.off(event, handler);
   }
 
-  /** Internal initializer wiring for the session's fixed owners (ADR-0017). */
-  async [initializeSession](): Promise<void> {
+  /** Startup sequence for the session's fixed owners (ADR-0017); called once by `create()`. */
+  private async initialize(): Promise<void> {
     // Initialize plugin system (must complete before watchers for extensions to be available)
     await this.initPlugins();
 
