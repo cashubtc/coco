@@ -30,17 +30,32 @@ export const usePaginatedHistory = (pageSize = 100): UsePaginatedHistoryResult =
   const [isFetching, setIsFetching] = useState(false);
 
   const runRead = useCallback(async (intent: ReadIntent): Promise<void> => {
-    if (fetchingRef.current) {
+    const generation = generationRef.current;
+    const selectedManager = managerRef.current;
+    const selectedPageSize = pageSizeRef.current;
+
+    while (fetchingRef.current) {
       if (intent.background) {
         queuedInvalidationRef.current = true;
         return activeReadRef.current ?? Promise.resolve();
       }
-      await activeReadRef.current;
+
+      try {
+        await (activeReadRef.current ?? Promise.resolve());
+      } catch {
+        // The caller that started the failed read receives its error. A later foreground intent
+        // still needs to run rather than inheriting that failure.
+      }
     }
 
-    const selectedManager = managerRef.current;
-    const selectedPageSize = pageSizeRef.current;
-    const generation = generationRef.current;
+    if (
+      generation !== generationRef.current ||
+      selectedManager !== managerRef.current ||
+      selectedPageSize !== pageSizeRef.current
+    ) {
+      return;
+    }
+
     const offset = intent.mode === 'infinite' ? 0 : intent.start;
     const limit = intent.mode === 'infinite' ? intent.start + selectedPageSize : selectedPageSize;
     fetchingRef.current = true;
