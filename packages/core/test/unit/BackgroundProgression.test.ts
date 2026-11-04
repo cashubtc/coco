@@ -15,6 +15,7 @@ import type { PendingMeltOperation } from '../../operations/melt/MeltOperation.t
 import type { Repositories } from '../../repositories/index.ts';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 import { buildYHexMapsForSecrets } from '../../utils.ts';
+import { pendingSend } from '../fixtures/SendOperation.ts';
 import { mintQuoteFromBolt11Fixture } from '../normalizedMintQuoteFixtures.ts';
 
 const mintUrl = 'https://background.test';
@@ -624,18 +625,18 @@ describe.each(['memory', 'sqlite'] as const)('background progression (%s)', (ada
     'allows an awaited proof-state listener to call %s and releases the wire subscription',
     async (stop) => {
       const secrets = ['spent-before-shutdown', 'still-inflight-after-shutdown'];
-      await repo.proofRepository.saveProofs(
+      const proofs = secrets.map((secret) => ({
+        id: keysetId,
+        amount: Amount.from(1),
+        C: keys['1'],
+        secret,
         mintUrl,
-        secrets.map((secret) => ({
-          id: keysetId,
-          amount: Amount.from(1),
-          C: keys['1'],
-          secret,
-          mintUrl,
-          unit: 'sat',
-          state: 'inflight' as const,
-        })),
-      );
+        unit: 'sat',
+        state: 'inflight' as const,
+        usedByOperationId: 'shutdown-send',
+      }));
+      await repo.proofRepository.saveProofs(mintUrl, proofs);
+      await repo.sendOperationRepository.create(pendingSend('shutdown-send', proofs));
       // Startup checks leave both proofs inflight, so the real watcher acquires a subscription.
       proofState = 'UNSPENT';
       await openSession({ watchers: { proofStateWatcher: {} } });
@@ -690,6 +691,145 @@ describe.each(['memory', 'sqlite'] as const)('background progression (%s)', (ada
       expect(eventsReceived).toBe(1);
     },
   );
+
+  it('subscribes to Sends while legacy startup recovery waits without duplicate discovery checks', async () => {
+    const input = {
+      id: keysetId,
+      amount: Amount.from(1),
+      C: keys['1'],
+      secret: 'legacy-input',
+      mintUrl,
+      unit: 'sat',
+      state: 'spent' as const,
+      usedByOperationId: 'legacy-send',
+    };
+    const inputs = [input, { ...input, secret: 'legacy-second-input' }];
+    const outputs = ['legacy-first', 'legacy-last'].map((secret) => ({ ...input, secret }));
+    const ordinary = {
+      ...input,
+      secret: 'ordinary-send-proof',
+      state: 'inflight' as const,
+      usedByOperationId: 'ordinary-send',
+    };
+    // Historical recovery retained the allocation and spent inputs, but no token or output rows.
+    await repo.proofRepository.saveProofs(mintUrl, [...inputs, ordinary]);
+    await repo.sendOperationRepository.create({
+      ...pendingSend('legacy-send', inputs, outputs),
+      method: 'p2pk',
+      methodData: { pubkey: keys['1'] },
+      revision: 0,
+      token: undefined,
+    });
+    await repo.sendOperationRepository.create(pendingSend('ordinary-send', [ordinary]));
+
+    const { yHexBySecret } = buildYHexMapsForSecrets([
+      ...outputs.map((proof) => proof.secret),
+      ordinary.secret,
+    ]);
+    const legacyYs = outputs.map((proof) => yHexBySecret.get(proof.secret)!);
+    let releaseRecovery!: () => void;
+    const recoveryGate = new Promise<void>((resolve) => {
+      releaseRecovery = resolve;
+    });
+    let recoveryStarted!: () => void;
+    const checking = new Promise<void>((resolve) => {
+      recoveryStarted = resolve;
+    });
+    let legacySpent = false;
+    const legacyChecks: string[][] = [];
+    const fetchBoundary = globalThis.fetch;
+    globalThis.fetch = (async (request, init) => {
+      const url = new URL(request instanceof Request ? request.url : String(request));
+      if (url.pathname !== '/v1/checkstate') return fetchBoundary(request, init);
+      const { Ys } = JSON.parse(String(init?.body)) as { Ys: string[] };
+      if (!Ys.some((y) => legacyYs.includes(y))) return fetchBoundary(request, init);
+      legacyChecks.push(Ys);
+      recoveryStarted();
+      await recoveryGate;
+      return Response.json({
+        states: Ys.map((Y) => ({ Y, state: legacySpent ? 'SPENT' : 'UNSPENT' })),
+      });
+    }) as typeof fetch;
+    proofState = 'UNSPENT';
+    const opening = openSession({ watchers: { proofStateWatcher: {} } });
+    try {
+      await checking;
+      // Let finite local discovery finish while every legacy HTTP check remains blocked.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const subscriptionFor = (secret: string) =>
+        socketRequests.find(
+          (request) =>
+            request.method === 'subscribe' &&
+            'filters' in request.params &&
+            request.params.filters.includes(yHexBySecret.get(secret)!),
+        );
+      const ordinarySubscription = subscriptionFor(ordinary.secret);
+      expect(ordinarySubscription).toBeDefined();
+      expect(subscriptionFor(outputs[0]!.secret)).toBeDefined();
+      expect(subscriptionFor(outputs[1]!.secret)).toBeDefined();
+      // One recovery check plus the hybrid transport's initial poll. Discovery adds no check.
+      expect(legacyChecks).toHaveLength(2);
+
+      const finalized: string[] = [];
+      let ordinaryCompleted!: () => void;
+      const ordinaryDone = new Promise<void>((resolve) => {
+        ordinaryCompleted = resolve;
+      });
+      let legacyCompleted!: () => void;
+      const legacyDone = new Promise<void>((resolve) => {
+        legacyCompleted = resolve;
+      });
+      events.on('send:finalized', ({ operationId }) => {
+        finalized.push(operationId);
+        if (operationId === 'ordinary-send') ordinaryCompleted();
+        if (operationId === 'legacy-send') legacyCompleted();
+      });
+      const notifySpent = (subscription: WsRequest, secret: string) =>
+        receiveSocketMessage({
+          data: JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'subscribe',
+            params: {
+              subId: subscription.params.subId,
+              payload: { Y: yHexBySecret.get(secret), state: 'SPENT' },
+            },
+          }),
+        });
+      notifySpent(ordinarySubscription!, ordinary.secret);
+      await ordinaryDone;
+      expect((await repo.sendOperationRepository.getById('ordinary-send'))?.state).toBe(
+        'finalized',
+      );
+
+      releaseRecovery();
+      await opening;
+      expect(legacyChecks).toHaveLength(2);
+      expect((await coco.ops.send.get('legacy-send'))?.state).toBe('pending');
+
+      // A later legacy observation still verifies the complete allocation before finalization.
+      legacySpent = true;
+      notifySpent(subscriptionFor(outputs[0]!.secret)!, outputs[0]!.secret);
+      await legacyDone;
+      expect(legacyChecks).toHaveLength(3);
+      expect(legacyChecks.at(-1)).toEqual(legacyYs);
+      expect((await coco.ops.send.get('legacy-send'))?.state).toBe('finalized');
+      expect(finalized).toEqual(['ordinary-send', 'legacy-send']);
+      for (const proof of inputs) {
+        expect(
+          (await repo.proofRepository.getProofBySecret(mintUrl, proof.secret))?.usedByOperationId,
+        ).toBeUndefined();
+      }
+      expect(
+        await repo.proofRepository.getProofsBySecrets(
+          mintUrl,
+          outputs.map((p) => p.secret),
+        ),
+      ).toEqual([]);
+    } finally {
+      releaseRecovery();
+      await opening;
+    }
+  });
 
   it.each(['dispose'] as const)(
     'allows an awaited Send completion listener to call %s',
