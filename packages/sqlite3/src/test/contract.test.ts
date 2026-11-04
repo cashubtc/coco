@@ -7,6 +7,7 @@ import {
   runRepositoryTransactionContract,
   runKeypairAllocationContract,
   allocateKeypairForTest,
+  openKeypairAllocatorForTest,
   runAuthSessionRepositoryContract,
   runKeysetRepositoryContract,
   runProofRepositoryContract,
@@ -159,6 +160,8 @@ describe('synchronous SQLite contention', () => {
     it(`returns prompt conflicts and restores settings (file alias: ${useAlias})`, async () => {
       const { first, second, firstDatabase, secondDatabase, dispose } =
         await createSharedRepositories(useAlias);
+      // Session startup also uses storage, so open the allocator before the owner holds its lock.
+      const allocator = await openKeypairAllocatorForTest(second);
       let release!: () => void;
       let entered!: () => void;
       const held = new Promise<void>((resolve) => {
@@ -183,7 +186,7 @@ describe('synchronous SQLite contention', () => {
         ).rejects.toBeInstanceOf(RepositoryTransactionConflictError);
         expect(performance.now() - started).toBeLessThan(1000);
         expect(contenderEntered).toBe(false);
-        await expect(allocateKeypairForTest(second, 'p2pk')).rejects.toBeInstanceOf(
+        await expect(allocator.allocate('p2pk')).rejects.toBeInstanceOf(
           RepositoryTransactionConflictError,
         );
         expect(performance.now() - started).toBeLessThan(1000);
@@ -211,7 +214,11 @@ describe('synchronous SQLite contention', () => {
         try {
           await owner;
         } finally {
-          await dispose();
+          try {
+            await allocator.dispose();
+          } finally {
+            await dispose();
+          }
         }
       }
     });
