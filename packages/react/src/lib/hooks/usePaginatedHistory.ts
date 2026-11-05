@@ -12,7 +12,7 @@ export type UsePaginatedHistoryResult = {
 };
 
 type Cursor = { mode: 'infinite' | 'page'; start: number };
-type ReadIntent = Cursor & { background: boolean };
+type ReadIntent = { cursor: Cursor | 'current' | 'next'; background: boolean };
 
 export const usePaginatedHistory = (pageSize = 100): UsePaginatedHistoryResult => {
   const manager = useManager();
@@ -56,8 +56,20 @@ export const usePaginatedHistory = (pageSize = 100): UsePaginatedHistoryResult =
       return;
     }
 
-    const offset = intent.mode === 'infinite' ? 0 : intent.start;
-    const limit = intent.mode === 'infinite' ? intent.start + selectedPageSize : selectedPageSize;
+    const cursor =
+      intent.cursor === 'current'
+        ? cursorRef.current
+        : intent.cursor === 'next'
+          ? {
+              mode: 'infinite' as const,
+              start:
+                cursorRef.current.mode === 'infinite'
+                  ? cursorRef.current.start + selectedPageSize
+                  : 0,
+            }
+          : intent.cursor;
+    const offset = cursor.mode === 'infinite' ? 0 : cursor.start;
+    const limit = cursor.mode === 'infinite' ? cursor.start + selectedPageSize : selectedPageSize;
     fetchingRef.current = true;
     setIsFetching(true);
 
@@ -65,7 +77,7 @@ export const usePaginatedHistory = (pageSize = 100): UsePaginatedHistoryResult =
       try {
         const entries = (await selectedManager.history.getPaginatedHistory(offset, limit)) ?? [];
         if (generation !== generationRef.current || selectedManager !== managerRef.current) return;
-        cursorRef.current = { mode: intent.mode, start: intent.start };
+        cursorRef.current = cursor;
         setHistory(entries);
         setHasMore(entries.length === limit);
       } catch (readError) {
@@ -81,8 +93,7 @@ export const usePaginatedHistory = (pageSize = 100): UsePaginatedHistoryResult =
           activeReadRef.current = null;
           if (queuedInvalidationRef.current) {
             queuedInvalidationRef.current = false;
-            const cursor = cursorRef.current;
-            void runReadRef.current({ ...cursor, background: true });
+            void runReadRef.current({ cursor: 'current', background: true });
           }
         }
       }
@@ -112,9 +123,12 @@ export const usePaginatedHistory = (pageSize = 100): UsePaginatedHistoryResult =
         queuedInvalidationRef.current = true;
         return;
       }
-      void runReadRef.current({ ...cursorRef.current, background: true });
+      void runReadRef.current({ cursor: 'current', background: true });
     });
-    void runReadRef.current({ mode: 'infinite', start: 0, background: true });
+    void runReadRef.current({
+      cursor: { mode: 'infinite', start: 0 },
+      background: true,
+    });
 
     return () => {
       unsubscribe();
@@ -126,14 +140,12 @@ export const usePaginatedHistory = (pageSize = 100): UsePaginatedHistoryResult =
   }, [manager, pageSize]);
 
   const refresh = useCallback(async () => {
-    await runReadRef.current({ ...cursorRef.current, background: false });
+    await runReadRef.current({ cursor: 'current', background: false });
   }, []);
 
   const loadMore = useCallback(async () => {
     if (!hasMore) return;
-    const start =
-      cursorRef.current.mode === 'infinite' ? cursorRef.current.start + pageSizeRef.current : 0;
-    await runReadRef.current({ mode: 'infinite', start, background: false });
+    await runReadRef.current({ cursor: 'next', background: false });
   }, [hasMore]);
 
   const goToPage = useCallback(async (page: number) => {
@@ -141,8 +153,7 @@ export const usePaginatedHistory = (pageSize = 100): UsePaginatedHistoryResult =
       throw new TypeError('History page must be a nonnegative safe integer');
     }
     await runReadRef.current({
-      mode: 'page',
-      start: page * pageSizeRef.current,
+      cursor: { mode: 'page', start: page * pageSizeRef.current },
       background: false,
     });
   }, []);

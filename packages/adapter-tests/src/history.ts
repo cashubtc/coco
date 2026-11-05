@@ -186,7 +186,7 @@ export function runHistoryProjectionContract(
     it('uses descending stable IDs to break created-time ties across pages', () =>
       withRepositories(options, async (repositories) => {
         const createdAt = 1_700_000_500_000;
-        for (const id of ['tie-a', 'tie-c', 'tie-b']) {
+        for (const id of ['tie-a', 'tie-c', 'tie-B']) {
           await repositories.mintSwap.operationRepository.create(
             createMintSwapFixtures(id, createdAt).prepared,
           );
@@ -195,7 +195,7 @@ export function runHistoryProjectionContract(
         const first = await repositories.historyRepository.getPaginatedHistoryEntries(2, 0);
         const second = await repositories.historyRepository.getPaginatedHistoryEntries(2, 2);
         expect(JSON.stringify([...first, ...second].map((entry) => entry.id))).toBe(
-          JSON.stringify(['mint-swap:tie-c', 'mint-swap:tie-b', 'mint-swap:tie-a']),
+          JSON.stringify(['mint-swap:tie-c', 'mint-swap:tie-a', 'mint-swap:tie-B']),
         );
       }));
   });

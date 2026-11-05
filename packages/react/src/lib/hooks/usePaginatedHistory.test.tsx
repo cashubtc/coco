@@ -139,6 +139,98 @@ describe('usePaginatedHistory', () => {
     expect(result.current.history).toEqual(pageTwoEntries);
   });
 
+  it('refreshes the page reached by an in-flight navigation', async () => {
+    const mock = historyManager();
+    const pageRead = createDeferred<HistoryEntry[]>();
+    const pageEntries = [entry('page', 2)];
+    const refreshedPageEntries = [entry('refreshed-page', 3)];
+    mock.getPaginatedHistory
+      .mockResolvedValueOnce([entry('initial', 1)])
+      .mockReturnValueOnce(pageRead.promise)
+      .mockResolvedValueOnce(refreshedPageEntries);
+    const { result } = renderHook(() => usePaginatedHistory(2), {
+      wrapper: createHookWrapper(mock.manager),
+    });
+    await flush();
+
+    let navigation!: Promise<void>;
+    let refresh!: Promise<void>;
+    act(() => {
+      navigation = result.current.goToPage(1);
+      refresh = result.current.refresh();
+    });
+    pageRead.resolve(pageEntries);
+    await act(async () => {
+      await Promise.all([navigation, refresh]);
+    });
+
+    expect(mock.getPaginatedHistory).toHaveBeenNthCalledWith(3, 2, 2);
+    expect(result.current.history).toEqual(refreshedPageEntries);
+  });
+
+  it('refreshes the expanded window reached by an in-flight load', async () => {
+    const mock = historyManager();
+    const loadRead = createDeferred<HistoryEntry[]>();
+    const loadedEntries = [entry('loaded', 3), entry('initial', 1)];
+    const refreshedEntries = [entry('refreshed', 4), ...loadedEntries];
+    mock.getPaginatedHistory
+      .mockResolvedValueOnce([entry('initial', 1), entry('older', 0)])
+      .mockReturnValueOnce(loadRead.promise)
+      .mockResolvedValueOnce(refreshedEntries);
+    const { result } = renderHook(() => usePaginatedHistory(2), {
+      wrapper: createHookWrapper(mock.manager),
+    });
+    await flush();
+
+    let load!: Promise<void>;
+    let refresh!: Promise<void>;
+    act(() => {
+      load = result.current.loadMore();
+      refresh = result.current.refresh();
+    });
+    loadRead.resolve(loadedEntries);
+    await act(async () => {
+      await Promise.all([load, refresh]);
+    });
+
+    expect(mock.getPaginatedHistory).toHaveBeenNthCalledWith(3, 0, 4);
+    expect(result.current.history).toEqual(refreshedEntries);
+  });
+
+  it('resolves each overlapping load against the window committed before it', async () => {
+    const mock = historyManager();
+    const firstLoad = createDeferred<HistoryEntry[]>();
+    const initialEntries = [entry('initial-2', 2), entry('initial-1', 1)];
+    const firstLoadedEntries = [entry('first-4', 4), entry('first-3', 3), ...initialEntries];
+    const secondLoadedEntries = [entry('second-6', 6), entry('second-5', 5), ...firstLoadedEntries];
+    mock.getPaginatedHistory
+      .mockResolvedValueOnce(initialEntries)
+      .mockReturnValueOnce(firstLoad.promise)
+      .mockResolvedValueOnce(secondLoadedEntries);
+    const { result } = renderHook(() => usePaginatedHistory(2), {
+      wrapper: createHookWrapper(mock.manager),
+    });
+    await flush();
+
+    let first!: Promise<void>;
+    let second!: Promise<void>;
+    act(() => {
+      first = result.current.loadMore();
+      second = result.current.loadMore();
+    });
+    expect(mock.getPaginatedHistory).toHaveBeenNthCalledWith(2, 0, 4);
+    expect(mock.getPaginatedHistory).toHaveBeenCalledTimes(2);
+
+    firstLoad.resolve(firstLoadedEntries);
+    await flush();
+    expect(mock.getPaginatedHistory).toHaveBeenNthCalledWith(3, 0, 6);
+
+    await act(async () => {
+      await Promise.all([first, second]);
+    });
+    expect(result.current.history).toEqual(secondLoadedEntries);
+  });
+
   it('runs a waiting foreground intent after the preceding read fails', async () => {
     const mock = historyManager();
     const failedPage = createDeferred<HistoryEntry[]>();

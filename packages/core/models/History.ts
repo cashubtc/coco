@@ -292,7 +292,7 @@ export function parseHistoryEntryId(id: string):
 
 export function compareHistoryEntries(a: HistoryEntry, b: HistoryEntry): number {
   if (a.createdAt !== b.createdAt) return b.createdAt - a.createdAt;
-  return b.id.localeCompare(a.id);
+  return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
 }
 
 export function projectSendOperation(operation: SendOperation): SendHistoryEntry | null {
