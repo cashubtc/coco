@@ -93,6 +93,9 @@ Transaction contract options:
   `dispose`. Open it before a test holds storage locks, because session startup also uses storage.
 - `runAuthSessionRepositoryContract()` verifies the NUT-21/22 auth session
   persistence contract.
+- `runHistoryProjectionContract()` verifies the grouped Mint Swap row, sanitization, exact-child
+  list suppression with direct lookup, late child freshness, stopped-parent authority, and
+  projection-before-pagination behavior.
 - `runKeysetRepositoryContract()` verifies immutable key storage, empty-key backfilling,
   concurrent metadata/key writes, and transaction rollback. Supply
   `createSharedRepositories` to exercise independent roots sharing one physical store.

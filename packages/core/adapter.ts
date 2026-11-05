@@ -31,6 +31,9 @@ export type {
   Keyset,
   LegacyHistoryEntry,
   LegacyHistoryRowInput,
+  MintSwapHistoryChild,
+  MintSwapHistoryEntry,
+  MintSwapHistoryProgress,
   MeltQuote,
   MeltQuoteRef,
   Mint,
@@ -38,6 +41,7 @@ export type {
   MintQuoteRef,
   QuoteIdentity,
 } from './models/index.ts';
+export { projectMintSwapHistoryEntry } from './repositories/MintSwapHistoryProjection.ts';
 export {
   applyBolt11MintQuoteStateFallback,
   batchMintHistoryId,

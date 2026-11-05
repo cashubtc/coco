@@ -80,6 +80,7 @@ describe('Mint Swap with two real mints', () => {
       expect(prepared.state).toBe('prepared');
       if (prepared.state !== 'prepared') return;
       const bounds = prepared.sourceDebitBounds;
+      expect(await balance(coco, sourceMintUrl)).toEqual(sourceBefore);
 
       const states: string[] = [];
       const off = coco.on('mint-swap:updated', ({ operationId, state }) => {
@@ -107,7 +108,8 @@ describe('Mint Swap with two real mints', () => {
       expect(debit.greaterThanOrEqual(bounds.minimum)).toBe(true);
       expect(debit.lessThanOrEqual(bounds.maximum)).toBe(true);
 
-      // Children finished, and each left history on its own mint.
+      // Children finished. Lists expose the parent action, while exact child drill-down remains
+      // available by deterministic history ID.
       expect((await coco.ops.melt.get(outcome.operation.sourceOperationId))?.state).toBe(
         'finalized',
       );
@@ -115,20 +117,41 @@ describe('Mint Swap with two real mints', () => {
         'finalized',
       );
       const history = await coco.history.getPaginatedHistory();
-      expect(history).toContainEqual(
+      const parentHistoryId = `mint-swap:${outcome.operation.id}`;
+      const sourceHistoryId = `melt:${outcome.operation.sourceOperationId}`;
+      const destinationHistoryId = `mint:${outcome.operation.destinationOperationId}`;
+      expect(history.filter((entry) => entry.id === parentHistoryId)).toEqual([
         expect.objectContaining({
-          type: 'melt',
-          operationId: outcome.operation.sourceOperationId,
-          mintUrl: outcome.operation.sourceMintUrl,
+          type: 'mint-swap',
+          operationId: outcome.operation.id,
+          state: 'completed',
+          sourceMintUrl: outcome.operation.sourceMintUrl,
+          destinationMintUrl: outcome.operation.destinationMintUrl,
+          destinationAmount,
+          progress: expect.objectContaining({
+            provenance: 'current',
+            state: 'completed',
+            sourceSettlement,
+            destinationCompletion,
+          }),
+          sourceChild: expect.objectContaining({ present: true, state: 'finalized' }),
+          destinationChild: expect.objectContaining({ present: true, state: 'finalized' }),
         }),
-      );
-      expect(history).toContainEqual(
-        expect.objectContaining({
-          type: 'mint',
-          operationId: outcome.operation.destinationOperationId,
-          mintUrl: outcome.operation.destinationMintUrl,
-        }),
-      );
+      ]);
+      expect(history.some((entry) => entry.id === sourceHistoryId)).toBe(false);
+      expect(history.some((entry) => entry.id === destinationHistoryId)).toBe(false);
+      expect(await coco.history.getHistoryEntryById(parentHistoryId)).toMatchObject({
+        type: 'mint-swap',
+        operationId: outcome.operation.id,
+      });
+      expect(await coco.history.getHistoryEntryById(sourceHistoryId)).toMatchObject({
+        type: 'melt',
+        operationId: outcome.operation.sourceOperationId,
+      });
+      expect(await coco.history.getHistoryEntryById(destinationHistoryId)).toMatchObject({
+        type: 'mint',
+        operationId: outcome.operation.destinationOperationId,
+      });
     },
     60_000,
   );

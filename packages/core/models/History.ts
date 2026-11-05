@@ -20,8 +20,20 @@ import type {
   SendOperation,
   SendOperationState,
 } from '../operations/send/SendOperation.ts';
+import type {
+  DestinationCompletionEvidence,
+  LastSafeCheckpoint,
+  MintSwapAttention,
+  MintSwapFailure,
+  MintSwapOperationState,
+  SourceDebitBounds,
+  SourceSettlementEvidence,
+  ValueNeutralExitEvidence,
+} from '../operations/mintSwap/MintSwapOperation.ts';
 
-export type HistoryType = 'mint' | 'melt' | 'send' | 'receive';
+export type HistoryType = 'mint' | 'melt' | 'send' | 'receive' | 'mint-swap';
+
+type OrdinaryHistoryType = Exclude<HistoryType, 'mint-swap'>;
 
 type BaseHistoryEntry = {
   id: string;
@@ -80,11 +92,90 @@ export type ReceiveHistoryEntry = OperationHistoryBase & {
   token?: Token;
 };
 
+export type MintSwapHistoryChild<S extends string> =
+  | { operationId: string; present: false }
+  | { operationId: string; present: true; state: S; updatedAt: number };
+
+type MintSwapHistoryCurrentProgress =
+  | { provenance: 'current'; state: 'preparing'; stateEnteredAt: number }
+  | {
+      provenance: 'current';
+      state: 'prepared';
+      stateEnteredAt: number;
+      sourceDebitBounds: SourceDebitBounds;
+    }
+  | {
+      provenance: 'current';
+      state: 'source_pending';
+      stateEnteredAt: number;
+      sourceDebitBounds: SourceDebitBounds;
+      sourceStartedAt: number;
+    }
+  | {
+      provenance: 'current';
+      state: 'destination_funded';
+      stateEnteredAt: number;
+      sourceDebitBounds: SourceDebitBounds;
+      sourceStartedAt: number;
+      sourceSettlement: SourceSettlementEvidence;
+    }
+  | {
+      provenance: 'current';
+      state: 'destination_pending';
+      stateEnteredAt: number;
+      sourceDebitBounds: SourceDebitBounds;
+      sourceStartedAt: number;
+      sourceSettlement: SourceSettlementEvidence;
+      destinationStartedAt: number;
+    }
+  | {
+      provenance: 'current';
+      state: 'completed';
+      stateEnteredAt: number;
+      sourceDebitBounds: SourceDebitBounds;
+      sourceStartedAt: number;
+      sourceSettlement: SourceSettlementEvidence;
+      destinationStartedAt: number;
+      destinationCompletion: DestinationCompletionEvidence;
+    };
+
+export type MintSwapHistoryProgress =
+  | MintSwapHistoryCurrentProgress
+  | ({ provenance: 'last_safe' } & LastSafeCheckpoint);
+
+export type MintSwapHistoryEntry = OperationHistoryBase & {
+  type: 'mint-swap';
+  amount: Amount;
+  unit: 'sat';
+  parentUpdatedAt: number;
+  parentRevision: number;
+  state: MintSwapOperationState;
+  stateEnteredAt: number;
+  sourceMintUrl: string;
+  destinationMintUrl: string;
+  destinationAmount: Amount;
+  sourceDebitCap?: Amount;
+  sourceOperationId: string;
+  destinationOperationId: string;
+  progress: MintSwapHistoryProgress;
+  cancellationRequestedAt?: number;
+  valueNeutral?: ValueNeutralExitEvidence;
+  failure?: MintSwapFailure;
+  attention?: MintSwapAttention;
+  completedAt?: number;
+  cancelledAt?: number;
+  failedAt?: number;
+  attentionAt?: number;
+  sourceChild: MintSwapHistoryChild<MeltOperationState>;
+  destinationChild: MintSwapHistoryChild<MintOperationState>;
+};
+
 export type OperationHistoryEntry =
   | MintHistoryEntry
   | MeltHistoryEntry
   | SendHistoryEntry
-  | ReceiveHistoryEntry;
+  | ReceiveHistoryEntry
+  | MintSwapHistoryEntry;
 
 export type LegacyMintHistoryState = MintQuoteState | string;
 export type LegacyMeltHistoryState = MeltQuoteState | string;
@@ -136,7 +227,7 @@ export type HistoryEntry = OperationHistoryEntry | LegacyHistoryEntry;
 
 export type LegacyHistoryRowInput = {
   legacyHistoryId: string | number;
-  type: HistoryType;
+  type: OrdinaryHistoryType;
   createdAt: number;
   mintUrl: string;
   unit: string;
@@ -344,7 +435,7 @@ function getReceiveOperationMetadata(
 }
 
 export function projectOperationToHistoryEntry(
-  type: HistoryType,
+  type: OrdinaryHistoryType,
   operation: SendOperation | MeltOperation | MintOperation | ReceiveOperation,
 ): OperationHistoryEntry | null {
   switch (type) {
@@ -408,5 +499,11 @@ export function projectLegacyHistoryRow(row: LegacyHistoryRowInput): LegacyHisto
 }
 
 function isHistoryType(value: string): value is HistoryType {
-  return value === 'mint' || value === 'melt' || value === 'send' || value === 'receive';
+  return (
+    value === 'mint' ||
+    value === 'melt' ||
+    value === 'send' ||
+    value === 'receive' ||
+    value === 'mint-swap'
+  );
 }

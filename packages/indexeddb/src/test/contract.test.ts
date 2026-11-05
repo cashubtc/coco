@@ -20,6 +20,7 @@ import {
   runMintSwapPersistenceContract,
   runBatchMintPersistenceContract,
   runBatchMintHistoryContract,
+  runHistoryProjectionContract,
 } from '@cashu/coco-adapter-tests';
 import { MintSwapIdentityConflictError } from '@cashu/coco-core/adapter';
 import { IndexedDbRepositories } from '../index.ts';
@@ -83,6 +84,7 @@ runKeypairAllocationContract(
 
 runBatchMintPersistenceContract({ createRepositories }, { describe, it, expect });
 runBatchMintHistoryContract({ createRepositories }, { describe, it, expect });
+runHistoryProjectionContract({ createRepositories }, { describe, it, expect });
 
 runMintSwapPersistenceContract(
   {
