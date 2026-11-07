@@ -17,11 +17,11 @@ export class MemoryKeysetRepository implements KeysetRepository {
   }
 
   async getKeysetsByMintUrl(mintUrl: string): Promise<Keyset[]> {
-    return Array.from(this.getMintMap(mintUrl).values());
+    return Array.from(this.getMintMap(mintUrl).values(), (keyset) => cloneMemoryValue(keyset));
   }
 
   async getKeysetById(mintUrl: string, id: string): Promise<Keyset | null> {
-    return this.getMintMap(mintUrl).get(id) ?? null;
+    return cloneMemoryValue(this.getMintMap(mintUrl).get(id) ?? null);
   }
 
   updateKeyset(keyset: Omit<Keyset, 'keypairs' | 'updatedAt'>): Promise<void> {
@@ -30,16 +30,19 @@ export class MemoryKeysetRepository implements KeysetRepository {
 
   async addKeyset(keyset: Omit<Keyset, 'updatedAt'>): Promise<void> {
     const mintMap = this.getMintMap(keyset.mintUrl);
-    mintMap.set(keyset.id, {
-      ...keyset,
-      keypairs: reconcileKeysetKeypairs(
-        keyset.mintUrl,
-        keyset.id,
-        mintMap.get(keyset.id)?.keypairs,
-        keyset.keypairs,
-      ),
-      updatedAt: Math.floor(Date.now() / 1000),
-    });
+    mintMap.set(
+      keyset.id,
+      cloneMemoryValue({
+        ...keyset,
+        keypairs: reconcileKeysetKeypairs(
+          keyset.mintUrl,
+          keyset.id,
+          mintMap.get(keyset.id)?.keypairs,
+          keyset.keypairs,
+        ),
+        updatedAt: Math.floor(Date.now() / 1000),
+      }),
+    );
   }
 
   async deleteKeyset(mintUrl: string, keysetId: string): Promise<void> {
