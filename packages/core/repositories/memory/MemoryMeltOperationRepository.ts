@@ -17,7 +17,7 @@ export class MemoryMeltOperationRepository implements MeltOperationRepository {
       throw new Error(`MeltOperation with id ${operation.id} already exists`);
     }
     this.assertNoDuplicateQuoteOperation(operation);
-    this.operations.set(operation.id, { ...operation });
+    this.operations.set(operation.id, cloneMemoryValue(operation));
   }
 
   async update(operation: MeltOperation): Promise<void> {
@@ -25,19 +25,19 @@ export class MemoryMeltOperationRepository implements MeltOperationRepository {
       throw new Error(`MeltOperation with id ${operation.id} not found`);
     }
     this.assertNoDuplicateQuoteOperation(operation);
-    this.operations.set(operation.id, { ...operation });
+    this.operations.set(operation.id, cloneMemoryValue(operation));
   }
 
   async getById(id: string): Promise<MeltOperation | null> {
     const operation = this.operations.get(id);
-    return operation ? { ...operation } : null;
+    return operation ? cloneMemoryValue(operation) : null;
   }
 
   async getByState(state: MeltOperationState): Promise<MeltOperation[]> {
     const results: MeltOperation[] = [];
     for (const operation of this.operations.values()) {
       if (operation.state === state) {
-        results.push({ ...operation });
+        results.push(cloneMemoryValue(operation));
       }
     }
     return results;
@@ -47,7 +47,7 @@ export class MemoryMeltOperationRepository implements MeltOperationRepository {
     const results: MeltOperation[] = [];
     for (const operation of this.operations.values()) {
       if (operation.state === 'executing' || operation.state === 'pending') {
-        results.push({ ...operation });
+        results.push(cloneMemoryValue(operation));
       }
     }
     return results;
@@ -57,7 +57,7 @@ export class MemoryMeltOperationRepository implements MeltOperationRepository {
     const results: MeltOperation[] = [];
     for (const operation of this.operations.values()) {
       if (operation.mintUrl === mintUrl) {
-        results.push({ ...operation });
+        results.push(cloneMemoryValue(operation));
       }
     }
     return results;
@@ -71,14 +71,14 @@ export class MemoryMeltOperationRepository implements MeltOperationRepository {
         'quoteId' in operation &&
         operation.quoteId === quoteId
       ) {
-        results.push({ ...operation });
+        results.push(cloneMemoryValue(operation));
       }
     }
     return results;
   }
 
   async getAll(): Promise<MeltOperation[]> {
-    return Array.from(this.operations.values(), (operation) => ({ ...operation }));
+    return Array.from(this.operations.values(), (operation) => cloneMemoryValue(operation));
   }
 
   async delete(id: string): Promise<void> {

@@ -19,31 +19,33 @@ export class MemoryMintRepository implements MintRepository {
     if (!mint) {
       throw new Error(`Mint not found: ${mintUrl}`);
     }
-    return mint;
+    return cloneMemoryValue(mint);
   }
 
   async findMintByUrl(mintUrl: string): Promise<Mint | null> {
-    return this.mints.get(mintUrl) ?? null;
+    return cloneMemoryValue(this.mints.get(mintUrl) ?? null);
   }
 
   async getAllMints(): Promise<Mint[]> {
-    return Array.from(this.mints.values());
+    return Array.from(this.mints.values(), (mint) => cloneMemoryValue(mint));
   }
 
   async getAllTrustedMints(): Promise<Mint[]> {
-    return Array.from(this.mints.values()).filter((mint) => mint.trusted);
+    return Array.from(this.mints.values())
+      .filter((mint) => mint.trusted)
+      .map((mint) => cloneMemoryValue(mint));
   }
 
   async addNewMint(mint: Mint): Promise<void> {
-    this.mints.set(mint.mintUrl, mint);
+    this.mints.set(mint.mintUrl, cloneMemoryValue(mint));
   }
 
   async addOrUpdateMint(mint: Mint): Promise<void> {
-    this.mints.set(mint.mintUrl, mint);
+    this.mints.set(mint.mintUrl, cloneMemoryValue(mint));
   }
 
   async updateMint(mint: Mint): Promise<void> {
-    this.mints.set(mint.mintUrl, mint);
+    this.mints.set(mint.mintUrl, cloneMemoryValue(mint));
   }
 
   async setMintTrusted(mintUrl: string, trusted: boolean): Promise<void> {
