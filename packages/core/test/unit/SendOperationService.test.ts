@@ -80,7 +80,7 @@ describe('SendOperationService', () => {
       recovery: () => api.recovery.run(),
       refresh: () => api.refresh(operationId),
       finalize: () => api.finalize(operationId),
-      notification: () => service.recordProofSpent(operationId, secret),
+      notification: () => service.applyProofStateObservation(operationId, [secret]),
     }[path]();
   };
 

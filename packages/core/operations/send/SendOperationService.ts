@@ -1025,14 +1025,6 @@ export class SendOperationService {
   }
 
   /**
-   * Persist a mint proof-state notification through the Send transaction boundary. The last send
-   * proof observation and the pending-to-finalized transition commit together.
-   */
-  async recordProofSpent(operationId: string, secret: string): Promise<boolean> {
-    return this.applyProofStateObservation(operationId, [secret]);
-  }
-
-  /**
    * Apply SPENT evidence and any resulting Send completion in one transaction. Partial evidence
    * leaves the Send pending. Duplicate evidence is harmless; no watcher has proof write authority.
    * Legacy tokenless P2PK Sends still require verification of their complete exact output plan.
