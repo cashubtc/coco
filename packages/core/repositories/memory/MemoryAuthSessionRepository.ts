@@ -10,11 +10,11 @@ export class MemoryAuthSessionRepository implements AuthSessionRepository {
   }
 
   async getSession(mintUrl: string): Promise<AuthSession | null> {
-    return this.sessions.get(mintUrl) ?? null;
+    return cloneMemoryValue(this.sessions.get(mintUrl) ?? null);
   }
 
   async saveSession(session: AuthSession): Promise<void> {
-    this.sessions.set(session.mintUrl, session);
+    this.sessions.set(session.mintUrl, cloneMemoryValue(session));
   }
 
   async deleteSession(mintUrl: string): Promise<void> {
@@ -22,6 +22,6 @@ export class MemoryAuthSessionRepository implements AuthSessionRepository {
   }
 
   async getAllSessions(): Promise<AuthSession[]> {
-    return [...this.sessions.values()];
+    return [...this.sessions.values()].map((session) => cloneMemoryValue(session));
   }
 }
