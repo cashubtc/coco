@@ -14,7 +14,7 @@ export class MemoryCounterRepository implements CounterRepository {
   }
 
   async getCounter(mintUrl: string, keysetId: string): Promise<Counter | null> {
-    return this.counters.get(this.key(mintUrl, keysetId)) ?? null;
+    return cloneMemoryValue(this.counters.get(this.key(mintUrl, keysetId)) ?? null);
   }
 
   async setCounter(mintUrl: string, keysetId: string, counter: number): Promise<void> {
