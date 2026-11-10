@@ -191,3 +191,12 @@ export interface CompleteSendReclaimResult {
   spentProofSecrets: string[];
   releasedProofSecrets: string[];
 }
+
+export interface AbandonSendReclaimInput {
+  operationId: string;
+  updatedAt: number;
+}
+
+export interface AbandonSendReclaimResult {
+  operation: PendingSendOperation;
+}

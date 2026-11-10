@@ -18,6 +18,8 @@ import {
   isTerminalOperation,
 } from './SendOperation.ts';
 import type {
+  AbandonSendReclaimInput,
+  AbandonSendReclaimResult,
   BeginSendReclaimInput,
   BeginSendReclaimResult,
   CompletePendingSendInput,
@@ -775,6 +777,44 @@ export const completeSendReclaim = defineTransition<
     spentProofSecrets,
     releasedProofSecrets,
   };
+});
+
+/**
+ * Return an interrupted reclaim to `pending` and drop its request. Compose it with the transition
+ * that settles the Send; it never stands alone.
+ */
+export const abandonSendReclaim = defineTransition<
+  AbandonSendReclaimInput,
+  AbandonSendReclaimResult
+>(async (tx, input) => {
+  const current = await tx.sendOperations.getById(input.operationId);
+  if (!current || current.state !== 'rolling_back' || current.method !== 'default') {
+    throw new SendOperationConflictError(
+      input.operationId,
+      'Send reclaim abandonment lost a state or revision conflict',
+    );
+  }
+  const revision = current.revision ?? 0;
+  const pending: PendingSendOperation = {
+    ...current,
+    state: 'pending',
+    revision: revision + 1,
+    updatedAt: input.updatedAt,
+    reclaimData: undefined,
+  };
+  const transitioned = await tx.sendOperations.transition({
+    operationId: current.id,
+    expectedState: 'rolling_back',
+    expectedRevision: revision,
+    next: pending,
+  });
+  if (!transitioned) {
+    throw new SendOperationConflictError(
+      current.id,
+      'Send reclaim abandonment lost a state or revision conflict',
+    );
+  }
+  return { operation: pending };
 });
 
 export const claimSendRecovery = defineTransition<ClaimSendRecoveryInput, ClaimSendRecoveryResult>(

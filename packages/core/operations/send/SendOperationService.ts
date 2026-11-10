@@ -20,6 +20,7 @@ import {
   cleanupLegacySendInit,
   cleanupOrphanedSendReservations,
   recoverLegacyExactSend,
+  abandonSendReclaim,
   beginSendReclaim,
   completePendingSend,
   completeSendReclaim,
@@ -48,6 +49,7 @@ import {
   type PreparedSendOperation,
   type ExecutingSendOperation,
   type PendingSendOperation,
+  type RollingBackSendOperation,
   type CreateSendOperationOptions,
 } from './SendOperation';
 import type { SendMethod, SendMethodData } from './SendMethodHandler';
@@ -74,6 +76,11 @@ import { OperationIdLock } from '../OperationIdLock';
 import { normalizeUnitAmount, type UnitAmount } from '../../amounts.ts';
 import type { SendOperationQueries } from './SendOperationQueries.ts';
 import type { SendRemote, SendRemoteSession } from './SendRemote.ts';
+
+type SendReclaimOutcome =
+  | { status: 'reclaimed'; result: CompleteSendReclaimResult }
+  | { status: 'claimed'; result: CompletePendingSendResult }
+  | { status: 'unresolved'; detail: string; restoreMayBeNeeded: boolean };
 
 // Explicit request-validation rejections from NUT error_codes.md. Unknown errors
 // do not establish non-effect and must retain the request for recovery.
@@ -588,6 +595,7 @@ export class SendOperationService {
   /**
    * Cancel a prepared operation and release its reservations.
    * Reclaim commits its Output Allocation before mint I/O and applies the result atomically.
+   * A reclaim whose mint call fails makes one attempt to settle from mint evidence before rejecting.
    * Throws if the operation is already in progress.
    */
   async rollback(operationId: string, reason = 'Rolled back by user action'): Promise<void> {
@@ -604,6 +612,8 @@ export class SendOperationService {
     const releaseLock = await this.acquireOperationLock(operationId);
     let cancelled: CancelPreparedSendResult | undefined;
     let reclaimed: CompleteSendReclaimResult | undefined;
+    let claimed: CompletePendingSendResult | undefined;
+    let failure: { error: unknown } | undefined;
     try {
       const operation = await this.operationQueries.getById(operationId);
       if (!operation) {
@@ -638,21 +648,31 @@ export class SendOperationService {
             operationId,
           });
         }
-        const proofs = begun.operation.reclaimData
-          ? await remote.reclaim(begun.inputProofs, begun.operation.reclaimData.outputData)
-          : [];
-        const reclaimedAt = Date.now();
-        const reclaimedProofs = mapProofToCoreProof(operation.mintUrl, 'ready', proofs, {
-          unit: operation.unit,
-        });
-        reclaimed = await this.transactionRunner.run((tx) =>
-          tx.perform(completeSendReclaim, {
-            operationId,
-            updatedAt: reclaimedAt,
+        try {
+          reclaimed = await this.submitSendReclaim(
+            begun.operation,
+            begun.inputProofs,
+            remote,
             reason,
-            proofs: reclaimedProofs,
-          }),
-        );
+          );
+        } catch (error) {
+          failure = { error };
+          // The request may have reached the mint. Make one attempt to settle from mint evidence.
+          try {
+            const outcome = await this.resolveInterruptedReclaim(begun.operation, reason);
+            if (outcome.status === 'reclaimed') {
+              reclaimed = outcome.result;
+              failure = undefined;
+            } else if (outcome.status === 'claimed') {
+              claimed = outcome.result;
+            }
+          } catch (resolveError) {
+            this.logger?.warn('Could not settle a failed Send reclaim; leaving it for recovery', {
+              operationId,
+              error: resolveError instanceof Error ? resolveError.message : String(resolveError),
+            });
+          }
+        }
       } else {
         throw new Error(`Cannot rollback operation in state ${operation.state}`);
       }
@@ -660,23 +680,233 @@ export class SendOperationService {
       releaseLock();
     }
     if (cancelled) await this.publishCancelledSend(cancelled);
-    if (reclaimed) {
-      await this.publishSavedProofs(reclaimed.operation.mintUrl, reclaimed.savedProofs);
-      if (reclaimed.spentProofSecrets.length > 0)
-        await this.publishCommittedEvent('proofs:state-changed', {
-          mintUrl: reclaimed.operation.mintUrl,
-          secrets: reclaimed.spentProofSecrets,
-          state: 'spent',
-        });
-      if (reclaimed.releasedProofSecrets.length > 0)
-        await this.publishCommittedEvent('proofs:released', {
-          mintUrl: reclaimed.operation.mintUrl,
-          secrets: reclaimed.releasedProofSecrets,
-        });
-      await this.publishCommittedEvent('send:rolled-back', {
+    if (reclaimed) await this.publishReclaimedSend(reclaimed);
+    if (claimed) await this.publishCompletedSend(claimed);
+    if (failure) throw failure.error;
+  }
+
+  private async publishReclaimedSend(reclaimed: CompleteSendReclaimResult): Promise<void> {
+    await this.publishSavedProofs(reclaimed.operation.mintUrl, reclaimed.savedProofs);
+    if (reclaimed.spentProofSecrets.length > 0)
+      await this.publishCommittedEvent('proofs:state-changed', {
         mintUrl: reclaimed.operation.mintUrl,
-        operationId: reclaimed.operation.id,
-        operation: reclaimed.operation,
+        secrets: reclaimed.spentProofSecrets,
+        state: 'spent',
+      });
+    if (reclaimed.releasedProofSecrets.length > 0)
+      await this.publishCommittedEvent('proofs:released', {
+        mintUrl: reclaimed.operation.mintUrl,
+        secrets: reclaimed.releasedProofSecrets,
+      });
+    await this.publishCommittedEvent('send:rolled-back', {
+      mintUrl: reclaimed.operation.mintUrl,
+      operationId: reclaimed.operation.id,
+      operation: reclaimed.operation,
+    });
+  }
+
+  /** Submit the committed reclaim request, if the reclaim has one, and apply the result. */
+  private async submitSendReclaim(
+    operation: RollingBackSendOperation,
+    inputProofs: Proof[],
+    remote: SendRemoteSession,
+    reason: string,
+  ): Promise<CompleteSendReclaimResult> {
+    const proofs = operation.reclaimData
+      ? await remote.reclaim(inputProofs, operation.reclaimData.outputData)
+      : [];
+    return this.applySendReclaim(operation, proofs, reason);
+  }
+
+  private async applySendReclaim(
+    operation: RollingBackSendOperation,
+    proofs: Proof[],
+    reason: string,
+  ): Promise<CompleteSendReclaimResult> {
+    const updatedAt = Date.now();
+    const reclaimedProofs = mapProofToCoreProof(operation.mintUrl, 'ready', proofs, {
+      unit: operation.unit,
+    });
+    return this.transactionRunner.run((tx) =>
+      tx.perform(completeSendReclaim, {
+        operationId: operation.id,
+        updatedAt,
+        reason,
+        proofs: reclaimedProofs,
+      }),
+    );
+  }
+
+  /**
+   * Settle a reclaim that stopped after `rolling_back` was committed. The caller holds the
+   * operation lock. Mint I/O runs outside transactions; evidence that does not decide the outcome
+   * leaves the Send and its reclaim request untouched.
+   */
+  private async resolveInterruptedReclaim(
+    operation: RollingBackSendOperation,
+    reason: string,
+  ): Promise<SendReclaimOutcome> {
+    const plan = operation.reclaimData;
+    const secrets = plan ? plan.inputProofSecrets : getSendProofSecrets(operation);
+    const stored = await this.proofQueries.getProofsBySecrets(operation.mintUrl, secrets);
+    const bySecret = new Map(stored.map((proof) => [proof.secret, proof]));
+    if (secrets.length === 0 || bySecret.size !== secrets.length) {
+      return {
+        status: 'unresolved',
+        detail: 'token proof metadata is missing',
+        restoreMayBeNeeded: true,
+      };
+    }
+    const inputProofs = secrets.map((secret) => bySecret.get(secret)!);
+    const metadata = await this.mintMetadataRefresh.refreshAndCommitIfStale(operation.mintUrl);
+    const remote = this.remote.open(metadata, operation.unit);
+    const states = await remote.checkProofStates(inputProofs);
+    if (states.length !== inputProofs.length) {
+      return {
+        status: 'unresolved',
+        detail: 'proof-state response was incomplete',
+        restoreMayBeNeeded: false,
+      };
+    }
+    const allUnspent = states.every((state) => state.state === 'UNSPENT');
+    const allSpent = states.every((state) => state.state === 'SPENT');
+
+    if (!plan) {
+      // No request was stored, so spent token proofs cannot be attributed to either party.
+      if (!allUnspent || inputProofs.some((proof) => proof.state !== 'inflight')) {
+        return {
+          status: 'unresolved',
+          detail: 'no stored reclaim request and the token proofs are not all unspent',
+          restoreMayBeNeeded: true,
+        };
+      }
+      // Nothing was reclaimed or claimed. Start again with a stored request.
+      const updatedAt = Date.now();
+      const activeKeys = this.activeKeys(metadata, operation.unit);
+      const seed = await this.loadSeed();
+      const begun = await this.transactionRunner.run(async (tx) => {
+        await tx.perform(abandonSendReclaim, { operationId: operation.id, updatedAt });
+        return tx.perform(beginSendReclaim, {
+          operationId: operation.id,
+          updatedAt,
+          activeKeys,
+          seed,
+        });
+      });
+      if (begun.counter) await this.publishCommittedEvent('counter:updated', begun.counter);
+      return {
+        status: 'reclaimed',
+        result: await this.submitSendReclaim(begun.operation, begun.inputProofs, remote, reason),
+      };
+    }
+
+    if (allUnspent) {
+      return {
+        status: 'reclaimed',
+        result: await this.submitSendReclaim(operation, inputProofs, remote, reason),
+      };
+    }
+    if (!allSpent) {
+      return {
+        status: 'unresolved',
+        detail: 'token proofs are pending or only partly spent',
+        restoreMayBeNeeded: false,
+      };
+    }
+
+    // A strict Restore returns nothing only when the mint signed none of the reclaim outputs.
+    const restored = await remote.restoreOutputs(plan.outputData, { requireComplete: true });
+    if (restored.length === 0) {
+      // The token proofs are spent and the reclaim never landed: the recipient claimed.
+      const updatedAt = Date.now();
+      const result = await this.transactionRunner.run(async (tx) => {
+        await tx.perform(abandonSendReclaim, { operationId: operation.id, updatedAt });
+        return tx.perform(completePendingSend, {
+          operationId: operation.id,
+          updatedAt,
+          spentProofSecrets: plan.inputProofSecrets,
+        });
+      });
+      return { status: 'claimed', result };
+    }
+    const expected = getSecretsFromSerializedOutputData(plan.outputData).keepSecrets;
+    const restoredSecrets = new Set(restored.map((proof) => proof.secret));
+    if (
+      restored.length !== expected.length ||
+      !expected.every((secret) => restoredSecrets.has(secret))
+    ) {
+      return {
+        status: 'unresolved',
+        detail: 'reclaim outputs were only partly restored',
+        restoreMayBeNeeded: false,
+      };
+    }
+    return {
+      status: 'reclaimed',
+      result: await this.applySendReclaim(operation, restored, reason),
+    };
+  }
+
+  /** Recovery entry: take the operation lock, settle, then publish outside the lock. */
+  private async recoverRollingBackOperation(op: SendOperation): Promise<void> {
+    let releaseLock: () => void;
+    try {
+      releaseLock = await this.acquireOperationLock(op.id);
+    } catch (error) {
+      if (!(error instanceof OperationInProgressError)) throw error;
+      this.logger?.debug('Skipping rolling_back Send recovery because it is in progress', {
+        operationId: op.id,
+      });
+      return;
+    }
+    let outcome: SendReclaimOutcome;
+    try {
+      const latest = await this.operationQueries.getById(op.id);
+      if (!latest || latest.state !== 'rolling_back') {
+        this.logger?.debug('Skipping rolling_back Send recovery because state changed', {
+          operationId: op.id,
+          state: latest?.state,
+        });
+        return;
+      }
+      outcome =
+        latest.method === 'default'
+          ? await this.resolveInterruptedReclaim(latest, 'Reclaim completed during recovery')
+          : {
+              status: 'unresolved',
+              detail: `method ${latest.method} has no reclaim`,
+              restoreMayBeNeeded: true,
+            };
+    } finally {
+      releaseLock();
+    }
+
+    if (outcome.status === 'reclaimed') {
+      await this.publishReclaimedSend(outcome.result);
+      this.logger?.info('Completed an interrupted Send reclaim during recovery', {
+        operationId: op.id,
+      });
+    } else if (outcome.status === 'claimed') {
+      await this.publishCompletedSend(outcome.result);
+      this.logger?.info('Interrupted Send reclaim found the token claimed', {
+        operationId: op.id,
+        state: outcome.result.operation.state,
+      });
+    } else if (outcome.restoreMayBeNeeded) {
+      this.logger?.warn(
+        'Found operation stuck in rolling_back state. ' +
+          'This indicates a crash during rollback. Manual recovery via seed restore may be needed.',
+        {
+          operationId: op.id,
+          mintUrl: op.mintUrl,
+          amount: op.amount,
+          detail: outcome.detail,
+        },
+      );
+    } else {
+      this.logger?.warn('Send reclaim outcome remains ambiguous; preserving recovery material', {
+        operationId: op.id,
+        detail: outcome.detail,
       });
     }
   }
@@ -746,22 +976,17 @@ export class SendOperationService {
         }
       }
 
-      // 5. Warn about rolling_back operations (need manual intervention)
-      // TODO: Implement automatic recovery for rolling_back operations.
-      // New reclaims retain their output plan atomically, but automatic reclaim recovery remains
-      // a separate behavior change. Older records may lack that plan. Preserve the existing
-      // warning and manual seed Restore path for both.
+      // 5. Settle interrupted reclaims from mint evidence
       const rollingBackOps = await this.operationQueries.getByState('rolling_back');
       for (const op of rollingBackOps) {
-        this.logger?.warn(
-          'Found operation stuck in rolling_back state. ' +
-            'This indicates a crash during rollback. Manual recovery via seed restore may be needed.',
-          {
+        try {
+          await this.recoverRollingBackOperation(op);
+        } catch (e) {
+          this.logger?.error('Error recovering rolling_back operation', {
             operationId: op.id,
-            mintUrl: op.mintUrl,
-            amount: op.amount,
-          },
-        );
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
         rollingBackCount++;
       }
 

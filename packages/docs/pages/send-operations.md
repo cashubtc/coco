@@ -14,15 +14,15 @@ The send operation saga provides:
 
 Send operations progress through the following states:
 
-| State          | Description                                       |
-| -------------- | ------------------------------------------------- |
-| `init`         | Operation created, nothing reserved yet           |
-| `prepared`     | Proofs reserved, fee calculated, ready to execute |
-| `executing`    | Swap in progress (if needed)                      |
-| `pending`      | Token created, waiting for recipient to claim     |
-| `finalized`    | Recipient claimed, operation finalized            |
-| `rolling_back` | Rollback in progress                              |
-| `rolled_back`  | Operation cancelled, proofs reclaimed             |
+| State          | Description                                             |
+| -------------- | ------------------------------------------------------- |
+| `init`         | Operation created, nothing reserved yet                 |
+| `prepared`     | Proofs reserved, fee calculated, ready to execute       |
+| `executing`    | Swap in progress (if needed)                            |
+| `pending`      | Token created, waiting for recipient to claim           |
+| `finalized`    | Recipient claimed, operation finalized                  |
+| `rolling_back` | Reclaim in progress; settled by recovery if interrupted |
+| `rolled_back`  | Operation cancelled, proofs reclaimed                   |
 
 ```
 init ──► prepared ──► executing ──► pending ──► finalized
@@ -31,6 +31,8 @@ init ──► prepared ──► executing ──► pending ──► finalize
   │         │            │                      │
   └─────────┴────────────┴──────────────────────┴──► rolled_back
 ```
+
+A reclaim that finds the token already claimed finalizes the operation.
 
 ## Lifecycle Actions
 
@@ -193,6 +195,9 @@ if (operation?.state === 'pending') {
 }
 ```
 
+If the mint rejects the reclaim because the recipient already claimed the token, `reclaim()`
+rejects and the operation is finalized.
+
 > **Note:** Reclaiming requires a swap, which incurs fees. The reclaimed amount will be less than the original send amount.
 
 ## Querying Operations
@@ -246,13 +251,13 @@ await coco.ops.send.recovery.run();
 
 ### Recovery Behavior by State
 
-| State          | Recovery Action                                         |
-| -------------- | ------------------------------------------------------- |
-| `init`         | Cleaned up (deleted)                                    |
-| `prepared`     | Left as-is; user can rollback manually                  |
-| `executing`    | Checks mint for swap status, recovers proofs if needed  |
-| `pending`      | Checks if proofs are spent; finalizes or leaves pending |
-| `rolling_back` | Warns; may need manual seed restore                     |
+| State          | Recovery Action                                                                                                      |
+| -------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `init`         | Cleaned up (deleted)                                                                                                 |
+| `prepared`     | Left as-is; user can rollback manually                                                                               |
+| `executing`    | Checks mint for swap status, recovers proofs if needed                                                               |
+| `pending`      | Checks if proofs are spent; finalizes or leaves pending                                                              |
+| `rolling_back` | Checks the token proofs with the mint; completes the reclaim, finalizes a claimed Send, or leaves it for a later run |
 
 ### Executing State Recovery
 
@@ -268,6 +273,23 @@ For swap sends, recovery checks the original inputs with the mint and uses the s
 
 Legacy exact-match sends stranded in `executing` are handled separately: recovery returns their
 unsubmitted, operation-owned inputs to ready, releases their reservations, and records `rolled_back`.
+
+### Rolling Back State Recovery
+
+For an interrupted reclaim, recovery checks the token proofs with the mint and uses the stored
+reclaim request:
+
+- **Token proofs unspent**: Replays the stored reclaim request with the same inputs and outputs,
+  then moves the operation to `rolled_back`.
+- **Token proofs spent, reclaim outputs restorable**: Saves the restored proofs and moves the
+  operation to `rolled_back`.
+- **Token proofs spent, the mint signed none of the reclaim outputs**: The recipient claimed the
+  token; the operation moves to `finalized`.
+- **Anything else**: The operation and its stored request are left unchanged for the next recovery
+  run.
+- **Operations from releases that did not store the reclaim request**: Restarted only when the mint
+  reports every token proof unspent. Otherwise recovery logs a warning, and a seed Restore for that
+  mint recovers any reclaimed value that was not saved.
 
 ### Retrieving a Recovered Token
 

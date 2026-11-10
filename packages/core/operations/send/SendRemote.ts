@@ -7,7 +7,11 @@ import type { SwapTransportRequest } from './SendTransitionTypes.ts';
 export interface SendRemoteSession {
   swap(request: SwapTransportRequest): Promise<{ keep: Proof[]; send: Proof[] }>;
   checkProofStates(proofs: ProofStateInput[]): Promise<ProofState[]>;
-  restoreOutputs(outputData: SerializedOutputData): Promise<Proof[]>;
+  /** With `requireComplete`, an empty result means the mint signed none of the outputs. */
+  restoreOutputs(
+    outputData: SerializedOutputData,
+    options?: { requireComplete?: boolean },
+  ): Promise<Proof[]>;
   reclaim(proofs: Proof[], outputData: SerializedOutputData): Promise<Proof[]>;
 }
 
