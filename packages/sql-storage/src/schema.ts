@@ -1650,6 +1650,10 @@ const MIGRATIONS: readonly Migration[] = [
         ON coco_cashu_batch_mint_members(mintUrl, quoteId);
     `,
   },
+  {
+    id: '046_keyset_final_expiry',
+    sql: `ALTER TABLE coco_cashu_keysets ADD COLUMN finalExpiry INTEGER`,
+  },
 ];
 
 // Export for testing

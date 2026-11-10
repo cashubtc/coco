@@ -31,3 +31,17 @@ export function testMintKeysetId(
 export function testLegacyMintKeysetId() {
   return deriveKeysetId(testMintKeypairs, { versionByte: 0 });
 }
+
+/** NUT-02 V2 test vector 1: the id commits to `finalExpiry` and `feePpk` as well as the keys. */
+export const expiringKeysetVector = {
+  id: '015ba18a8adcd02e715a58358eb618da4a4b3791151a4bee5e968bb88406ccf76a',
+  unit: 'sat',
+  feePpk: 100,
+  finalExpiry: 2059210353,
+  keypairs: {
+    '1': '03a40f20667ed53513075dc51e715ff2046cad64eb68960632269ba7f0210e38bc',
+    '2': '03fd4ce5a16b65576145949e6f99f445f8249fee17c606b688b504a849cdc452de',
+    '4': '02648eccfa4c026960966276fa5a4cae46ce0fd432211a4f449bf84f13aa5f8303',
+    '8': '02fdfd6796bfeac490cbee12f778f867f0a2c68f6508d17c649759ea0dc3547528',
+  },
+} as const;
