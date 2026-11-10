@@ -34,6 +34,29 @@ import { type Repositories, serializeAmount } from '@cashu/coco-core/adapter';
 import type { Plugin, PluginExtensions } from '@cashu/coco-core/plugin';
 ```
 
+When importing an existing Wallet or recovering after local database loss, use
+`initializeCocoWithRestore` to finish Restore before plugins and automatic session work start:
+
+```ts
+import { initializeCocoWithRestore } from '@cashu/coco-core';
+
+const manager = await initializeCocoWithRestore(
+  { repo, seedGetter },
+  {
+    mints: [{ mintUrl: 'https://mint.example', units: ['sat'] }],
+    onKeysetProgress: ({ mintUrl, keysetId, status }) => {
+      console.info({ mintUrl, keysetId, status });
+    },
+  },
+);
+```
+
+Pass an `AbortSignal` to cancel between keysets. Restore commits each keyset independently; if
+initialization fails, `CocoRestoreInitializationError.restoreReports` contains completed and failed
+keyset outcomes, and completed work remains persisted. Restore's discovery gap limit still applies,
+so success does not prove that every historical output or every previously used mint was found.
+Ordinary `initializeCoco` startup behavior is unchanged.
+
 - Use the package root for app-facing wallet setup, manager APIs, public models,
   errors, amount helpers, events, logging, and config boundary types.
 - Use `@cashu/coco-core/adapter` when you are writing persistence adapters or
