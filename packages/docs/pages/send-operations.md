@@ -122,6 +122,27 @@ const prepared = await coco.ops.send.prepare({
 Forcing a swap may add an input fee, which is reflected in `prepared.fee`. P2PK sends already swap
 to create locked outputs, so this option only changes default sends.
 
+### Sending Without the Mint
+
+Preparing a send normally refreshes mint metadata that is more than five minutes old, which fails
+when the mint is unreachable. Set `offline` to prepare from stored proofs and keysets instead:
+
+```ts
+const prepared = await coco.ops.send.prepare({ mintUrl, amount: 64, offline: true });
+const { token } = await coco.ops.send.execute(prepared.id);
+```
+
+Preparing makes no mint request and never plans a swap, so it works only when stored proofs add up
+to the amount as they are. Otherwise `prepare` throws `OfflineSendError` and reserves nothing. Its
+`reason` is `no_exact_match`, or `unsupported_option` when `offline` is combined with a send
+target, `forceSwap` or `coverReceiverFees`. Ordinary input, balance and trust validation errors
+are unchanged. When the mint's denominations are powers of two, an exact match is found whenever
+one exists; for other denominations selection can miss one.
+
+Stored proofs are not checked against the mint, so the receiver finds out on redemption whether
+they are still spendable. Reclaiming an executed send still needs the mint, and watchers and
+startup recovery keep making their own requests.
+
 ### P2PK Sends
 
 Use a P2PK target when the token should be locked to one or more public keys:

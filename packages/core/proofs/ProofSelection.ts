@@ -8,7 +8,7 @@ import {
   type SelectProofs,
 } from '@cashu/cashu-ts';
 import { assertSameUnit, normalizeUnit } from '@core/amounts.ts';
-import { ProofValidationError } from '@core/models/Error.ts';
+import { OfflineSendError, ProofValidationError } from '@core/models/Error.ts';
 
 /** Receiver net target and, when needed, the keys for planning new swap outputs. */
 export interface ReceiverFeePolicy {
@@ -17,8 +17,9 @@ export interface ReceiverFeePolicy {
   swapOutputKeys?: MintKeys;
 }
 
+/** `offline` selects only proofs that can be sent as they are and never plans a swap. */
 export function selectProofInputs(
-  operation: { amount: Amount; unit: string },
+  operation: { amount: Amount; unit: string; offline?: boolean },
   available: Proof[],
   keyChain: KeyChain,
   selectProofs: SelectProofs,
@@ -31,6 +32,10 @@ export function selectProofInputs(
   }
   if (sumProofs(available).lessThan(receiver?.amount ?? operation.amount)) {
     throw new ProofValidationError('Not enough proofs to send');
+  }
+  if (operation.offline) {
+    const proofs = selectStoredProofs(operation.amount, available, keyChain);
+    return { proofs, fee: Amount.zero(), needsSwap: false, sendAmount: operation.amount };
   }
 
   if (!forceSwap) {
@@ -58,6 +63,42 @@ export function selectProofInputs(
     return { proofs: selected, fee, needsSwap: true, sendAmount };
   }
   throw new ProofValidationError('Send amount is not sufficient after fees');
+}
+
+/**
+ * Takes the largest proof that still fits, which finds an exact sum whenever one exists if every
+ * denomination divides the next larger one, as powers of two do. The randomized selector used
+ * online can miss such a sum. Among equal proofs, the one the receiver pays least to redeem
+ * goes first.
+ */
+function selectStoredProofs(amount: Amount, available: Proof[], keyChain: KeyChain): Proof[] {
+  const redemptionFee = (proof: Proof) => {
+    try {
+      return keyChain.getKeyset(proof.id).fee;
+    } catch {
+      // A keyset that is not stored has no known fee, so its proofs go last.
+      return Number.MAX_SAFE_INTEGER;
+    }
+  };
+  const largestFirst = [...available].sort((a, b) =>
+    a.amount.equals(b.amount)
+      ? redemptionFee(a) - redemptionFee(b)
+      : a.amount.greaterThan(b.amount)
+        ? -1
+        : 1,
+  );
+  const selected: Proof[] = [];
+  let remaining = amount;
+  for (const proof of largestFirst) {
+    if (proof.amount.greaterThan(remaining)) continue;
+    selected.push(proof);
+    remaining = remaining.subtract(proof.amount);
+  }
+  if (remaining.isZero()) return selected;
+  throw new OfflineSendError(
+    'no_exact_match',
+    'Offline send requires stored proofs matching the exact amount',
+  );
 }
 
 export function calculateProofFee(
