@@ -21,9 +21,9 @@ restoring trust. For a mint requiring login, also read [Mint authentication](aut
 
 Coco starts its watchers and processors by default. Quote watchers observe and persist mint
 state; processors advance quote-backed operations from those observations. The proof-state
-watcher tracks inflight proofs, including recipient claims of outgoing tokens. A payment
-observation and a finalized wallet operation are separate milestones: render completion from
-the operation's persisted state.
+watcher tracks the proofs of pending Sends, so a recipient's claim of an outgoing token completes
+that Send. A payment observation and a finalized wallet operation are separate milestones: render
+completion from the operation's persisted state.
 
 When changing defaults, controlling background work, or diagnosing stalled operations, read
 [Background services](background-services.md).

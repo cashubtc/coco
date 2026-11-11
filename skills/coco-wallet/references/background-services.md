@@ -5,13 +5,13 @@ operation that is not advancing. Keep `initializeCoco()` defaults when they meet
 
 ## Responsibilities
 
-| Configuration entry                  | Responsibility                                                                                                                                                              |
-| ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `watchers.mintOperationWatcher`      | Observe canonical mint quotes and quotes referenced by pending Mint Operations for BOLT11, BOLT12, and onchain payments. Persist observations before operation advancement. |
-| `processors.mintOperationProcessor`  | React to mint quote updates, claim available value, and advance Mint Operations according to the session's auto-claim policy.                                               |
-| `watchers.meltQuoteWatcher`          | Observe canonical melt quotes, retaining operation-owned interest while pending melts need settlement, including after quote expiry.                                        |
-| `processors.meltSettlementProcessor` | React to melt quote updates and reconcile interested pending Melt Operations through Coco's settlement workflow.                                                            |
-| `watchers.proofStateWatcher`         | Observe inflight proofs becoming spent. Send-owned evidence completes the outgoing Send Operation; unowned proofs are reconciled; Melt-owned proofs are left to Melt.       |
+| Configuration entry                  | Responsibility                                                                                                                                                                                       |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `watchers.mintOperationWatcher`      | Observe canonical mint quotes and quotes referenced by pending Mint Operations for BOLT11, BOLT12, and onchain payments. Persist observations before operation advancement.                          |
+| `processors.mintOperationProcessor`  | React to mint quote updates, claim available value, and advance Mint Operations according to the session's auto-claim policy.                                                                        |
+| `watchers.meltQuoteWatcher`          | Observe canonical melt quotes, retaining operation-owned interest while pending melts need settlement, including after quote expiry.                                                                 |
+| `processors.meltSettlementProcessor` | React to melt quote updates and reconcile interested pending Melt Operations through Coco's settlement workflow.                                                                                     |
+| `watchers.proofStateWatcher`         | Observe the proofs of pending Sends becoming spent and submit that evidence to Send, which completes the outgoing Send Operation. Other inflight proofs, including unowned ones, are not reconciled. |
 
 The proof-state watcher does not reconcile newly restored `pending` proofs. Those remain
 unavailable until repeated [Restore](restore.md) establishes their state. Watchers and processors
