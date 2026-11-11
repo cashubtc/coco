@@ -91,17 +91,22 @@ describe('Proof watcher with real Send coordination', () => {
     h.eventBus.on('send:finalized', ({ operationId }) => {
       finalized.push(operationId);
     });
+    // Send logs listener failures instead of rethrowing them, so record what the listener saw and
+    // assert it after delivery.
+    const committedAtPublication: unknown[] = [];
     h.eventBus.on('proofs:state-changed', async ({ secrets }) => {
-      if (secrets.includes('last')) {
-        expect(await h.stateOf('last')).toBe('spent');
-        expect((await h.service.getOperation('send'))?.state).toBe('finalized');
-      }
+      if (!secrets.includes('last')) return;
+      committedAtPublication.push({
+        proof: await h.stateOf('last'),
+        send: (await h.service.getOperation('send'))?.state,
+      });
     });
     await h.notify('first');
     expect(await h.stateOf('first')).toBe('spent');
     expect((await h.service.getOperation('send'))?.state).toBe('pending');
     await h.notify('last');
     await h.service.applyProofStateObservation('send', ['first', 'last']);
+    expect(committedAtPublication).toEqual([{ proof: 'spent', send: 'finalized' }]);
     expect(finalized).toEqual(['send']);
     expect(h.unsubscribe).toHaveBeenCalledTimes(1);
   });
