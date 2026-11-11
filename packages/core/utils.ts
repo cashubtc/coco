@@ -51,6 +51,12 @@ export interface ProofStateInput {
 
 /**
  * JSON-safe form of a blinded signature for repository persistence.
+ *
+ * @remarks
+ * Unstable repository contract starting with v3: minor or major releases may introduce
+ * breaking changes with adapter migration notes. Patch releases preserve compatibility.
+ *
+ * @see {@link https://github.com/cashubtc/coco/blob/master/packages/core/README.md#repository-compatibility | Repository compatibility policy}
  */
 export type StoredBlindedSignature = Omit<SerializedBlindedSignature, 'amount'> & {
   amount: string;
@@ -82,6 +88,12 @@ function hexToUint8Array(hex: string): Uint8Array {
 
 /**
  * Serialize a single OutputData to JSON-safe format
+ *
+ * @remarks
+ * Unstable repository contract starting with v3: minor or major releases may introduce
+ * breaking changes with adapter migration notes. Patch releases preserve compatibility.
+ *
+ * @see {@link https://github.com/cashubtc/coco/blob/master/packages/core/README.md#repository-compatibility | Repository compatibility policy}
  */
 export function serializeOutput(output: OutputDataLike): SerializedOutput {
   return {
@@ -98,6 +110,12 @@ export function serializeOutput(output: OutputDataLike): SerializedOutput {
 
 /**
  * Deserialize a single SerializedOutput back to OutputData
+ *
+ * @remarks
+ * Unstable repository contract starting with v3: minor or major releases may introduce
+ * breaking changes with adapter migration notes. Patch releases preserve compatibility.
+ *
+ * @see {@link https://github.com/cashubtc/coco/blob/master/packages/core/README.md#repository-compatibility | Repository compatibility policy}
  */
 export function deserializeOutput(serialized: SerializedOutput): OutputData {
   return new OutputData(
@@ -114,6 +132,12 @@ export function deserializeOutput(serialized: SerializedOutput): OutputData {
 
 /**
  * Serialize OutputData arrays for keep and send to JSON-safe format
+ *
+ * @remarks
+ * Unstable repository contract starting with v3: minor or major releases may introduce
+ * breaking changes with adapter migration notes. Patch releases preserve compatibility.
+ *
+ * @see {@link https://github.com/cashubtc/coco/blob/master/packages/core/README.md#repository-compatibility | Repository compatibility policy}
  */
 export function serializeOutputData(data: {
   keep: OutputDataLike[];
@@ -127,6 +151,12 @@ export function serializeOutputData(data: {
 
 /**
  * Deserialize SerializedOutputData back to OutputData arrays
+ *
+ * @remarks
+ * Unstable repository contract starting with v3: minor or major releases may introduce
+ * breaking changes with adapter migration notes. Patch releases preserve compatibility.
+ *
+ * @see {@link https://github.com/cashubtc/coco/blob/master/packages/core/README.md#repository-compatibility | Repository compatibility policy}
  */
 export function deserializeOutputData(serialized: SerializedOutputData): {
   keep: OutputData[];
@@ -149,6 +179,12 @@ function decodeSecretHex(hexSecret: string): string {
 /**
  * Extract secrets from serialized output data.
  * Returns the string form of secrets (matching proof.secret in Proof objects).
+ *
+ * @remarks
+ * Unstable repository contract starting with v3: minor or major releases may introduce
+ * breaking changes with adapter migration notes. Patch releases preserve compatibility.
+ *
+ * @see {@link https://github.com/cashubtc/coco/blob/master/packages/core/README.md#repository-compatibility | Repository compatibility policy}
  */
 export function getSecretsFromSerializedOutputData(serialized: SerializedOutputData): {
   keepSecrets: string[];
@@ -193,10 +229,28 @@ export function sumAmounts(values: Iterable<AmountLike>): Amount {
   return Amount.sum(values);
 }
 
+/**
+ * Serialize an Amount as a decimal string for repository persistence.
+ *
+ * @remarks
+ * Unstable repository contract starting with v3: minor or major releases may introduce
+ * breaking changes with adapter migration notes. Patch releases preserve compatibility.
+ *
+ * @see {@link https://github.com/cashubtc/coco/blob/master/packages/core/README.md#repository-compatibility | Repository compatibility policy}
+ */
 export function serializeAmount(value: AmountLike): string {
   return Amount.from(value).toString();
 }
 
+/**
+ * Serialize repository data to JSON, representing bigint values as decimal strings.
+ *
+ * @remarks
+ * Unstable repository contract starting with v3: minor or major releases may introduce
+ * breaking changes with adapter migration notes. Patch releases preserve compatibility.
+ *
+ * @see {@link https://github.com/cashubtc/coco/blob/master/packages/core/README.md#repository-compatibility | Repository compatibility policy}
+ */
 export function stringifyJson(value: unknown): string {
   const json = JSON.stringify(value, (_key, value) =>
     typeof value === 'bigint' ? value.toString() : value,
@@ -207,6 +261,15 @@ export function stringifyJson(value: unknown): string {
   return json;
 }
 
+/**
+ * Hydrate an Amount from a repository representation.
+ *
+ * @remarks
+ * Unstable repository contract starting with v3: minor or major releases may introduce
+ * breaking changes with adapter migration notes. Patch releases preserve compatibility.
+ *
+ * @see {@link https://github.com/cashubtc/coco/blob/master/packages/core/README.md#repository-compatibility | Repository compatibility policy}
+ */
 export function deserializeAmount(value: string | number | bigint | Amount): Amount {
   return Amount.from(value);
 }
@@ -239,6 +302,12 @@ function deserializeStoredAmount(value: unknown): Amount {
 
 /**
  * Convert blinded signatures to a repository-safe form.
+ *
+ * @remarks
+ * Unstable repository contract starting with v3: minor or major releases may introduce
+ * breaking changes with adapter migration notes. Patch releases preserve compatibility.
+ *
+ * @see {@link https://github.com/cashubtc/coco/blob/master/packages/core/README.md#repository-compatibility | Repository compatibility policy}
  */
 export function serializeBlindedSignatures(
   signatures: SerializedBlindedSignature[] | undefined,
@@ -251,6 +320,12 @@ export function serializeBlindedSignatures(
 
 /**
  * Restore blinded signature Amount instances after repository hydration.
+ *
+ * @remarks
+ * Unstable repository contract starting with v3: minor or major releases may introduce
+ * breaking changes with adapter migration notes. Patch releases preserve compatibility.
+ *
+ * @see {@link https://github.com/cashubtc/coco/blob/master/packages/core/README.md#repository-compatibility | Repository compatibility policy}
  */
 export function deserializeBlindedSignatures(
   value: unknown,
@@ -273,6 +348,15 @@ export function deserializeBlindedSignatures(
   });
 }
 
+/**
+ * Hydrate token proof amounts from a repository representation.
+ *
+ * @remarks
+ * Unstable repository contract starting with v3: minor or major releases may introduce
+ * breaking changes with adapter migration notes. Patch releases preserve compatibility.
+ *
+ * @see {@link https://github.com/cashubtc/coco/blob/master/packages/core/README.md#repository-compatibility | Repository compatibility policy}
+ */
 export function deserializeToken(value: unknown): Token | undefined {
   if (!value || typeof value !== 'object') return undefined;
   const token = value as Token;

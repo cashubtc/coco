@@ -1,7 +1,7 @@
 import { Amount } from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it, mock } from 'bun:test';
 import { HistoryApi } from '../../api/HistoryApi';
-import type { HistoryEntry } from '../../models/History';
+import type { HistoryEntry, LegacyHistoryEntry } from '../../models/History';
 import type { HistoryService } from '../../services';
 
 describe('HistoryApi', () => {
@@ -17,25 +17,51 @@ describe('HistoryApi', () => {
     api = new HistoryApi(historyService);
   });
 
-  it('delegates operationId lookups to the history service', async () => {
+  const operationEntry = {
+    id: 'history-1',
+    source: 'operation' as const,
+    mintUrl: 'https://mint.test',
+    operationId: '  operation-1  ',
+    amount: Amount.from(10),
+    state: 'finalized' as const,
+    unit: 'sat',
+    createdAt: 1,
+    updatedAt: 2,
+  };
+  const operationEntries: HistoryEntry[] = [
+    { ...operationEntry, type: 'send' },
+    { ...operationEntry, type: 'receive' },
+    { ...operationEntry, type: 'melt', quoteId: 'quote-1' },
+    { ...operationEntry, type: 'mint', quoteId: 'quote-1', paymentRequest: 'lnbc10' },
+  ];
+
+  it.each(operationEntries)('returns trimmed operation IDs for $type history', async (entry) => {
     (
       historyService.getHistoryEntryById as unknown as ReturnType<typeof mock>
-    ).mockResolvedValueOnce({
-      id: 'history-1',
-      source: 'operation',
-      type: 'melt',
-      mintUrl: 'https://mint.test',
-      quoteId: 'quote-1',
-      operationId: 'operation-1',
-      amount: Amount.from(10),
-      state: 'prepared',
-      unit: 'sat',
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    } as HistoryEntry);
+    ).mockResolvedValueOnce(entry);
 
-    await expect(api.getOperationIdForHistoryEntry('history-1')).resolves.toBe('operation-1');
-    expect(historyService.getHistoryEntryById).toHaveBeenCalledWith('history-1');
+    await expect(api.getOperationIdForHistoryEntry(entry.id)).resolves.toBe('operation-1');
+    expect(historyService.getHistoryEntryById).toHaveBeenCalledWith(entry.id);
+  });
+
+  it('returns null for legacy history without an operation ID', async () => {
+    const entry = {
+      id: 'legacy:1',
+      source: 'legacy',
+      legacyHistoryId: '1',
+      type: 'send',
+      mintUrl: 'https://mint.test',
+      amount: Amount.from(10),
+      state: 'pending',
+      unit: 'sat',
+      createdAt: 1,
+      updatedAt: 1,
+    } satisfies LegacyHistoryEntry;
+    (
+      historyService.getHistoryEntryById as unknown as ReturnType<typeof mock>
+    ).mockResolvedValueOnce(entry);
+
+    await expect(api.getOperationIdForHistoryEntry(entry.id)).resolves.toBeNull();
   });
 
   it('preserves null operationId lookups from the history service', async () => {

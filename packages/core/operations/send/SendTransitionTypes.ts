@@ -20,6 +20,8 @@ export interface PrepareSendInput {
   forceSwap: boolean;
   /** Randomized outputs fixed during preflight and reused across transaction retries. */
   fixedSendOutputs?: readonly OutputDataLike[];
+  /** Payment Request net target. Omitted for ordinary face-value Sends. */
+  receiverAmount?: Amount;
 }
 
 export interface PrepareSendResult {
@@ -185,7 +187,19 @@ export interface CompleteSendReclaimInput {
 
 export interface CompleteSendReclaimResult {
   operation: RolledBackSendOperation;
+  /** Reclaim outputs this transition inserted; outputs that were already stored are left out. */
   savedProofs: CoreProof[];
   spentProofSecrets: string[];
   releasedProofSecrets: string[];
+}
+
+export interface AbandonSendReclaimInput {
+  operationId: string;
+  /** Revision of the `rolling_back` record whose mint evidence justified the abandonment. */
+  expectedRevision: number;
+  updatedAt: number;
+}
+
+export interface AbandonSendReclaimResult {
+  operation: PendingSendOperation;
 }

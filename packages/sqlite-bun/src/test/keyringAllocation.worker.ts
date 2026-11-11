@@ -1,14 +1,13 @@
-import { parentPort, workerData } from 'node:worker_threads';
 import { Database } from 'bun:sqlite';
+import process from 'node:process';
 import { allocateKeypairForTest } from '@cashu/coco-adapter-tests';
 import { SqliteRepositories } from '../index.ts';
 
-type AllocationWorkerData = {
-  filename: string;
-  count: number;
-};
-
-const { filename, count } = workerData as AllocationWorkerData;
+const filename = process.argv[2];
+const count = Number(process.argv[3]);
+if (!filename || !Number.isSafeInteger(count) || count <= 0) {
+  throw new Error('Expected a database filename and positive allocation count');
+}
 const database = new Database(filename);
 database.exec('PRAGMA busy_timeout = 5000');
 
@@ -21,11 +20,11 @@ try {
       ),
     ),
   );
-  parentPort?.postMessage({ indexes });
+  console.log(JSON.stringify(indexes));
 } catch (error) {
-  parentPort?.postMessage({
-    error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
-  });
+  // Keep the original stack and SQLite error details in the parent test failure.
+  console.error(error);
+  process.exitCode = 1;
 } finally {
   database.close();
 }

@@ -1,13 +1,16 @@
 import { describe, it, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { execFile } from 'node:child_process';
 import { mkdtemp, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Worker } from 'node:worker_threads';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import {
   runRepositoryTransactionContract,
   runKeypairAllocationContract,
   allocateKeypairForTest,
+  openKeypairAllocatorForTest,
   runAuthSessionRepositoryContract,
   runKeysetRepositoryContract,
   runProofRepositoryContract,
@@ -19,6 +22,9 @@ import {
   runMeltOperationRepositoryContract,
   runMeltQuoteRepositoryContract,
   runMintSwapPersistenceContract,
+  runBatchMintPersistenceContract,
+  runBatchMintHistoryContract,
+  createBatchMintFixtures,
 } from '@cashu/coco-adapter-tests';
 import { RepositoryTransactionConflictError } from '@cashu/coco-core/adapter';
 import { runSqlDatabaseContract } from '@cashu/coco-sql-storage/test';
@@ -93,6 +99,36 @@ runKeypairAllocationContract(
   { describe, it, expect },
 );
 
+runBatchMintPersistenceContract({ createRepositories }, { describe, it, expect });
+runBatchMintHistoryContract({ createRepositories }, { describe, it, expect });
+
+describe('Batch Mint read consistency', () => {
+  for (const state of ['finalized', 'failed'] as const) {
+    it(`keeps ordered members when an in-flight batch becomes ${state} during a read`, async () => {
+      const { repositories, dispose } = await createRepositories();
+      try {
+        const fixtures = createBatchMintFixtures('concurrent');
+        const repository = repositories.batchMint.operationRepository;
+        await repository.create(fixtures.executing);
+
+        // Start the read before queuing the update; both use the real adapter's scheduling.
+        const [listed] = await Promise.all([
+          repository.listInFlight(),
+          repository.update(fixtures[state]),
+        ]);
+
+        expect(listed).toHaveLength(1);
+        expect(listed[0]?.members).toEqual(
+          [...fixtures.executing.members].sort((a, b) => a.ordinal - b.ordinal),
+        );
+        expect((await repository.getById(fixtures.executing.id))?.state).toBe(state);
+      } finally {
+        await dispose();
+      }
+    });
+  }
+});
+
 runMintSwapPersistenceContract(
   {
     createRepositories,
@@ -100,24 +136,23 @@ runMintSwapPersistenceContract(
   { describe, it, expect },
 );
 
-function runAllocationWorker(filename: string, count: number): Promise<number[]> {
-  return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL('./keyringAllocation.worker.ts', import.meta.url), {
-      workerData: { filename, count },
-    });
-    worker.once('message', (message: { indexes?: number[]; error?: string }) => {
-      if (message.error) reject(new Error(message.error));
-      else resolve(message.indexes ?? []);
-    });
-    worker.once('error', reject);
-    worker.once('exit', (code) => {
-      if (code !== 0) reject(new Error(`Allocation worker exited with code ${code}`));
-    });
-  });
+async function runAllocationProcess(filename: string, count: number): Promise<number[]> {
+  // Bun 1.3.11 can assign the same SQLite handle to concurrent worker-thread opens.
+  // Separate processes keep independent native connections while testing file-level contention.
+  const { stdout } = await promisify(execFile)(
+    process.execPath,
+    [
+      fileURLToPath(new URL('./keyringAllocation.worker.ts', import.meta.url)),
+      filename,
+      String(count),
+    ],
+    { timeout: 20000, killSignal: 'SIGKILL', encoding: 'utf8' },
+  );
+  return JSON.parse(stdout) as number[];
 }
 
 describe('keyring allocation process boundary', () => {
-  it('coordinates worker connections through the SQLite file', async () => {
+  it('coordinates separate processes through the SQLite file', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'coco-sqlite-bun-worker-'));
     const filename = join(directory, 'wallet.sqlite');
     const database = new Database(filename);
@@ -126,11 +161,17 @@ describe('keyring allocation process boundary', () => {
     database.close();
 
     try {
-      const [first, second] = await Promise.all([
-        runAllocationWorker(filename, 50),
-        runAllocationWorker(filename, 50),
+      // Await both exits, including on failure, before reopening or removing their database.
+      const results = await Promise.allSettled([
+        runAllocationProcess(filename, 50),
+        runAllocationProcess(filename, 50),
       ]);
-      const indexes = [...first, ...second].sort((left, right) => left - right);
+      const indexes = results
+        .flatMap((result) => {
+          if (result.status === 'rejected') throw result.reason;
+          return result.value;
+        })
+        .sort((left, right) => left - right);
       expect(indexes).toEqual(Array.from({ length: 100 }, (_, index) => index));
       expect(new Set(indexes).size).toBe(100);
 
@@ -147,7 +188,7 @@ describe('keyring allocation process boundary', () => {
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
-  });
+  }, 30000);
 });
 
 describe('synchronous SQLite contention', () => {
@@ -211,6 +252,8 @@ describe('synchronous SQLite contention', () => {
     it(`returns prompt conflicts and restores settings (file alias: ${useAlias})`, async () => {
       const { first, second, firstDatabase, secondDatabase, dispose } =
         await createSharedRepositories(useAlias);
+      // Session startup also uses storage, so open the allocator before the owner holds its lock.
+      const allocator = await openKeypairAllocatorForTest(second);
       let release!: () => void;
       let entered!: () => void;
       const held = new Promise<void>((resolve) => {
@@ -235,7 +278,7 @@ describe('synchronous SQLite contention', () => {
         ).rejects.toBeInstanceOf(RepositoryTransactionConflictError);
         expect(performance.now() - started).toBeLessThan(1000);
         expect(contenderEntered).toBe(false);
-        await expect(allocateKeypairForTest(second, 'p2pk')).rejects.toBeInstanceOf(
+        await expect(allocator.allocate('p2pk')).rejects.toBeInstanceOf(
           RepositoryTransactionConflictError,
         );
         expect(performance.now() - started).toBeLessThan(1000);
@@ -263,7 +306,11 @@ describe('synchronous SQLite contention', () => {
         try {
           await owner;
         } finally {
-          await dispose();
+          try {
+            await allocator.dispose();
+          } finally {
+            await dispose();
+          }
         }
       }
     });

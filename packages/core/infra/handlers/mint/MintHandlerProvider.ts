@@ -4,29 +4,12 @@ import type {
   MintMethodHandlerRegistry,
 } from '../../../operations/mint/MintMethodHandler';
 
-/**
- * Runtime registry for mint method handlers.
- */
+/** Lookup for mint method handlers fixed at construction. */
 export class MintHandlerProvider {
-  private registry: Partial<Record<MintMethod, MintMethodHandler<any>>> = {};
+  private readonly registry: Readonly<Partial<MintMethodHandlerRegistry>>;
 
-  constructor(initialHandlers?: Partial<MintMethodHandlerRegistry>) {
-    if (initialHandlers) {
-      this.registerMany(initialHandlers);
-    }
-  }
-
-  register<M extends MintMethod>(method: M, handler: MintMethodHandler<M>): void {
-    this.set(method, handler);
-  }
-
-  registerMany(handlers: Partial<MintMethodHandlerRegistry>): void {
-    for (const method of Object.keys(handlers) as MintMethod[]) {
-      const handler = handlers[method];
-      if (handler) {
-        this.set(method, handler as MintMethodHandler<typeof method>);
-      }
-    }
+  constructor(initialHandlers: Partial<MintMethodHandlerRegistry> = {}) {
+    this.registry = Object.freeze({ ...initialHandlers });
   }
 
   get<M extends MintMethod>(method: M): MintMethodHandler<M> {
@@ -35,13 +18,5 @@ export class MintHandlerProvider {
       throw new Error(`No mint handler registered for method ${method}`);
     }
     return handler as MintMethodHandler<M>;
-  }
-
-  getAll(): MintMethodHandlerRegistry {
-    return this.registry as MintMethodHandlerRegistry;
-  }
-
-  private set<M extends MintMethod>(method: M, handler: MintMethodHandler<M>): void {
-    (this.registry as Partial<Record<M, MintMethodHandler<M>>>)[method] = handler;
   }
 }

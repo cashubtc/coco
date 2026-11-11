@@ -117,6 +117,13 @@ Await dependent capability calls sequentially. `Promise.all()` is appropriate on
 and writes cannot violate a shared invariant. Lifetime tracking provides containment, not ordering;
 it does not make concurrent allocations for the same purpose safe within one scope.
 
+P2PK imports and deletions resolve canonical SEC1 and legacy always-`02` identities through
+the scoped keypair repository before mutating it. `KeyRingService` owns the transaction and
+returns the persisted keypair only after commit, preserving its identity and derivation metadata.
+Imports reject writes that would overwrite a mint quote key; neither import nor deletion changes
+allocation high-water marks. Read-only lookup and signing reuse the bounded alias lookup through
+narrow `KeypairQueries` access. The helper cannot open transactions, enumerate keys, or rewrite rows.
+
 ## Coordinator Effects
 
 A `<Domain>Service` coordinates management actions. A `<Domain>OperationService` additionally owns
@@ -244,7 +251,10 @@ Re-running Restore reconciles eligible pending records: fresh observations leave
 `PENDING`, release them to ready on `UNSPENT`, or mark them spent on `SPENT`. Each application
 rechecks current local state and operation ownership inside the keyset transaction. Automatic
 pending-proof watching and its subscription lifecycle are deferred to a separate change; the
-existing proof watcher continues to handle inflight proofs only.
+existing proof watcher handles pending Send observations only. It delegates spent evidence and
+completion to Send; it has no transaction runner or proof write authority. Unowned inflight proofs,
+including missing or terminal operation references, no longer receive automatic reconciliation
+(ADR-0015).
 
 Pending proofs are excluded from the existing `spendable`, `reserved`, and `total` balances, just as
 inflight proofs are. They contribute to those balances only after becoming ready. A separate pending
@@ -254,11 +264,13 @@ Publish proof-saved, proof-state-changed, and counter-updated events only for ac
 changes. Matching existing proofs and unchanged counters produce no duplicate update events.
 Listener failures follow the existing post-commit publication policy and do not undo the Restore.
 
-Remove `CounterService.overwriteCounter()` when its Restore caller moves, without retaining a
-compatibility wrapper. Migrate the remaining legacy output allocators, including Receive and sweep,
-then remove CounterService and its plugin-facing entry once no callers remain. These removals
-intentionally change the plugin-facing service API. Restore's migration alone does not establish
-exclusive Output Allocation or prevent later stale writes by legacy counter callers.
+`CounterService.overwriteCounter()` was removed when its Restore caller moved, without a
+compatibility wrapper. Receive owns its transactional Output Allocation, and Sweep delegates
+exchanges through Receive's public coordinator methods. The removal is complete: ProofService,
+CounterService and their `proofService` and `counterService` plugin keys no longer exist, so no
+legacy caller can allocate outputs or write counters outside a coordinator-owned transaction.
+Plugins read balances through `balances` and get no proof or counter write path. See
+[ADR-0015](packages/core/docs/adr/0015-plugins-get-no-direct-proof-or-counter-authority.md).
 
 ## Mint Operations
 
@@ -269,9 +281,13 @@ ownership, and active keys inside the transaction, then persists the pending ope
 Output Allocation. New preparation does not persist an intermediate init row. Legacy init rows
 remain readable and are cleaned up through a scoped transition.
 
-`beginMintExecution` rechecks canonical quote accounting and sibling operations in the same scope
-that records executing. This creates the Mint Quote Reservation; pending operations reserve no
-balance. State checks and updates share the adapter's serialized write transaction, without relying
+`beginMintExecution` rechecks canonical quote accounting and the quote's local claim facts in the
+same scope that records executing. This creates the Mint Quote Reservation; pending operations
+reserve no balance. Every claimability decision reads those facts through the one scoped query
+`tx.mintQuoteClaims`, which counts finalized and `executing` claims from both Mint Operations and
+Batch Mint Operations; informational checks outside a transition read it in a read-only `run()`.
+Required `tx.batchMintOperations` is bound to the same adapter transaction in Memory and all
+persistent adapters, like Mint Swap persistence. State checks and updates share the adapter's serialized write transaction, without relying
 on an in-memory operation or quote lock for correctness. Standalone Mint preparation retains the
 shared mint lock for compatibility with same-session legacy output allocators; their cross-session
 counter safety remains part of the owning legacy migrations.
@@ -288,8 +304,8 @@ reservation. Only a definitive non-issuance result permits failure. Recovery and
 share settlement. Events follow commit, and listener failures do not replay issuance. Repositories
 preserve coordinator-supplied timestamps, subject to existing adapter precision.
 
-The dormant Mint Swap coordinator calls `tx.perform(prepareMint, destinationInput)` with its
-predetermined child ID and compose additional local transitions before returning. Its remote quote creation and
+The Mint Swap coordinator calls `tx.perform(prepareMint, destinationInput)` with its
+predetermined child ID and composes additional local transitions before returning. Its remote quote creation and
 metadata/seed preflight still occur outside the transaction. Melt supplies the corresponding source
 side through `prepareMelt`.
 
@@ -314,7 +330,10 @@ records each remote quote observation before calling `applyMeltPending`, `applyM
 `releaseMeltAfterNonPayment`. Paid settlement validates NUT-08 change against the persisted output
 plan and atomically saves change, spends the exact Melt inputs, and finalizes the operation.
 
-Only fresh positive `UNPAID` evidence permits release. Prepared cancellation is safe because no
+Only fresh positive `UNPAID` evidence permits release. Background Melt progression consumes cached
+PAID settlement evidence, but confirms nonpayment under the shared operation lock before release.
+This applies to standalone operations and to Mint Swap source children released to ordinary
+resolution; an active parent coordinates its child instead. Prepared cancellation is safe because no
 remote effect was authorized. Timeouts, transport errors, malformed responses, incomplete pre-swap
 restoration, and contradictory proof/quote observations retain operation-owned value and use
 `deferMeltRecovery`. Recovery restores remote output candidates outside transactions, then passes
@@ -329,8 +348,8 @@ counter changes roll back together. Their remote effects still occur only after 
 
 The internal `MintSwapOperationService` composes the existing Mint and Melt transitions with
 branded parent transitions. Required `tx.mintSwapOperations` is bound to the same adapter transaction
-in Memory and all persistent adapters without a feature option. The coordinator is not wired into
-Manager or public APIs. Adapter migrations own persisted format changes.
+in Memory and all persistent adapters without a feature option. Manager wires the coordinator into
+the public Mint Swap API and recovery processor. Adapter migrations own persisted format changes.
 
 Locked destination quote creation follows an independent committed NUT-20 key allocation. Quote
 creation and metadata refresh intentionally survive later preparation failure. Parent preparation
@@ -357,11 +376,129 @@ and owned proof evidence in the same scope that reserves destination claimable v
 `reserveMintQuoteForExecution`. It never restores trust or replaces output plans. Ordinary
 `beginMintExecution` still checks trust before composing that shared reservation transition.
 
+Mint Swap is the exclusive coordinator of its source Melt and destination Mint children while the
+parent is active. Ordinary Mint/Melt commands that would change a child or use its quote reject
+with `MintSwapChildOperationError`, carrying `parentOperationId` for `ops.mintSwap`. A command
+called in the wrong state for the child reports that state error first, and refresh reads a child
+it has nothing to resolve for. Reads and shared Quote Observations continue; ordinary processors,
+automatic Mint quote claiming and generic Mint/Melt recovery skip these children and quotes.
+
+A terminal or `needs_attention` parent never acts again, so exclusivity ends when it stops. Its
+children return to ordinary resolution: recovery, processors, claiming, and commands that observe,
+settle, release or issue. Release is one-way, so a check that admits ordinary work stays valid.
+Ordinary coordination never authorizes a stopped parent's source payment: Melt preparation against
+its source quote and execution of its prepared source reject with `parentStopped`, because the stop
+may record evidence against paying, and ordinary Melt recovery only applies an existing outcome. The
+stop emits no child or quote event, so running processors remember work they skipped and recheck it
+when `mint-swap:updated` reports a stopped parent. The parent commits its stop inside any child lock
+it holds, and its record keeps that diagnosis.
+
+The coordinating parent comes from durable reverse lookups over immutable child IDs and quote
+references, including terminal and `needs_attention` parents; it is never inferred from an active
+scan or stored on the child. An operation ID matches only a parent's own child and a quote reference
+matches its quote. Ordinary coordinators perform `assertOrdinaryChildWork` before waiting on locks
+and again in each transaction that authorizes or mutates. Parent creation rejects quotes with
+existing ordinary operations, and ordinary preparation and claiming check the quote, so an active
+parent's quotes have no sibling operations and a parent cannot appear after ordinary effect
+authorization. Parent coordinators keep composing child transitions directly, under the shared child
+locks and the transitions' own child-state and proof invariants.
+
+Disabling the parent processor pauses automatic progression of active parents' children along with
+the parent's existing startup recovery; explicit parent refresh and recovery remain available,
+and generic child recovery does not bypass the pause. Separating startup repair from routine
+progression remains a separate migration.
+
 One effect-driving Coco Session per Wallet store is required. Shared child operation locks coordinate
 ordinary child services with the parent; parent revisions do not fence network effects across
-independent sessions. Runtime enforcement and activation belong to #419. Child change snapshots are
-captured within each attempt and published after commit and lock release, so reentrant listeners
+independent sessions. Manager shares these locks with the coordinator and reuses existing host/session
+lifecycle guards; Core does not introduce a universal process lock. Cocod's state-directory lease
+protects its hosted session, and React's initialization guard applies per provider.
+
+Coco uses lock-step package versioning, so the Mint Swap API has no feature activation gate.
+Initial source payment requires an explicit `execute` call. The Mint Swap processor is enabled by
+default and can be disabled independently without restricting explicit commands. It honors
+persisted due times and registers exact parent quote interests with the existing Mint/Melt watchers,
+including parents whose due time is still ahead. Ordinary operation and parent interests use the same
+synchronous declaration contract: local acceptance does not promise subscription readiness. Watchers
+own trust checks, acquisition, setup diagnostics, failure retries on existing triggers, and late cleanup.
+Parent scans install routing and declare all interests without awaiting acquisition; retired cleanup
+also stays outside the progression queue. Withdrawal revokes logical ownership synchronously while its
+returned promise drains required physical cleanup. Parent stop and watcher stop retain their drain
+guarantees. Shared owners cannot remove one another's interests or revive retired records.
+Prepared observation never authorizes payment.
+Watchers commit canonical observations; parent callbacks only request later coordination scans.
+Disabling a watcher does not introduce replacement polling in the parent. Normal scans use cached
+canonical evidence. Startup also uses complete paid source evidence and sufficient funded-destination
+accounting before considering remote recovery. Startup still falls back to bounded recovery for
+unresolved evidence, including fresh accounting for an already-authorized destination; it respects
+automatic eligibility and retry deadlines. Explicit refresh/recovery retains immediate observation.
+Necessary operation recovery effects remain available. Fresh positive `UNPAID` confirmation under
+the shared source lock remains required before releasing inputs, independently of watcher state.
+Exact authorized recovery interests can survive trust revocation, including Manager's transport
+closure and shared Mint polling admission; unrelated untrusted quotes gain no permission.
+Manager coalesces networking-only `ensureSubscriptions()` calls and drains admitted local repair
+and parent work on disposal. Repair preserves owners and interests without startup discovery or
+Operation Recovery.
+A local observation timeout only ends waiting; it does not change the persisted operation.
+
+Parent and child change snapshots are captured within each attempt and published after commit and
+lock release, so reentrant listeners
 cannot deadlock on the coordinator's child locks. Delivery remains best effort, without an outbox.
+
+## Batch Mint Operations
+
+`BatchMintOperationService` coordinates one atomic NUT-29 issuance for an exact ordered group of
+Mint Quotes ([ADR-0016](packages/core/docs/adr/0016-model-batch-minting-as-a-standalone-atomic-operation.md)).
+It receives the shared runner, read-only batch and proof queries, seed loading, the Quote Lifecycle's
+canonical quote lookup, mint metadata, and the Wallet factory. Preflight rejects malformed groups,
+untrusted mints and groups the mint's NUT-29 metadata does not admit (a malformed or single-quote
+batch size admits none), takes the mint lock for same-session coordination with legacy output
+allocators, and fixes the ID, keys, seed and timestamp. Admission takes no Quote Identity lock: its
+checks and writes share the serialized Wallet transaction, which alone chooses one winner.
+
+`tx.perform(admitBatchMint, input)` rechecks trust and, per member in caller order, Mint Swap
+exclusivity through `assertOrdinaryChildWork`, the canonical quote's method and unit, the absence
+of a nonterminal standalone Mint Operation, claimability from `tx.mintQuoteClaims` through
+`assessMintQuoteClaim` (`holdsAtomicQuote`: an atomic quote admits no other reservation), NUT-04
+limits and Wallet-owned NUT-20 keys. It then allocates
+one aggregate output plan and creates the operation as `executing`. That one commit is the Mint
+Quote Reservation for every member; neither signatures nor private keys are persisted. A concurrent standalone
+claim or batch for the same quote reads the same scope, so only one commits.
+
+Submission sends exactly the persisted members, amounts and outputs through cashu-ts
+`prepareBatchMint` and `completeBatchMint`. As for a Mint Operation, the Wallet signs at submission,
+and cashu-ts retries with the legacy NUT-20 message for mints that predate the amended one.
+`applyBatchMintResult`
+validates the complete proof set against the persisted plan and atomically saves the proofs
+(attributed to the batch) and finalizes; it never fabricates remote accounting. Initial submission
+may fail on an allowlisted definitive rejection. Recovery treats those errors separately because a
+rejected replay does not disprove an earlier issuance.
+
+Recovery holds the operation lock and uses complete locally saved proofs first, then replays the
+Exact Operation Request. Ambiguous responses end the run with `executing` and its reservations.
+Only the issuance-related codes specified in ADR-0016 lead to NUT-09 Restore. Complete valid unspent
+outputs finalize; an explicitly empty Restore response permits `failBatchMint` under ADR-0016's
+mint ordering assumption. The failure transaction rereads matching local proofs and retains executing
+if any are present, so concurrent Wallet Restore cannot be mistaken for absence. Partial, invalid,
+unavailable or non-unspent results remain unresolved. Replay, Restore and proof-state checks stay
+outside transactions; settlement, failure and deferral each own one `run()`.
+
+There are no recovery quote checks, timer or internal retry loop. Startup and
+`ops.mint.batch.recovery.run()` each make a bounded recovery pass. A mint that returns a qualifying
+rejection before competing issuance completes or serves stale Restore data can violate the accepted
+ordering assumption; this is not a general inference of non-issuance from missing signatures.
+
+`BatchMintQuoteClaims` owns automatic claiming through batches for the Mint Operation Processor's
+processing turns and startup sweep. It depends on the Batch Mint coordinator and on Mint's
+standalone `claimMintQuote`; Mint does not depend on either. Its eligibility pre-check reads claim
+facts in a read-only `run()`, and admission rereads them. A rejected or failed batch falls back to
+standalone claims for its members.
+
+Mint Swap creation rejects a destination quote held by an `executing` Batch Mint Operation, and
+batch admission rejects quotes an active Mint Swap coordinates. Standalone Mint preparation,
+execution and automatic claiming read batch reservations and finalized members through
+`tx.mintQuoteClaims`. Events (`batch-mint-op:*`, `proofs:saved`, `counter:updated`) are published
+after commit; batches emit no `mint-op:*` events.
 
 ## Files and Dependencies
 
@@ -375,6 +512,11 @@ operations/mint/
   MintOperationService.ts                     # workflow orchestration
   MintTransitions.ts                         # preparation, issuance, settlement, and recovery
   MintTransitionTypes.ts                     # named Mint transition inputs and results
+operations/batchMint/
+  BatchMintOperationService.ts               # admission preflight, submission, recovery, events
+  BatchMintTransitions.ts                    # admission, settlement, failure, and deferral
+  BatchMintTransitionTypes.ts                # named Batch Mint transition inputs and results
+  BatchMintQuoteClaims.ts                    # automatic grouping, chunking, and standalone fallback
 operations/melt/
   MeltOperationService.ts                    # Melt saga coordinator
   MeltTransitions.ts                         # reservation, authorization, settlement, and recovery
@@ -388,6 +530,7 @@ transactions/
   outputs/ScopedOutputs.ts                    # output allocation including counters
   keypairs/ScopedKeypairs.ts                  # keypair allocation and scoped persistence
   mints/ScopedMintMetadata.ts                 # metadata application and trust checks
+  mintQuoteClaims/ScopedMintQuoteClaims.ts    # shared local Mint Quote claim facts and claim rules
 ```
 
 Names describe authority and lifetime:
@@ -486,10 +629,10 @@ Before completing a change involving Wallet persistence, operation coordination,
 
 ## Migration and Verification
 
-Send, Mint, Melt, and Restore transitions, the dormant Mint Swap coordinator, KeyRing mutations,
-and mint metadata refresh use coordinator-owned transactions.
-Legacy Receive, legacy public Mint Swap orchestration, Payment Request Receive parent/attempt/child
-atomicity, and MintService add/forced-update/trust/delete paths remain for their owning migrations.
+Send, Mint, Melt, Receive, and Restore transitions, the Mint Swap and Batch Mint coordinators,
+KeyRing mutations, and mint metadata refresh use coordinator-owned transactions.
+Payment Request Receive parent/attempt/child atomicity and MintService add/forced-update/trust/delete
+paths remain for their owning migrations.
 Those migrations should reuse domain capabilities and branded transitions, rather than add domain gateways.
 Runtime rejection of nested Wallet transactions remains nonuniform: IndexedDB rejects ambient
 transactions, while Memory/SQLite root calls may queue behind an outer caller awaiting them. Do not
@@ -509,6 +652,29 @@ Behavior tests cover memory and persistent adapters:
 - Ambiguous remote outcomes retain exact recovery material and owned resources.
 
 Public APIs, package exports, persisted formats, and protocol behavior do not change with this
-internal composition model, except for the explicitly accepted proof-state addition and plugin-facing removals in the
-Restore and legacy counter migration above. `CoreTransaction`, `Transition`, their helpers, and the runner remain internal implementation details.
+internal composition model, except for the explicitly accepted Mint Swap child-command restriction, proof-state addition and plugin-facing removals in the
+Restore and legacy counter migration above. That migration is complete: ProofService and
+CounterService are removed, and plugins have no proof or counter write path
+([ADR-0015](packages/core/docs/adr/0015-plugins-get-no-direct-proof-or-counter-authority.md)). `CoreTransaction`, `Transition`, their helpers, and the runner remain internal implementation details.
 They must not be exported from package entry points.
+
+## Send proof observation
+
+The proof watcher schedules observation for pending Sends using targets supplied by Send. Targets
+are informational: `applyProofStateObservation` validates exact proof membership and the completion
+transition rechecks current operation state and proof ownership inside one transaction. Partial
+observations commit spent proof state while leaving the Send pending; the last proof observation,
+Send completion, and reservation release commit together. Events follow commit.
+
+`advancePendingOperation` uses the same transition for complete locally persisted evidence without
+polling. Legacy tokenless P2PK Sends wait for Operation Recovery or a new proof observation to verify
+their complete output allocation remotely; local advancement does not make that request.
+Subscription targets may be derived without recreating proof rows.
+
+Operation Recovery owns the startup mint checks. The proof watcher discovers subscriptions using
+local evidence and does not repeat those checks, either per Send or in a batch. Subscription setup
+therefore proceeds while recovery requests are still outstanding. The subscription transport keeps
+its existing polling and WebSocket observation paths. New observations still go through Send's
+validation, including complete-allocation verification for legacy tokenless P2PK records.
+The watcher retains its ADR-0014 shutdown semantics and defers pending-event discovery until Send's
+publication returns. This does not add a standalone Send processor or change startup recovery.

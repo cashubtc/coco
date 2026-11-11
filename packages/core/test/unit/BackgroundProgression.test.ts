@@ -1,0 +1,905 @@
+import { Amount, deriveKeysetId } from '@cashu/cashu-ts';
+import { Database } from 'bun:sqlite';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { SqlStorageRepositories } from '../../../sql-storage/src/repositories.ts';
+import { SqliteDb } from '../../../sqlite-bun/src/db.ts';
+import { initializeCoco, Manager, type CocoConfig } from '../../Manager.ts';
+import { meltQuoteFromBolt11Response } from '../../models/MeltQuote.ts';
+import type { EventBus } from '../../events/EventBus.ts';
+import type { CoreEvents } from '../../events/types.ts';
+import type { WsRequest } from '../../infra/SubscriptionProtocol.ts';
+import type { PendingMeltOperation } from '../../operations/melt/MeltOperation.ts';
+import type { Repositories } from '../../repositories/index.ts';
+import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
+import { buildYHexMapsForSecrets } from '../../utils.ts';
+import { pendingSend } from '../fixtures/SendOperation.ts';
+import { mintQuoteFromBolt11Fixture } from '../normalizedMintQuoteFixtures.ts';
+
+const mintUrl = 'https://background.test';
+const keys = { '1': '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798' };
+const keysetId = deriveKeysetId(keys, { unit: 'sat' });
+const seed = new Uint8Array(64).fill(1);
+const disabledRuntime = {
+  watchers: {
+    mintOperationWatcher: { disabled: true },
+    meltQuoteWatcher: { disabled: true },
+    proofStateWatcher: { disabled: true },
+  },
+  processors: {
+    mintOperationProcessor: { disabled: true },
+    meltSettlementProcessor: { disabled: true },
+    mintSwapOperationProcessor: { disabled: true },
+  },
+};
+
+// These workflows need responses a real mint cannot produce on demand: conflicting or incomplete
+// evidence, pending Melts, and proof that no redundant request was made. The shared integration suite
+// covers the rest against a real mint. They use the Session facade and real storage, transactions,
+// handlers and events. Live-work tests select owners before persisting fixtures and publish the
+// committed fixture notifications explicitly, independently of startup recovery.
+describe.each(['memory', 'sqlite'] as const)('background progression (%s)', (adapter) => {
+  let repo: Repositories;
+  let database: Database | undefined;
+  let coco: Manager;
+  let events: EventBus<CoreEvents>;
+  let originalFetch: typeof fetch;
+  let requests: string[];
+  let meltState: 'PENDING' | 'PAID' | 'UNPAID';
+  let mintState: 'UNPAID' | 'PAID' | 'ISSUED';
+  let proofState: 'UNSPENT' | 'SPENT';
+  let socketRequests: WsRequest[];
+  let receiveSocketMessage: (event: { data: string }) => void;
+  let subscribed: Promise<WsRequest>;
+  let sessionConfig: CocoConfig;
+
+  async function openSession(selection: Pick<CocoConfig, 'watchers' | 'processors'>) {
+    await coco.dispose();
+    coco = await initializeCoco({
+      ...sessionConfig,
+      watchers: { ...disabledRuntime.watchers, ...selection.watchers },
+      processors: { ...disabledRuntime.processors, ...selection.processors },
+    });
+  }
+
+  beforeEach(async () => {
+    database = adapter === 'sqlite' ? new Database(':memory:') : undefined;
+    repo = database
+      ? new SqlStorageRepositories({ database: new SqliteDb({ database }) })
+      : new MemoryRepositories();
+    await repo.init();
+    const now = Math.floor(Date.now() / 1000);
+    await repo.mintRepository.addNewMint({
+      mintUrl,
+      name: 'Background test mint',
+      trusted: true,
+      createdAt: now,
+      updatedAt: now,
+      mintInfo: {
+        name: 'Background test mint',
+        version: 'test',
+        pubkey: '',
+        contact: [],
+        nuts: {
+          '4': {
+            methods: [
+              {
+                method: 'bolt11',
+                method_name: 'bolt11',
+                unit: 'sat',
+                min_amount: 1,
+                max_amount: 100,
+              },
+            ],
+            disabled: false,
+          },
+          '5': {
+            methods: [
+              {
+                method: 'bolt11',
+                method_name: 'bolt11',
+                unit: 'sat',
+                min_amount: 1,
+                max_amount: 100,
+              },
+            ],
+            disabled: false,
+          },
+          '11': { supported: true },
+        },
+      },
+    });
+    await repo.keysetRepository.addKeyset({
+      mintUrl,
+      id: keysetId,
+      unit: 'sat',
+      keypairs: keys,
+      active: true,
+      feePpk: 0,
+    });
+    requests = [];
+    socketRequests = [];
+    let subscriptionSent!: (request: WsRequest) => void;
+    subscribed = new Promise((resolve) => {
+      subscriptionSent = resolve;
+    });
+    meltState = 'PENDING';
+    mintState = 'PAID';
+    proofState = 'SPENT';
+    const respond = (
+      path: string,
+      body: {
+        outputs?: { id: string; amount: number; B_: string }[];
+        Ys?: string[];
+      },
+    ): unknown => {
+      if (path === '/v1/melt/bolt11') return remoteMelt('PENDING');
+      if (path.startsWith('/v1/melt/quote/bolt11/')) return remoteMelt(meltState);
+      if (path.startsWith('/v1/mint/quote/bolt11/')) return remoteMint(mintState);
+      // The amount-1 mint key has private scalar 1, so a blind signature is B_ itself.
+      if (path === '/v1/swap')
+        return {
+          signatures: body.outputs!.map((output) => ({
+            id: output.id,
+            amount: output.amount,
+            C_: output.B_,
+          })),
+        };
+      if (path === '/v1/mint/bolt11') {
+        if (mintState === 'ISSUED')
+          return new Response(JSON.stringify({ code: 20002, detail: 'already issued' }), {
+            status: 400,
+          });
+        return {
+          signatures: body.outputs!.map((output) => ({
+            id: output.id,
+            amount: output.amount,
+            C_: output.B_,
+          })),
+        };
+      }
+      if (path === '/v1/restore')
+        return {
+          outputs: body.outputs,
+          signatures: body.outputs!.map((output) => ({
+            id: output.id,
+            amount: output.amount,
+            C_: output.B_,
+          })),
+        };
+      if (path === '/v1/checkstate')
+        return { states: body.Ys!.map((Y) => ({ Y, state: proofState })) };
+      throw new Error(`Unexpected mint request: ${path}`);
+    };
+    originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(
+        typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
+      );
+      if (url.origin !== mintUrl) throw new Error(`Unexpected mint: ${url.origin}`);
+      requests.push(url.pathname);
+      const response = await respond(url.pathname, init?.body ? JSON.parse(String(init.body)) : {});
+      return response instanceof Response ? response : Response.json(response);
+    }) as typeof fetch;
+    sessionConfig = {
+      repo,
+      seedGetter: async () => seed,
+      ...disabledRuntime,
+      plugins: [
+        {
+          name: 'background-test-events',
+          required: ['eventBus'],
+          onReady: ({ services }) => {
+            events = services.eventBus;
+          },
+        },
+      ],
+      // Keep the real hybrid/polling transport; tests control only protocol-boundary messages.
+      webSocketFactory: () => ({
+        send(data) {
+          const request = JSON.parse(data) as WsRequest;
+          socketRequests.push(request);
+          if (request.method === 'subscribe') subscriptionSent(request);
+        },
+        close() {},
+        removeEventListener() {},
+        addEventListener(type, listener) {
+          if (type === 'open') queueMicrotask(() => listener({}));
+          if (type === 'message') receiveSocketMessage = listener;
+        },
+      }),
+    };
+    coco = await initializeCoco(sessionConfig);
+  });
+
+  afterEach(async () => {
+    await coco?.dispose();
+    globalThis.fetch = originalFetch;
+    database?.close();
+  });
+
+  function remoteMelt(state: typeof meltState) {
+    return {
+      quote: 'melt',
+      request: 'invoice',
+      amount: 1,
+      fee_reserve: 0,
+      unit: 'sat',
+      expiry: 9_999_999_999,
+      state,
+      payment_preimage: state === 'PAID' ? 'preimage' : null,
+    };
+  }
+
+  function remoteMint(state: typeof mintState) {
+    return { quote: 'mint', request: 'invoice', amount: 1, unit: 'sat', expiry: null, state };
+  }
+
+  async function seedMelt(state: typeof meltState, incomplete = false, proofOwner = 'melt-op') {
+    const quote = meltQuoteFromBolt11Response(mintUrl, {
+      ...remoteMelt(state),
+      amount: Amount.from(1),
+      fee_reserve: Amount.zero(),
+    });
+    if (incomplete) quote.change = undefined;
+    await repo.meltQuoteRepository.upsertMeltQuote(quote);
+    const operation: PendingMeltOperation = {
+      id: 'melt-op',
+      state: 'pending',
+      mintUrl,
+      unit: 'sat',
+      method: 'bolt11',
+      methodData: { invoice: 'invoice' },
+      quoteId: 'melt',
+      amount: Amount.from(1),
+      fee_reserve: Amount.zero(),
+      swap_fee: Amount.zero(),
+      needsSwap: false,
+      inputAmount: Amount.from(1),
+      inputProofSecrets: ['melt-input'],
+      changeOutputData: { keep: [], send: [] },
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    await repo.meltOperationRepository.create(operation);
+    await repo.proofRepository.saveProofs(mintUrl, [
+      {
+        id: keysetId,
+        amount: Amount.from(1),
+        C: keys['1'],
+        secret: 'melt-input',
+        mintUrl,
+        unit: 'sat',
+        state: 'inflight',
+        usedByOperationId: proofOwner,
+      },
+    ]);
+    return operation;
+  }
+
+  async function publishSeededMelt() {
+    const operation = await coco.ops.melt.get('melt-op');
+    const quote = await coco.quotes.melt.get({ mintUrl, quoteId: 'melt' });
+    if (!operation || !quote) return;
+    // A committed operation/quote notification, after direct fixture persistence.
+    await events.emit('melt-op:pending', { mintUrl, operationId: operation.id, operation });
+    await events.emit('melt-quote:updated', { mintUrl, method: 'bolt11', quoteId: 'melt', quote });
+  }
+
+  async function finishMeltChecks() {
+    // Initial checks are explicitly deferred past pending-event publication and its operation lock.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await coco.dispose();
+  }
+
+  async function seedMint(state: typeof mintState = 'UNPAID') {
+    const quote = mintQuoteFromBolt11Fixture(mintUrl, {
+      ...remoteMint(state),
+      state,
+      amount: Amount.from(1),
+    });
+    await repo.mintQuoteRepository.upsertMintQuote(quote);
+    return coco.ops.mint.prepare({ quote, amount: 1 });
+  }
+
+  it.each(['PAID', 'UNPAID'] as const)(
+    'advances cached %s Melt evidence with confirmation only for nonpayment',
+    async (state) => {
+      await openSession({ processors: { meltSettlementProcessor: {} } });
+      await seedMelt(state);
+      meltState = state;
+      await publishSeededMelt();
+      await finishMeltChecks();
+      expect((await coco.ops.melt.get('melt-op'))?.state).toBe(
+        state === 'PAID' ? 'finalized' : 'rolled_back',
+      );
+      expect((await repo.proofRepository.getProofBySecret(mintUrl, 'melt-input'))?.state).toBe(
+        state === 'PAID' ? 'spent' : 'ready',
+      );
+      expect(requests).toEqual(state === 'PAID' ? [] : ['/v1/melt/quote/bolt11/melt']);
+    },
+  );
+
+  it.each([false, true])(
+    'leaves waiting or incomplete Melt evidence pending (incomplete=%s)',
+    async (incomplete) => {
+      await openSession({ processors: { meltSettlementProcessor: {} } });
+      await seedMelt(incomplete ? 'PAID' : 'PENDING', incomplete);
+      await publishSeededMelt();
+      await finishMeltChecks();
+      expect((await coco.ops.melt.get('melt-op'))?.state).toBe('pending');
+      expect(
+        (await repo.proofRepository.getProofBySecret(mintUrl, 'melt-input'))?.usedByOperationId,
+      ).toBe('melt-op');
+      expect(requests).toEqual([]);
+    },
+  );
+
+  it('reassesses canonical state instead of advancing from an obsolete event payload', async () => {
+    await openSession({ processors: { meltSettlementProcessor: {} } });
+    await seedMelt('PENDING');
+    await publishSeededMelt();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const obsolete = meltQuoteFromBolt11Response(mintUrl, {
+      ...remoteMelt('PAID'),
+      amount: Amount.from(1),
+      fee_reserve: Amount.zero(),
+    });
+    await events.emit('melt-quote:updated', {
+      mintUrl,
+      method: 'bolt11',
+      quoteId: 'melt',
+      quote: obsolete,
+    });
+    await finishMeltChecks();
+    expect((await coco.ops.melt.get('melt-op'))?.state).toBe('pending');
+    expect(requests).toEqual([]);
+  });
+
+  it('preserves input ownership when cached settlement conflicts with local proofs', async () => {
+    await openSession({ processors: { meltSettlementProcessor: {} } });
+    await seedMelt('PAID', false, 'other-operation');
+    await publishSeededMelt();
+    await finishMeltChecks();
+    expect((await coco.ops.melt.get('melt-op'))?.state).toBe('pending');
+    expect(
+      (await repo.proofRepository.getProofBySecret(mintUrl, 'melt-input'))?.usedByOperationId,
+    ).toBe('other-operation');
+    expect(requests).toEqual([]);
+  });
+
+  it('requires committed non-payment observation metadata before releasing Melt inputs', async () => {
+    await openSession({ processors: { meltSettlementProcessor: {} } });
+    await seedMelt('UNPAID');
+    const quote = (await coco.quotes.melt.get({ mintUrl, quoteId: 'melt' }))!;
+    if (adapter === 'sqlite') {
+      database!.run('UPDATE coco_cashu_melt_quotes SET lastObservedRemoteStateAt = NULL');
+    } else {
+      await repo.meltQuoteRepository.upsertMeltQuote({
+        ...quote,
+        lastObservedRemoteStateAt: undefined,
+      });
+    }
+    await publishSeededMelt();
+    await finishMeltChecks();
+    expect((await coco.ops.melt.get('melt-op'))?.state).toBe('pending');
+    expect(requests).toEqual([]);
+  });
+
+  it('observes without processing, then consumes cached evidence in a new Session', async () => {
+    await seedMelt('PENDING');
+    meltState = 'PAID';
+    const quote = await coco.quotes.melt.refresh({ mintUrl, quoteId: 'melt' });
+    expect(quote.state).toBe('PAID');
+    expect(quote.change).toEqual([]); // omitted PAID change is normalized at observation
+    expect((await coco.ops.melt.get('melt-op'))?.state).toBe('pending');
+    await openSession({ processors: { meltSettlementProcessor: {} } });
+    await finishMeltChecks();
+    expect((await coco.ops.melt.get('melt-op'))?.state).toBe('finalized');
+    expect(requests).toEqual(['/v1/melt/quote/bolt11/melt']);
+  });
+
+  it('lets a watcher persist polling evidence while processing is disabled', async () => {
+    await openSession({ watchers: { meltQuoteWatcher: {} } });
+    await seedMelt('PENDING');
+    meltState = 'PAID';
+    const observed = new Promise<void>((resolve) =>
+      coco.on('melt-quote:updated', ({ quote }) => {
+        if (quote.state === 'PAID') resolve();
+      }),
+    );
+    await publishSeededMelt();
+    await observed;
+    await coco.dispose();
+    expect((await coco.ops.melt.get('melt-op'))?.state).toBe('pending');
+    expect((await coco.quotes.melt.get({ mintUrl, quoteId: 'melt' }))?.change).toEqual([]);
+    expect(requests).toEqual(['/v1/melt/quote/bolt11/melt']);
+  });
+
+  it('repairs watcher delivery while keeping a processor explicitly disabled', async () => {
+    await openSession({ watchers: { meltQuoteWatcher: {} } });
+    await seedMelt('PENDING');
+
+    await publishSeededMelt();
+    const subscription = await subscribed;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await coco.ensureSubscriptions();
+    const observed = new Promise<void>((resolve) =>
+      coco.on('melt-quote:updated', ({ quote }) => {
+        if (quote.state === 'PAID') resolve();
+      }),
+    );
+    receiveSocketMessage({
+      data: JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'subscribe',
+        params: { subId: subscription.params.subId, payload: remoteMelt('PAID') },
+      }),
+    });
+    await observed;
+    await coco.dispose();
+    expect((await coco.quotes.melt.get({ mintUrl, quoteId: 'melt' }))?.state).toBe('PAID');
+    expect((await coco.ops.melt.get('melt-op'))?.state).toBe('pending');
+    expect(requests).toEqual(['/v1/melt/quote/bolt11/melt']);
+  });
+
+  it('runs one-time Mint recovery with every background owner omitted', async () => {
+    const operation = await seedMint();
+    await coco.dispose();
+    coco = await initializeCoco({ ...sessionConfig, ...disabledRuntime });
+    expect((await coco.ops.mint.get(operation.id))?.state).toBe('finalized');
+    expect(requests).toContain('/v1/mint/quote/bolt11/mint');
+    expect(requests).toContain('/v1/mint/bolt11');
+  });
+
+  it('keeps owners omitted at initialization absent during networking repair', async () => {
+    const watchers = structuredClone(disabledRuntime.watchers);
+    const processors = structuredClone(disabledRuntime.processors);
+    await coco.dispose();
+    coco = await initializeCoco({ ...sessionConfig, watchers, processors });
+    for (const owner of Object.values(watchers)) owner.disabled = false;
+    for (const owner of Object.values(processors)) owner.disabled = false;
+
+    await seedMelt('PENDING');
+    meltState = 'PAID';
+    await coco.ensureSubscriptions();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(requests).toEqual([]);
+    expect(socketRequests).toEqual([]);
+    expect((await coco.ops.melt.get('melt-op'))?.state).toBe('pending');
+  });
+
+  it('preserves enabled owners without rerunning their startup discovery', async () => {
+    await openSession({
+      watchers: { meltQuoteWatcher: {} },
+      processors: { meltSettlementProcessor: {} },
+    });
+
+    // Records arrive without a live event, after both startup scans. Repair must not discover them.
+    await seedMelt('PENDING');
+    meltState = 'PAID';
+    await coco.ensureSubscriptions();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(requests).toEqual([]);
+    expect(socketRequests).toEqual([]);
+    expect((await coco.ops.melt.get('melt-op'))?.state).toBe('pending');
+
+    // A normal committed event still reaches the already-enabled processor and watcher.
+    const completed = new Promise<void>((resolve) => coco.on('melt-op:finalized', () => resolve()));
+    const operation = (await coco.ops.melt.get('melt-op'))!;
+    await events.emit('melt-op:pending', { mintUrl, operationId: operation.id, operation });
+    await completed;
+    expect((await coco.ops.melt.get('melt-op'))?.state).toBe('finalized');
+    expect(requests).toEqual(['/v1/melt/quote/bolt11/melt']);
+  });
+
+  it('leaves standalone Mint recovery independent of networking repair', async () => {
+    const operation = await seedMint();
+    await coco.ensureSubscriptions();
+    expect((await coco.ops.mint.get(operation.id))?.state).toBe('pending');
+    expect(requests).toEqual([]);
+    await coco.ops.mint.recovery.run();
+    expect((await coco.ops.mint.get(operation.id))?.state).toBe('finalized');
+    expect(requests).toContain('/v1/mint/quote/bolt11/mint');
+    expect(requests).toContain('/v1/mint/bolt11');
+  });
+
+  it('settles complete polling evidence with both owners enabled without refetching', async () => {
+    await openSession({
+      watchers: { meltQuoteWatcher: {} },
+      processors: { meltSettlementProcessor: {} },
+    });
+    await seedMelt('PENDING');
+    meltState = 'PAID';
+    const completed = new Promise<void>((resolve) => coco.on('melt-op:finalized', () => resolve()));
+    await publishSeededMelt();
+    await completed;
+    await coco.dispose();
+    await finishMeltChecks();
+    expect((await coco.ops.melt.get('melt-op'))?.state).toBe('finalized');
+    expect(requests).toEqual(['/v1/melt/quote/bolt11/melt']);
+  });
+
+  it('deduplicates terminal events from overlapping runtime observations', async () => {
+    await openSession({ processors: { meltSettlementProcessor: {} } });
+    const operation = await seedMelt('PENDING');
+    await publishSeededMelt();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    let finalized = 0;
+    coco.on('melt-op:finalized', () => {
+      finalized++;
+    });
+    meltState = 'PAID';
+    await Promise.all([
+      coco.quotes.melt.refresh({ mintUrl, quoteId: operation.quoteId }),
+      coco.quotes.melt.refresh({ mintUrl, quoteId: operation.quoteId }),
+    ]);
+    await finishMeltChecks();
+    expect((await coco.ops.melt.get(operation.id))?.state).toBe('finalized');
+    expect(finalized).toBe(1);
+    expect(requests).toHaveLength(2);
+  });
+
+  it('handles newly pending Melts when startup discovery is disabled', async () => {
+    await openSession({
+      processors: {
+        meltSettlementProcessor: { initializeExistingPendingOperationsOnStart: false },
+      },
+    });
+    await publishSeededMelt();
+    const quote = meltQuoteFromBolt11Response(mintUrl, {
+      ...remoteMelt('UNPAID'),
+      amount: Amount.from(1),
+      fee_reserve: Amount.zero(),
+    });
+    await repo.meltQuoteRepository.upsertMeltQuote(quote);
+    await repo.proofRepository.saveProofs(mintUrl, [
+      {
+        id: keysetId,
+        amount: Amount.from(1),
+        C: keys['1'],
+        secret: 'live-melt',
+        mintUrl,
+        unit: 'sat',
+        state: 'ready',
+      },
+    ]);
+    const operation = await coco.ops.melt.prepare({ quote });
+    expect((await coco.ops.melt.execute(operation.id)).state).toBe('pending');
+    meltState = 'PAID';
+    await coco.quotes.melt.refresh({ mintUrl, quoteId: 'melt' });
+    await finishMeltChecks();
+    expect((await coco.ops.melt.get(operation.id))?.state).toBe('finalized');
+    expect(requests).toEqual(['/v1/swap', '/v1/melt/bolt11', '/v1/melt/quote/bolt11/melt']);
+  });
+
+  it('keeps explicit operation refresh available with both owners disabled', async () => {
+    await seedMelt('PAID', true);
+    meltState = 'PAID';
+    expect((await coco.ops.melt.refresh('melt-op')).state).toBe('finalized');
+    expect(requests).toEqual(['/v1/melt/quote/bolt11/melt']);
+  });
+
+  it.each([
+    ['PAID', true],
+    ['PAID', false],
+    ['ISSUED', true],
+    ['ISSUED', false],
+  ] as const)(
+    'discovers pending Mint operations with cached %s quotes (batching %s)',
+    async (state, batchMintQuotes) => {
+      await openSession({
+        processors: { mintOperationProcessor: { batchMintQuotes, processIntervalMs: 20 } },
+      });
+      const operation = await seedMint();
+      await repo.mintQuoteRepository.upsertMintQuote(
+        mintQuoteFromBolt11Fixture(mintUrl, {
+          ...remoteMint(state),
+          state,
+          amount: Amount.from(1),
+        }),
+      );
+      mintState = state;
+      // Restored proofs must still be unspent for the ISSUED path.
+      proofState = 'UNSPENT';
+      await events.emit('mint-quote:updated', {
+        mintUrl,
+        method: 'bolt11',
+        quoteId: 'mint',
+        quote: (await coco.quotes.mint.get({ mintUrl, quoteId: 'mint' }))!,
+      });
+      await coco.waitForMintOperationProcessor();
+      expect((await coco.ops.mint.get(operation.id))?.state).toBe('finalized');
+      expect(
+        (await repo.proofRepository.getProofsByOperationId(mintUrl, operation.id)).some(
+          (p) => p.state === 'ready',
+        ),
+      ).toBe(true);
+      expect(requests.some((path) => path.startsWith('/v1/mint/quote/'))).toBe(false);
+    },
+  );
+
+  it.each(['dispose'] as const)(
+    'allows an awaited proof-state listener to call %s and releases the wire subscription',
+    async (stop) => {
+      const secrets = ['spent-before-shutdown', 'still-inflight-after-shutdown'];
+      const proofs = secrets.map((secret) => ({
+        id: keysetId,
+        amount: Amount.from(1),
+        C: keys['1'],
+        secret,
+        mintUrl,
+        unit: 'sat',
+        state: 'inflight' as const,
+        usedByOperationId: 'shutdown-send',
+      }));
+      await repo.proofRepository.saveProofs(mintUrl, proofs);
+      await repo.sendOperationRepository.create(pendingSend('shutdown-send', proofs));
+      // Startup checks leave both proofs inflight, so the real watcher acquires a subscription.
+      proofState = 'UNSPENT';
+      await openSession({ watchers: { proofStateWatcher: {} } });
+      const subscription = await subscribed;
+      // Subscription setup commits its local bookkeeping after the wire request is sent.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      let eventsReceived = 0;
+      const stopped = new Promise<void>((resolve, reject) => {
+        coco.on('proofs:state-changed', async ({ state }) => {
+          if (state !== 'spent') return;
+          eventsReceived += 1;
+          try {
+            await coco[stop]();
+            resolve();
+          } catch (error) {
+            reject(error);
+          }
+        });
+      });
+      const { yHexBySecret } = buildYHexMapsForSecrets(secrets);
+      const notifySpent = (secret: string) =>
+        receiveSocketMessage({
+          data: JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'subscribe',
+            params: {
+              subId: subscription.params.subId,
+              payload: { Y: yHexBySecret.get(secret), state: 'SPENT' },
+            },
+          }),
+        });
+
+      notifySpent(secrets[0]!);
+      await stopped;
+
+      expect((await repo.proofRepository.getProofBySecret(mintUrl, secrets[0]!))?.state).toBe(
+        'spent',
+      );
+      expect(
+        socketRequests.filter(
+          (request) =>
+            request.method === 'unsubscribe' && request.params.subId === subscription.params.subId,
+        ),
+      ).toHaveLength(1);
+
+      // A late notification must not change the remaining proof or publish another event.
+      notifySpent(secrets[1]!);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect((await repo.proofRepository.getProofBySecret(mintUrl, secrets[1]!))?.state).toBe(
+        'inflight',
+      );
+      expect(eventsReceived).toBe(1);
+    },
+  );
+
+  it('subscribes to Sends while legacy startup recovery waits without duplicate discovery checks', async () => {
+    const input = {
+      id: keysetId,
+      amount: Amount.from(1),
+      C: keys['1'],
+      secret: 'legacy-input',
+      mintUrl,
+      unit: 'sat',
+      state: 'spent' as const,
+      usedByOperationId: 'legacy-send',
+    };
+    const inputs = [input, { ...input, secret: 'legacy-second-input' }];
+    const outputs = ['legacy-first', 'legacy-last'].map((secret) => ({ ...input, secret }));
+    const ordinary = {
+      ...input,
+      secret: 'ordinary-send-proof',
+      state: 'inflight' as const,
+      usedByOperationId: 'ordinary-send',
+    };
+    // Historical recovery retained the allocation and spent inputs, but no token or output rows.
+    await repo.proofRepository.saveProofs(mintUrl, [...inputs, ordinary]);
+    await repo.sendOperationRepository.create({
+      ...pendingSend('legacy-send', inputs, outputs),
+      method: 'p2pk',
+      methodData: { pubkey: keys['1'] },
+      revision: 0,
+      token: undefined,
+    });
+    await repo.sendOperationRepository.create(pendingSend('ordinary-send', [ordinary]));
+
+    const { yHexBySecret } = buildYHexMapsForSecrets([
+      ...outputs.map((proof) => proof.secret),
+      ordinary.secret,
+    ]);
+    const legacyYs = outputs.map((proof) => yHexBySecret.get(proof.secret)!);
+    let releaseRecovery!: () => void;
+    const recoveryGate = new Promise<void>((resolve) => {
+      releaseRecovery = resolve;
+    });
+    let recoveryStarted!: () => void;
+    const checking = new Promise<void>((resolve) => {
+      recoveryStarted = resolve;
+    });
+    let legacySpent = false;
+    const legacyChecks: string[][] = [];
+    const fetchBoundary = globalThis.fetch;
+    globalThis.fetch = (async (request, init) => {
+      const url = new URL(request instanceof Request ? request.url : String(request));
+      if (url.pathname !== '/v1/checkstate') return fetchBoundary(request, init);
+      const { Ys } = JSON.parse(String(init?.body)) as { Ys: string[] };
+      if (!Ys.some((y) => legacyYs.includes(y))) return fetchBoundary(request, init);
+      legacyChecks.push(Ys);
+      recoveryStarted();
+      await recoveryGate;
+      return Response.json({
+        states: Ys.map((Y) => ({ Y, state: legacySpent ? 'SPENT' : 'UNSPENT' })),
+      });
+    }) as typeof fetch;
+    proofState = 'UNSPENT';
+    const opening = openSession({ watchers: { proofStateWatcher: {} } });
+    try {
+      await checking;
+      // Let finite local discovery finish while every legacy HTTP check remains blocked.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const subscriptionFor = (secret: string) =>
+        socketRequests.find(
+          (request) =>
+            request.method === 'subscribe' &&
+            'filters' in request.params &&
+            request.params.filters.includes(yHexBySecret.get(secret)!),
+        );
+      const ordinarySubscription = subscriptionFor(ordinary.secret);
+      expect(ordinarySubscription).toBeDefined();
+      expect(subscriptionFor(outputs[0]!.secret)).toBeDefined();
+      expect(subscriptionFor(outputs[1]!.secret)).toBeDefined();
+      // One recovery check plus the hybrid transport's initial poll. Discovery adds no check.
+      expect(legacyChecks).toHaveLength(2);
+
+      const finalized: string[] = [];
+      let ordinaryCompleted!: () => void;
+      const ordinaryDone = new Promise<void>((resolve) => {
+        ordinaryCompleted = resolve;
+      });
+      let legacyCompleted!: () => void;
+      const legacyDone = new Promise<void>((resolve) => {
+        legacyCompleted = resolve;
+      });
+      events.on('send:finalized', ({ operationId }) => {
+        finalized.push(operationId);
+        if (operationId === 'ordinary-send') ordinaryCompleted();
+        if (operationId === 'legacy-send') legacyCompleted();
+      });
+      const notifySpent = (subscription: WsRequest, secret: string) =>
+        receiveSocketMessage({
+          data: JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'subscribe',
+            params: {
+              subId: subscription.params.subId,
+              payload: { Y: yHexBySecret.get(secret), state: 'SPENT' },
+            },
+          }),
+        });
+      notifySpent(ordinarySubscription!, ordinary.secret);
+      await ordinaryDone;
+      expect((await repo.sendOperationRepository.getById('ordinary-send'))?.state).toBe(
+        'finalized',
+      );
+
+      releaseRecovery();
+      await opening;
+      expect(legacyChecks).toHaveLength(2);
+      expect((await coco.ops.send.get('legacy-send'))?.state).toBe('pending');
+
+      // A later legacy observation still verifies the complete allocation before finalization.
+      legacySpent = true;
+      notifySpent(subscriptionFor(outputs[0]!.secret)!, outputs[0]!.secret);
+      await legacyDone;
+      expect(legacyChecks).toHaveLength(3);
+      expect(legacyChecks.at(-1)).toEqual(legacyYs);
+      expect((await coco.ops.send.get('legacy-send'))?.state).toBe('finalized');
+      expect(finalized).toEqual(['ordinary-send', 'legacy-send']);
+      for (const proof of inputs) {
+        expect(
+          (await repo.proofRepository.getProofBySecret(mintUrl, proof.secret))?.usedByOperationId,
+        ).toBeUndefined();
+      }
+      expect(
+        await repo.proofRepository.getProofsBySecrets(
+          mintUrl,
+          outputs.map((p) => p.secret),
+        ),
+      ).toEqual([]);
+    } finally {
+      releaseRecovery();
+      await opening;
+    }
+  });
+
+  it.each(['dispose'] as const)(
+    'allows an awaited Send completion listener to call %s',
+    async (stop) => {
+      await openSession({
+        watchers: { proofStateWatcher: { watchExistingInflightOnStart: false } },
+      });
+
+      await repo.proofRepository.saveProofs(mintUrl, [
+        {
+          id: keysetId,
+          amount: Amount.from(1),
+          C: keys['1'],
+          secret: 'stop-on-completion',
+          mintUrl,
+          unit: 'sat',
+          state: 'ready',
+        },
+      ]);
+      const operation = await coco.ops.send.prepare({ mintUrl, amount: 1 });
+      const completed = new Promise<void>((resolve) => {
+        coco.on('send:finalized', async () => {
+          await coco[stop]();
+          resolve();
+        });
+      });
+
+      await coco.ops.send.execute(operation.id);
+      await completed;
+
+      expect((await coco.ops.send.get(operation.id))?.state).toBe('finalized');
+      expect(requests).toEqual(['/v1/checkstate']);
+    },
+  );
+
+  it('reloads persisted startup evidence in a fresh Session with startup recovery', async () => {
+    let directory: string | undefined;
+    try {
+      if (adapter === 'sqlite') {
+        await coco.dispose();
+        database!.close();
+        directory = mkdtempSync(join(tmpdir(), 'coco-background-'));
+        database = new Database(join(directory, 'wallet.db'));
+        repo = new SqlStorageRepositories({ database: new SqliteDb({ database }) });
+        await repo.init();
+      }
+      await seedMelt('PAID');
+      await coco.dispose();
+      if (adapter === 'sqlite') {
+        database!.close();
+        database = new Database(join(directory!, 'wallet.db'));
+        repo = new SqlStorageRepositories({ database: new SqliteDb({ database }) });
+        await repo.init();
+      }
+      coco = await initializeCoco({
+        repo,
+        seedGetter: async () => seed,
+        ...disabledRuntime,
+        processors: { ...disabledRuntime.processors, meltSettlementProcessor: {} },
+      });
+      await finishMeltChecks();
+      expect((await coco.ops.melt.get('melt-op'))?.state).toBe('finalized');
+      expect(requests).toEqual([]);
+    } finally {
+      if (directory) {
+        await coco.dispose();
+        database?.close();
+        database = undefined;
+        rmSync(directory, { recursive: true, force: true });
+      }
+    }
+  });
+});

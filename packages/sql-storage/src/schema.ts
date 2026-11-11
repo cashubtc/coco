@@ -1602,6 +1602,54 @@ const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_coco_cashu_proofs_createdByOp ON coco_cashu_proofs(createdByOperationId) WHERE createdByOperationId IS NOT NULL;
     `,
   },
+  {
+    id: '044_receive_operation_revision',
+    // Older development builds used another migration id for this column. Retain their data.
+    run: async (db) => {
+      const columns = await db.all<{ name: string }>(
+        'PRAGMA table_info(coco_cashu_receive_operations)',
+      );
+      if (!columns.some((column) => column.name === 'revision')) {
+        await db.exec(
+          'ALTER TABLE coco_cashu_receive_operations ADD COLUMN revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0)',
+        );
+      }
+    },
+  },
+  {
+    id: '045_batch_mint_operations',
+    sql: `
+      CREATE TABLE coco_cashu_batch_mint_operations (
+        id TEXT PRIMARY KEY,
+        mintUrl TEXT NOT NULL,
+        method TEXT NOT NULL,
+        unit TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('executing', 'finalized', 'failed')),
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL,
+        error TEXT,
+        terminalFailureJson TEXT,
+        outputDataJson TEXT NOT NULL
+      );
+      CREATE INDEX idx_coco_cashu_batch_mint_operations_state
+        ON coco_cashu_batch_mint_operations(state);
+
+      CREATE TABLE coco_cashu_batch_mint_members (
+        operationId TEXT NOT NULL
+          REFERENCES coco_cashu_batch_mint_operations(id) ON DELETE CASCADE,
+        ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+        mintUrl TEXT NOT NULL,
+        quoteId TEXT NOT NULL,
+        amount TEXT NOT NULL,
+        request TEXT NOT NULL,
+        pubkey TEXT,
+        PRIMARY KEY (operationId, ordinal),
+        UNIQUE (operationId, mintUrl, quoteId)
+      );
+      CREATE INDEX idx_coco_cashu_batch_mint_members_quote
+        ON coco_cashu_batch_mint_members(mintUrl, quoteId);
+    `,
+  },
 ];
 
 // Export for testing

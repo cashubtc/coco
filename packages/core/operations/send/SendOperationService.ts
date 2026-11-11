@@ -8,6 +8,7 @@ import {
 import type { MintService } from '@core/services/MintService.ts';
 import type { ProofQueries } from '@core/proofs/ProofQueries.ts';
 import { createKeyChain } from '@core/proofs/KeysetSelection.ts';
+import { feeCoveredSendAmount } from '@core/proofs/ProofSelection.ts';
 import type { MintMetadata } from '@core/mints/MintMetadata.ts';
 import {
   applySendResult,
@@ -19,6 +20,7 @@ import {
   cleanupLegacySendInit,
   cleanupOrphanedSendReservations,
   recoverLegacyExactSend,
+  abandonSendReclaim,
   beginSendReclaim,
   completePendingSend,
   completeSendReclaim,
@@ -27,6 +29,7 @@ import {
 
 import type {
   ApplySendResult,
+  BeginSendReclaimResult,
   CancelPreparedSendResult,
   ExecuteExactSendResult,
   CompletePendingSendInput,
@@ -47,6 +50,7 @@ import {
   type PreparedSendOperation,
   type ExecutingSendOperation,
   type PendingSendOperation,
+  type RollingBackSendOperation,
   type CreateSendOperationOptions,
 } from './SendOperation';
 import type { SendMethod, SendMethodData } from './SendMethodHandler';
@@ -73,6 +77,42 @@ import { OperationIdLock } from '../OperationIdLock';
 import { normalizeUnitAmount, type UnitAmount } from '../../amounts.ts';
 import type { SendOperationQueries } from './SendOperationQueries.ts';
 import type { SendRemote, SendRemoteSession } from './SendRemote.ts';
+import { canCompleteWithInput } from './SendValidation.ts';
+
+/** Informational observation target; applying evidence always rechecks the persisted Send. */
+export interface SendProofObservationTarget {
+  operationId: string;
+  mintUrl: string;
+  unit: string;
+  id: string;
+  secret: string;
+  state: 'inflight' | 'spent';
+}
+
+/** Why an interrupted reclaim was left as it is. */
+type UnresolvedReclaimReason =
+  | 'token_proofs_missing'
+  | 'no_stored_request'
+  | 'method_without_reclaim'
+  | 'proof_states_incomplete'
+  | 'token_proofs_unsettled'
+  | 'request_not_replayed'
+  | 'outputs_partly_restored';
+
+const UNRESOLVED_RECLAIM_DETAIL: Record<UnresolvedReclaimReason, string> = {
+  token_proofs_missing: 'token proof metadata is missing',
+  no_stored_request: 'no stored reclaim request and the token proofs are not all unspent',
+  method_without_reclaim: 'the send method has no reclaim',
+  proof_states_incomplete: 'proof-state response was incomplete',
+  token_proofs_unsettled: 'token proofs are pending or only partly spent',
+  request_not_replayed: 'token proofs are unspent and the rejected request was not sent again',
+  outputs_partly_restored: 'reclaim outputs were only partly restored',
+};
+
+type SendReclaimOutcome =
+  | { status: 'rolled_back'; result: CompleteSendReclaimResult }
+  | { status: 'claimed'; result: CompletePendingSendResult }
+  | { status: 'unresolved'; reason: UnresolvedReclaimReason };
 
 // Explicit request-validation rejections from NUT error_codes.md. Unknown errors
 // do not establish non-effect and must retain the request for recovery.
@@ -97,6 +137,16 @@ export interface SendOperationServiceDependencies {
   outputDataCreator?: OutputDataCreator;
   logger?: Logger;
   mintScopedLock?: MintScopedLock;
+}
+
+/** Options applied before a Send's amount and proof plan are committed. */
+export interface PrepareSendOptions {
+  /**
+   * Treat the requested amount as the receiver's net target after redemption input fees.
+   * Defaults to false (face value). The prepared amount is gross outgoing value; its fee
+   * remains the separate payer-side preparation cost. Applies to unlocked and P2PK sends.
+   */
+  coverReceiverFees?: boolean;
 }
 
 /**
@@ -214,7 +264,10 @@ export class SendOperationService {
    *
    * Throws if the operation is already in progress.
    */
-  async prepare(operation: InitSendOperation): Promise<PreparedSendOperation> {
+  async prepare(
+    operation: InitSendOperation,
+    options: PrepareSendOptions = {},
+  ): Promise<PreparedSendOperation> {
     const releaseLock = await this.acquireOperationLock(operation.id);
     let result: PrepareSendResult;
     try {
@@ -227,8 +280,22 @@ export class SendOperationService {
         const metadata = await this.mintMetadataRefresh.refreshAndCommitIfStale(operation.mintUrl);
         const keys = this.activeKeys(metadata, operation.unit);
         const seed = await this.loadSeed();
+        const receiverAmount = options.coverReceiverFees ? operation.amount : undefined;
+        // P2PK outputs are randomized in preflight. Unlocked Sends defer fee planning until
+        // authoritative selection determines that existing proofs cannot be sent directly.
+        const plannedOperation =
+          receiverAmount && operation.method === 'p2pk'
+            ? {
+                ...operation,
+                amount: feeCoveredSendAmount(
+                  receiverAmount,
+                  keys,
+                  createKeyChain(operation.mintUrl, operation.unit, metadata.keysets),
+                ),
+              }
+            : operation;
         const plan = handler.prepare({
-          operation,
+          operation: plannedOperation,
           activeKeys: keys,
           mintInfo: metadata.mint.mintInfo,
           outputDataCreator: this.outputDataCreator,
@@ -236,10 +303,11 @@ export class SendOperationService {
         const updatedAt = Date.now();
         result = await this.transactionRunner.run((tx) =>
           tx.perform(prepareSend, {
-            operation: { ...operation, updatedAt },
+            operation: { ...plannedOperation, updatedAt },
             activeKeys: keys,
             seed,
             ...plan,
+            receiverAmount,
           }),
         );
       } finally {
@@ -559,6 +627,7 @@ export class SendOperationService {
   /**
    * Cancel a prepared operation and release its reservations.
    * Reclaim commits its Output Allocation before mint I/O and applies the result atomically.
+   * A reclaim whose mint call fails makes one attempt to settle from mint evidence before rejecting.
    * Throws if the operation is already in progress.
    */
   async rollback(operationId: string, reason = 'Rolled back by user action'): Promise<void> {
@@ -575,6 +644,8 @@ export class SendOperationService {
     const releaseLock = await this.acquireOperationLock(operationId);
     let cancelled: CancelPreparedSendResult | undefined;
     let reclaimed: CompleteSendReclaimResult | undefined;
+    let claimed: CompletePendingSendResult | undefined;
+    let failure: { error: unknown } | undefined;
     try {
       const operation = await this.operationQueries.getById(operationId);
       if (!operation) {
@@ -592,38 +663,35 @@ export class SendOperationService {
       } else if (operation.state === 'pending' && operation.method === 'default') {
         const metadata = await this.mintMetadataRefresh.refreshAndCommitIfStale(operation.mintUrl);
         const remote = this.remote.open(metadata, operation.unit);
-        const updatedAt = Date.now();
-        const activeKeys = this.activeKeys(metadata, operation.unit);
-        const seed = await this.loadSeed();
-        const begun = await this.transactionRunner.run((tx) =>
-          tx.perform(beginSendReclaim, {
-            operationId,
-            updatedAt,
-            activeKeys,
-            seed,
-          }),
-        );
-        if (begun.counter) await this.publishCommittedEvent('counter:updated', begun.counter);
-        if (begun.skippedForFees) {
-          this.logger?.warn('Cannot reclaim send proofs because fees consume the amount', {
-            operationId,
-          });
-        }
-        const proofs = begun.operation.reclaimData
-          ? await remote.reclaim(begun.inputProofs, begun.operation.reclaimData.outputData)
-          : [];
-        const reclaimedAt = Date.now();
-        const reclaimedProofs = mapProofToCoreProof(operation.mintUrl, 'ready', proofs, {
-          unit: operation.unit,
-        });
-        reclaimed = await this.transactionRunner.run((tx) =>
-          tx.perform(completeSendReclaim, {
-            operationId,
-            updatedAt: reclaimedAt,
+        const begun = await this.beginReclaim(operation, metadata);
+        try {
+          reclaimed = await this.submitSendReclaim(
+            begun.operation,
+            begun.inputProofs,
+            remote,
             reason,
-            proofs: reclaimedProofs,
-          }),
-        );
+          );
+        } catch (error) {
+          failure = { error };
+          // The request may have reached the mint. Make one attempt to settle from mint evidence.
+          // A definitive rejection had no effect there, so the same request is not sent again.
+          try {
+            const outcome = await this.resolveInterruptedReclaim(begun.operation, reason, {
+              replayStoredRequest: !this.isDefinitiveSwapFailure(error),
+            });
+            if (outcome.status === 'rolled_back') {
+              reclaimed = outcome.result;
+              failure = undefined;
+            } else if (outcome.status === 'claimed') {
+              claimed = outcome.result;
+            }
+          } catch (resolveError) {
+            this.logger?.warn('Could not settle a failed Send reclaim; leaving it for recovery', {
+              operationId,
+              error: resolveError instanceof Error ? resolveError.message : String(resolveError),
+            });
+          }
+        }
       } else {
         throw new Error(`Cannot rollback operation in state ${operation.state}`);
       }
@@ -631,24 +699,269 @@ export class SendOperationService {
       releaseLock();
     }
     if (cancelled) await this.publishCancelledSend(cancelled);
-    if (reclaimed) {
-      await this.publishSavedProofs(reclaimed.operation.mintUrl, reclaimed.savedProofs);
-      if (reclaimed.spentProofSecrets.length > 0)
-        await this.publishCommittedEvent('proofs:state-changed', {
-          mintUrl: reclaimed.operation.mintUrl,
-          secrets: reclaimed.spentProofSecrets,
-          state: 'spent',
-        });
-      if (reclaimed.releasedProofSecrets.length > 0)
-        await this.publishCommittedEvent('proofs:released', {
-          mintUrl: reclaimed.operation.mintUrl,
-          secrets: reclaimed.releasedProofSecrets,
-        });
-      await this.publishCommittedEvent('send:rolled-back', {
+    if (reclaimed) await this.publishReclaimedSend(reclaimed);
+    if (claimed) await this.publishCompletedSend(claimed);
+    if (failure) throw failure.error;
+  }
+
+  private async publishReclaimedSend(reclaimed: CompleteSendReclaimResult): Promise<void> {
+    await this.publishSavedProofs(reclaimed.operation.mintUrl, reclaimed.savedProofs);
+    if (reclaimed.spentProofSecrets.length > 0)
+      await this.publishCommittedEvent('proofs:state-changed', {
         mintUrl: reclaimed.operation.mintUrl,
-        operationId: reclaimed.operation.id,
-        operation: reclaimed.operation,
+        secrets: reclaimed.spentProofSecrets,
+        state: 'spent',
       });
+    if (reclaimed.releasedProofSecrets.length > 0)
+      await this.publishCommittedEvent('proofs:released', {
+        mintUrl: reclaimed.operation.mintUrl,
+        secrets: reclaimed.releasedProofSecrets,
+      });
+    await this.publishCommittedEvent('send:rolled-back', {
+      mintUrl: reclaimed.operation.mintUrl,
+      operationId: reclaimed.operation.id,
+      operation: reclaimed.operation,
+    });
+  }
+
+  /**
+   * Commit the reclaim request for a `pending` Send. For a `rolling_back` Send, abandon its
+   * reclaim and begin a new one in the same transaction.
+   */
+  private async beginReclaim(
+    operation: PendingSendOperation | RollingBackSendOperation,
+    metadata: MintMetadata,
+  ): Promise<BeginSendReclaimResult> {
+    const updatedAt = Date.now();
+    const activeKeys = this.activeKeys(metadata, operation.unit);
+    const seed = await this.loadSeed();
+    const begun = await this.transactionRunner.run(async (tx) => {
+      if (operation.state === 'rolling_back') {
+        await tx.perform(abandonSendReclaim, {
+          operationId: operation.id,
+          expectedRevision: operation.revision ?? 0,
+          updatedAt,
+        });
+      }
+      return tx.perform(beginSendReclaim, {
+        operationId: operation.id,
+        updatedAt,
+        activeKeys,
+        seed,
+      });
+    });
+    if (begun.counter) await this.publishCommittedEvent('counter:updated', begun.counter);
+    if (begun.skippedForFees) {
+      this.logger?.warn('Cannot reclaim send proofs because fees consume the amount', {
+        operationId: operation.id,
+      });
+    }
+    return begun;
+  }
+
+  /** Submit the committed reclaim request, if the reclaim has one, and apply the result. */
+  private async submitSendReclaim(
+    operation: RollingBackSendOperation,
+    inputProofs: Proof[],
+    remote: SendRemoteSession,
+    reason: string,
+  ): Promise<CompleteSendReclaimResult> {
+    const proofs = operation.reclaimData
+      ? await remote.reclaim(inputProofs, operation.reclaimData.outputData)
+      : [];
+    return this.applySendReclaim(operation, proofs, reason);
+  }
+
+  private async applySendReclaim(
+    operation: RollingBackSendOperation,
+    proofs: Proof[],
+    reason: string,
+  ): Promise<CompleteSendReclaimResult> {
+    const updatedAt = Date.now();
+    const reclaimedProofs = mapProofToCoreProof(operation.mintUrl, 'ready', proofs, {
+      unit: operation.unit,
+    });
+    return this.transactionRunner.run((tx) =>
+      tx.perform(completeSendReclaim, {
+        operationId: operation.id,
+        updatedAt,
+        reason,
+        proofs: reclaimedProofs,
+      }),
+    );
+  }
+
+  /**
+   * Settle a reclaim that stopped after `rolling_back` was committed. The caller holds the
+   * operation lock. Reclaim outputs the wallet already stores settle it without the mint. Mint
+   * I/O runs outside transactions; evidence that does not decide the outcome leaves the Send and
+   * its reclaim request untouched.
+   */
+  private async resolveInterruptedReclaim(
+    operation: RollingBackSendOperation,
+    reason: string,
+    options: { replayStoredRequest: boolean } = { replayStoredRequest: true },
+  ): Promise<SendReclaimOutcome> {
+    const plan = operation.reclaimData;
+    const secrets = plan ? plan.inputProofSecrets : getSendProofSecrets(operation);
+    const stored = await this.proofQueries.getProofsBySecrets(operation.mintUrl, secrets);
+    const bySecret = new Map(stored.map((proof) => [proof.secret, proof]));
+    if (secrets.length === 0 || bySecret.size !== secrets.length) {
+      return { status: 'unresolved', reason: 'token_proofs_missing' };
+    }
+    const inputProofs = secrets.map((secret) => bySecret.get(secret)!);
+    const outputSecrets = plan
+      ? getSecretsFromSerializedOutputData(plan.outputData).keepSecrets
+      : [];
+
+    if (plan) {
+      // The mint signs these outputs only for this request, so holding all of them, for example
+      // after a Restore, shows the reclaim landed. Completion keeps the stored rows as they are.
+      const held = await this.proofQueries.getProofsBySecrets(operation.mintUrl, outputSecrets);
+      if (outputSecrets.length > 0 && held.length === outputSecrets.length) {
+        return {
+          status: 'rolled_back',
+          result: await this.applySendReclaim(operation, held, reason),
+        };
+      }
+    }
+
+    const metadata = await this.mintMetadataRefresh.refreshAndCommitIfStale(operation.mintUrl);
+    const remote = this.remote.open(metadata, operation.unit);
+    const states = await remote.checkProofStates(inputProofs);
+    if (states.length !== inputProofs.length) {
+      return { status: 'unresolved', reason: 'proof_states_incomplete' };
+    }
+    const allUnspent = states.every((state) => state.state === 'UNSPENT');
+    const allSpent = states.every((state) => state.state === 'SPENT');
+
+    if (!plan) {
+      // No request was stored, so spent token proofs cannot be attributed to either party.
+      if (!allUnspent || inputProofs.some((proof) => proof.state !== 'inflight')) {
+        return { status: 'unresolved', reason: 'no_stored_request' };
+      }
+      // Nothing was reclaimed or claimed. Start again with a stored request.
+      const begun = await this.beginReclaim(operation, metadata);
+      return {
+        status: 'rolled_back',
+        result: await this.submitSendReclaim(begun.operation, begun.inputProofs, remote, reason),
+      };
+    }
+
+    if (allUnspent) {
+      if (!options.replayStoredRequest) {
+        return { status: 'unresolved', reason: 'request_not_replayed' };
+      }
+      return {
+        status: 'rolled_back',
+        result: await this.submitSendReclaim(operation, inputProofs, remote, reason),
+      };
+    }
+    if (!allSpent) {
+      return { status: 'unresolved', reason: 'token_proofs_unsettled' };
+    }
+
+    // A strict Restore returns nothing only when the mint signed none of the reclaim outputs.
+    const restored = await remote.restoreOutputs(plan.outputData, { requireComplete: true });
+    if (restored.length === 0) {
+      // The token proofs are spent and the reclaim never landed: the recipient claimed.
+      const updatedAt = Date.now();
+      const result = await this.transactionRunner.run(async (tx) => {
+        await tx.perform(abandonSendReclaim, {
+          operationId: operation.id,
+          expectedRevision: operation.revision ?? 0,
+          updatedAt,
+        });
+        return tx.perform(completePendingSend, {
+          operationId: operation.id,
+          updatedAt,
+          spentProofSecrets: plan.inputProofSecrets,
+        });
+      });
+      return { status: 'claimed', result };
+    }
+    const restoredSecrets = new Set(restored.map((proof) => proof.secret));
+    if (
+      restored.length !== outputSecrets.length ||
+      !outputSecrets.every((secret) => restoredSecrets.has(secret))
+    ) {
+      return { status: 'unresolved', reason: 'outputs_partly_restored' };
+    }
+    return {
+      status: 'rolled_back',
+      result: await this.applySendReclaim(operation, restored, reason),
+    };
+  }
+
+  /** Recovery entry: take the operation lock, settle, then publish outside the lock. */
+  private async recoverRollingBackOperation(op: SendOperation): Promise<void> {
+    let releaseLock: () => void;
+    try {
+      releaseLock = await this.acquireOperationLock(op.id);
+    } catch (error) {
+      if (!(error instanceof OperationInProgressError)) throw error;
+      this.logger?.debug('Skipping rolling_back Send recovery because it is in progress', {
+        operationId: op.id,
+      });
+      return;
+    }
+    let outcome: SendReclaimOutcome;
+    try {
+      const latest = await this.operationQueries.getById(op.id);
+      if (!latest || latest.state !== 'rolling_back') {
+        this.logger?.debug('Skipping rolling_back Send recovery because state changed', {
+          operationId: op.id,
+          state: latest?.state,
+        });
+        return;
+      }
+      outcome =
+        latest.method === 'default'
+          ? await this.resolveInterruptedReclaim(latest, 'Reclaim completed during recovery')
+          : { status: 'unresolved', reason: 'method_without_reclaim' };
+    } finally {
+      releaseLock();
+    }
+
+    if (outcome.status === 'rolled_back') {
+      await this.publishReclaimedSend(outcome.result);
+      this.logger?.info('Completed an interrupted Send reclaim during recovery', {
+        operationId: op.id,
+      });
+      return;
+    }
+    if (outcome.status === 'claimed') {
+      await this.publishCompletedSend(outcome.result);
+      this.logger?.info('Interrupted Send reclaim found the token claimed', {
+        operationId: op.id,
+        state: outcome.result.operation.state,
+      });
+      return;
+    }
+    const detail = UNRESOLVED_RECLAIM_DETAIL[outcome.reason];
+    switch (outcome.reason) {
+      // The stored record cannot settle these; the value is only reachable through a Restore.
+      case 'token_proofs_missing':
+      case 'no_stored_request':
+      case 'method_without_reclaim':
+        this.logger?.warn(
+          'Found operation stuck in rolling_back state. ' +
+            'This indicates a crash during rollback. Manual recovery via seed restore may be needed.',
+          {
+            operationId: op.id,
+            mintUrl: op.mintUrl,
+            amount: op.amount,
+            reason: outcome.reason,
+            detail,
+          },
+        );
+        return;
+      default:
+        this.logger?.warn('Send reclaim outcome remains ambiguous; preserving recovery material', {
+          operationId: op.id,
+          reason: outcome.reason,
+          detail,
+        });
     }
   }
 
@@ -717,22 +1030,17 @@ export class SendOperationService {
         }
       }
 
-      // 5. Warn about rolling_back operations (need manual intervention)
-      // TODO: Implement automatic recovery for rolling_back operations.
-      // New reclaims retain their output plan atomically, but automatic reclaim recovery remains
-      // a separate behavior change. Older records may lack that plan. Preserve the existing
-      // warning and manual seed Restore path for both.
+      // 5. Settle interrupted reclaims from mint evidence
       const rollingBackOps = await this.operationQueries.getByState('rolling_back');
       for (const op of rollingBackOps) {
-        this.logger?.warn(
-          'Found operation stuck in rolling_back state. ' +
-            'This indicates a crash during rollback. Manual recovery via seed restore may be needed.',
-          {
+        try {
+          await this.recoverRollingBackOperation(op);
+        } catch (e) {
+          this.logger?.error('Error recovering rolling_back operation', {
             operationId: op.id,
-            mintUrl: op.mintUrl,
-            amount: op.amount,
-          },
-        );
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
         rollingBackCount++;
       }
 
@@ -985,24 +1293,124 @@ export class SendOperationService {
   }
 
   /**
-   * Persist a mint proof-state notification through the Send transaction boundary. The last send
-   * proof observation and the pending-to-finalized transition commit together.
+   * Apply SPENT evidence and any resulting Send completion in one transaction. Partial evidence
+   * leaves the Send pending. Duplicate evidence is harmless; no watcher has proof write authority.
+   * Legacy tokenless P2PK Sends still require verification of their complete exact output plan.
+   * Callers supply trusted mint evidence. A true result means the observation was handled, not
+   * necessarily that the Send finalized.
    */
-  async recordProofSpent(operationId: string, secret: string): Promise<boolean> {
+  async applyProofStateObservation(
+    operationId: string,
+    spentSecrets: readonly string[],
+  ): Promise<boolean> {
     const operation = await this.operationQueries.getById(operationId);
     if (!operation || operation.state !== 'pending') return false;
-    if (!getSendProofSecrets(operation).includes(secret)) {
-      throw new ProofValidationError(`Proof ${secret} does not belong to Send operation`);
+    const expected = new Set(getSendProofSecrets(operation));
+    if (spentSecrets.some((secret) => !expected.has(secret))) {
+      throw new ProofValidationError('Observed proof does not belong to Send operation');
     }
+    if (spentSecrets.length === 0) return false;
     const completion = isLegacyTokenlessP2pkSend(operation)
       ? await this.observeLegacyTokenlessP2pk(operation)
-      : { operationId, updatedAt: Date.now(), spentProofSecrets: [secret] };
+      : { operationId, updatedAt: Date.now(), spentProofSecrets: [...new Set(spentSecrets)] };
     if (!completion) return true;
     const result = await this.transactionRunner.run((tx) =>
       tx.perform(completePendingSend, completion),
     );
     await this.publishCompletedSend(result);
     return true;
+  }
+
+  /**
+   * Reassess persisted proof evidence without polling. Legacy tokenless P2PK records wait for
+   * Operation Recovery or a new observation to verify their complete allocation with the mint.
+   * The completion transition rechecks state, exact proofs and ownership in its transaction.
+   */
+  async advancePendingOperation(operationId: string): Promise<void> {
+    const operation = await this.operationQueries.getById(operationId);
+    if (!operation || operation.state !== 'pending') return;
+    if (isLegacyTokenlessP2pkSend(operation)) return;
+    const secrets = getSendProofSecrets(operation);
+    const proofs = await this.proofQueries.getProofsBySecrets(operation.mintUrl, secrets);
+    if (
+      secrets.length === 0 ||
+      proofs.length !== new Set(secrets).size ||
+      proofs.some((proof) => proof.state !== 'spent')
+    )
+      return;
+    const updatedAt = Date.now();
+    const result = await this.transactionRunner.run((tx) =>
+      tx.perform(completePendingSend, { operationId, updatedAt }),
+    );
+    await this.publishCompletedSend(result);
+  }
+
+  /**
+   * Discover pending Send targets by operation or by a local proof-event hint. No writes or remote
+   * effects occur here. Missing/terminal owners and proofs reserved by another operation are omitted.
+   * Legacy tokenless outputs are derived from their persisted allocation, without fabricating rows.
+   */
+  async getProofObservationTargets(
+    input: string | { mintUrl: string; secrets: string[] },
+  ): Promise<SendProofObservationTarget[]> {
+    const requested = typeof input === 'string' ? undefined : new Set(input.secrets);
+    const mintUrl = typeof input === 'string' ? undefined : normalizeMintUrl(input.mintUrl);
+    const candidates =
+      typeof input === 'string'
+        ? [input]
+        : (await this.proofQueries.getProofsBySecrets(mintUrl!, input.secrets))
+            .map((proof) => proof.usedByOperationId ?? proof.createdByOperationId)
+            .filter((id): id is string => id != null);
+    const targets: SendProofObservationTarget[] = [];
+    for (const operationId of new Set(candidates)) {
+      const operation = await this.operationQueries.getById(operationId);
+      if (
+        !operation ||
+        operation.state !== 'pending' ||
+        (mintUrl !== undefined && operation.mintUrl !== mintUrl)
+      )
+        continue;
+      const secrets = getSendProofSecrets(operation);
+      const proofs = new Map(
+        (await this.proofQueries.getProofsBySecrets(operation.mintUrl, secrets)).map((proof) => [
+          proof.secret,
+          proof,
+        ]),
+      );
+      const legacy = isLegacyTokenlessP2pkSend(operation)
+        ? new Map(
+            getProofStateInputsFromSerializedOutputs(operation.outputData.send).map((proof) => [
+              proof.secret,
+              proof,
+            ]),
+          )
+        : undefined;
+      for (const secret of secrets) {
+        if (requested && !requested.has(secret)) continue;
+        const proof = proofs.get(secret);
+        if (proof && proof.state !== 'inflight' && proof.state !== 'spent') continue;
+        if (proof && proof.usedByOperationId != null && proof.usedByOperationId !== operationId)
+          continue;
+        if (
+          proof &&
+          !(operation.needsSwap
+            ? proof.createdByOperationId === operationId
+            : canCompleteWithInput(proof, operationId))
+        )
+          continue;
+        const id = proof?.id ?? legacy?.get(secret)?.id;
+        if (!id) continue;
+        targets.push({
+          operationId,
+          mintUrl: operation.mintUrl,
+          unit: operation.unit,
+          id,
+          secret,
+          state: proof?.state === 'spent' ? 'spent' : 'inflight',
+        });
+      }
+    }
+    return targets;
   }
 
   private async observeLegacyTokenlessP2pk(

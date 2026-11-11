@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { Manager } from '@cashu/coco-core';
+import { initializeCoco } from '@cashu/coco-core';
 import { SqlStorageRepositories } from '../repositories.ts';
 import {
   ensureSchemaUpTo,
@@ -58,13 +58,25 @@ const EXPECTED_MIGRATION_IDS = [
   '041_send_reclaim_data',
   '042_mint_swap_operations',
   '043_pending_proofs',
+  '044_receive_operation_revision',
+  '045_batch_mint_operations',
 ] as const;
 
 async function allocateP2pkKey(db: SqlDatabase) {
-  const manager = new Manager(
-    new SqlStorageRepositories({ database: db }),
-    async () => new Uint8Array(64),
-  );
+  const manager = await initializeCoco({
+    repo: new SqlStorageRepositories({ database: db }),
+    seedGetter: async () => new Uint8Array(64),
+    watchers: {
+      mintOperationWatcher: { disabled: true },
+      meltQuoteWatcher: { disabled: true },
+      proofStateWatcher: { disabled: true },
+    },
+    processors: {
+      mintOperationProcessor: { disabled: true },
+      meltSettlementProcessor: { disabled: true },
+      mintSwapOperationProcessor: { disabled: true },
+    },
+  });
   try {
     return await manager.keyring.generateKeyPair(true);
   } finally {
@@ -1298,6 +1310,64 @@ describe('shared SQL schema migrations', () => {
   );
 });
 
+describe('Batch Mint migration', () => {
+  itWithDatabase(
+    'adds indexed Batch Mint tables and keeps existing Mint Operations',
+    async (db) => {
+      await ensureSchemaUpTo(db, '045_batch_mint_operations');
+      const mintOperationColumns = await getColumnNames(db, 'coco_cashu_mint_operations');
+      const mintOperationIndexes = await getIndexNames(db, 'coco_cashu_mint_operations');
+      await db.run(
+        `INSERT INTO coco_cashu_mint_operations
+        (id, mintUrl, quoteId, state, createdAt, updatedAt, method, methodDataJson, amount, unit,
+         request, outputDataJson)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          'existing-mint-op',
+          'https://mint.test',
+          'existing-quote',
+          'finalized',
+          1,
+          1,
+          'bolt11',
+          '{}',
+          '10',
+          'sat',
+          'lnbc-existing',
+          JSON.stringify({ keep: [], send: [] }),
+        ],
+      );
+
+      await ensureSchemaUpTo(db);
+
+      expect(await getColumnNames(db, 'coco_cashu_mint_operations')).toEqual(mintOperationColumns);
+      expect(await getIndexNames(db, 'coco_cashu_mint_operations')).toEqual(mintOperationIndexes);
+      expect(await getColumnNames(db, 'coco_cashu_batch_mint_members')).toEqual([
+        'operationId',
+        'ordinal',
+        'mintUrl',
+        'quoteId',
+        'amount',
+        'request',
+        'pubkey',
+      ]);
+      expect(await getIndexNames(db, 'coco_cashu_batch_mint_members')).toEqual(
+        expect.arrayContaining(['idx_coco_cashu_batch_mint_members_quote']),
+      );
+      const repositories = new SqlStorageRepositories({ database: db });
+      const existing = await repositories.mintOperationRepository.getById('existing-mint-op');
+      expect(existing?.state).toBe('finalized');
+      expect(await repositories.batchMint.operationRepository.listInFlight()).toEqual([]);
+      expect(
+        await repositories.batchMint.operationRepository.listByQuote({
+          mintUrl: 'https://mint.test',
+          quoteId: 'existing-quote',
+        }),
+      ).toEqual([]);
+    },
+  );
+});
+
 describe('pending proof migration', () => {
   it('preserves historical proof material, ownership, counters and indexes', async () => {
     const database = new Database(':memory:');
@@ -1347,4 +1417,86 @@ describe('pending proof migration', () => {
       database.close();
     }
   });
+});
+
+describe('Receive revision migration', () => {
+  for (const oldMigration of [
+    undefined,
+    '040_receive_operation_revision',
+    '041_receive_operation_revision',
+    '042_receive_operation_revision',
+  ]) {
+    it(`preserves legacy requests and existing revisions from ${oldMigration ?? 'no revision column'}`, async () => {
+      const database = new Database(':memory:');
+      const db = createBunSqlDatabase(database);
+      try {
+        await ensureSchemaUpTo(db, '044_receive_operation_revision');
+        if (oldMigration) {
+          await db.exec(
+            'ALTER TABLE coco_cashu_receive_operations ADD COLUMN revision INTEGER NOT NULL DEFAULT 0',
+          );
+          await db.run('INSERT INTO coco_cashu_migrations (id, appliedAt) VALUES (?, 1)', [
+            oldMigration,
+          ]);
+        }
+        const inputProofs = JSON.stringify([
+          {
+            id: 'keys',
+            amount: '3',
+            secret: 'signed-secret',
+            C: 'C',
+            witness: '{"signatures":["saved"]}',
+          },
+        ]);
+        const outputs = JSON.stringify({
+          keep: [{ secret: 'saved-output', blindingFactor: '42' }],
+          send: [],
+        });
+        const source = JSON.stringify({
+          type: 'payment-request',
+          requestOperationId: 'parent',
+          attemptId: 'attempt',
+          transport: 'inband',
+        });
+        await db.run(
+          `INSERT INTO coco_cashu_receive_operations (id, mintUrl, unit, amount, state, createdAt, updatedAt, fee, inputProofsJson, outputDataJson, sourceJson${oldMigration ? ', revision' : ''}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${oldMigration ? ', 7' : ''})`,
+          [
+            'receive',
+            'https://mint.test',
+            'sat',
+            '3',
+            'executing',
+            1,
+            1,
+            '0',
+            inputProofs,
+            outputs,
+            source,
+          ],
+        );
+        await ensureSchemaUpTo(db);
+        const row = await db.get<{
+          revision: number;
+          inputProofsJson: string;
+          outputDataJson: string;
+          sourceJson: string;
+        }>('SELECT * FROM coco_cashu_receive_operations WHERE id = ?', ['receive']);
+        expect(row!.revision).toBe(oldMigration ? 7 : 0);
+        expect(row!.inputProofsJson).toBe(inputProofs);
+        expect(row!.outputDataJson).toBe(outputs);
+        expect(row!.sourceJson).toBe(source);
+        await ensureSchemaUpTo(db);
+        expect(
+          (
+            await db.get<{ revision: number }>(
+              'SELECT revision FROM coco_cashu_receive_operations WHERE id = ?',
+              ['receive'],
+            )
+          )?.revision,
+        ).toBe(oldMigration ? 7 : 0);
+      } finally {
+        database.close();
+      }
+    });
+  }
 });

@@ -30,7 +30,6 @@ import { MemoryMintQuoteRepository } from '../../repositories/memory/MemoryMintQ
 import type { MemoryMintRepository } from '../../repositories/memory/MemoryMintRepository.ts';
 import { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
 import { MintService } from '../../services/MintService.ts';
-import type { ProofService } from '../../services/ProofService.ts';
 import type { WalletService } from '../../services/WalletService.ts';
 import { waitFor } from '../waitFor.ts';
 
@@ -59,9 +58,11 @@ describe('QuoteLifecycle mint quote polling', () => {
   let mintRepository: MemoryMintRepository;
   let mintService: MintService;
   let quoteLifecycle: QuoteLifecycle;
+  let recoveryInterests: Set<string>;
   let fetchRemoteMintQuote: ReturnType<typeof mock>;
 
   beforeEach(async () => {
+    recoveryInterests = new Set();
     eventBus = new EventBus<CoreEvents>();
     mintQuoteRepository = new MemoryMintQuoteRepository();
     mintAdapter = Object.assign(new MintAdapter(new MintRequestProvider()), {
@@ -116,17 +117,62 @@ describe('QuoteLifecycle mint quote polling', () => {
     } as unknown as MintHandlerProvider;
 
     quoteLifecycle = new QuoteLifecycle({
+      hasMintRecoveryInterest: (method, identity) =>
+        method === 'bolt11' &&
+        identity.mintUrl === mintUrl &&
+        recoveryInterests.has(identity.quoteId),
       mintHandlerProvider,
       meltHandlerProvider: {} as MeltHandlerProvider,
       mintQuoteRepository,
       meltQuoteRepository: {} as never,
       proofRepository: {} as ProofRepository,
-      proofService: {} as ProofService,
       mintService,
       walletService: {} as WalletService,
       mintAdapter,
       eventBus,
     });
+  });
+
+  it('polls only exact registered recovery interests after trust revocation', async () => {
+    await persistBolt11Quote('recovery');
+    await persistBolt11Quote('ordinary');
+    await mintRepository.setMintTrusted(mintUrl, false);
+    recoveryInterests.add('recovery');
+    mintAdapter.checkMintQuoteBatch = mock(async () => [
+      bolt11PollingSnapshot('recovery'),
+    ]) as never;
+    const result = await quoteLifecycle.checkMintQuotesForPolling('bolt11', [
+      { mintUrl, quoteId: 'ordinary' },
+      { mintUrl, quoteId: 'recovery' },
+    ]);
+    expect(mintAdapter.checkMintQuoteBatch).toHaveBeenCalledWith(mintUrl, 'bolt11', ['recovery']);
+    expect(result.outcomes.find((value) => value.identity.quoteId === 'recovery')?.status).toBe(
+      'updated',
+    );
+    expect(result.outcomes.find((value) => value.identity.quoteId === 'ordinary')?.status).toBe(
+      'failed',
+    );
+    recoveryInterests.clear();
+    await expect(
+      quoteLifecycle.checkMintQuotesForPolling('bolt11', [{ mintUrl, quoteId: 'recovery' }]),
+    ).rejects.toThrow('not trusted');
+    expect(mintAdapter.checkMintQuoteBatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('rechecks recovery permission after metadata awaits and before submitting a poll', async () => {
+    await persistBolt11Quote('recovery');
+    await mintRepository.setMintTrusted(mintUrl, false);
+    recoveryInterests.add('recovery');
+    mintService.supportsNut29MintQuoteCheck = mock(async () => {
+      recoveryInterests.clear();
+      return true;
+    });
+    const result = await quoteLifecycle.checkMintQuotesForPolling('bolt11', [
+      { mintUrl, quoteId: 'recovery' },
+    ]);
+    expect(result.outcomes[0]?.status).toBe('failed');
+    expect(mintAdapter.checkMintQuoteBatch).not.toHaveBeenCalled();
+    expect(mintAdapter.checkMintQuote).not.toHaveBeenCalled();
   });
 
   async function persistBolt11Quote(quoteId: string, pubkey?: string): Promise<void> {
@@ -444,7 +490,6 @@ describe('QuoteLifecycle mint quote polling', () => {
         quoteLifecycle,
       );
       transport.on(mintUrl, 'message', (event) => notifications.push(JSON.parse(event.data)));
-      transport.pause();
       try {
         transport.send(mintUrl, {
           jsonrpc: '2.0',
@@ -456,7 +501,6 @@ describe('QuoteLifecycle mint quote polling', () => {
           },
           id: 1,
         });
-        transport.resume();
         await waitFor(() =>
           notifications.some(({ params }) => params?.payload?.quote === 'quote-a'),
         );
@@ -897,7 +941,6 @@ describe('QuoteLifecycle mint quote polling', () => {
       mintQuoteRepository,
       meltQuoteRepository: {} as never,
       proofRepository: {} as ProofRepository,
-      proofService: {} as ProofService,
       mintService,
       walletService: {} as WalletService,
       mintAdapter,
@@ -1006,7 +1049,6 @@ describe('QuoteLifecycle mint quote polling', () => {
       quoteLifecycle,
     );
     transport.on(mintUrl, 'message', (event) => notifications.push(JSON.parse(event.data)));
-    transport.pause();
 
     transport.send(mintUrl, {
       jsonrpc: '2.0',
@@ -1018,7 +1060,6 @@ describe('QuoteLifecycle mint quote polling', () => {
       },
       id: 1,
     });
-    transport.resume();
     await waitFor(() => notifications.some(({ params }) => params?.payload?.quote === 'quote-b'));
 
     expect(mintAdapter.checkMintQuoteBatch).toHaveBeenCalledTimes(1);
@@ -1056,7 +1097,6 @@ describe('QuoteLifecycle mint quote polling', () => {
       quoteLifecycle,
     );
     transport.on(mintUrl, 'message', (event) => notifications.push(JSON.parse(event.data)));
-    transport.pause();
     transport.send(mintUrl, {
       jsonrpc: '2.0',
       method: 'subscribe',
@@ -1067,7 +1107,6 @@ describe('QuoteLifecycle mint quote polling', () => {
       },
       id: 1,
     });
-    transport.resume();
     await waitFor(
       () => (mintAdapter.checkMintQuoteBatch as ReturnType<typeof mock>).mock.calls.length === 1,
     );

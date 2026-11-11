@@ -20,7 +20,7 @@ core package, for example `@cashu/coco-sqlite`, `@cashu/coco-indexeddb`, or
 
 ## Entry points
 
-`@cashu/coco-core` publishes three stable import surfaces. Pick the narrowest
+`@cashu/coco-core` publishes three documented import surfaces. Pick the narrowest
 one that matches what you are building:
 
 ```ts
@@ -46,6 +46,121 @@ import type { Plugin, PluginExtensions } from '@cashu/coco-core/plugin';
 Concrete services, operation service classes, handler providers, transport
 internals, `PluginHost`, and individual memory repository classes are
 implementation details. They are not app-facing root API.
+
+## Repository compatibility
+
+Starting with **v3**, the repository implementation contract is a public, **unstable** extension
+point. This policy does not apply retroactively to v2. Custom storage adapters remain supported:
+implement `Repositories` from `@cashu/coco-core/adapter`, initialize your adapter, and pass it as
+`repo` to `initializeCoco({ repo, seedGetter })`. This includes backends beyond the supplied
+adapters, such as an independently implemented PostgreSQL adapter.
+
+The unstable contract includes the `Repositories` aggregate, individual repository interfaces and
+methods, transaction-scope interfaces, and types or helpers used exclusively to implement
+repositories. These may change incompatibly in **minor or major releases**. **Patch releases must
+preserve compatibility** with this contract. Every incompatible change must include an adapter
+migration note explaining the affected interfaces, required implementation changes, and any
+persistence migration needed.
+
+This exception is scoped by the contract, not by the import path. Shared public domain models
+(such as `CoreProof`), Wallet APIs, events, and plugin service interfaces retain normal semantic
+versioning guarantees even when repositories reference them or `/adapter` re-exports them. Their
+incompatible changes require a major release. The supplied adapters' constructors, configuration,
+initialization, and normal use through `initializeCoco` retain those guarantees too. Direct use
+of their repository methods follows the unstable repository contract.
+
+Adapter authors should declare the Coco versions they support and run the relevant
+[`@cashu/coco-adapter-tests` conformance suites](../adapter-tests/README.md) against their actual
+backend before expanding that range. Do not assume compatibility with future minor releases; for
+example, an adapter validated for the 3.2 release line can declare `>=3.2.0 <3.3.0` rather than
+`^3.2.0`. Use matching releases of core and the conformance package when validating an upgrade.
+
+Unstable signatures do not relax transaction, durability, or recovery requirements. Adapters must
+continue to satisfy the documented repository semantics. Compatibility with persisted wallet data
+is assessed separately; changing an interface does not by itself permit dropping existing data or
+operation recovery support.
+
+See [ADR-0013](docs/adr/0013-keep-custom-adapters-with-scoped-compatibility.md) for the rationale.
+
+## Mint Swap operations
+
+Mint Swap moves an exact sat amount between two distinct trusted mints using BOLT11. Its API is
+available without feature configuration:
+
+```ts
+const manager = await initializeCoco({
+  repo: repos,
+  seedGetter,
+});
+const operation = await manager.ops.mintSwap.prepare({
+  id: 'caller-stable-swap-id',
+  sourceMintUrl: 'https://source.example',
+  destinationMintUrl: 'https://destination.example',
+  destinationAmount: { amount: 100, unit: 'sat' },
+  sourceDebitCap: { amount: 110, unit: 'sat' },
+});
+// Inspect operation.state and, when prepared, its sourceDebitBounds before approving payment.
+if (operation.state === 'prepared') await manager.ops.mintSwap.execute(operation.id);
+const outcome = await manager.ops.mintSwap.waitForOutcome(operation.id, { timeoutMs: 30_000 });
+```
+
+The persisted operation is authoritative. Reusing an ID requires the same normalized intent.
+Preparation does not pay; `execute` explicitly authorizes the initial source payment. `get` and
+`listActive` read locally. `refresh(id)` and `recovery.run()` reconcile existing work, including
+finishing persisted preparation, without paying an untouched prepared source. They may recover
+already-authorized source work and redeem funded destination value.
+
+Coco packages are intended to be used with lock-step versioning; Mint Swap has no separate API
+activation flag. Automatic parent recovery is enabled by default. To use only explicit parent
+recovery, set `processors.mintSwapOperationProcessor.disabled: true`. That skips automatic parent
+startup passes and timers while keeping preparation, execution, reads, cancellation and
+explicit recovery available. Ordinary Mint/Melt recovery retains its own configuration.
+The processor options `processIntervalMs` (1000), `sweepIntervalMs` (30000) and `batchSize` (25)
+control scanning, not persisted retry/backoff policy. The processor registers parent-owned quote
+interests with the existing Mint/Melt watchers, including parents whose recovery deadline is still
+in the future. Watchers commit canonical quote observations; the parent then coordinates eligible
+recovery using those observations and shared child locks. Exact authorized recovery interests
+remain observable after trust revocation without trusting the mint again.
+
+Parent and ordinary operation interests are accepted synchronously. Watchers own asynchronous
+subscription setup and its diagnostics, so slow or failed setup does not block cached parent
+progression. Enabling a watcher can resolve while operation-owned setup is pending. Removing an
+interest revokes its permission immediately and waits for required cleanup; other owners retain theirs.
+Disabling a watcher stops ongoing observation, not parent coordination or explicit recovery.
+Periodic parent scans do not replace a disabled watcher with quote polling. Bounded startup
+recovery and explicit `refresh(id)` / `recovery.run()` can still make target-isolated checks;
+automatic startup recovery respects processor configuration and persisted due times. Necessary
+operation recovery effects remain available. Before releasing source inputs on `UNPAID`, recovery
+requires fresh confirmation under the shared source child lock, whether or not a watcher is enabled.
+If new routine quote evidence is needed, the parent remains recoverable until observation resumes
+or a caller supplies it through refresh/recovery. Re-enabling watchers rebuilds parent interests
+without resetting retry deadlines. Mint-provided Retry-After delays remain a lower bound on the next
+automatic attempt.
+
+`cancel(id)` records intent and returns the actual state. An ambiguous source can remain pending;
+a paid source recovers forward. Cancellation can still incur a completed pre-swap fee. A
+`needs_attention` outcome requires inspection and is not successful settlement. A waiter timeout
+only ends observation; it never cancels, executes or recovers the swap. Waiters support `signal`
+and `pollIntervalMs`, and reject on disposal, a missing operation or a read failure.
+The timeout includes a final local read. Disposal drains admitted commands and local subscription repair
+before completing.
+
+`mint-swap:updated` carries `{ operationId, revision, state }` after commit and lock release.
+Quote and metadata updates committed by a parent command are also published after its locks are
+released, so listeners can await a refresh of that parent.
+Hints can be lost, duplicated by application delivery, or arrive out of order; reload and retain
+the newest revision. Waiters keep polling even without events. Lifecycle requests should be made
+outside awaited operation or lifecycle event listeners, so a listener does not await shutdown of its own work.
+
+Use one effect-driving Coco Session per Wallet store. Manager shares child locks with ordinary
+Mint/Melt services; Core does not enforce a universal cross-process singleton. Reuse host session
+guards (such as Cocod's state-directory lease); React initialization guards apply per provider.
+Mint Swap exclusively coordinates its children while it is active: ordinary Mint/Melt commands that
+would change a child or use its quote reject with `MintSwapChildOperationError`; pass its
+`parentOperationId` to `ops.mintSwap`. Reads keep returning children. Once the parent is terminal or
+`needs_attention`, its children return to ordinary resolution, but no ordinary command pays its
+source (`parentStopped: true`). See [Mint Swap Operations](https://github.com/cashubtc/coco/blob/master/TRANSACTION_DESIGN.md#mint-swap-operations).
+History projection and React Mint Swap hooks are outside this slice.
 
 ## Protocol Support
 
@@ -149,29 +264,27 @@ console.log('reserved balance', balances['https://nofees.testnut.cashu.space']?.
 
 ### Watchers & processors (optional)
 
-Start background watchers or processors to automatically react to changes:
+Select Background Watchers and Background Processors once for the Coco Session:
 
 ```ts
-// Watch mint operation quote updates on startup and while running (default true)
-await manager.enableMintOperationWatcher({ watchExistingPendingOnStart: true });
+const manager = await initializeCoco({
+  repo,
+  seedGetter,
+  watchers: { proofStateWatcher: { disabled: true } },
+  processors: {
+    mintOperationProcessor: { processIntervalMs: 3000, batchMintQuotes: true },
+  },
+});
 
-// Process queued mint operations from live events (auto-enabled by initializeCoco)
-await manager.enableMintOperationProcessor({ processIntervalMs: 3000 });
-
-// Watch canonical melt quote updates and settle pending melt operations
-await manager.enableMeltQuoteWatcher();
-await manager.enableMeltSettlementProcessor();
-
-// Watch proof state updates (e.g., to move inflight proofs to spent)
-await manager.enableProofStateWatcher();
-
-// Later, you can stop them
-await manager.disableMintOperationWatcher();
-await manager.disableMintOperationProcessor();
-await manager.disableMeltQuoteWatcher();
-await manager.disableMeltSettlementProcessor();
-await manager.disableProofStateWatcher();
+// Final session cleanup
+await manager.dispose();
 ```
+
+Selection and options remain fixed. Omitted config uses defaults; `disabled: true` omits that owner
+for the entire session. All six enable/disable pairs have been removed. One-time startup Operation
+Recovery still runs even when every owner is disabled; Mint Swap automatic recovery retains its own
+selection. Explicit operation/recovery APIs remain available. No persistence migration is needed.
+See [fixed-owner migration](../docs/pages/watchers-processors.md#fixed-owner-migration).
 
 ### initializeCoco options
 
@@ -182,19 +295,16 @@ await manager.disableProofStateWatcher();
 - `logger`: optional logger (defaults to `NullLogger`)
 - `webSocketFactory`: optional WebSocket factory
 - `plugins`: optional plugin list
-- `watchers`: enable/disable watcher services (`mintOperationWatcher`, `meltQuoteWatcher`,
+- `watchers`: select watcher services for the session (`mintOperationWatcher`, `meltQuoteWatcher`,
   `proofStateWatcher`)
-- `processors`: enable/disable processors (`mintOperationProcessor`, `meltSettlementProcessor`)
+- `processors`: select processors (`mintOperationProcessor`, `meltSettlementProcessor`, `mintSwapOperationProcessor`)
   and tune intervals
 - `subscriptions`: polling intervals for hybrid WebSocket + polling (`slowPollingIntervalMs`, `fastPollingIntervalMs`)
-
-If you prefer manual wiring, construct `Manager` directly and call `initPlugins()` before enabling watchers/processors.
 
 ## Architecture
 
 - `Manager` is the app-facing facade. It exposes `mint`, `wallet`, `auth`,
-  `quotes`, `paymentRequests`, `ops`, `history`, and `keyring` APIs plus watcher
-  and processor helpers.
+  `quotes`, `paymentRequests`, `ops`, `history`, and `keyring` APIs plus session disposal and networking repair.
 - `initializeCoco` wires the manager from a `CocoConfig`, including
   repositories, seed access, logging, subscriptions, plugins, watchers, and
   processors.
@@ -202,7 +312,7 @@ If you prefer manual wiring, construct `Manager` directly and call `initPlugins(
   and melt lifecycles.
 - `manager.quotes.mint` and `manager.quotes.melt` expose canonical quote lookup,
   creation, and refresh workflows.
-- `manager.on(...)` exposes typed `CoreEvents`, including subscription,
+- `manager.on(...)` exposes typed `CoreEvents`, including
   operation, proof, quote, history, mint, and auth-session events.
 
 ### Storage
@@ -215,20 +325,35 @@ for setup and storage-security guidance.
 
 ### Manager
 
+Create a Manager with `initializeCoco(config)` or the equivalent `Manager.create(config)`. Its
+constructor is private.
+
 - `mint`, `wallet`, `auth`, `quotes`, `paymentRequests`, `ops`, `history`, and
   `keyring`
 - `ext: PluginExtensions` from `@cashu/coco-core/plugin`
 - `on/once/off` for `CoreEvents`
-- `enableMintOperationWatcher()`, `disableMintOperationWatcher()`
-- `enableMintOperationProcessor()`, `disableMintOperationProcessor()`,
-  `waitForMintOperationProcessor()`
-- `enableMeltQuoteWatcher()`, `disableMeltQuoteWatcher()`
-- `enableMeltSettlementProcessor()`, `disableMeltSettlementProcessor()`
-- `enableProofStateWatcher()`, `disableProofStateWatcher()`
-- `pauseSubscriptions()`, `resumeSubscriptions()`
+- `waitForMintOperationProcessor()`
+- `ensureSubscriptions(): Promise<void>`
 - `use(plugin: Plugin): void` with `Plugin` from `@cashu/coco-core/plugin`
-- `initPlugins(): Promise<void>`
 - `dispose(): Promise<void>`
+
+`ensureSubscriptions()` is the app-foreground networking repair hook. It replaces sockets even when
+apparently alive, replays current subscriptions, and ensures polling schedules run. Overlapping calls
+coalesce. The promise resolves after local initiation, without waiting for remote connectivity,
+catch-up or operation completion; offline calls are safe. Current callbacks and owner settings are
+preserved. It does not restart watchers/processors, rediscover interests, or run Operation Recovery.
+Already-started polling may still commit observations and normal delivery may advance operations.
+
+This replaces the removed `pauseSubscriptions()` / `resumeSubscriptions()` APIs and
+`subscriptions:paused` / `subscriptions:resumed` events. Plugins use
+`ServiceMap.subscriptions.ensureSubscriptions()` in place of subscription `pause()` / `resume()`.
+There is no equivalent coordinated background quieting API: removing a background pause leaves
+enabled polling and work running. Owner configuration is fixed at initialization; `dispose()` is final shutdown. Import preparation
+and temporary background suspension require separate decisions. App-owned plugin synchronization,
+paid-quote requeueing and catch-up must remain explicit. Standalone Mint
+and Batch Mint recovery formerly run by resume are now independent explicit calls to
+`ops.mint.recovery.run()` and `ops.mint.batch.recovery.run()` when needed. See the
+[foreground and transport migration guide](../docs/starting/subscriptions.md).
 
 ### OpsApi
 
@@ -240,6 +365,18 @@ for setup and storage-security guidance.
   `listPending`, `listInFlight`, `checkPayment`, `refresh`, `finalize`, plus
   `recovery` and `diagnostics`. Built-in methods: `bolt11`, `onchain`,
   `bolt12`.
+- `mint.batch`: `execute({ mintUrl, method, members })`, `get`, `listByQuote`,
+  `listInFlight`, plus `recovery`. A Batch Mint Operation claims two or more
+  quotes from one trusted mint, method and unit in one atomic NUT-29 request,
+  with no fallback to standalone mint operations. Admission failures reject
+  before anything is persisted; an ambiguous outcome returns the batch still
+  `executing` for `recovery.run()`. Each member keeps its own `type: 'mint'`
+  history entry (`batchMintOperationId` set to the batch ID), and batches publish
+  `batch-mint-op:executing | finalized | failed` instead of `mint-op:*` events.
+  Automatic claiming uses Batch Mint Operations too unless
+  `processors.mintOperationProcessor.batchMintQuotes` is `false`; see
+  [Coco config](../docs/pages/coco-config.md).
+  See [Mint Operations](../docs/pages/mint-operations.md#batch-mint-operations-coco-ops-mint-batch).
 - `melt`: `prepare`, `execute`, `get`, `getByQuote`, `listByQuote`,
   `listPrepared`, `listInFlight`, `refresh`, `cancel`, `reclaim`, `finalize`,
   plus `recovery` and `diagnostics`. Built-in methods: `bolt11`, `bolt12`,
@@ -290,10 +427,23 @@ those details are derived from canonical quote storage.
 - `balances.total(scope?: { mintUrls?: string[]; units?: string[]; trustedOnly?: boolean }): Promise<BalanceSnapshot>`
 - `balances.totalByUnit(scope?: { mintUrls?: string[]; units?: string[]; trustedOnly?: boolean }): Promise<BalancesByUnit>`
 - `restore(mintUrl: string, options?: { units?: string[] }): Promise<void>`
-- `sweep(mintUrl: string, bip39seed: Uint8Array, options?: { units?: string[] }): Promise<void>`
+- `sweep(mintUrl: string, bip39seed: Uint8Array, options?: { units?: string[] }): Promise<SweepReport>`
 - `decodeToken(tokenString: string, mintUrl?: string): Promise<Token>`
 - `encodeToken(token: Token, opts?: { removeDleq?: boolean }): string`
 - `encodePaymentRequest(paymentRequest: PaymentRequest, version?: 'creqA' | 'creqB'): string`
+
+Sweep returns `{ mintUrl, keysets }`. Each keyset result identifies its `keysetId` and `unit`,
+with status `transferred`, `noop`, `skipped`, `failed`, or `unresolved`. Pending observations are
+reported as `pending: { count, amount }`; skips distinguish `pending` from `uneconomic`.
+A transferred result includes `received`, `fee`, and `receiveOperationId`. All amounts are cashu-ts
+`Amount` values in that result's unit. Discovery failures may have no pending observations.
+
+Sweep returns the complete report even when all keysets fail or remain unresolved. Callers must
+inspect every status; a resolved call does not imply a successful transfer. Input validation and
+mint setup failures still reject before keyset processing.
+Inspect unresolved Receive IDs through `ops.receive` before retrying. Receive owns
+exchange recovery and ordinary Receive history; Sweep does not resume unvisited keysets after
+restart or deduplicate a later sweep against unresolved exchanges. See the [Sweep guide](../docs/pages/bip39.md#sweep).
 
 ### AuthApi
 
@@ -348,6 +498,15 @@ internals.
 
 ## Core events
 
+**Automatic-claiming migration:** batching is enabled by default. A quote waiter listening only
+for `mint-op:finalized` can hang even after the processor successfully claims the payment through
+a batch. Listen for both `mint-op:finalized` and `batch-mint-op:finalized`, match by mint URL and
+quote ID, and reconcile persisted claims after subscribing. Alternatively, configure
+`processors.mintOperationProcessor.batchMintQuotes: false` for standalone automatic claims.
+Explicitly prepared standalone operations still emit `mint-op:*`. See
+[Awaiting automatically claimed payments](../docs/pages/mint-operations.md#awaiting-automatically-claimed-payments)
+for an example and failure-handling guidance.
+
 See the `CoreEvents` type for the full, current event map. Common events
 include:
 
@@ -369,6 +528,9 @@ include:
 - `mint-op:executing` → `{ mintUrl, operationId, operation }`
 - `mint-op:finalized` → `{ mintUrl, operationId, operation }`
 - `mint-op:failed` → `{ mintUrl, operationId, operation }`
+- `batch-mint-op:executing` → `{ mintUrl, operationId, operation }` (ordered `operation.members`)
+- `batch-mint-op:finalized` → `{ mintUrl, operationId, operation }` (ordered `operation.members`)
+- `batch-mint-op:failed` → `{ mintUrl, operationId, operation }` (ordered `operation.members`)
 - `send:prepared` → `{ mintUrl, operationId, operation }`
 - `send:pending` → `{ mintUrl, operationId, operation, token }`
 - `send:finalized` → `{ mintUrl, operationId, operation }`
@@ -381,7 +543,6 @@ include:
 - `melt-op:pending` → `{ mintUrl, operationId, operation }`
 - `melt-op:finalized` → `{ mintUrl, operationId, operation }`
 - `melt-op:rolled-back` → `{ mintUrl, operationId, operation }`
-- `subscriptions:paused` / `subscriptions:resumed`
 - `auth-session:updated` / `auth-session:deleted` / `auth-session:expired`
 
 ## Plugins
@@ -436,11 +597,8 @@ const quotePlugin: Plugin<['quotes']> = {
 ### Using plugins
 
 ```ts
-// Pass plugins at construction
-const manager = new Manager(repos, seedGetter, logger, undefined, [myPlugin]);
-
-// Or register later
-manager.use(myPlugin);
+// Initialize plugins before automatic owners start
+const manager = await initializeCoco({ repo: repos, seedGetter, logger, plugins: [myPlugin] });
 
 // Dispose (runs onDispose and registered cleanups)
 await manager.dispose();

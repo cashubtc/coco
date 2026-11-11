@@ -68,6 +68,9 @@ persisted records. Core's [documented exports](packages/core/README.md#exports) 
 plugin audiences; [ServiceMap](packages/core/plugins/types.ts) makes reachable plugin service contracts
 compatibility-sensitive. An internal refactor can affect those contracts without changing root exports.
 
+Apply the [repository compatibility policy](packages/core/README.md#repository-compatibility)
+when reviewing changes to storage adapter contracts.
+
 Preserve support for ordinary records written by older releases until an explicit migration or
 breaking-change decision replaces it. Repairing an exceptional inconsistent state that an old
 implementation might have produced is a separate decision. Assess severity, plausible likelihood,
@@ -84,11 +87,16 @@ uncertain remote outcome. In core and adapters, prefer the existing domain error
 appropriate for internal preconditions that need no separate caller behavior. Keep unavoidable message-matching
 compatibility logic isolated and tested. Respect each flow's documented retry and recovery policy.
 
-After an owner's `stop()` or `dispose()` resolves, it must not start new owned work or deliver late
-callbacks. Account for resources acquired while shutdown is awaiting other work, release those
-resources, and await owned work where necessary to establish the guarantee. Already-submitted remote
-requests may complete. Define pause/resume separately from final shutdown. Apply the incremental legacy
-policy above when reviewing existing lifecycle implementations.
+After an owner's `stop()` or `dispose()` resolves, it must not accept new work or leave subscriptions
+and timers active. Account for resources acquired during shutdown and release late acquisition
+results. Define and document whether already-started processing is drained or allowed to finish;
+already-submitted remote requests may complete. Keep stopped runs from installing resources or
+continuing discovery after a restart.
+
+The proof-state watcher is the one documented exception to draining started work on shutdown; see
+[ADR-0014](packages/core/docs/adr/0014-let-proof-watcher-shutdown-finish-started-work.md). It does
+not change other owners' documented drain guarantees. Apply the incremental legacy policy above when
+reviewing existing lifecycles.
 
 Use structured diagnostic context. **Never log the seed returned by `seedGetter`**, including through
 copies, cached values, encodings, object dumps or error context. This also applies to debug logging.
@@ -96,10 +104,20 @@ copies, cached values, encodings, object dumps or error context. This also appli
 ## Test behavior
 
 Add or update tests with behavior changes whenever practical.
-Prefer real behavior tests, especially the integration suite, for workflows and interactions. Focused
-unit tests are valuable for complex behavior. Choose the boundary that demonstrates the guarantee under
-change; doubles must not remove the persistence, protocol or lifecycle behavior the test is meant to
-prove. Avoid tests that merely mirror implementation or repeat trivial delegation.
+Name the public boundary that demonstrates the guarantee under change before writing the test, then
+choose the first fit from this order:
+
+1. The public surface (`Manager`, `ops.*`) against the real mint, in the integration suite. This is the
+   default for workflows and interactions.
+2. The same public surface with an in-process fake at a system boundary (transport, clock, storage
+   failure), for failures, races and interrupted states a real mint cannot produce on demand. Use the
+   real repositories and services behind the boundary.
+3. A unit test, only for pure logic or a state-transition table.
+
+Doubles must not remove the persistence, protocol or lifecycle behavior the test is meant to prove. Do
+not mock Coco's own services or collaborators: such a test checks the mock, not the behavior. Avoid tests
+that merely mirror implementation, read private fields, or repeat trivial delegation, and do not add
+tests only to reach a coverage target.
 
 Assert observable outcomes and relevant failure behavior. For recovery changes, exercise the historical
 records or interrupted states that the change actually promises to handle, guided by the risk assessment
@@ -109,8 +127,10 @@ do not require every backend or duplicate equivalent assertions
 by default. Type-level contracts also need compiler verification.
 
 Use the affected scripts and CI selection to establish what actually runs. A test's presence in a
-directory is not evidence that a particular CI job executes it. Report relevant verification and any
-remaining uncertainty.
+directory is not evidence that a particular CI job executes it. Report exact verification commands and
+results, including suites and storage backends exercised, relevant mint fee and unit configuration,
+work left to CI, and any remaining uncertainty. Distinguish direct execution of a package's test entry
+from running the integration runner's package matrix.
 
 ## Keep guidance accurate
 

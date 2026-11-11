@@ -1,3 +1,4 @@
+import type { MintSwapOperationState } from '../operations/mintSwap/MintSwapOperation.ts';
 import type { Token } from '@cashu/cashu-ts';
 import type { MeltMethod, MeltOperation } from '@core/operations/melt';
 import type {
@@ -6,6 +7,11 @@ import type {
   MintMethod,
   MintOperation,
 } from '@core/operations/mint';
+import type {
+  ExecutingBatchMintOperation,
+  FailedBatchMintOperation,
+  FinalizedBatchMintOperation,
+} from '../operations/batchMint/BatchMintOperation.ts';
 import type { MeltQuote } from '../models/MeltQuote';
 import type { MintQuote } from '../models/MintQuote';
 import type { UnitAmount } from '../amounts.ts';
@@ -18,6 +24,12 @@ import type { SendOperation } from '../operations/send/SendOperation';
 import type { CoreProof, ProofState } from '../types';
 
 export interface CoreEvents {
+  /** Best-effort post-commit hint. Reload the operation; hints may be lost or reordered. */
+  'mint-swap:updated': {
+    operationId: string;
+    revision: number;
+    state: MintSwapOperationState;
+  };
   'mint:added': { mint: Mint; keysets: Keyset[] };
   'mint:updated': { mint: Mint; keysets: Keyset[] };
   'mint:metadata-refreshed': { mintUrl: string };
@@ -87,8 +99,25 @@ export interface CoreEvents {
   'mint-op:executing': { mintUrl: string; operationId: string; operation: MintOperation };
   'mint-op:finalized': { mintUrl: string; operationId: string; operation: FinalizedMintOperation };
   'mint-op:failed': { mintUrl: string; operationId: string; operation: FailedMintOperation };
-  'subscriptions:paused': void;
-  'subscriptions:resumed': void;
+  /**
+   * Batch Mint lifecycle, published after commit with the ordered members. Batches never emit
+   * `mint-op:*` events for their member quotes.
+   */
+  'batch-mint-op:executing': {
+    mintUrl: string;
+    operationId: string;
+    operation: ExecutingBatchMintOperation;
+  };
+  'batch-mint-op:finalized': {
+    mintUrl: string;
+    operationId: string;
+    operation: FinalizedBatchMintOperation;
+  };
+  'batch-mint-op:failed': {
+    mintUrl: string;
+    operationId: string;
+    operation: FailedBatchMintOperation;
+  };
   'auth-session:updated': { mintUrl: string };
   'auth-session:deleted': { mintUrl: string };
   'auth-session:expired': { mintUrl: string };

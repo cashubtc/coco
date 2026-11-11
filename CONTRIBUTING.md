@@ -35,7 +35,7 @@ flag or fix the prose.
 - If you plan to run IndexedDB browser tests locally, install Playwright browsers:
 
   ```bash
-  bunx playwright install
+  bun --cwd packages/indexeddb playwright install chromium
   ```
 
 - Before running Cocod commands, follow its [development setup](packages/cocod/README.md#development)
@@ -70,29 +70,91 @@ bun run docs:build
 Useful package-level commands:
 
 ```bash
-bun run --filter='@cashu/coco-core' test
 bun run --filter='@cashu/coco-core' test:unit
-bun run --filter='@cashu/coco-core' test:integration
 bun run --filter='@cashu/coco-react' lint
-bun run --filter='@cashu/coco-indexeddb' test
-bun run --filter='@cashu/coco-indexeddb' test:browser
-bun run --filter='@cashu/coco-sqlite' test
-bun run --filter='@cashu/coco-sqlite-bun' test
-bun --cwd packages/expo-sqlite test
+bun run --filter='cocod' test
 ```
+
+The plain `test` script in core and the SQL adapters also picks up `integration.test.ts`, which fails
+with `MINT_URL is not set` unless a mint is running. Use `test:integration` below for those suites.
 
 Run the smallest relevant test set for your change. If you touch shared logic,
 running `bun run build`, `bun run typecheck`, and the affected package tests is a
 good default.
+
+### Integration tests
+
+Integration tests run against a real local mint in Docker, so Docker must be installed and running.
+Core also gets a second mint, exposed as `MINT_URL_2`, for workflows such as Mint Swap that need two:
+
+```bash
+bun run test:integration                         # every package
+bun run test:integration core                    # one package, by directory name
+bun run test:integration core -t 'melt'          # filter by test name
+bun run test:integration core --custom-unit usd  # run the suite in a non-sat unit
+```
+
+Run what your change can affect and leave the rest to CI, which selects workflows by changed path:
+
+| Changed                                     | Run                                   |
+| ------------------------------------------- | ------------------------------------- |
+| `packages/core`                             | `core`                                |
+| Amount or unit handling                     | `core`, then `core --custom-unit usd` |
+| A storage adapter                           | That adapter                          |
+| `packages/sql-storage`                      | `sqlite-bun`                          |
+| `packages/adapter-tests/src/integration.ts` | `core` and `sqlite-bun`               |
+| Repository contracts or schema              | Every package                         |
+| `packages/cocod`                            | `bun run --filter='cocod' test`       |
+| Docs only                                   | Nothing                               |
+
+Every package does not mean every environment: custom-unit runs and the auth suite
+(`scripts/auth_mint/test-auth-integration.sh`) are separate.
+
+The runner executes each package's `integration.test.ts`, so import any new integration test file from
+that entry file or it will not run.
+
+#### Writing an integration test
+
+Choose the public API boundary and storage coverage separately. Add portable wallet behavior to
+`packages/adapter-tests/src/integration.ts` when it should run across adapters, using the harness's
+repository factory. Use a core-only suite when the intended coverage is core-specific, and explain
+that scope. Needing fresh funding or multiple Coco Sessions does not itself justify core-only
+placement. `packages/core/test/integration/SweepIntegration.test.ts` is a reference for funding and
+session lifecycle, not a rule for where to put a new test.
+
+- Read `MINT_URL` from the environment and go through `initializeCoco`, `ops.*`, `wallet` and
+  `history` rather than services.
+- Fund the wallet with a real mint operation (see `fund` in `SweepIntegration.test.ts` or `mintAmount` in
+  `integration.ts`) and assert balances, operation states and history.
+- Disable the watchers and processors in the `initializeCoco` config unless the test is about them, and
+  `dispose()` every Manager in `afterEach`.
+- Create a fresh seed per test. Tests share one mint, so do not depend on its prior state.
+- Respect `CUSTOM_UNIT` when amounts or fees are asserted, as `SweepIntegration.test.ts` does.
+- Before you open the PR, use the selection table above to choose the applicable package suites. Run
+  `bun run test:integration <package> -t '<your test name>'` for each selected package and confirm the
+  intended tests execute with a nonzero pass count. A file that `integration.test.ts` does not import
+  is silently skipped.
+
+The `indexeddb` tests also need Playwright browsers. The runner stops and prints the install command
+if they are missing, rather than installing them for you.
+
+Each run builds the packages, starts its own mint container on a free port, and removes only that
+container when it exits, so separate worktrees can run at the same time. Run one at a time per
+worktree, because concurrent runs in one checkout overwrite each other's builds. A run killed with
+`SIGKILL` leaves its container behind; `docker ps --filter name=cdk-mint-` lists them.
+
+To use a mint you already started, skip the script:
+
+```bash
+MINT_URL=http://localhost:3338 bun test packages/core/test/integration/integration.test.ts
+```
 
 ### Running a single test
 
 ```bash
 bun run --filter='@cashu/coco-core' test -- test/unit/Manager.test.ts
 bun run --filter='@cashu/coco-core' test -- -t "initializeCoco" test/unit/Manager.test.ts
-bun run --filter='@cashu/coco-sqlite' test -- src/test/integration.test.ts
-bun run --filter='@cashu/coco-indexeddb' test -- src/test/integration.test.ts
-bun run --filter='@cashu/coco-indexeddb' test:browser -- src/test/integration.test.ts
+bun run test:integration sqlite3 -t 'melt quote'
 ```
 
 ## Workflow expectations
@@ -153,6 +215,8 @@ expectations may lead to contribution restrictions.
 - Explain the problem and why your change is the right fix
 - Include the verification steps you ran
 - Keep descriptions short and concrete
+- Fill in the Tests section of the PR template: name the integration tests you added and justify each
+  unit test
 - Add screenshots when a PR changes UI or docs visuals
 - Mention follow-up work instead of bundling unrelated fixes into the same PR
 
@@ -192,7 +256,9 @@ We use `bun:test` across most packages, plus Vitest for some adapter coverage.
 Use the [behavior testing standards](CODING_STANDARDS.md#test-behavior) to choose meaningful coverage
 and handle asynchronous behavior.
 
-Run `bun run test:coverage:core` for core unit coverage. Core unit and integration coverage use
+Run `bun run test:coverage:core` for core unit coverage and `bun run test:integration core --coverage`
+for core integration coverage, written to `packages/core/coverage/integration/lcov.info`. Codecov
+combines both, so integration coverage counts. Core unit and integration coverage use
 `scripts/scope-core-coverage.ts` to report only core source, excluding generated `dist/` output and
 other workspace packages imported by the tests. Adapter behavior can still be exercised by core
 tests; adapter coverage belongs in separate adapter reports.
@@ -212,6 +278,12 @@ CI=1 bun run --filter='@cashu/coco-indexeddb' test:browser
 Published packages are versioned with Changesets. If your PR changes runtime
 behavior, public types, package exports, or documentation for a published package,
 you should usually include a changeset unless a maintainer tells you otherwise.
+
+For repository contract changes, choose the changeset bump using the
+[compatibility policy](packages/core/README.md#repository-compatibility). Put required adapter migration
+notes in the changeset: name the affected interfaces, implementation changes, and persistence migration
+(or state that none is needed). Update the supplied adapters and relevant conformance coverage together
+with each contract change.
 
 Stable and prerelease npm publishes validate and publish the tagged commit.
 Package versions and changelogs must be committed before the GitHub Release is

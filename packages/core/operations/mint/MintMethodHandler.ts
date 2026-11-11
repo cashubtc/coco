@@ -7,8 +7,8 @@ import type {
   Proof,
   Wallet,
 } from '@cashu/cashu-ts';
+import type { DeferPublication } from '../../events/DeferredPublication.ts';
 import type { ProofRepository } from '../../repositories';
-import type { ProofService } from '../../services/ProofService';
 import type { WalletService } from '../../services/WalletService';
 import type { MintService } from '../../services/MintService';
 import type { EventBus } from '../../events/EventBus';
@@ -125,7 +125,6 @@ export interface MintMethodMeta<M extends MintMethod = MintMethod> {
 
 export interface BaseHandlerDeps {
   proofRepository: ProofRepository;
-  proofService: ProofService;
   walletService: WalletService;
   mintService: MintService;
   mintAdapter: MintAdapter;
@@ -136,6 +135,7 @@ export interface BaseHandlerDeps {
 export interface CreateMintQuoteContext<M extends MintMethod = MintMethod> extends BaseHandlerDeps {
   mintUrl: string;
   createQuoteData: MintMethodCreateQuoteData<M>;
+  deferPublication?: DeferPublication;
   wallet: Wallet;
 }
 
@@ -155,9 +155,15 @@ export interface ExecuteContext<M extends MintMethod = MintMethod> {
 export interface RecoverExecutingContext<
   M extends MintMethod = MintMethod,
 > extends ExecuteContext<M> {
+  /** Canonical observation already committed by the owning coordinator; avoids a second poll. */
+  observedQuote?: MintQuote<M>;
   restoreOutputs(): Promise<Proof[]>;
   /** The coordinator persists observations before recovery advances the operation. */
   recordQuoteSnapshot(snapshot: MintMethodQuoteSnapshot<M>): Promise<void>;
+  /**
+   * Local claim facts for the quote across Mint Operations and Batch Mint Operations, excluding
+   * this operation's own reservation.
+   */
   localClaimabilityFacts: { finalizedAmount: Amount; reservedAmount: Amount };
 }
 
@@ -183,7 +189,7 @@ export type MintExecutionResult =
 export type RecoverExecutingResult =
   | { status: 'ISSUED'; proofs: Proof[] }
   | { status: 'REJECTED'; error: string }
-  | { status: 'UNRESOLVED'; error?: string };
+  | { status: 'UNRESOLVED'; error?: string; retryAfterMs?: number };
 
 export type PendingMintCheckCategory = 'waiting' | 'ready' | 'completed' | 'terminal';
 

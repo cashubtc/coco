@@ -5,6 +5,7 @@ import type {
   MintSwapOperationState,
 } from '@cashu/coco-core/adapter';
 import {
+  normalizeMintUrl,
   compareMintSwapCreated,
   compareMintSwapDue,
   deserializeMintSwapOperation,
@@ -66,6 +67,27 @@ export class SqliteMintSwapOperationRepository implements MintSwapOperationRepos
     const row = await this.db.get<MintSwapOperationRow>(
       `SELECT ${SELECT_COLUMNS} FROM ${TABLE} WHERE id = ?`,
       [id],
+    );
+    return row ? fromRow(row) : null;
+  }
+
+  async getByChild(kind: 'mint' | 'melt', operationId: string): Promise<MintSwapOperation | null> {
+    const column = kind === 'mint' ? 'destinationOperationId' : 'sourceOperationId';
+    const row = await this.db.get<MintSwapOperationRow>(
+      `SELECT ${SELECT_COLUMNS} FROM ${TABLE} WHERE ${column} = ?`,
+      [operationId],
+    );
+    return row ? fromRow(row) : null;
+  }
+
+  async getByQuote(
+    kind: 'mint' | 'melt',
+    quote: Parameters<MintSwapOperationRepository['getByQuote']>[1],
+  ): Promise<MintSwapOperation | null> {
+    const prefix = kind === 'mint' ? 'destinationQuote' : 'sourceQuote';
+    const row = await this.db.get<MintSwapOperationRow>(
+      `SELECT ${SELECT_COLUMNS} FROM ${TABLE} WHERE ${prefix}MintUrl = ? AND ${prefix}Method = ? AND ${prefix}Id = ?`,
+      [normalizeMintUrl(quote.mintUrl), quote.method, quote.quoteId],
     );
     return row ? fromRow(row) : null;
   }

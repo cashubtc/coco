@@ -7,6 +7,7 @@ import type {
   PendingMintOperation,
 } from '@core/operations/mint';
 import type { MintQuoteRef, QuoteIdentity } from '../models/QuoteIdentity.ts';
+import type { BatchMintOpsApi } from './BatchMintOpsApi.ts';
 
 /** Mint methods supported by the default `Manager` wiring. */
 export type DefaultSupportedMintMethod = 'bolt11' | 'onchain' | 'bolt12';
@@ -31,6 +32,13 @@ export interface MintDiagnosticsApi {
 }
 
 /**
+ * While a Mint Swap is active, commands that would change its destination child or use its quote
+ * reject with `MintSwapChildOperationError`; use `ops.mintSwap`. A command called in the wrong
+ * state for the child reports that state error first, and `refresh` reads a child it has nothing to
+ * resolve for. Once the parent stops (terminal or
+ * `needs_attention`), commands and recovery may resolve the child and claim its quote.
+ * Read methods include children.
+ *
  * Operation-oriented API for quote-backed mint workflows.
  *
  * This API makes the mint lifecycle explicit so callers can move a canonical
@@ -48,7 +56,14 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
     isLocked: (operationId: string) => this.mintOperationService.isOperationLocked(operationId),
   };
 
-  constructor(private readonly mintOperationService: MintOperationService) {}
+  constructor(
+    private readonly mintOperationService: MintOperationService,
+    /**
+     * Batch Mint Operations: claim two or more quotes in one atomic NUT-29 request, with no
+     * fallback to the standalone Mint Operations managed by this API.
+     */
+    readonly batch: BatchMintOpsApi,
+  ) {}
 
   /**
    * Prepares a mint operation against an existing canonical quote without executing it.

@@ -1,4 +1,4 @@
-import type { Manager, Logger, UnitAmountLike, MintQuote } from '@cashu/coco-core';
+import type { Manager, Logger, UnitAmountLike, MintQuote, CocoConfig } from '@cashu/coco-core';
 import type { Repositories } from '@cashu/coco-core/adapter';
 import {
   initializeCoco,
@@ -30,6 +30,7 @@ import {
   type Secret,
 } from '@cashu/cashu-ts';
 import { createFakeInvoice } from 'fake-bolt11';
+import { runPaymentRequestFeeTests } from './paymentRequestFees.ts';
 
 export type OutputDataFactory = (amount: AmountLike, keys: MintKeys | HasKeysetKeys) => OutputData;
 
@@ -384,6 +385,20 @@ function isMintQuoteReady(quote: MintQuote | null | undefined): quote is MintQuo
   return quote.state === 'PAID' || quote.state === 'ISSUED';
 }
 
+async function awaitMintQuotesPaid(
+  manager: Manager,
+  mintUrl: string,
+  quotes: readonly MintQuote[],
+): Promise<void> {
+  const deadline = Date.now() + MINT_QUOTE_READY_TIMEOUT_MS;
+  for (const { quoteId } of quotes) {
+    while (!isMintQuoteReady(await manager.quotes.mint.refresh({ mintUrl, quoteId }))) {
+      if (Date.now() > deadline) throw new Error(`Mint quote ${quoteId} was not paid in time`);
+      await new Promise((resolve) => setTimeout(resolve, MINT_QUOTE_READY_REFRESH_INTERVAL_MS));
+    }
+  }
+}
+
 async function getMintQuoteForOperation(
   manager: Manager,
   operation: PreparedMintOperation,
@@ -518,7 +533,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
     afterEach(async () => {
       if (mgr) {
-        await mgr.pauseSubscriptions();
         await mgr.dispose();
         mgr = undefined;
       }
@@ -553,7 +567,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(trustedMints).toHaveLength(1);
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -580,7 +593,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(await mgr.mint.isTrustedMint(mintUrl)).toBe(false);
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -611,7 +623,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           await eventPromise;
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -672,7 +683,100 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(await getMintTotalBalance(mgr, mintUrl, testUnit)).toBeGreaterThanOrEqual(100);
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
+            await mgr.dispose();
+            mgr = undefined;
+          }
+          await dispose();
+        }
+      });
+
+      it('should claim locked and unlocked quotes in one NUT-29 batch with one optimised output set', async () => {
+        const { repositories, dispose } = await createRepositories();
+        try {
+          mgr = await initializeCoco({
+            repo: repositories,
+            seedGetter,
+            logger,
+            processors: { mintOperationProcessor: { disabled: true } },
+          });
+          await mgr.mint.addMint(mintUrl, { trusted: true });
+          const create = (locked: boolean) =>
+            mgr!.quotes.mint.create({
+              mintUrl,
+              amount: 21,
+              unit: testUnit,
+              method: 'bolt11',
+              locked,
+            });
+          const quotes = [await create(true), await create(false), await create(true)];
+          await awaitMintQuotesPaid(mgr, mintUrl, quotes);
+
+          const operation = await mgr.ops.mint.batch.execute({
+            mintUrl,
+            method: 'bolt11',
+            members: quotes.map(({ quoteId }) => ({ quoteId })),
+          });
+
+          expect(operation.state).toBe('finalized');
+          // Three separate splits of 21 (16 + 4 + 1) would need nine outputs.
+          expect(operation.outputData.keep).toHaveLength(6);
+          expect(await getMintTotalBalance(mgr, mintUrl, testUnit)).toBe(63);
+          const observed = await mgr.quotes.mint.refresh({ mintUrl, quoteId: quotes[0]!.quoteId });
+          expect(observed.state).toBe('ISSUED');
+        } finally {
+          if (mgr) {
+            await mgr.dispose();
+            mgr = undefined;
+          }
+          await dispose();
+        }
+        // The Manager's limiter allows a burst of 20 requests, then one every 3 seconds.
+      }, 20000);
+
+      it('should claim quotes paid before startup as one Batch Mint Operation', async () => {
+        const { repositories, dispose } = await createRepositories();
+        try {
+          mgr = await initializeCoco({
+            repo: repositories,
+            seedGetter,
+            logger,
+            processors: { mintOperationProcessor: { disabled: true } },
+          });
+          await mgr.mint.addMint(mintUrl, { trusted: true });
+          const quotes = [];
+          for (let index = 0; index < 3; index += 1) {
+            quotes.push(
+              await mgr.quotes.mint.create({
+                mintUrl,
+                amount: 21,
+                unit: testUnit,
+                method: 'bolt11',
+              }),
+            );
+          }
+          await awaitMintQuotesPaid(mgr, mintUrl, quotes);
+
+          await mgr.dispose();
+          mgr = await initializeCoco({
+            repo: repositories,
+            seedGetter,
+            logger,
+            processors: { mintOperationProcessor: { processIntervalMs: 20 } },
+          });
+          await mgr.waitForMintOperationProcessor();
+
+          const batchIds = new Set<string>();
+          for (const { quoteId } of quotes) {
+            const [batch, ...others] = await mgr.ops.mint.batch.listByQuote({ mintUrl, quoteId });
+            expect(others).toHaveLength(0);
+            expect(batch?.state).toBe('finalized');
+            batchIds.add(batch!.id);
+            expect(await mgr.ops.mint.listByQuote({ mintUrl, quoteId })).toHaveLength(0);
+          }
+          expect(batchIds.size).toBe(1);
+          expect(await getMintTotalBalance(mgr, mintUrl, testUnit)).toBe(63);
+        } finally {
+          if (mgr) {
             await mgr.dispose();
             mgr = undefined;
           }
@@ -705,7 +809,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(await getMintTotalBalance(mgr, mintUrl, testUnit)).toBeGreaterThanOrEqual(50);
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -788,7 +891,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(storedQuote.reusable).toBe(true);
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -863,7 +965,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(storedQuote.reusable).toBe(true);
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -962,7 +1063,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
             mintUrl,
             amount: { amount: 25, unit: customUnit },
           });
-          await mgr!.pauseSubscriptions();
           await mgr!.dispose();
 
           mgr = await initializeCoco({
@@ -1204,17 +1304,19 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
     });
 
     describe('Proof State Checks', () => {
+      let proofRepository: Repositories['proofRepository'];
       let repositoriesDispose: (() => Promise<void>) | undefined;
 
       beforeEach(async () => {
         const { repositories, dispose } = await createRepositories();
         repositoriesDispose = dispose;
+        proofRepository = repositories.proofRepository;
         mgr = await initializeCoco({
           repo: repositories,
           seedGetter,
           logger,
           watchers: {
-            proofStateWatcher: { disabled: true },
+            proofStateWatcher: {},
           },
         });
 
@@ -1230,7 +1332,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         }
       });
 
-      it('should mark inflight proofs as spent on manual check', async () => {
+      it('should complete a claimed Send from its spent evidence', async () => {
         const sendAmount = 25;
         const preparedSend = await mgr!.ops.send.prepare({
           mintUrl,
@@ -1238,21 +1340,26 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         });
         const { token } = await mgr!.ops.send.execute(preparedSend.id);
 
-        await mgr!.wallet.receive(token);
-
-        const proofRepository = (mgr as any).proofRepository as Repositories['proofRepository'];
-        const proofService = (mgr as any).proofService as {
-          checkInflightProofs: () => Promise<void>;
-        };
-
-        const beforeStates = await Promise.all(
-          token.proofs.map((proof) => proofRepository.getProofBySecret(mintUrl, proof.secret)),
+        const beforeStates = await proofRepository.getProofsBySecrets(
+          mintUrl,
+          token.proofs.map((proof) => proof.secret),
         );
-        const inflightCount = beforeStates.filter((proof) => proof?.state === 'inflight').length;
-        expect(inflightCount).toBeGreaterThan(0);
+        expect(beforeStates.filter((proof) => proof.state === 'inflight').length).toBeGreaterThan(
+          0,
+        );
 
-        await proofService.checkInflightProofs();
+        // The proof watcher hands SPENT evidence for Send-owned proofs to the Send.
+        const finalized = new Promise<void>((resolve) => {
+          const off = mgr!.on('send:finalized', ({ operationId }) => {
+            if (operationId !== preparedSend.id) return;
+            off();
+            resolve();
+          });
+        });
+        await mgr!.wallet.receive(token);
+        await finalized;
 
+        expect((await mgr!.ops.send.get(preparedSend.id))?.state).toBe('finalized');
         const afterStates = await Promise.all(
           token.proofs.map((proof) => proofRepository.getProofBySecret(mintUrl, proof.secret)),
         );
@@ -1862,6 +1969,62 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       });
     });
 
+    describe('Send Reclaim After Claim', () => {
+      let repositoriesDispose: (() => Promise<void>) | undefined;
+
+      beforeEach(async () => {
+        const { repositories, dispose } = await createRepositories();
+        repositoriesDispose = dispose;
+        // No proof-state watcher: the wallet must learn about the claim from its own reclaim.
+        mgr = await initializeCoco({
+          repo: repositories,
+          seedGetter,
+          logger,
+          watchers: {
+            mintOperationWatcher: { disabled: true },
+            proofStateWatcher: { disabled: true },
+          },
+        });
+        await mgr.mint.addMint(mintUrl, { trusted: true });
+        await mintAmount(mgr!, mintUrl, 200, testUnit);
+      });
+
+      afterEach(async () => {
+        if (repositoriesDispose) {
+          await repositoriesDispose();
+          repositoriesDispose = undefined;
+        }
+      });
+
+      it('should finalize the send and reject when reclaiming a token the recipient claimed', async () => {
+        const prepared = await mgr!.ops.send.prepare({ mintUrl, amount: testAmount(40) });
+        const { operation, token } = await mgr!.ops.send.execute(prepared.id);
+        const balanceAfterSend = await getMintTotalBalance(mgr!, mintUrl, testUnit);
+
+        const recipient = new Wallet(createTestMint(mintUrl), { unit: testUnit });
+        await recipient.loadMint();
+        await recipient.receive(token);
+        expect((await mgr!.ops.send.get(operation.id))?.state).toBe('pending');
+
+        const finalized = waitForEvent<{ operationId: string }>(
+          mgr!,
+          'send:finalized',
+          (payload) => payload.operationId === operation.id,
+        );
+        const finalizedHistory = waitForSendHistoryState(mgr!, 'finalized', {
+          operationId: operation.id,
+        });
+        await expect(mgr!.ops.send.reclaim(operation.id)).rejects.toThrow();
+        await finalized;
+        await finalizedHistory;
+
+        expect((await mgr!.ops.send.get(operation.id))?.state).toBe('finalized');
+        expect((await mgr!.ops.send.listInFlight()).length).toBe(0);
+        expect(await getMintTotalBalance(mgr!, mintUrl, testUnit)).toBe(balanceAfterSend);
+        expect(await getMintSpendableBalance(mgr!, mintUrl, testUnit)).toBe(balanceAfterSend);
+      }, 30000);
+    });
+
     describe('Send Operation Locking', () => {
       let repositoriesDispose: (() => Promise<void>) | undefined;
 
@@ -2063,7 +2226,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           unsubscribe();
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -2093,7 +2255,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           unsubscribe();
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -2148,7 +2309,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           unsubSaved();
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -2190,7 +2350,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(await getMintTotalBalance(mgr, mintUrl, testUnit)).toBeGreaterThanOrEqual(150);
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -2198,7 +2357,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         }
       });
 
-      it('should handle pause and resume subscriptions', async () => {
+      it('repairs subscriptions and continues automatic minting', async () => {
         const { repositories, dispose } = await createRepositories();
         try {
           mgr = await initializeCoco({
@@ -2209,15 +2368,13 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
           await mgr.mint.addMint(mintUrl, { trusted: true });
 
-          await mgr.pauseSubscriptions();
-          await mgr.resumeSubscriptions();
+          await mgr.ensureSubscriptions();
 
           await mintAmount(mgr!, mintUrl, 100, testUnit);
 
           expect(await getMintTotalBalance(mgr, mintUrl, testUnit)).toBeGreaterThanOrEqual(100);
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -2258,7 +2415,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           const pendingOperation = await mgr!.ops.send.get(operationId!);
           expect(pendingOperation!.state).toBe('pending');
 
-          await mgr.pauseSubscriptions();
           await mgr.dispose();
           mgr = undefined;
 
@@ -2286,13 +2442,319 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(finalized!.state).toBe('finalized');
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
           await dispose();
         }
       }, 20000);
+    });
+
+    describe('Background progression', () => {
+      // Live work starts after initialization with fixed owner selection. Startup cases reopen
+      // a Session explicitly and retain its normal Operation Recovery.
+      const ownersDisabled = {
+        watchers: {
+          mintOperationWatcher: { disabled: true },
+          meltQuoteWatcher: { disabled: true },
+          proofStateWatcher: { disabled: true },
+        },
+        processors: {
+          mintOperationProcessor: { disabled: true },
+          meltSettlementProcessor: { disabled: true },
+        },
+      };
+
+      async function startSession(
+        repo: Repositories,
+        selection: Pick<CocoConfig, 'watchers' | 'processors' | 'plugins'> = {},
+      ) {
+        const manager = await initializeCoco({
+          repo,
+          seedGetter,
+          logger,
+          subscriptions: watcherTestSubscriptions,
+          ...ownersDisabled,
+          watchers: { ...ownersDisabled.watchers, ...selection.watchers },
+          processors: { ...ownersDisabled.processors, ...selection.processors },
+          plugins: selection.plugins,
+        });
+        await manager.mint.addMint(mintUrl, { trusted: true });
+        return manager;
+      }
+
+      async function stopSession() {
+        await mgr?.dispose();
+        mgr = undefined;
+      }
+
+      async function withSession(
+        run: (manager: Manager, repo: Repositories) => Promise<void>,
+        selection: Pick<CocoConfig, 'watchers' | 'processors'> = {},
+      ) {
+        const { repositories, dispose } = await createRepositories();
+        try {
+          mgr = await startSession(repositories, selection);
+          await run(mgr, repositories);
+        } finally {
+          await stopSession();
+          await dispose();
+        }
+      }
+
+      async function refreshUntilReady(manager: Manager, quoteId: string) {
+        for (let attempt = 0; attempt < 80; attempt++) {
+          const quote = await manager.quotes.mint.refresh({ mintUrl, quoteId });
+          if (isMintQuoteReady(quote)) return quote;
+          await new Promise((resolve) => setTimeout(resolve, MINT_QUOTE_READY_REFRESH_INTERVAL_MS));
+        }
+        throw new Error(`Mint quote ${quoteId} did not become ready`);
+      }
+
+      async function fundedPendingSend(manager: Manager, target?: { pubkey: string }) {
+        await mintAmount(manager, mintUrl, 100, testUnit);
+        const prepared = await manager.ops.send.prepare({
+          mintUrl,
+          amount: testAmount(20),
+          ...(target ? { target: { type: 'p2pk' as const, pubkey: target.pubkey } } : {}),
+        });
+        return manager.ops.send.execute(prepared.id);
+      }
+
+      it('claims a cached paid quote without an operation on processor startup', async () => {
+        await withSession(async (manager, repo) => {
+          const quote = await manager.quotes.mint.create({
+            mintUrl,
+            amount: 40,
+            unit: testUnit,
+            method: 'bolt11',
+          });
+          await refreshUntilReady(manager, quote.quoteId);
+
+          await manager.dispose();
+          manager = mgr = await startSession(repo, { processors: { mintOperationProcessor: {} } });
+          await manager.waitForMintOperationProcessor();
+
+          const operations = await manager.ops.mint.listByQuote({
+            mintUrl,
+            quoteId: quote.quoteId,
+          });
+          expect(operations[0]?.state).toBe('finalized');
+          expect(await getMintTotalBalance(manager, mintUrl, testUnit)).toBe(40);
+        });
+      }, 30000);
+
+      it('advances a pending Mint from an explicit quote refresh with its watcher disabled', async () => {
+        await withSession(
+          async (manager) => {
+            const operation = await prepareMintOperation(manager, mintUrl, 40, testUnit);
+
+            await manager.waitForMintOperationProcessor();
+            expect((await manager.ops.mint.get(operation.id))?.state).toBe('pending');
+
+            await refreshUntilReady(manager, operation.quoteId);
+            await manager.waitForMintOperationProcessor();
+
+            expect((await manager.ops.mint.get(operation.id))?.state).toBe('finalized');
+          },
+          { processors: { mintOperationProcessor: {} } },
+        );
+      }, 30000);
+
+      it('records Mint watcher observations without advancing while its processor is disabled', async () => {
+        await withSession(
+          async (manager) => {
+            const operation = await prepareMintOperation(manager, mintUrl, 40, testUnit);
+            const observed = waitForEvent<{ quote: MintQuote }>(
+              manager,
+              'mint-quote:updated',
+              ({ quote }) => quote.quoteId === operation.quoteId && isMintQuoteReady(quote),
+            );
+
+            await observed;
+            await manager.dispose();
+
+            expect((await manager.ops.mint.get(operation.id))?.state).toBe('pending');
+            expect(await getMintTotalBalance(manager, mintUrl, testUnit)).toBe(0);
+          },
+          { watchers: { mintOperationWatcher: {} } },
+        );
+      }, 30000);
+
+      it('suppresses automatic Mint claims while allowing explicit execution', async () => {
+        await withSession(
+          async (manager) => {
+            const operation = await prepareMintOperation(manager, mintUrl, 40, testUnit);
+            await refreshUntilReady(manager, operation.quoteId);
+
+            await manager.quotes.mint.refresh({ mintUrl, quoteId: operation.quoteId });
+            await manager.waitForMintOperationProcessor();
+            expect((await manager.ops.mint.get(operation.id))?.state).toBe('pending');
+
+            expect((await manager.ops.mint.execute(operation.id)).state).toBe('finalized');
+          },
+          { processors: { mintOperationProcessor: { autoClaimMintQuotes: false } } },
+        );
+      }, 30000);
+
+      it('processes an explicit Mint requeue while automatic claiming is disabled', async () => {
+        await withSession(
+          async (manager) => {
+            const operation = await prepareMintOperation(manager, mintUrl, 40, testUnit);
+            await refreshUntilReady(manager, operation.quoteId);
+
+            const { requeued } = await manager.requeuePaidMintQuotes(mintUrl);
+            await manager.waitForMintOperationProcessor();
+
+            expect(requeued).toContain(operation.quoteId);
+            expect((await manager.ops.mint.get(operation.id))?.state).toBe('finalized');
+          },
+          {
+            processors: {
+              mintOperationProcessor: {
+                autoClaimMintQuotes: false,
+                initialEnqueueDelayMs: 0,
+              },
+            },
+          },
+        );
+      }, 30000);
+
+      it('completes a pending Send with locally spent proofs during Session startup', async () => {
+        await withSession(async (manager, repo) => {
+          const { operation, token } = await fundedPendingSend(manager);
+          // The local proof update committed before an interruption left the Send pending.
+          await repo.proofRepository.setProofState(
+            mintUrl,
+            token.proofs.map((proof) => proof.secret),
+            'spent',
+          );
+          await manager.dispose();
+          manager = mgr = await startSession(repo, { watchers: { proofStateWatcher: {} } });
+
+          expect((await manager.ops.send.get(operation.id))?.state).toBe('finalized');
+        });
+      }, 30000);
+
+      it('observes newly pending Sends with its startup scan disabled', async () => {
+        await withSession(
+          async (manager) => {
+            const { operation, token } = await fundedPendingSend(manager);
+            const finalized = waitForEvent<{ operationId: string }>(
+              manager,
+              'send:finalized',
+              (payload) => payload.operationId === operation.id,
+            );
+
+            const recipient = new Wallet(createTestMint(mintUrl), { unit: testUnit });
+            await recipient.loadMint();
+            await recipient.receive(token);
+            await finalized;
+
+            expect((await manager.ops.send.get(operation.id))?.state).toBe('finalized');
+          },
+          { watchers: { proofStateWatcher: { watchExistingInflightOnStart: false } } },
+        );
+      }, 30000);
+
+      describe('legacy tokenless P2PK Sends', () => {
+        // Older releases persisted these Sends with neither a token nor their output proof rows.
+        async function persistLegacySend(manager: Manager, repo: Repositories) {
+          const secretKey = crypto.getRandomValues(new Uint8Array(32));
+          const { publicKeyHex } = await manager.keyring.addKeyPair(secretKey);
+          const { operation, token } = await fundedPendingSend(manager, { pubkey: publicKeyHex });
+          expect(operation.needsSwap).toBe(true);
+          const { token: _token, ...legacy } = operation;
+          await repo.sendOperationRepository.update({ ...legacy, revision: 0 });
+          await repo.proofRepository.deleteProofs(
+            mintUrl,
+            token.proofs.map((proof) => proof.secret),
+          );
+          const redeem = async () => {
+            const recipient = new Wallet(createTestMint(mintUrl), { unit: testUnit });
+            await recipient.loadMint();
+            await recipient.receive(token, {
+              privkey: Array.from(secretKey, (byte) => byte.toString(16).padStart(2, '0')).join(''),
+            });
+          };
+          return { operation, token, redeem };
+        }
+
+        async function expectCompleted(
+          manager: Manager,
+          repo: Repositories,
+          operationId: string,
+          token: Token,
+          spendable: number,
+        ) {
+          expect((await manager.ops.send.get(operationId))?.state).toBe('finalized');
+          // Completion does not fabricate the output proof rows that were never retained.
+          const rows = await repo.proofRepository.getProofsBySecrets(
+            mintUrl,
+            token.proofs.map((proof) => proof.secret),
+          );
+          expect(rows).toHaveLength(0);
+          expect(await getMintSpendableBalance(manager, mintUrl, testUnit)).toBe(spendable);
+        }
+
+        it('completes one already redeemed before the Session starts', async () => {
+          await withSession(async (manager, repo) => {
+            const { operation, token, redeem } = await persistLegacySend(manager, repo);
+            const spendable = await getMintSpendableBalance(manager, mintUrl, testUnit);
+
+            await stopSession();
+            await redeem();
+            mgr = await startSession(repo, { watchers: { proofStateWatcher: {} } });
+            await expectCompleted(mgr, repo, operation.id, token, spendable);
+          });
+        }, 30000);
+
+        it('stays pending while unspent, then completes from a SPENT notification', async () => {
+          await withSession(async (manager, repo) => {
+            const { operation, token, redeem } = await persistLegacySend(manager, repo);
+            const spendable = await getMintSpendableBalance(manager, mintUrl, testUnit);
+
+            await stopSession();
+            let acquired!: () => void;
+            const subscribed = new Promise<void>((resolve) => {
+              acquired = resolve;
+            });
+            const restarted = await startSession(repo, {
+              watchers: { proofStateWatcher: {} },
+              plugins: [
+                {
+                  name: 'observe-acquisition',
+                  required: ['subscriptions'],
+                  onReady: ({ services }) => {
+                    const subscribe = services.subscriptions.subscribe.bind(services.subscriptions);
+                    services.subscriptions.subscribe = (async (
+                      ...args: Parameters<typeof subscribe>
+                    ) => {
+                      const subscription = await subscribe(...args);
+                      if (args[1] === 'proof_state') acquired();
+                      return subscription;
+                    }) as typeof subscribe;
+                  },
+                },
+              ],
+            });
+            mgr = restarted;
+            const finalized = waitForEvent<{ operationId: string }>(
+              restarted,
+              'send:finalized',
+              (payload) => payload.operationId === operation.id,
+            );
+
+            await subscribed;
+            expect((await restarted.ops.send.get(operation.id))?.state).toBe('pending');
+
+            await redeem();
+            await finalized;
+
+            await expectCompleted(restarted, repo, operation.id, token, spendable);
+          });
+        }, 30000);
+      });
     });
 
     describe('Full Workflow Integration', () => {
@@ -2338,7 +2800,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(await getMintTotalBalance(mgr, mintUrl, testUnit)).toBeGreaterThanOrEqual(400);
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -2365,7 +2826,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(keypair.secretKey.length).toBe(32);
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -2390,7 +2850,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(retrieved?.secretKey).toBeDefined();
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -2413,7 +2872,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(retrieved).toBe(null);
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -2440,7 +2898,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(latest?.publicKeyHex).toBe(kp3.publicKeyHex);
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -2462,7 +2919,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(latest).toBe(null);
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -2493,7 +2949,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(publicKeys).toContain(kp3.publicKeyHex);
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -2530,7 +2985,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(removed).toBe(null);
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -2557,7 +3011,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           const kp1_1 = await mgr1.keyring.generateKeyPair(true);
           const kp1_2 = await mgr1.keyring.generateKeyPair(true);
 
-          await mgr1.pauseSubscriptions();
           await mgr1.dispose();
 
           // Second manager with same seed generates keypairs
@@ -2570,7 +3023,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           const kp2_1 = await mgr2.keyring.generateKeyPair(true);
           const kp2_2 = await mgr2.keyring.generateKeyPair(true);
 
-          await mgr2.pauseSubscriptions();
           await mgr2.dispose();
 
           // Keypairs should be identical (deterministic derivation)
@@ -2611,7 +3063,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(retrievedAfter?.derivationIndex).toBe(originalDerivationIndex);
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -2638,7 +3089,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           const derivedKp = await mgr1.keyring.generateKeyPair(true);
           expect(derivedKp.secretKey).toBeDefined();
 
-          await mgr1.pauseSubscriptions();
           await mgr1.dispose();
 
           // Second manager: add the key first (without derivation index), then generate
@@ -2666,7 +3116,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(retrievedAfter).toBeDefined();
           expect(retrievedAfter?.derivationIndex).toBeDefined();
 
-          await mgr2.pauseSubscriptions();
           await mgr2.dispose();
         } finally {
           await dispose1();
@@ -2927,7 +3376,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         expect(storedTokenBeforeRestart.token).toBeDefined();
         expect(storedTokenBeforeRestart.token?.proofs.length).toBeGreaterThan(0);
 
-        await mgr!.pauseSubscriptions();
         await mgr!.dispose();
         mgr = undefined;
 
@@ -3122,7 +3570,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           unsubscribe();
         } finally {
           if (mgr) {
-            await mgr.pauseSubscriptions();
             await mgr.dispose();
             mgr = undefined;
           }
@@ -3130,6 +3577,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         }
       });
     });
+
+    runPaymentRequestFeeTests(options, runner, mintAmount);
 
     describe('Payment Requests', () => {
       let repositoriesDispose: (() => Promise<void>) | undefined;

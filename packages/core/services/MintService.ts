@@ -10,6 +10,7 @@ import {
   type MintMetadata,
   type MintQueries,
 } from '@core/mints/MintMetadata.ts';
+import { publishOrDefer, type DeferPublication } from '../events/DeferredPublication.ts';
 import type { CoreTransactionRunner } from '../transactions/CoreTransaction.ts';
 import {
   KeysetSyncError,
@@ -57,6 +58,15 @@ function supportsNut29MintQuoteCheckFromInfo(mintInfo: MintInfo, method: string)
         (entry as { method?: unknown }).method === method,
     )
   );
+}
+
+/** NUT-29 `max_batch_size`, capped at Coco's protocol safety cap of 100; malformed limits are 1. */
+function getNut29BatchSizeLimit(mintInfo: MintInfo): number {
+  const nuts = mintInfo.nuts as unknown as Record<string, unknown>;
+  const maxBatchSize = (nuts['29'] as { max_batch_size?: unknown }).max_batch_size;
+  if (maxBatchSize === undefined) return 100;
+  if (!Number.isSafeInteger(maxBatchSize) || Number(maxBatchSize) < 1) return 1;
+  return Math.min(Number(maxBatchSize), 100);
 }
 
 export interface MethodUnitCapability {
@@ -237,7 +247,7 @@ export class MintService {
    * Older or equal-timestamp observations return the committed snapshot without publishing events.
    * Call only outside a Wallet transaction; runtime nesting rejection is not yet universal.
    */
-  async refreshAndCommitIfStale(mintUrl: string): Promise<MintMetadata> {
+  async refreshAndCommitIfStale(mintUrl: string, defer?: DeferPublication): Promise<MintMetadata> {
     mintUrl = normalizeMintUrl(mintUrl);
     const cached = await this.metadata.queries.getMetadata(mintUrl);
     if (cached && cached.mint.updatedAt >= Math.floor(Date.now() / 1000) - MINT_REFRESH_TTL_S)
@@ -247,8 +257,10 @@ export class MintService {
       tx.mintMetadata.applyObservation(observation),
     );
     if (result.applied) {
-      await this.publishCommittedEvent('mint:metadata-refreshed', { mintUrl });
-      await this.publishCommittedEvent('mint:updated', result.metadata);
+      await publishOrDefer(async () => {
+        await this.publishCommittedEvent('mint:metadata-refreshed', { mintUrl });
+        await this.publishCommittedEvent('mint:updated', result.metadata);
+      }, defer);
     }
     return result.metadata;
   }
@@ -259,14 +271,17 @@ export class MintService {
   ): Promise<void> {
     try {
       await this.eventBus?.emit(event, payload, { throwOnError: true });
-    } catch (error) {
-      this.logger?.error('Failed to publish committed mint metadata event', { event, error });
+    } catch {
+      this.logger?.error('Failed to publish committed mint metadata event', { event });
     }
   }
 
   /** Compatibility wrapper; new internal callers use the explicitly committing action. */
-  async ensureUpdatedMint(mintUrl: string): Promise<{ mint: Mint; keysets: Keyset[] }> {
-    return this.refreshAndCommitIfStale(mintUrl);
+  async ensureUpdatedMint(
+    mintUrl: string,
+    defer?: DeferPublication,
+  ): Promise<{ mint: Mint; keysets: Keyset[] }> {
+    return this.refreshAndCommitIfStale(mintUrl, defer);
   }
 
   async deleteMint(mintUrl: string): Promise<void> {
@@ -279,9 +294,9 @@ export class MintService {
     await this.mintRepo.deleteMint(mintUrl);
   }
 
-  async getMintInfo(mintUrl: string): Promise<MintInfo> {
+  async getMintInfo(mintUrl: string, defer?: DeferPublication): Promise<MintInfo> {
     // ensureUpdatedMint already normalizes, but normalize here for consistency
-    const { mint } = await this.ensureUpdatedMint(normalizeMintUrl(mintUrl));
+    const { mint } = await this.ensureUpdatedMint(normalizeMintUrl(mintUrl), defer);
     return mint.mintInfo;
   }
 
@@ -294,10 +309,14 @@ export class MintService {
    * propagate to the caller. Missing, malformed, or disabled settings return
    * `false` rather than throwing.
    */
-  async supportsNut(mintUrl: string, nut: TopLevelNutCapability): Promise<boolean> {
+  async supportsNut(
+    mintUrl: string,
+    nut: TopLevelNutCapability,
+    defer?: DeferPublication,
+  ): Promise<boolean> {
     this.assertSupportCapabilityNut(nut);
     const normalizedMintUrl = normalizeMintUrl(mintUrl);
-    const mintInfo = await this.getMintInfo(normalizedMintUrl);
+    const mintInfo = await this.getMintInfo(normalizedMintUrl, defer);
     const settings = this.getNutSupportSettings(mintInfo, nut);
     return settings?.supported === true;
   }
@@ -323,12 +342,18 @@ export class MintService {
   async getNut29MintQuoteCheckLimit(mintUrl: string, method: string): Promise<number> {
     const mintInfo = await this.getMintInfo(normalizeMintUrl(mintUrl));
     if (!supportsNut29MintQuoteCheckFromInfo(mintInfo, method)) return 1;
+    return getNut29BatchSizeLimit(mintInfo);
+  }
 
-    const nuts = mintInfo.nuts as unknown as Record<string, unknown>;
-    const maxBatchSize = (nuts['29'] as { max_batch_size?: unknown }).max_batch_size;
-    if (maxBatchSize === undefined) return 100;
-    if (!Number.isSafeInteger(maxBatchSize) || Number(maxBatchSize) < 1) return 1;
-    return Math.min(Number(maxBatchSize), 100);
+  /**
+   * Returns the safety-capped NUT-29 batch mint limit for a payment method, or `0` when the mint
+   * does not advertise NUT-29 for it. NUT-29 shares its method list and `max_batch_size` between
+   * quote checks and batch minting. Malformed limits return `1`, which admits no batch.
+   */
+  async getNut29BatchMintLimit(mintUrl: string, method: string): Promise<number> {
+    const mintInfo = await this.getMintInfo(normalizeMintUrl(mintUrl));
+    if (!supportsNut29MintQuoteCheckFromInfo(mintInfo, method)) return 0;
+    return getNut29BatchSizeLimit(mintInfo);
   }
 
   /**
@@ -341,8 +366,9 @@ export class MintService {
     mintUrl: string,
     nut: TopLevelNutCapability,
     scope?: string,
+    defer?: DeferPublication,
   ): Promise<void> {
-    if (await this.supportsNut(mintUrl, nut)) {
+    if (await this.supportsNut(mintUrl, nut, defer)) {
       return;
     }
 
@@ -375,11 +401,12 @@ export class MintService {
     nut: 4 | 5,
     method: string,
     unit: string,
+    defer?: DeferPublication,
   ): Promise<MethodUnitCapability> {
     this.assertMethodCapabilityNut(nut);
     const normalizedMintUrl = normalizeMintUrl(mintUrl);
     const normalizedUnit = normalizeUnit(unit, { defaultUnit: DEFAULT_UNIT });
-    const mintInfo = await this.getMintInfo(normalizedMintUrl);
+    const mintInfo = await this.getMintInfo(normalizedMintUrl, defer);
     const settings = this.getNutMethodSettings(mintInfo, nut);
     const nutName = this.formatNut(nut);
 
@@ -483,6 +510,7 @@ export class MintService {
     nut: 4 | 5,
     method: string,
     scope: string | UnitAmount,
+    defer?: DeferPublication,
   ): Promise<void> {
     let unit: string;
     let requestedAmount: Amount | undefined;
@@ -493,7 +521,7 @@ export class MintService {
       unit = intent.unit;
       requestedAmount = intent.amount;
     }
-    const capability = await this.getMintMethodUnitCapability(mintUrl, nut, method, unit);
+    const capability = await this.getMintMethodUnitCapability(mintUrl, nut, method, unit, defer);
     if (!capability.supported) {
       throw new ProofValidationError(
         capability.reason ??

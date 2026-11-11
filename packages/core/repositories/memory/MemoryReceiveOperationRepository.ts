@@ -16,26 +16,51 @@ export class MemoryReceiveOperationRepository implements ReceiveOperationReposit
     if (this.operations.has(operation.id)) {
       throw new Error(`ReceiveOperation with id ${operation.id} already exists`);
     }
-    this.operations.set(operation.id, { ...operation });
+    this.operations.set(
+      operation.id,
+      cloneMemoryValue({ ...operation, revision: operation.revision ?? 0 }),
+    );
   }
 
   async update(operation: ReceiveOperation): Promise<void> {
     if (!this.operations.has(operation.id)) {
       throw new Error(`ReceiveOperation with id ${operation.id} not found`);
     }
-    this.operations.set(operation.id, { ...operation, updatedAt: Date.now() });
+    this.operations.set(
+      operation.id,
+      cloneMemoryValue({ ...operation, revision: operation.revision ?? 0, updatedAt: Date.now() }),
+    );
+  }
+
+  async transition(
+    input: Parameters<ReceiveOperationRepository['transition']>[0],
+  ): Promise<boolean> {
+    const current = this.operations.get(input.operationId);
+    if (
+      !current ||
+      current.state !== input.expectedState ||
+      (current.revision ?? 0) !== input.expectedRevision
+    )
+      return false;
+    if (input.next.id !== input.operationId)
+      throw new Error('Receive operation transition cannot change the operation id');
+    this.operations.set(
+      input.operationId,
+      cloneMemoryValue({ ...input.next, revision: input.expectedRevision + 1 }),
+    );
+    return true;
   }
 
   async getById(id: string): Promise<ReceiveOperation | null> {
     const op = this.operations.get(id);
-    return op ? { ...op } : null;
+    return op ? cloneMemoryValue(op) : null;
   }
 
   async getByState(state: ReceiveOperationState): Promise<ReceiveOperation[]> {
     const results: ReceiveOperation[] = [];
     for (const op of this.operations.values()) {
       if (op.state === state) {
-        results.push({ ...op });
+        results.push(cloneMemoryValue(op));
       }
     }
     return results;
@@ -45,7 +70,7 @@ export class MemoryReceiveOperationRepository implements ReceiveOperationReposit
     const results: ReceiveOperation[] = [];
     for (const op of this.operations.values()) {
       if (op.state === 'executing') {
-        results.push({ ...op });
+        results.push(cloneMemoryValue(op));
       }
     }
     return results;
@@ -55,7 +80,7 @@ export class MemoryReceiveOperationRepository implements ReceiveOperationReposit
     const results: ReceiveOperation[] = [];
     for (const op of this.operations.values()) {
       if (op.mintUrl === mintUrl) {
-        results.push({ ...op });
+        results.push(cloneMemoryValue(op));
       }
     }
     return results;
@@ -64,14 +89,16 @@ export class MemoryReceiveOperationRepository implements ReceiveOperationReposit
   async getByPaymentRequestAttemptId(attemptId: string): Promise<ReceiveOperation | null> {
     for (const op of this.operations.values()) {
       if (op.source?.type === 'payment-request' && op.source.attemptId === attemptId) {
-        return { ...op };
+        return cloneMemoryValue(op);
       }
     }
     return null;
   }
 
   async getAll(): Promise<ReceiveOperation[]> {
-    return Array.from(this.operations.values(), (operation) => ({ ...operation }));
+    return Array.from(this.operations.values(), (operation) =>
+      cloneMemoryValue({ ...operation, revision: operation.revision ?? 0 }),
+    );
   }
 
   async delete(id: string): Promise<void> {

@@ -4,6 +4,7 @@ import {
   type Repositories,
   type RepositoryTransactionScope,
   type SendOperationRepository,
+  type ReceiveOperationRepository,
   type MintOperationRepository,
   type MintQuoteRepository,
   type MeltOperationRepository,
@@ -16,9 +17,14 @@ import {
 import { RepositoryScopedProofs, type ScopedProofs } from './proofs/ScopedProofs.ts';
 import { RepositoryScopedOutputs, type ScopedOutputs } from './outputs/ScopedOutputs.ts';
 import { RepositoryScopedKeypairs, type ScopedKeypairs } from './keypairs/ScopedKeypairs.ts';
+import {
+  RepositoryScopedMintQuoteClaims,
+  type ScopedMintQuoteClaims,
+} from './mintQuoteClaims/ScopedMintQuoteClaims.ts';
 import { TransactionLifetime } from './TransactionLifetime.ts';
 import { getTransitionBody, type Transition } from './Transition.ts';
 import type { MintSwapOperationRepository } from '../operations/mintSwap/MintSwapOperationRepository.ts';
+import type { BatchMintOperationRepository } from '../operations/batchMint/BatchMintOperationRepository.ts';
 
 /**
  * Scoped capabilities sharing one adapter transaction attempt. Await mutations sequentially unless
@@ -31,20 +37,29 @@ export interface CoreTransaction {
   readonly keypairs: ScopedKeypairs;
   readonly proofs: ScopedProofs;
   readonly outputs: ScopedOutputs;
+  readonly mintQuoteClaims: ScopedMintQuoteClaims;
   readonly mintSwapOperations: Pick<
     MintSwapOperationRepository,
-    'getById' | 'create' | 'transition'
+    'getById' | 'getByChild' | 'getByQuote' | 'create' | 'transition'
+  >;
+  readonly batchMintOperations: Pick<
+    BatchMintOperationRepository,
+    'getById' | 'listByQuote' | 'create' | 'update'
   >;
   readonly mintOperations: Pick<
     MintOperationRepository,
     'getById' | 'getByQuoteId' | 'create' | 'update' | 'delete'
   >;
-  readonly mintQuotes: Pick<MintQuoteRepository, 'getMintQuote'>;
+  readonly mintQuotes: Pick<MintQuoteRepository, 'getMintQuote' | 'getMintQuoteById'>;
   readonly meltOperations: Pick<
     MeltOperationRepository,
     'getById' | 'getByQuoteId' | 'create' | 'update' | 'delete'
   >;
   readonly meltQuotes: Pick<MeltQuoteRepository, 'getMeltQuote' | 'getMeltQuoteById'>;
+  readonly receiveOperations: Pick<
+    ReceiveOperationRepository,
+    'getById' | 'create' | 'transition' | 'delete'
+  >;
   readonly sendOperations: Pick<
     SendOperationRepository,
     'getById' | 'getByMintUrl' | 'create' | 'transition' | 'delete'
@@ -113,10 +128,16 @@ export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
       meltOperations: repositories.meltOperationRepository,
       meltQuotes: repositories.meltQuoteRepository,
       mintSwapOperations: repositories.mintSwap.operationRepository,
+      batchMintOperations: repositories.batchMint.operationRepository,
       mintMetadata,
       keypairs: new RepositoryScopedKeypairs(repositories.keyRingRepository),
       proofs,
       outputs,
+      mintQuoteClaims: new RepositoryScopedMintQuoteClaims(
+        repositories.mintOperationRepository,
+        repositories.batchMint.operationRepository,
+      ),
+      receiveOperations: repositories.receiveOperationRepository,
       sendOperations: repositories.sendOperationRepository,
     });
     return scoped;

@@ -16,6 +16,8 @@ import {
   runMeltOperationRepositoryContract,
   runMeltQuoteRepositoryContract,
   runMintSwapPersistenceContract,
+  runBatchMintPersistenceContract,
+  runBatchMintHistoryContract,
 } from '@cashu/coco-adapter-tests';
 import { runSqlDatabaseContract } from '@cashu/coco-sql-storage/test';
 import { SqliteRepositories as Repositories } from '../index.ts';
@@ -43,21 +45,32 @@ async function createRepositories() {
   } as const;
 }
 
+/**
+ * The synchronous shim blocks the event loop while SQLite waits for a lock, so the lock holder on
+ * the other connection cannot finish. Keep the busy timeout short, including after each later
+ * `init()` such as a Coco Session's startup, which restores the schema default.
+ */
+function createShortBusyRepositories(database: NativeExpoSqliteDatabaseShim): Repositories {
+  const repositories = new Repositories({
+    database: database as unknown as SqliteRepositoriesOptions['database'],
+  });
+  const init = repositories.init.bind(repositories);
+  repositories.init = async () => {
+    await init();
+    await database.execAsync('PRAGMA busy_timeout = 10');
+  };
+  return repositories;
+}
+
 async function createSharedRepositories() {
   const directory = await mkdtemp(join(tmpdir(), 'coco-expo-sqlite-keyring-'));
   const filename = join(directory, 'wallet.sqlite');
   const firstDatabase = new NativeExpoSqliteDatabaseShim(filename);
   const secondDatabase = new NativeExpoSqliteDatabaseShim(filename);
-  const first = new Repositories({
-    database: firstDatabase as unknown as SqliteRepositoriesOptions['database'],
-  });
-  const second = new Repositories({
-    database: secondDatabase as unknown as SqliteRepositoriesOptions['database'],
-  });
+  const first = createShortBusyRepositories(firstDatabase);
+  const second = createShortBusyRepositories(secondDatabase);
   await first.init();
   await second.init();
-  await firstDatabase.execAsync('PRAGMA busy_timeout = 10');
-  await secondDatabase.execAsync('PRAGMA busy_timeout = 10');
 
   return {
     first,
@@ -103,6 +116,9 @@ runKeypairAllocationContract(
   { createRepositories, createSharedRepositories },
   { describe, it, expect },
 );
+
+runBatchMintPersistenceContract({ createRepositories }, { describe, it, expect });
+runBatchMintHistoryContract({ createRepositories }, { describe, it, expect });
 
 runMintSwapPersistenceContract(
   {

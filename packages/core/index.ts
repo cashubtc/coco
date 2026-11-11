@@ -114,6 +114,15 @@ export type { OutputDataCreator, OutputDataLike } from '@cashu/cashu-ts';
 export type { WebSocketLike, WebSocketFactory } from './infra/WsConnectionManager.ts';
 export { normalizeMintUrl, toAmount, sumAmounts } from './utils.ts';
 export type {
+  BatchMintMember,
+  BatchMintOperation,
+  BatchMintOperationFailure,
+  BatchMintOperationState,
+  ExecutingBatchMintOperation,
+  FailedBatchMintOperation,
+  FinalizedBatchMintOperation,
+} from './operations/batchMint/BatchMintOperation.ts';
+export type {
   MintSwapOperation,
   MintSwapOperationState,
   PreparingMintSwapOperation,
@@ -141,6 +150,8 @@ export {
 } from './operations/mintSwap/MintSwapOperation.ts';
 export { parseMintSwapOperation } from './operations/mintSwap/parseMintSwapOperation.ts';
 export {
+  MintSwapChildOperationError,
   MintSwapIdentityConflictError,
+  MintSwapIntentConflictError,
   type MintSwapIdentityKind,
-} from './operations/mintSwap/MintSwapIdentityConflictError.ts';
+} from './operations/mintSwap/MintSwapErrors.ts';

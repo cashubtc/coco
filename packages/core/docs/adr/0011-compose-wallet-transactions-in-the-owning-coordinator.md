@@ -16,6 +16,12 @@ the atomic write set, and reusable capabilities/transitions own its domain invar
 scope type or gateway is required. Scoped repository contracts may directly provide narrow local
 persistence capabilities when another wrapper would add no behavior.
 
+P2PK import and deletion resolve legacy public-key aliases inside the transaction owned by
+`KeyRingService`. Import returns the persisted keypair after commit, preserving its identity and
+derivation metadata, and rejects writes that would overwrite a mint quote key. Read-only lookup
+and signing share the alias algorithm through narrow key access; it cannot open transactions or
+mutate storage.
+
 ## Considered Options
 
 Mandatory gateways provided an explicit committed-result interface but duplicated every transition
@@ -76,8 +82,8 @@ transactions. Their commits intentionally survive later caller failure. Only app
 observations publish events; older observations and timestamp ties retain the first committed
 snapshot. Coordinator dependencies remain acyclic.
 
-Mint Swap persistence is a required part of every Wallet transaction scope, independently of runtime
-activation. Adapter migrations govern persisted model changes. Funded Mint Swap redemption derives
+Mint Swap persistence is a required part of every Wallet transaction scope. Adapter migrations
+govern persisted model changes. Funded Mint Swap redemption derives
 authority from the persisted paid parent and exact child, quote, and proof evidence checked in the
 same scope as the Mint Quote Reservation. It can recover paid value after trust revocation; ordinary
 Mint execution retains its trust gate. Both paths compose the same reservation transition and exact-output settlement.
@@ -86,21 +92,63 @@ After that commit, trust revocation cannot interrupt the authorized request or i
 source payment may have succeeded before its observation was persisted. Recovery retains all exact
 request and ownership checks, never restores trust, and never blindly redispatches source payment.
 
-Send, Mint, Melt, the dormant Mint Swap coordinator, KeyRing, and mint metadata refresh use this model.
+Batch Mint persistence (`batchMint.operationRepository`, exposed as `tx.batchMintOperations`) and
+the shared Mint Quote claim-facts query `tx.mintQuoteClaims` are likewise required parts of every
+Wallet transaction scope. Every Mint Quote claimability decision, standalone or batched, reads its
+claim facts through that one query in the scope that authorizes it, so a standalone claim and a
+Batch Mint admission for the same quote cannot both commit. Adapter migrations govern the persisted
+Batch Mint format ([ADR-0016](0016-model-batch-minting-as-a-standalone-atomic-operation.md)).
+
+Send, Mint, Melt, Receive, the Mint Swap and Batch Mint coordinators, KeyRing, and mint metadata
+refresh use this model. The Batch Mint coordinator commits admission, Output Allocation and every
+member's Mint Quote Reservation in one `run()`, and settlement, failure and deferral in one `run()`
+each; NUT-20 signing, exact replay, Restore and proof-state checks stay outside transactions.
+Batch recovery uses saved proofs, then exact replay and conditional Restore (ADR-0016), without
+quote checks. Empty Restore permits failure only after a qualifying replay rejection under the
+accepted mint ordering assumption. Failure rechecks local output proofs inside its transaction;
+any saved evidence retains executing. Ambiguous replay or Restore results retain reservations.
 Mint Swap composes exact child preparation, authorization, and settlement through the same runner
-scope. It requires shared child locks in one effect-driving Coco Session; runtime activation and
-enforcement remain #419. Legacy Receive, legacy public Mint Swap orchestration, Payment Request Receive
-parent/attempt/child atomicity, and MintService add/forced-update/trust/delete paths remain for their
+scope. Manager shares its child locks with ordinary Mint/Melt services in one effect-driving Coco
+Session per Wallet store. Existing host/session guards retain their scope; Core does not add a
+universal cross-process singleton. Coco packages are intended to be used with lock-step versioning,
+so the Mint Swap API has no feature activation gate. Initial source payment requires an explicit
+`execute` call. The parent processor is enabled by default and can be disabled without restricting
+explicit commands. It registers interests in the existing Mint/Melt watchers and consumes committed
+canonical quote updates without initiating prepared source payment. Interests are rebuilt independently
+of durable retry deadlines. Ordinary and parent interests are synchronous local declarations;
+watchers own asynchronous activation, diagnostics, and late cleanup. Parent scans and replacement
+declarations do not await retired physical cleanup, but stop drains it. Withdrawal immediately revokes
+logical ownership while preserving shared owners. A disabled watcher does not recruit a replacement
+parent quote poller. Startup uses sufficient cached evidence first, retaining a bounded recovery
+fallback for unresolved evidence. Explicit recovery and necessary
+recovery effects remain available. Source proof release
+still requires fresh positive `UNPAID` confirmation under the shared child lock, including when the
+ordinary Melt processor advances the child after its parent stops. Authorized recovery
+interests permit observation of exact quotes after trust revocation, without restoring mint trust.
+Parent update hints are captured in the owning transaction and published after commit and
+lock release; local polling and complete active sweeps tolerate lost hints. No outbox or new schema
+is introduced. Manager coalesces networking-only subscription repair and drains admitted local repair and parent
+work on disposal. Repair preserves current owners and interests without discovery or Operation Recovery. An observation timeout only ends waiting; it does not change the persisted operation.
+Payment Request Receive parent/attempt/child atomicity and MintService
+add/forced-update/trust/delete paths remain for their
 owning migrations.
 Consistent fail-fast rejection of nested transactions remains follow-up work and must distinguish
-nesting from legitimate concurrent calls. There are no public API or persisted-format changes.
+nesting from legitimate concurrent calls. Mint Swap runtime adds public APIs/configuration/events;
+it does not change the persisted parent format.
+
+Mint Swap now exclusively coordinates its children while it can act, revising the earlier
+permission for independent ordinary child commands. Once the parent is terminal or
+`needs_attention`, its children return to ordinary resolution, but ordinary coordination never
+authorizes their source payment. No persisted format changes are introduced. The
+[Transaction Design](../../../../TRANSACTION_DESIGN.md) owns the detailed contract.
 
 The Restore migration adds an explicit exception
 to the public API compatibility policy: move Restore directly to scoped monotonic advancement and
-remove plugin-facing `overwriteCounter()`, without first reworking CounterService. After migrating
-the remaining legacy output allocators, remove CounterService and its plugin-facing entry. Until
-those callers migrate, Restore's scoped advancement alone cannot prevent their stale counter writes
-or make their output derivation and later counter increment one atomic Output Allocation.
+remove plugin-facing `overwriteCounter()`, without first reworking CounterService. Receive now
+owns transactional Output Allocation, and Sweep delegates exchanges through its coordinator methods.
+ProofService, CounterService and their plugin-facing entries have since been removed, so every
+Output Allocation goes through ScopedOutputs in its owning transaction. See
+[ADR-0015](0015-plugins-get-no-direct-proof-or-counter-authority.md).
 
 Restore commits proof import and counter advancement together per keyset. Its coordinator opens
 one transaction, and a branded transition composes ScopedProofs and ScopedOutputs within that scope.
@@ -121,3 +169,14 @@ Initial pending-proof reconciliation happens through repeated Restore, inside it
 Automatic pending-proof watching and its lifecycle changes are deferred to a separate migration.
 
 [Transaction Design](../../../../TRANSACTION_DESIGN.md) defines the implementation and review contract.
+
+Send's proof observation entry point composes proof-state application and resulting completion
+through `completePendingSend` in one transaction. Its background watcher owns no proof writes or
+transaction runner; targets only guide observation. The final proof update and Send completion
+remain atomic, unlike independently committed canonical Quote Observations. The retired unowned
+inflight compatibility path is documented in ADR-0015.
+
+Send Operation Recovery owns startup mint checks. Proof watcher discovery uses local evidence and
+installs subscriptions without repeating recovery's requests. Local Send advancement does not poll;
+legacy tokenless P2PK verification remains in recovery and in the application of new observations.
+The subscription transport retains its existing polling and WebSocket observation paths.

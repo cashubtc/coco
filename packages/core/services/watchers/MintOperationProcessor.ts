@@ -1,8 +1,13 @@
 import type { EventBus, CoreEvents } from '@core/events';
 import type { Logger } from '../../logging/Logger.ts';
 import type { MintMethod, MintOperationService } from '@core/operations/mint';
+import type { MintQuoteRef } from '../../models/QuoteIdentity.ts';
 import { MintOperationError, NetworkError } from '../../models/Error';
+import { mintQuoteLockKey } from '../../operations/MintScopedLock.ts';
+import type { BatchMintQuoteClaims } from '../../operations/batchMint/BatchMintQuoteClaims.ts';
+import { isMintSwapQuiescentState } from '../../operations/mintSwap/MintSwapOperation.ts';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
+import type { MintService } from '../MintService.ts';
 
 interface QueueItem {
   mintUrl: string;
@@ -30,15 +35,25 @@ export interface MintOperationProcessorOptions {
   baseRetryDelayMs?: number;
   initialEnqueueDelayMs?: number;
   autoClaimMintQuotes?: boolean;
+  /**
+   * Claim compatible quotes together through Batch Mint Operations. Defaults to `true`; `false`
+   * claims one standalone Mint Operation per quote.
+   */
+  batchMintQuotes?: boolean;
 }
 
 export class MintOperationProcessor {
   private readonly mintOperations: MintOperationService;
+  /** Set only while `batchMintQuotes` is on. */
+  private readonly batchMintQuoteClaims?: BatchMintQuoteClaims;
   private readonly quoteLifecycle: QuoteLifecycle;
+  private readonly mintService: Pick<MintService, 'isTrustedMint'>;
   private readonly bus: EventBus<CoreEvents>;
   private readonly logger?: Logger;
 
   private running = false;
+  private started = false;
+  private stopping?: Promise<void>;
   private queue: QueueItem[] = [];
   private processing = false;
   private processingTimer?: ReturnType<typeof setTimeout>;
@@ -46,9 +61,18 @@ export class MintOperationProcessor {
   private offPending?: () => void;
   private offRequeue?: () => void;
   private offUntrusted?: () => void;
+  private offMintSwapUpdated?: () => void;
   private claimingQuotes = new Set<string>();
   private quoteClaimsNeedingFollowUp = new Set<string>();
   private claimTasks = new Set<Promise<void>>();
+  /** Quote claims collected during the current processing turn, claimed together when it ends. */
+  private collectedClaims = new Map<string, MintQuoteRef>();
+  private collectionTimer?: ReturnType<typeof setTimeout>;
+  /** Quote claims skipped because an active Mint Swap coordinates the quote. */
+  private quotesAwaitingParentStop = new Map<
+    string,
+    { mintUrl: string; method: MintMethod; quoteId: string }
+  >();
 
   private handlers = new Map<string, OperationHandler>();
   private readonly processIntervalMs: number;
@@ -60,12 +84,16 @@ export class MintOperationProcessor {
   constructor(
     mintOperations: MintOperationService,
     quoteLifecycle: QuoteLifecycle,
+    mintService: Pick<MintService, 'isTrustedMint'>,
     bus: EventBus<CoreEvents>,
     logger?: Logger,
     options?: MintOperationProcessorOptions,
+    /** Without it, every quote is claimed as a standalone Mint Operation. */
+    batchMintQuoteClaims?: BatchMintQuoteClaims,
   ) {
     this.mintOperations = mintOperations;
     this.quoteLifecycle = quoteLifecycle;
+    this.mintService = mintService;
     this.bus = bus;
     this.logger = logger;
 
@@ -75,6 +103,8 @@ export class MintOperationProcessor {
     this.baseRetryDelayMs = options?.baseRetryDelayMs ?? 5000;
     this.initialEnqueueDelayMs = options?.initialEnqueueDelayMs ?? 500;
     this.autoClaimMintQuotes = options?.autoClaimMintQuotes ?? true;
+    this.batchMintQuoteClaims =
+      (options?.batchMintQuotes ?? true) ? batchMintQuoteClaims : undefined;
 
     const defaultHandler = new DefaultMintOperationHandler(mintOperations);
     for (const method of ['bolt11', 'bolt12', 'onchain']) {
@@ -92,7 +122,8 @@ export class MintOperationProcessor {
   }
 
   async start(): Promise<void> {
-    if (this.running) return;
+    if (this.started || this.stopping) return;
+    this.started = true;
     this.running = true;
     this.logger?.info('MintOperationProcessor started');
 
@@ -110,14 +141,8 @@ export class MintOperationProcessor {
         return;
       }
 
-      const quote = await this.quoteLifecycle.getMintQuote(
-        operation.mintUrl,
-        operation.method,
-        operation.quoteId,
-      );
-      if (quote) {
-        this.scheduleQuoteClaim(operation.mintUrl, operation.method, operation.quoteId);
-      }
+      // A pending Mint Operation keeps its own request and can be claimed immediately.
+      this.scheduleQuoteClaim(operation.mintUrl, operation.method, operation.quoteId, false);
     });
 
     // Subscribe to explicit operation requeue events.
@@ -128,6 +153,18 @@ export class MintOperationProcessor {
     // Clear queue items when mint is untrusted
     this.offUntrusted = this.bus.on('mint:untrusted', ({ mintUrl }) => {
       this.clearMintFromQueue(mintUrl);
+      for (const [key, ref] of this.collectedClaims) {
+        if (ref.mintUrl === mintUrl) this.collectedClaims.delete(key);
+      }
+    });
+
+    // A stopped parent emits no quote event, so reschedule the claims it was coordinating.
+    this.offMintSwapUpdated = this.bus.on('mint-swap:updated', ({ state }) => {
+      if (!isMintSwapQuiescentState(state)) return;
+      const awaiting = Array.from(this.quotesAwaitingParentStop.values());
+      this.quotesAwaitingParentStop.clear();
+      for (const { mintUrl, method, quoteId } of awaiting)
+        this.scheduleQuoteClaim(mintUrl, method, quoteId);
     });
 
     if (this.autoClaimMintQuotes) {
@@ -138,10 +175,15 @@ export class MintOperationProcessor {
     this.scheduleNextProcess();
   }
 
-  async stop(): Promise<void> {
-    if (!this.running) return;
+  stop(): Promise<void> {
+    if (this.stopping) return this.stopping;
     this.running = false;
+    const task = this.finishStop();
+    this.stopping = task;
+    return task;
+  }
 
+  private async finishStop(): Promise<void> {
     // Unsubscribe from events
     if (this.offQuoteUpdated) {
       try {
@@ -183,6 +225,24 @@ export class MintOperationProcessor {
       }
     }
 
+    if (this.offMintSwapUpdated) {
+      try {
+        this.offMintSwapUpdated();
+      } catch {
+        // ignore
+      } finally {
+        this.offMintSwapUpdated = undefined;
+      }
+    }
+    this.quotesAwaitingParentStop.clear();
+
+    // Discard claims collected for a turn that will not run.
+    if (this.collectionTimer) {
+      clearTimeout(this.collectionTimer);
+      this.collectionTimer = undefined;
+    }
+    this.collectedClaims.clear();
+
     // Clear processing timer
     if (this.processingTimer) {
       clearTimeout(this.processingTimer);
@@ -202,7 +262,12 @@ export class MintOperationProcessor {
    * Useful for CLI applications that want to ensure all queued operations are processed before exiting.
    */
   async waitForCompletion(): Promise<void> {
-    while (this.queue.length > 0 || this.processing || this.claimTasks.size > 0) {
+    while (
+      this.queue.length > 0 ||
+      this.processing ||
+      this.claimTasks.size > 0 ||
+      this.collectedClaims.size > 0
+    ) {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
   }
@@ -273,12 +338,18 @@ export class MintOperationProcessor {
     }, this.processIntervalMs);
   }
 
-  private scheduleQuoteClaim(mintUrl: string, method: MintMethod, quoteId: string): void {
-    if (!this.autoClaimMintQuotes) {
+  /** With `collect`, the claim joins the current processing turn so it can be batched. */
+  private scheduleQuoteClaim(
+    mintUrl: string,
+    method: MintMethod,
+    quoteId: string,
+    collect = this.batchMintQuoteClaims !== undefined,
+  ): void {
+    if (!this.running || !this.autoClaimMintQuotes) {
       return;
     }
 
-    const key = `${mintUrl}::${method}::${quoteId}`;
+    const key = mintQuoteLockKey({ mintUrl, method, quoteId });
     if (this.claimingQuotes.has(key)) {
       this.quoteClaimsNeedingFollowUp.add(key);
       this.logger?.debug('Mint quote claim already in progress', {
@@ -289,42 +360,103 @@ export class MintOperationProcessor {
       return;
     }
 
-    this.claimingQuotes.add(key);
-    const task = (async () => {
-      try {
-        const assessment = await this.mintOperations.getMintQuoteClaimability(
-          mintUrl,
-          method,
-          quoteId,
-        );
-        if (assessment?.status !== 'claimable' && assessment?.status !== 'complete') {
-          this.logger?.debug('Mint quote has no locally claimable value', {
-            mintUrl,
-            method,
-            quoteId,
-          });
-          return;
-        }
+    if (collect) {
+      this.collectQuoteClaim(key, { mintUrl, method, quoteId });
+      return;
+    }
 
+    // An immediate claim supersedes one collected for the current turn.
+    this.collectedClaims.delete(key);
+    this.claimingQuotes.add(key);
+    this.trackClaimTask(async () => {
+      try {
+        if (!(await this.isReadyToClaim(key, { mintUrl, method, quoteId }))) return;
         await this.mintOperations.claimMintQuote(mintUrl, method, quoteId, {
           autoClaimRemaining: true,
         });
       } catch (error) {
-        this.logger?.warn('Failed to check or claim mint quote', {
-          mintUrl,
-          method,
-          quoteId,
+        this.logClaimFailure({ mintUrl, method, quoteId }, error);
+      } finally {
+        this.finishQuoteClaim(key, { mintUrl, method, quoteId });
+      }
+    });
+  }
+
+  /** Collect a claim into the current processing turn, opening one if none is open. */
+  private collectQuoteClaim(key: string, quote: MintQuoteRef): void {
+    if (!this.running) return;
+    this.collectedClaims.set(key, quote);
+    if (this.collectionTimer) return;
+    this.collectionTimer = setTimeout(() => {
+      this.collectionTimer = undefined;
+      this.claimCollectedQuotes();
+    }, this.processIntervalMs);
+  }
+
+  /** End the turn: claim every collected quote that is ready, grouped into Batch Mint Operations. */
+  private claimCollectedQuotes(): void {
+    if (!this.running) return;
+    const collected = Array.from(this.collectedClaims);
+    this.collectedClaims.clear();
+    for (const [key] of collected) this.claimingQuotes.add(key);
+    this.trackClaimTask(async () => {
+      try {
+        const ready: MintQuoteRef[] = [];
+        for (const [key, quote] of collected) {
+          try {
+            if (await this.isReadyToClaim(key, quote)) ready.push(quote);
+          } catch (error) {
+            this.logClaimFailure(quote, error);
+          }
+        }
+        if (!this.running || ready.length === 0 || !this.batchMintQuoteClaims) return;
+        await this.batchMintQuoteClaims.claimMintQuotes(ready);
+      } catch (error) {
+        this.logger?.warn('Failed to claim collected mint quotes', {
           error: error instanceof Error ? error.message : String(error),
         });
       } finally {
-        this.claimingQuotes.delete(key);
-        const needsFollowUp = this.quoteClaimsNeedingFollowUp.delete(key);
-        if (needsFollowUp && this.running) {
-          this.scheduleQuoteClaim(mintUrl, method, quoteId);
-        }
+        for (const [key, quote] of collected) this.finishQuoteClaim(key, quote);
       }
-    })();
+    });
+  }
 
+  /** Whether a quote has locally claimable value and no active Mint Swap coordinates it. */
+  private async isReadyToClaim(key: string, quote: MintQuoteRef): Promise<boolean> {
+    // Mark before reading the parent so a parent stop committed during the read reschedules it.
+    this.quotesAwaitingParentStop.set(key, quote);
+    if (!(await this.mintOperations.canResolve(quote))) return false;
+    this.quotesAwaitingParentStop.delete(key);
+    const assessment = await this.mintOperations.getMintQuoteClaimability(
+      quote.mintUrl,
+      quote.method,
+      quote.quoteId,
+    );
+    if (!this.running) return false;
+    if (assessment?.status !== 'claimable' && assessment?.status !== 'complete') {
+      this.logger?.debug('Mint quote has no locally claimable value', { ...quote });
+      return false;
+    }
+    return true;
+  }
+
+  private finishQuoteClaim(key: string, { mintUrl, method, quoteId }: MintQuoteRef): void {
+    this.claimingQuotes.delete(key);
+    const needsFollowUp = this.quoteClaimsNeedingFollowUp.delete(key);
+    if (needsFollowUp && this.running) {
+      this.scheduleQuoteClaim(mintUrl, method, quoteId);
+    }
+  }
+
+  private logClaimFailure(quote: MintQuoteRef, error: unknown): void {
+    this.logger?.warn('Failed to check or claim mint quote', {
+      ...quote,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  private trackClaimTask(run: () => Promise<void>): void {
+    const task = run();
     this.claimTasks.add(task);
     task.finally(() => {
       this.claimTasks.delete(task);
@@ -332,19 +464,46 @@ export class MintOperationProcessor {
   }
 
   private schedulePendingQuoteClaims(): void {
-    const task = (async () => {
+    this.trackClaimTask(async () => {
       try {
-        await this.mintOperations.claimPendingMintQuotes({ autoClaimRemaining: true });
+        // Completed quotes are absent from the quote backlog but can still have pending
+        // operations (for example after issuance in another session).
+        const [quotes, operations] = await Promise.all([
+          this.quoteLifecycle.getPendingMintQuotes(),
+          this.mintOperations.getPendingOperations(),
+        ]);
+        const interests = new Map<
+          string,
+          { mintUrl: string; method: MintMethod; quoteId: string }
+        >();
+        for (const interest of [...quotes, ...operations]) {
+          interests.set(`${interest.mintUrl}::${interest.method}::${interest.quoteId}`, interest);
+        }
+        // Startup discovery claims only for trusted mints; claiming would contact the mint.
+        const trustedByMint = new Map<string, boolean>();
+        for (const interest of interests.values()) {
+          if (!this.running) return;
+          let trusted = trustedByMint.get(interest.mintUrl);
+          if (trusted === undefined) {
+            trusted = await this.mintService.isTrustedMint(interest.mintUrl);
+            trustedByMint.set(interest.mintUrl, trusted);
+            if (!this.running) return;
+          }
+          if (!trusted) {
+            this.logger?.debug('Skipping pending mint quote claim for untrusted mint', {
+              mintUrl: interest.mintUrl,
+              method: interest.method,
+              quoteId: interest.quoteId,
+            });
+            continue;
+          }
+          this.scheduleQuoteClaim(interest.mintUrl, interest.method, interest.quoteId);
+        }
       } catch (error) {
         this.logger?.warn('Failed to claim pending mint quotes on startup', {
           error: error instanceof Error ? error.message : String(error),
         });
       }
-    })();
-
-    this.claimTasks.add(task);
-    task.finally(() => {
-      this.claimTasks.delete(task);
     });
   }
 
@@ -394,6 +553,7 @@ export class MintOperationProcessor {
   private async processItem(item: QueueItem): Promise<void> {
     const { mintUrl, operationId, method } = item;
 
+    if (!(await this.mintOperations.canResolve(operationId))) return;
     const handler = this.handlers.get(method);
     if (!handler) {
       this.logger?.warn('No handler registered for mint method', {

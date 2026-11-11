@@ -10,7 +10,7 @@ import type {
   MintSwapFailure,
   MintSwapRetryError,
 } from './MintSwapOperation.ts';
-import { isMintSwapTerminalState } from './MintSwapOperation.ts';
+import { allowsOrdinaryWork, isMintSwapQuiescentState } from './MintSwapOperation.ts';
 import {
   prepareMelt,
   beginMeltExecution,
@@ -35,17 +35,21 @@ import type {
   BeginMintSwapSourceResult,
   ApplyMintSwapSourceInput,
   BeginMintSwapDestinationResult,
+  AssertOrdinaryChildWorkInput,
 } from './MintSwapTransitionTypes.ts';
 import {
   advanceMintSwap,
   assertMintSwapIntent,
   invoiceHash,
   meltPlanAmounts,
-  MintSwapInvariantError,
   scheduleMintSwapRetry,
   stopMintSwap,
 } from './MintSwapValidation.ts';
-import { MintSwapDebitCapError } from './MintSwapDebitCapError.ts';
+import {
+  MintSwapChildOperationError,
+  MintSwapDebitCapError,
+  MintSwapInvariantError,
+} from './MintSwapErrors.ts';
 
 async function requireParent(tx: CoreTransaction, id: string): Promise<MintSwapOperation> {
   const operation = await tx.mintSwapOperations.getById(id);
@@ -68,10 +72,6 @@ async function save(
   )
     throw new RepositoryTransactionConflictError('Mint Swap changed during local composition');
   return { ...next, revision: current.revision + 1 };
-}
-
-function quiescent(operation: MintSwapOperation) {
-  return isMintSwapTerminalState(operation.state) || operation.state === 'needs_attention';
 }
 
 async function quotes(tx: CoreTransaction, parent: MintSwapOperation) {
@@ -203,6 +203,36 @@ export const createMintSwap = defineTransition<PreparingMintSwapOperation, MintS
       return current;
     }
     await quotes(tx, input);
+    // A parent cannot claim a quote after an ordinary coordinator has allocated a plan or
+    // authorized effects. The inverse race is rejected by its scoped parent check.
+    if (
+      (await tx.meltOperations.getByQuoteId(input.sourceQuote.mintUrl, input.sourceQuote.quoteId))
+        .length
+    ) {
+      throw new MintSwapInvariantError('child_identity', 'child_conflict', 'source');
+    }
+    if (
+      (
+        await tx.mintOperations.getByQuoteId(
+          input.destinationQuote.mintUrl,
+          input.destinationQuote.method,
+          input.destinationQuote.quoteId,
+        )
+      ).length
+    ) {
+      throw new MintSwapInvariantError('child_identity', 'child_conflict', 'destination');
+    }
+    // An executing Batch Mint Operation holds the quote's reservation; failed batches released it.
+    if (
+      (
+        await tx.batchMintOperations.listByQuote({
+          mintUrl: input.destinationQuote.mintUrl,
+          quoteId: input.destinationQuote.quoteId,
+        })
+      ).some((operation) => operation.state === 'executing')
+    ) {
+      throw new MintSwapInvariantError('child_identity', 'child_conflict', 'destination');
+    }
     await tx.mintSwapOperations.create(input);
     return input;
   },
@@ -447,7 +477,7 @@ export const cancelMintSwap = defineTransition<
 >(async (tx, input) => {
   let parent = await requireParent(tx, input.id);
   if (
-    quiescent(parent) ||
+    isMintSwapQuiescentState(parent.state) ||
     parent.state === 'destination_funded' ||
     parent.state === 'destination_pending'
   )
@@ -482,7 +512,7 @@ async function reconcile(
   now: number,
 ): Promise<MintSwapOperation> {
   let parent = current;
-  if (quiescent(parent)) return parent;
+  if (isMintSwapQuiescentState(parent.state)) return parent;
   try {
     if (parent.state === 'preparing') {
       const source = await tx.meltOperations.getById(parent.sourceOperationId);
@@ -752,5 +782,22 @@ export const flagMintSwapAttention = defineTransition<
   MintSwapOperation
 >(async (tx, input) => {
   const parent = await requireParent(tx, input.id);
-  return quiescent(parent) ? parent : markAttention(tx, parent, input.error, input.now);
+  return isMintSwapQuiescentState(parent.state)
+    ? parent
+    : markAttention(tx, parent, input.error, input.now);
 });
+
+/**
+ * Ordinary Mint and Melt coordinators perform this in the same scope as authorization or mutation.
+ * Lookups include terminal and needs_attention parents.
+ */
+export const assertOrdinaryChildWork = defineTransition<AssertOrdinaryChildWorkInput, void>(
+  async (tx, { kind, target, authority }) => {
+    const parent =
+      typeof target === 'string'
+        ? await tx.mintSwapOperations.getByChild(kind, target)
+        : await tx.mintSwapOperations.getByQuote(kind, target);
+    if (parent && !allowsOrdinaryWork(parent, authority))
+      throw new MintSwapChildOperationError(parent.id, isMintSwapQuiescentState(parent.state));
+  },
+);

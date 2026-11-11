@@ -60,10 +60,21 @@ A durable, individually observable intent to claim value from one Mint Quote. It
 as one mint history entry.
 _Avoid_: Mint request, quote state
 
+**Batch Mint Operation**:
+A durable, individually observable intent to atomically claim value from an exact ordered group of
+two or more compatible Mint Quotes through one issuance outcome. Each member appears as one mint
+history entry sharing that outcome.
+_Avoid_: Mint Operation parent, Mint Batch Attempt, transparent batch
+
+**Batch Mint Member**:
+An ordered allocation of an amount from one Mint Quote within a Batch Mint Operation. It is not a
+child operation and has no independent outcome.
+_Avoid_: Child Mint Operation, batch item, quote owner
+
 **Mint Swap Operation**:
 A durable parent Saga that moves value between two mints by referencing one exact source Melt
-Operation and one exact destination Mint Operation. It owns cross-child progress and recovery
-evidence, but never owns or duplicates either child's state.
+Operation and one exact destination Mint Operation. It exclusively coordinates their progress and
+recovery until it stops, but never owns or duplicates either child's state.
 _Avoid_: Child operation owner, transfer operation, generic Saga
 
 **Quote Observation**:
@@ -127,10 +138,14 @@ Observation.
 _Avoid_: Claim deadline, quote invalidity
 
 **Background Watcher**:
-A session-scoped automatic observer that keeps wallet state progressing without a direct caller
-waiting on a specific result. Disabling a Background Watcher does not disable explicit caller
-operations for the same domain work.
+A session-scoped automatic observer that reconciles local quote or proof state with evidence from
+a mint. Explicit caller operations remain available independently of automatic observation.
 _Avoid_: Subscriptions, processors
+
+**Background Processor**:
+A session-scoped automatic coordinator that advances wallet operations from local state and events.
+Advancement may require further mint interactions through the operation's own rules.
+_Avoid_: Background Watcher, subscriptions
 
 **Restore**:
 The act of reconstructing a wallet's proofs for a mint from the wallet's deterministic secrets and the mint's state. Restore is distinct from operation recovery and does not create a persistent restored state.
@@ -140,6 +155,17 @@ _Avoid_: Recovery, Wallet Import, restored mint, restored wallet
 The act of reconciling persisted in-flight wallet operations after interruption so local operation state, proof state, and mint state agree again.
 _Avoid_: Restore, restart, resume
 
+**Sweep**:
+The act of discovering proofs from a source Wallet Seed and exchanging their available value for newly issued proofs belonging to the destination Wallet. Unlike Restore, Sweep transfers value through a mint exchange.
+_Avoid_: Restore, Wallet Import
+
+**Owning Operation**:
+The operation that holds a proof, as an input it reserved or an output it created, until the
+operation releases it or finishes. The operation that reserved it takes precedence over the one that
+created it. Only the Owning Operation decides that proof's state, so evidence about the proof goes
+to it.
+_Avoid_: Proof owner, reserving operation
+
 **Pending Proof**:
 A proof retained by the Wallet as unavailable while a mint-reported transaction remains unresolved.
 Its return to spendable funds depends on resolving that transaction and respecting any local
@@ -148,7 +174,7 @@ _Avoid_: Unclaimed Send token, pending quote
 
 **Exact Operation Request**:
 Immutable mint request material owned by a durable operation and reused for both initial submission
-and Operation Recovery.
+and Operation Recovery. Quote signatures are not part of it; they are created at each submission.
 _Avoid_: Retry request, regenerated request, execution attempt
 
 **Ambiguous Operation Outcome**:

@@ -26,10 +26,6 @@ declare module 'bun:sqlite' {
   }
 }
 
-declare const process: {
-  env: Record<string, string | undefined>;
-};
-
 declare function setTimeout(
   handler: (...args: any[]) => void,
   timeout?: number,

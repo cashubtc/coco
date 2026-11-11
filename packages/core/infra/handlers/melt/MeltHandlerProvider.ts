@@ -4,30 +4,12 @@ import type {
   MeltMethodHandlerRegistry,
 } from '../../../operations/melt/MeltMethodHandler';
 
-/**
- * Runtime registry for melt method handlers.
- * Keeps wiring concerns out of the core melt domain.
- */
+/** Lookup for melt method handlers fixed at construction. */
 export class MeltHandlerProvider {
-  private registry: Partial<MeltMethodHandlerRegistry> = {};
+  private readonly registry: Readonly<Partial<MeltMethodHandlerRegistry>>;
 
-  constructor(initialHandlers?: Partial<MeltMethodHandlerRegistry>) {
-    if (initialHandlers) {
-      this.registerMany(initialHandlers);
-    }
-  }
-
-  register<M extends MeltMethod>(method: M, handler: MeltMethodHandler<M>): void {
-    this.set(method, handler);
-  }
-
-  registerMany(handlers: Partial<MeltMethodHandlerRegistry>): void {
-    for (const method of Object.keys(handlers) as MeltMethod[]) {
-      const handler = handlers[method];
-      if (handler) {
-        this.set(method, handler as MeltMethodHandler<typeof method>);
-      }
-    }
+  constructor(initialHandlers: Partial<MeltMethodHandlerRegistry> = {}) {
+    this.registry = Object.freeze({ ...initialHandlers });
   }
 
   get<M extends MeltMethod>(method: M): MeltMethodHandler<M> {
@@ -36,13 +18,5 @@ export class MeltHandlerProvider {
       throw new Error(`No melt handler registered for method ${method}`);
     }
     return handler as MeltMethodHandler<M>;
-  }
-
-  getAll(): MeltMethodHandlerRegistry {
-    return this.registry as MeltMethodHandlerRegistry;
-  }
-
-  private set<M extends MeltMethod>(method: M, handler: MeltMethodHandler<M>): void {
-    (this.registry as Partial<Record<M, MeltMethodHandler<M>>>)[method] = handler;
   }
 }

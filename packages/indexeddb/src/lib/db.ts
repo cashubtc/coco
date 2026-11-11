@@ -229,6 +229,7 @@ export interface SendOperationRow {
 }
 
 export interface ReceiveOperationRow {
+  revision?: number;
   id: string;
   mintUrl: string;
   unit?: string | null;
@@ -341,6 +342,29 @@ export interface MintOperationRow {
   lastObservedRemoteStateAt?: number | null;
   terminalFailureJson?: string | null;
   outputDataJson?: string | null;
+}
+
+export interface BatchMintOperationRow {
+  id: string;
+  mintUrl: string;
+  method: string;
+  unit: string;
+  state: 'executing' | 'finalized' | 'failed';
+  createdAt: number;
+  updatedAt: number;
+  error: string | null;
+  terminalFailureJson: string | null;
+  outputDataJson: string;
+}
+
+export interface BatchMintMemberRow {
+  operationId: string;
+  ordinal: number;
+  mintUrl: string;
+  quoteId: string;
+  amount: string;
+  request: string;
+  pubkey: string | null;
 }
 
 export interface MintSwapOperationRow {

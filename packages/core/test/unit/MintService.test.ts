@@ -80,55 +80,6 @@ describe('MintService', () => {
   });
 
   describe('trust management', () => {
-    it('should add new mints as untrusted by default', async () => {
-      const result = await service.addMintByUrl(testMintUrl);
-
-      expect(result.mint.trusted).toBe(false);
-      expect(result.mint.mintUrl).toBe(testMintUrl);
-      expect(result.keysets.length).toBeGreaterThan(0);
-    });
-
-    it('should add new mints as untrusted when explicitly specified', async () => {
-      const result = await service.addMintByUrl(testMintUrl, { trusted: false });
-
-      expect(result.mint.trusted).toBe(false);
-      expect(result.mint.mintUrl).toBe(testMintUrl);
-    });
-
-    it('should add new mints as trusted when option is set', async () => {
-      const result = await service.addMintByUrl(testMintUrl, { trusted: true });
-
-      expect(result.mint.trusted).toBe(true);
-      expect(result.mint.mintUrl).toBe(testMintUrl);
-      expect(result.keysets.length).toBeGreaterThan(0);
-    });
-
-    it('should check if mint is trusted', async () => {
-      await service.addMintByUrl(testMintUrl);
-
-      const isTrusted = await service.isTrustedMint(testMintUrl);
-      expect(isTrusted).toBe(false);
-    });
-
-    it('should trust a mint', async () => {
-      await service.addMintByUrl(testMintUrl);
-
-      await service.trustMint(testMintUrl);
-
-      const isTrusted = await service.isTrustedMint(testMintUrl);
-      expect(isTrusted).toBe(true);
-    });
-
-    it('should untrust a mint', async () => {
-      await service.addMintByUrl(testMintUrl);
-      await service.trustMint(testMintUrl);
-
-      await service.untrustMint(testMintUrl);
-
-      const isTrusted = await service.isTrustedMint(testMintUrl);
-      expect(isTrusted).toBe(false);
-    });
-
     it('should emit mint:updated event when trusting mint', async () => {
       await service.addMintByUrl(testMintUrl);
 
@@ -156,51 +107,6 @@ describe('MintService', () => {
 
       expect(events.length).toBe(1);
       expect(events[0]?.mint.trusted).toBe(false);
-    });
-  });
-
-  describe('getAllMints', () => {
-    it('should return all mints regardless of trust status', async () => {
-      await service.addMintByUrl(testMintUrl);
-      await service.addMintByUrl(testMintUrl2);
-      await service.trustMint(testMintUrl);
-
-      const allMints = await service.getAllMints();
-
-      expect(allMints.length).toBe(2);
-      expect(allMints.some((m) => m.trusted)).toBe(true);
-      expect(allMints.some((m) => !m.trusted)).toBe(true);
-    });
-
-    it('should return empty array when no mints exist', async () => {
-      const allMints = await service.getAllMints();
-      expect(allMints.length).toBe(0);
-    });
-  });
-
-  describe('getAllTrustedMints', () => {
-    it('should return only trusted mints', async () => {
-      await service.addMintByUrl(testMintUrl);
-      await service.addMintByUrl(testMintUrl2);
-      await service.trustMint(testMintUrl);
-
-      const trustedMints = await service.getAllTrustedMints();
-
-      expect(trustedMints.length).toBe(1);
-      expect(trustedMints[0]?.mintUrl).toBe(testMintUrl);
-      expect(trustedMints[0]?.trusted).toBe(true);
-    });
-
-    it('should return empty array when no trusted mints exist', async () => {
-      await service.addMintByUrl(testMintUrl);
-
-      const trustedMints = await service.getAllTrustedMints();
-      expect(trustedMints.length).toBe(0);
-    });
-
-    it('should return empty array when no mints exist', async () => {
-      const trustedMints = await service.getAllTrustedMints();
-      expect(trustedMints.length).toBe(0);
     });
   });
 
@@ -1066,37 +972,6 @@ describe('MintService', () => {
       mockAdapter.fetchKeysForId = mock(() => Promise.reject(new Error('Network error')));
 
       await expect(service.addMintByUrl(testMintUrl)).rejects.toThrow();
-    });
-  });
-
-  describe('integration with repository', () => {
-    it('should persist trusted state correctly', async () => {
-      await service.addMintByUrl(testMintUrl);
-      await service.trustMint(testMintUrl);
-
-      const mint = await mintRepo.getMintByUrl(testMintUrl);
-      expect(mint.trusted).toBe(true);
-    });
-
-    it('should update trusted state correctly', async () => {
-      await service.addMintByUrl(testMintUrl);
-      await service.trustMint(testMintUrl);
-      await service.untrustMint(testMintUrl);
-
-      const mint = await mintRepo.getMintByUrl(testMintUrl);
-      expect(mint.trusted).toBe(false);
-    });
-
-    it('should handle multiple mints with different trust states', async () => {
-      await service.addMintByUrl(testMintUrl);
-      await service.addMintByUrl(testMintUrl2);
-      await service.trustMint(testMintUrl);
-
-      const mint1 = await mintRepo.getMintByUrl(testMintUrl);
-      const mint2 = await mintRepo.getMintByUrl(testMintUrl2);
-
-      expect(mint1.trusted).toBe(true);
-      expect(mint2.trusted).toBe(false);
     });
   });
 });

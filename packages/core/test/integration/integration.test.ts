@@ -1,3 +1,9 @@
+// The CI integration runner selects this entry file explicitly.
+import './RequestRateLimitIntegration.test.ts';
+import './SweepIntegration.test.ts';
+import './PaymentRequestPlanning.test.ts';
+import './SendProofObservations.test.ts';
+import './MintSwapIntegration.test.ts';
 import { describe, it, beforeEach, afterEach, expect } from 'bun:test';
 import { runIntegrationTests } from '@cashu/coco-adapter-tests';
 import { MemoryRepositories } from '../../repositories/memory';

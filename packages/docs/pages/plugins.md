@@ -72,11 +72,9 @@ implementation wiring and is not needed to author extensions.
 | ------------------------------ | ------------------------------------------- |
 | `mintService`                  | Manage mints (add, update, trust/untrust)   |
 | `walletService`                | Low-level wallet operations                 |
-| `proofService`                 | Manage proofs (save, delete, query)         |
 | `keyRingService`               | P2PK key management                         |
 | `seedService`                  | Access the wallet seed                      |
 | `walletRestoreService`         | Restore wallet from seed                    |
-| `counterService`               | Keyset counter management                   |
 | `tokenService`                 | Token decoding and encoding helpers         |
 | `historyService`               | Transaction history                         |
 | `sendOperationService`         | Send operation lifecycle                    |
@@ -84,6 +82,7 @@ implementation wiring and is not needed to author extensions.
 | `meltOperationService`         | Melt operation lifecycle                    |
 | `mintOperationService`         | Mint operation lifecycle                    |
 | `quotes`                       | Canonical quote create/import/lookup API    |
+| `balances`                     | Read-only wallet balances                   |
 | `paymentRequestService`        | Payment request helpers                     |
 | `paymentRequestReceiveService` | Payment request receive operation lifecycle |
 | `subscriptions`                | WebSocket subscription manager              |
@@ -109,6 +108,71 @@ const externalQuotePlugin: Plugin<['quotes']> = {
 };
 ```
 
+Plugins that need balances can request `balances`. It is the same read-only API as
+`manager.wallet.balances`:
+
+```ts
+import type { Plugin } from '@cashu/coco-core/plugin';
+
+const balancePlugin: Plugin<['balances']> = {
+  name: 'balance-plugin',
+  required: ['balances'],
+  onReady: async ({ services }) => {
+    const byMint = await services.balances.byMint();
+    const total = await services.balances.total({ units: ['sat'] });
+  },
+};
+```
+
+Plugins get no direct proof or counter authority. Plugins move value through operations, which
+own their proof changes and commit them transactionally.
+
+## Migrating from `proofService` and `counterService`
+
+The `proofService` and `counterService` plugin keys, and the `ProofService` and `CounterService`
+classes, have been removed. Migrate as follows:
+
+- **Moving value**: use the operation services instead of writing proofs. Send with
+  `sendOperationService`, receive with `receiveOperationService`, mint with
+  `mintOperationService`, and melt with `meltOperationService`. They select, reserve, create
+  outputs and save proofs for you.
+- **Balances**: request `balances` instead of `proofService.getBalances*()`. For example,
+  `getBalancesByMint()` becomes `balances.byMint()` and `getBalanceTotal()` becomes
+  `balances.total()`. For trusted mints only, pass `{ trustedOnly: true }` and read each
+  mint's `total` or `spendable` snapshot field.
+- **Counters**: there is no replacement. Output Counters advance only inside operations and
+  Restore, so plugins can't read, increment or overwrite them.
+
+Plugins can no longer list raw proofs. Open an issue if your plugin needs that.
+
+## Migrating history operation lookups
+
+`historyService.getOperationIdFromHistoryEntry()` has been removed. It was a send-only
+lookup that threw when an entry was missing, was another history type, or had no operation ID.
+Plugins already declaring `historyService` can read the entry directly:
+
+```ts
+const entry = await ctx.services.historyService.getHistoryEntryById(historyId);
+const operationId = entry?.operationId?.trim() || null;
+```
+
+This accepts every history type and returns `null` for missing entries or absent/blank
+operation IDs. If your plugin depends on the former send-only errors, retain those checks:
+
+```ts
+const entry = await ctx.services.historyService.getHistoryEntryById(historyId);
+if (!entry) throw new Error(`History entry ${historyId} not found`);
+if (entry.type !== 'send') throw new Error(`History entry ${historyId} is not a send entry`);
+if (!entry.operationId) {
+  throw new Error(`History entry ${historyId} is not backed by an operation`);
+}
+const operationId = entry.operationId;
+```
+
+Applications can continue to use `manager.history.getOperationIdForHistoryEntry(historyId)`.
+That lookup accepts every history type, trims operation IDs, and returns `null` for
+missing entries or absent/blank IDs.
+
 ## Plugin Extensions
 
 Plugins can register custom APIs that become accessible via `manager.ext`. This allows plugins to expose their own public interface to consumers.
@@ -123,8 +187,8 @@ import type { Plugin, PluginEventBus } from '@cashu/coco-core/plugin';
 class MyPluginApi {
   constructor(private eventBus: PluginEventBus) {}
 
-  onSubscriptionsResumed(handler: () => void): () => void {
-    return this.eventBus.on('subscriptions:resumed', handler);
+  onHistoryUpdated(handler: () => void): () => void {
+    return this.eventBus.on('history:updated', handler);
   }
 
   async fetchData() {
@@ -155,7 +219,7 @@ const manager = await initializeCoco({
 });
 
 // Access the plugin's API
-const unsubscribe = manager.ext.myPlugin.onSubscriptionsResumed(() => {});
+const unsubscribe = manager.ext.myPlugin.onHistoryUpdated(() => {});
 const result = await manager.ext.myPlugin.fetchData();
 ```
 
@@ -170,8 +234,8 @@ import type { Plugin, PluginEventBus, PluginExtensions } from '@cashu/coco-core/
 // Define your API class
 export class MyPluginApi {
   constructor(private eventBus: PluginEventBus) {}
-  onSubscriptionsResumed(handler: () => void): () => void {
-    return this.eventBus.on('subscriptions:resumed', handler);
+  onHistoryUpdated(handler: () => void): () => void {
+    return this.eventBus.on('history:updated', handler);
   }
   async fetchData(): Promise<{ data: string }> {
     /* ... */
@@ -268,30 +332,21 @@ Called when `manager.dispose()` is invoked. Use this for:
 
 ## Plugin Initialization Order
 
-When using `initializeCoco()`:
+`initializeCoco()` and `Manager.create()` start a Coco Session in this order:
 
 1. Manager is constructed with all services
-2. `manager.initPlugins()` is awaited:
+2. Plugins are initialized:
    - All plugins' `onInit` hooks run in registration order
    - All plugins' `onReady` hooks run in registration order
-3. Watchers and processors are enabled
+3. Selected watchers and processors start, and startup Operation Recovery runs
 4. Manager is returned, fully initialized
 
-This ensures that `manager.ext` contains all registered extensions before the manager is returned to the caller.
+This ensures that `manager.ext` contains all registered extensions before the manager is returned to
+the caller. Plugin hooks also run before any background work, so `onInit` can subscribe to events
+emitted during startup.
 
-## Direct Manager Instantiation
-
-If you instantiate `Manager` directly instead of using `initializeCoco()`, you must call `initPlugins()` manually:
-
-```ts
-const manager = new Manager(repositories, seedGetter, logger, webSocketFactory, [myPlugin]);
-
-// Required for plugins to initialize and extensions to be available
-await manager.initPlugins();
-
-// Now extensions are available
-manager.ext.myPlugin.doSomething();
-```
+`Manager` cannot be constructed directly. Pass plugins through `initializeCoco({ plugins })`, or
+register them later with `manager.use(plugin)`.
 
 ## Error Handling
 

@@ -14,6 +14,12 @@
  * - finalized: Sent proofs confirmed spent, operation finalized
  * - rolling_back: Rollback in progress (reclaim swap being executed)
  * - rolled_back: Operation cancelled, proofs reclaimed
+ *
+ * An interrupted reclaim stays rolling_back until it is settled from mint evidence. Besides
+ * rolled_back, settlement has one more edge, rolling_back ──► pending, which is never committed
+ * on its own: the same transaction either finalizes the Send because the recipient claimed the
+ * token (rolling_back ──► pending ──► finalized) or begins a new reclaim for a Send that had
+ * no stored request (rolling_back ──► pending ──► rolling_back).
  */
 export type SendOperationState =
   | 'init'
@@ -43,7 +49,7 @@ interface SendOperationBase<M extends SendMethod = SendMethod> {
   /** The mint URL for this operation */
   mintUrl: string;
 
-  /** The amount requested to send (before fees) */
+  /** Gross outgoing proof value, including receiver input fees when preparation opts in. */
   amount: Amount;
 
   /** Unit for all amounts, proofs, outputs, and token data in this operation. */
@@ -166,6 +172,8 @@ export interface FinalizedSendOperation extends SendOperationBase, PreparedData,
  * Rolling back state - rollback in progress, reclaim swap being executed.
  * This is a transient state used to prevent race conditions with ProofStateWatcher.
  * Only used when rolling back from 'pending' state (which requires a reclaim swap).
+ * A reclaim interrupted here ends in 'rolled_back', or in 'finalized' when the recipient claimed
+ * the token.
  */
 export interface RollingBackSendOperation extends SendOperationBase, PreparedData, SendTokenData {
   state: 'rolling_back';

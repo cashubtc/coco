@@ -129,10 +129,6 @@ export abstract class BaseQuoteMeltHandler<M extends MeltMethod> implements Melt
         throw new Error(`Unsupported melt method ${String(this.method)}`);
     }
 
-    // create/fetch return complete remote quote snapshots. State-only observations bypass handlers
-    // and may keep `change` undefined until QuoteLifecycle performs this full refresh.
-    return canonical.state === 'PAID' && !Array.isArray(canonical.change)
-      ? ({ ...canonical, change: [] } as MeltQuote<M>)
-      : canonical;
+    return canonical;
   }
 }

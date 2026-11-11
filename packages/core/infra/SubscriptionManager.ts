@@ -43,12 +43,12 @@ export class SubscriptionManager {
   private readonly logger?: Logger;
   private readonly messageHandlerByMint = new Map<string, (evt: any) => void>();
   private readonly openHandlerByMint = new Map<string, (evt: any) => void>();
-  private readonly hasOpenedByMint = new Map<string, boolean>();
   private readonly wsFactory?: WebSocketFactory;
   private readonly mintAdapter: MintAdapter;
   private readonly mintQuotePolling?: MintQuotePollingOperation;
   private readonly options: Required<SubscriptionManagerOptions>;
-  private paused = false;
+  private repair?: Promise<void>;
+  private closeGeneration = 0;
 
   constructor(
     wsFactoryOrManager: WebSocketFactory | RealTimeTransport,
@@ -208,14 +208,7 @@ export class SubscriptionManager {
     // Also ensure an 'open' listener that re-subscribes active subs on reconnect
     const onOpen = (_evt: any) => {
       try {
-        const hasOpened = this.hasOpenedByMint.get(mintUrl) === true;
-        if (hasOpened) {
-          this.logger?.info('WS open detected, re-subscribing active subscriptions', { mintUrl });
-          this.reSubscribeMint(mintUrl);
-        } else {
-          this.hasOpenedByMint.set(mintUrl, true);
-          this.logger?.info('WS open detected, initial open - skipping re-subscribe', { mintUrl });
-        }
+        this.reSubscribeMint(mintUrl);
       } catch (err) {
         this.logger?.error('Failed to handle open event', { mintUrl, err });
       }
@@ -232,10 +225,13 @@ export class SubscriptionManager {
     payload: unknown,
     normalizedPayload?: unknown,
   ): Promise<void> {
-    let deliveredPayload = payload;
-    if (active.kind === 'bolt11_mint_quote' && normalizedPayload !== undefined) {
-      deliveredPayload = normalizedPayload;
-    } else if (active.kind === 'bolt11_mint_quote') {
+    // Melt polling already crossed the adapter boundary. Preserve Amount values in its change
+    // signatures, just as BOLT11 mint polling preserves its normalized accounting fields.
+    const useNormalizedPayload =
+      normalizedPayload !== undefined &&
+      (active.kind === 'bolt11_mint_quote' || active.kind.endsWith('_melt_quote'));
+    let deliveredPayload = useNormalizedPayload ? normalizedPayload : payload;
+    if (active.kind === 'bolt11_mint_quote' && normalizedPayload === undefined) {
       const quoteId =
         payload &&
         typeof payload === 'object' &&
@@ -353,21 +349,6 @@ export class SubscriptionManager {
     }
     pendingById.set(id, subId);
 
-    // If paused, subscription is registered but won't be sent until resume
-    if (this.paused) {
-      this.logger?.info('Subscription created while paused, will activate on resume', {
-        mintUrl,
-        kind,
-        subId,
-      });
-      return {
-        subId,
-        unsubscribe: async () => {
-          await this.unsubscribe(mintUrl, subId);
-        },
-      };
-    }
-
     const t = this.getTransport(mintUrl);
     this.logger?.debug('Sending subscribe request', {
       mintUrl,
@@ -387,7 +368,8 @@ export class SubscriptionManager {
     return {
       subId,
       unsubscribe: async () => {
-        await this.unsubscribe(mintUrl, subId);
+        if (onNotification) this.removeCallback(subId, onNotification);
+        if (active.callbacks.size === 0) await this.unsubscribe(mintUrl, subId);
       },
     };
   }
@@ -405,6 +387,8 @@ export class SubscriptionManager {
   }
 
   async unsubscribe(mintUrl: string, subId: string): Promise<void> {
+    const active = this.subscriptions.get(subId);
+    if (!active || active.mintUrl !== mintUrl) return;
     this.logger?.debug('SubscriptionManager: unsubscribe called', {
       mintUrl,
       subId,
@@ -438,6 +422,7 @@ export class SubscriptionManager {
   }
 
   closeAll(): void {
+    this.closeGeneration++;
     // Close all transports
     const seen = new Set<RealTimeTransport>();
     for (const t of this.transportByMint.values()) {
@@ -456,7 +441,6 @@ export class SubscriptionManager {
     this.nextIdByMint.clear();
     this.messageHandlerByMint.clear();
     this.openHandlerByMint.clear();
-    this.hasOpenedByMint.clear();
   }
 
   closeMint(mintUrl: string): void {
@@ -476,10 +460,9 @@ export class SubscriptionManager {
     this.nextIdByMint.delete(mintUrl);
     this.messageHandlerByMint.delete(mintUrl);
     this.openHandlerByMint.delete(mintUrl);
-    this.hasOpenedByMint.delete(mintUrl);
 
     // Close transport for this mint
-    const transport = this.transportByMint.get(mintUrl);
+    const transport = this.transportByMint.get('*') ?? this.transportByMint.get(mintUrl);
     if (transport) {
       transport.closeMint(mintUrl);
       this.transportByMint.delete(mintUrl);
@@ -520,28 +503,27 @@ export class SubscriptionManager {
     }
   }
 
-  pause(): void {
-    this.paused = true;
-    // Pause all transports
-    const seen = new Set<RealTimeTransport>();
-    for (const t of this.transportByMint.values()) {
-      if (seen.has(t)) continue;
-      seen.add(t);
-      t.pause();
-    }
-    this.logger?.info('SubscriptionManager paused');
-  }
-
-  resume(): void {
-    this.paused = false;
-    // Resume all transports - they will trigger 'open' events which handle re-subscription
-    const seen = new Set<RealTimeTransport>();
-    for (const t of this.transportByMint.values()) {
-      if (seen.has(t)) continue;
-      seen.add(t);
-      t.resume();
-    }
-    // Don't re-subscribe here - the 'open' handler will do it after hasOpened state is set
-    this.logger?.info('SubscriptionManager resumed');
+  /**
+   * Initiate transport repair for current interests, coalescing overlapping calls.
+   * Completion is local only: connectivity, catch-up and callback completion are not awaited.
+   * Owners and registrations are retained; no discovery or operation recovery is performed.
+   */
+  ensureSubscriptions(): Promise<void> {
+    if (this.repair) return this.repair;
+    const generation = this.closeGeneration;
+    this.repair = Promise.resolve()
+      .then(() => {
+        if (generation !== this.closeGeneration) return;
+        this.pendingSubscribeByMint.clear();
+        const transports = new Set<RealTimeTransport>();
+        for (const [mintUrl, interests] of this.activeByMint) {
+          if (interests.size > 0) transports.add(this.getTransport(mintUrl));
+        }
+        for (const transport of transports) transport.ensure();
+      })
+      .finally(() => {
+        this.repair = undefined;
+      });
+    return this.repair;
   }
 }

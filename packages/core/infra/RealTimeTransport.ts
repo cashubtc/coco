@@ -11,9 +11,15 @@ export interface TransportMessageEvent {
 
 export interface RealTimeTransport {
   on(mintUrl: string, event: TransportEvent, handler: (evt: any) => void): void;
+  /** Register polling work or send on a live socket; open replay supplies disconnected interests. */
   send(mintUrl: string, req: WsRequest): void;
   closeAll(): void;
   closeMint(mintUrl: string): void;
-  pause(): void;
-  resume(): void;
+  /**
+   * Initiate local networking repair without waiting for remote readiness.
+   * Preserve polling interests; replace sockets and emit open when each replacement connects.
+   * The open listener replays current logical subscriptions. Replayed subscribe requests
+   * must be idempotent for polling. Retired connections must not emit events.
+   */
+  ensure(): void;
 }

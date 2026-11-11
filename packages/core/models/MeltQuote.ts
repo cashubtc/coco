@@ -9,6 +9,7 @@ import type {
   MeltMethodQuoteSnapshot,
   MeltMethodRemoteState,
 } from '../operations/melt/MeltMethodHandler';
+import { deserializeBlindedSignatures } from '../utils.ts';
 
 type BoltMeltMethod = Extract<MeltMethod, 'bolt11' | 'bolt12'>;
 
@@ -70,7 +71,7 @@ function meltQuoteFromBoltResponse<M extends BoltMeltMethod>(
     expiry: quote.expiry,
     state: quote.state,
     payment_preimage: quote.payment_preimage,
-    change: quote.change,
+    change: normalizeChange(quote.state, quote.change),
     lastObservedRemoteState: quote.state,
     lastObservedRemoteStateAt: now,
     createdAt: now,
@@ -78,6 +79,7 @@ function meltQuoteFromBoltResponse<M extends BoltMeltMethod>(
   } as MeltQuote<M>;
 }
 
+/** Convert a complete remote response; omitted PAID change means no change to return. */
 export function meltQuoteFromBolt11Response(
   mintUrl: string,
   quote: MeltMethodQuoteSnapshot<'bolt11'>,
@@ -86,6 +88,7 @@ export function meltQuoteFromBolt11Response(
   return meltQuoteFromBoltResponse(mintUrl, 'bolt11', quote, options);
 }
 
+/** Convert a complete remote response; omitted PAID change means no change to return. */
 export function meltQuoteFromBolt12Response(
   mintUrl: string,
   quote: MeltMethodQuoteSnapshot<'bolt12'>,
@@ -94,6 +97,7 @@ export function meltQuoteFromBolt12Response(
   return meltQuoteFromBoltResponse(mintUrl, 'bolt12', quote, options);
 }
 
+/** Convert a complete remote response; omitted PAID change means no change to return. */
 export function meltQuoteFromOnchainResponse(
   mintUrl: string,
   quote: MeltMethodQuoteSnapshot<'onchain'>,
@@ -113,7 +117,7 @@ export function meltQuoteFromOnchainResponse(
     expiry: quote.expiry,
     state: quote.state,
     outpoint: quote.outpoint ?? undefined,
-    change: quote.change,
+    change: normalizeChange(quote.state, quote.change),
     lastObservedRemoteState: quote.state,
     lastObservedRemoteStateAt: now,
     createdAt: now,
@@ -173,6 +177,14 @@ export function resolveOnchainMeltFeeOption(
   }
 
   return { feeIndex, feeOption };
+}
+
+// Watcher payloads are raw NUT-17 JSON, so change amounts may still be numbers.
+function normalizeChange(
+  state: MeltMethodRemoteState,
+  change: SerializedBlindedSignature[] | undefined,
+): SerializedBlindedSignature[] | undefined {
+  return deserializeBlindedSignatures(state === 'PAID' ? (change ?? []) : change);
 }
 
 function normalizeOnchainFeeOptions(

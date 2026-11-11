@@ -18,6 +18,8 @@ import {
   runMeltQuoteRepositoryContract,
   createMintSwapFixtures,
   runMintSwapPersistenceContract,
+  runBatchMintPersistenceContract,
+  runBatchMintHistoryContract,
 } from '@cashu/coco-adapter-tests';
 import { MintSwapIdentityConflictError } from '@cashu/coco-core/adapter';
 import { IndexedDbRepositories } from '../index.ts';
@@ -78,6 +80,9 @@ runKeypairAllocationContract(
   { createRepositories, createSharedRepositories },
   { describe, it, expect },
 );
+
+runBatchMintPersistenceContract({ createRepositories }, { describe, it, expect });
+runBatchMintHistoryContract({ createRepositories }, { describe, it, expect });
 
 runMintSwapPersistenceContract(
   {
@@ -381,6 +386,56 @@ describe('indexeddb quote storage constraints', () => {
       });
     } finally {
       reopened.db.close();
+      await Dexie.delete(dbName);
+    }
+  });
+
+  it('adds indexed Batch Mint stores to a version-35 Wallet and keeps Mint Operations', async () => {
+    const dbName = `coco_cashu_batch_mint_migration_${Date.now()}_${dbCounter++}`;
+    const legacy = new Dexie(dbName);
+    legacy.version(35).stores({
+      coco_cashu_mint_operations:
+        '&id, state, mintUrl, createdAt, [mintUrl+quoteId], [mintUrl+method+quoteId]',
+    });
+    await legacy.open();
+    await legacy.table('coco_cashu_mint_operations').add({
+      id: 'existing-mint-op',
+      mintUrl: 'https://mint.test',
+      quoteId: 'existing-quote',
+      state: 'finalized',
+      createdAt: 1,
+      updatedAt: 1,
+      method: 'bolt11',
+      methodDataJson: '{}',
+      amount: '10',
+      unit: 'sat',
+      request: 'lnbc-existing',
+      outputDataJson: JSON.stringify({ keep: [], send: [] }),
+    });
+    legacy.close();
+
+    const repositories = new IndexedDbRepositories({ name: dbName });
+    await repositories.init();
+    try {
+      expect((await repositories.mintOperationRepository.getById('existing-mint-op'))?.state).toBe(
+        'finalized',
+      );
+      const memberIndexes = repositories.db.table('coco_cashu_batch_mint_members').schema.indexes;
+      expect(memberIndexes.some((index) => index.name === '[mintUrl+quoteId]')).toBe(true);
+      expect(
+        memberIndexes.some(
+          (index) => index.name === '[operationId+mintUrl+quoteId]' && index.unique,
+        ),
+      ).toBe(true);
+      expect(await repositories.batchMint.operationRepository.listInFlight()).toEqual([]);
+      expect(
+        await repositories.batchMint.operationRepository.listByQuote({
+          mintUrl: 'https://mint.test',
+          quoteId: 'existing-quote',
+        }),
+      ).toEqual([]);
+    } finally {
+      repositories.db.close();
       await Dexie.delete(dbName);
     }
   });

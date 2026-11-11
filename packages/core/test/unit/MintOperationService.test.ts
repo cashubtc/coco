@@ -17,6 +17,7 @@ import {
   type Wallet,
 } from '@cashu/cashu-ts';
 import { MintOpsApi } from '../../api/MintOpsApi';
+import type { BatchMintOpsApi } from '../../api/BatchMintOpsApi.ts';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import { MintOperationService } from '../../operations/mint/MintOperationService';
@@ -50,7 +51,6 @@ import {
 import { QuoteLifecycle } from '../../quotes/QuoteLifecycle';
 import type { MintService } from '../../services/MintService';
 import type { WalletService } from '../../services/WalletService';
-import type { ProofService } from '../../services/ProofService';
 import type { MintAdapter } from '../../infra/MintAdapter';
 import type { Logger } from '../../logging/Logger';
 import { serializeOutputData, deserializeOutputData } from '../../utils';
@@ -66,7 +66,6 @@ describe('MintOperationService', () => {
   let operationRepo: MintOperationRepository;
   let quoteRepo: MintQuoteRepository;
   let proofRepo: ProofRepository;
-  let proofService: ProofService;
   let mintService: MintService;
   let walletService: WalletService;
   let mintAdapter: MintAdapter;
@@ -377,19 +376,6 @@ describe('MintOperationService', () => {
       get: mock(() => handler),
     } as unknown as MintHandlerProvider;
 
-    proofService = {
-      saveProofs: mock(async (_mintUrl: string, proofs: CoreProof[]) => {
-        await proofRepo.saveProofs(mintUrl, proofs);
-      }),
-      recoverProofsFromOutputData: mock(async (_mintUrl: string, _outputData, options) => {
-        if (!options?.createdByOperationId) {
-          return [];
-        }
-        await proofRepo.saveProofs(mintUrl, [toCoreProof('out-1', options.createdByOperationId)]);
-        return [makeProof('out-1')];
-      }),
-    } as unknown as ProofService;
-
     mintService = {
       isTrustedMint: mock(async () => true),
       refreshAndCommitIfStale: mock(async () => ({
@@ -431,7 +417,6 @@ describe('MintOperationService', () => {
       mintQuoteRepository: quoteRepo,
       meltQuoteRepository: {} as any,
       proofRepository: proofRepo,
-      proofService,
       mintService,
       walletService,
       mintAdapter,
@@ -1858,7 +1843,7 @@ describe('MintOperationService', () => {
   it('public execute joins a background claim that already moved the operation to executing', async () => {
     await persistQuote();
     const pending = await service.prepare({ mintUrl, method: 'bolt11', quoteId }, Amount.from(10));
-    const api = new MintOpsApi(service);
+    const api = new MintOpsApi(service, {} as BatchMintOpsApi);
     const executionStarted = createDeferred();
     const releaseExecution = createDeferred();
     (handler.execute as Mock<any>).mockImplementationOnce(async () => {
@@ -2699,7 +2684,7 @@ describe('MintOperationService', () => {
     const failed = mock(() => {});
     eventBus.on('mint-op:failed', failed);
 
-    const result = await new MintOpsApi(service).checkPayment(pendingOp.id);
+    const result = await new MintOpsApi(service, {} as BatchMintOpsApi).checkPayment(pendingOp.id);
 
     expect(result.category).toBe('ready');
     expect((await operationRepo.getById(pendingOp.id))?.state).toBe('finalized');

@@ -244,6 +244,15 @@ if (operation.state === 'failed') {
 
 ## Events
 
+::: warning Automatic claiming changes the completion event
+Automatic claiming batches compatible quotes by default. A payment can be claimed successfully
+without emitting `mint-op:finalized`, so a quote waiter listening only for that event can hang.
+Follow [Awaiting automatically claimed payments](#awaiting-automatically-claimed-payments) below.
+:::
+
+The following events and operation-ID waiter apply to a standalone Mint Operation, such as one
+returned by `coco.ops.mint.prepare()`. Prepared standalone operations are not converted into batches.
+
 ```ts
 coco.on('mint-op:pending', ({ operationId, operation }) => {
   console.log('Mint pending', operationId, operation.request);
@@ -285,4 +294,161 @@ const waitForMintCompletion = (operationId: string) =>
       reject(new Error(operation.terminalFailure?.reason ?? operation.error ?? 'Mint failed'));
     });
   });
+```
+
+### Awaiting automatically claimed payments
+
+When the startup sweep or Mint Operation Processor claims a quote, it may use either a standalone
+Mint Operation or a Batch Mint Operation. Listen to both `mint-op:finalized` and
+`batch-mint-op:finalized`, matching the mint URL and quote ID. Batch events contain `operation.members`;
+they do not contain a standalone operation for each quote, and their operation ID belongs to
+`coco.ops.mint.batch`.
+
+For a one-time BOLT11 payment, subscribe before exposing the payment request, then check persisted
+state to cover completion before subscription (including during startup):
+
+```ts
+const quote = await coco.quotes.mint.get({ mintUrl, quoteId });
+if (!quote || quote.method !== 'bolt11') throw new Error('Expected a BOLT11 quote');
+const identity = { mintUrl: quote.mintUrl, quoteId: quote.quoteId };
+let notified = false;
+const reportClaimed = () => {
+  if (notified) return;
+  notified = true;
+  cleanup();
+  console.log('Payment claimed; proofs saved', identity);
+};
+
+const offMint = coco.on('mint-op:finalized', ({ mintUrl, operation }) => {
+  if (mintUrl === identity.mintUrl && operation.quoteId === identity.quoteId) reportClaimed();
+});
+const offBatch = coco.on('batch-mint-op:finalized', ({ mintUrl, operation }) => {
+  if (
+    mintUrl === identity.mintUrl &&
+    operation.members.some((member) => member.quoteId === identity.quoteId)
+  )
+    reportClaimed();
+});
+const cleanup = () => {
+  offMint();
+  offBatch();
+};
+
+try {
+  const [standalone, batches] = await Promise.all([
+    coco.ops.mint.listByQuote(identity),
+    coco.ops.mint.batch.listByQuote(identity),
+  ]);
+  if ([...standalone, ...batches].some((operation) => operation.state === 'finalized')) {
+    reportClaimed();
+  }
+} catch (error) {
+  cleanup();
+  throw error;
+}
+// Keep the listeners while waiting; also call cleanup() on cancellation or screen teardown.
+```
+
+Events are live notifications, not a replayable log. Reconcile persisted state after reconnecting
+and give application-level waits a timeout or cancellation path. A `batch-mint-op:failed` event
+does not necessarily end an automatic quote claim: the processor may subsequently claim that quote
+through a standalone operation. A `mint-quote:updated` observation of payment is also not proof that
+the claim has finalized. For reusable BOLT12/onchain quotes, track each finalized claim's operation
+ID and amount rather than treating the first finalization as completion of the quote's lifetime.
+
+For per-quote UI updates, `history:updated` covers both claim types with one entry per quote.
+To preserve standalone automatic claims and their `mint-op:*` events during migration, set
+`processors.mintOperationProcessor.batchMintQuotes: false` when initializing Coco (or pass
+`batchMintQuotes: false` in `processors.mintOperationProcessor` at initialization). Explicit `coco.ops.mint.batch` calls
+still emit batch events, and existing in-flight batches still recover as batches.
+
+## Batch Mint Operations (`coco.ops.mint.batch`)
+
+A Batch Mint Operation claims two or more Mint Quotes from one trusted mint in
+one atomic NUT-29 request with one aggregate output set. It is a standalone
+operation: it never creates, adopts or falls back to standalone mint
+operations.
+
+```ts
+const operation = await coco.ops.mint.batch.execute({
+  mintUrl,
+  method: 'bolt11',
+  members: [{ quoteId: first.quoteId }, { quoteId: second.quoteId }],
+});
+
+if (operation.state === 'executing') {
+  // Ambiguous outcome: the request may have reached the mint. Recover later.
+  await coco.ops.mint.batch.recovery.run();
+}
+```
+
+- `execute({ mintUrl, method, members })` admits, prepares and submits the
+  exact request in caller order. Each member is `{ quoteId, amount? }`;
+  reusable (`bolt12`, `onchain`) members default to their full available
+  amount, and `bolt11` members claim the quote amount. Every request carries
+  `quote_amounts`.
+- `get(operationId)`, `listByQuote({ mintUrl, quoteId })` and `listInFlight()`
+  load persisted batches.
+- `recovery.run()` recovers every `executing` batch. Startup recovery also runs
+  it together with mint recovery.
+
+`execute` rejects before persisting anything when the group has fewer than 2
+or duplicate members, mixes methods or units, targets an untrusted mint, uses a
+method the mint does not advertise for NUT-29 or advertises a malformed or
+single-quote `max_batch_size` for (`unsupported_method`), exceeds the mint's
+`max_batch_size` (capped at 100), or contains a member that is unclaimable,
+mismatches its BOLT11 amount, has a nonterminal standalone mint operation, is
+coordinated by an active Mint Swap, or lacks a Wallet-owned NUT-20 quote key.
+Admission failures throw `BatchMintAdmissionError` (with a `reason`),
+`UnknownMintError`, `MintQuoteKeyError` or `MintSwapChildOperationError`.
+
+Outcomes:
+
+- `finalized`: the complete proof set is saved, attributed to the batch.
+- `failed`: the initial submission was definitively rejected, or recovery received a qualifying
+  issuance rejection followed by an empty Restore response. Reservations are released; members
+  can be claimed again if their quotes remain claimable.
+- `executing`: the outcome remains unresolved and reservations are retained.
+
+Recovery first checks for complete locally saved proofs, then replays the exact original batch
+with the same members, amounts and outputs. It does not check quotes or allocate new outputs.
+A complete valid response finalizes. Network errors, timeouts, server errors, malformed responses,
+and other ambiguous replay results end that recovery run without Restore or reservation release.
+
+An issuance-related rejection (outputs already signed, quote already issued, or CDK's duplicate
+output response) triggers Restore of the persisted outputs. Complete valid unspent signatures
+finalize; an explicitly empty response marks the batch failed unless matching proofs are already
+saved locally. Partial, invalid, unavailable, pending or spent results keep it executing for a later
+recovery run. Other replay rejections, such as changed batch limits or insufficient reusable quote
+balance, also remain unresolved; Wallet Restore can recover already issued proofs for subsequent
+local finalization.
+
+The empty-result rule assumes the mint serializes competing requests and exposes committed
+signatures before rejecting a replay for prior issuance. A mint that rejects early or returns stale
+Restore results can cause a false failure requiring separate Wallet Restore. This is an accepted
+mint compatibility assumption, not a timeout-based guarantee. Recovery adds no timer or internal
+retry loop.
+
+Each member keeps its own `type: 'mint'` history entry with its own `quoteId`,
+`paymentRequest` and `amount`, the batch's state, `operationId` and
+`batchMintOperationId` set to the batch ID, and the entry ID
+`batch-mint:<batchId>:<ordinal>`.
+
+Batches publish `batch-mint-op:executing`, `batch-mint-op:finalized` and
+`batch-mint-op:failed` with the operation and its ordered members, after the
+change commits. They never emit `mint-op:*` events.
+
+Automatic claiming creates Batch Mint Operations by default, so a quote paid
+while the processor runs may settle through these events rather than
+`mint-op:*`. Use `ops.mint.batch.listByQuote({ mintUrl, quoteId })` alongside
+`ops.mint.listByQuote` to find its claim, or set
+`processors.mintOperationProcessor.batchMintQuotes: false`.
+
+```ts
+coco.on('batch-mint-op:finalized', ({ operation }) => {
+  console.log(
+    'Batch settled quotes',
+    operation.members.map((member) => member.quoteId),
+  );
+});
 ```

@@ -47,15 +47,19 @@ export function outputProofs(data: SerializedOutputData, kind: 'keep' | 'send' =
 
 export async function mintSwapFixture(
   repositories: Repositories,
-  options: { input?: number; cap?: number; initialize?: boolean } = {},
+  options: { input?: number; cap?: number; initialize?: boolean; suffix?: string } = {},
 ) {
   await repositories.init();
+  // A suffixed fixture adds another parent, with its own quotes and input, to an existing Wallet.
+  const suffix = options.suffix ?? '';
+  const sourceQuoteId = `source-quote${suffix}`;
+  const destinationQuoteId = `destination-quote${suffix}`;
   const keypair = {
     publicKeyHex: pubkey,
     secretKey: new Uint8Array(32).fill(1),
     purpose: 'nut20_mint_quote' as const,
   };
-  if (options.initialize !== false) {
+  if (options.initialize !== false && !suffix) {
     for (const mintUrl of [sourceUrl, destinationUrl]) {
       await repositories.mintRepository.addNewMint({
         mintUrl,
@@ -107,6 +111,8 @@ export async function mintSwapFixture(
       });
     }
     await repositories.keyRingRepository.setPersistedKeyPair(keypair);
+  }
+  if (options.initialize !== false) {
     await repositories.proofRepository.saveProofs(sourceUrl, [
       {
         id: keys.id,
@@ -114,7 +120,7 @@ export async function mintSwapFixture(
         unit: 'sat',
         state: 'ready',
         amount: Amount.from(options.input ?? 8),
-        secret: 'original',
+        secret: `original${suffix}`,
         C: pubkey,
       },
     ]);
@@ -124,7 +130,7 @@ export async function mintSwapFixture(
     const quote = meltQuoteFromBolt11Response(
       sourceUrl,
       {
-        quote: 'source-quote',
+        quote: sourceQuoteId,
         request: invoice,
         amount: Amount.from(8),
         unit: 'sat',
@@ -141,7 +147,7 @@ export async function mintSwapFixture(
   };
   const saveDestination = async (state: 'UNPAID' | 'PAID' | 'ISSUED') => {
     const quote = mintQuoteFromBolt11Fixture(destinationUrl, {
-      quote: 'destination-quote',
+      quote: destinationQuoteId,
       request: invoice,
       amount: Amount.from(8),
       unit: 'sat',
@@ -158,7 +164,7 @@ export async function mintSwapFixture(
   }
   const runner = new RepositoryCoreTransactionRunner(repositories);
   const parent: PreparingMintSwapOperation = {
-    id: 'swap',
+    id: `swap${suffix}`,
     revision: 0,
     state: 'preparing',
     sourceMintUrl: sourceUrl,
@@ -166,10 +172,10 @@ export async function mintSwapFixture(
     unit: 'sat',
     destinationAmount: Amount.from(8),
     ...(options.cap === undefined ? {} : { sourceDebitCap: Amount.from(options.cap) }),
-    sourceQuote: { mintUrl: sourceUrl, method: 'bolt11', quoteId: 'source-quote' },
-    destinationQuote: { mintUrl: destinationUrl, method: 'bolt11', quoteId: 'destination-quote' },
-    sourceOperationId: 'source-child',
-    destinationOperationId: 'destination-child',
+    sourceQuote: { mintUrl: sourceUrl, method: 'bolt11', quoteId: sourceQuoteId },
+    destinationQuote: { mintUrl: destinationUrl, method: 'bolt11', quoteId: destinationQuoteId },
+    sourceOperationId: `source-child${suffix}`,
+    destinationOperationId: `destination-child${suffix}`,
     paymentRequestHash: invoiceHash(invoice),
     createdAt: time,
     updatedAt: time,
@@ -237,6 +243,8 @@ export async function mintSwapFixture(
         requests.push('source-quote');
         return saveSource('UNPAID');
       }) as MintSwapOperationServiceDependencies['quoteLifecycle']['createMeltQuote'],
+      getMintQuote: (url, method, id) =>
+        repositories.mintQuoteRepository.getMintQuote(url, method, id),
       getMeltQuote: (url, method, id) =>
         repositories.meltQuoteRepository.getMeltQuote(url, method, id),
       refreshMeltQuote: async () => {

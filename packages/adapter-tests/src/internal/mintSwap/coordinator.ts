@@ -14,6 +14,7 @@ import {
   beginMintSwapDestination,
 } from '../../../../core/operations/mintSwap/MintSwapTransitions.ts';
 import { beginMintExecution } from '../../../../core/operations/mint/MintTransitions.ts';
+import { MintSwapChildOperationError } from '../../../../core/operations/mintSwap/MintSwapErrors.ts';
 import { MeltOperationService } from '../../../../core/operations/melt/MeltOperationService.ts';
 import { KeyRingService } from '../../../../core/services/KeyRingService.ts';
 import { KeypairDerivation } from '../../../../core/keypairs/KeypairDerivation.ts';
@@ -33,7 +34,6 @@ import { cashuNormalizedBolt11Fixture } from '../../../../core/test/normalizedMi
 import type { MintAdapter } from '../../../../core/infra/MintAdapter.ts';
 import type { MintService } from '../../../../core/services/MintService.ts';
 import type { WalletService } from '../../../../core/services/WalletService.ts';
-import type { ProofService } from '../../../../core/services/ProofService.ts';
 
 import type { MintSwapContractOptions, MintSwapTestRunner } from './contract.ts';
 
@@ -75,7 +75,6 @@ export function runMintSwapCoordinatorContract(
           meltQuoteRepository: repositories.meltQuoteRepository,
           proofRepository: repositories.proofRepository,
           // These legacy dependencies are unused by Melt observation recording/refresh.
-          proofService: {} as ProofService,
           mintService: dependencies.mintService as MintService,
           walletService: dependencies.walletService as WalletService,
           meltHandlerProvider: new MeltHandlerProvider({
@@ -928,6 +927,24 @@ export function runMintSwapCoordinatorContract(
       expect(fixture.requests).toContain('observe-source');
     });
 
+    it('settles a paid source whose quote reports an empty payment preimage', async () => {
+      await fixture.create();
+      await fixture.prepare();
+      fixture.dependencies.meltHandlerProvider.get('bolt11').melt = async () => {
+        throw new Error('timeout');
+      };
+      expect((await fixture.service().execute('swap')).state).toBe('source_pending');
+      // Some mints, including CDK's fake wallet, report PAID with an empty preimage.
+      fixture.dependencies.quoteLifecycle.refreshMeltQuote = async () => {
+        const quote = await fixture.saveSource('PAID');
+        return fixture.repositories.meltQuoteRepository.upsertMeltQuote({
+          ...quote,
+          payment_preimage: '',
+        });
+      };
+      expect((await fixture.service().reconcile('swap')).state).toBe('destination_pending');
+    });
+
     it('leaves PENDING recoverable with a cancellation request, then cancels on fresh UNPAID', async () => {
       await fixture.create();
       await fixture.prepare();
@@ -1364,13 +1381,15 @@ export function runMintSwapCoordinatorContract(
         mintScopedLock: fixture.dependencies.mintScopedLock,
       });
       expect(childService.isOperationLocked('source-child')).toBe(true);
-      const childExecution = childService.execute('source-child');
+      await expect(childService.execute('source-child')).rejects.toBeInstanceOf(
+        MintSwapChildOperationError,
+      );
       await expect(
         fixture.dependencies.sourceOperationLock.acquire('source-child'),
       ).rejects.toThrow();
       release();
       await execution;
-      expect((await childExecution).state).toBe('finalized');
+      expect((await childService.getOperation('source-child'))?.state).toBe('finalized');
       expect(fixture.requests.filter((request) => request === 'melt')).toHaveLength(1);
       expect(fixture.dependencies.sourceOperationLock.isLocked('source-child')).toBe(false);
     });
@@ -1505,7 +1524,6 @@ export function runMintSwapCoordinatorContract(
           meltQuoteRepository: repositories.meltQuoteRepository,
           proofRepository: repositories.proofRepository,
           // These legacy dependencies are unused by Mint observation recording/refresh.
-          proofService: {} as ProofService,
           mintService: dependencies.mintService as MintService,
           walletService: dependencies.walletService as WalletService,
         });
@@ -1657,7 +1675,6 @@ export function runMintSwapCoordinatorContract(
           mintQuoteRepository: repositories.mintQuoteRepository,
           meltQuoteRepository: repositories.meltQuoteRepository,
           proofRepository: repositories.proofRepository,
-          proofService: {} as ProofService,
           mintService: dependencies.mintService as MintService,
           walletService: dependencies.walletService as WalletService,
         });

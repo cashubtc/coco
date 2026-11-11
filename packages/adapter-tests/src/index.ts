@@ -1,5 +1,5 @@
 import { Amount } from '@cashu/cashu-ts';
-import { Manager } from '@cashu/coco-core';
+import { initializeCoco } from '@cashu/coco-core';
 import {
   type Mint,
   type Keyset,
@@ -86,29 +86,62 @@ function derivedKeypair(derivationIndex: number, purpose: KeypairPurpose) {
   } as const;
 }
 
-/** Exercise the real key-management gateway on an initialized adapter without starting watchers. */
+export interface KeypairAllocatorForTest {
+  allocate(purpose: KeypairPurpose): Promise<Keypair>;
+  dispose(): Promise<void>;
+}
+
+/**
+ * Open a Coco Session without background owners and expose the real key-management gateway on an
+ * initialized adapter. Open it before holding storage locks: session startup also uses storage.
+ */
+export async function openKeypairAllocatorForTest(
+  repositories: Repositories,
+): Promise<KeypairAllocatorForTest> {
+  let allocate: KeypairAllocatorForTest['allocate'] | undefined;
+  const manager = await initializeCoco({
+    repo: repositories,
+    seedGetter: async () => new Uint8Array(64),
+    plugins: [
+      {
+        name: 'keypair-allocation-contract',
+        required: ['keyRingService'],
+        onInit: ({ services: { keyRingService } }) => {
+          allocate = (purpose) =>
+            purpose === 'p2pk'
+              ? keyRingService.generateNewKeyPair({ dumpSecretKey: true })
+              : keyRingService.generateMintQuoteKeyPair();
+        },
+      },
+    ],
+    watchers: {
+      mintOperationWatcher: { disabled: true },
+      meltQuoteWatcher: { disabled: true },
+      proofStateWatcher: { disabled: true },
+    },
+    processors: {
+      mintOperationProcessor: { disabled: true },
+      meltSettlementProcessor: { disabled: true },
+      mintSwapOperationProcessor: { disabled: true },
+    },
+  });
+  if (!allocate) {
+    await manager.dispose();
+    throw new Error('Keypair allocation contract was not initialized');
+  }
+  return { allocate, dispose: () => manager.dispose() };
+}
+
+/** Allocate one keypair through a short-lived {@link openKeypairAllocatorForTest} session. */
 export async function allocateKeypairForTest(
   repositories: Repositories,
   purpose: KeypairPurpose,
 ): Promise<Keypair> {
-  const manager = new Manager(repositories, async () => new Uint8Array(64));
-  let allocate: (() => Promise<Keypair>) | undefined;
-  manager.use({
-    name: 'keypair-allocation-contract',
-    required: ['keyRingService'],
-    onInit: ({ services: { keyRingService } }) => {
-      allocate = () =>
-        purpose === 'p2pk'
-          ? keyRingService.generateNewKeyPair({ dumpSecretKey: true })
-          : keyRingService.generateMintQuoteKeyPair();
-    },
-  });
+  const allocator = await openKeypairAllocatorForTest(repositories);
   try {
-    await manager.initPlugins();
-    if (!allocate) throw new Error('Keypair allocation contract was not initialized');
-    return await allocate();
+    return await allocator.allocate(purpose);
   } finally {
-    await manager.dispose();
+    await allocator.dispose();
   }
 }
 
@@ -226,10 +259,13 @@ export function runKeypairAllocationContract(
     if (options.createSharedRepositories) {
       it('coordinates independent roots sharing one physical store', async () => {
         const { first, second, dispose } = await options.createSharedRepositories!();
+        // One session per root keeps startup out of the contention under test.
+        const firstAllocator = await openKeypairAllocatorForTest(first);
+        const secondAllocator = await openKeypairAllocatorForTest(second);
         try {
           const indexes = await Promise.all([
-            ...Array.from({ length: 50 }, () => allocateKeypairForTest(first, 'nut20_mint_quote')),
-            ...Array.from({ length: 50 }, () => allocateKeypairForTest(second, 'nut20_mint_quote')),
+            ...Array.from({ length: 50 }, () => firstAllocator.allocate('nut20_mint_quote')),
+            ...Array.from({ length: 50 }, () => secondAllocator.allocate('nut20_mint_quote')),
           ]);
           expectExactIndexRange(
             indexes.map((key) => key.derivationIndex!),
@@ -239,8 +275,8 @@ export function runKeypairAllocationContract(
           );
 
           const p2pk = await Promise.all([
-            allocateKeypairForTest(first, 'p2pk'),
-            allocateKeypairForTest(second, 'p2pk'),
+            firstAllocator.allocate('p2pk'),
+            secondAllocator.allocate('p2pk'),
           ]);
           expectExactIndexRange(
             p2pk.map((key) => key.derivationIndex!),
@@ -249,7 +285,11 @@ export function runKeypairAllocationContract(
             expect,
           );
         } finally {
-          await dispose();
+          try {
+            await Promise.all([firstAllocator.dispose(), secondAllocator.dispose()]);
+          } finally {
+            await dispose();
+          }
         }
       });
     }
@@ -2068,6 +2108,163 @@ export async function runReceiveOperationRepositoryContract(
   const { describe, it, expect } = runner;
 
   describe('ReceiveOperationRepository contract', () => {
+    it('conditionally advances Receive state with monotonic revisions and unchanged request data', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = {
+          ...createDummyReceiveOperation(),
+          state: 'prepared' as const,
+          fee: Amount.from(1),
+          outputData: { keep: [], send: [] },
+        };
+        const repository = repositories.receiveOperationRepository;
+        await repository.create(operation);
+        expect((await repository.getById(operation.id))?.revision).toBe(0);
+        const executing = {
+          ...operation,
+          state: 'executing' as const,
+          revision: 99,
+          updatedAt: 2000,
+        };
+        expect(
+          await repository.transition({
+            operationId: operation.id,
+            expectedState: 'prepared',
+            expectedRevision: 1,
+            next: executing,
+          }),
+        ).toBe(false);
+        expect(
+          await repository.transition({
+            operationId: operation.id,
+            expectedState: 'prepared',
+            expectedRevision: 0,
+            next: executing,
+          }),
+        ).toBe(true);
+        expect(
+          await repository.transition({
+            operationId: operation.id,
+            expectedState: 'prepared',
+            expectedRevision: 0,
+            next: executing,
+          }),
+        ).toBe(false);
+        const stored = await repository.getById(operation.id);
+        expect(stored?.revision).toBe(1);
+        expect(JSON.stringify(stored?.inputProofs)).toBe(JSON.stringify(operation.inputProofs));
+        expect(stored?.state).toBe('executing');
+        await expectThrows(
+          () =>
+            repository.transition({
+              operationId: operation.id,
+              expectedState: 'executing',
+              expectedRevision: 1,
+              next: { ...executing, id: 'different' },
+            }),
+          expect,
+        );
+        expect((await repository.getById(operation.id))?.revision).toBe(1);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('isolates nested Receive request data on every write and read', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = {
+          ...createDummyReceiveOperation(),
+          state: 'prepared' as const,
+          fee: Amount.from(1),
+          outputData: { keep: [], send: [] },
+          source: {
+            type: 'payment-request' as const,
+            requestOperationId: 'parent',
+            attemptId: 'attempt',
+            transport: 'inband' as const,
+          },
+        };
+        operation.inputProofs[0]!.dleq = { e: 'e', s: 's', r: 'r' };
+        const repository = repositories.receiveOperationRepository;
+        await repository.create(operation);
+        operation.inputProofs[0]!.secret = 'changed';
+        operation.inputProofs[0]!.dleq!.e = 'changed';
+        operation.source.requestOperationId = 'changed';
+        const reads = [
+          (await repository.getById(operation.id))!,
+          (await repository.getByState('prepared'))[0]!,
+          (await repository.getByMintUrl(operation.mintUrl))[0]!,
+          (await repository.getByPaymentRequestAttemptId('attempt'))!,
+        ];
+        for (const snapshot of reads) {
+          expect(snapshot.inputProofs[0]!.secret).toBe('receive-secret-1');
+          expect(snapshot.inputProofs[0]!.dleq!.e).toBe('e');
+          snapshot.inputProofs[0]!.dleq!.e = 'changed again';
+        }
+        expect((await repository.getById(operation.id))!.inputProofs[0]!.dleq!.e).toBe('e');
+        const next = {
+          ...reads[0]!,
+          state: 'executing' as const,
+          fee: Amount.from(1),
+          outputData: { keep: [], send: [] },
+        };
+        await repository.transition({
+          operationId: operation.id,
+          expectedState: 'prepared',
+          expectedRevision: 0,
+          next,
+        });
+        next.inputProofs[0]!.secret = 'changed after transition';
+        const pending = (await repository.getPending())[0]!;
+        expect(pending.inputProofs[0]!.secret).toBe('receive-secret-1');
+        pending.inputProofs[0]!.secret = 'changed pending snapshot';
+        expect((await repository.getById(operation.id))!.inputProofs[0]!.secret).toBe(
+          'receive-secret-1',
+        );
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('rolls back a Receive transition with its counter allocation', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = createDummyReceiveOperation();
+        await repositories.receiveOperationRepository.create(operation);
+        await expectThrows(
+          () =>
+            repositories.withTransaction(async (scope) => {
+              await scope.counterRepository.setCounter(operation.mintUrl, 'receive-keyset', 3);
+              await scope.receiveOperationRepository.transition({
+                operationId: operation.id,
+                expectedState: 'init',
+                expectedRevision: 0,
+                next: {
+                  ...operation,
+                  state: 'prepared',
+                  fee: Amount.from(1),
+                  outputData: { keep: [], send: [] },
+                },
+              });
+              throw new Error('abort Receive transaction');
+            }),
+          expect,
+        );
+        expect((await repositories.receiveOperationRepository.getById(operation.id))?.state).toBe(
+          'init',
+        );
+        expect(
+          (await repositories.receiveOperationRepository.getById(operation.id))?.revision,
+        ).toBe(0);
+        expect(
+          await repositories.counterRepository.getCounter(operation.mintUrl, 'receive-keyset'),
+        ).toBe(null);
+      } finally {
+        await dispose();
+      }
+    });
+
     it('rehydrates persisted input proof amounts', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {
@@ -2920,3 +3117,9 @@ export {
   runMintSwapPersistenceContract,
   type MintSwapContractOptions,
 } from './mintSwap.ts';
+export {
+  createBatchMintFixtures,
+  runBatchMintPersistenceContract,
+  runBatchMintHistoryContract,
+  type BatchMintContractOptions,
+} from './batchMint.ts';

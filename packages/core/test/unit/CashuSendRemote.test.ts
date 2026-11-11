@@ -58,7 +58,14 @@ function sign(outputs: WireOutput[], signingKeyset = keyset) {
   });
 }
 
-function environment(signingKeyset = keyset) {
+type RestoreResponse = { outputs: WireOutput[]; signatures: ReturnType<typeof sign> };
+function environment(
+  signingKeyset = keyset,
+  mintBehavior: {
+    restore?: (complete: RestoreResponse) => RestoreResponse;
+    proofState?: 'UNSPENT' | 'PENDING' | 'SPENT';
+  } = {},
+) {
   const calls: Array<{ endpoint: string; body?: Record<string, unknown> }> = [];
   const request: MintRequestFn = async <T>({
     endpoint,
@@ -67,13 +74,20 @@ function environment(signingKeyset = keyset) {
     calls.push({ endpoint, body: requestBody });
     if (endpoint.endsWith('/swap'))
       return { signatures: sign(requestBody!.outputs as WireOutput[], signingKeyset) } as T;
-    if (endpoint.endsWith('/restore'))
-      return {
-        outputs: requestBody!.outputs,
+    if (endpoint.endsWith('/restore')) {
+      const complete = {
+        outputs: requestBody!.outputs as WireOutput[],
         signatures: sign(requestBody!.outputs as WireOutput[], signingKeyset),
-      } as T;
+      };
+      return (mintBehavior.restore?.(complete) ?? complete) as T;
+    }
     if (endpoint.endsWith('/checkstate'))
-      return { states: (requestBody!.Ys as string[]).map((Y) => ({ Y, state: 'UNSPENT' })) } as T;
+      return {
+        states: (requestBody!.Ys as string[]).map((Y) => ({
+          Y,
+          state: mintBehavior.proofState ?? 'UNSPENT',
+        })),
+      } as T;
     throw new Error(`Unexpected endpoint: ${endpoint}`);
   };
   const mint = {
@@ -325,4 +339,80 @@ describe('CashuSendRemote', () => {
       `${mintUrl}/v1/checkstate`,
     ]);
   });
+});
+
+describe('CashuSendRemote strict Restore', () => {
+  // Two outputs (1 and 2), so a partial answer can be told from a complete one.
+  const outputData = () =>
+    serializeOutputData({
+      keep: OutputData.createDeterministicData(Amount.from(3), seed, 0, keys),
+      send: [],
+    });
+  const strictRestore = (mintBehavior: Parameters<typeof environment>[1]) =>
+    environment(keyset, mintBehavior)
+      .remote.open(metadata, unit)
+      .restoreOutputs(outputData(), { requireComplete: true });
+
+  it('returns every output when the mint signed all of them and none is spent', async () => {
+    const restored = await strictRestore({});
+
+    expect(restored).toHaveLength(2);
+    expect(sumProofs(restored).toString()).toBe('3');
+  });
+
+  it('returns nothing only when the mint reports no output and no signature', async () => {
+    const { remote, calls } = environment(keyset, {
+      restore: () => ({ outputs: [], signatures: [] }),
+    });
+
+    const restored = await remote
+      .open(metadata, unit)
+      .restoreOutputs(outputData(), { requireComplete: true });
+
+    expect(restored).toEqual([]);
+    expect(calls.map((call) => call.endpoint)).toEqual([`${mintUrl}/v1/restore`]);
+  });
+
+  it.each([
+    [
+      'only some of the outputs',
+      (complete: RestoreResponse) => ({
+        outputs: complete.outputs.slice(0, 1),
+        signatures: complete.signatures.slice(0, 1),
+      }),
+      'incomplete or duplicate',
+    ],
+    [
+      'the same output twice',
+      (complete: RestoreResponse) => ({
+        outputs: [complete.outputs[0]!, complete.outputs[0]!],
+        signatures: [complete.signatures[0]!, complete.signatures[0]!],
+      }),
+      'incomplete or duplicate',
+    ],
+    [
+      'signatures for other amounts',
+      (complete: RestoreResponse) => ({
+        outputs: complete.outputs,
+        signatures: [complete.signatures[1]!, complete.signatures[0]!],
+      }),
+      'does not match the persisted output',
+    ],
+  ] as const)('rejects a response with %s', async (_case, restore, message) => {
+    await expect(strictRestore({ restore })).rejects.toThrow(message);
+    await expect(strictRestore({ restore })).rejects.toBeInstanceOf(ProofValidationError);
+  });
+
+  it.each(['SPENT', 'PENDING'] as const)(
+    'rejects restored outputs the mint reports %s instead of returning nothing',
+    async (proofState) => {
+      await expect(strictRestore({ proofState })).rejects.toThrow('not all confirmed unspent');
+
+      // Without the option the same answer is filtered to an empty result.
+      const filtered = await environment(keyset, { proofState })
+        .remote.open(metadata, unit)
+        .restoreOutputs(outputData());
+      expect(filtered).toEqual([]);
+    },
+  );
 });
