@@ -16,9 +16,10 @@
   ],
   "devDependencies": {
     "@cashu/coco-adapter-tests": "2.0.0",
-    "@vitest/browser": "^3.2.4",
+    "@types/chai": "5.2.3",
+    "@vitest/browser-playwright": "5.0.5",
     "playwright": "^1.61.0",
-    "vitest": "^3.2.4"
+    "vitest": "5.0.5"
   },
   "exports": {
     ".": {
