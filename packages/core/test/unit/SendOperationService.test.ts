@@ -15,13 +15,8 @@ import type {
 import { MintOperationError, NetworkError } from '../../models/Error.ts';
 import { makeOutputDataCreator } from '../fixtures/OutputDataCreator.ts';
 import { SendOpsApi } from '../../api/SendOpsApi.ts';
-import {
-  ProofStateWatcherService,
-  type ProofStateRemote,
-} from '../../services/watchers/ProofStateWatcherService.ts';
+import { ProofStateWatcherService } from '../../services/watchers/ProofStateWatcherService.ts';
 import type { SubscriptionManager, SubscriptionCallback } from '../../infra/SubscriptionManager.ts';
-import type { MintService } from '../../services/MintService.ts';
-import type { CoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
 
 type Environment = Awaited<ReturnType<typeof createSendEnvironment>>;
 
@@ -86,7 +81,7 @@ describe('SendOperationService', () => {
       recovery: () => api.recovery.run(),
       refresh: () => api.refresh(operationId),
       finalize: () => api.finalize(operationId),
-      notification: () => service.recordProofSpent(operationId, secret),
+      notification: () => service.applyProofStateObservation(operationId, [secret]),
     }[path]();
   };
 
@@ -288,25 +283,13 @@ describe('SendOperationService', () => {
           return { subId: 'event-order-sub', unsubscribe: async () => {} };
         },
       };
-      // Send-owned evidence must never reach the watcher's unowned-proof reconciliation.
-      const reconcile = mock(async () => {});
       const watcher = new ProofStateWatcherService(
         subscriptions as unknown as SubscriptionManager,
-        { isTrustedMint: async () => true } as unknown as MintService,
-        proofRepo,
-        {
-          sendOperations: repositories.sendOperationRepository,
-          meltOperations: repositories.meltOperationRepository,
-          mintOperations: repositories.mintOperationRepository,
-          receiveOperations: repositories.receiveOperationRepository,
-          mintSwapOperations: repositories.mintSwap.operationRepository,
-        },
-        { run: reconcile } as unknown as CoreTransactionRunner,
-        {} as ProofStateRemote,
+        { isTrustedMint: async () => true },
+        service,
         eventBus,
         logger,
         { watchExistingInflightOnStart: false },
-        service,
       );
       await watcher.start();
 
@@ -333,7 +316,6 @@ describe('SendOperationService', () => {
 
         expect((await sendOpRepo.getById(prepared.id))?.state).toBe('finalized');
         expect(events).toEqual(['pending', 'finalized']);
-        expect(reconcile).not.toHaveBeenCalled();
       } finally {
         await watcher.stop();
       }

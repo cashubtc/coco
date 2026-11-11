@@ -77,6 +77,17 @@ import { OperationIdLock } from '../OperationIdLock';
 import { normalizeUnitAmount, type UnitAmount } from '../../amounts.ts';
 import type { SendOperationQueries } from './SendOperationQueries.ts';
 import type { SendRemote, SendRemoteSession } from './SendRemote.ts';
+import { canCompleteWithInput } from './SendValidation.ts';
+
+/** Informational observation target; applying evidence always rechecks the persisted Send. */
+export interface SendProofObservationTarget {
+  operationId: string;
+  mintUrl: string;
+  unit: string;
+  id: string;
+  secret: string;
+  state: 'inflight' | 'spent';
+}
 
 /** Why an interrupted reclaim was left as it is. */
 type UnresolvedReclaimReason =
@@ -1282,24 +1293,124 @@ export class SendOperationService {
   }
 
   /**
-   * Persist a mint proof-state notification through the Send transaction boundary. The last send
-   * proof observation and the pending-to-finalized transition commit together.
+   * Apply SPENT evidence and any resulting Send completion in one transaction. Partial evidence
+   * leaves the Send pending. Duplicate evidence is harmless; no watcher has proof write authority.
+   * Legacy tokenless P2PK Sends still require verification of their complete exact output plan.
+   * Callers supply trusted mint evidence. A true result means the observation was handled, not
+   * necessarily that the Send finalized.
    */
-  async recordProofSpent(operationId: string, secret: string): Promise<boolean> {
+  async applyProofStateObservation(
+    operationId: string,
+    spentSecrets: readonly string[],
+  ): Promise<boolean> {
     const operation = await this.operationQueries.getById(operationId);
     if (!operation || operation.state !== 'pending') return false;
-    if (!getSendProofSecrets(operation).includes(secret)) {
-      throw new ProofValidationError(`Proof ${secret} does not belong to Send operation`);
+    const expected = new Set(getSendProofSecrets(operation));
+    if (spentSecrets.some((secret) => !expected.has(secret))) {
+      throw new ProofValidationError('Observed proof does not belong to Send operation');
     }
+    if (spentSecrets.length === 0) return false;
     const completion = isLegacyTokenlessP2pkSend(operation)
       ? await this.observeLegacyTokenlessP2pk(operation)
-      : { operationId, updatedAt: Date.now(), spentProofSecrets: [secret] };
+      : { operationId, updatedAt: Date.now(), spentProofSecrets: [...new Set(spentSecrets)] };
     if (!completion) return true;
     const result = await this.transactionRunner.run((tx) =>
       tx.perform(completePendingSend, completion),
     );
     await this.publishCompletedSend(result);
     return true;
+  }
+
+  /**
+   * Reassess persisted proof evidence without polling. Legacy tokenless P2PK records wait for
+   * Operation Recovery or a new observation to verify their complete allocation with the mint.
+   * The completion transition rechecks state, exact proofs and ownership in its transaction.
+   */
+  async advancePendingOperation(operationId: string): Promise<void> {
+    const operation = await this.operationQueries.getById(operationId);
+    if (!operation || operation.state !== 'pending') return;
+    if (isLegacyTokenlessP2pkSend(operation)) return;
+    const secrets = getSendProofSecrets(operation);
+    const proofs = await this.proofQueries.getProofsBySecrets(operation.mintUrl, secrets);
+    if (
+      secrets.length === 0 ||
+      proofs.length !== new Set(secrets).size ||
+      proofs.some((proof) => proof.state !== 'spent')
+    )
+      return;
+    const updatedAt = Date.now();
+    const result = await this.transactionRunner.run((tx) =>
+      tx.perform(completePendingSend, { operationId, updatedAt }),
+    );
+    await this.publishCompletedSend(result);
+  }
+
+  /**
+   * Discover pending Send targets by operation or by a local proof-event hint. No writes or remote
+   * effects occur here. Missing/terminal owners and proofs reserved by another operation are omitted.
+   * Legacy tokenless outputs are derived from their persisted allocation, without fabricating rows.
+   */
+  async getProofObservationTargets(
+    input: string | { mintUrl: string; secrets: string[] },
+  ): Promise<SendProofObservationTarget[]> {
+    const requested = typeof input === 'string' ? undefined : new Set(input.secrets);
+    const mintUrl = typeof input === 'string' ? undefined : normalizeMintUrl(input.mintUrl);
+    const candidates =
+      typeof input === 'string'
+        ? [input]
+        : (await this.proofQueries.getProofsBySecrets(mintUrl!, input.secrets))
+            .map((proof) => proof.usedByOperationId ?? proof.createdByOperationId)
+            .filter((id): id is string => id != null);
+    const targets: SendProofObservationTarget[] = [];
+    for (const operationId of new Set(candidates)) {
+      const operation = await this.operationQueries.getById(operationId);
+      if (
+        !operation ||
+        operation.state !== 'pending' ||
+        (mintUrl !== undefined && operation.mintUrl !== mintUrl)
+      )
+        continue;
+      const secrets = getSendProofSecrets(operation);
+      const proofs = new Map(
+        (await this.proofQueries.getProofsBySecrets(operation.mintUrl, secrets)).map((proof) => [
+          proof.secret,
+          proof,
+        ]),
+      );
+      const legacy = isLegacyTokenlessP2pkSend(operation)
+        ? new Map(
+            getProofStateInputsFromSerializedOutputs(operation.outputData.send).map((proof) => [
+              proof.secret,
+              proof,
+            ]),
+          )
+        : undefined;
+      for (const secret of secrets) {
+        if (requested && !requested.has(secret)) continue;
+        const proof = proofs.get(secret);
+        if (proof && proof.state !== 'inflight' && proof.state !== 'spent') continue;
+        if (proof && proof.usedByOperationId != null && proof.usedByOperationId !== operationId)
+          continue;
+        if (
+          proof &&
+          !(operation.needsSwap
+            ? proof.createdByOperationId === operationId
+            : canCompleteWithInput(proof, operationId))
+        )
+          continue;
+        const id = proof?.id ?? legacy?.get(secret)?.id;
+        if (!id) continue;
+        targets.push({
+          operationId,
+          mintUrl: operation.mintUrl,
+          unit: operation.unit,
+          id,
+          secret,
+          state: proof?.state === 'spent' ? 'spent' : 'inflight',
+        });
+      }
+    }
+    return targets;
   }
 
   private async observeLegacyTokenlessP2pk(

@@ -116,13 +116,22 @@ not advance them; use an explicit operation check such as `coco.ops.melt.refresh
 
 ## ProofStateWatcher
 
-This module observes inflight proof state and invokes the Send operation service for completion. Its
-startup scan also discovers pending Sends whose proofs are already locally spent and supported legacy
-tokenless P2PK Sends whose output proof rows were not retained. Legacy completion still requires the
-original input metadata and exact output allocation; it does not fabricate proofs or a token.
+This module observes proofs belonging to pending Sends and submits SPENT evidence to the Send
+operation service. The proof changes and any resulting Send completion commit atomically; the
+watcher never writes proofs itself. Its startup scan uses local evidence to discover pending Sends,
+including those whose proofs are already locally spent and supported legacy tokenless P2PK Sends
+whose output proof rows were not retained. Operation Recovery owns the startup mint checks; discovery
+installs subscriptions without waiting for or repeating those requests. The subscription transport
+continues to observe through polling and WebSocket notifications. Legacy completion still requires
+remote verification of the complete output allocation, through recovery or a new proof observation,
+and the original input metadata; it does not fabricate proofs or a token.
 
-`watchExistingInflightOnStart: false` skips the startup proof and Send scan. Live proof events and newly
-pending Sends remain observed while the watcher runs.
+Unowned inflight proofs, including records whose referenced operations are missing or terminal,
+are no longer automatically reconciled. This retires the old compatibility fallback. Restore's
+unowned ready and pending proofs are unaffected; other operation types retain their own recovery.
+
+`watchExistingInflightOnStart: false` skips startup subscription discovery, but does not disable
+Operation Recovery. Live proof events and newly pending Sends remain observed while the watcher runs.
 
 `await coco.dispose()` stops proof observation and discovery, cancels pending discovery timers,
 and releases subscriptions, including those acquired during shutdown. Proof watcher shutdown waits
