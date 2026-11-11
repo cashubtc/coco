@@ -719,6 +719,7 @@ export const completeSendReclaim = defineTransition<
   }
   const allocation = current.reclaimData;
   const spentProofSecrets = allocation?.inputProofSecrets ?? [];
+  let savedProofs: CoreProof[] = [];
   if (allocation) {
     assertOutputProofs({
       mintUrl: current.mintUrl,
@@ -728,6 +729,30 @@ export const completeSendReclaim = defineTransition<
       state: 'ready',
       proofs: input.proofs,
     });
+    // A Restore may already have saved some of these outputs. Keep those rows as they are, with
+    // any state or reservation they have gained since, and insert only the missing ones.
+    const stored = new Map(
+      (
+        await tx.proofs.getProofsBySecrets(
+          current.mintUrl,
+          input.proofs.map((proof) => proof.secret),
+        )
+      ).map((proof) => [proof.secret, proof]),
+    );
+    for (const proof of input.proofs) {
+      const existing = stored.get(proof.secret);
+      if (
+        existing &&
+        (existing.id !== proof.id ||
+          existing.C !== proof.C ||
+          !Amount.from(existing.amount).equals(proof.amount) ||
+          normalizeUnit(existing.unit) !== normalizeUnit(current.unit) ||
+          existing.createdByOperationId != null)
+      ) {
+        throw new ProofValidationError('Reclaimed proof conflicts with a stored proof');
+      }
+    }
+    savedProofs = input.proofs.filter((proof) => !stored.has(proof.secret));
     await tx.proofs.settleSpend({
       mintUrl: current.mintUrl,
       unit: current.unit,
@@ -735,7 +760,7 @@ export const completeSendReclaim = defineTransition<
       secrets: spentProofSecrets,
       state: ['inflight', 'spent'],
       ownership: current.needsSwap ? 'created' : 'used',
-      outputs: input.proofs,
+      outputs: savedProofs,
     });
   } else if (input.proofs.length > 0) {
     throw new ProofValidationError('Reclaimed proofs have no committed output plan');
@@ -773,7 +798,7 @@ export const completeSendReclaim = defineTransition<
   }
   return {
     operation: rolledBack,
-    savedProofs: input.proofs,
+    savedProofs,
     spentProofSecrets,
     releasedProofSecrets,
   };
@@ -781,31 +806,37 @@ export const completeSendReclaim = defineTransition<
 
 /**
  * Return an interrupted reclaim to `pending` and drop its request. Compose it with the transition
- * that settles the Send; it never stands alone.
+ * that settles the Send; it never stands alone. The caller decided from mint evidence about one
+ * revision of the record, so any later revision, such as a request another Coco Session stored,
+ * is a conflict.
  */
 export const abandonSendReclaim = defineTransition<
   AbandonSendReclaimInput,
   AbandonSendReclaimResult
 >(async (tx, input) => {
   const current = await tx.sendOperations.getById(input.operationId);
-  if (!current || current.state !== 'rolling_back' || current.method !== 'default') {
+  if (
+    !current ||
+    current.state !== 'rolling_back' ||
+    current.method !== 'default' ||
+    (current.revision ?? 0) !== input.expectedRevision
+  ) {
     throw new SendOperationConflictError(
       input.operationId,
       'Send reclaim abandonment lost a state or revision conflict',
     );
   }
-  const revision = current.revision ?? 0;
   const pending: PendingSendOperation = {
     ...current,
     state: 'pending',
-    revision: revision + 1,
+    revision: input.expectedRevision + 1,
     updatedAt: input.updatedAt,
     reclaimData: undefined,
   };
   const transitioned = await tx.sendOperations.transition({
     operationId: current.id,
     expectedState: 'rolling_back',
-    expectedRevision: revision,
+    expectedRevision: input.expectedRevision,
     next: pending,
   });
   if (!transitioned) {

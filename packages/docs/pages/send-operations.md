@@ -36,14 +36,14 @@ A reclaim that finds the token already claimed finalizes the operation.
 
 ## Lifecycle Actions
 
-| Action                                  | Valid input state              | Resulting state                        | Use when                                                          |
-| --------------------------------------- | ------------------------------ | -------------------------------------- | ----------------------------------------------------------------- |
-| `prepare({ mintUrl, amount, target? })` | none                           | `prepared`                             | You want to reserve proofs and show fees before creating a token. |
-| `execute(operationOrId, options?)`      | `prepared`                     | `pending`                              | The user confirmed the send and you need the shareable token.     |
-| `refresh(operationId)`                  | any, actively checks `pending` | latest stored state                    | You are resuming stale persisted state or building recovery UI.   |
-| `cancel(operationId)`                   | `prepared`                     | `rolled_back`                          | The user abandons the send before a token is created.             |
-| `reclaim(operationId)`                  | `pending`                      | `rolled_back` when reclaim is possible | The token was created but should be reclaimed before receipt.     |
-| `finalize(operationId)`                 | `pending`                      | `finalized`                            | You know the token was claimed and want to finalize explicitly.   |
+| Action                                  | Valid input state              | Resulting state                       | Use when                                                          |
+| --------------------------------------- | ------------------------------ | ------------------------------------- | ----------------------------------------------------------------- |
+| `prepare({ mintUrl, amount, target? })` | none                           | `prepared`                            | You want to reserve proofs and show fees before creating a token. |
+| `execute(operationOrId, options?)`      | `prepared`                     | `pending`                             | The user confirmed the send and you need the shareable token.     |
+| `refresh(operationId)`                  | any, actively checks `pending` | latest stored state                   | You are resuming stale persisted state or building recovery UI.   |
+| `cancel(operationId)`                   | `prepared`                     | `rolled_back`                         | The user abandons the send before a token is created.             |
+| `reclaim(operationId)`                  | `pending`                      | `rolled_back`; `finalized` if claimed | The token was created but should be reclaimed before receipt.     |
+| `finalize(operationId)`                 | `pending`                      | `finalized`                           | You know the token was claimed and want to finalize explicitly.   |
 
 With the default proof-state watcher enabled, most apps do not need to poll
 `refresh()` during the happy path. Render from the operation returned by
@@ -196,7 +196,8 @@ if (operation?.state === 'pending') {
 ```
 
 If the mint rejects the reclaim because the recipient already claimed the token, `reclaim()`
-rejects and the operation is finalized.
+rejects and the operation is finalized. A reclaim that fails for another reason can leave the
+operation `rolling_back` for recovery to settle, so read the operation again after a rejection.
 
 > **Note:** Reclaiming requires a swap, which incurs fees. The reclaimed amount will be less than the original send amount.
 
@@ -276,9 +277,16 @@ unsubmitted, operation-owned inputs to ready, releases their reservations, and r
 
 ### Rolling Back State Recovery
 
-For an interrupted reclaim, recovery checks the token proofs with the mint and uses the stored
-reclaim request:
+A reclaim has its own stored request, separate from the original send: the token proofs it spends
+and a new set of outputs, both saved before the mint is contacted. Recovery settles the reclaim
+from that exact request and never replaces a request that may have reached the mint. Reclaimed
+proofs are saved as ordinary ready proofs, and the Send stays a single history entry.
 
+For an interrupted reclaim, recovery first looks for the reclaim outputs in the wallet, then
+checks the token proofs with the mint:
+
+- **Reclaim outputs already in the wallet** (for example after a Restore): Moves the operation to
+  `rolled_back` without contacting the mint and leaves those proofs as they are.
 - **Token proofs unspent**: Replays the stored reclaim request with the same inputs and outputs,
   then moves the operation to `rolled_back`.
 - **Token proofs spent, reclaim outputs restorable**: Saves the restored proofs and moves the

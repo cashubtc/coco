@@ -29,6 +29,7 @@ import {
 
 import type {
   ApplySendResult,
+  BeginSendReclaimResult,
   CancelPreparedSendResult,
   ExecuteExactSendResult,
   CompletePendingSendInput,
@@ -77,10 +78,30 @@ import { normalizeUnitAmount, type UnitAmount } from '../../amounts.ts';
 import type { SendOperationQueries } from './SendOperationQueries.ts';
 import type { SendRemote, SendRemoteSession } from './SendRemote.ts';
 
+/** Why an interrupted reclaim was left as it is. */
+type UnresolvedReclaimReason =
+  | 'token_proofs_missing'
+  | 'no_stored_request'
+  | 'method_without_reclaim'
+  | 'proof_states_incomplete'
+  | 'token_proofs_unsettled'
+  | 'request_not_replayed'
+  | 'outputs_partly_restored';
+
+const UNRESOLVED_RECLAIM_DETAIL: Record<UnresolvedReclaimReason, string> = {
+  token_proofs_missing: 'token proof metadata is missing',
+  no_stored_request: 'no stored reclaim request and the token proofs are not all unspent',
+  method_without_reclaim: 'the send method has no reclaim',
+  proof_states_incomplete: 'proof-state response was incomplete',
+  token_proofs_unsettled: 'token proofs are pending or only partly spent',
+  request_not_replayed: 'token proofs are unspent and the rejected request was not sent again',
+  outputs_partly_restored: 'reclaim outputs were only partly restored',
+};
+
 type SendReclaimOutcome =
-  | { status: 'reclaimed'; result: CompleteSendReclaimResult }
+  | { status: 'rolled_back'; result: CompleteSendReclaimResult }
   | { status: 'claimed'; result: CompletePendingSendResult }
-  | { status: 'unresolved'; detail: string; restoreMayBeNeeded: boolean };
+  | { status: 'unresolved'; reason: UnresolvedReclaimReason };
 
 // Explicit request-validation rejections from NUT error_codes.md. Unknown errors
 // do not establish non-effect and must retain the request for recovery.
@@ -631,23 +652,7 @@ export class SendOperationService {
       } else if (operation.state === 'pending' && operation.method === 'default') {
         const metadata = await this.mintMetadataRefresh.refreshAndCommitIfStale(operation.mintUrl);
         const remote = this.remote.open(metadata, operation.unit);
-        const updatedAt = Date.now();
-        const activeKeys = this.activeKeys(metadata, operation.unit);
-        const seed = await this.loadSeed();
-        const begun = await this.transactionRunner.run((tx) =>
-          tx.perform(beginSendReclaim, {
-            operationId,
-            updatedAt,
-            activeKeys,
-            seed,
-          }),
-        );
-        if (begun.counter) await this.publishCommittedEvent('counter:updated', begun.counter);
-        if (begun.skippedForFees) {
-          this.logger?.warn('Cannot reclaim send proofs because fees consume the amount', {
-            operationId,
-          });
-        }
+        const begun = await this.beginReclaim(operation, metadata);
         try {
           reclaimed = await this.submitSendReclaim(
             begun.operation,
@@ -658,9 +663,12 @@ export class SendOperationService {
         } catch (error) {
           failure = { error };
           // The request may have reached the mint. Make one attempt to settle from mint evidence.
+          // A definitive rejection had no effect there, so the same request is not sent again.
           try {
-            const outcome = await this.resolveInterruptedReclaim(begun.operation, reason);
-            if (outcome.status === 'reclaimed') {
+            const outcome = await this.resolveInterruptedReclaim(begun.operation, reason, {
+              replayStoredRequest: !this.isDefinitiveSwapFailure(error),
+            });
+            if (outcome.status === 'rolled_back') {
               reclaimed = outcome.result;
               failure = undefined;
             } else if (outcome.status === 'claimed') {
@@ -705,6 +713,41 @@ export class SendOperationService {
     });
   }
 
+  /**
+   * Commit the reclaim request for a `pending` Send. For a `rolling_back` Send, abandon its
+   * reclaim and begin a new one in the same transaction.
+   */
+  private async beginReclaim(
+    operation: PendingSendOperation | RollingBackSendOperation,
+    metadata: MintMetadata,
+  ): Promise<BeginSendReclaimResult> {
+    const updatedAt = Date.now();
+    const activeKeys = this.activeKeys(metadata, operation.unit);
+    const seed = await this.loadSeed();
+    const begun = await this.transactionRunner.run(async (tx) => {
+      if (operation.state === 'rolling_back') {
+        await tx.perform(abandonSendReclaim, {
+          operationId: operation.id,
+          expectedRevision: operation.revision ?? 0,
+          updatedAt,
+        });
+      }
+      return tx.perform(beginSendReclaim, {
+        operationId: operation.id,
+        updatedAt,
+        activeKeys,
+        seed,
+      });
+    });
+    if (begun.counter) await this.publishCommittedEvent('counter:updated', begun.counter);
+    if (begun.skippedForFees) {
+      this.logger?.warn('Cannot reclaim send proofs because fees consume the amount', {
+        operationId: operation.id,
+      });
+    }
+    return begun;
+  }
+
   /** Submit the committed reclaim request, if the reclaim has one, and apply the result. */
   private async submitSendReclaim(
     operation: RollingBackSendOperation,
@@ -739,34 +782,44 @@ export class SendOperationService {
 
   /**
    * Settle a reclaim that stopped after `rolling_back` was committed. The caller holds the
-   * operation lock. Mint I/O runs outside transactions; evidence that does not decide the outcome
-   * leaves the Send and its reclaim request untouched.
+   * operation lock. Reclaim outputs the wallet already stores settle it without the mint. Mint
+   * I/O runs outside transactions; evidence that does not decide the outcome leaves the Send and
+   * its reclaim request untouched.
    */
   private async resolveInterruptedReclaim(
     operation: RollingBackSendOperation,
     reason: string,
+    options: { replayStoredRequest: boolean } = { replayStoredRequest: true },
   ): Promise<SendReclaimOutcome> {
     const plan = operation.reclaimData;
     const secrets = plan ? plan.inputProofSecrets : getSendProofSecrets(operation);
     const stored = await this.proofQueries.getProofsBySecrets(operation.mintUrl, secrets);
     const bySecret = new Map(stored.map((proof) => [proof.secret, proof]));
     if (secrets.length === 0 || bySecret.size !== secrets.length) {
-      return {
-        status: 'unresolved',
-        detail: 'token proof metadata is missing',
-        restoreMayBeNeeded: true,
-      };
+      return { status: 'unresolved', reason: 'token_proofs_missing' };
     }
     const inputProofs = secrets.map((secret) => bySecret.get(secret)!);
+    const outputSecrets = plan
+      ? getSecretsFromSerializedOutputData(plan.outputData).keepSecrets
+      : [];
+
+    if (plan) {
+      // The mint signs these outputs only for this request, so holding all of them, for example
+      // after a Restore, shows the reclaim landed. Completion keeps the stored rows as they are.
+      const held = await this.proofQueries.getProofsBySecrets(operation.mintUrl, outputSecrets);
+      if (outputSecrets.length > 0 && held.length === outputSecrets.length) {
+        return {
+          status: 'rolled_back',
+          result: await this.applySendReclaim(operation, held, reason),
+        };
+      }
+    }
+
     const metadata = await this.mintMetadataRefresh.refreshAndCommitIfStale(operation.mintUrl);
     const remote = this.remote.open(metadata, operation.unit);
     const states = await remote.checkProofStates(inputProofs);
     if (states.length !== inputProofs.length) {
-      return {
-        status: 'unresolved',
-        detail: 'proof-state response was incomplete',
-        restoreMayBeNeeded: false,
-      };
+      return { status: 'unresolved', reason: 'proof_states_incomplete' };
     }
     const allUnspent = states.every((state) => state.state === 'UNSPENT');
     const allSpent = states.every((state) => state.state === 'SPENT');
@@ -774,44 +827,27 @@ export class SendOperationService {
     if (!plan) {
       // No request was stored, so spent token proofs cannot be attributed to either party.
       if (!allUnspent || inputProofs.some((proof) => proof.state !== 'inflight')) {
-        return {
-          status: 'unresolved',
-          detail: 'no stored reclaim request and the token proofs are not all unspent',
-          restoreMayBeNeeded: true,
-        };
+        return { status: 'unresolved', reason: 'no_stored_request' };
       }
       // Nothing was reclaimed or claimed. Start again with a stored request.
-      const updatedAt = Date.now();
-      const activeKeys = this.activeKeys(metadata, operation.unit);
-      const seed = await this.loadSeed();
-      const begun = await this.transactionRunner.run(async (tx) => {
-        await tx.perform(abandonSendReclaim, { operationId: operation.id, updatedAt });
-        return tx.perform(beginSendReclaim, {
-          operationId: operation.id,
-          updatedAt,
-          activeKeys,
-          seed,
-        });
-      });
-      if (begun.counter) await this.publishCommittedEvent('counter:updated', begun.counter);
+      const begun = await this.beginReclaim(operation, metadata);
       return {
-        status: 'reclaimed',
+        status: 'rolled_back',
         result: await this.submitSendReclaim(begun.operation, begun.inputProofs, remote, reason),
       };
     }
 
     if (allUnspent) {
+      if (!options.replayStoredRequest) {
+        return { status: 'unresolved', reason: 'request_not_replayed' };
+      }
       return {
-        status: 'reclaimed',
+        status: 'rolled_back',
         result: await this.submitSendReclaim(operation, inputProofs, remote, reason),
       };
     }
     if (!allSpent) {
-      return {
-        status: 'unresolved',
-        detail: 'token proofs are pending or only partly spent',
-        restoreMayBeNeeded: false,
-      };
+      return { status: 'unresolved', reason: 'token_proofs_unsettled' };
     }
 
     // A strict Restore returns nothing only when the mint signed none of the reclaim outputs.
@@ -820,7 +856,11 @@ export class SendOperationService {
       // The token proofs are spent and the reclaim never landed: the recipient claimed.
       const updatedAt = Date.now();
       const result = await this.transactionRunner.run(async (tx) => {
-        await tx.perform(abandonSendReclaim, { operationId: operation.id, updatedAt });
+        await tx.perform(abandonSendReclaim, {
+          operationId: operation.id,
+          expectedRevision: operation.revision ?? 0,
+          updatedAt,
+        });
         return tx.perform(completePendingSend, {
           operationId: operation.id,
           updatedAt,
@@ -829,20 +869,15 @@ export class SendOperationService {
       });
       return { status: 'claimed', result };
     }
-    const expected = getSecretsFromSerializedOutputData(plan.outputData).keepSecrets;
     const restoredSecrets = new Set(restored.map((proof) => proof.secret));
     if (
-      restored.length !== expected.length ||
-      !expected.every((secret) => restoredSecrets.has(secret))
+      restored.length !== outputSecrets.length ||
+      !outputSecrets.every((secret) => restoredSecrets.has(secret))
     ) {
-      return {
-        status: 'unresolved',
-        detail: 'reclaim outputs were only partly restored',
-        restoreMayBeNeeded: false,
-      };
+      return { status: 'unresolved', reason: 'outputs_partly_restored' };
     }
     return {
-      status: 'reclaimed',
+      status: 'rolled_back',
       result: await this.applySendReclaim(operation, restored, reason),
     };
   }
@@ -872,42 +907,50 @@ export class SendOperationService {
       outcome =
         latest.method === 'default'
           ? await this.resolveInterruptedReclaim(latest, 'Reclaim completed during recovery')
-          : {
-              status: 'unresolved',
-              detail: `method ${latest.method} has no reclaim`,
-              restoreMayBeNeeded: true,
-            };
+          : { status: 'unresolved', reason: 'method_without_reclaim' };
     } finally {
       releaseLock();
     }
 
-    if (outcome.status === 'reclaimed') {
+    if (outcome.status === 'rolled_back') {
       await this.publishReclaimedSend(outcome.result);
       this.logger?.info('Completed an interrupted Send reclaim during recovery', {
         operationId: op.id,
       });
-    } else if (outcome.status === 'claimed') {
+      return;
+    }
+    if (outcome.status === 'claimed') {
       await this.publishCompletedSend(outcome.result);
       this.logger?.info('Interrupted Send reclaim found the token claimed', {
         operationId: op.id,
         state: outcome.result.operation.state,
       });
-    } else if (outcome.restoreMayBeNeeded) {
-      this.logger?.warn(
-        'Found operation stuck in rolling_back state. ' +
-          'This indicates a crash during rollback. Manual recovery via seed restore may be needed.',
-        {
+      return;
+    }
+    const detail = UNRESOLVED_RECLAIM_DETAIL[outcome.reason];
+    switch (outcome.reason) {
+      // The stored record cannot settle these; the value is only reachable through a Restore.
+      case 'token_proofs_missing':
+      case 'no_stored_request':
+      case 'method_without_reclaim':
+        this.logger?.warn(
+          'Found operation stuck in rolling_back state. ' +
+            'This indicates a crash during rollback. Manual recovery via seed restore may be needed.',
+          {
+            operationId: op.id,
+            mintUrl: op.mintUrl,
+            amount: op.amount,
+            reason: outcome.reason,
+            detail,
+          },
+        );
+        return;
+      default:
+        this.logger?.warn('Send reclaim outcome remains ambiguous; preserving recovery material', {
           operationId: op.id,
-          mintUrl: op.mintUrl,
-          amount: op.amount,
-          detail: outcome.detail,
-        },
-      );
-    } else {
-      this.logger?.warn('Send reclaim outcome remains ambiguous; preserving recovery material', {
-        operationId: op.id,
-        detail: outcome.detail,
-      });
+          reason: outcome.reason,
+          detail,
+        });
     }
   }
 

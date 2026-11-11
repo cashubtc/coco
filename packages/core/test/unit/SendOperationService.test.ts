@@ -1067,4 +1067,138 @@ describe('SendOperationService', () => {
     expect(remote.reclaim).toHaveBeenCalledTimes(1);
     expect((await proofRepo.getAvailableProofs(mintUrl)).length).toBeGreaterThan(0);
   });
+
+  it('completes a reclaim whose result could not be committed', async () => {
+    await proofRepo.saveProofs(mintUrl, [makeProof('reclaim-inline-failed-commit', 10)]);
+    const prepared = await service.prepare(await service.init(mintUrl, unitAmount(10)));
+    await service.execute(prepared);
+    const withTransaction = repositories.withTransaction.bind(repositories);
+    let failNextTransaction = false;
+    repositories.withTransaction = (work) => {
+      if (!failNextTransaction) return withTransaction(work);
+      failNextTransaction = false;
+      return Promise.reject(new Error('storage unavailable'));
+    };
+    remote.reclaim.mockImplementationOnce(async (_inputs, outputData) => {
+      failNextTransaction = true;
+      return reclaimOutputs(outputData);
+    });
+    reportStates('SPENT');
+    remote.restoreOutputs.mockImplementation(async (outputData) => reclaimOutputs(outputData));
+    const rolledBack: string[] = [];
+    eventBus.on('send:rolled-back', ({ operationId }) => {
+      rolledBack.push(operationId);
+    });
+
+    await service.rollback(prepared.id);
+
+    const stored = await sendOpRepo.getById(prepared.id);
+    expect(stored?.state).toBe('rolled_back');
+    expect(remote.reclaim).toHaveBeenCalledTimes(1);
+    expect(remote.restoreOutputs).toHaveBeenCalledTimes(1);
+    expect((await proofRepo.getAvailableProofs(mintUrl)).map((proof) => proof.secret)).toEqual(
+      reclaimOutputs(stored!.reclaimData!.outputData).map((proof) => proof.secret),
+    );
+    expect(rolledBack).toEqual([prepared.id]);
+  });
+
+  it('sends a failed reclaim request once more when the token proofs are still unspent', async () => {
+    await proofRepo.saveProofs(mintUrl, [makeProof('reclaim-inline-replay', 10)]);
+    const prepared = await service.prepare(await service.init(mintUrl, unitAmount(10)));
+    await service.execute(prepared);
+    remote.reclaim.mockRejectedValueOnce(new Error('connection lost'));
+    remote.reclaim.mockImplementation(async (_inputs, outputData) => reclaimOutputs(outputData));
+    reportStates('UNSPENT');
+
+    await service.rollback(prepared.id);
+
+    expect((await sendOpRepo.getById(prepared.id))?.state).toBe('rolled_back');
+    expect(remote.reclaim).toHaveBeenCalledTimes(2);
+    expect(remote.reclaim.mock.calls[1]![1]).toEqual(remote.reclaim.mock.calls[0]![1]);
+  });
+
+  it('does not send a reclaim request again after the mint definitively rejected it', async () => {
+    await proofRepo.saveProofs(mintUrl, [makeProof('reclaim-inline-rejected', 10)]);
+    const prepared = await service.prepare(await service.init(mintUrl, unitAmount(10)));
+    await service.execute(prepared);
+    remote.reclaim.mockRejectedValue(new MintOperationError(12002, 'Keyset is inactive'));
+    reportStates('UNSPENT');
+
+    await expect(service.rollback(prepared.id)).rejects.toThrow('Keyset is inactive');
+
+    const stored = await sendOpRepo.getById(prepared.id);
+    expect(stored?.state).toBe('rolling_back');
+    expect(stored?.reclaimData).toBeDefined();
+    expect(remote.reclaim).toHaveBeenCalledTimes(1);
+    expect(remote.checkProofStates).toHaveBeenCalledTimes(1);
+  });
+
+  it('still finalizes a claimed Send when the mint definitively rejected the reclaim', async () => {
+    await proofRepo.saveProofs(mintUrl, [makeProof('reclaim-inline-rejected-claimed', 10)]);
+    const prepared = await service.prepare(await service.init(mintUrl, unitAmount(10)));
+    await service.execute(prepared);
+    remote.reclaim.mockRejectedValue(new MintOperationError(12002, 'Keyset is inactive'));
+    reportStates('SPENT');
+
+    await expect(service.rollback(prepared.id)).rejects.toThrow('Keyset is inactive');
+
+    expect((await sendOpRepo.getById(prepared.id))?.state).toBe('finalized');
+    expect(remote.reclaim).toHaveBeenCalledTimes(1);
+  });
+
+  it('settles a reclaim from outputs the wallet already stores without asking the mint', async () => {
+    const id = await interruptedReclaim('reclaim-outputs-stored');
+    const outputs = reclaimOutputs((await sendOpRepo.getById(id))!.reclaimData!.outputData);
+    // A Restore imported the reclaim outputs, and the wallet has spent them since.
+    await proofRepo.saveProofs(
+      mintUrl,
+      outputs.map((proof) => ({ ...proof, mintUrl, unit: 'sat', state: 'spent' }) as CoreProof),
+    );
+    remote.checkProofStates.mockClear();
+    const saved: string[] = [];
+    eventBus.on('proofs:saved', ({ proofs }) => {
+      saved.push(...proofs.map((proof) => proof.secret));
+    });
+
+    await buildService().recoverPendingOperations();
+
+    expect((await sendOpRepo.getById(id))?.state).toBe('rolled_back');
+    expect(remote.checkProofStates).not.toHaveBeenCalled();
+    expect(remote.restoreOutputs).not.toHaveBeenCalled();
+    expect(remote.reclaim).toHaveBeenCalledTimes(1);
+    expect(saved).toEqual([]);
+    for (const output of outputs) {
+      expect((await proofRepo.getProofBySecret(mintUrl, output.secret))?.state).toBe('spent');
+    }
+    const input = await proofRepo.getProofBySecret(mintUrl, 'reclaim-outputs-stored');
+    expect(input?.state).toBe('spent');
+    expect(input?.usedByOperationId).toBeUndefined();
+  });
+
+  it('does not let another Coco Session replace a restarted reclaim request', async () => {
+    const id = await rollingBackWithoutRequest('reclaim-no-request-race');
+    reportStates('UNSPENT');
+    // While this Session waits on the mint, another one restarts the reclaim and stores a request.
+    const other = buildService();
+    let raced = false;
+    remote.checkProofStates.mockImplementation(async (proofs) => {
+      if (!raced) {
+        raced = true;
+        remote.reclaim.mockRejectedValueOnce(new Error('connection lost'));
+        await other.recoverPendingOperations();
+      }
+      return proofs.map((proof) => ({ Y: `Y-${proof.secret}`, state: 'UNSPENT', witness: null }));
+    });
+
+    await service.recoverPendingOperations();
+
+    const stored = await sendOpRepo.getById(id);
+    expect(stored?.state).toBe('rolling_back');
+    expect(stored?.reclaimData?.outputData).toEqual(remote.reclaim.mock.calls[0]![1]);
+    expect(remote.reclaim).toHaveBeenCalledTimes(1);
+    expect(logger.error).toHaveBeenCalledWith(
+      'Error recovering rolling_back operation',
+      expect.objectContaining({ operationId: id, error: expect.stringContaining('conflict') }),
+    );
+  });
 });

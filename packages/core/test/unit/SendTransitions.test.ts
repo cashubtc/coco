@@ -1,6 +1,7 @@
 import { Amount, type MintKeys, type OutputDataLike } from '@cashu/cashu-ts';
 import { describe, expect, it } from 'bun:test';
 import {
+  abandonSendReclaim,
   applySendResult,
   beginSendExecution,
   cancelPreparedSend,
@@ -1662,6 +1663,174 @@ describe('Send transitions reclaim', () => {
       'rolling_back',
     );
     expect(await repositories.proofRepository.getAvailableProofs(mintUrl)).toEqual([]);
+  });
+
+  async function rollingBack() {
+    const environment = await pending();
+    const begun = await environment.transactionRunner.run((tx) =>
+      tx.perform(beginSendReclaim, {
+        operationId: environment.operation.id,
+        updatedAt: 400,
+        activeKeys: keys,
+        seed: new Uint8Array(32),
+      }),
+    );
+    return { ...environment, begun };
+  }
+
+  it('keeps reclaim outputs a Restore already saved instead of inserting them again', async () => {
+    const { repositories, transactionRunner, operation, begun } = await rollingBack();
+    const proofs = reclaimProofs(begun.operation.reclaimData!.outputData);
+    expect(proofs).toHaveLength(1);
+    // The restored output was spent again before the reclaim was settled.
+    await repositories.proofRepository.saveProofs(mintUrl, [{ ...proofs[0]!, state: 'spent' }]);
+
+    const completed = await transactionRunner.run((tx) =>
+      tx.perform(completeSendReclaim, {
+        operationId: operation.id,
+        updatedAt: 500,
+        reason: 'reclaimed',
+        proofs,
+      }),
+    );
+
+    expect(completed.operation.state).toBe('rolled_back');
+    expect(completed.savedProofs).toEqual([]);
+    expect(
+      (await repositories.proofRepository.getProofBySecret(mintUrl, proofs[0]!.secret))?.state,
+    ).toBe('spent');
+    expect(await repositories.proofRepository.getAvailableProofs(mintUrl)).toEqual([]);
+    const input = await repositories.proofRepository.getProofBySecret(mintUrl, 'reclaim-input');
+    expect(input?.state).toBe('spent');
+    expect(input?.usedByOperationId).toBeUndefined();
+  });
+
+  it('rejects a reclaim output that conflicts with a stored proof', async () => {
+    const { repositories, transactionRunner, operation, begun } = await rollingBack();
+    const proofs = reclaimProofs(begun.operation.reclaimData!.outputData);
+    await repositories.proofRepository.saveProofs(mintUrl, [{ ...proofs[0]!, C: 'another-C' }]);
+
+    await expect(
+      transactionRunner.run((tx) =>
+        tx.perform(completeSendReclaim, {
+          operationId: operation.id,
+          updatedAt: 500,
+          reason: 'reclaimed',
+          proofs,
+        }),
+      ),
+    ).rejects.toThrow('conflicts with a stored proof');
+    const stored = await repositories.sendOperationRepository.getById(operation.id);
+    expect(stored?.state).toBe('rolling_back');
+    expect(stored?.reclaimData).toEqual(begun.operation.reclaimData);
+    expect(
+      (await repositories.proofRepository.getProofBySecret(mintUrl, 'reclaim-input'))?.state,
+    ).toBe('inflight');
+  });
+
+  it('finalizes a claimed Send in the transaction that abandons its reclaim', async () => {
+    const { repositories, transactionRunner, operation, begun } = await rollingBack();
+
+    const completed = await transactionRunner.run(async (tx) => {
+      await tx.perform(abandonSendReclaim, {
+        operationId: operation.id,
+        expectedRevision: begun.operation.revision ?? 0,
+        updatedAt: 500,
+      });
+      return tx.perform(completePendingSend, {
+        operationId: operation.id,
+        updatedAt: 500,
+        spentProofSecrets: begun.operation.reclaimData!.inputProofSecrets,
+      });
+    });
+
+    expect(completed.operation.state).toBe('finalized');
+    const stored = await repositories.sendOperationRepository.getById(operation.id);
+    expect(stored?.state).toBe('finalized');
+    expect(stored?.reclaimData).toBeUndefined();
+    const input = await repositories.proofRepository.getProofBySecret(mintUrl, 'reclaim-input');
+    expect(input?.state).toBe('spent');
+    expect(input?.usedByOperationId).toBeUndefined();
+    expect(await repositories.proofRepository.getAvailableProofs(mintUrl)).toEqual([]);
+  });
+
+  it('keeps the reclaim and its request when the composed completion fails', async () => {
+    const { repositories, transactionRunner, operation, begun } = await rollingBack();
+
+    await expect(
+      transactionRunner.run(async (tx) => {
+        await tx.perform(abandonSendReclaim, {
+          operationId: operation.id,
+          expectedRevision: begun.operation.revision ?? 0,
+          updatedAt: 500,
+        });
+        return tx.perform(completePendingSend, {
+          operationId: operation.id,
+          updatedAt: 500,
+          spentProofSecrets: ['not-a-token-proof'],
+        });
+      }),
+    ).rejects.toThrow('does not belong to Send operation');
+
+    const stored = await repositories.sendOperationRepository.getById(operation.id);
+    expect(stored?.state).toBe('rolling_back');
+    expect(stored?.revision).toBe(begun.operation.revision);
+    expect(stored?.reclaimData).toEqual(begun.operation.reclaimData);
+    expect(
+      (await repositories.proofRepository.getProofBySecret(mintUrl, 'reclaim-input'))?.state,
+    ).toBe('inflight');
+  });
+
+  it('replaces an abandoned reclaim request without reusing its output positions', async () => {
+    const { repositories, transactionRunner, operation, begun } = await rollingBack();
+
+    const restarted = await transactionRunner.run(async (tx) => {
+      await tx.perform(abandonSendReclaim, {
+        operationId: operation.id,
+        expectedRevision: begun.operation.revision ?? 0,
+        updatedAt: 500,
+      });
+      return tx.perform(beginSendReclaim, {
+        operationId: operation.id,
+        updatedAt: 500,
+        activeKeys: keys,
+        seed: new Uint8Array(32),
+      });
+    });
+
+    const stored = await repositories.sendOperationRepository.getById(operation.id);
+    expect(stored?.state).toBe('rolling_back');
+    expect(stored?.reclaimData).toEqual(restarted.operation.reclaimData);
+    expect(restarted.operation.reclaimData).not.toEqual(begun.operation.reclaimData);
+    expect((await repositories.counterRepository.getCounter(mintUrl, keysetId))?.counter).toBe(2);
+  });
+
+  it('refuses to abandon a reclaim that changed after its evidence was read', async () => {
+    const { repositories, transactionRunner, operation, begun } = await rollingBack();
+    const staleRevision = begun.operation.revision ?? 0;
+    const restart = () =>
+      transactionRunner.run(async (tx) => {
+        await tx.perform(abandonSendReclaim, {
+          operationId: operation.id,
+          expectedRevision: staleRevision,
+          updatedAt: 500,
+        });
+        return tx.perform(beginSendReclaim, {
+          operationId: operation.id,
+          updatedAt: 500,
+          activeKeys: keys,
+          seed: new Uint8Array(32),
+        });
+      });
+    // Another Coco Session replaces the request first; its request may already be at the mint.
+    const winner = await restart();
+
+    await expect(restart()).rejects.toThrow('conflict');
+
+    const stored = await repositories.sendOperationRepository.getById(operation.id);
+    expect(stored?.state).toBe('rolling_back');
+    expect(stored?.reclaimData).toEqual(winner.operation.reclaimData);
+    expect((await repositories.counterRepository.getCounter(mintUrl, keysetId))?.counter).toBe(2);
   });
 });
 
