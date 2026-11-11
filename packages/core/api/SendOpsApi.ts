@@ -156,6 +156,11 @@ export class SendOpsApi {
    *
    * This is intended for sends that are already in flight but still support
    * rollback according to the underlying send method.
+   *
+   * If the mint call fails, one attempt is made to settle the operation from mint evidence before
+   * this rejects with the original error. A rejection therefore does not mean nothing changed:
+   * the operation is `finalized` when the recipient already claimed the token, and otherwise
+   * stays `rolling_back` until recovery settles it. Read the operation again to tell which.
    */
   async reclaim(operationId: string): Promise<void> {
     const operation = await this.requireOperation(operationId);

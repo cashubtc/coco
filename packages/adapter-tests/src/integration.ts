@@ -1969,6 +1969,62 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       });
     });
 
+    describe('Send Reclaim After Claim', () => {
+      let repositoriesDispose: (() => Promise<void>) | undefined;
+
+      beforeEach(async () => {
+        const { repositories, dispose } = await createRepositories();
+        repositoriesDispose = dispose;
+        // No proof-state watcher: the wallet must learn about the claim from its own reclaim.
+        mgr = await initializeCoco({
+          repo: repositories,
+          seedGetter,
+          logger,
+          watchers: {
+            mintOperationWatcher: { disabled: true },
+            proofStateWatcher: { disabled: true },
+          },
+        });
+        await mgr.mint.addMint(mintUrl, { trusted: true });
+        await mintAmount(mgr!, mintUrl, 200, testUnit);
+      });
+
+      afterEach(async () => {
+        if (repositoriesDispose) {
+          await repositoriesDispose();
+          repositoriesDispose = undefined;
+        }
+      });
+
+      it('should finalize the send and reject when reclaiming a token the recipient claimed', async () => {
+        const prepared = await mgr!.ops.send.prepare({ mintUrl, amount: testAmount(40) });
+        const { operation, token } = await mgr!.ops.send.execute(prepared.id);
+        const balanceAfterSend = await getMintTotalBalance(mgr!, mintUrl, testUnit);
+
+        const recipient = new Wallet(createTestMint(mintUrl), { unit: testUnit });
+        await recipient.loadMint();
+        await recipient.receive(token);
+        expect((await mgr!.ops.send.get(operation.id))?.state).toBe('pending');
+
+        const finalized = waitForEvent<{ operationId: string }>(
+          mgr!,
+          'send:finalized',
+          (payload) => payload.operationId === operation.id,
+        );
+        const finalizedHistory = waitForSendHistoryState(mgr!, 'finalized', {
+          operationId: operation.id,
+        });
+        await expect(mgr!.ops.send.reclaim(operation.id)).rejects.toThrow();
+        await finalized;
+        await finalizedHistory;
+
+        expect((await mgr!.ops.send.get(operation.id))?.state).toBe('finalized');
+        expect((await mgr!.ops.send.listInFlight()).length).toBe(0);
+        expect(await getMintTotalBalance(mgr!, mintUrl, testUnit)).toBe(balanceAfterSend);
+        expect(await getMintSpendableBalance(mgr!, mintUrl, testUnit)).toBe(balanceAfterSend);
+      }, 30000);
+    });
+
     describe('Send Operation Locking', () => {
       let repositoriesDispose: (() => Promise<void>) | undefined;
 

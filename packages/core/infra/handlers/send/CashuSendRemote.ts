@@ -55,7 +55,8 @@ export class CashuSendRemote implements SendRemote {
         );
       },
       checkProofStates: (proofs) => wallet.checkProofsStates(proofs),
-      restoreOutputs: (outputs) => restoreOutputProofs(wallet, metadata.keysets, unit, outputs),
+      restoreOutputs: (outputs, options) =>
+        restoreOutputProofs(wallet, metadata.keysets, unit, outputs, options),
       reclaim: (proofs, outputs) => {
         const data = deserializeOutputData(outputs).keep;
         const keysetId = getOutputKeysetId(data);

@@ -14,15 +14,15 @@ The send operation saga provides:
 
 Send operations progress through the following states:
 
-| State          | Description                                       |
-| -------------- | ------------------------------------------------- |
-| `init`         | Operation created, nothing reserved yet           |
-| `prepared`     | Proofs reserved, fee calculated, ready to execute |
-| `executing`    | Swap in progress (if needed)                      |
-| `pending`      | Token created, waiting for recipient to claim     |
-| `finalized`    | Recipient claimed, operation finalized            |
-| `rolling_back` | Rollback in progress                              |
-| `rolled_back`  | Operation cancelled, proofs reclaimed             |
+| State          | Description                                             |
+| -------------- | ------------------------------------------------------- |
+| `init`         | Operation created, nothing reserved yet                 |
+| `prepared`     | Proofs reserved, fee calculated, ready to execute       |
+| `executing`    | Swap in progress (if needed)                            |
+| `pending`      | Token created, waiting for recipient to claim           |
+| `finalized`    | Recipient claimed, operation finalized                  |
+| `rolling_back` | Reclaim in progress; settled by recovery if interrupted |
+| `rolled_back`  | Operation cancelled, proofs reclaimed                   |
 
 ```
 init ──► prepared ──► executing ──► pending ──► finalized
@@ -32,16 +32,18 @@ init ──► prepared ──► executing ──► pending ──► finalize
   └─────────┴────────────┴──────────────────────┴──► rolled_back
 ```
 
+A reclaim that finds the token already claimed finalizes the operation.
+
 ## Lifecycle Actions
 
-| Action                                  | Valid input state              | Resulting state                        | Use when                                                          |
-| --------------------------------------- | ------------------------------ | -------------------------------------- | ----------------------------------------------------------------- |
-| `prepare({ mintUrl, amount, target? })` | none                           | `prepared`                             | You want to reserve proofs and show fees before creating a token. |
-| `execute(operationOrId, options?)`      | `prepared`                     | `pending`                              | The user confirmed the send and you need the shareable token.     |
-| `refresh(operationId)`                  | any, actively checks `pending` | latest stored state                    | You are resuming stale persisted state or building recovery UI.   |
-| `cancel(operationId)`                   | `prepared`                     | `rolled_back`                          | The user abandons the send before a token is created.             |
-| `reclaim(operationId)`                  | `pending`                      | `rolled_back` when reclaim is possible | The token was created but should be reclaimed before receipt.     |
-| `finalize(operationId)`                 | `pending`                      | `finalized`                            | You know the token was claimed and want to finalize explicitly.   |
+| Action                                  | Valid input state              | Resulting state                       | Use when                                                          |
+| --------------------------------------- | ------------------------------ | ------------------------------------- | ----------------------------------------------------------------- |
+| `prepare({ mintUrl, amount, target? })` | none                           | `prepared`                            | You want to reserve proofs and show fees before creating a token. |
+| `execute(operationOrId, options?)`      | `prepared`                     | `pending`                             | The user confirmed the send and you need the shareable token.     |
+| `refresh(operationId)`                  | any, actively checks `pending` | latest stored state                   | You are resuming stale persisted state or building recovery UI.   |
+| `cancel(operationId)`                   | `prepared`                     | `rolled_back`                         | The user abandons the send before a token is created.             |
+| `reclaim(operationId)`                  | `pending`                      | `rolled_back`; `finalized` if claimed | The token was created but should be reclaimed before receipt.     |
+| `finalize(operationId)`                 | `pending`                      | `finalized`                           | You know the token was claimed and want to finalize explicitly.   |
 
 With the default proof-state watcher enabled, most apps do not need to poll
 `refresh()` during the happy path. Render from the operation returned by
@@ -193,6 +195,10 @@ if (operation?.state === 'pending') {
 }
 ```
 
+If the mint rejects the reclaim because the recipient already claimed the token, `reclaim()`
+rejects and the operation is finalized. A reclaim that fails for another reason can leave the
+operation `rolling_back` for recovery to settle, so read the operation again after a rejection.
+
 > **Note:** Reclaiming requires a swap, which incurs fees. The reclaimed amount will be less than the original send amount.
 
 ## Querying Operations
@@ -246,13 +252,13 @@ await coco.ops.send.recovery.run();
 
 ### Recovery Behavior by State
 
-| State          | Recovery Action                                         |
-| -------------- | ------------------------------------------------------- |
-| `init`         | Cleaned up (deleted)                                    |
-| `prepared`     | Left as-is; user can rollback manually                  |
-| `executing`    | Checks mint for swap status, recovers proofs if needed  |
-| `pending`      | Checks if proofs are spent; finalizes or leaves pending |
-| `rolling_back` | Warns; may need manual seed restore                     |
+| State          | Recovery Action                                                                                                      |
+| -------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `init`         | Cleaned up (deleted)                                                                                                 |
+| `prepared`     | Left as-is; user can rollback manually                                                                               |
+| `executing`    | Checks mint for swap status, recovers proofs if needed                                                               |
+| `pending`      | Checks if proofs are spent; finalizes or leaves pending                                                              |
+| `rolling_back` | Checks the token proofs with the mint; completes the reclaim, finalizes a claimed Send, or leaves it for a later run |
 
 ### Executing State Recovery
 
@@ -268,6 +274,30 @@ For swap sends, recovery checks the original inputs with the mint and uses the s
 
 Legacy exact-match sends stranded in `executing` are handled separately: recovery returns their
 unsubmitted, operation-owned inputs to ready, releases their reservations, and records `rolled_back`.
+
+### Rolling Back State Recovery
+
+A reclaim has its own stored request, separate from the original send: the token proofs it spends
+and a new set of outputs, both saved before the mint is contacted. Recovery settles the reclaim
+from that exact request and never replaces a request that may have reached the mint. Reclaimed
+proofs are saved as ordinary ready proofs, and the Send stays a single history entry.
+
+For an interrupted reclaim, recovery first looks for the reclaim outputs in the wallet, then
+checks the token proofs with the mint:
+
+- **Reclaim outputs already in the wallet** (for example after a Restore): Moves the operation to
+  `rolled_back` without contacting the mint and leaves those proofs as they are.
+- **Token proofs unspent**: Replays the stored reclaim request with the same inputs and outputs,
+  then moves the operation to `rolled_back`.
+- **Token proofs spent, reclaim outputs restorable**: Saves the restored proofs and moves the
+  operation to `rolled_back`.
+- **Token proofs spent, the mint signed none of the reclaim outputs**: The recipient claimed the
+  token; the operation moves to `finalized`.
+- **Anything else**: The operation and its stored request are left unchanged for the next recovery
+  run.
+- **Operations from releases that did not store the reclaim request**: Restarted only when the mint
+  reports every token proof unspent. Otherwise recovery logs a warning, and a seed Restore for that
+  mint recovers any reclaimed value that was not saved.
 
 ### Retrieving a Recovered Token
 
