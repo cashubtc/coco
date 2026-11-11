@@ -231,10 +231,11 @@ describe('usePaginatedHistory', () => {
     expect(result.current.history).toEqual(secondLoadedEntries);
   });
 
-  it('runs a waiting foreground intent after the preceding read fails', async () => {
+  it('runs a waiting foreground intent after swallowing the preceding read failure', async () => {
     const mock = historyManager();
     const failedPage = createDeferred<HistoryEntry[]>();
     const recoveredPage = [entry('recovered-page', 3)];
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
     mock.getPaginatedHistory
       .mockResolvedValueOnce([entry('initial', 1)])
       .mockReturnValueOnce(failedPage.promise)
@@ -253,9 +254,9 @@ describe('usePaginatedHistory', () => {
 
     await act(async () => {
       failedPage.reject(new Error('page one failed'));
-      await expect(failedRead).rejects.toThrow('page one failed');
-      await recoveredRead;
+      await Promise.all([failedRead, recoveredRead]);
     });
+    expect(consoleError).toHaveBeenCalledWith(new Error('page one failed'));
     expect(mock.getPaginatedHistory).toHaveBeenNthCalledWith(3, 4, 2);
     expect(result.current.history).toEqual(recoveredPage);
   });
@@ -278,18 +279,34 @@ describe('usePaginatedHistory', () => {
     expect(result.current.history).toEqual(recovered);
   });
 
-  it('rejects explicit failures while retaining the last good data and cursor', async () => {
+  it('swallows explicit failures while retaining the last good data and cursor', async () => {
     const mock = historyManager();
     const initial = [entry('good', 1)];
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
     mock.getPaginatedHistory.mockResolvedValueOnce(initial).mockRejectedValueOnce(new Error('bad'));
     const { result } = renderHook(() => usePaginatedHistory(2), {
       wrapper: createHookWrapper(mock.manager),
     });
     await flush();
 
-    await expect(result.current.refresh()).rejects.toThrow('bad');
+    await expect(result.current.refresh()).resolves.toBeUndefined();
+    expect(consoleError).toHaveBeenCalledWith(new Error('bad'));
     expect(result.current.history).toEqual(initial);
     expect(result.current.hasMore).toBe(false);
+  });
+
+  it('ignores invalid page requests without rejecting', async () => {
+    const mock = historyManager();
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mock.getPaginatedHistory.mockResolvedValueOnce([entry('initial', 1)]);
+    const { result } = renderHook(() => usePaginatedHistory(2), {
+      wrapper: createHookWrapper(mock.manager),
+    });
+    await flush();
+
+    await expect(result.current.goToPage(-1)).resolves.toBeUndefined();
+    expect(mock.getPaginatedHistory).toHaveBeenCalledTimes(1);
+    expect(consoleError).toHaveBeenCalledWith(expect.any(TypeError));
   });
 
   it('fences an old Manager read and hydrates the replacement Manager', async () => {

@@ -1,13 +1,14 @@
 import type { Manager, MintSwapOperation } from '@cashu/coco-core';
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useManager } from '../contexts/ManagerContext';
-import type { OperationBinding, OperationHookResult, OperationHookStatus } from './operation-types';
+import type { OperationBinding, OperationHookResult } from './operation-types';
 import {
   getInitialOperationFromBinding,
   getInitialOperationIdFromBinding,
   normalizeHookError,
   requireCurrentOperationId,
   requireUnboundOperationCreation,
+  useOperationHookState,
 } from './operationHookUtils';
 
 type MintSwapOps = Manager['ops']['mintSwap'];
@@ -51,31 +52,28 @@ export function useMintSwapOperation(
   const initialBindingRef = useRef(initialBinding);
   const initialOperation = getInitialOperationFromBinding(initialBindingRef.current);
   const boundOperationIdRef = useRef(getInitialOperationIdFromBinding(initialBindingRef.current));
-  const currentOperationRef = useRef<MintSwapOperation | null>(initialOperation);
   const managerRef = useRef(manager);
   const previousManagerRef = useRef(manager);
-  const mountedRef = useRef(true);
   const epochRef = useRef(0);
   const readStateRef = useRef<ReadState>({ epoch: 0, reading: false, requested: false });
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  // Epochs fence stale state updates, but a submitted effect keeps this lock until it settles.
-  const commandRef = useRef<symbol | null>(null);
   const hydrationErrorRef = useRef<Error | null>(null);
   const waitAbortRef = useRef(new AbortController());
 
-  const [currentOperation, setCurrentOperation] = useState<MintSwapOperation | null>(
-    initialOperation,
-  );
-  const [executeResult, setExecuteResult] = useState<MintSwapOperationExecuteResult | null>(null);
-  const [status, setStatus] = useState<OperationHookStatus>('idle');
-  const [error, setError] = useState<Error | null>(null);
-
-  useLayoutEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
+  const {
+    currentOperation,
+    executeResult,
+    status,
+    error,
+    isLoading,
+    isError,
+    replaceCurrentOperation,
+    replaceExecuteResult,
+    getCurrentOperation,
+    replaceStatus,
+    runStatefulAction,
+    reset: resetState,
+  } = useOperationHookState<MintSwapOperation, MintSwapOperationExecuteResult>(initialOperation);
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) clearInterval(pollRef.current);
@@ -84,15 +82,13 @@ export function useMintSwapOperation(
 
   const bindOperation = useCallback(
     (operation: MintSwapOperation, options?: { clearExecuteResult?: boolean }) => {
-      if (!mountedRef.current || operation.id !== boundOperationIdRef.current) return;
-      const current = currentOperationRef.current;
+      if (operation.id !== boundOperationIdRef.current) return;
+      const current = getCurrentOperation();
       if (current?.id === operation.id && operation.revision < current.revision) return;
-      currentOperationRef.current = operation;
-      setCurrentOperation(operation);
-      if (options?.clearExecuteResult) setExecuteResult(null);
+      replaceCurrentOperation(operation, options);
       if (isQuiescent(operation)) stopPolling();
     },
-    [stopPolling],
+    [getCurrentOperation, replaceCurrentOperation, stopPolling],
   );
 
   const queueRead = useCallback(() => {
@@ -108,6 +104,8 @@ export function useMintSwapOperation(
     if (state.reading) return;
     state.reading = true;
     const selectedManager = managerRef.current;
+    const hydrating = !getCurrentOperation();
+    if (hydrating) replaceStatus('loading');
 
     void (async () => {
       try {
@@ -121,22 +119,30 @@ export function useMintSwapOperation(
           ) {
             return;
           }
-          if (!operation) throw new Error(`Operation ${operationId} not found`);
+          if (!operation) {
+            stopPolling();
+            if (!getCurrentOperation()) {
+              const notFoundError = new Error(`Operation ${operationId} not found`);
+              boundOperationIdRef.current = null;
+              hydrationErrorRef.current = notFoundError;
+              replaceCurrentOperation(null, { clearExecuteResult: true });
+              replaceStatus('error', notFoundError);
+            }
+            return;
+          }
           bindOperation(operation);
-          if (hydrationErrorRef.current && mountedRef.current) {
+          if (hydrating || hydrationErrorRef.current) {
             hydrationErrorRef.current = null;
-            setError(null);
-            setStatus('success');
+            replaceStatus('success');
           }
         }
       } catch (readError) {
         if (epoch === epochRef.current && selectedManager === managerRef.current) {
+          const normalized = normalizeHookError(readError);
           console.error(readError);
-          if (!currentOperationRef.current && mountedRef.current) {
-            const normalized = normalizeHookError(readError);
+          if (!getCurrentOperation()) {
             hydrationErrorRef.current = normalized;
-            setError(normalized);
-            setStatus('error');
+            replaceStatus('error', normalized);
           }
         }
       } finally {
@@ -144,16 +150,16 @@ export function useMintSwapOperation(
         if (state.requested && epoch === epochRef.current) queueRead();
       }
     })();
-  }, [bindOperation]);
+  }, [bindOperation, getCurrentOperation, replaceCurrentOperation, replaceStatus, stopPolling]);
 
   const ensurePolling = useCallback(() => {
-    const operation = currentOperationRef.current;
+    const operation = getCurrentOperation();
     if (!boundOperationIdRef.current || (operation && isQuiescent(operation))) {
       stopPolling();
       return;
     }
     if (!pollRef.current) pollRef.current = setInterval(queueRead, 1_000);
-  }, [queueRead, stopPolling]);
+  }, [getCurrentOperation, queueRead, stopPolling]);
 
   useEffect(() => {
     const replacingManager = previousManagerRef.current !== manager;
@@ -167,11 +173,7 @@ export function useMintSwapOperation(
 
     if (replacingManager) {
       hydrationErrorRef.current = null;
-      currentOperationRef.current = null;
-      setCurrentOperation(null);
-      setExecuteResult(null);
-      setStatus('idle');
-      setError(null);
+      resetState();
     }
 
     const unsubscribe = manager.on('mint-swap:updated', ({ operationId }) => {
@@ -189,46 +191,26 @@ export function useMintSwapOperation(
       stopPolling();
       waitAbortRef.current.abort(new Error('Mint Swap observer disposed'));
     };
-  }, [ensurePolling, manager, queueRead, stopPolling]);
+  }, [ensurePolling, manager, queueRead, resetState, stopPolling]);
 
   const runCommand = useCallback(
     async <T>(
       action: (selectedManager: Manager) => Promise<T>,
       onSuccess: (result: T) => void,
     ): Promise<T> => {
-      if (commandRef.current) throw new Error('Operation already in progress');
-      const token = Symbol('mint-swap-command');
-      commandRef.current = token;
       hydrationErrorRef.current = null;
       const selectedManager = managerRef.current;
       const epoch = epochRef.current;
-      if (mountedRef.current) {
-        setStatus('loading');
-        setError(null);
-      }
-      try {
-        const result = await action(selectedManager);
-        if (epoch === epochRef.current && selectedManager === managerRef.current) {
-          onSuccess(result);
-          if (mountedRef.current) setStatus('success');
-        }
-        return result;
-      } catch (commandError) {
-        const normalized = normalizeHookError(commandError);
-        if (
-          epoch === epochRef.current &&
-          selectedManager === managerRef.current &&
-          mountedRef.current
-        ) {
-          setError(normalized);
-          setStatus('error');
-        }
-        throw normalized;
-      } finally {
-        if (commandRef.current === token) commandRef.current = null;
-      }
+      return runStatefulAction(
+        () => action(selectedManager),
+        (result) => {
+          if (epoch === epochRef.current && selectedManager === managerRef.current) {
+            onSuccess(result);
+          }
+        },
+      );
     },
-    [],
+    [runStatefulAction],
   );
 
   const prepare = useCallback(
@@ -247,7 +229,7 @@ export function useMintSwapOperation(
   );
 
   const refresh = useCallback(async () => {
-    const id = requireCurrentOperationId(currentOperationRef.current, 'refresh');
+    const id = requireCurrentOperationId(getCurrentOperation(), 'refresh');
     return runCommand(
       (selectedManager) => selectedManager.ops.mintSwap.refresh(id),
       (operation) => {
@@ -255,22 +237,22 @@ export function useMintSwapOperation(
         ensurePolling();
       },
     );
-  }, [bindOperation, ensurePolling, runCommand]);
+  }, [bindOperation, ensurePolling, getCurrentOperation, runCommand]);
 
   const execute = useCallback(async () => {
-    const id = requireCurrentOperationId(currentOperationRef.current, 'execute');
+    const id = requireCurrentOperationId(getCurrentOperation(), 'execute');
     return runCommand(
       (selectedManager) => selectedManager.ops.mintSwap.execute(id),
       (operation) => {
         bindOperation(operation);
-        setExecuteResult(operation);
+        replaceExecuteResult(operation);
         ensurePolling();
       },
     );
-  }, [bindOperation, ensurePolling, runCommand]);
+  }, [bindOperation, ensurePolling, getCurrentOperation, replaceExecuteResult, runCommand]);
 
   const cancel = useCallback(async () => {
-    const id = requireCurrentOperationId(currentOperationRef.current, 'cancel');
+    const id = requireCurrentOperationId(getCurrentOperation(), 'cancel');
     return runCommand(
       (selectedManager) => selectedManager.ops.mintSwap.cancel(id),
       (operation) => {
@@ -278,11 +260,11 @@ export function useMintSwapOperation(
         ensurePolling();
       },
     );
-  }, [bindOperation, ensurePolling, runCommand]);
+  }, [bindOperation, ensurePolling, getCurrentOperation, runCommand]);
 
   const waitForOutcome = useCallback(
     async (options: MintSwapOperationWaitOptions = {}) => {
-      const id = requireCurrentOperationId(currentOperationRef.current, 'waitForOutcome');
+      const id = requireCurrentOperationId(getCurrentOperation(), 'waitForOutcome');
       const selectedManager = managerRef.current;
       const epoch = epochRef.current;
       const internalSignal = waitAbortRef.current.signal;
@@ -302,7 +284,7 @@ export function useMintSwapOperation(
         throw normalizeHookError(waitError);
       }
     },
-    [bindOperation],
+    [bindOperation, getCurrentOperation],
   );
 
   const listActive = useCallback(() => managerRef.current.ops.mintSwap.listActive(), []);
@@ -315,22 +297,16 @@ export function useMintSwapOperation(
     waitAbortRef.current = new AbortController();
     hydrationErrorRef.current = null;
     boundOperationIdRef.current = null;
-    currentOperationRef.current = null;
-    if (mountedRef.current) {
-      setCurrentOperation(null);
-      setExecuteResult(null);
-      setStatus('idle');
-      setError(null);
-    }
-  }, [stopPolling]);
+    resetState();
+  }, [resetState, stopPolling]);
 
   return {
     currentOperation,
     executeResult,
     status,
     error,
-    isLoading: status === 'loading',
-    isError: status === 'error',
+    isLoading,
+    isError,
     prepare,
     refresh,
     execute,

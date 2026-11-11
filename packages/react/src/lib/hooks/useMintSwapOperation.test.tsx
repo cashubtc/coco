@@ -125,6 +125,60 @@ async function flush(): Promise<void> {
 }
 
 describe('useMintSwapOperation', () => {
+  it('reports loading and success while hydrating a string binding', async () => {
+    const mock = managerMock();
+    const pending = createDeferred<MintSwapOperation | null>();
+    const prepared = operation('prepared', 1);
+    mock.mintSwap.get.mockReturnValue(pending.promise);
+    const { result } = renderHook(() => useMintSwapOperation('swap'), {
+      wrapper: createHookWrapper(mock.manager),
+    });
+
+    expect(result.current.status).toBe('loading');
+    expect(result.current.isLoading).toBe(true);
+
+    await act(async () => {
+      pending.resolve(prepared);
+      await pending.promise;
+    });
+
+    expect(result.current.currentOperation).toEqual(prepared);
+    expect(result.current.status).toBe('success');
+    expect(result.current.isLoading).toBe(false);
+  });
+
+  it('settles a missing string binding without polling forever and permits prepare', async () => {
+    vi.useFakeTimers();
+    const mock = managerMock();
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const prepared = operation('prepared', 1);
+    mock.mintSwap.get.mockResolvedValue(null);
+    mock.mintSwap.prepare.mockResolvedValue(prepared);
+    const { result } = renderHook(() => useMintSwapOperation('missing-swap'), {
+      wrapper: createHookWrapper(mock.manager),
+    });
+    await flush();
+
+    expect(result.current.status).toBe('error');
+    expect(result.current.error?.message).toBe('Operation missing-swap not found');
+    expect(mock.mintSwap.get).toHaveBeenCalledTimes(1);
+    expect(consoleError).not.toHaveBeenCalled();
+
+    await act(async () => vi.advanceTimersByTimeAsync(5_000));
+    expect(mock.mintSwap.get).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await result.current.prepare({
+        id: prepared.id,
+        sourceMintUrl: prepared.sourceMintUrl,
+        destinationMintUrl: prepared.destinationMintUrl,
+        destinationAmount: 100,
+      });
+    });
+    expect(result.current.currentOperation).toEqual(prepared);
+    expect(result.current.status).toBe('success');
+  });
+
   it('subscribes before reading and orders observed snapshots by parent revision', async () => {
     const mock = managerMock();
     const calls: string[] = [];
@@ -395,6 +449,36 @@ describe('useMintSwapOperation', () => {
     oldRead.resolve(operation('completed', 9));
     await flush();
     expect(result.current.currentOperation).toEqual(replacement);
+  });
+
+  it('settles when a replacement Manager does not contain the bound operation', async () => {
+    vi.useFakeTimers();
+    const first = managerMock();
+    const second = managerMock();
+    const prepared = operation('prepared', 1);
+    first.mintSwap.get.mockResolvedValue(prepared);
+    second.mintSwap.get.mockResolvedValue(null);
+    let selectedManager = first.manager;
+    const Wrapper = ({ children }: { children: ReactNode }) => (
+      <ManagerProvider manager={selectedManager}>{children}</ManagerProvider>
+    );
+    const { result, rerender } = renderHook(() => useMintSwapOperation('swap'), {
+      wrapper: Wrapper,
+    });
+    await flush();
+    expect(result.current.currentOperation).toEqual(prepared);
+
+    selectedManager = second.manager;
+    rerender();
+    await flush();
+
+    expect(result.current.currentOperation).toBeNull();
+    expect(result.current.status).toBe('error');
+    expect(result.current.error?.message).toBe('Operation swap not found');
+    expect(second.mintSwap.get).toHaveBeenCalledTimes(1);
+
+    await act(async () => vi.advanceTimersByTimeAsync(5_000));
+    expect(second.mintSwap.get).toHaveBeenCalledTimes(1);
   });
 
   it('keeps an old Manager command locked until its submitted effect settles', async () => {

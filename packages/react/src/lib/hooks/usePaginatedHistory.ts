@@ -40,12 +40,7 @@ export const usePaginatedHistory = (pageSize = 100): UsePaginatedHistoryResult =
         return activeReadRef.current ?? Promise.resolve();
       }
 
-      try {
-        await (activeReadRef.current ?? Promise.resolve());
-      } catch {
-        // The caller that started the failed read receives its error. A later foreground intent
-        // still needs to run rather than inheriting that failure.
-      }
+      await (activeReadRef.current ?? Promise.resolve());
     }
 
     if (
@@ -81,11 +76,7 @@ export const usePaginatedHistory = (pageSize = 100): UsePaginatedHistoryResult =
         setHistory(entries);
         setHasMore(entries.length === limit);
       } catch (readError) {
-        if (intent.background) {
-          console.error(readError);
-          return;
-        }
-        throw readError;
+        console.error(readError);
       } finally {
         if (generation === generationRef.current && selectedManager === managerRef.current) {
           fetchingRef.current = false;
@@ -150,7 +141,8 @@ export const usePaginatedHistory = (pageSize = 100): UsePaginatedHistoryResult =
 
   const goToPage = useCallback(async (page: number) => {
     if (!Number.isSafeInteger(page) || page < 0) {
-      throw new TypeError('History page must be a nonnegative safe integer');
+      console.error(new TypeError('History page must be a nonnegative safe integer'));
+      return;
     }
     await runReadRef.current({
       cursor: { mode: 'page', start: page * pageSizeRef.current },

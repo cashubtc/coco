@@ -1,22 +1,24 @@
-import type { HistoryProjectionRepository } from '../repositories';
-import { EventBus } from '../events/EventBus';
-import type { CoreEvents } from '../events/types';
+import type { Token } from '@cashu/cashu-ts';
+import type { Logger } from '@core/logging';
 import type { HistoryEntry, OperationHistoryEntry } from '@core/models/History';
 import {
+  operationHistoryId,
   projectBatchMintOperation,
   projectMeltOperation,
   projectMintOperation,
   projectReceiveOperation,
   projectSendOperation,
 } from '@core/models/History';
-import type { Logger } from '@core/logging';
+import type { BatchMintOperation } from '@core/operations/batchMint/BatchMintOperation';
 import type { MeltOperation } from '@core/operations/melt';
 import type { MintOperation } from '@core/operations/mint';
-import type { BatchMintOperation } from '@core/operations/batchMint/BatchMintOperation';
+import type { MintSwapOperation } from '@core/operations/mintSwap/MintSwapOperation';
+import type { MintSwapOperationRepository } from '@core/operations/mintSwap/MintSwapOperationRepository';
 import type { ReceiveOperation } from '@core/operations/receive/ReceiveOperation';
 import type { SendOperation } from '@core/operations/send/SendOperation';
-import type { Token } from '@cashu/cashu-ts';
-import type { MintSwapOperationRepository } from '@core/operations/mintSwap/MintSwapOperationRepository';
+import { EventBus } from '../events/EventBus';
+import type { CoreEvents } from '../events/types';
+import type { HistoryProjectionRepository } from '../repositories';
 
 export class HistoryService {
   private readonly historyRepository: HistoryProjectionRepository;
@@ -93,7 +95,7 @@ export class HistoryService {
     });
 
     this.eventBus.on('mint-swap:updated', ({ operationId }) => {
-      return this.emitMintSwapById(operationId);
+      return this.emitMintSwapUpdate(operationId);
     });
   }
 
@@ -117,13 +119,13 @@ export class HistoryService {
     mintUrl: string,
     operation: MeltOperation,
   ): Promise<void> {
-    try {
-      const parent = await this.mintSwapOperationRepository.getByChild('melt', operation.id);
-      if (parent) return this.emitMintSwapById(parent.id);
-      await this.emitProjectedMelt(mintUrl, operation);
-    } catch (err) {
-      this.logMintSwapProjectionFailure(operation.id, err);
-    }
+    const quote =
+      operation.quoteId === undefined
+        ? null
+        : { mintUrl: operation.mintUrl, method: operation.method, quoteId: operation.quoteId };
+    await this.emitChildOrParent('melt', operation.id, quote, () =>
+      this.emitProjectedMelt(mintUrl, operation),
+    );
   }
 
   private async emitProjectedMint(mintUrl: string, operation: MintOperation): Promise<void> {
@@ -134,26 +136,75 @@ export class HistoryService {
     mintUrl: string,
     operation: MintOperation,
   ): Promise<void> {
-    try {
-      const parent = await this.mintSwapOperationRepository.getByChild('mint', operation.id);
-      if (parent) return this.emitMintSwapById(parent.id);
-      await this.emitProjectedMint(mintUrl, operation);
-    } catch (err) {
-      this.logMintSwapProjectionFailure(operation.id, err);
-    }
+    const quote = {
+      mintUrl: operation.mintUrl,
+      method: operation.method,
+      quoteId: operation.quoteId,
+    };
+    await this.emitChildOrParent('mint', operation.id, quote, () =>
+      this.emitProjectedMint(mintUrl, operation),
+    );
   }
 
-  private async emitMintSwapById(operationId: string): Promise<void> {
+  private async emitChildOrParent(
+    role: 'mint' | 'melt',
+    operationId: string,
+    quote: Parameters<MintSwapOperationRepository['getByQuote']>[1] | null,
+    emitChild: () => Promise<void>,
+  ): Promise<void> {
+    const parent = await this.findParentForChild(role, operationId, quote);
+    if (parent === undefined) return;
+    if (!parent) {
+      await emitChild();
+      return;
+    }
+
     try {
-      const entry = await this.historyRepository.getHistoryEntryById(`mint-swap:${operationId}`);
-      if (!entry) return;
-      if (entry.source !== 'operation' || entry.type !== 'mint-swap') {
-        throw new Error(`Expected Mint Swap history entry for ${operationId}`);
-      }
-      await this.emitProjectedEntry(entry.mintUrl, entry, 'mint-swap', operationId);
+      if (!(await this.emitMintSwapById(parent.id))) await emitChild();
     } catch (err) {
       this.logMintSwapProjectionFailure(operationId, err);
     }
+  }
+
+  /** A quote is the independent durable reverse key when the child-ID lookup is unavailable. */
+  private async findParentForChild(
+    role: 'mint' | 'melt',
+    operationId: string,
+    quote: Parameters<MintSwapOperationRepository['getByQuote']>[1] | null,
+  ): Promise<MintSwapOperation | null | undefined> {
+    try {
+      return await this.mintSwapOperationRepository.getByChild(role, operationId);
+    } catch (err) {
+      this.logMintSwapProjectionFailure(operationId, err);
+    }
+
+    if (!quote) return undefined;
+    try {
+      return await this.mintSwapOperationRepository.getByQuote(role, quote);
+    } catch (err) {
+      this.logMintSwapProjectionFailure(operationId, err);
+      return undefined;
+    }
+  }
+
+  private async emitMintSwapUpdate(operationId: string): Promise<void> {
+    try {
+      await this.emitMintSwapById(operationId);
+    } catch (err) {
+      this.logMintSwapProjectionFailure(operationId, err);
+    }
+  }
+
+  private async emitMintSwapById(operationId: string): Promise<boolean> {
+    const entry = await this.historyRepository.getHistoryEntryById(
+      operationHistoryId('mint-swap', operationId),
+    );
+    if (!entry) return false;
+    if (entry.source !== 'operation' || entry.type !== 'mint-swap') {
+      throw new Error(`Expected Mint Swap history entry for ${operationId}`);
+    }
+    await this.emitProjectedEntry(entry.mintUrl, entry, 'mint-swap', operationId);
+    return true;
   }
 
   private logMintSwapProjectionFailure(operationId: string, err: unknown): void {
