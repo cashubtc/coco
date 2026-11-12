@@ -55,6 +55,7 @@ import {
 import {
   FaultController,
   ScenarioPreconditionError,
+  waitForFaultTrigger,
   type FaultMint,
   type FiredFault,
   type MintRestartRecord,
@@ -700,19 +701,16 @@ async function race(
     const lead = start(leadSide);
     void lead.then(() => (leadSettled = true));
     // Event trigger: the mint has answered the lead's swap and the gateway is holding the reply.
-    await waitUntil(
+    await waitForFaultTrigger(
       'race lead swap committed',
-      30_000,
       async () => {
         if (leadSettled) throw new ScenarioPreconditionError('Race lead settled before its hold');
         const evidence = await mint.gateway.evidence();
         return (evidence.rules.find((rule) => rule.id === ruleId)?.applied ?? 0) > 0;
       },
+      30_000,
       10,
-    ).catch((error: unknown) => {
-      if (error instanceof ScenarioPreconditionError) throw error;
-      throw new ScenarioPreconditionError('The race lead swap never reached the mint');
-    });
+    );
     trace.record('gateway', 'race_lead_committed', { step: planned.index, ruleId });
     const follower = await start(followSide);
     const leader = await lead;

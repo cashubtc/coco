@@ -10,6 +10,9 @@ export class InfrastructureFailure extends Error {
   override readonly name = 'InfrastructureFailure';
 }
 
+/** The probe stayed inconclusive until its deadline, rather than reporting a failed process. */
+export class WaitTimeout extends InfrastructureFailure {}
+
 // Keep the image and fee configuration aligned with scripts/test-integration.sh.
 export const MINT_IMAGE = 'cashubtc/mintd:0.17.0-rc.0';
 export const MINT_INPUT_FEE_PPK = 100;
@@ -42,7 +45,7 @@ export async function waitUntil<T>(
     await Bun.sleep(intervalMs);
   }
   const reason = lastError instanceof Error ? `: ${lastError.message}` : '';
-  throw new InfrastructureFailure(`Timed out waiting for ${what}${reason}`);
+  throw new WaitTimeout(`Timed out waiting for ${what}${reason}`, { cause: lastError });
 }
 
 /** Asks the OS for a free loopback port. Another process may still claim it before use. */

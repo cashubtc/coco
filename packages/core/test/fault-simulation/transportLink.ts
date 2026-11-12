@@ -173,6 +173,8 @@ export class TransportLink {
         'content-type': 'application/json',
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    }).catch((cause: unknown) => {
+      throw new InfrastructureFailure(`Transport link control ${path} failed`, { cause });
     });
     if (!response.ok) {
       throw new InfrastructureFailure(`Transport link control ${path} returned ${response.status}`);

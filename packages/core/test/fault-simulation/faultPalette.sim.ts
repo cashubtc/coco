@@ -11,7 +11,8 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { MINT_MNEMONICS, MintContainer } from './environment.ts';
+import { InfrastructureFailure, MINT_MNEMONICS, MintContainer } from './environment.ts';
+import { waitForFaultTrigger } from './faults.ts';
 import { runScenario, type ScenarioRun } from './runner.ts';
 import { scenarios } from './scenarios.ts';
 import { generateWorkload } from './workload.ts';
@@ -160,6 +161,22 @@ describe('transport link in front of a real mint', () => {
           probeWebSockets: 1,
         });
         expect(evidence.wallets.alice!.unrouted).toBe(0);
+
+        // Losing the fault infrastructure must not be mistaken for a fault that never triggered.
+        await link.stop();
+        await expect(
+          waitForFaultTrigger('Wallet traffic', async () => {
+            await link!.evidence();
+            return false;
+          }),
+        ).rejects.toBeInstanceOf(InfrastructureFailure);
+        await gateway.stop();
+        await expect(
+          waitForFaultTrigger('gateway rule', async () => {
+            await gateway!.evidence();
+            return false;
+          }),
+        ).rejects.toBeInstanceOf(InfrastructureFailure);
       } finally {
         await link?.stop();
         await gateway?.stop();

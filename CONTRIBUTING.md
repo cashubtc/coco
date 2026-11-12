@@ -275,8 +275,9 @@ combines both, so integration coverage counts. Core unit and integration coverag
 other workspace packages imported by the tests. Adapter behavior can still be exercised by core
 tests; adapter coverage belongs in separate adapter reports.
 
-- Put tests under `test/unit` or `test/integration`
-- Name test files `*.test.ts`
+- Put tests under `test/unit` or `test/integration`, except the separately run wallet fault
+  simulation under `packages/core/test/fault-simulation`.
+- Name test files `*.test.ts`; the fault simulation uses `*.sim.ts` to keep it out of ordinary tests.
 - Prefer Bun `mock()` for spies and doubles
 
 For browser coverage in `packages/indexeddb`, run:
