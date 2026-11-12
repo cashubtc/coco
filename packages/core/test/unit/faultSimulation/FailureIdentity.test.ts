@@ -51,7 +51,7 @@ describe('failure identity', () => {
   it('reads the identity of a migrated v1 failure from its recorded verdict', () => {
     expect(failureSignature(fixture('v1-negative-control-no-restart.trace.json'))).toEqual({
       outcome: 'wallet_failure',
-      findings: ['outcome_unmet wallet=bob', 'value_deficit'],
+      findings: ['outcome_unmet wallet=bob', 'value_deficit mint=mint-a'],
       unobservedWallets: ['bob'],
     });
   });
@@ -103,6 +103,22 @@ describe('failure identity', () => {
       reasonClass: 'ScenarioPreconditionError',
     });
   });
+});
+
+it('recognizes a migrated single-mint failure in current mint-scoped evidence without rewriting history', () => {
+  const original = fixture('v1-negative-control-no-restart.trace.json');
+  original.result!.expectationMet = false;
+  const before = JSON.stringify(original.events);
+  const replay = structuredClone(original);
+  delete replay.migratedFrom;
+  for (const event of replay.events) {
+    if (event.type !== 'verdict') continue;
+    for (const finding of event.data!.findings as { code: string; mint?: string }[]) {
+      if (finding.code === 'value_deficit') finding.mint = 'mint-a';
+    }
+  }
+  expect(compareRuns(original, replay).status).toBe('reproduced');
+  expect(JSON.stringify(original.events)).toBe(before);
 });
 
 describe('replay comparison', () => {

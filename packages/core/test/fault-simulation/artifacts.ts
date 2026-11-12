@@ -10,7 +10,7 @@
  * Wallet Seeds themselves. Findings name the kind of content, never its value.
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { buildRunReport, renderReport } from './report.ts';
 import { RedactionError, readTrace } from './trace.ts';
 
@@ -79,9 +79,10 @@ export interface PortableExport {
  * Copies a run's portable evidence to `outDir`: the trace unchanged, `report.json`, `report.md`
  * and top-level logs and JSON files that pass the scan. Throws {@link RedactionError} and writes
  * nothing when the trace itself contains prohibited content. Never reads Wallet stores, never
- * copies `private/` and never modifies the run directory.
+ * copies `private/` and never modifies the run directory. The destination must not already exist.
  */
 export function exportPortableArtifacts(runDir: string, outDir: string): PortableExport {
+  if (existsSync(outDir)) throw new Error('Export destination must be a new directory');
   const secrets = retainedSecrets(runDir);
   const kinds = (text: string) => findProhibitedContent(text, secrets).map(({ kind }) => kind);
 
@@ -113,7 +114,9 @@ export function exportPortableArtifacts(runDir: string, outDir: string): Portabl
     else outputs.set(entry.name, text);
   }
 
-  mkdirSync(outDir, { recursive: true });
+  mkdirSync(dirname(outDir), { recursive: true });
+  // Exclusive creation also prevents two exports from publishing into the same destination.
+  mkdirSync(outDir);
   for (const [name, text] of outputs) writeFileSync(join(outDir, name), text);
   return { files: [...outputs.keys()], withheld };
 }

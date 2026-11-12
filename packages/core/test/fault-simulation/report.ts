@@ -32,6 +32,7 @@ interface RecordedFinding {
   severity?: unknown;
   mint?: unknown;
   wallet?: unknown;
+  operationId?: unknown;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -67,8 +68,32 @@ export function failureSignature(trace: RecordedTrace): FailureSignature {
   const severity = outcome === 'unresolved' ? 'unresolved' : 'failure';
   const verdict = decisiveVerdict(trace.events);
   const recorded = Array.isArray(verdict?.findings) ? (verdict.findings as RecordedFinding[]) : [];
+  const implicitMint =
+    trace.migratedFrom && trace.plan.mints?.length === 1 ? trace.plan.mints[0] : undefined;
   const findings = [
-    ...new Set(recorded.filter((finding) => finding.severity === severity).map(findingKey)),
+    ...new Set(
+      recorded
+        .filter((finding) => finding.severity === severity)
+        .map((finding) => {
+          // v1 accounting had one implicit mint. Operation/history findings were never mint-scoped.
+          const mintScoped =
+            [
+              'value_deficit',
+              'value_surplus',
+              'stranded_value',
+              'balance_mismatch',
+              'duplicate_claim',
+              'pending_proof',
+              'partially_spent_token',
+            ].includes(String(finding.code)) ||
+            (finding.code === 'missing_evidence' && finding.operationId === undefined);
+          return findingKey(
+            implicitMint && finding.mint === undefined && mintScoped
+              ? { ...finding, mint: implicitMint }
+              : finding,
+          );
+        }),
+    ),
   ].sort();
   const signature: FailureSignature = { outcome, findings };
 
