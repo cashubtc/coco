@@ -14,8 +14,14 @@ export class InfrastructureFailure extends Error {
 export const MINT_IMAGE = 'cashubtc/mintd:0.17.0-rc.0';
 export const MINT_INPUT_FEE_PPK = 100;
 export const MINT_UNIT = 'sat';
-const MINT_MNEMONIC =
-  'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+/**
+ * Distinct BIP-39 test mnemonics, one per logical mint, so the mints have distinct keysets as
+ * independent mints would. The first matches scripts/test-integration.sh.
+ */
+export const MINT_MNEMONICS = [
+  'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about',
+  'legal winner thank year wave sausage worth useful legal winner thank yellow',
+];
 
 export async function waitUntil<T>(
   what: string,
@@ -64,7 +70,7 @@ export class MintContainer {
     readonly imageDigest: string,
   ) {}
 
-  static async start(name: string): Promise<MintContainer> {
+  static async start(name: string, mnemonic: string): Promise<MintContainer> {
     docker([
       'run',
       '-d',
@@ -87,7 +93,7 @@ export class MintContainer {
       '-e',
       'CDK_MINTD_FAKE_WALLET_MAX_DELAY=0',
       '-e',
-      `CDK_MINTD_MNEMONIC=${MINT_MNEMONIC}`,
+      `CDK_MINTD_MNEMONIC=${mnemonic}`,
       MINT_IMAGE,
     ]);
     try {

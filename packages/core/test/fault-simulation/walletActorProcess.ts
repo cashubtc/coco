@@ -18,11 +18,11 @@ import { SqliteDb } from '../../../sqlite-bun/src/db.ts';
 import { initializeCoco } from '../../Manager.ts';
 import type { ActorCommand, ActorReply } from './walletActor.ts';
 
-const { SIM_DB_PATH, SIM_SEED_PATH, SIM_MINT_URL, SIM_UNIT } = process.env;
-if (!SIM_DB_PATH || !SIM_SEED_PATH || !SIM_MINT_URL || !SIM_UNIT) {
-  throw new Error('Wallet actor requires SIM_DB_PATH, SIM_SEED_PATH, SIM_MINT_URL and SIM_UNIT');
+const { SIM_DB_PATH, SIM_SEED_PATH, SIM_MINT_URLS, SIM_UNIT } = process.env;
+if (!SIM_DB_PATH || !SIM_SEED_PATH || !SIM_MINT_URLS || !SIM_UNIT) {
+  throw new Error('Wallet actor requires SIM_DB_PATH, SIM_SEED_PATH, SIM_MINT_URLS and SIM_UNIT');
 }
-const mintUrl = SIM_MINT_URL;
+const mintUrls = JSON.parse(SIM_MINT_URLS) as string[];
 const unit = SIM_UNIT;
 const seed = Uint8Array.from(Buffer.from(readFileSync(SIM_SEED_PATH, 'utf8').trim(), 'hex'));
 
@@ -33,7 +33,7 @@ await repo.init();
 // Session initialization performs Operation Recovery for persisted in-flight operations.
 const coco = await initializeCoco({ repo, seedGetter: async () => seed });
 
-async function fund(amount: number) {
+async function fund(mintUrl: string, amount: number) {
   const quote = await coco.quotes.mint.create({
     mintUrl,
     amount: { amount: Amount.from(amount), unit },
@@ -53,28 +53,48 @@ async function fund(amount: number) {
   return { operationId: prepared.id, state: operation.state };
 }
 
-async function observe(operationIds: string[]) {
-  const balance = await coco.wallet.balances.total({ mintUrls: [mintUrl], units: [unit] });
-  const history = await coco.history.getPaginatedHistory(0, 1_000);
-  const operations = await Promise.all(
-    operationIds.map(async (id) => ({
-      id,
-      state: (await coco.ops.receive.get(id))?.state,
-      historyEntries: history.filter((entry) => entry.operationId === id).length,
-    })),
-  );
-  return { balance: Number(balance.total.toString()), operations };
+async function observe(receiveIds: string[], sendIds: string[]) {
+  const balances: Record<string, number> = {};
+  for (const mintUrl of mintUrls) {
+    const balance = await coco.wallet.balances.total({ mintUrls: [mintUrl], units: [unit] });
+    balances[mintUrl] = Number(balance.total.toString());
+  }
+  const history = await coco.history.getPaginatedHistory(0, 10_000);
+  const entries = (id: string) => history.filter((entry) => entry.operationId === id).length;
+  const operations = [
+    ...(await Promise.all(
+      receiveIds.map(async (id) => ({
+        id,
+        kind: 'receive' as const,
+        state: (await coco.ops.receive.get(id))?.state,
+        historyEntries: entries(id),
+      })),
+    )),
+    ...(await Promise.all(
+      sendIds.map(async (id) => ({
+        id,
+        kind: 'send' as const,
+        state: (await coco.ops.send.get(id))?.state,
+        historyEntries: entries(id),
+      })),
+    )),
+  ];
+  return { balances, operations };
 }
 
 async function handle(command: ActorCommand): Promise<unknown> {
   switch (command.type) {
-    case 'addMint':
-      await coco.mint.addMint(mintUrl, { trusted: true });
+    case 'addMints':
+      for (const mintUrl of mintUrls) await coco.mint.addMint(mintUrl, { trusted: true });
       return {};
     case 'fund':
-      return fund(command.amount);
+      return fund(command.mintUrl, command.amount);
     case 'send': {
-      const prepared = await coco.ops.send.prepare({ mintUrl, amount: command.amount, unit });
+      const prepared = await coco.ops.send.prepare({
+        mintUrl: command.mintUrl,
+        amount: command.amount,
+        unit,
+      });
       const { operation, token } = await coco.ops.send.execute(prepared.id);
       return { operationId: operation.id, token: getEncodedToken(token) };
     }
@@ -82,8 +102,11 @@ async function handle(command: ActorCommand): Promise<unknown> {
       return { operationId: (await coco.ops.receive.prepare({ token: command.token })).id };
     case 'executeReceive':
       return { state: (await coco.ops.receive.execute(command.operationId)).state };
+    case 'reclaim':
+      await coco.ops.send.reclaim(command.operationId);
+      return { state: (await coco.ops.send.get(command.operationId))?.state };
     case 'observe':
-      return observe(command.operationIds);
+      return observe(command.receiveIds, command.sendIds);
     case 'dispose':
       await coco.dispose();
       return {};

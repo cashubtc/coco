@@ -8,7 +8,7 @@
 import { writeFileSync } from 'node:fs';
 import type { ScenarioPlan } from './scenarios.ts';
 
-export const TRACE_FORMAT = 'coco-wallet-fault-simulation/trace/v1';
+export const TRACE_FORMAT = 'coco-wallet-fault-simulation/trace/v2';
 
 export interface TraceEvent {
   seq: number;
