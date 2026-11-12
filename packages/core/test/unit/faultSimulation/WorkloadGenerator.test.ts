@@ -142,3 +142,64 @@ describe('generateWorkload', () => {
     }
   });
 });
+
+describe('generated fault interactions', () => {
+  const faultKinds = [
+    'dropRequest',
+    'dropResponse',
+    'withholdResponse',
+    'delayResponses',
+    'disconnect',
+    'dropWebSockets',
+    'crash',
+    'restartMint',
+  ];
+  const faulted = (seed: number, recoveryMode: 'automatic' | 'explicit' = 'automatic') =>
+    generateWorkload({ ...options(seed), faults: true, recoveryMode });
+  const seeds = Array.from({ length: 30 }, (_, index) => index + 1);
+
+  it('leaves fault-free generation unchanged', () => {
+    for (const seed of [1, 2, 3]) {
+      expect(generateWorkload({ ...options(seed), faults: false }).steps).toEqual(
+        generateWorkload(options(seed)).steps,
+      );
+    }
+  });
+
+  it('generates only plans the workload model accepts, reproducibly from the scenario seed', () => {
+    for (const seed of seeds) {
+      for (const mode of ['automatic', 'explicit'] as const) {
+        const plan = faulted(seed, mode);
+        expect(() => planWorkload(plan)).not.toThrow();
+        expect(faulted(seed, mode)).toEqual(plan);
+        expect(plan.recoveryMode).toBe(mode);
+      }
+    }
+  });
+
+  it('covers every fault kind across a small seed range', () => {
+    const kinds = new Set<string>(
+      seeds.flatMap((seed) => faulted(seed).steps.map((step) => step.kind)),
+    );
+    for (const kind of faultKinds) expect(kinds).toContain(kind);
+  });
+
+  it('heals before every checkpoint that follows a fault, and uses explicit recovery only when allowed', () => {
+    for (const seed of seeds) {
+      for (const mode of ['automatic', 'explicit'] as const) {
+        const plan = faulted(seed, mode);
+        let faultSinceHeal = false;
+        for (const step of plan.steps) {
+          if (faultKinds.includes(step.kind)) faultSinceHeal = true;
+          if (step.kind === 'heal') faultSinceHeal = false;
+          if (step.kind === 'checkpoint') expect(faultSinceHeal).toBe(false);
+        }
+        const recovers = plan.steps.filter((step) => step.kind === 'recover').length;
+        if (mode === 'automatic') expect(recovers).toBe(0);
+      }
+    }
+    expect(
+      seeds.some((seed) => faulted(seed, 'explicit').steps.some((s) => s.kind === 'recover')),
+    ).toBe(true);
+  });
+});

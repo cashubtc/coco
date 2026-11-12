@@ -19,7 +19,8 @@ export const FAULT_LAB_REVISION = '1cc954d33a1088fd20efc48c5437e3a7441920f7';
 export interface GatewayRule {
   phase: 'before_forward' | 'after_downstream_commit' | 'after_downstream_response';
   action: 'drop' | 'delay';
-  match: { method: string; path: string };
+  /** `operationId` matches the Wallet tag a transport link adds, scoping the rule to one Wallet. */
+  match: { method?: string; path?: string; operationId?: string };
   count?: number;
   delayMs?: number;
 }
@@ -161,6 +162,10 @@ export class FaultLabGateway {
       throw new InfrastructureFailure(`Fault Lab control ${path} returned ${response.status}`);
     }
     return response.json();
+  }
+
+  get running(): boolean {
+    return this.process.exitCode === null && this.process.signalCode === null;
   }
 
   async addRule(rule: GatewayRule): Promise<string> {

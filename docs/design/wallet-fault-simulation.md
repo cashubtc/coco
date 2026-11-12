@@ -1,9 +1,10 @@
 # Wallet fault simulation
 
-Status: design confirmed. The Fault Lab adoption experiment and the three-Wallet, two-mint
-workload with independent accounting, generated from scenario seeds, are implemented in
-[the fault simulation harness](../../packages/core/test/fault-simulation/README.md). The complete
-fault palette, failure reports and minimization, and the CI corpus are not.
+Status: design confirmed. The Fault Lab adoption experiment, the three-Wallet, two-mint workload
+with independent accounting generated from scenario seeds, the initial fault palette with separate
+automatic and explicit recovery, and failure reports, replay and minimization are implemented in
+[the fault simulation harness](../../packages/core/test/fault-simulation/README.md). The CI corpus
+is not.
 
 Implementation specification: [GitHub issue #616](https://github.com/cashubtc/coco/issues/616).
 
@@ -192,3 +193,25 @@ Gateway limitations for later work:
 - It forwards only `accept` and `content-type` request headers and caps responses at 64 KiB.
 - Bun's `fetch` retries an idempotent `GET` once when a reused connection closes, so a dropped `GET`
   response can be masked at the client. A `POST` is not retried.
+
+The harness addresses the first two limitations without changing the gateway. A Coco-owned
+transport link is each Wallet's proxy and the only path to the mints, which Wallets address by
+canonical URLs that never resolve. It tags each Wallet's HTTP for the gateway's operation match, so
+gateway rules target one Wallet, and tunnels WebSocket upgrades to the mint. It also supplies the
+connection faults the gateway lacks: Wallet-to-mint outages and abrupt WebSocket disconnects.
+
+## Initial fault palette findings
+
+Observed against the pinned mint and Coco at the time of implementation; the harness asserts them as
+recovery expectations:
+
+- A Receive whose swap request or successful response is lost recovers inside `execute`: Coco
+  resubmits the same swap when its inputs are unspent and restores its outputs when they are spent.
+- A Send whose swap request or successful response is lost stays `executing`, as does a Receive
+  attempted during an outage, which reaches no mint. Neither progresses when connectivity returns.
+  Startup recovery after a restart, or the explicit Send and Receive recovery sweeps, make the Send
+  `pending` with its token and finalize the Receive.
+- A pending Send finalizes after its sender reconnects, by polling once its WebSocket is gone.
+  Coco does not reopen a lost WebSocket by itself; `ensureSubscriptions()` or a new Session does.
+- A mint killed and started over its storage keeps its keysets and proof states, and transfers of
+  tokens issued before the restart continue.

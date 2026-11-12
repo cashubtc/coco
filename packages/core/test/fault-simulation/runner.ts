@@ -2,9 +2,10 @@
  * Executes a scenario plan in a fresh world and classifies its outcome.
  *
  * World: one pinned mint container per logical mint, one pinned Fault Lab gateway in front of each
- * mint, and one Wallet actor process per Wallet. Wallets only know gateway URLs, so all their mint
- * HTTP traffic passes through a gateway. Every Wallet trusts every mint; transfers stay within the
- * token's mint.
+ * mint, one transport link, and one Wallet actor process per Wallet. Wallets know only canonical
+ * mint URLs that the transport link alone can reach: their HTTP passes through the mint's gateway
+ * and their WebSockets through a link tunnel. Every Wallet trusts every mint; transfers stay
+ * within the token's mint.
  *
  * Scheduling: steps are dispatched in plan order. A step starts once the previous steps of its
  * Wallets and of its token have settled, so each Wallet has at most one foreground command
@@ -51,8 +52,16 @@ import {
   nodeVersion,
   preparePinnedGateway,
 } from './faultLabGateway.ts';
+import {
+  FaultController,
+  ScenarioPreconditionError,
+  type FaultMint,
+  type FiredFault,
+  type MintRestartRecord,
+} from './faults.ts';
 import type { CheckerControl, ScenarioPlan, ScenarioStep } from './scenarios.ts';
-import { TRACE_FORMAT, ScenarioTrace, type TraceDocument } from './trace.ts';
+import { TransportLink, canonicalMintUrl, prepareTransportLink } from './transportLink.ts';
+import { ScenarioTrace, readTraceFile } from './trace.ts';
 import {
   ActorCommandError,
   WalletActor,
@@ -62,8 +71,8 @@ import {
 import {
   expectedReceiveStates,
   expectedSendStates,
-  generateWorkload,
   planWorkload,
+  type Exposure,
   type PlannedStep,
   type ReceiveExpectation,
   type TokenFate,
@@ -71,23 +80,65 @@ import {
 
 export type ScenarioOutcome = 'pass' | 'wallet_failure' | 'unresolved' | 'infrastructure_failure';
 
-export interface FiredFault {
-  ruleId: string;
-  mint: string;
-  phase: string;
-  action: string;
-  method?: string;
-  path?: string;
-  applied: number;
-}
+export type { FiredFault, MintRestartRecord } from './faults.ts';
 
 export interface CrashRecord {
   wallet: string;
   signal: string | null;
+  step?: number;
+  /** `fault_fired`: SIGKILL once the withheld response's rule fired; `step`: a `crash` step. */
+  trigger?: 'fault_fired' | 'step';
   /** Direct mint evidence that the request whose response was withheld took effect. */
-  mintAcceptedRequest: boolean;
-  /** Receive state in the store after the crash, read without a Coco Session. */
-  persistedOperationState: string | undefined;
+  mintAcceptedRequest?: boolean;
+  /** The interrupted operation's state in the store after the crash, read without a Session. */
+  persistedOperationState?: string | undefined;
+}
+
+/**
+ * What an exposed command did under its fault, corroborated outside the Wallet: the mint's view
+ * of the operation's inputs, the persisted operation state and the Wallet's link traffic.
+ */
+export interface ExchangeRecord {
+  step: number;
+  wallet: string;
+  mint: string;
+  command: 'send' | 'receive';
+  fault: Exposure['fault'];
+  result: 'completed' | 'interrupted';
+  /** For an interrupted command: whether the mint had spent the operation's inputs. */
+  mintAcceptedRequest?: boolean;
+  /** For an interrupted command: the operation's persisted state, read without a Session. */
+  persistedOperationState?: string;
+  /** Swap and restore requests the Wallet sent to the mint during the command. */
+  swapAttempts: number;
+  restoreRequests: number;
+}
+
+/** An explicit public recovery call and the operation states it changed. */
+export interface RecoveryRecord {
+  step: number;
+  wallet: string;
+  observed: number;
+  transitions: {
+    operationId: string;
+    kind: 'receive' | 'send';
+    before: string | undefined;
+    after: string | undefined;
+  }[];
+}
+
+/** One Wallet's traffic to one mint through the transport link. */
+export interface TransportRecord {
+  wallet: string;
+  mint: string;
+  requests: number;
+  failedRequests: number;
+  refusedConnections: number;
+  connectionsClosedByFault: number;
+  webSocketUpgrades: number;
+  webSocketsClosedByFault: number;
+  /** Requests from this Wallet that named no known mint or bypassed the proxy. */
+  unrouted: number;
 }
 
 /** Observed result of one foreground command, judged against the plan's expectation. */
@@ -98,9 +149,12 @@ export interface CommandOutcome {
   token?: string;
   /**
    * `rejected` is a pass when the plan expects rejection, such as a duplicate delivery.
-   * `interrupted` means the harness crashed the Wallet while the command was outstanding.
+   * `interrupted` means the command failed or the Wallet was crashed under a planned fault; its
+   * operation must still reach the expected state.
    */
   result: 'completed' | 'rejected' | 'interrupted';
+  /** The planned fault the command ran under. */
+  exposure?: Exposure['fault'];
 }
 
 /** A receive-versus-reclaim race and the claimant the mint and Coco agree won it. */
@@ -141,14 +195,13 @@ export interface ScenarioRun {
   races: RaceRecord[];
   faultsFired: FiredFault[];
   crashes: CrashRecord[];
+  exchanges: ExchangeRecord[];
+  recoveries: RecoveryRecord[];
+  mintRestarts: MintRestartRecord[];
+  transport: TransportRecord[];
   tracePath: string;
   /** Number of secrets the redaction check verified to be absent from the trace. */
   secretsChecked: number;
-}
-
-/** A scenario precondition (such as an unfired fault) was not established. */
-class ScenarioPreconditionError extends Error {
-  override readonly name = 'ScenarioPreconditionError';
 }
 
 /** A command's observable result contradicts the plan in an environment without active faults. */
@@ -186,21 +239,16 @@ function componentVersions(): Record<string, unknown> {
   };
 }
 
-interface MintNode {
-  name: string;
-  container: MintContainer;
-  gateway: FaultLabGateway;
-  probe: MintProbe;
-  /** The URL Wallets use: the gateway in front of this mint. */
-  url: string;
-}
+/** A mint, its gateway and probe; `url` is the canonical URL only the transport link reaches. */
+type MintNode = FaultMint;
 
 interface TokenRecord {
   ref: string;
   sender: string;
   mint: string;
   inputs: Omit<ObservedProof, 'mintState'>[];
-  encoded: string;
+  /** Absent while an interrupted Send has not recovered; fetched from the sender afterwards. */
+  encoded?: string;
   sendOperationId: string;
   fate: TokenFate;
 }
@@ -226,13 +274,15 @@ class ScenarioWorld {
   readonly actors = new Map<string, WalletActor>();
   readonly actorOptions = new Map<string, WalletActorOptions>();
   readonly mints = new Map<string, MintNode>();
+  link!: TransportLink;
   readonly mintByUrl = new Map<string, string>();
   readonly tokens = new Map<string, TokenRecord>();
   readonly receiveAttempts: ReceiveAttempt[] = [];
   readonly funding: { wallet: string; mint: string; amount: number }[] = [];
-  readonly installedFaults: { ruleId: string; mint: string }[] = [];
-  readonly faultsFired = new Map<string, FiredFault>();
+  faults!: FaultController;
   readonly crashes: CrashRecord[] = [];
+  readonly exchanges: ExchangeRecord[] = [];
+  readonly recoveries: RecoveryRecord[] = [];
   readonly commands: CommandOutcome[] = [];
   readonly races: RaceRecord[] = [];
   readonly checkpoints: CheckpointRecord[] = [];
@@ -267,23 +317,6 @@ class ScenarioWorld {
   }
 
   mintOfUrl = (url: string): string | undefined => this.mintByUrl.get(normalizeMintUrl(url));
-
-  async captureFiredFaults(): Promise<void> {
-    for (const { ruleId, mint } of this.installedFaults) {
-      const evidence = await this.mint(mint).gateway.evidence();
-      const rule = evidence.rules.find((candidate) => candidate.id === ruleId);
-      if (!rule || rule.applied === 0) continue;
-      this.faultsFired.set(ruleId, {
-        ruleId,
-        mint,
-        phase: rule.phase,
-        action: rule.action,
-        method: rule.method,
-        path: rule.path,
-        applied: rule.applied,
-      });
-    }
-  }
 
   async startActor(wallet: string): Promise<WalletActor> {
     const actor = await WalletActor.start(this.actorOptions.get(wallet)!);
@@ -326,6 +359,7 @@ async function runStep(world: ScenarioWorld, planned: PlannedStep): Promise<void
       wallets: planned.wallets,
       ...(token ? { token } : {}),
       result,
+      ...(planned.exposure ? { exposure: planned.exposure.fault } : {}),
     });
   switch (step.kind) {
     case 'fund': {
@@ -355,40 +389,65 @@ async function runStep(world: ScenarioWorld, planned: PlannedStep): Promise<void
         mint: step.mint,
         amount: step.amount,
         token: step.token,
+        ...(planned.exposure ? { exposure: planned.exposure.fault } : {}),
       });
-      const result = await world
-        .actor(step.wallet)
-        .request({ type: 'send', mintUrl: mint.url, amount: step.amount });
-      trace.registerSecret(result.token);
-      const keysetIds = (await mint.probe.keysets()).map((keyset) => keyset.id);
-      const decoded = decodeTokenInputs(result.token, step.mint, keysetIds);
-      trace.registerSecret(...decoded.secrets);
-      world.tokens.set(step.token, {
+      const actor = world.actor(step.wallet);
+      const { operationId } = await actor.request({
+        type: 'prepareSend',
+        mintUrl: mint.url,
+        amount: step.amount,
+      });
+      const token: TokenRecord = {
         ref: step.token,
         sender: step.wallet,
         mint: step.mint,
-        inputs: decoded.inputs,
-        encoded: result.token,
-        sendOperationId: result.operationId,
+        inputs: [],
+        sendOperationId: operationId,
         fate: planned.fateAfter!,
-      });
-      const tokenAmount = decoded.inputs.reduce((total, input) => total + input.amount, 0);
+      };
+      world.tokens.set(step.token, token);
+      const traffic = await world.faults.walletEvidence(step.wallet, step.mint);
+      const execution = settle(actor.request({ type: 'executeSend', operationId }));
+      if (step.crashWhenFaultFires) {
+        await crashWhenFaultFires(world, planned, 'send', operationId, execution);
+        completed('interrupted', step.token);
+        return;
+      }
+      const settled = await execution;
+      if ('error' in settled) {
+        if (!planned.exposure || !rejection(settled.error)) throw settled.error;
+        trace.record(step.wallet, 'interrupted', {
+          step: index,
+          type: 'executeSend',
+          error: settled.error.remote.name,
+        });
+        await recordExchange(world, planned, 'send', operationId, 'interrupted', traffic);
+        completed('interrupted', step.token);
+        return;
+      }
+      await registerToken(world, token, settled.result.token);
       trace.record(step.wallet, 'result', {
         step: index,
         type: 'send',
-        operationId: result.operationId,
+        operationId,
         token: step.token,
-        tokenAmount,
-        tokenProofs: decoded.inputs.length,
+        tokenAmount: tokenAmount(token),
+        tokenProofs: token.inputs.length,
       });
-      if (tokenAmount !== step.amount) {
-        throw new WalletOutcomeError(`${step.token} carries ${tokenAmount}, not ${step.amount}`);
+      if (tokenAmount(token) !== step.amount) {
+        throw new WalletOutcomeError(
+          `${step.token} carries ${tokenAmount(token)}, not ${step.amount}`,
+        );
+      }
+      if (planned.exposure) {
+        await recordExchange(world, planned, 'send', operationId, 'completed', traffic);
       }
       completed('completed', step.token);
       return;
     }
     case 'receive': {
       const token = world.token(step.token);
+      const encoded = await ensureToken(world, token);
       const attempt: ReceiveAttempt = {
         wallet: step.wallet,
         token: step.token,
@@ -402,10 +461,11 @@ async function runStep(world: ScenarioWorld, planned: PlannedStep): Promise<void
         type: 'prepareReceive',
         token: step.token,
         expect: attempt.expectation,
+        ...(planned.exposure ? { exposure: planned.exposure.fault } : {}),
       });
       let prepared: ActorResults['prepareReceive'];
       try {
-        prepared = await actor.request({ type: 'prepareReceive', token: token.encoded });
+        prepared = await actor.request({ type: 'prepareReceive', token: encoded });
       } catch (error) {
         if (!rejection(error) || attempt.expectation === 'finalized') throw error;
         trace.record(step.wallet, 'rejected', { step: index, type: 'prepareReceive' });
@@ -419,19 +479,34 @@ async function runStep(world: ScenarioWorld, planned: PlannedStep): Promise<void
         type: 'executeReceive',
         operationId: prepared.operationId,
       });
-      const execution = actor
-        .request({ type: 'executeReceive', operationId: prepared.operationId })
-        .then(
-          (result) => ({ result }),
-          (error: Error) => ({ error }),
-        );
+      const traffic = await world.faults.walletEvidence(step.wallet, token.mint);
+      const execution = settle(
+        actor.request({ type: 'executeReceive', operationId: prepared.operationId }),
+      );
       if (step.crashWhenFaultFires) {
-        await crashWhenFaultFires(world, step.wallet, token, prepared.operationId, execution);
+        await crashWhenFaultFires(world, planned, 'receive', prepared.operationId, execution);
         completed('interrupted', step.token);
         return;
       }
       const settled = await execution;
       if ('error' in settled) {
+        if (planned.exposure && rejection(settled.error) && attempt.expectation === 'finalized') {
+          trace.record(step.wallet, 'interrupted', {
+            step: index,
+            type: 'executeReceive',
+            error: settled.error.remote.name,
+          });
+          await recordExchange(
+            world,
+            planned,
+            'receive',
+            prepared.operationId,
+            'interrupted',
+            traffic,
+          );
+          completed('interrupted', step.token);
+          return;
+        }
         if (!rejection(settled.error) || attempt.expectation === 'finalized') throw settled.error;
         trace.record(step.wallet, 'rejected', { step: index, type: 'executeReceive' });
         completed('rejected', step.token);
@@ -444,6 +519,9 @@ async function runStep(world: ScenarioWorld, planned: PlannedStep): Promise<void
       });
       if (attempt.expectation === 'rejected') {
         throw new WalletOutcomeError(`Duplicate delivery of ${step.token} was accepted`);
+      }
+      if (planned.exposure) {
+        await recordExchange(world, planned, 'receive', prepared.operationId, 'completed', traffic);
       }
       completed('completed', step.token);
       return;
@@ -491,44 +569,46 @@ async function runStep(world: ScenarioWorld, planned: PlannedStep): Promise<void
         throw new WalletOutcomeError(`${step.wallet} did not dispose within 10 seconds`);
       }
       await world.startActor(step.wallet);
+      await fetchRecoveredTokens(world, step.wallet);
       completed('completed');
       return;
     }
-    case 'withholdResponse': {
-      // The held response is lost when the Wallet process dies; the long hold outlasts the run.
-      const ruleId = await world.mint(step.mint).gateway.addRule({
-        phase: 'after_downstream_response',
-        action: 'delay',
-        delayMs: 600_000,
-        count: 1,
-        match: { method: step.method, path: step.path },
-      });
-      world.installedFaults.push({ ruleId, mint: step.mint });
-      trace.record('gateway', 'fault_installed', { step: index, ruleId, ...step });
+    case 'crash': {
+      const actor = world.actor(step.wallet);
+      const { signal } = await actor.crash();
+      const crash: CrashRecord = { wallet: step.wallet, signal, step: index, trigger: 'step' };
+      world.crashes.push(crash);
+      trace.record(step.wallet, 'crashed', { step: index, pid: actor.pid, signal });
+      completed('completed');
       return;
     }
-    case 'heal': {
-      await world.captureFiredFaults();
-      for (const mint of world.mints.values()) {
-        await mint.gateway.clearRules();
-        const evidence = await mint.gateway.evidence();
-        if (evidence.rules.length !== 0) {
-          throw new InfrastructureFailure(`Fault rules remain at ${mint.name}`);
-        }
-      }
-      await waitUntil('healthy mint and gateway paths', 10_000, async () => {
-        for (const mint of world.mints.values()) {
-          const direct = await fetch(`${mint.container.directUrl}/v1/info`);
-          const proxied = await fetch(`${mint.url}/v1/info`);
-          if (!direct.ok || !proxied.ok) return false;
-        }
-        return true;
-      });
+    case 'recover':
+      await recover(world, index, step.wallet);
+      completed('completed');
+      return;
+    case 'withholdResponse':
+    case 'dropRequest':
+    case 'dropResponse':
+    case 'delayResponses':
+      await world.faults.install(step, index);
+      return;
+    case 'disconnect':
+      await world.faults.disconnect(step.wallet, step.mint, index);
+      return;
+    case 'reconnect':
+      await world.faults.reconnect(step.wallet, step.mint, index);
+      return;
+    case 'dropWebSockets':
+      await world.faults.dropWebSockets(step.wallet, step.mint, index);
+      return;
+    case 'restartMint':
+      await world.faults.restartMint(step.mint, index, knownProofYs(world, step.mint));
+      return;
+    case 'heal':
+      await world.faults.heal(index);
       world.healthyAt = Date.now();
       world.healedSinceCheckpoint = true;
-      trace.record('harness', 'environment_healthy', { step: index });
       return;
-    }
     case 'checkpoint':
       await checkpoint(world, index);
       return;
@@ -565,7 +645,7 @@ async function race(
     race: true,
   });
   attempt.operationId = (
-    await recipient.request({ type: 'prepareReceive', token: token.encoded })
+    await recipient.request({ type: 'prepareReceive', token: await ensureToken(world, token) })
   ).operationId;
   token.fate = planned.fateAfter!;
 
@@ -671,49 +751,199 @@ async function race(
   }
 }
 
-async function crashWhenFaultFires(
+type Settled<T> = { result: T } | { error: Error };
+
+const settle = <T>(request: Promise<T>): Promise<Settled<T>> =>
+  request.then(
+    (result) => ({ result }),
+    (error: Error) => ({ error }),
+  );
+
+const tokenAmount = (token: TokenRecord) =>
+  token.inputs.reduce((total, input) => total + input.amount, 0);
+
+/** Decodes a created token's inputs independently of the Wallet and registers its secrets. */
+async function registerToken(world: ScenarioWorld, token: TokenRecord, encoded: string) {
+  world.trace.registerSecret(encoded);
+  const keysetIds = (await world.mint(token.mint).probe.keysets()).map((keyset) => keyset.id);
+  const decoded = decodeTokenInputs(encoded, token.mint, keysetIds);
+  world.trace.registerSecret(...decoded.secrets);
+  token.inputs = decoded.inputs;
+  token.encoded = encoded;
+}
+
+/**
+ * The token to deliver. An interrupted Send's token exists only once Coco has recovered the Send,
+ * so it is read from the sender through the public interface; a Send that is still not pending
+ * by then is a wallet failure, because the plan delivers it only after the sender's recovery.
+ */
+async function ensureToken(world: ScenarioWorld, token: TokenRecord): Promise<string> {
+  if (token.encoded) return token.encoded;
+  const { state, token: encoded } = await world
+    .actor(token.sender)
+    .request({ type: 'sendToken', operationId: token.sendOperationId });
+  if (!encoded) {
+    throw new WalletOutcomeError(`${token.ref} is not available: its Send is ${state}`);
+  }
+  await registerToken(world, token, encoded);
+  world.trace.record(token.sender, 'token_recovered', {
+    token: token.ref,
+    operationId: token.sendOperationId,
+    state,
+    tokenAmount: tokenAmount(token),
+  });
+  return encoded;
+}
+
+/** After a Wallet's restart or explicit recovery, reads the tokens of its recovered Sends. */
+async function fetchRecoveredTokens(world: ScenarioWorld, wallet: string): Promise<void> {
+  for (const token of world.tokens.values()) {
+    if (token.sender !== wallet || token.encoded) continue;
+    await ensureToken(world, token).catch(() => undefined);
+  }
+}
+
+/** Every proof `Y` the harness knows at a mint: token inputs and every Wallet's stored proofs. */
+function knownProofYs(world: ScenarioWorld, mint: string): string[] {
+  const ys = new Set<string>();
+  for (const token of world.tokens.values()) {
+    if (token.mint === mint) for (const input of token.inputs) ys.add(input.y);
+  }
+  for (const wallet of world.plan.wallets) {
+    const { proofs, secrets } = readStoredProofs(
+      world.actorOptions.get(wallet)!.dbPath,
+      MINT_UNIT,
+      world.mintOfUrl,
+    );
+    world.trace.registerSecret(...secrets);
+    for (const proof of proofs) if (proof.mint === mint) ys.add(proof.y);
+  }
+  return [...ys];
+}
+
+/** The `Y`s an operation spends: a Receive's token inputs, or a Send's persisted inputs. */
+function operationInputYs(
   world: ScenarioWorld,
   wallet: string,
-  token: TokenRecord,
+  kind: 'send' | 'receive',
   operationId: string,
-  execution: Promise<{ result: unknown } | { error: Error }>,
+  token: TokenRecord,
+): string[] {
+  if (kind === 'receive') return token.inputs.map((input) => input.y);
+  const { proofs, secrets } = readStoredProofs(
+    world.actorOptions.get(wallet)!.dbPath,
+    MINT_UNIT,
+    world.mintOfUrl,
+  );
+  world.trace.registerSecret(...secrets);
+  return proofs.filter((proof) => proof.usedByOperationId === operationId).map((proof) => proof.y);
+}
+
+/** Whether the mint spent every input of the operation, read directly from the mint. */
+async function mintSpent(world: ScenarioWorld, mint: string, ys: string[]): Promise<boolean> {
+  if (ys.length === 0) throw new ScenarioPreconditionError('The operation has no known inputs');
+  const states = await world.mint(mint).probe.proofStates(ys);
+  return ys.every((y) => states.get(y) === 'SPENT');
+}
+
+/**
+ * Corroborates what an exposed command did: whether its exchange fault fired, whether the mint
+ * spent the operation's inputs, the persisted operation state, and the Wallet's swap and restore
+ * traffic during the command. A request lost before the mint must leave the inputs unspent, and
+ * a response lost after it must follow a spend; otherwise the fault did not establish its
+ * scenario.
+ */
+async function recordExchange(
+  world: ScenarioWorld,
+  planned: PlannedStep,
+  command: 'send' | 'receive',
+  operationId: string,
+  result: 'completed' | 'interrupted',
+  trafficBefore: { requestsByPath: Record<string, number> },
 ): Promise<void> {
-  const fault = world.installedFaults.at(-1);
-  if (!fault) throw new Error('No fault precedes the crash trigger');
-  const { gateway, probe } = world.mint(fault.mint);
+  const exposure = planned.exposure!;
+  const wallet = planned.wallets[0]!;
+  const token = world.token(planned.tokens[0]!);
+  if (exposure.fault === 'dropRequest' || exposure.fault === 'dropResponse') {
+    const rule = world.faults.ruleOf(exposure.faultStep);
+    if ((await world.faults.applied(rule)) === 0) {
+      throw new ScenarioPreconditionError(`The ${exposure.fault} for ${wallet} never fired`);
+    }
+    await world.faults.captureFired();
+  }
+  const after = await world.faults.walletEvidence(wallet, exposure.mint);
+  const delta = (path: string) =>
+    (after.requestsByPath[path] ?? 0) - (trafficBefore.requestsByPath[path] ?? 0);
+  const record: ExchangeRecord = {
+    step: planned.index,
+    wallet,
+    mint: exposure.mint,
+    command,
+    fault: exposure.fault,
+    result,
+    swapAttempts: delta('POST /v1/swap'),
+    restoreRequests: delta('POST /v1/restore'),
+  };
+  if (result === 'interrupted') {
+    const ys = operationInputYs(world, wallet, command, operationId, token);
+    record.mintAcceptedRequest = await mintSpent(world, exposure.mint, ys);
+    record.persistedOperationState = readPersistedOperationState(
+      world.actorOptions.get(wallet)!.dbPath,
+      command,
+      operationId,
+    );
+    const expectedEffect = exposure.fault === 'dropResponse';
+    if (record.mintAcceptedRequest !== expectedEffect) {
+      throw new ScenarioPreconditionError(
+        `The ${exposure.fault} interrupted ${command} with mint effect ${record.mintAcceptedRequest}`,
+      );
+    }
+  }
+  world.exchanges.push(record);
+  world.trace.record('harness', 'exchange_corroborated', { ...record });
+}
+
+/**
+ * Crashes the Wallet as soon as the gateway reports that the armed withheld-response rule fired,
+ * so the mint has answered and the answer can never be delivered. Corroborates directly at the
+ * mint that the request took effect, and from the store that the operation was interrupted.
+ */
+async function crashWhenFaultFires(
+  world: ScenarioWorld,
+  planned: PlannedStep,
+  kind: 'send' | 'receive',
+  operationId: string,
+  execution: Promise<Settled<unknown>>,
+): Promise<void> {
+  const wallet = planned.wallets[0]!;
+  const token = world.token(planned.tokens[0]!);
+  const rule = world.faults.ruleOf(planned.exposure!.faultStep);
   let settledEarly = false;
   void execution.then(() => (settledEarly = true));
-  // Event trigger: the gateway has received the mint's response and is withholding it.
-  await waitUntil(
-    'fault trigger',
-    30_000,
-    async () => {
-      if (settledEarly) throw new ScenarioPreconditionError('Receive settled before the fault');
-      const evidence = await gateway.evidence();
-      return (evidence.rules.find((rule) => rule.id === fault.ruleId)?.applied ?? 0) > 0;
-    },
-    10,
-  ).catch((error: unknown) => {
-    if (error instanceof ScenarioPreconditionError) throw error;
-    throw new ScenarioPreconditionError('The withheld-response fault never fired');
-  });
-  await world.captureFiredFaults();
-  world.trace.record('gateway', 'fault_fired', { ruleId: fault.ruleId, mint: fault.mint });
+  await world.faults.awaitFired(rule, () => settledEarly);
 
   const actor = world.actor(wallet);
   const { signal } = await actor.crash();
   const settled = await execution;
   world.trace.record(wallet, 'crashed', {
+    step: planned.index,
     pid: actor.pid,
     signal,
     pendingCommandInterrupted: 'error' in settled && settled.error.name === 'ActorTerminatedError',
   });
 
-  const states = await probe.proofStates(token.inputs.map((input) => input.y));
-  const mintAcceptedRequest = token.inputs.every((input) => states.get(input.y) === 'SPENT');
+  const ys = operationInputYs(world, wallet, kind, operationId, token);
+  const mintAcceptedRequest = await mintSpent(world, rule.mint, ys);
   const dbPath = world.actorOptions.get(wallet)!.dbPath;
-  const persistedOperationState = readPersistedOperationState(dbPath, 'receive', operationId);
-  const crash = { wallet, signal, mintAcceptedRequest, persistedOperationState };
+  const persistedOperationState = readPersistedOperationState(dbPath, kind, operationId);
+  const crash: CrashRecord = {
+    wallet,
+    signal,
+    step: planned.index,
+    trigger: 'fault_fired',
+    mintAcceptedRequest,
+    persistedOperationState,
+  };
   world.crashes.push(crash);
   world.trace.record('harness', 'crash_corroborated', { ...crash });
   if (!mintAcceptedRequest) {
@@ -721,9 +951,48 @@ async function crashWhenFaultFires(
   }
   if (persistedOperationState !== 'executing') {
     throw new ScenarioPreconditionError(
-      `The crash did not interrupt the Receive (${persistedOperationState})`,
+      `The crash did not interrupt the ${kind} (${persistedOperationState})`,
     );
   }
+}
+
+/**
+ * Explicit public recovery in an explicit-recovery scenario. The call returning proves nothing;
+ * the record shows which operation states it changed, and checkpoints judge the outcome.
+ */
+async function recover(world: ScenarioWorld, step: number, wallet: string): Promise<void> {
+  const actor = world.actor(wallet);
+  const ids = (kind: 'receive' | 'send') =>
+    world
+      .expectedOutcomes()
+      .filter((outcome) => outcome.wallet === wallet && outcome.kind === kind)
+      .map((outcome) => outcome.operationId);
+  const query = { type: 'observe' as const, receiveIds: ids('receive'), sendIds: ids('send') };
+  const before = await actor.request(query);
+  world.trace.record(wallet, 'command', { step, type: 'recover' });
+  await actor.request({ type: 'recover' });
+  const after = await actor.request(query);
+  const record: RecoveryRecord = {
+    step,
+    wallet,
+    observed: before.operations.length,
+    transitions: before.operations.flatMap((operation) => {
+      const later = after.operations.find((candidate) => candidate.id === operation.id)?.state;
+      return later === operation.state
+        ? []
+        : [
+            {
+              operationId: operation.id,
+              kind: operation.kind,
+              before: operation.state,
+              after: later,
+            },
+          ];
+    }),
+  };
+  world.recoveries.push(record);
+  world.trace.record(wallet, 'recovery_observed', { ...record });
+  await fetchRecoveredTokens(world, wallet);
 }
 
 /**
@@ -785,7 +1054,14 @@ async function awaitExpectedOutcomes(world: ScenarioWorld, step: number) {
 }
 
 async function checkpoint(world: ScenarioWorld, step: number): Promise<void> {
+  world.faults.requireProcesses();
   const awaited = await awaitExpectedOutcomes(world, step);
+  // An interrupted Send's token becomes known once Coco has recovered the Send.
+  for (const token of world.tokens.values()) {
+    if (!token.encoded && world.actors.get(token.sender)?.running) {
+      await ensureToken(world, token).catch(() => undefined);
+    }
+  }
   const verdict = await evaluate(world, step);
   world.healedSinceCheckpoint = false;
   world.lastVerdict = verdict;
@@ -834,6 +1110,12 @@ async function evaluate(world: ScenarioWorld, step: number): Promise<AccountingV
     ysByMint.set(proof.mint, [...(ysByMint.get(proof.mint) ?? []), proof.y]);
   for (const proofs of stored.values()) proofs.forEach(addY);
   for (const token of world.tokens.values()) token.inputs.forEach(addY);
+  // A token that does not exist yet is not an economic claim; its Send stays a required outcome.
+  const createdTokens = [...world.tokens.values()].filter((token) => {
+    if (token.encoded) return true;
+    trace.record('harness', 'token_unavailable', { step, token: token.ref });
+    return false;
+  });
   const states = new Map<string, Map<string, ObservedProof['mintState'] & string>>();
   for (const [mint, ys] of ysByMint) {
     const node = world.mints.get(mint);
@@ -900,7 +1182,7 @@ async function evaluate(world: ScenarioWorld, step: number): Promise<AccountingV
       }
       return { wallet, storedProofs: stored.get(wallet)!.map(withState), publicBalances };
     }),
-    tokens: [...world.tokens.values()].map((token) => ({
+    tokens: createdTokens.map((token) => ({
       ref: token.ref,
       mint: token.mint,
       sender: token.sender,
@@ -1061,6 +1343,7 @@ export async function runScenario(
 
   let outcome: ScenarioOutcome = 'pass';
   let reason: string | undefined;
+  let transport: TransportRecord[] = [];
   const world = new ScenarioWorld(plan, trace);
 
   try {
@@ -1098,12 +1381,29 @@ export async function runScenario(
           container,
           gateway,
           probe: new MintProbe(container.directUrl),
-          url: gateway.url,
+          url: canonicalMintUrl(name),
         };
         world.mints.set(name, node);
-        world.mintByUrl.set(normalizeMintUrl(gateway.url), name);
+        world.mintByUrl.set(normalizeMintUrl(node.url), name);
       }),
     );
+    world.link = await TransportLink.start({
+      bundlePath: await prepareTransportLink(artifactsRoot()),
+      mints: plan.mints.map((name) => ({
+        name,
+        gateway: world.mint(name).gateway.url,
+        direct: world.mint(name).container.directUrl,
+      })),
+      wallets: plan.wallets,
+      logPath: join(runDir, 'transport-link.log'),
+    });
+    world.faults = new FaultController({
+      mints: world.mints,
+      link: world.link,
+      wallets: plan.wallets,
+      trace,
+      ...(plan.infrastructureControl ? { infrastructureControl: plan.infrastructureControl } : {}),
+    });
     const mintNodes = plan.mints.map((name) => world.mint(name));
     Object.assign(trace.document.components, {
       mint: {
@@ -1124,7 +1424,9 @@ export async function runScenario(
             unit,
             inputFeePpk: input_fee_ppk ?? 0,
           })),
-          transport: 'Wallets use this mint only through its own Fault Lab gateway',
+          transport:
+            'Wallets reach this mint only through the transport link: HTTP via its Fault Lab ' +
+            'gateway, WebSockets tunnelled to the mint',
         })),
       ),
       wallets: plan.wallets.map((wallet) => ({
@@ -1153,6 +1455,8 @@ export async function runScenario(
           seedPath,
           mintUrls: mintNodes.map((mint) => mint.url),
           unit: MINT_UNIT,
+          proxyUrl: world.link.proxyFor(wallet),
+          recoveryMode: plan.recoveryMode,
           logPath: join(privateDir, `${wallet}.log`),
         });
         await (await world.startActor(wallet)).request({ type: 'addMints' });
@@ -1167,14 +1471,12 @@ export async function runScenario(
       await checkpoint(world, plan.steps.length);
     }
 
-    await world.captureFiredFaults();
-    const unfired = world.installedFaults.filter(({ ruleId }) => !world.faultsFired.has(ruleId));
+    await world.faults.captureFired();
+    const unfired = world.faults.unfired();
     if (unfired.length > 0) {
-      throw new ScenarioPreconditionError(
-        `Faults never fired: ${unfired.map(({ ruleId }) => ruleId)}`,
-      );
+      throw new ScenarioPreconditionError(`Faults never fired: ${unfired.join(', ')}`);
     }
-    await recordGatewayTraffic(world);
+    transport = await recordTransportTraffic(world);
     outcome = world.lastVerdict!.status;
     if (world.commandFailure && outcome === 'pass') {
       outcome = 'wallet_failure';
@@ -1187,7 +1489,13 @@ export async function runScenario(
     reason = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
   }
 
-  const expectationMet = plan.expect === 'pass' ? outcome === 'pass' : outcome === 'wallet_failure';
+  const expectationMet =
+    outcome ===
+    {
+      pass: 'pass',
+      'detected-failure': 'wallet_failure',
+      'infrastructure-failure': 'infrastructure_failure',
+    }[plan.expect];
   const run: ScenarioRun = {
     runId,
     outcome,
@@ -1197,8 +1505,12 @@ export async function runScenario(
     checkpoints: world.checkpoints,
     commands: world.commands,
     races: world.races,
-    faultsFired: [...world.faultsFired.values()],
+    faultsFired: [...(world.faults?.fired.values() ?? [])],
     crashes: world.crashes,
+    exchanges: world.exchanges,
+    recoveries: world.recoveries,
+    mintRestarts: world.faults?.mintRestarts ?? [],
+    transport,
     tracePath,
     secretsChecked: trace.secretCount,
   };
@@ -1211,6 +1523,10 @@ export async function runScenario(
     commands: summarizeCommands(run.commands),
     faultsFired: run.faultsFired,
     crashes: run.crashes,
+    exchanges: run.exchanges,
+    recoveries: run.recoveries,
+    mintRestarts: run.mintRestarts,
+    transport: run.transport,
   };
   // Preserve the trace before tearing the environment down. A trace that would leak a secret is
   // not written; the private inputs are kept for diagnosis and the run fails loudly below.
@@ -1224,6 +1540,7 @@ export async function runScenario(
   await Promise.all(
     [...world.actors.values()].map((actor) => actor.shutdown().catch(() => undefined)),
   );
+  await world.link?.stop().catch(() => undefined);
   for (const mint of world.mints.values()) {
     await mint.gateway?.stop().catch(() => undefined);
     mint.container.stop();
@@ -1246,10 +1563,29 @@ export function summarizeCommands(commands: CommandOutcome[]): Record<string, nu
 }
 
 /**
- * Records what each gateway saw. Wallets only know gateway URLs, so this is their complete mint
- * HTTP traffic; a WebSocket upgrade attempt appears here as a plain `GET /v1/ws` request.
+ * Records what the transport link and each gateway saw. Wallets reach mints only through the link,
+ * so this is their complete mint traffic: HTTP per Wallet and mint, WebSocket tunnels, refused
+ * connections and requests that named no known mint (`unrouted`, refused).
  */
-async function recordGatewayTraffic(world: ScenarioWorld): Promise<void> {
+async function recordTransportTraffic(world: ScenarioWorld): Promise<TransportRecord[]> {
+  const records: TransportRecord[] = [];
+  const link = await world.link.evidence();
+  for (const [wallet, { unrouted, mints }] of Object.entries(link.wallets)) {
+    world.trace.record('link', 'traffic', { wallet, unrouted, mints });
+    for (const [mint, evidence] of Object.entries(mints)) {
+      records.push({
+        wallet,
+        mint,
+        requests: evidence.requests,
+        failedRequests: evidence.failedRequests,
+        refusedConnections: evidence.refusedConnections,
+        connectionsClosedByFault: evidence.connectionsClosedByFault,
+        webSocketUpgrades: evidence.webSocketUpgrades,
+        webSocketsClosedByFault: evidence.webSocketsClosedByFault,
+        unrouted,
+      });
+    }
+  }
   for (const mint of world.mints.values()) {
     const evidence = await mint.gateway.evidence();
     const requests: Record<string, number> = {};
@@ -1267,26 +1603,16 @@ async function recordGatewayTraffic(world: ScenarioWorld): Promise<void> {
       requests,
     });
   }
+  return records;
 }
 
 /**
- * Replays the plan recorded in a trace from clean state, with fresh Wallet Seeds. A generated plan
- * is first regenerated from its recorded scenario seed and must match the recorded commands.
+ * Replays the plan recorded in a trace from clean state, with fresh Wallet Seeds. Runs the recorded
+ * commands exactly; see `replay.ts` for provenance and comparison with the original.
  */
 export async function replayScenario(tracePath: string): Promise<ScenarioRun> {
-  const document = JSON.parse(readFileSync(tracePath, 'utf8')) as TraceDocument;
-  if (document.format !== TRACE_FORMAT) {
-    throw new Error(`Unsupported trace format ${String(document.format)}`);
-  }
-  if (document.plan.generator) {
-    const { version, ...generatorOptions } = document.plan.generator;
-    const regenerated = generateWorkload(generatorOptions);
-    if (
-      regenerated.generator?.version !== version ||
-      JSON.stringify(regenerated.steps) !== JSON.stringify(document.plan.steps)
-    ) {
-      throw new Error('The recorded scenario seed no longer generates the recorded commands');
-    }
-  }
-  return runScenario(document.plan, { replayOf: document.runId });
+  // replay.ts imports this module lazily; a dynamic import here avoids a static cycle.
+  const { prepareReplay } = await import('./replay.ts');
+  const original = readTraceFile(tracePath);
+  return runScenario(prepareReplay(original).plan, { replayOf: original.runId });
 }

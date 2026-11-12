@@ -71,13 +71,29 @@ export class MintContainer {
   ) {}
 
   static async start(name: string, mnemonic: string): Promise<MintContainer> {
+    // A fixed host port keeps the mint's address across a restart. Another process can claim the
+    // free port before Docker binds it, so retry with a fresh one.
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await MintContainer.startOnce(name, mnemonic, await freePort());
+      } catch (error) {
+        if (attempt === 3) throw error;
+      }
+    }
+  }
+
+  private static async startOnce(
+    name: string,
+    mnemonic: string,
+    port: number,
+  ): Promise<MintContainer> {
     docker([
       'run',
       '-d',
       '--name',
       name,
       '-p',
-      '127.0.0.1::3338',
+      `127.0.0.1:${port}:3338`,
       '-e',
       'CDK_MINTD_DATABASE=sqlite',
       '-e',
@@ -97,18 +113,38 @@ export class MintContainer {
       MINT_IMAGE,
     ]);
     try {
-      const port = docker(['port', name, '3338/tcp']).split('\n')[0]!.split(':').pop();
       const directUrl = `http://127.0.0.1:${port}`;
       const imageDigest = docker(['image', 'inspect', '--format', '{{.Id}}', MINT_IMAGE]);
-      await waitUntil('mint readiness', 30_000, async () => {
-        const response = await fetch(`${directUrl}/v1/info`);
-        return response.ok;
-      });
-      return new MintContainer(name, directUrl, imageDigest);
+      const container = new MintContainer(name, directUrl, imageDigest);
+      await container.waitReady();
+      return container;
     } catch (error) {
       Bun.spawnSync(['docker', 'rm', '-f', name]);
       throw error;
     }
+  }
+
+  async waitReady(timeoutMs = 30_000): Promise<void> {
+    await waitUntil(`${this.name} readiness`, timeoutMs, async () => {
+      const response = await fetch(`${this.directUrl}/v1/info`);
+      return response.ok;
+    });
+  }
+
+  /** When the container's current process started, as Docker reports it. */
+  startedAt(): string {
+    return docker(['inspect', '--format', '{{.State.StartedAt}}', this.name]);
+  }
+
+  /** SIGKILLs the mint process. The container and its committed storage remain. */
+  kill(): void {
+    docker(['kill', '--signal', 'KILL', this.name]);
+  }
+
+  /** Starts the killed container again over its committed storage and the same port. */
+  async restart(): Promise<void> {
+    docker(['start', this.name]);
+    await this.waitReady();
   }
 
   /** Removes the container. mintd ignores SIGTERM, so a graceful stop would only add latency. */
