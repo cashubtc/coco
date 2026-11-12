@@ -67,6 +67,7 @@ export function readStoredProofs(
           keysetId: row.id,
           storeState: row.state,
           ...(usedBy ? { usedByOperationId: usedBy } : {}),
+          ...(row.usedByOperationId ? { reservedByOperationId: row.usedByOperationId } : {}),
         };
       }),
       secrets: rows.map((row) => row.secret),
