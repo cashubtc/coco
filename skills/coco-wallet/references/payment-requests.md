@@ -10,8 +10,10 @@ and supported spending-condition checks. Show any `spendingCondition` diagnostic
 no eligible mint. A request's `allowedMints` alone is not a list of payable choices.
 
 For an amountless request, the parsed `payableMints` list contains candidates before the payment
-amount is known. After the user chooses an amount, recheck spendable balance at the selected mint
-in the request's unit. Preparation remains authoritative for fees and concurrent balance changes.
+amount is known. After the user chooses an amount, parse again with
+`coco.paymentRequests.parse(encodedRequest, { amount })` so `payableMints` lists only mints whose
+spendable balance covers it in the request's unit. The request stays amountless, so pass the same
+amount to `prepare()`. Preparation remains authoritative for fees and concurrent balance changes.
 Allow mint reselection when preparation reports insufficient funds.
 
 ```ts
