@@ -11,7 +11,7 @@
 import { describe, expect, it } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { replayScenario, runScenario, type ScenarioRun } from './runner.ts';
-import { scenarios } from './scenarios.ts';
+import { scenarios, type ScenarioStep } from './scenarios.ts';
 import { generateWorkload, type WorkloadOptions } from './workload.ts';
 
 const scenarioTimeoutMs = 180_000;
@@ -85,7 +85,11 @@ describe('wallet fault simulation against a real mint', () => {
         id: 'recovered-before-deadline-delayed-checkpoint',
         recoveryDeadlineMs: 5_000,
         steps: [
-          ...scenarios.lostReceiveResponseCrash.steps.slice(0, -1),
+          ...scenarios.lostReceiveResponseCrash.steps.slice(0, -1).flatMap<ScenarioStep>((step) =>
+            // Settle the sender before starting this Receive recovery window. The earlier
+            // slice has no WebSockets and would otherwise need two polling intervals.
+            step.kind === 'heal' ? [{ kind: 'restart', wallet: 'alice' }, step] : [step],
+          ),
           { kind: 'fund', wallet: 'alice', mint: 'mint-a', amount: 128 },
           { kind: 'send', wallet: 'alice', mint: 'mint-a', amount: 21, token: 'later-1' },
           { kind: 'raceReclaim', token: 'later-1', recipient: 'bob', lead: 'recipient' },
@@ -284,7 +288,7 @@ describe('three Wallets at two real mints', () => {
         expectSecretFreeTrace(run);
 
         if (index === 0) {
-          // Replay executes the recorded commands verbatim; scheduling may differ.
+          // Replay regenerates the same commands from the recorded seed; scheduling may differ.
           const replay = await replayScenario(run.tracePath);
           expect(outcomeOf(replay)).toMatchObject({ outcome: 'pass', expectationMet: true });
           const byStep = (commands: ScenarioRun['commands']) =>
