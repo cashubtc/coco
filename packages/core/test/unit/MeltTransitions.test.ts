@@ -17,7 +17,6 @@ import { SqlStorageRepositories } from '../../../sql-storage/src/repositories.ts
 import { SqliteDb } from '../../../sqlite-bun/src/db.ts';
 import { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
-import type { MeltQuote } from '../../models/MeltQuote.ts';
 import { ProofStateWatcherService } from '../../services/watchers/ProofStateWatcherService.ts';
 import { ProofValidationError } from '../../models/Error.ts';
 import { MeltHandlerProvider } from '../../infra/handlers/melt/MeltHandlerProvider.ts';
@@ -243,33 +242,57 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
     return { keep: data.keep.map(make), send: data.send.map(make) };
   }
 
-  function recoveryService(refresh: () => Promise<MeltQuote>) {
+  /** Real Melt recovery and quote coordination; only the mint's quote check is fake. */
+  function recoveryService(checkMeltQuote: MintAdapter['checkMeltQuote']) {
     const unused = async (): Promise<never> => {
       throw new Error('Recovery must not allocate or resubmit a request');
     };
+    const handlerProvider = new MeltHandlerProvider({ bolt11: new MeltBolt11Handler() });
+    const eventBus = new EventBus<CoreEvents>();
+    const mintService = createMintServiceForMetadata(repositories, undefined, eventBus);
+    const walletService = { getWalletWithActiveKeysetId: unused } as unknown as WalletService;
+    const mintAdapter = {
+      checkMeltQuote,
+      checkMeltQuoteState: MintAdapter.prototype.checkMeltQuoteState,
+      customMeltBolt11: unused,
+    } as unknown as MintAdapter;
     return new MeltOperationService({
-      handlerProvider: new MeltHandlerProvider(),
+      handlerProvider,
       meltOperationQueries: repositories.meltOperationRepository,
       proofQueries: repositories.proofRepository,
       transactionRunner: new RepositoryCoreTransactionRunner(repositories),
       loadSeed: unused,
-      quoteLifecycle: {
-        requireMeltQuoteRefForPrepare: unused,
-        getMeltQuote: readQuote,
-        getMeltQuoteById: readQuote,
-        refreshMeltQuote: refresh,
-        refreshMeltQuoteById: refresh,
-        recordMeltQuoteObservation: unused,
-      },
-      mintService: { refreshAndCommitIfStale: unused },
-      walletService: { getWalletWithActiveKeysetId: unused },
-      mintAdapter: {} as MintAdapter,
-      eventBus: new EventBus<CoreEvents>(),
+      quoteLifecycle: new QuoteLifecycle({
+        mintHandlerProvider: {} as QuoteLifecycleDeps['mintHandlerProvider'],
+        meltHandlerProvider: handlerProvider,
+        mintQuoteRepository: repositories.mintQuoteRepository,
+        meltQuoteRepository: repositories.meltQuoteRepository,
+        proofRepository: repositories.proofRepository,
+        mintService,
+        walletService,
+        mintAdapter,
+        eventBus,
+      }),
+      mintService,
+      walletService,
+      mintAdapter,
+      eventBus,
     });
   }
 
-  function readQuote() {
-    return repositories.meltQuoteRepository.getMeltQuote(mintUrl, 'bolt11', 'quote-1');
+  function meltQuoteResponse(state: 'UNPAID' | 'PENDING' | 'PAID') {
+    return {
+      method: 'bolt11' as const,
+      quote: 'quote-1',
+      request: 'lnbc1test',
+      amount: Amount.from(8),
+      unit: 'sat',
+      fee_reserve: Amount.from(2),
+      expiry: 100,
+      state,
+      payment_preimage: state === 'PAID' ? 'preimage' : null,
+      change: [],
+    };
   }
 
   it.each(
@@ -324,15 +347,14 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
     runner = new RepositoryCoreTransactionRunner(repositories);
     expect(await repositories.proofRepository.getProofsBySecrets(mintUrl, secrets)).toEqual(before);
 
-    const readFreshQuote = async () => {
+    const checkMeltQuote = async () => {
       if (outcome === 'ambiguous') throw new Error('connection lost');
-      await saveQuote(outcome, 4_000);
-      return (await readQuote())!;
+      return meltQuoteResponse(outcome);
     };
     // Independent coordinators have separate locks; the storage transaction decides the winner.
     await Promise.all([
-      recoveryService(readFreshQuote).recoverPendingOperations(),
-      recoveryService(readFreshQuote).recoverPendingOperations(),
+      recoveryService(checkMeltQuote).recoverPendingOperations(),
+      recoveryService(checkMeltQuote).recoverPendingOperations(),
     ]);
     const stored = await repositories.meltOperationRepository.getById('melt-1');
     expect(stored?.state).toBe(
