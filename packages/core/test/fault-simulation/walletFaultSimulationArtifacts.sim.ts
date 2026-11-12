@@ -36,7 +36,7 @@ function snapshot(dir: string): Record<string, string> {
 function expectPortable(tracePath: string) {
   const outDir = mkdtempSync(join(tmpdir(), 'coco-faultsim-portable-'));
   try {
-    const exported = exportPortableArtifacts(dirname(tracePath), outDir);
+    const exported = exportPortableArtifacts(dirname(tracePath), join(outDir, 'export'));
     expect(exported.withheld).toEqual([]);
     expect(exported.files).toEqual(expect.arrayContaining(['trace.json', 'report.json']));
   } finally {
