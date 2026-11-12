@@ -26,6 +26,13 @@ export const MINT_MNEMONICS = [
   'legal winner thank year wave sausage worth useful legal winner thank yellow',
 ];
 
+/** Drain every parallel startup before teardown can inspect the registered resources. */
+export async function awaitStartup(tasks: Promise<unknown>[]): Promise<void> {
+  const results = await Promise.allSettled(tasks);
+  const failed = results.find((result) => result.status === 'rejected');
+  if (failed?.status === 'rejected') throw failed.reason;
+}
+
 export async function waitUntil<T>(
   what: string,
   timeoutMs: number,
