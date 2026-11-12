@@ -5,7 +5,7 @@ status: accepted
 # Release operation-owned value only on positive evidence of non-effect
 
 An operation persists its Exact Operation Request and its authorization before the first remote
-submission, and initial execution and Operation Recovery both submit that same request. After
+submission. Operation Recovery retains that request and, where replay is permitted, reuses it. After
 submission, only positive evidence that the mint did not act on the request permits releasing the
 operation's proofs, allocations or reservations, or recording failure. Timeouts, transport errors,
 malformed responses, crashes, exhausted retries and elapsed time are not evidence: they leave an

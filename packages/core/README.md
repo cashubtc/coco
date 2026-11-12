@@ -122,12 +122,14 @@ in the future. Watchers commit canonical quote observations; the parent then coo
 recovery using those observations and shared child locks. Exact authorized recovery interests
 remain observable after trust revocation without trusting the mint again.
 
-Watchers and processors are selected at initialization for the whole Coco Session. An omitted
-watcher means nothing observes quotes between calls: parent coordination, `refresh(id)` and
-`recovery.run()` still work, but periodic parent scans do not poll quotes in its place. A parent
-that needs new quote evidence stays recoverable until a caller supplies it through refresh or
-recovery. `ensureSubscriptions()` repairs networking without restarting owners or running recovery.
-Mint-provided Retry-After delays remain a lower bound on the next automatic attempt.
+Watchers and processors are selected at initialization for the whole Coco Session. Omitting a
+watcher removes its routine quote observation: parent coordination, `refresh(id)` and
+`recovery.run()` still work, but periodic parent scans do not poll quotes in its place. Bounded
+startup recovery can still observe unresolved quotes, and releasing source inputs requires fresh
+`UNPAID` confirmation under the shared source child lock even when the watcher is omitted. A parent
+that needs other new quote evidence stays recoverable until a caller supplies it through refresh
+or recovery. `ensureSubscriptions()` repairs networking without restarting owners or running
+recovery. Mint-provided Retry-After delays remain a lower bound on the next automatic attempt.
 
 `cancel(id)` records intent and returns the actual state. An ambiguous source can remain pending;
 a paid source recovers forward. Cancellation can still incur a completed pre-swap fee. A
