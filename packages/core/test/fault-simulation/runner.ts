@@ -83,6 +83,10 @@ export interface ScenarioRun {
   secretsChecked: number;
 }
 
+class WalletOutcomeError extends Error {
+  override readonly name = 'WalletOutcomeError';
+}
+
 /** A scenario precondition (such as an unfired fault) was not established. */
 class ScenarioPreconditionError extends Error {
   override readonly name = 'ScenarioPreconditionError';
@@ -132,6 +136,7 @@ class ScenarioWorld {
   readonly faultsFired = new Map<string, FiredFault>();
   readonly crashes: CrashRecord[] = [];
   commandFailure: string | undefined;
+  readonly missedDeadlineIds = new Set<string>();
   healthyAt = Date.now();
 
   constructor(
@@ -197,6 +202,10 @@ async function runStep(world: ScenarioWorld, step: ScenarioStep): Promise<void> 
         inputs: decoded.inputs,
         encoded: result.token,
       });
+      const amount = decoded.inputs.reduce((total, input) => total + input.amount, 0);
+      if (amount !== step.amount) {
+        throw new WalletOutcomeError(`${step.token} carries ${amount}, expected ${step.amount}`);
+      }
       trace.record(step.wallet, 'result', {
         type: 'send',
         operationId: result.operationId,
@@ -268,6 +277,7 @@ async function runStep(world: ScenarioWorld, step: ScenarioStep): Promise<void> 
         const operationId = world.tokens.get(requirement.token)?.receiveOperationId;
         if (!operationId) continue;
         if (!actor?.running) {
+          world.missedDeadlineIds.add(operationId);
           trace.record(requirement.wallet, 'requirement_unobservable', {
             operationId,
             reason: 'Wallet process is not running',
@@ -281,6 +291,7 @@ async function runStep(world: ScenarioWorld, step: ScenarioStep): Promise<void> 
           if (state === requirement.state) break;
           await Bun.sleep(250);
         }
+        if (state !== requirement.state) world.missedDeadlineIds.add(operationId);
         trace.record(requirement.wallet, 'requirement_observed', {
           operationId,
           state,
@@ -408,6 +419,7 @@ async function evaluate(world: ScenarioWorld): Promise<AccountingVerdict> {
       kind: requirement.operation,
       expectedState: requirement.state,
       observedState,
+      missedDeadline: world.missedDeadlineIds.has(operationId),
       historyEntries: view?.historyEntries,
     });
     trace.record('harness', 'outcome_observed', {
@@ -513,7 +525,8 @@ export async function runScenario(
       try {
         await runStep(world, step);
       } catch (error) {
-        if (!(error instanceof ActorCommandError)) throw error;
+        if (!(error instanceof ActorCommandError) && !(error instanceof WalletOutcomeError))
+          throw error;
         // A rejected command in a step that expects success is a wallet failure. Keep evaluating
         // so the report still shows the resulting fund state.
         world.commandFailure = error.message;

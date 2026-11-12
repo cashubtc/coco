@@ -17,6 +17,7 @@ export function proofY(secret: string): string {
 }
 
 interface ProofRow {
+  mintUrl: string;
   amount: string;
   id: string;
   unit: string;
@@ -35,16 +36,27 @@ export function readStoredProofs(
   try {
     const rows = database
       .query(
-        'SELECT amount, id, unit, secret, state, usedByOperationId FROM coco_cashu_proofs WHERE unit = ?',
+        'SELECT mintUrl, amount, id, unit, secret, state, usedByOperationId FROM coco_cashu_proofs WHERE unit = ?',
       )
       .all(unit) as ProofRow[];
+    // Settled Sends release proof reservations; their input lists preserve fee boundaries.
+    const sendInputs = new Map<string, string>();
+    const sends = database
+      .query('SELECT id, mintUrl, inputProofSecretsJson FROM coco_cashu_send_operations')
+      .all() as { id: string; mintUrl: string; inputProofSecretsJson: string | null }[];
+    for (const send of sends) {
+      for (const secret of JSON.parse(send.inputProofSecretsJson ?? '[]') as string[]) {
+        sendInputs.set(`${send.mintUrl}|${secret}`, send.id);
+      }
+    }
     return {
       proofs: rows.map((row) => ({
         y: proofY(row.secret),
         amount: Number(row.amount),
         keysetId: row.id,
         storeState: row.state,
-        ...(row.usedByOperationId ? { usedByOperationId: row.usedByOperationId } : {}),
+        usedByOperationId: row.usedByOperationId ?? sendInputs.get(`${row.mintUrl}|${row.secret}`),
+        ...(row.usedByOperationId ? { reservedByOperationId: row.usedByOperationId } : {}),
       })),
       secrets: rows.map((row) => row.secret),
     };

@@ -21,6 +21,8 @@ export interface ObservedProof {
 export interface StoredProof extends ObservedProof {
   storeState: 'ready' | 'inflight' | 'spent';
   usedByOperationId?: string;
+  /** Current reservation owner, separate from historical swap attribution. */
+  reservedByOperationId?: string;
 }
 
 export interface WalletAccountingEvidence {
@@ -44,6 +46,8 @@ export interface RequiredOperationOutcome {
   expectedState: 'finalized';
   observedState: string | undefined;
   historyEntries: number | undefined;
+  /** A later successful observation cannot erase an unmet bounded-recovery requirement. */
+  missedDeadline?: boolean;
 }
 
 export interface AccountingEvidence {
@@ -186,7 +190,10 @@ export function checkFundAccounting(evidence: AccountingEvidence): AccountingVer
           wallet: wallet.wallet,
           message: 'Stored proof is mint-pending',
         });
-      } else if (proof.mintState === 'UNSPENT' && proof.storeState === 'spent') {
+      } else if (
+        proof.mintState === 'UNSPENT' &&
+        (proof.storeState !== 'ready' || proof.reservedByOperationId !== undefined)
+      ) {
         if (!strandedYs.has(proof.y)) {
           strandedYs.set(proof.y, proof.amount);
           findings.push(
@@ -194,7 +201,7 @@ export function checkFundAccounting(evidence: AccountingEvidence): AccountingVer
               code: 'stranded_value',
               wallet: wallet.wallet,
               amount: proof.amount,
-              message: 'Mint-unspent proof is locally marked spent',
+              message: 'Mint-unspent proof is not freely spendable in the Wallet store',
             }),
           );
         }
@@ -203,8 +210,14 @@ export function checkFundAccounting(evidence: AccountingEvidence): AccountingVer
         const claim = claimants.get(proof.y) ?? { amount: proof.amount, wallets: [] };
         claim.wallets.push(wallet.wallet);
         claimants.set(proof.y, claim);
+      } else if (proof.usedByOperationId === undefined) {
+        markUnresolved({
+          code: 'missing_evidence',
+          wallet: wallet.wallet,
+          message: 'A spent input cannot be attributed to the swap that consumed it',
+        });
       } else {
-        const swap = proof.usedByOperationId ?? `${wallet.wallet}:unknown`;
+        const swap = `${wallet.wallet}|${proof.usedByOperationId}`;
         const inputs = swapInputs.get(swap) ?? new Map<string, ObservedProof>();
         inputs.set(proof.y, proof);
         swapInputs.set(swap, inputs);
@@ -271,12 +284,14 @@ export function checkFundAccounting(evidence: AccountingEvidence): AccountingVer
 
   for (const outcome of evidence.requiredOutcomes) {
     const subject = { wallet: outcome.wallet, operationId: outcome.operationId };
-    if (outcome.observedState !== outcome.expectedState) {
+    if (outcome.missedDeadline || outcome.observedState !== outcome.expectedState) {
       findings.push(
         failure({
           ...subject,
           code: 'outcome_unmet',
-          message: `${outcome.kind} is ${outcome.observedState ?? 'unobserved'}, expected ${outcome.expectedState}`,
+          message: outcome.missedDeadline
+            ? `${outcome.kind} missed the recovery deadline`
+            : `${outcome.kind} is ${outcome.observedState ?? 'unobserved'}, expected ${outcome.expectedState}`,
         }),
       );
     }

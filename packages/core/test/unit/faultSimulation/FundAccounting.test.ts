@@ -67,6 +67,37 @@ function completedTransfer(): AccountingEvidence {
 }
 
 describe('checkFundAccounting', () => {
+  it('fails recovered funds that remain reserved despite finalized operations and matching total balances', () => {
+    const evidence = completedTransfer();
+    for (const proof of evidence.wallets[1]!.storedProofs) {
+      proof.reservedByOperationId = 'receive-1';
+    }
+    const verdict = checkFundAccounting(evidence);
+    expect(verdict.status).toBe('wallet_failure');
+    expect(verdict.ledger.stranded).toBe(31);
+    expect(verdict.findings).toContainEqual(
+      expect.objectContaining({ code: 'stranded_value', wallet: 'bob' }),
+    );
+  });
+
+  it('retains a missed recovery deadline even when a later observation is finalized', () => {
+    const evidence = completedTransfer();
+    evidence.requiredOutcomes[0]!.missedDeadline = true;
+    const verdict = checkFundAccounting(evidence);
+    expect(verdict.status).toBe('wallet_failure');
+    expect(verdict.findings).toContainEqual(
+      expect.objectContaining({ code: 'outcome_unmet', wallet: 'bob' }),
+    );
+  });
+
+  it('leaves released spent inputs without a proven swap boundary unresolved', () => {
+    const evidence = completedTransfer();
+    delete evidence.wallets[0]!.storedProofs[0]!.usedByOperationId;
+    const verdict = checkFundAccounting(evidence);
+    expect(verdict.status).toBe('unresolved');
+    expect(verdict.findings).toContainEqual(expect.objectContaining({ code: 'missing_evidence' }));
+  });
+
   it('passes a completed transfer whose value, fees and outcome are all corroborated', () => {
     const verdict = checkFundAccounting(completedTransfer());
 

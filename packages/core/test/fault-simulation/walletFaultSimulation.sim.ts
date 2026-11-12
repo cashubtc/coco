@@ -33,6 +33,26 @@ function expectSecretFreeTrace(run: ScenarioRun) {
 
 describe('wallet fault simulation against a real mint', () => {
   it(
+    'retains an expired recovery deadline even when final accounting sees finalized Receive',
+    async () => {
+      const run = await runScenario({
+        ...scenarios.healthyTransfer,
+        id: 'negative-control-expired-recovery-deadline',
+        expect: 'detected-failure',
+        recoveryDeadlineMs: 0,
+      });
+      expect(outcomeOf(run)).toMatchObject({ outcome: 'wallet_failure', expectationMet: true });
+      expect(run.verdict?.findings).toContainEqual(
+        expect.objectContaining({
+          code: 'outcome_unmet',
+          message: 'receive missed the recovery deadline',
+        }),
+      );
+    },
+    scenarioTimeoutMs,
+  );
+
+  it(
     'healthy baseline: a funded Send and Receive pass independent accounting',
     async () => {
       const run = await runScenario(scenarios.healthyTransfer);
