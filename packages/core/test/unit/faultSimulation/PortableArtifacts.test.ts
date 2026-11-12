@@ -113,6 +113,17 @@ describe('portable artifact export', () => {
     expect(snapshot(runDir)).toEqual(before);
   });
 
+  it('refuses a reused export directory without changing either source or earlier evidence', () => {
+    exportPortableArtifacts(runDir, outDir);
+    const previous = snapshot(outDir);
+    rmSync(join(runDir, 'gateway-mint-a.log'));
+    writeFileSync(join(runDir, 'gateway-mint-b.log'), rawToken);
+    const source = snapshot(runDir);
+    expect(() => exportPortableArtifacts(runDir, outDir)).toThrow();
+    expect(snapshot(outDir)).toEqual(previous);
+    expect(snapshot(runDir)).toEqual(source);
+  });
+
   it('withholds a log that would leak a token and says why', () => {
     writeFileSync(join(runDir, 'gateway-mint-b.log'), `forwarding ${rawToken}\n`);
 
