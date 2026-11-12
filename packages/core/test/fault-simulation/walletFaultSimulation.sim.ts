@@ -11,7 +11,7 @@
 import { describe, expect, it } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { replayScenario, runScenario, type ScenarioRun } from './runner.ts';
-import { scenarios } from './scenarios.ts';
+import { scenarios, type ScenarioStep } from './scenarios.ts';
 import { generateWorkload, type WorkloadOptions } from './workload.ts';
 
 const scenarioTimeoutMs = 180_000;
@@ -56,15 +56,66 @@ const count = (run: ScenarioRun, kind: string, result: string) =>
 
 describe('wallet fault simulation against a real mint', () => {
   it(
-    'retains an expired recovery deadline even when final accounting sees finalized Receive',
+    'does not expire a completed Send while later foreground work delays the checkpoint',
     async () => {
       const run = await runScenario({
         ...scenarios.healthyTransfer,
+        id: 'completed-before-heal-delayed-checkpoint',
+        recoveryDeadlineMs: 0,
+        steps: [
+          { kind: 'fund', wallet: 'alice', mint: 'mint-a', amount: 64 },
+          { kind: 'send', wallet: 'alice', mint: 'mint-a', amount: 32, token: 'token-1' },
+          { kind: 'heal' },
+          { kind: 'restart', wallet: 'bob' },
+          { kind: 'fund', wallet: 'bob', mint: 'mint-a', amount: 64 },
+          { kind: 'checkpoint' },
+        ],
+      });
+      expect(outcomeOf(run)).toMatchObject({ outcome: 'pass', expectationMet: true });
+      expect(run.verdict?.ledger.outstanding).toBe(32);
+    },
+    scenarioTimeoutMs,
+  );
+
+  it(
+    'remembers recovery within the window when foreground races delay the checkpoint',
+    async () => {
+      const run = await runScenario({
+        ...scenarios.lostReceiveResponseCrash,
+        id: 'recovered-before-deadline-delayed-checkpoint',
+        recoveryDeadlineMs: 5_000,
+        steps: [
+          ...scenarios.lostReceiveResponseCrash.steps.slice(0, -1).flatMap<ScenarioStep>((step) =>
+            // Settle the sender before starting this Receive recovery window. The earlier
+            // slice has no WebSockets and would otherwise need two polling intervals.
+            step.kind === 'heal' ? [{ kind: 'restart', wallet: 'alice' }, step] : [step],
+          ),
+          { kind: 'fund', wallet: 'alice', mint: 'mint-a', amount: 128 },
+          { kind: 'send', wallet: 'alice', mint: 'mint-a', amount: 21, token: 'later-1' },
+          { kind: 'raceReclaim', token: 'later-1', recipient: 'bob', lead: 'recipient' },
+          { kind: 'send', wallet: 'alice', mint: 'mint-a', amount: 21, token: 'later-2' },
+          { kind: 'raceReclaim', token: 'later-2', recipient: 'bob', lead: 'recipient' },
+          { kind: 'checkpoint' },
+        ],
+      });
+      expect(outcomeOf(run)).toMatchObject({ outcome: 'pass', expectationMet: true });
+      expect(run.checkpoints[0]!.msAwaitingOutcomes).toBeGreaterThan(5_000);
+      expect(run.crashes).toHaveLength(1);
+    },
+    scenarioTimeoutMs,
+  );
+
+  it(
+    'retains an expired recovery deadline even when final accounting sees finalized Receive',
+    async () => {
+      const run = await runScenario({
+        ...scenarios.lostReceiveResponseCrash,
         id: 'negative-control-expired-recovery-deadline',
         expect: 'detected-failure',
         recoveryDeadlineMs: 0,
       });
       expect(outcomeOf(run)).toMatchObject({ outcome: 'wallet_failure', expectationMet: true });
+      expect(run.verdict?.ledger.holdings.bob).toBe(31);
       expect(run.verdict?.findings).toContainEqual(
         expect.objectContaining({
           code: 'outcome_unmet',

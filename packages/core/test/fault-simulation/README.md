@@ -142,8 +142,9 @@ outcome.
 
 `heal` removes every gateway rule, ends every outage after it has affected traffic, gives delays a
 bounded chance to fire, and then establishes health: each mint answers directly, and every
-Wallet's link path reaches it over HTTP and WebSocket. Only then does the checkpoint's recovery
-deadline (the plan's `recoveryDeadlineMs`, 60 s by default) start. Failure to establish health,
+Wallet's link path reaches it over HTTP and WebSocket. The harness samples the current operation
+states as the healthy baseline, then starts the recovery deadline (the plan's
+`recoveryDeadlineMs`, 60 s by default) and observes pending outcomes alongside foreground work. Failure to establish health,
 including a mint that does not come back, is an `infrastructure_failure`. A checkpoint requires a
 healed environment, and a plan must end healed. A healthy environment with an unmet outcome at the
 deadline is a `wallet_failure`, never a pass as "safely blocked".
@@ -158,9 +159,13 @@ restarts.
 
 ## Outcomes and evidence
 
-A `checkpoint` waits for every Wallet to be idle, observes without calling any recovery interface
-until each expected operation state holds or the recovery deadline passes, and then runs the
-checker. A plan always ends with one. A failed checkpoint stops further dispatch.
+A `checkpoint` waits for every Wallet to be idle, collects the recovery observations and runs the
+checker. A success observed during the window remains on time even if later work delays the
+checkpoint; a missed deadline remains a failure even if recovery subsequently finishes. New
+operations and changed token fates introduced after healing get their own bounded observation at
+the checkpoint. These observations never call recovery interfaces. A later `heal` replaces an
+unfinished window, retaining any deadline misses already incurred. Observation tasks are drained
+before teardown. A plan always ends with a checkpoint, and a failed one stops further dispatch.
 
 `accounting.ts` checks value independently of Coco's displayed balances. Proof states come from the
 mints, token contents from the harness's own decoding, and fees from each mint's keyset input fee
