@@ -1054,7 +1054,11 @@ async function awaitExpectedOutcomes(world: ScenarioWorld, step: number) {
     unmet: [...pending].map(([operationId, state]) => ({ operationId, state })),
     msAwaitingOutcomes,
   });
-  return { msAwaitingOutcomes, met: pending.size === 0 };
+  return {
+    msAwaitingOutcomes,
+    met: pending.size === 0,
+    missedDeadlineIds: new Set(pending.keys()),
+  };
 }
 
 async function checkpoint(world: ScenarioWorld, step: number): Promise<void> {
@@ -1066,7 +1070,7 @@ async function checkpoint(world: ScenarioWorld, step: number): Promise<void> {
       await ensureToken(world, token).catch(() => undefined);
     }
   }
-  const verdict = await evaluate(world, step);
+  const verdict = await evaluate(world, step, awaited.missedDeadlineIds);
   world.healedSinceCheckpoint = false;
   world.lastVerdict = verdict;
   const { wallets: _wallets, ...ledger } = verdict.ledger;
@@ -1082,7 +1086,11 @@ async function checkpoint(world: ScenarioWorld, step: number): Promise<void> {
 }
 
 /** Collects mint, store and public evidence and runs the independent checker. */
-async function evaluate(world: ScenarioWorld, step: number): Promise<AccountingVerdict> {
+async function evaluate(
+  world: ScenarioWorld,
+  step: number,
+  missedDeadlineIds: Set<string>,
+): Promise<AccountingVerdict> {
   const { plan, trace } = world;
   const expected = world.expectedOutcomes();
 
@@ -1169,6 +1177,7 @@ async function evaluate(world: ScenarioWorld, step: number): Promise<AccountingV
     return {
       ...outcome,
       observedState: observed.state,
+      missedDeadline: missedDeadlineIds.has(outcome.operationId),
       historyEntries: observed.historyEntries,
     };
   });
