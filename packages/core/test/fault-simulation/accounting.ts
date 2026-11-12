@@ -30,6 +30,8 @@ export interface StoredProof extends ObservedProof {
    * records. Spent inputs without it cannot be assigned to a swap, so their fee stays unresolved.
    */
   usedByOperationId?: string;
+  /** Current reservation owner, separate from historical swap attribution. */
+  reservedByOperationId?: string;
 }
 
 export interface WalletAccountingEvidence {
@@ -69,6 +71,8 @@ export interface RequiredOperationOutcome {
   expectedStates: string[];
   observedState: string | undefined;
   historyEntries: number | undefined;
+  /** A later successful observation cannot erase an unmet bounded-recovery requirement. */
+  missedDeadline?: boolean;
 }
 
 export interface AccountingEvidence {
@@ -118,7 +122,7 @@ export interface ValueLedger {
   held: number;
   /** Value of created tokens whose inputs are still unspent. */
   outstanding: number;
-  /** Mint-unspent value a Wallet has locally marked spent. */
+  /** Mint-unspent value that is not ready and unreserved for spending. */
   stranded: number;
   /** Legitimate input fees derived from the keyset rate, rounded once per swap. */
   fees: number;
@@ -391,7 +395,10 @@ export function checkFundAccounting(evidence: AccountingEvidence): AccountingVer
               ? 'Stored proof has no mint state'
               : 'Stored proof is mint-pending',
         });
-      } else if (proof.mintState === 'UNSPENT' && proof.storeState === 'spent') {
+      } else if (
+        proof.mintState === 'UNSPENT' &&
+        (proof.storeState !== 'ready' || proof.reservedByOperationId !== undefined)
+      ) {
         mint.adjust(mint.stranded, wallet.wallet, proof.amount);
         if (!mint.strandedProofs.has(key)) {
           mint.strandedProofs.set(key, proof.amount);
@@ -400,7 +407,7 @@ export function checkFundAccounting(evidence: AccountingEvidence): AccountingVer
               ...subject,
               code: 'stranded_value',
               amount: proof.amount,
-              message: 'Mint-unspent proof is locally marked spent',
+              message: 'Mint-unspent proof is not freely spendable in the Wallet store',
             }),
           );
         }
@@ -550,6 +557,7 @@ export function checkFundAccounting(evidence: AccountingEvidence): AccountingVer
   for (const outcome of evidence.requiredOutcomes) {
     const subject = { wallet: outcome.wallet, operationId: outcome.operationId };
     if (
+      outcome.missedDeadline ||
       outcome.observedState === undefined ||
       !outcome.expectedStates.includes(outcome.observedState)
     ) {
@@ -557,9 +565,10 @@ export function checkFundAccounting(evidence: AccountingEvidence): AccountingVer
         failure({
           ...subject,
           code: 'outcome_unmet',
-          message:
-            `${outcome.kind} is ${outcome.observedState ?? 'unobserved'}, expected ` +
-            outcome.expectedStates.join(' or '),
+          message: outcome.missedDeadline
+            ? `${outcome.kind} missed the recovery deadline`
+            : `${outcome.kind} is ${outcome.observedState ?? 'unobserved'}, expected ` +
+              outcome.expectedStates.join(' or '),
         }),
       );
     }
