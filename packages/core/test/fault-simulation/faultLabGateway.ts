@@ -140,7 +140,16 @@ export class FaultLabGateway {
     try {
       await waitUntil('Fault Lab gateway control API', 10_000, async () => {
         if (child.exitCode !== null) throw new InfrastructureFailure('Fault Lab gateway exited');
-        await gateway.evidence();
+        try {
+          await gateway.evidence();
+        } catch (error) {
+          // Connection failures are expected while the new process binds its control port.
+          // Once start resolves, the same failure must terminate the scenario as infrastructure.
+          if (error instanceof InfrastructureFailure && error.cause !== undefined) {
+            throw new Error('Fault Lab control API is not reachable yet', { cause: error });
+          }
+          throw error;
+        }
         return true;
       });
     } catch (error) {
@@ -151,12 +160,15 @@ export class FaultLabGateway {
   }
 
   private async control(path: string, init: RequestInit = {}): Promise<unknown> {
+    if (!this.running) throw new InfrastructureFailure('Fault Lab gateway process exited');
     const response = await fetch(`${this.url}/__faults/v1/${path}`, {
       ...init,
       headers: {
         authorization: `Bearer ${this.controlToken}`,
         'content-type': 'application/json',
       },
+    }).catch((cause: unknown) => {
+      throw new InfrastructureFailure(`Fault Lab control ${path} failed`, { cause });
     });
     if (!response.ok) {
       throw new InfrastructureFailure(`Fault Lab control ${path} returned ${response.status}`);

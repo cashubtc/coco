@@ -64,7 +64,6 @@ describe('replay preparation', () => {
     expect(replay.provenance.generator).toBeUndefined();
   });
 });
-
 it('preserves explicit recovery mode when validating a recorded plan', () => {
   const trace = readTrace(
     readFileSync(

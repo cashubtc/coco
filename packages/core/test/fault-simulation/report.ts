@@ -13,7 +13,9 @@ type Outcome = 'pass' | 'wallet_failure' | 'unresolved' | 'infrastructure_failur
 /**
  * What makes two failures "the same": the outcome, the failing findings by code and the mint and
  * Wallet they concern, and for a contradicted command its kind, or for an unresolved run its error
- * class. Amounts, operation IDs and step indices are excluded because they legitimately differ
+ * class. Wallet outcomes unavailable from a live process at the decisive checkpoint are also
+ * part of the identity: omitting startup recovery must not reproduce a failure after recovery.
+ * Amounts, operation IDs and step indices are excluded because they legitimately differ
  * between a run and its replay or minimized form.
  */
 export interface FailureSignature {
@@ -21,6 +23,8 @@ export interface FailureSignature {
   findings: string[];
   commandFailure?: string;
   reasonClass?: string;
+  /** Wallets whose decisive outcomes could not be observed through a running Coco Session. */
+  unobservedWallets?: string[];
 }
 
 interface RecordedFinding {
@@ -93,6 +97,27 @@ export function failureSignature(trace: RecordedTrace): FailureSignature {
   ].sort();
   const signature: FailureSignature = { outcome, findings };
 
+  // Limit provenance to the decisive checkpoint. Earlier stopped Wallets may have recovered by
+  // this point. v1 records read-only fallback; v2 also records an unavailable Wallet explicitly.
+  const unobservedWallets = new Set<string>();
+  if (verdict) {
+    for (const event of trace.events) {
+      if (event.type === 'verdict') {
+        if (event.data === verdict) break;
+        unobservedWallets.clear();
+      } else if (event.type === 'outcomes_unobservable') {
+        unobservedWallets.add(event.source);
+      } else if (
+        event.type === 'outcome_observed' &&
+        event.data?.provenance === 'persisted_read_only' &&
+        typeof event.data.wallet === 'string'
+      ) {
+        unobservedWallets.add(event.data.wallet);
+      }
+    }
+  }
+  if (unobservedWallets.size > 0) signature.unobservedWallets = [...unobservedWallets].sort();
+
   const commandFailed = trace.events.find((event) => event.type === 'command_failed');
   const failedStep = commandFailed?.data?.step;
   if (typeof failedStep === 'number') {
@@ -113,6 +138,7 @@ const canonical = (signature: FailureSignature) => ({
   findings: [...signature.findings].sort(),
   commandFailure: signature.commandFailure ?? null,
   reasonClass: signature.reasonClass ?? null,
+  unobservedWallets: [...(signature.unobservedWallets ?? [])].sort(),
 });
 
 export interface ReplayComparison {
@@ -176,7 +202,15 @@ export interface Coverage {
     /** Installed fault rules that never fired: `kind METHOD path [@mint]`. Not covered. */
     unfired: Record<string, number>;
   };
-  /** `signal mintAcceptedRequest=… persisted=…` per corroborated Wallet crash. */
+  /**
+   * Agreed palette fault kinds that demonstrably happened: fired gateway and link faults by plan
+   * step kind, every Wallet `crash`, and every `restartMint` the mint survived with its state.
+   */
+  faultKinds: Record<string, number>;
+  /**
+   * `signal trigger=… mintAcceptedRequest=… persisted=…` per Wallet crash; fields a crash did not
+   * record (an idle crash has no interrupted request) are left out.
+   */
   crashes: Record<string, number>;
   /** `after_crash`, `graceful`, `forced` (disposal had to kill) or `unrecorded`. */
   restarts: Record<string, number>;
@@ -184,11 +218,52 @@ export interface Coverage {
   recoveryModes: Record<string, number>;
   /** `lead=… winner=…` or `unled winner=…` per receive-versus-reclaim race. */
   races: Record<string, number>;
+  /** `keysetsRetained=… proofStatesRetained=…` per mint restart. */
+  mintRestarts: Record<string, number>;
+  /** `command fault result mintAcceptedRequest=… persisted=…` per corroborated exposed command. */
+  exchanges: Record<string, number>;
+  /** `kind before->after` per operation an explicit recovery call changed, or `no_change`. */
+  recoveries: Record<string, number>;
   /** Checkpoint verdicts by status. */
   checkpoints: Record<string, number>;
   /** Wallet-to-mint requests seen by the gateways, by `METHOD path`. */
   transport: Record<string, number>;
+  /** Transport link totals; `unrouted` counts requests that named no known mint (a bypass). */
+  link: LinkTotals;
 }
+
+export interface LinkTotals {
+  webSocketUpgrades: number;
+  webSocketsClosedByFault: number;
+  refusedConnections: number;
+  connectionsClosedByFault: number;
+  unrouted: number;
+}
+
+const emptyLink = (): LinkTotals => ({
+  webSocketUpgrades: 0,
+  webSocketsClosedByFault: 0,
+  refusedConnections: 0,
+  connectionsClosedByFault: 0,
+  unrouted: 0,
+});
+
+const emptyCoverage = (runs: number): Coverage => ({
+  runs,
+  commands: {},
+  faults: { fired: {}, unfired: {} },
+  faultKinds: {},
+  crashes: {},
+  restarts: {},
+  recoveryModes: {},
+  races: {},
+  mintRestarts: {},
+  exchanges: {},
+  recoveries: {},
+  checkpoints: {},
+  transport: {},
+  link: emptyLink(),
+});
 
 export interface ReportedFinding {
   code: string;
@@ -261,6 +336,16 @@ const INTERPRETED_EVENTS = new Set([
   'checker_control_applied',
   'command_failed',
   'traffic',
+  // Palette events whose coverage comes from the run result (faults, exchanges, recoveries and
+  // mint restarts) or from the commands they belong to.
+  'interrupted',
+  'outage_started',
+  'outage_ended',
+  'websockets_dropped',
+  'mint_killed',
+  'mint_restarted',
+  'exchange_corroborated',
+  'recovery_observed',
   // S1 (v1) observation events.
   'requirement_observed',
   'requirement_unobservable',
@@ -275,19 +360,27 @@ const text = (value: unknown): string | undefined =>
 
 const atMint = (mint: unknown) => (typeof mint === 'string' ? ` @${mint}` : '');
 
+/**
+ * Gateway faults recorded before fault kinds were (S1 and S2 traces) only installed
+ * `withholdResponse`; the phase and action still identify the others.
+ */
+function inferredFaultKind(fault: Record<string, unknown>): string {
+  if (typeof fault.kind === 'string') return fault.kind;
+  const mechanism = `${String(fault.phase)}/${String(fault.action)}`;
+  return (
+    {
+      'before_forward/drop': 'dropRequest',
+      'after_downstream_response/drop': 'dropResponse',
+      'after_downstream_response/delay': 'withholdResponse',
+    }[mechanism] ?? `unrecorded ${mechanism}`
+  );
+}
+
+const records = (value: unknown) => (Array.isArray(value) ? value.filter(isRecord) : []);
+
 function exercisedCoverage(trace: RecordedTrace): Coverage {
   const result = trace.result ?? {};
-  const coverage: Coverage = {
-    runs: 1,
-    commands: {},
-    faults: { fired: {}, unfired: {} },
-    crashes: {},
-    restarts: {},
-    recoveryModes: {},
-    races: {},
-    checkpoints: {},
-    transport: {},
-  };
+  const coverage = emptyCoverage(1);
 
   if (isRecord(result.commands)) {
     for (const [key, value] of Object.entries(result.commands)) {
@@ -304,6 +397,7 @@ function exercisedCoverage(trace: RecordedTrace): Coverage {
   for (const fault of fired) {
     if (typeof fault.applied === 'number' && fault.applied < 1) continue;
     firedRules.add(`${String(fault.ruleId)}${atMint(fault.mint)}`);
+    count(coverage.faultKinds, inferredFaultKind(fault));
     count(
       coverage.faults.fired,
       `${text(fault.method) ?? '*'} ${text(fault.path) ?? '*'} ${String(fault.phase)}/${String(fault.action)}${atMint(fault.mint)}`,
@@ -353,13 +447,71 @@ function exercisedCoverage(trace: RecordedTrace): Coverage {
     }
   }
 
-  const crashes = Array.isArray(result.crashes) ? result.crashes.filter(isRecord) : [];
-  for (const crash of crashes) {
+  for (const crash of records(result.crashes)) {
     count(
       coverage.crashes,
-      `${String(crash.signal)} mintAcceptedRequest=${String(crash.mintAcceptedRequest)} persisted=${String(crash.persistedOperationState)}`,
+      [
+        String(crash.signal),
+        ...(typeof crash.trigger === 'string' ? [`trigger=${crash.trigger}`] : []),
+        ...(crash.mintAcceptedRequest === undefined
+          ? []
+          : [`mintAcceptedRequest=${String(crash.mintAcceptedRequest)}`]),
+        ...(crash.persistedOperationState === undefined
+          ? []
+          : [`persisted=${String(crash.persistedOperationState)}`]),
+      ].join(' '),
+    );
+    if (crash.signal === 'SIGKILL') count(coverage.faultKinds, 'crash');
+  }
+  for (const restart of records(result.mintRestarts)) {
+    count(
+      coverage.mintRestarts,
+      `keysetsRetained=${String(restart.keysetsRetained)} proofStatesRetained=${String(restart.proofStatesRetained)}`,
+    );
+    if (restart.keysetsRetained === true && restart.proofStatesRetained === true) {
+      count(coverage.faultKinds, 'restartMint');
+    }
+  }
+  for (const exchange of records(result.exchanges)) {
+    count(
+      coverage.exchanges,
+      [
+        String(exchange.command),
+        String(exchange.fault),
+        String(exchange.result),
+        ...(exchange.mintAcceptedRequest === undefined
+          ? []
+          : [`mintAcceptedRequest=${String(exchange.mintAcceptedRequest)}`]),
+        ...(exchange.persistedOperationState === undefined
+          ? []
+          : [`persisted=${String(exchange.persistedOperationState)}`]),
+      ].join(' '),
     );
   }
+  for (const recovery of records(result.recoveries)) {
+    const transitions = records(recovery.transitions);
+    if (transitions.length === 0) count(coverage.recoveries, 'no_change');
+    for (const transition of transitions) {
+      count(
+        coverage.recoveries,
+        `${String(transition.kind)} ${String(transition.before)}->${String(transition.after)}`,
+      );
+    }
+  }
+  // Every record of a Wallet repeats that Wallet's unrouted count; count it once per Wallet.
+  const unrouted = new Map<string, number>();
+  for (const entry of records(result.transport)) {
+    for (const field of [
+      'webSocketUpgrades',
+      'webSocketsClosedByFault',
+      'refusedConnections',
+      'connectionsClosedByFault',
+    ] as const) {
+      if (typeof entry[field] === 'number') coverage.link[field] += entry[field];
+    }
+    if (typeof entry.unrouted === 'number') unrouted.set(String(entry.wallet), entry.unrouted);
+  }
+  coverage.link.unrouted = [...unrouted.values()].reduce((sum, value) => sum + value, 0);
   const races = Array.isArray(result.races) ? result.races.filter(isRecord) : [];
   for (const race of races) {
     const lead = typeof race.lead === 'string' ? `lead=${race.lead}` : 'unled';
@@ -438,17 +590,7 @@ export function buildRunReport(trace: RecordedTrace): RunReport {
 }
 
 export function mergeCoverage(coverages: Coverage[]): Coverage {
-  const merged: Coverage = {
-    runs: 0,
-    commands: {},
-    faults: { fired: {}, unfired: {} },
-    crashes: {},
-    restarts: {},
-    recoveryModes: {},
-    races: {},
-    checkpoints: {},
-    transport: {},
-  };
+  const merged = emptyCoverage(0);
   const add = (into: Record<string, number>, from: Record<string, number>) => {
     for (const [key, value] of Object.entries(from)) count(into, key, value);
   };
@@ -457,12 +599,19 @@ export function mergeCoverage(coverages: Coverage[]): Coverage {
     add(merged.commands, coverage.commands);
     add(merged.faults.fired, coverage.faults.fired);
     add(merged.faults.unfired, coverage.faults.unfired);
+    add(merged.faultKinds, coverage.faultKinds);
     add(merged.crashes, coverage.crashes);
     add(merged.restarts, coverage.restarts);
     add(merged.recoveryModes, coverage.recoveryModes);
     add(merged.races, coverage.races);
+    add(merged.mintRestarts, coverage.mintRestarts);
+    add(merged.exchanges, coverage.exchanges);
+    add(merged.recoveries, coverage.recoveries);
     add(merged.checkpoints, coverage.checkpoints);
     add(merged.transport, coverage.transport);
+    for (const field of Object.keys(merged.link) as (keyof LinkTotals)[]) {
+      merged.link[field] += coverage.link[field];
+    }
   }
   return merged;
 }
@@ -480,12 +629,17 @@ export function renderCoverage(coverage: Coverage): string {
     ...table('Commands', coverage.commands, 'none'),
     ...table('Faults fired', coverage.faults.fired, 'none'),
     ...table('Faults installed but never fired (not covered)', coverage.faults.unfired, 'none'),
+    ...table('Fault kinds exercised', coverage.faultKinds, 'none'),
     ...table('Wallet crashes', coverage.crashes, 'none'),
     ...table('Wallet restarts', coverage.restarts, 'none'),
+    ...table('Mint restarts', coverage.mintRestarts, 'none'),
+    ...table('Interrupted exchanges', coverage.exchanges, 'none'),
+    ...table('Explicit recovery transitions', coverage.recoveries, 'none'),
     ...table('Recovery modes (checkpoints)', coverage.recoveryModes, 'none'),
     ...table('Receive-versus-reclaim races', coverage.races, 'none'),
     ...table('Checkpoints', coverage.checkpoints, 'none'),
     ...table('Gateway requests', coverage.transport, 'none'),
+    ...table('Transport link', { ...coverage.link }, 'none'),
   ].join('\n');
 }
 

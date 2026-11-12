@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'bun:test';
 import { readFileSync } from 'node:fs';
-import { buildRunReport, mergeCoverage, renderReport } from '../../fault-simulation/report.ts';
+import {
+  buildRunReport,
+  mergeCoverage,
+  renderCoverage,
+  renderReport,
+} from '../../fault-simulation/report.ts';
 import { readTrace, type RecordedTrace } from '../../fault-simulation/trace.ts';
 
 const fixture = (name: string) =>
@@ -10,6 +15,8 @@ const fixture = (name: string) =>
 
 const v1Crash = () => fixture('v1-receive-lost-response-crash-restart.trace.json');
 const generatedFailure = () => fixture('v2-generated-seed-2-false-deficit.trace.json');
+const generatedFaults = () => fixture('v2-generated-faults-explicit-seed-5.trace.json');
+const walletCrashes = () => fixture('v2-wallet-crashes.trace.json');
 
 function withEvents(
   trace: RecordedTrace,
@@ -123,5 +130,84 @@ describe('run report', () => {
     expect(merged.restarts).toEqual({ after_crash: 1, graceful: 3 });
     expect(merged.checkpoints).toEqual({ pass: 3, wallet_failure: 1 });
     expect(merged.faults.fired).toEqual({ 'POST /v1/swap after_downstream_response/delay': 1 });
+  });
+
+  it('reports the palette fault kinds, crashes and mint restarts a faulted run exercised', () => {
+    const report = buildRunReport(generatedFaults());
+
+    expect(report.coverage.faultKinds).toEqual({
+      dropWebSockets: 1,
+      delayResponses: 1,
+      disconnect: 1,
+      crash: 3,
+      restartMint: 1,
+    });
+    expect(report.coverage.crashes).toEqual({ 'SIGKILL trigger=step': 3 });
+    expect(report.coverage.restarts).toEqual({ after_crash: 3, graceful: 2 });
+    expect(report.coverage.mintRestarts).toEqual({
+      'keysetsRetained=true proofStatesRetained=true': 1,
+    });
+    expect(report.coverage.recoveryModes).toEqual({ explicit: 3 });
+  });
+
+  it('reports interrupted exchanges and what explicit recovery changed', () => {
+    const report = buildRunReport(generatedFaults());
+
+    expect(report.coverage.exchanges).toEqual({
+      'receive outage interrupted mintAcceptedRequest=false persisted=executing': 1,
+    });
+    expect(report.coverage.recoveries).toEqual({ 'receive executing->finalized': 1 });
+  });
+
+  it('totals transport link evidence, counting each Wallet unrouted request once', () => {
+    expect(buildRunReport(generatedFaults()).coverage.link).toEqual({
+      webSocketUpgrades: 15,
+      webSocketsClosedByFault: 5,
+      refusedConnections: 2,
+      connectionsClosedByFault: 9,
+      unrouted: 0,
+    });
+  });
+
+  it('interprets the events behind palette coverage instead of listing them as unknown', () => {
+    expect(buildRunReport(generatedFaults()).additionalEvents).toEqual({});
+  });
+
+  it('distinguishes a crash on a fired fault from an idle crash', () => {
+    const report = buildRunReport(walletCrashes());
+
+    expect(report.coverage.crashes).toEqual({
+      'SIGKILL trigger=fault_fired mintAcceptedRequest=true persisted=executing': 1,
+      'SIGKILL trigger=step': 1,
+    });
+    expect(report.coverage.faultKinds).toEqual({ withholdResponse: 1, crash: 2 });
+  });
+
+  it('infers the fault kind of traces that predate recorded kinds', () => {
+    expect(buildRunReport(v1Crash()).coverage.faultKinds).toEqual({
+      withholdResponse: 1,
+      crash: 1,
+    });
+  });
+
+  it('renders and aggregates the palette coverage', () => {
+    const merged = mergeCoverage([
+      buildRunReport(generatedFaults()).coverage,
+      buildRunReport(walletCrashes()).coverage,
+    ]);
+
+    expect(merged.faultKinds).toMatchObject({ crash: 5, restartMint: 1, withholdResponse: 1 });
+    expect(merged.link.webSocketsClosedByFault).toBe(5);
+    expect(merged.recoveries).toEqual({ 'receive executing->finalized': 1 });
+    const rendered = renderCoverage(merged);
+    for (const heading of [
+      'Fault kinds exercised',
+      'Mint restarts',
+      'Interrupted exchanges',
+      'Explicit recovery transitions',
+      'Transport link',
+    ]) {
+      expect(rendered).toContain(heading);
+    }
   });
 });

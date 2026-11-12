@@ -1,0 +1,1059 @@
+{
+  "format": "coco-wallet-fault-simulation/trace/v2",
+  "runId": "wallet-crash-during-send-and-idle-2026-11-12T11-24-48-998Z-2d11169d",
+  "plan": {
+    "expect": "pass",
+    "recoveryMode": "automatic",
+    "recoveryDeadlineMs": 60000,
+    "wallets": ["alice", "bob", "carol"],
+    "mints": ["mint-a", "mint-b"],
+    "id": "wallet-crash-during-send-and-idle",
+    "description": "Alice is SIGKILLed while the mint's answer to her Send swap is withheld; Carol is SIGKILLed while idle with a pending Send whose token Bob then claims. New Coco Sessions over the same stores must recover both.",
+    "steps": [
+      {
+        "kind": "fund",
+        "wallet": "alice",
+        "mint": "mint-a",
+        "amount": 64
+      },
+      {
+        "kind": "fund",
+        "wallet": "carol",
+        "mint": "mint-b",
+        "amount": 64
+      },
+      {
+        "kind": "send",
+        "wallet": "carol",
+        "mint": "mint-b",
+        "amount": 15,
+        "token": "c1"
+      },
+      {
+        "kind": "withholdResponse",
+        "wallet": "alice",
+        "mint": "mint-a",
+        "method": "POST",
+        "path": "/v1/swap"
+      },
+      {
+        "kind": "send",
+        "wallet": "alice",
+        "mint": "mint-a",
+        "amount": 21,
+        "token": "a1",
+        "crashWhenFaultFires": true
+      },
+      {
+        "kind": "crash",
+        "wallet": "carol"
+      },
+      {
+        "kind": "receive",
+        "wallet": "bob",
+        "token": "c1"
+      },
+      {
+        "kind": "heal"
+      },
+      {
+        "kind": "restart",
+        "wallet": "alice"
+      },
+      {
+        "kind": "restart",
+        "wallet": "carol"
+      },
+      {
+        "kind": "receive",
+        "wallet": "bob",
+        "token": "a1"
+      },
+      {
+        "kind": "checkpoint"
+      }
+    ]
+  },
+  "components": {
+    "coco": {
+      "commit": "2867205882fc92dc41a3919655b6d511019e729e",
+      "dirty": true
+    },
+    "bun": "1.3.14",
+    "cashuTs": "5.0.0-rc.4",
+    "faultLab": {
+      "repository": "https://github.com/GautamBytes/cashu-fault-lab.git",
+      "revision": "1cc954d33a1088fd20efc48c5437e3a7441920f7",
+      "component": "apps/http-fault-gateway",
+      "runtime": "node v22.22.1"
+    },
+    "mint": {
+      "image": "cashubtc/mintd:0.17.0-rc.0",
+      "imageId": "sha256:3ea25571aecd6bb47c55781fb9f6566fbca364f6a4a163475ae81c1cae17b852",
+      "paymentBackend": "fakewallet"
+    }
+  },
+  "configuration": {
+    "unit": "sat",
+    "inputFeePpk": 100,
+    "mints": [
+      {
+        "mint": "mint-a",
+        "mnemonic": "test vector 1",
+        "keysets": [
+          {
+            "id": "0187b2e8760759f0d0de2e0b7cae676f106e318e6795206c8b266865e5b9fe6074",
+            "unit": "sat",
+            "inputFeePpk": 100
+          }
+        ],
+        "transport": "Wallets reach this mint only through the transport link: HTTP via its Fault Lab gateway, WebSockets tunnelled to the mint"
+      },
+      {
+        "mint": "mint-b",
+        "mnemonic": "test vector 2",
+        "keysets": [
+          {
+            "id": "01932e27691087a95d2a3e3d9a76dfad4fe438b3c450090fc9f77668e874324de4",
+            "unit": "sat",
+            "inputFeePpk": 100
+          }
+        ],
+        "transport": "Wallets reach this mint only through the transport link: HTTP via its Fault Lab gateway, WebSockets tunnelled to the mint"
+      }
+    ],
+    "wallets": [
+      {
+        "wallet": "alice",
+        "storage": "SQLite file (bun:sqlite through sql-storage)",
+        "backgroundOwners": "Coco defaults: Background Watchers and Processors enabled",
+        "trustedMints": ["mint-a", "mint-b"]
+      },
+      {
+        "wallet": "bob",
+        "storage": "SQLite file (bun:sqlite through sql-storage)",
+        "backgroundOwners": "Coco defaults: Background Watchers and Processors enabled",
+        "trustedMints": ["mint-a", "mint-b"]
+      },
+      {
+        "wallet": "carol",
+        "storage": "SQLite file (bun:sqlite through sql-storage)",
+        "backgroundOwners": "Coco defaults: Background Watchers and Processors enabled",
+        "trustedMints": ["mint-a", "mint-b"]
+      }
+    ],
+    "concurrency": "At most one foreground command per Wallet; different Wallets concurrently",
+    "recoveryMode": "automatic",
+    "recoveryDeadlineMs": 60000
+  },
+  "privateInputs": {
+    "description": "Wallet Seeds and Wallet stores are private replay inputs. Clean-state replay of this plan generates fresh Wallet Seeds and needs none of them.",
+    "references": {
+      "alice.walletSeed": "private/alice.seed",
+      "alice.store": "private/alice.sqlite",
+      "bob.walletSeed": "private/bob.seed",
+      "bob.store": "private/bob.sqlite",
+      "carol.walletSeed": "private/carol.seed",
+      "carol.store": "private/carol.sqlite"
+    }
+  },
+  "events": [
+    {
+      "seq": 1,
+      "atMs": 1303,
+      "source": "bob",
+      "type": "process_started",
+      "data": {
+        "pid": 1561727
+      }
+    },
+    {
+      "seq": 2,
+      "atMs": 1315,
+      "source": "alice",
+      "type": "process_started",
+      "data": {
+        "pid": 1561726
+      }
+    },
+    {
+      "seq": 3,
+      "atMs": 1334,
+      "source": "carol",
+      "type": "process_started",
+      "data": {
+        "pid": 1561728
+      }
+    },
+    {
+      "seq": 4,
+      "atMs": 1517,
+      "source": "harness",
+      "type": "world_ready"
+    },
+    {
+      "seq": 5,
+      "atMs": 1517,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 0,
+        "kind": "fund"
+      }
+    },
+    {
+      "seq": 6,
+      "atMs": 1517,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 1,
+        "kind": "fund"
+      }
+    },
+    {
+      "seq": 7,
+      "atMs": 1517,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 2,
+        "kind": "send"
+      }
+    },
+    {
+      "seq": 8,
+      "atMs": 1517,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 3,
+        "kind": "withholdResponse"
+      }
+    },
+    {
+      "seq": 9,
+      "atMs": 1517,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 4,
+        "kind": "send"
+      }
+    },
+    {
+      "seq": 10,
+      "atMs": 1517,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 5,
+        "kind": "crash"
+      }
+    },
+    {
+      "seq": 11,
+      "atMs": 1517,
+      "source": "alice",
+      "type": "command",
+      "data": {
+        "step": 0,
+        "type": "fund",
+        "mint": "mint-a",
+        "amount": 64
+      }
+    },
+    {
+      "seq": 12,
+      "atMs": 1517,
+      "source": "carol",
+      "type": "command",
+      "data": {
+        "step": 1,
+        "type": "fund",
+        "mint": "mint-b",
+        "amount": 64
+      }
+    },
+    {
+      "seq": 13,
+      "atMs": 1742,
+      "source": "carol",
+      "type": "result",
+      "data": {
+        "step": 1,
+        "type": "fund",
+        "operationId": "CSE-cBu7FnV8C6GIjMcrDQ",
+        "state": "finalized"
+      }
+    },
+    {
+      "seq": 14,
+      "atMs": 1742,
+      "source": "carol",
+      "type": "command",
+      "data": {
+        "step": 2,
+        "type": "send",
+        "mint": "mint-b",
+        "amount": 15,
+        "token": "c1"
+      }
+    },
+    {
+      "seq": 15,
+      "atMs": 1743,
+      "source": "alice",
+      "type": "result",
+      "data": {
+        "step": 0,
+        "type": "fund",
+        "operationId": "TFewmyZhsDmD-qMMH1uzvQ",
+        "state": "finalized"
+      }
+    },
+    {
+      "seq": 16,
+      "atMs": 1748,
+      "source": "gateway",
+      "type": "fault_installed",
+      "data": {
+        "step": 3,
+        "ruleId": "http-rule-1",
+        "kind": "withholdResponse",
+        "wallet": "alice",
+        "mint": "mint-a",
+        "method": "POST",
+        "path": "/v1/swap"
+      }
+    },
+    {
+      "seq": 17,
+      "atMs": 1749,
+      "source": "alice",
+      "type": "command",
+      "data": {
+        "step": 4,
+        "type": "send",
+        "mint": "mint-a",
+        "amount": 21,
+        "token": "a1",
+        "exposure": "withholdResponse"
+      }
+    },
+    {
+      "seq": 18,
+      "atMs": 1800,
+      "source": "gateway",
+      "type": "fault_fired",
+      "data": {
+        "ruleId": "http-rule-1",
+        "mint": "mint-a"
+      }
+    },
+    {
+      "seq": 19,
+      "atMs": 1811,
+      "source": "alice",
+      "type": "crashed",
+      "data": {
+        "step": 4,
+        "pid": 1561726,
+        "signal": "SIGKILL",
+        "pendingCommandInterrupted": true
+      }
+    },
+    {
+      "seq": 20,
+      "atMs": 1817,
+      "source": "harness",
+      "type": "crash_corroborated",
+      "data": {
+        "wallet": "alice",
+        "signal": "SIGKILL",
+        "step": 4,
+        "trigger": "fault_fired",
+        "mintAcceptedRequest": true,
+        "persistedOperationState": "executing"
+      }
+    },
+    {
+      "seq": 21,
+      "atMs": 1861,
+      "source": "carol",
+      "type": "result",
+      "data": {
+        "step": 2,
+        "type": "send",
+        "operationId": "YTyUgz9Y3WR4h3Mf0MN7tA",
+        "token": "c1",
+        "tokenAmount": 15,
+        "tokenProofs": 4
+      }
+    },
+    {
+      "seq": 22,
+      "atMs": 1876,
+      "source": "carol",
+      "type": "crashed",
+      "data": {
+        "step": 5,
+        "pid": 1561728,
+        "signal": "SIGKILL"
+      }
+    },
+    {
+      "seq": 23,
+      "atMs": 1876,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 6,
+        "kind": "receive"
+      }
+    },
+    {
+      "seq": 24,
+      "atMs": 1876,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 7,
+        "kind": "heal"
+      }
+    },
+    {
+      "seq": 25,
+      "atMs": 1876,
+      "source": "bob",
+      "type": "command",
+      "data": {
+        "step": 6,
+        "type": "prepareReceive",
+        "token": "c1",
+        "expect": "finalized"
+      }
+    },
+    {
+      "seq": 26,
+      "atMs": 1956,
+      "source": "bob",
+      "type": "command",
+      "data": {
+        "step": 6,
+        "type": "executeReceive",
+        "operationId": "TnZts_Ickf7KpxRM6HIFgw"
+      }
+    },
+    {
+      "seq": 27,
+      "atMs": 2002,
+      "source": "bob",
+      "type": "result",
+      "data": {
+        "step": 6,
+        "type": "executeReceive",
+        "state": "finalized"
+      }
+    },
+    {
+      "seq": 28,
+      "atMs": 2060,
+      "source": "harness",
+      "type": "environment_healthy",
+      "data": {
+        "step": 7
+      }
+    },
+    {
+      "seq": 29,
+      "atMs": 2060,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 8,
+        "kind": "restart"
+      }
+    },
+    {
+      "seq": 30,
+      "atMs": 2060,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 9,
+        "kind": "restart"
+      }
+    },
+    {
+      "seq": 31,
+      "atMs": 2060,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 10,
+        "kind": "receive"
+      }
+    },
+    {
+      "seq": 32,
+      "atMs": 2060,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 11,
+        "kind": "checkpoint"
+      }
+    },
+    {
+      "seq": 33,
+      "atMs": 2060,
+      "source": "alice",
+      "type": "restart",
+      "data": {
+        "step": 8,
+        "previousProcess": "not_running",
+        "sameStore": true,
+        "sameWalletSeed": true
+      }
+    },
+    {
+      "seq": 34,
+      "atMs": 2061,
+      "source": "carol",
+      "type": "restart",
+      "data": {
+        "step": 9,
+        "previousProcess": "not_running",
+        "sameStore": true,
+        "sameWalletSeed": true
+      }
+    },
+    {
+      "seq": 35,
+      "atMs": 2269,
+      "source": "carol",
+      "type": "process_started",
+      "data": {
+        "pid": 1561819
+      }
+    },
+    {
+      "seq": 36,
+      "atMs": 2391,
+      "source": "alice",
+      "type": "process_started",
+      "data": {
+        "pid": 1561818
+      }
+    },
+    {
+      "seq": 37,
+      "atMs": 2400,
+      "source": "alice",
+      "type": "token_recovered",
+      "data": {
+        "token": "a1",
+        "operationId": "NRuUBNuAa71L3Zr1Uhu0CA",
+        "state": "pending",
+        "tokenAmount": 21
+      }
+    },
+    {
+      "seq": 38,
+      "atMs": 2400,
+      "source": "bob",
+      "type": "command",
+      "data": {
+        "step": 10,
+        "type": "prepareReceive",
+        "token": "a1",
+        "expect": "finalized"
+      }
+    },
+    {
+      "seq": 39,
+      "atMs": 2425,
+      "source": "bob",
+      "type": "command",
+      "data": {
+        "step": 10,
+        "type": "executeReceive",
+        "operationId": "GheACFfG50VaeHWmuS3tug"
+      }
+    },
+    {
+      "seq": 40,
+      "atMs": 2455,
+      "source": "bob",
+      "type": "result",
+      "data": {
+        "step": 10,
+        "type": "executeReceive",
+        "state": "finalized"
+      }
+    },
+    {
+      "seq": 41,
+      "atMs": 2464,
+      "source": "harness",
+      "type": "outcomes_awaited",
+      "data": {
+        "step": 11,
+        "expected": 4,
+        "unmet": [],
+        "msAwaitingOutcomes": 404
+      }
+    },
+    {
+      "seq": 42,
+      "atMs": 2482,
+      "source": "checker",
+      "type": "verdict",
+      "data": {
+        "step": 11,
+        "status": "pass",
+        "findings": [],
+        "ledger": {
+          "funded": 128,
+          "held": 124,
+          "holdings": {
+            "alice": 42,
+            "bob": 34,
+            "carol": 48
+          },
+          "outstanding": 0,
+          "stranded": 0,
+          "fees": 4,
+          "unexplained": 0,
+          "mints": {
+            "mint-a": {
+              "funded": 64,
+              "held": 62,
+              "outstanding": 0,
+              "stranded": 0,
+              "fees": 2,
+              "unexplained": 0
+            },
+            "mint-b": {
+              "funded": 64,
+              "held": 62,
+              "outstanding": 0,
+              "stranded": 0,
+              "fees": 2,
+              "unexplained": 0
+            }
+          },
+          "wallets": {
+            "alice": {
+              "mint-a": {
+                "expected": 42,
+                "held": 42,
+                "stranded": 0
+              },
+              "mint-b": {
+                "expected": 0,
+                "held": 0,
+                "stranded": 0
+              }
+            },
+            "bob": {
+              "mint-a": {
+                "expected": 20,
+                "held": 20,
+                "stranded": 0
+              },
+              "mint-b": {
+                "expected": 14,
+                "held": 14,
+                "stranded": 0
+              }
+            },
+            "carol": {
+              "mint-a": {
+                "expected": 0,
+                "held": 0,
+                "stranded": 0
+              },
+              "mint-b": {
+                "expected": 48,
+                "held": 48,
+                "stranded": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "seq": 43,
+      "atMs": 2484,
+      "source": "link",
+      "type": "traffic",
+      "data": {
+        "wallet": "alice",
+        "unrouted": 0,
+        "mints": {
+          "mint-a": {
+            "requests": 15,
+            "requestsByPath": {
+              "GET /v1/info": 1,
+              "GET /v1/keysets": 1,
+              "GET /v1/keys/0187b2e8760759f0d0de2e0b7cae676f106e318e6795206c8b266865e5b9fe6074": 1,
+              "POST /v1/mint/quote/bolt11": 1,
+              "POST /v1/mint/quote/bolt11/:quote_id": 1,
+              "GET /v1/mint/quote/bolt11/:quote_id": 3,
+              "POST /v1/mint/bolt11": 1,
+              "POST /v1/swap": 1,
+              "POST /v1/checkstate": 4,
+              "POST /v1/restore": 1
+            },
+            "failedRequests": 1,
+            "refusedConnections": 0,
+            "connectionsClosedByFault": 0,
+            "webSocketUpgrades": 2,
+            "webSocketsOpen": 1,
+            "webSocketsClosedByFault": 0,
+            "webSocketBytesToMint": 706,
+            "webSocketBytesFromMint": 3054,
+            "probeRequests": 1,
+            "probeWebSockets": 1,
+            "offline": false
+          },
+          "mint-b": {
+            "requests": 3,
+            "requestsByPath": {
+              "GET /v1/info": 1,
+              "GET /v1/keysets": 1,
+              "GET /v1/keys/01932e27691087a95d2a3e3d9a76dfad4fe438b3c450090fc9f77668e874324de4": 1
+            },
+            "failedRequests": 0,
+            "refusedConnections": 0,
+            "connectionsClosedByFault": 0,
+            "webSocketUpgrades": 0,
+            "webSocketsOpen": 0,
+            "webSocketsClosedByFault": 0,
+            "webSocketBytesToMint": 0,
+            "webSocketBytesFromMint": 0,
+            "probeRequests": 1,
+            "probeWebSockets": 1,
+            "offline": false
+          }
+        }
+      }
+    },
+    {
+      "seq": 44,
+      "atMs": 2484,
+      "source": "link",
+      "type": "traffic",
+      "data": {
+        "wallet": "bob",
+        "unrouted": 0,
+        "mints": {
+          "mint-a": {
+            "requests": 4,
+            "requestsByPath": {
+              "GET /v1/info": 1,
+              "GET /v1/keysets": 1,
+              "GET /v1/keys/0187b2e8760759f0d0de2e0b7cae676f106e318e6795206c8b266865e5b9fe6074": 1,
+              "POST /v1/swap": 1
+            },
+            "failedRequests": 0,
+            "refusedConnections": 0,
+            "connectionsClosedByFault": 0,
+            "webSocketUpgrades": 0,
+            "webSocketsOpen": 0,
+            "webSocketsClosedByFault": 0,
+            "webSocketBytesToMint": 0,
+            "webSocketBytesFromMint": 0,
+            "probeRequests": 1,
+            "probeWebSockets": 1,
+            "offline": false
+          },
+          "mint-b": {
+            "requests": 4,
+            "requestsByPath": {
+              "GET /v1/info": 1,
+              "GET /v1/keysets": 1,
+              "GET /v1/keys/01932e27691087a95d2a3e3d9a76dfad4fe438b3c450090fc9f77668e874324de4": 1,
+              "POST /v1/swap": 1
+            },
+            "failedRequests": 0,
+            "refusedConnections": 0,
+            "connectionsClosedByFault": 0,
+            "webSocketUpgrades": 0,
+            "webSocketsOpen": 0,
+            "webSocketsClosedByFault": 0,
+            "webSocketBytesToMint": 0,
+            "webSocketBytesFromMint": 0,
+            "probeRequests": 1,
+            "probeWebSockets": 1,
+            "offline": false
+          }
+        }
+      }
+    },
+    {
+      "seq": 45,
+      "atMs": 2484,
+      "source": "link",
+      "type": "traffic",
+      "data": {
+        "wallet": "carol",
+        "unrouted": 0,
+        "mints": {
+          "mint-a": {
+            "requests": 3,
+            "requestsByPath": {
+              "GET /v1/info": 1,
+              "GET /v1/keysets": 1,
+              "GET /v1/keys/0187b2e8760759f0d0de2e0b7cae676f106e318e6795206c8b266865e5b9fe6074": 1
+            },
+            "failedRequests": 0,
+            "refusedConnections": 0,
+            "connectionsClosedByFault": 0,
+            "webSocketUpgrades": 0,
+            "webSocketsOpen": 0,
+            "webSocketsClosedByFault": 0,
+            "webSocketBytesToMint": 0,
+            "webSocketBytesFromMint": 0,
+            "probeRequests": 1,
+            "probeWebSockets": 1,
+            "offline": false
+          },
+          "mint-b": {
+            "requests": 12,
+            "requestsByPath": {
+              "GET /v1/info": 1,
+              "GET /v1/keysets": 1,
+              "GET /v1/keys/01932e27691087a95d2a3e3d9a76dfad4fe438b3c450090fc9f77668e874324de4": 1,
+              "POST /v1/mint/quote/bolt11": 1,
+              "POST /v1/mint/quote/bolt11/:quote_id": 1,
+              "GET /v1/mint/quote/bolt11/:quote_id": 3,
+              "POST /v1/mint/bolt11": 1,
+              "POST /v1/swap": 1,
+              "POST /v1/checkstate": 2
+            },
+            "failedRequests": 0,
+            "refusedConnections": 0,
+            "connectionsClosedByFault": 0,
+            "webSocketUpgrades": 2,
+            "webSocketsOpen": 1,
+            "webSocketsClosedByFault": 0,
+            "webSocketBytesToMint": 1181,
+            "webSocketBytesFromMint": 2728,
+            "probeRequests": 1,
+            "probeWebSockets": 1,
+            "offline": false
+          }
+        }
+      }
+    },
+    {
+      "seq": 46,
+      "atMs": 2485,
+      "source": "gateway",
+      "type": "traffic",
+      "data": {
+        "mint": "mint-a",
+        "inbound": 25,
+        "forwarded": 25,
+        "responded": 24,
+        "dropped": 0,
+        "delayed": 1,
+        "requests": {
+          "GET /v1/info": 6,
+          "GET /v1/keysets": 3,
+          "GET /v1/keys/0187b2e8760759f0d0de2e0b7cae676f106e318e6795206c8b266865e5b9fe6074": 3,
+          "POST /v1/mint/quote/bolt11": 1,
+          "POST /v1/mint/quote/bolt11/:quote_id": 1,
+          "GET /v1/mint/quote/bolt11/:quote_id": 3,
+          "POST /v1/mint/bolt11": 1,
+          "POST /v1/swap": 2,
+          "POST /v1/checkstate": 4,
+          "POST /v1/restore": 1
+        }
+      }
+    },
+    {
+      "seq": 47,
+      "atMs": 2486,
+      "source": "gateway",
+      "type": "traffic",
+      "data": {
+        "mint": "mint-b",
+        "inbound": 22,
+        "forwarded": 22,
+        "responded": 22,
+        "dropped": 0,
+        "delayed": 0,
+        "requests": {
+          "GET /v1/info": 6,
+          "GET /v1/keysets": 3,
+          "GET /v1/keys/01932e27691087a95d2a3e3d9a76dfad4fe438b3c450090fc9f77668e874324de4": 3,
+          "POST /v1/mint/quote/bolt11": 1,
+          "POST /v1/mint/quote/bolt11/:quote_id": 1,
+          "GET /v1/mint/quote/bolt11/:quote_id": 3,
+          "POST /v1/mint/bolt11": 1,
+          "POST /v1/swap": 2,
+          "POST /v1/checkstate": 2
+        }
+      }
+    }
+  ],
+  "result": {
+    "outcome": "pass",
+    "expectationMet": true,
+    "checkpoints": [
+      {
+        "step": 11,
+        "status": "pass",
+        "findings": [],
+        "ledger": {
+          "funded": 128,
+          "held": 124,
+          "holdings": {
+            "alice": 42,
+            "bob": 34,
+            "carol": 48
+          },
+          "outstanding": 0,
+          "stranded": 0,
+          "fees": 4,
+          "unexplained": 0,
+          "mints": {
+            "mint-a": {
+              "funded": 64,
+              "held": 62,
+              "outstanding": 0,
+              "stranded": 0,
+              "fees": 2,
+              "unexplained": 0
+            },
+            "mint-b": {
+              "funded": 64,
+              "held": 62,
+              "outstanding": 0,
+              "stranded": 0,
+              "fees": 2,
+              "unexplained": 0
+            }
+          }
+        },
+        "msAwaitingOutcomes": 404,
+        "expectedOutcomesMet": true
+      }
+    ],
+    "races": [],
+    "commands": {
+      "fund:completed": 2,
+      "send:interrupted": 1,
+      "send:completed": 1,
+      "crash:completed": 1,
+      "receive:completed": 2,
+      "restart:completed": 2
+    },
+    "faultsFired": [
+      {
+        "ruleId": "http-rule-1",
+        "mint": "mint-a",
+        "phase": "after_downstream_response",
+        "action": "delay",
+        "method": "POST",
+        "path": "/v1/swap",
+        "applied": 1,
+        "kind": "withholdResponse",
+        "wallet": "alice",
+        "step": 3
+      }
+    ],
+    "crashes": [
+      {
+        "wallet": "alice",
+        "signal": "SIGKILL",
+        "step": 4,
+        "trigger": "fault_fired",
+        "mintAcceptedRequest": true,
+        "persistedOperationState": "executing"
+      },
+      {
+        "wallet": "carol",
+        "signal": "SIGKILL",
+        "step": 5,
+        "trigger": "step"
+      }
+    ],
+    "exchanges": [],
+    "recoveries": [],
+    "mintRestarts": [],
+    "transport": [
+      {
+        "wallet": "alice",
+        "mint": "mint-a",
+        "requests": 15,
+        "failedRequests": 1,
+        "refusedConnections": 0,
+        "connectionsClosedByFault": 0,
+        "webSocketUpgrades": 2,
+        "webSocketsClosedByFault": 0,
+        "unrouted": 0
+      },
+      {
+        "wallet": "alice",
+        "mint": "mint-b",
+        "requests": 3,
+        "failedRequests": 0,
+        "refusedConnections": 0,
+        "connectionsClosedByFault": 0,
+        "webSocketUpgrades": 0,
+        "webSocketsClosedByFault": 0,
+        "unrouted": 0
+      },
+      {
+        "wallet": "bob",
+        "mint": "mint-a",
+        "requests": 4,
+        "failedRequests": 0,
+        "refusedConnections": 0,
+        "connectionsClosedByFault": 0,
+        "webSocketUpgrades": 0,
+        "webSocketsClosedByFault": 0,
+        "unrouted": 0
+      },
+      {
+        "wallet": "bob",
+        "mint": "mint-b",
+        "requests": 4,
+        "failedRequests": 0,
+        "refusedConnections": 0,
+        "connectionsClosedByFault": 0,
+        "webSocketUpgrades": 0,
+        "webSocketsClosedByFault": 0,
+        "unrouted": 0
+      },
+      {
+        "wallet": "carol",
+        "mint": "mint-a",
+        "requests": 3,
+        "failedRequests": 0,
+        "refusedConnections": 0,
+        "connectionsClosedByFault": 0,
+        "webSocketUpgrades": 0,
+        "webSocketsClosedByFault": 0,
+        "unrouted": 0
+      },
+      {
+        "wallet": "carol",
+        "mint": "mint-b",
+        "requests": 12,
+        "failedRequests": 0,
+        "refusedConnections": 0,
+        "connectionsClosedByFault": 0,
+        "webSocketUpgrades": 2,
+        "webSocketsClosedByFault": 0,
+        "unrouted": 0
+      }
+    ]
+  }
+}

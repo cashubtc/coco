@@ -137,11 +137,15 @@ session lifecycle, not a rule for where to put a new test.
 
 #### Wallet fault simulation
 
-`bun run test:fault-simulation` runs the real-mint crash and network-fault scenarios and the
-three-Wallet, two-mint workloads. They start their own mint containers, a pinned Cashu Fault Lab
-gateway per mint under Node and Wallet processes, so neither runner above selects them. See the
-[harness README](packages/core/test/fault-simulation/README.md) for prerequisites, artifacts and
-replay.
+`bun run test:fault-simulation` runs the fixed corpus of real-mint fault scenarios with fixed
+scenario seeds. `test:fault-simulation:seeds -- --seeds <a,b> --fault-seeds <c>` runs arbitrary
+generated workloads. The scenarios start their own mint containers, a pinned Cashu Fault Lab gateway
+per mint under Node (24 in CI) and the Wallet processes, so neither runner above selects them. CI runs
+the corpus in the `wallet-fault-simulation` workflow on pull requests touching `packages/core`,
+`packages/sql-storage`, `packages/sqlite-bun`, `package.json` or `bun.lock`. It also runs nightly with
+random seeds. A failure uploads only redacted, scanner-approved evidence. See the
+[harness README](packages/core/test/fault-simulation/README.md) for prerequisites, budgets, replay,
+failure diagnosis and promoting a failure to a regression scenario.
 
 The `indexeddb` tests also need Playwright browsers. The runner stops and prints the install command
 if they are missing, rather than installing them for you.
@@ -271,8 +275,9 @@ combines both, so integration coverage counts. Core unit and integration coverag
 other workspace packages imported by the tests. Adapter behavior can still be exercised by core
 tests; adapter coverage belongs in separate adapter reports.
 
-- Put tests under `test/unit` or `test/integration`
-- Name test files `*.test.ts`
+- Put tests under `test/unit` or `test/integration`, except the separately run wallet fault
+  simulation under `packages/core/test/fault-simulation`.
+- Name test files `*.test.ts`; the fault simulation uses `*.sim.ts` to keep it out of ordinary tests.
 - Prefer Bun `mock()` for spies and doubles
 
 For browser coverage in `packages/indexeddb`, run:

@@ -250,7 +250,7 @@ export async function minimizeTrace(
 
 if (import.meta.main) {
   const [tracePath, maxRuns = '24'] = process.argv.slice(2);
-  if (!tracePath) {
+  if (!tracePath || !/^[1-9]\d*$/.test(maxRuns)) {
     console.error(
       'Usage: bun packages/core/test/fault-simulation/minimize.ts <trace.json> [maxRuns]',
     );

@@ -11,7 +11,9 @@ but must not implement wallet persistence or recovery on Coco's behalf. This pre
 reusing fault infrastructure without allowing a reference wallet implementation or an external
 runner's weaker success criteria to hide Coco failures.
 
-Cashu Fault Lab is a candidate for selective reuse, not an adopted dependency. Its integration must
-preserve this ownership; choosing tooling does not change Coco's recovery contracts. The confirmed
+The simulation adopts Cashu Fault Lab's pinned HTTP fault gateway as a separate Node process. It
+does not adopt Fault Lab's runner: Coco owns workload generation, fund accounting, recovery
+requirements and failure classification. This selective reuse preserves the ownership above and
+does not change Coco's recovery contracts. The confirmed
 [simulation design](../../../../docs/design/wallet-fault-simulation.md) records the agreed fault
 model and implementation requirements.

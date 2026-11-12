@@ -10,14 +10,14 @@ import { describe, expect, it } from 'bun:test';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
 import { connect, type Socket } from 'node:net';
-import { FaultController } from './faults.ts';
-import { MintProbe } from './evidence.ts';
-import { ScenarioTrace } from './trace.ts';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { MINT_MNEMONICS, MintContainer } from './environment.ts';
+import { InfrastructureFailure, MINT_MNEMONICS, MintContainer } from './environment.ts';
+import { FaultController, waitForFaultTrigger } from './faults.ts';
+import { MintProbe } from './evidence.ts';
+import { ScenarioTrace } from './trace.ts';
 import { runScenario, type ScenarioRun } from './runner.ts';
 import { scenarios } from './scenarios.ts';
 import { generateWorkload } from './workload.ts';
@@ -205,6 +205,22 @@ describe('transport link in front of a real mint', () => {
         );
         await faults.heal(4);
         expect(faults.unfired()).toHaveLength(1);
+
+        // Losing the fault infrastructure must not be mistaken for a fault that never triggered.
+        await link.stop();
+        await expect(
+          waitForFaultTrigger('Wallet traffic', async () => {
+            await link!.evidence();
+            return false;
+          }),
+        ).rejects.toBeInstanceOf(InfrastructureFailure);
+        await gateway.stop();
+        await expect(
+          waitForFaultTrigger('gateway rule', async () => {
+            await gateway!.evidence();
+            return false;
+          }),
+        ).rejects.toBeInstanceOf(InfrastructureFailure);
       } finally {
         await link?.stop();
         await gateway?.stop();
@@ -518,7 +534,8 @@ describe('process faults', () => {
       expect(run.mintRestarts[0]!.spentProofsChecked).toBeGreaterThan(0);
       expect(run.mintRestarts[0]!.startedAtAfter).not.toBe(run.mintRestarts[0]!.startedAtBefore);
       // The duplicate delivery after the restart is rejected: the spend survived the restart.
-      expect(commandsOf(run, 'receive').map((command) => command.result)).toEqual([
+      // Carol's and Bob's Receives after the restart run concurrently; compare in plan order.
+      expect(byStep(commandsOf(run, 'receive')).map((command) => command.result)).toEqual([
         'completed',
         'completed',
         'rejected',

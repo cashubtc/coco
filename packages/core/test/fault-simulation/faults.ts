@@ -13,7 +13,12 @@
  * health is an infrastructure failure. Wallet processes are not part of healing; a crashed Wallet
  * restarts through its own plan step.
  */
-import { InfrastructureFailure, waitUntil, type MintContainer } from './environment.ts';
+import {
+  InfrastructureFailure,
+  WaitTimeout,
+  waitUntil,
+  type MintContainer,
+} from './environment.ts';
 import type { MintProbe } from './evidence.ts';
 import type { FaultLabGateway, GatewayRule } from './faultLabGateway.ts';
 import type { InfrastructureControl, ScenarioStep } from './scenarios.ts';
@@ -96,6 +101,23 @@ const TRIGGER_TIMEOUT_MS = 30_000;
 /** Holding a withheld response for longer than any run means it is never delivered. */
 const WITHHOLD_MS = 600_000;
 
+/** Missing trigger evidence is unresolved; a failed environment keeps its original classification. */
+export async function waitForFaultTrigger(
+  description: string,
+  probe: () => Promise<boolean>,
+  timeoutMs = TRIGGER_TIMEOUT_MS,
+  intervalMs = 100,
+): Promise<void> {
+  try {
+    await waitUntil(description, timeoutMs, probe, intervalMs);
+  } catch (error) {
+    if (!(error instanceof WaitTimeout)) throw error;
+    throw new ScenarioPreconditionError(`Fault trigger not observed: ${description}`, {
+      cause: error,
+    });
+  }
+}
+
 export class FaultController {
   readonly fired = new Map<string, FiredFault>();
   readonly mintRestarts: MintRestartRecord[] = [];
@@ -164,20 +186,17 @@ export class FaultController {
 
   /** Event trigger: resolves once the gateway reports that the rule fired. */
   async awaitFired(rule: InstalledRule, settledEarly: () => boolean): Promise<void> {
-    await waitUntil(
+    await waitForFaultTrigger(
       `fault ${rule.ruleId} trigger`,
-      TRIGGER_TIMEOUT_MS,
       async () => {
         if (settledEarly()) {
           throw new ScenarioPreconditionError(`The command settled before ${rule.kind} fired`);
         }
         return (await this.applied(rule)) > 0;
       },
+      TRIGGER_TIMEOUT_MS,
       10,
-    ).catch((error: unknown) => {
-      if (error instanceof ScenarioPreconditionError) throw error;
-      throw new ScenarioPreconditionError(`The ${rule.kind} fault never fired`);
-    });
+    );
     await this.captureFired();
     this.options.trace.record('gateway', 'fault_fired', { ruleId: rule.ruleId, mint: rule.mint });
   }
@@ -238,11 +257,9 @@ export class FaultController {
     const outage = this.outages.get(`${wallet}|${mint}`);
     if (!outage) throw new Error(`${wallet} is not offline from ${mint}`);
     let refused = 0;
-    await waitUntil('outage affecting Wallet traffic', TRIGGER_TIMEOUT_MS, async () => {
+    await waitForFaultTrigger(`outage of ${wallet} at ${mint} affecting traffic`, async () => {
       refused = (await this.walletEvidence(wallet, mint)).refusedConnections - outage.refusedBefore;
       return outage.closed + refused > 0;
-    }).catch(() => {
-      throw new ScenarioPreconditionError(`The ${wallet} outage at ${mint} affected no traffic`);
     });
     await this.options.link.reconnect({ wallets: [wallet], mints: [mint] });
     this.outages.delete(`${wallet}|${mint}`);
@@ -274,10 +291,8 @@ export class FaultController {
       wallet,
       mint,
     });
-    await waitUntil('an open Wallet WebSocket', TRIGGER_TIMEOUT_MS, async () => {
+    await waitForFaultTrigger(`an open WebSocket of ${wallet} to ${mint}`, async () => {
       return (await this.walletEvidence(wallet, mint)).webSocketsOpen > 0;
-    }).catch(() => {
-      throw new ScenarioPreconditionError(`${wallet} never held an open WebSocket to ${mint}`);
     });
     const closed = await this.options.link.dropWebSockets(wallet, mint);
     if (closed === 0) {
