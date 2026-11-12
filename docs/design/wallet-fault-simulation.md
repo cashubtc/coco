@@ -1,10 +1,18 @@
 # Wallet fault simulation
 
-Status: design confirmed. The Fault Lab adoption experiment, the three-Wallet, two-mint workload
-with independent accounting generated from scenario seeds, the initial fault palette with separate
-automatic and explicit recovery, and failure reports, replay and minimization are implemented in
-[the fault simulation harness](../../packages/core/test/fault-simulation/README.md). The CI corpus
-is not.
+Status: first milestone implemented in
+[the fault simulation harness](../../packages/core/test/fault-simulation/README.md). It covers:
+
+- the Fault Lab adoption experiment;
+- the three-Wallet, two-mint workload with independent accounting, generated from scenario seeds;
+- the initial fault palette, with automatic and explicit recovery kept apart;
+- failure reports, replay and minimization;
+- the CI corpus.
+
+Relevant pull requests run a fixed scenario corpus with fixed scenario seeds. A nightly run adds
+bounded random seeds, and local runs take arbitrary seeds. Budgets come from measured runs. The
+`wallet-fault-simulation` workflow uploads only redacted portable evidence. No Coco runtime defect
+was found while implementing it. The harness README lists the open limits.
 
 Implementation specification: [GitHub issue #616](https://github.com/cashubtc/coco/issues/616).
 
@@ -176,7 +184,8 @@ Decision:
 - **Reuse the gateway.** Consume the pinned revision through a verified Git checkout. Bundle its
   `http-fault-gateway` for Node and run it as a separate process controlled through its
   `/__faults/v1/` API. Run it under Node. Under Bun's `node:http`, `drop` becomes an empty `200`.
-  Upstream declares Node 24; the experiment ran on Node 22.22.1.
+  Upstream declares Node `>=24 <25`. The experiment ran on Node 22.22.1. The full corpus has since
+  passed on Node 24.22.2, which CI uses and enforces.
 - **Do not adopt the runner.** The lifecycle driver models one adapter and its own operation state
   machine with caller-assigned operation IDs, so a Coco adapter would duplicate Coco's state machine.
   Its quiescence check accepts `recovery_blocked`, which fails a Coco progress requirement. It has no

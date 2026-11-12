@@ -94,8 +94,9 @@ describe('wallet fault simulation evidence against real mints', () => {
       unfired: {},
     });
     expect(replay.coverage.crashes).toEqual({
-      'SIGKILL mintAcceptedRequest=true persisted=executing': 1,
+      'SIGKILL trigger=fault_fired mintAcceptedRequest=true persisted=executing': 1,
     });
+    expect(replay.coverage.faultKinds).toEqual({ withholdResponse: 1, crash: 1 });
     expect(replay.coverage.restarts).toEqual({ after_crash: 1 });
     expect(replay.accounting.unexplained).toEqual({ 'mint-a': 0 });
     expect(replay.scenario.replayOf).toBe(readTraceFile(tracePath).runId);

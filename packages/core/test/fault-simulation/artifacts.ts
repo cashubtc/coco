@@ -59,7 +59,7 @@ export function findProhibitedContent(
 const privateDir = (runDir: string) => join(runDir, 'private');
 
 /** Wallet Seeds retained beside a run, used to prove they do not reach exported files. */
-function retainedSecrets(runDir: string): string[] {
+export function retainedSecrets(runDir: string): string[] {
   const dir = privateDir(runDir);
   if (!existsSync(dir)) return [];
   return readdirSync(dir)

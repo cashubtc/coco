@@ -6,29 +6,168 @@ requirements ([ADR-0018](../../docs/adr/0018-keep-wallet-simulation-correctness-
 
 ## Run
 
-From the repository root, with Docker, Node.js 22 or newer and Git available:
+Prerequisites:
+
+- Docker and Git.
+- Network access on first use, to fetch the pinned Fault Lab revision and the mint image.
+- Bun 1.3.14 or newer. Bun 1.3.11's `fetch` resends a POST whose connection dropped, so dropped swap
+  requests and responses never reach Coco; the transport link test fails under it, and the suite
+  refuses it.
+- Node.js for the gateway and transport link processes. The pinned Fault Lab declares Node
+  `>=24 <25`. CI uses Node 24.22.2 with Bun 1.3.14 and enforces the range (`--strict-runtime`).
+  Node 22.22 also works locally, and the suite records that as a warning.
+
+Run from the repository root:
 
 ```bash
-bun run test:fault-simulation                        # all scenarios
-bun run test:fault-simulation -t 'healthy workload'  # one scenario
-COCO_FAULT_SIM_SEEDS=11,12 bun run test:fault-simulation -t 'generated workload'
-COCO_FAULT_SIM_FAULT_SEEDS=7 bun run test:fault-simulation -t 'fault interactions'
-bun packages/core/test/fault-simulation/replay.ts .cache/fault-simulation/runs/<run>/trace.json
-bun packages/core/test/fault-simulation/minimize.ts .cache/fault-simulation/runs/<run>/trace.json 24
-bun packages/core/test/fault-simulation/report.ts .cache/fault-simulation/runs/*/trace.json
-bun packages/core/test/fault-simulation/artifacts.ts .cache/fault-simulation/runs/<run> <outDir>
-bun test ./packages/core/test/fault-simulation/walletFaultSimulationArtifacts.sim.ts  # after building core
+bun run test:fault-simulation                                     # fixed corpus, fixed seeds (as on PRs)
+bun run test:fault-simulation:nightly -- --random-seeds 2         # fixed corpus, random seeds
+bun run test:fault-simulation:seeds -- --seeds 11,12 --fault-seeds 7   # arbitrary seeds only
+bun run fault-simulation:replay <runDir>/trace.json               # clean-state replay
+bun run fault-simulation:minimize <runDir>/trace.json 24          # best-effort minimization
+bun run fault-simulation:report <runDir>/trace.json...            # report, or aggregate coverage
+bun run fault-simulation:export <runDir> <outDir>                 # scanned portable export
 ```
 
-The script builds core first because the SQLite repositories import its build output. The scenario
-file is named `*.sim.ts` so plain `bun test` and the unit and integration runners do not select it.
-`COCO_FAULT_SIM_SEEDS` takes comma-separated scenario seeds (unsigned 32-bit integers) for the
-fault-free generated workloads, default `1,2`; `COCO_FAULT_SIM_FAULT_SEEDS` does the same for
-generated workloads with fault interactions (`faultPalette.sim.ts`), default `5,18`, each run in
-both recovery modes.
+The `test:fault-simulation*` scripts run `suite.ts`, which builds core (the SQLite repositories
+import its build output), checks prerequisites, runs the selected `*.sim.ts` files with `bun test`
+under a wall-clock budget and then judges the evidence. `*.sim.ts` files are outside the default
+`*.test.ts` glob, so plain `bun test` and the unit and integration runners never select them. To run
+one scenario directly while developing, build core and filter by name:
 
+```bash
+bun run --filter='@cashu/coco-core' build
+bun test ./packages/core/test/fault-simulation/faultPalette.sim.ts -t 'mint restart'
+```
+
+Profiles:
+
+| Profile   | Files                                     | Scenario seeds                                      | Corpus coverage gate | Default budget      |
+| --------- | ----------------------------------------- | --------------------------------------------------- | -------------------- | ------------------- |
+| `pr`      | all three `*.sim.ts`                      | fault-free `1,2`; fault `5,18`, both recovery modes | required             | 20 min              |
+| `nightly` | all three `*.sim.ts`                      | `--random-seeds N` (default 3, at most 5) of each   | required             | 20 + 9 min per seed |
+| `seeds`   | the generated tests of the selected seeds | `--seeds`, `--fault-seeds`                          | reported only        | 5 + 3 / 6 per seed  |
+
+Seeds are unsigned 32-bit integers. Nightly seeds are drawn at random and recorded in the summary,
+so any of them can be rerun with the `seeds` profile. The budget bounds the tests and replays, not
+the build or prerequisites, and `--budget-minutes` overrides it. Other options: `--replay-failures`
+(the nightly default), `--max-replays`, `--strict-runtime`, `--skip-build`, `--out`.
+
+The suite passes (exit 0) only if all of these hold:
+
+- `bun test` passed, and its JUnit report shows that every selected file and every requested seed
+  in both recovery modes executed. In the corpus profiles, no test may be skipped.
+- Every recorded run met its expectation. The exception is the deliberately failing known-bad plan
+  of the evidence tests (`known-bad-*`), whose own tests assert its failure.
+- Every run directory exported cleanly: a trace exists and passes the secret scan.
+- In the corpus profiles, the aggregate observed coverage shows the following:
+  - every palette fault kind fired: dropped request, dropped response, withheld response, delayed
+    response, outage, WebSocket drop, Wallet crash, and a mint restart with retained state;
+  - both recovery modes;
+  - a restart after a crash, and a crash on a request the mint accepted;
+  - exchanges interrupted before and after the mint's effect;
+  - an explicit recovery that changed an operation;
+  - both led race outcomes, a rejected duplicate delivery and a completed reclaim;
+  - both negative-control outcomes;
+  - no unfired fault and no unrouted Wallet traffic.
+
+Otherwise it exits 1 (failure), 2 (usage), 3 (missing prerequisite: Docker, Node, Bun 1.3.14 or newer,
+Git, the Fault Lab revision, the mint image or, with `--strict-runtime`, the Node range) or 4 (budget
+exceeded; the test process group is killed and its containers removed). A missing prerequisite or
+an untriggered fault is never a skip.
+
+Output goes to `--out` (default `.cache/fault-simulation/suites/<profile>-<time>/`):
+
+- `work/` is the harness artifacts root for the suite's runs (`COCO_FAULT_SIM_ARTIFACTS`). It holds
+  failed runs' `private/` directories and never leaves the machine.
+- `portable/` holds only what the secret scanner approved: `summary.md` and `summary.json` (verdict,
+  problems, tests with durations, runs, exercised coverage, coverage gaps, runtime versions),
+  `junit.xml`, `test-output.log` and `runs/<run>/` exports (trace, `report.json`, `report.md`,
+  gateway and link logs). A file that fails the scan is withheld and named in the summary. CI
+  uploads `portable/` alone.
+
+The suite never retries a test. With `--replay-failures` it replays each failed run once from clean
+state and records the comparison; a passing replay leaves the original failure and the exit code
+unchanged.
+
+`COCO_FAULT_SIM_SEEDS` and `COCO_FAULT_SIM_FAULT_SEEDS` (comma-separated, defaults `1,2` and `5,18`)
+select the generated workloads when a `*.sim.ts` file is run directly; the suite always sets them.
 The first run fetches the pinned Cashu Fault Lab revision into `.cache/`. Set
 `COCO_FAULT_LAB_CHECKOUT` to use an existing checkout; it must be at the pinned revision.
+
+### CI
+
+`.github/workflows/fault-simulation.yml` (`wallet-fault-simulation`) runs on `ubuntu-24.04` with
+Bun 1.3.14 and Node 24.22.2:
+
+- **Pull requests and master pushes** that touch `packages/core`, `packages/sql-storage`,
+  `packages/sqlite-bun`, `package.json`, `bun.lock` or the workflow run the `pr` profile.
+- **Nightly** (03:17 UTC) runs the `nightly` profile with 3 random seeds of each kind.
+  `workflow_dispatch` chooses the profile and seed count.
+- Every attempt uploads `portable/` as `fault-simulation-<run id>-<attempt>` for 30 days, including
+  after failures and budget overruns, so a rerun never replaces the first attempt's evidence.
+
+### Budgets
+
+Measured on a local Linux host (Docker 29.9) with Bun 1.3.14 and Node 24.22.2 unless stated
+otherwise. These are measurements, not guarantees. The budgets leave roughly 2× headroom for slower
+CI hosts:
+
+| Run                                        | Tests | Tests wall clock         | Budget |
+| ------------------------------------------ | ----- | ------------------------ | ------ |
+| `pr` profile (two runs)                    | 25    | 434 s and 446 s          | 20 min |
+| `nightly --random-seeds 1`                 | 22    | 157 s                    | 29 min |
+| S3 suite under Bun 1.3.14 and Node 22.22.1 | 22    | 430 s (before the suite) | (n/a)  |
+
+Per test:
+
+- Fixed scenarios and controls: 1–18 s. The transport link test: under 1 s.
+- Fault-free generated workloads: 6–13 s per run.
+- Generated fault workloads: 8–72 s per recovery mode. Seeds 5 and 18 take 64–72 s, mostly
+  Coco's 5 s polling after WebSocket loss and restarts.
+- Evidence tests: 3–33 s, including replay and a 14-run minimization.
+
+The fixed seeds 5 and 18 account for about 280 s of the `pr` profile. Image pulls, the Fault Lab
+fetch and the core build are outside the budget; the CI job's 75-minute timeout bounds them. GitHub
+runner timings have not been measured yet.
+
+### Diagnosing a failure
+
+1. Read `summary.md`: the problems name failing tests, runs that missed their expectation,
+   selection problems and coverage gaps. In CI it is also the job summary.
+2. For a failing run, read `portable/runs/<run>/report.md`. It gives the outcome and failure
+   identity, the checker findings with accounting differences per mint, exercised coverage and the
+   component versions. `trace.json` holds the ordered events. `gateway-*.log` and
+   `transport-link.log` show traffic and fault control.
+3. Replay from clean state with the recorded commands and fault plan:
+   `bun run fault-simulation:replay <trace.json>`. It exits 0 only for `consistent` or
+   `reproduced`. The comparison is written to the replay's run directory, never the original's.
+   A downloaded CI trace replays the same way.
+4. Locally, a failed run keeps `work/runs/<run>/private/`: the Wallet Seeds, SQLite stores and Wallet
+   process logs, owner-only. Use them to inspect the original Wallet state. Never publish them. CI
+   discards them with the runner, and clean-state replay does not need them.
+5. Distinguish `infrastructure_failure` (health could not be established: fix the environment, the
+   failure is not about Coco) from `wallet_failure` and `unresolved` (missing evidence or a fault
+   that never fired). None of them is a pass.
+
+### Promoting a failure to a regression
+
+A failure stays unresolved until a fix is shown; a passing replay or nightly rerun does not resolve
+it.
+
+1. Keep the original portable trace. Minimize it with
+   `bun run fault-simulation:minimize <trace.json> [maxRuns]`. The result is best effort and keeps
+   the same failure identity and valid preconditions. It writes `minimized-plan.json` and
+   `minimization.json` under `.cache/fault-simulation/minimizations/`.
+2. Add the minimized steps as a named plan in `scenarios.ts`, controlling the ordering through
+   request- or event-triggered faults rather than sleeps. Give it a test with focused assertions in
+   the `*.sim.ts` file for its area, so the `pr` corpus runs it, and confirm the test fails against
+   the unfixed Coco.
+3. Fix Coco, and also add a regression test at the most direct public boundary the
+   [testing standards](../../../../CODING_STANDARDS.md#test-behavior) allow. Rerun the suite.
+4. A harness or checker bug gets its own fix and test. For example, S2's false 1-sat deficit is kept
+   as the `fixtures/v2-generated-seed-2-false-deficit.trace.json` replay fixture. It never weakens a
+   wallet requirement.
 
 ## World
 
@@ -219,10 +358,24 @@ Replays and minimization runs are new runs in their own directories.
   identity; passing, differently failing and erroring candidates are rejected and recorded. Results
   (`minimization.json`, `minimized-plan.json`) go to `.cache/fault-simulation/minimizations/`. The
   minimized plan drops `generator` and records the original run and generator as `derivedFrom`.
-- **Reports** (`report.ts`) are built from observations, not plans: commands by result, faults
-  that fired and installed faults that never fired, corroborated crashes, restarts after a crash
-  versus graceful ones, recovery modes, races, checkpoints, gateway requests, accounting
-  differences, and event types the report does not interpret.
+- **Reports** (`report.ts`) are built from observations, not plans. They cover:
+  - commands by result;
+  - faults that fired, and installed faults that never fired;
+  - palette fault kinds exercised (fired gateway and link faults, Wallet crashes, and mint restarts
+    that kept their state);
+  - crashes by trigger and corroborated mint effect, and restarts after a crash versus graceful
+    ones;
+  - mint restarts;
+  - interrupted exchanges with the mint's effect;
+  - operation transitions caused by explicit recovery;
+  - recovery modes, races and checkpoints;
+  - gateway requests and transport link totals (WebSocket upgrades and fault closures, refused and
+    closed connections, unrouted requests);
+  - accounting differences;
+  - event types the report does not interpret.
+
+  Gateway faults in traces that predate recorded fault kinds are classified by phase and action.
+
 - **Portable export** (`artifacts.ts`) copies the trace unchanged plus `report.json` and `report.md`
   and any top-level logs. Everything exported is scanned for raw tokens, Wallet-Seed-shaped and
   proof-secret-shaped hex, secret fields and the retained Wallet Seeds themselves; a trace that
@@ -250,25 +403,26 @@ Replays and minimization runs are new runs in their own directories.
 
 ## Modules
 
-| Module                    | Responsibility                                                           |
-| ------------------------- | ------------------------------------------------------------------------ |
-| `scenarios.ts`            | Scenario plans as replayable data                                        |
-| `workload.ts`             | Step preconditions, expected outcomes, token fates and seeded generator  |
-| `runner.ts`               | World lifecycle, scheduling, step execution, evidence, outcomes          |
-| `walletActor.ts`          | Harness handle for a Wallet process: commands, crash, shutdown           |
-| `walletActorProcess.ts`   | The Wallet process: one Coco Session over SQLite                         |
-| `faultLabGateway.ts`      | Thin adapter over the pinned Fault Lab HTTP gateway                      |
-| `transportLink.ts`        | Harness handle for the transport link: proxies, outages, WebSocket drops |
-| `transportLinkProcess.ts` | The link process: per-Wallet proxy to gateways and mint WebSockets       |
-| `faults.ts`               | Fault installation, firing evidence, mint restarts, healing and health   |
-| `environment.ts`          | Mint containers and infrastructure failure classification                |
-| `evidence.ts`             | Read-only store queries, direct mint probes and token decoding           |
-| `accounting.ts`           | Independent fund accounting checker                                      |
-| `trace.ts`                | Redacted trace writer and v1/v2 trace reader                             |
-| `replay.ts`               | Clean-state replay of recorded commands and replay comparison            |
-| `report.ts`               | Failure identity, exercised coverage and portable reports                |
-| `minimize.ts`             | Bounded failure minimization preserving preconditions and identity       |
-| `artifacts.ts`            | Portable export, secret scanning and private input retention             |
+| Module                    | Responsibility                                                            |
+| ------------------------- | ------------------------------------------------------------------------- |
+| `scenarios.ts`            | Scenario plans as replayable data                                         |
+| `workload.ts`             | Step preconditions, expected outcomes, token fates and seeded generator   |
+| `runner.ts`               | World lifecycle, scheduling, step execution, evidence, outcomes           |
+| `walletActor.ts`          | Harness handle for a Wallet process: commands, crash, shutdown            |
+| `walletActorProcess.ts`   | The Wallet process: one Coco Session over SQLite                          |
+| `faultLabGateway.ts`      | Thin adapter over the pinned Fault Lab HTTP gateway                       |
+| `transportLink.ts`        | Harness handle for the transport link: proxies, outages, WebSocket drops  |
+| `transportLinkProcess.ts` | The link process: per-Wallet proxy to gateways and mint WebSockets        |
+| `faults.ts`               | Fault installation, firing evidence, mint restarts, healing and health    |
+| `environment.ts`          | Mint containers and infrastructure failure classification                 |
+| `evidence.ts`             | Read-only store queries, direct mint probes and token decoding            |
+| `accounting.ts`           | Independent fund accounting checker                                       |
+| `trace.ts`                | Redacted trace writer and v1/v2 trace reader                              |
+| `replay.ts`               | Clean-state replay of recorded commands and replay comparison             |
+| `report.ts`               | Failure identity, exercised coverage and portable reports                 |
+| `minimize.ts`             | Bounded failure minimization preserving preconditions and identity        |
+| `artifacts.ts`            | Portable export, secret scanning and private input retention              |
+| `suite.ts`                | Profiles, prerequisites, budgets, selection and coverage gates, CI output |
 
 A run killed with `SIGKILL` can leave mint containers behind; `docker ps --filter name=coco-faultsim-`
 lists them.

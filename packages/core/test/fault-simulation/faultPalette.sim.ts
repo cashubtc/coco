@@ -413,7 +413,8 @@ describe('process faults', () => {
       expect(run.mintRestarts[0]!.spentProofsChecked).toBeGreaterThan(0);
       expect(run.mintRestarts[0]!.startedAtAfter).not.toBe(run.mintRestarts[0]!.startedAtBefore);
       // The duplicate delivery after the restart is rejected: the spend survived the restart.
-      expect(commandsOf(run, 'receive').map((command) => command.result)).toEqual([
+      // Carol's and Bob's Receives after the restart run concurrently; compare in plan order.
+      expect(byStep(commandsOf(run, 'receive')).map((command) => command.result)).toEqual([
         'completed',
         'completed',
         'rejected',
