@@ -13,6 +13,10 @@ bun run test:fault-simulation                        # all scenarios
 bun run test:fault-simulation -t 'healthy workload'  # one scenario
 COCO_FAULT_SIM_SEEDS=11,12 bun run test:fault-simulation -t 'generated workload'
 bun packages/core/test/fault-simulation/replay.ts .cache/fault-simulation/runs/<run>/trace.json
+bun packages/core/test/fault-simulation/minimize.ts .cache/fault-simulation/runs/<run>/trace.json 24
+bun packages/core/test/fault-simulation/report.ts .cache/fault-simulation/runs/*/trace.json
+bun packages/core/test/fault-simulation/artifacts.ts .cache/fault-simulation/runs/<run> <outDir>
+bun test ./packages/core/test/fault-simulation/walletFaultSimulationArtifacts.sim.ts  # after building core
 ```
 
 The script builds core first because the SQLite repositories import its build output. The scenario
@@ -119,9 +123,47 @@ Artifacts are written under `.cache/fault-simulation/runs/<run>/` (override with
 - `private/`: Wallet Seeds, SQLite stores and Wallet process logs. It is removed when a run meets its
   expectation and kept otherwise, or always with `COCO_FAULT_SIM_KEEP_PRIVATE=1`. Never publish it.
 
-Replay reruns the recorded plan from clean state with fresh Wallet Seeds. For a generated plan it
-first regenerates the commands from the recorded seed and refuses to run if they differ. It
-reproduces commands and request-triggered faults, not operating-system scheduling.
+## Evidence, replay and minimization
+
+A run's directory keeps its evidence before the world is torn down, and nothing later writes to it.
+Replays and minimization runs are new runs in their own directories.
+
+- **Trace formats.** `readTrace` reads the current `trace/v2` and S1 `trace/v1` traces. A v1 plan is
+  translated (implicit `mint-a`, `awaitRequirements` becomes a checkpoint) only when each listed v1
+  requirement is implied by the workload model; recorded events and results are kept verbatim. Any
+  other format, a v1 step without an equivalent, or an unimplied requirement is an explicit
+  `UnsupportedTraceError`. Fixtures under `fixtures/` are sanitized real traces.
+- **Replay** (`replay.ts`) runs the recorded commands and fault plan exactly as recorded, from clean
+  state with fresh Wallet Seeds. It never regenerates commands; for a generated plan it reports
+  whether the current generator still produces them (`reproduces`, `differs`, `not_regenerable`).
+  A recorded step whose state precondition no longer holds, or whose kind this harness cannot run,
+  is refused. `replay.json` in the replay's directory compares the runs: `reproduced` (same failure
+  identity), `not_reproduced`, `different_failure`, `inconclusive` (infrastructure), or for an
+  original that met its expectation `consistent` / `diverged`, plus changed component versions. A
+  replay never resolves the original failure: it stays `unresolved` until a fix is shown.
+- **Failure identity** is the outcome, the failing findings by code, mint and Wallet, the kind of a
+  contradicted command and the error class of an unresolved run. Amounts, operation IDs and step
+  indices are excluded.
+- **Minimization** (`minimize.ts`) is best effort and bounded by a run budget. Passing original
+  outcomes are rejected, including negative controls that unexpectedly passed: an empty passing
+  plan would not preserve the defect the control should detect. For a non-passing outcome, it confirms the
+  failure reproduces, then removes groups of steps, never the final checkpoint. A candidate is run
+  only if the workload model accepts it, every fault-triggered crash still has its fault installed
+  and every fault is still followed by healing. It is kept only if its run fails with the same
+  identity; passing, differently failing and erroring candidates are rejected and recorded. Results
+  (`minimization.json`, `minimized-plan.json`) go to `.cache/fault-simulation/minimizations/`. The
+  minimized plan drops `generator` and records the original run and generator as `derivedFrom`.
+- **Reports** (`report.ts`) are built from observations, not plans: commands by result, faults
+  that fired and installed faults that never fired, corroborated crashes, restarts after a crash
+  versus graceful ones, recovery modes, races, checkpoints, gateway requests, accounting
+  differences, and event types the report does not interpret.
+- **Portable export** (`artifacts.ts`) copies the trace unchanged plus `report.json` and `report.md`
+  and any top-level logs. Everything exported is scanned for raw tokens, Wallet-Seed-shaped and
+  proof-secret-shaped hex, secret fields and the retained Wallet Seeds themselves; a trace that
+  fails the scan is not exported at all, and a failing log is withheld with the reason. `private/`
+  is never exported. Clean-state replay needs no private inputs; Wallet Seeds and stores are
+  retained only to inspect the original Wallet state, in an owner-only directory
+  (`inspectPrivateRetention`).
 
 ## Interfaces for fault and artifact work
 
@@ -148,7 +190,11 @@ reproduces commands and request-triggered faults, not operating-system schedulin
 | `environment.ts`        | Mint containers and infrastructure failure classification               |
 | `evidence.ts`           | Read-only store queries, direct mint probes and token decoding          |
 | `accounting.ts`         | Independent fund accounting checker                                     |
-| `trace.ts`              | Redacted trace                                                          |
+| `trace.ts`              | Redacted trace writer and v1/v2 trace reader                            |
+| `replay.ts`             | Clean-state replay of recorded commands and replay comparison           |
+| `report.ts`             | Failure identity, exercised coverage and portable reports               |
+| `minimize.ts`           | Bounded failure minimization preserving preconditions and identity      |
+| `artifacts.ts`          | Portable export, secret scanning and private input retention            |
 
 A run killed with `SIGKILL` can leave mint containers behind; `docker ps --filter name=coco-faultsim-`
 lists them.
