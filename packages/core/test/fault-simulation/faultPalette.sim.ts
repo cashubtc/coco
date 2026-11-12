@@ -7,12 +7,17 @@
  * Wallet processes. Run with `bun run test:fault-simulation` from the repository root.
  */
 import { describe, expect, it } from 'bun:test';
+import { once } from 'node:events';
+import { createServer } from 'node:http';
+import { connect, type Socket } from 'node:net';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { InfrastructureFailure, MINT_MNEMONICS, MintContainer } from './environment.ts';
-import { waitForFaultTrigger } from './faults.ts';
+import { FaultController, waitForFaultTrigger } from './faults.ts';
+import { MintProbe } from './evidence.ts';
+import { ScenarioTrace } from './trace.ts';
 import { runScenario, type ScenarioRun } from './runner.ts';
 import { scenarios } from './scenarios.ts';
 import { generateWorkload } from './workload.ts';
@@ -162,6 +167,45 @@ describe('transport link in front of a real mint', () => {
         });
         expect(evidence.wallets.alice!.unrouted).toBe(0);
 
+        // Healing retires gateway rules but keeps their evidence. Later heals must not wait
+        // another trigger timeout for a delay that no longer exists at the gateway.
+        const faults = new FaultController({
+          mints: new Map([
+            [
+              'mint-a',
+              {
+                name: 'mint-a',
+                container: mint,
+                gateway,
+                probe: new MintProbe(mint.directUrl),
+                url: mintUrl,
+              },
+            ],
+          ]),
+          link,
+          wallets: ['alice', 'bob'],
+          trace: new ScenarioTrace('repeated-heal', scenarios.lostReceiveExchanges),
+        });
+        await faults.install(
+          { kind: 'delayResponses', mint: 'mint-a', wallet: 'alice', delayMs: 10, count: 1 },
+          0,
+        );
+        expect(await checkstate('alice')).toBe(400);
+        await faults.heal(1);
+        const firedBefore = [...faults.fired.values()];
+        expect(firedBefore).toHaveLength(1);
+        const healedAt = Date.now();
+        await faults.heal(2);
+        expect(Date.now() - healedAt).toBeLessThan(10_000);
+        expect([...faults.fired.values()]).toEqual(firedBefore);
+        // An unfired rule remains missing evidence even after it is removed by healing.
+        await faults.install(
+          { kind: 'dropRequest', mint: 'mint-a', wallet: 'alice', path: '/v1/swap' },
+          3,
+        );
+        await faults.heal(4);
+        expect(faults.unfired()).toHaveLength(1);
+
         // Losing the fault infrastructure must not be mistaken for a fault that never triggered.
         await link.stop();
         await expect(
@@ -187,6 +231,66 @@ describe('transport link in front of a real mint', () => {
     scenarioTimeoutMs,
   );
 });
+
+// Hold the wire handshake at each side of the tunnel; no Wallet or mint behavior is mocked.
+it.each(['request', 'response'] as const)(
+  'outages close WebSocket tunnels awaiting the upgrade %s',
+  async (phase) => {
+    const dir = mkdtempSync(join(tmpdir(), 'coco-link-opening-'));
+    const upstream = createServer();
+    const sockets = new Set<Socket>();
+    const upgrade = Promise.withResolvers<void>();
+    upstream.on('connection', (socket) => {
+      sockets.add(socket);
+      socket.on('error', () => socket.destroy());
+    });
+    upstream.on('upgrade', () => upgrade.resolve());
+    upstream.listen(0, '127.0.0.1');
+    await once(upstream, 'listening');
+    const address = upstream.address();
+    if (!address || typeof address === 'string') throw new Error('No upstream port');
+    const direct = `http://127.0.0.1:${address.port}`;
+    let link: TransportLink | undefined;
+    let client: Socket | undefined;
+    try {
+      link = await TransportLink.start({
+        bundlePath: await prepareTransportLink(dir),
+        mints: [{ name: 'mint-a', gateway: direct, direct }],
+        wallets: ['alice'],
+        logPath: join(dir, 'link.log'),
+      });
+      const proxy = new URL(link.proxyFor('alice'));
+      client = connect(Number(proxy.port), proxy.hostname);
+      client.on('error', () => client?.destroy());
+      const closed = new Promise<boolean>((resolve) => client!.once('close', () => resolve(true)));
+      const accepted = once(client, 'data');
+      client.write(
+        'CONNECT mint-a.faultsim.invalid:80 HTTP/1.1\r\nHost: mint-a.faultsim.invalid\r\n\r\n',
+      );
+      expect(String((await accepted)[0])).toContain('200 Connection Established');
+      if (phase === 'response') {
+        client.write(
+          'GET /v1/ws HTTP/1.1\r\nHost: mint-a.faultsim.invalid\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n',
+        );
+        await upgrade.promise;
+      }
+      const [result] = await link.disconnect({ wallets: ['alice'], mints: ['mint-a'] });
+      expect(await Promise.race([closed, Bun.sleep(5_000).then(() => false)])).toBe(true);
+      expect(result!.closedConnections).toBe(1);
+      expect((await link.evidence()).wallets.alice!.mints['mint-a']).toMatchObject({
+        offline: true,
+        webSocketsOpen: 0,
+      });
+    } finally {
+      client?.destroy();
+      await link?.stop();
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve) => upstream.close(() => resolve()));
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+  20_000,
+);
 
 /** Outcome fields compared as one object so a mismatch also prints the reason and findings. */
 function outcomeOf(run: ScenarioRun) {

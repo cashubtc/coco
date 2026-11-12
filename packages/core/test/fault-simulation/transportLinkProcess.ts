@@ -174,6 +174,8 @@ class WalletPort {
         client.destroy();
         return;
       }
+      // Track CONNECT as soon as its mint is known, including the incomplete upgrade request.
+      this.connections.get(client)?.add(route.name);
       client.on('error', () => client.destroy());
       client.write('HTTP/1.1 200 Connection Established\r\n\r\n');
       // Only a WebSocket upgrade may use a tunnel; plain HTTP must pass the gateway.
@@ -260,6 +262,13 @@ class WalletPort {
       if (socket.destroyed || !addressed.has(mint)) continue;
       closedConnections++;
       socket.destroy();
+    }
+    // An outage also closes upstream halves still awaiting a WebSocket upgrade response.
+    // dropWebSockets intentionally counts only established Wallet sockets, not these handshakes.
+    for (const tunnel of this.tunnels) {
+      if (tunnel.mint !== mint) continue;
+      tunnel.client.destroy();
+      tunnel.upstream.destroy();
     }
     this.counters.get(mint)!.connectionsClosedByFault += closedConnections;
     return { closedConnections, closedWebSockets };

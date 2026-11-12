@@ -80,6 +80,7 @@ type ExchangeStep = Extract<
 >;
 
 interface InstalledRule {
+  active: boolean;
   ruleId: string;
   mint: string;
   wallet?: string;
@@ -161,6 +162,7 @@ export class FaultController {
           };
     const ruleId = await this.mint(step.mint).gateway.addRule(rule);
     this.rules.push({
+      active: true,
       ruleId,
       mint: step.mint,
       ...(wallet === undefined ? {} : { wallet }),
@@ -200,7 +202,7 @@ export class FaultController {
   }
 
   async captureFired(): Promise<void> {
-    for (const rule of this.rules) {
+    for (const rule of this.rules.filter((candidate) => candidate.active)) {
       const evidence = await this.mint(rule.mint).gateway.evidence();
       const state = evidence.rules.find((candidate) => candidate.id === rule.ruleId);
       if (!state || state.applied === 0) continue;
@@ -365,7 +367,9 @@ export class FaultController {
    * applied get a bounded chance to fire on the Wallet's own traffic first.
    */
   async heal(step: number): Promise<void> {
-    for (const rule of this.rules.filter((candidate) => candidate.kind === 'delayResponses')) {
+    for (const rule of this.rules.filter(
+      (candidate) => candidate.active && candidate.kind === 'delayResponses',
+    )) {
       await waitUntil('delayed response', TRIGGER_TIMEOUT_MS, async () => {
         return (await this.applied(rule)) > 0;
       }).catch(() => undefined);
@@ -378,6 +382,10 @@ export class FaultController {
       await mint.gateway.clearRules();
       if ((await mint.gateway.evidence()).rules.length !== 0) {
         throw new InfrastructureFailure(`Fault rules remain at ${mint.name}`);
+      }
+      // Keep historical rules for unfired-fault accounting, but never await cleared triggers.
+      for (const rule of this.rules) {
+        if (rule.mint === mint.name) rule.active = false;
       }
     }
     await this.options.link.reconnect();
