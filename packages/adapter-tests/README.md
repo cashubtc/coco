@@ -82,7 +82,7 @@ Transaction contract options:
 
 - `runRepositoryTransactionContract()` verifies transactional behavior across the
   repository set, including grouped keypair and high-water-mark writes.
-- `runKeypairAllocationContract()` exercises the real key-management gateway for purpose isolation, concurrency,
+- `runKeypairAllocationContract()` exercises real keypair allocation for purpose isolation, concurrency,
   transactional rollback, committed-key deletion behavior, exhaustion, and—when
   `createSharedRepositories` is supplied—coordination between independent roots sharing one
   physical store.

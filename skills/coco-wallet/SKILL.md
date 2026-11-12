@@ -69,7 +69,7 @@ can also fail before a session exists, so handle ordinary errors as well.
 
 On app foreground, await `coco.ensureSubscriptions()` to initiate networking repair while
 preserving current owners and interests. Completion is local, not remote readiness or catch-up.
-Use individual owner controls for background policy and explicit recovery APIs for reconciliation;
+Background owners are fixed at initialization; use explicit recovery APIs for reconciliation;
 see [Background services](references/background-services.md). Final shutdown uses `dispose()`.
 
 **Done when:** restarting opens the same Wallet and database, unavailable storage has a visible

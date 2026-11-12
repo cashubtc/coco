@@ -66,7 +66,11 @@ export interface CoreTransaction {
   >;
 }
 
-/** Injected into coordinators; each invocation resolves only after its local work commits. */
+/**
+ * Injected into coordinators; each invocation resolves only after its local work commits, and a
+ * rejection means the attempt did not commit. Every `run()` opens its own adapter transaction per
+ * attempt: sharing the runner does not share a transaction, and nesting is unsupported.
+ */
 export interface CoreTransactionRunner {
   run<T>(work: (tx: CoreTransaction) => Promise<T>): Promise<T>;
 }

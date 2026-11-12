@@ -16,8 +16,3 @@ marker. An applied and committed mint metadata refresh clears the affected mint'
 ignored older observations and timestamp ties do not publish a refresh event or clear the markers.
 A new Coco Session starts without downgrade state. The policy has no recursive splitting,
 adaptive learned limit, internal retry loop, or persisted compatibility state.
-
-Batch Mint Operation Recovery does not check quotes. It replays the Exact Operation Request and
-uses Restore after qualifying issuance-related rejections, as specified by
-[ADR-0016](0016-model-batch-minting-as-a-standalone-atomic-operation.md). This replaces the earlier
-operation-scoped batch-check exception: quote accounting cannot establish which outputs issued.

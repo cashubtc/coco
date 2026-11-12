@@ -74,7 +74,7 @@ skips automatic parent startup passes and timers; all explicit commands remain a
 including preparation, execution, `ops.mintSwap.refresh(id)` and `ops.mintSwap.recovery.run()`. Generic Mint/Melt
 recovery, ordinary processors and automatic quote claiming leave children of active Mint Swaps to
 the parent, so disabling this processor also pauses them; see
-[Mint Swap Operations](https://github.com/cashubtc/coco/blob/master/TRANSACTION_DESIGN.md#mint-swap-operations). Scan defaults are `processIntervalMs: 1000`,
+[ADR-0020](https://github.com/cashubtc/coco/blob/master/packages/core/docs/adr/0020-mint-swap-exclusively-coordinates-its-children.md). Scan defaults are `processIntervalMs: 1000`,
 `sweepIntervalMs: 30000`, and `batchSize: 25`; durable retry deadlines remain authoritative.
 
 `processors.mintOperationProcessor.batchMintQuotes` defaults to `true`. Automatic claiming then

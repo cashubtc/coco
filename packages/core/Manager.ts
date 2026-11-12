@@ -899,9 +899,9 @@ export class Manager {
       repositories.mintRepository,
     );
 
-    // One shared instance across every counter-consuming operation service so that
-    // send, receive, melt, and mint serialize their per-mint deterministic-output
-    // derivation against each other. Passing separate instances would break that.
+    // One shared instance across the operation services serializes same-mint preparation,
+    // including the metadata refresh. Correctness does not rely on it: the Wallet transaction
+    // serializes proof reservation and Output Allocation.
     const mintScopedLock = new MintScopedLock();
     const sourceOperationLock = new OperationIdLock();
     const destinationOperationLock = new OperationIdLock();

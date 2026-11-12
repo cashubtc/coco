@@ -65,7 +65,7 @@ Native via `@cashu/coco-expo-sqlite`.
 The core exposes a minimal plugin API to hook into lifecycle events with access to specific services.
 
 - See `packages/core/README.md` → Plugins for details and examples.
-- Register at construction or via `manager.use(plugin)`; dispose with `manager.dispose()`.
+- Register through `initializeCoco({ plugins })` or via `manager.use(plugin)`; dispose with `manager.dispose()`.
 
 ## Agent skills
 

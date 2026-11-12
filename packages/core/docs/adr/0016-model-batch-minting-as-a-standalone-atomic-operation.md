@@ -14,7 +14,7 @@ exact members, amounts and outputs, signed at submission as a Mint Operation is,
 and never falls back to Mint Operations for them.
 Automatic claiming is the main consumer and may afterwards claim still-claimable members
 individually. Members keep per-quote mint history entries so batching does not change what a
-Wallet's history shows. This supersedes the retired ADR-0009 and ADR-0010.
+Wallet's history shows.
 
 ## Recovery through exact replay
 
