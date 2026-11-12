@@ -17,11 +17,19 @@ import { InfrastructureFailure } from './environment.ts';
 export type ActorCommand =
   | { type: 'addMints' }
   | { type: 'fund'; mintUrl: string; amount: number }
-  | { type: 'send'; mintUrl: string; amount: number }
+  | { type: 'prepareSend'; mintUrl: string; amount: number }
+  | { type: 'executeSend'; operationId: string }
+  /** The Send's state and, once it is pending, its token, read through `ops.send.get`. */
+  | { type: 'sendToken'; operationId: string }
   | { type: 'prepareReceive'; token: string }
   | { type: 'executeReceive'; operationId: string }
   | { type: 'reclaim'; operationId: string }
   | { type: 'observe'; receiveIds: string[]; sendIds: string[] }
+  /**
+   * Explicit public recovery: networking repair, then the Send and Receive recovery sweeps. Only
+   * an actor started for an explicit-recovery scenario accepts it.
+   */
+  | { type: 'recover' }
   | { type: 'dispose' };
 
 export type ActorReply =
@@ -38,7 +46,9 @@ export interface ObservedOperation {
 export interface ActorResults {
   addMints: Record<string, never>;
   fund: { operationId: string; state: string };
-  send: { operationId: string; token: string };
+  prepareSend: { operationId: string };
+  executeSend: { token: string };
+  sendToken: { state: string | undefined; token?: string };
   prepareReceive: { operationId: string };
   executeReceive: { state: string };
   reclaim: { state: string | undefined };
@@ -47,6 +57,7 @@ export interface ActorResults {
     balances: Record<string, number>;
     operations: ObservedOperation[];
   };
+  recover: Record<string, never>;
   dispose: Record<string, never>;
 }
 
@@ -72,6 +83,10 @@ export interface WalletActorOptions {
   seedPath: string;
   mintUrls: string[];
   unit: string;
+  /** This Wallet's transport link port, its only network path to the mints. */
+  proxyUrl: string;
+  /** Explicit recovery calls are accepted only in `explicit` scenarios. */
+  recoveryMode: 'automatic' | 'explicit';
   /** Private file receiving the actor's stderr. */
   logPath: string;
 }
@@ -144,6 +159,10 @@ export class WalletActor {
         SIM_SEED_PATH: options.seedPath,
         SIM_MINT_URLS: JSON.stringify(options.mintUrls),
         SIM_UNIT: options.unit,
+        SIM_PROXY_URL: options.proxyUrl,
+        SIM_RECOVERY_MODE: options.recoveryMode,
+        // Bun's fetch sends all mint HTTP through the link; WebSockets use the same proxy.
+        HTTP_PROXY: options.proxyUrl,
       },
       stdin: 'pipe',
       stdout: 'pipe',

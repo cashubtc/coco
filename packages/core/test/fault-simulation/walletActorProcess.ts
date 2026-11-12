@@ -18,9 +18,12 @@ import { SqliteDb } from '../../../sqlite-bun/src/db.ts';
 import { initializeCoco } from '../../Manager.ts';
 import type { ActorCommand, ActorReply } from './walletActor.ts';
 
-const { SIM_DB_PATH, SIM_SEED_PATH, SIM_MINT_URLS, SIM_UNIT } = process.env;
-if (!SIM_DB_PATH || !SIM_SEED_PATH || !SIM_MINT_URLS || !SIM_UNIT) {
-  throw new Error('Wallet actor requires SIM_DB_PATH, SIM_SEED_PATH, SIM_MINT_URLS and SIM_UNIT');
+const { SIM_DB_PATH, SIM_SEED_PATH, SIM_MINT_URLS, SIM_UNIT, SIM_PROXY_URL, SIM_RECOVERY_MODE } =
+  process.env;
+if (!SIM_DB_PATH || !SIM_SEED_PATH || !SIM_MINT_URLS || !SIM_UNIT || !SIM_PROXY_URL) {
+  throw new Error(
+    'Wallet actor requires SIM_DB_PATH, SIM_SEED_PATH, SIM_MINT_URLS, SIM_UNIT and SIM_PROXY_URL',
+  );
 }
 const mintUrls = JSON.parse(SIM_MINT_URLS) as string[];
 const unit = SIM_UNIT;
@@ -31,7 +34,13 @@ const repo = new SqlStorageRepositories({
 });
 await repo.init();
 // Session initialization performs Operation Recovery for persisted in-flight operations.
-const coco = await initializeCoco({ repo, seedGetter: async () => seed });
+// HTTP reaches the transport link through HTTP_PROXY. Bun's WebSocket ignores that variable, so
+// the documented factory option routes WebSockets through the same link.
+const coco = await initializeCoco({
+  repo,
+  seedGetter: async () => seed,
+  webSocketFactory: (url) => new WebSocket(url, { proxy: SIM_PROXY_URL } as never),
+});
 
 async function fund(mintUrl: string, amount: number) {
   const quote = await coco.quotes.mint.create({
@@ -89,14 +98,22 @@ async function handle(command: ActorCommand): Promise<unknown> {
       return {};
     case 'fund':
       return fund(command.mintUrl, command.amount);
-    case 'send': {
+    case 'prepareSend': {
       const prepared = await coco.ops.send.prepare({
         mintUrl: command.mintUrl,
         amount: command.amount,
         unit,
       });
-      const { operation, token } = await coco.ops.send.execute(prepared.id);
-      return { operationId: operation.id, token: getEncodedToken(token) };
+      return { operationId: prepared.id };
+    }
+    case 'executeSend': {
+      const { token } = await coco.ops.send.execute(command.operationId);
+      return { token: getEncodedToken(token) };
+    }
+    case 'sendToken': {
+      const operation = await coco.ops.send.get(command.operationId);
+      const token = operation && 'token' in operation ? operation.token : undefined;
+      return { state: operation?.state, ...(token ? { token: getEncodedToken(token) } : {}) };
     }
     case 'prepareReceive':
       return { operationId: (await coco.ops.receive.prepare({ token: command.token })).id };
@@ -107,6 +124,15 @@ async function handle(command: ActorCommand): Promise<unknown> {
       return { state: (await coco.ops.send.get(command.operationId))?.state };
     case 'observe':
       return observe(command.receiveIds, command.sendIds);
+    case 'recover':
+      // Defence in depth: an automatic-progress scenario must never be rescued by this call.
+      if (SIM_RECOVERY_MODE !== 'explicit') {
+        throw new Error('Explicit recovery is not permitted in an automatic-recovery scenario');
+      }
+      await coco.ensureSubscriptions();
+      await coco.ops.send.recovery.run();
+      await coco.ops.receive.recovery.run();
+      return {};
     case 'dispose':
       await coco.dispose();
       return {};

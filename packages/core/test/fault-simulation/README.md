@@ -12,6 +12,7 @@ From the repository root, with Docker, Node.js 22 or newer and Git available:
 bun run test:fault-simulation                        # all scenarios
 bun run test:fault-simulation -t 'healthy workload'  # one scenario
 COCO_FAULT_SIM_SEEDS=11,12 bun run test:fault-simulation -t 'generated workload'
+COCO_FAULT_SIM_FAULT_SEEDS=7 bun run test:fault-simulation -t 'fault interactions'
 bun packages/core/test/fault-simulation/replay.ts .cache/fault-simulation/runs/<run>/trace.json
 bun packages/core/test/fault-simulation/minimize.ts .cache/fault-simulation/runs/<run>/trace.json 24
 bun packages/core/test/fault-simulation/report.ts .cache/fault-simulation/runs/*/trace.json
@@ -21,8 +22,10 @@ bun test ./packages/core/test/fault-simulation/walletFaultSimulationArtifacts.si
 
 The script builds core first because the SQLite repositories import its build output. The scenario
 file is named `*.sim.ts` so plain `bun test` and the unit and integration runners do not select it.
-`COCO_FAULT_SIM_SEEDS` takes comma-separated scenario seeds (unsigned 32-bit integers); the default
-is `1,2`.
+`COCO_FAULT_SIM_SEEDS` takes comma-separated scenario seeds (unsigned 32-bit integers) for the
+fault-free generated workloads, default `1,2`; `COCO_FAULT_SIM_FAULT_SEEDS` does the same for
+generated workloads with fault interactions (`faultPalette.sim.ts`), default `5,18`, each run in
+both recovery modes.
 
 The first run fetches the pinned Cashu Fault Lab revision into `.cache/`. Set
 `COCO_FAULT_LAB_CHECKOUT` to use an existing checkout; it must be at the pinned revision.
@@ -35,12 +38,22 @@ Each scenario run starts its own world and removes it afterwards:
   `fakewallet` backend, unit `sat`, 100 ppk input fees and its own test mnemonic, so the two mints
   have distinct keysets;
 - one pinned Fault Lab HTTP gateway process in front of each mint, run under Node;
+- one transport link process (`transportLinkProcess.ts`, under Node), the only network path between
+  Wallets and mints;
 - one process per Wallet (`alice`, `bob`, `carol` in the multi-Wallet scenarios), each a real Coco
   Session over its own SQLite file and Wallet Seed, trusting every mint, with Coco's default
   Background Watchers and Processors.
 
-Wallets only know gateway URLs, so all their mint HTTP traffic passes through a gateway. The harness
-probes each mint directly and opens Wallet stores read-only. It never repairs Wallet state.
+Every Wallet uses the same canonical URL per mint, `http://<mint>.faultsim.invalid`, which never
+resolves, and its own transport link port as proxy: HTTP through `HTTP_PROXY`, WebSockets through
+Coco's documented `webSocketFactory` option (Bun's WebSocket ignores `HTTP_PROXY`). Traffic that
+bypassed the link would fail instead of reaching a mint unobserved, and the link refuses and counts
+requests that name no known mint (`unrouted`). The link forwards HTTP to the mint's gateway, adding
+the Wallet's tag in the gateway's operation header so gateway rules can target one Wallet, and
+tunnels WebSocket upgrades to `/v1/ws` straight to the mint, which the gateway cannot carry. When
+the gateway drops an exchange, the link drops the Wallet's connection rather than answering. It
+never alters a delivered body. The harness probes each mint directly and opens Wallet stores
+read-only. It never repairs Wallet state.
 
 A crash is `SIGKILL` of a Wallet process. A `restart` step disposes a running Wallet gracefully,
 or starts a crashed one, as a new process and Coco Session over the same store and Wallet Seed. The
@@ -48,9 +61,10 @@ trace records which; a graceful restart is never counted as crash coverage.
 
 ## Workload
 
-Plans are data (`scenarios.ts`). Steps: `fund`, `send` (creates a token), `receive` (delivers a
-token: prepare and execute a Receive), `reclaim`, `raceReclaim`, `restart`, `withholdResponse`,
-`heal` and `checkpoint`. Token delivery is separate from token creation, so tokens can stay
+Plans are data (`scenarios.ts`). Commands: `fund`, `send` (creates a token), `receive` (delivers a
+token: prepare and execute a Receive), `reclaim`, `raceReclaim`, `restart` and, in explicit-recovery
+scenarios, `recover`. Faults are listed under [Faults](#faults); `heal` and `checkpoint` complete the
+steps. Token delivery is separate from token creation, so tokens can stay
 undelivered or be delivered more than once. Transfers stay within the token's mint.
 
 `workload.ts` gives each step its meaning. `planWorkload(plan)` rejects steps whose state
@@ -75,17 +89,75 @@ spendable amounts are conservative lower bounds that keep commands meaningful; t
 expected balances. A scenario seed is distinct from Wallet Seeds and reproduces generated choices,
 not process scheduling.
 
+With `faults: true`, `generateWorkload` also draws fault interactions, each closing its own faults:
+a Receive under a lost swap request or response; a withheld Receive response with a crash and
+restart; delayed responses during a Receive, then healing; a recipient outage during its Receive
+followed by the recovery mode's progress step; a sender outage while its token is claimed; a
+WebSocket drop while a Send is pending; a crash of an idle sender while its token is claimed; and a
+bounded number of mint restarts. A checkpoint after a fault is preceded by `heal`. Interrupted
+Sends are left to fixed scenarios: an exact-match Send performs no swap, so its exchange fault
+would never fire. Fault-free generation is unchanged, so `WORKLOAD_GENERATOR_VERSION` stays 1.
+
+## Faults
+
+Every fault is triggered by a request or an event, and every installed fault must fire; one that
+does not leaves the run `unresolved`. `faults.ts` installs them and records the evidence.
+
+| Step                       | Mechanism                                                                                         | Fired when                                         |
+| -------------------------- | ------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| `dropRequest`              | gateway `before_forward` drop of the Wallet's next swap                                           | the rule applied                                   |
+| `dropResponse`             | gateway `after_downstream_response` drop: the mint answered, the Wallet never hears               | the rule applied                                   |
+| `withholdResponse`         | gateway holds the swap response for 10 minutes; the command crashes its Wallet on firing          | the rule applied                                   |
+| `delayResponses`           | gateway delays the Wallet's next `count` responses until `heal`                                   | the rule applied                                   |
+| `disconnect` / `reconnect` | link closes the Wallet's connections to the mint, including WebSockets, and refuses new ones      | a connection was closed or refused                 |
+| `dropWebSockets`           | link waits for an open WebSocket, then closes it without a close frame                            | a socket closed                                    |
+| `crash`                    | `SIGKILL` of the Wallet process; it stays down until `restart`                                    | always                                             |
+| `restartMint`              | link refuses the mint's connections, `docker kill`, `docker start` over the same storage and port | the mint reports the same keysets and proof states |
+
+Exchange faults and delays are scoped to one Wallet and consumed by its own next swap at that mint,
+so they do not serialize other Wallets. The model only lets a Send or a first Receive consume an
+exchange fault, rejects other commands of that Wallet at that mint while one is armed, and rejects
+commands whose behavior under an outage is not modelled. An exposed command may fail; that is
+recorded as `interrupted`, not a wallet failure, and its operation must still reach the expected
+state. A lost Receive exchange recovers inline in Coco. A Send interrupted by any fault, or a
+Receive interrupted by an outage or crash, stays `executing` until its Wallet restarts (startup
+recovery) or, in explicit scenarios, calls `recover`; until then the model refuses further commands
+on its token, and the releasing step is ordered before them. An interrupted Send's token is read
+through `ops.send.get` once it is pending.
+
+`ScenarioRun.exchanges` corroborates each exposed command outside the Wallet: whether the mint spent
+the operation's inputs (a request lost before the mint must leave them unspent; a response lost
+after it must follow a spend), the persisted operation state, and the Wallet's swap and restore
+requests during it. `mintRestarts` records the restart times, downtime and whether keysets and every
+known proof state were retained; anything else is an infrastructure failure.
+
+## Recovery modes
+
+`automatic` scenarios never call a recovery interface: progress must come from Coco, including
+inline recovery and startup recovery after `restart`. The model rejects `recover` in them and the
+Wallet actor refuses it. `explicit` scenarios may `recover` once every fault has healed: networking
+repair (`ensureSubscriptions`) and the Send and Receive recovery sweeps. Its return proves nothing;
+`ScenarioRun.recoveries` records which operation states it changed, and checkpoints judge the
+outcome.
+
+`heal` removes every gateway rule, ends every outage after it has affected traffic, gives delays a
+bounded chance to fire, and then establishes health: each mint answers directly, and every
+Wallet's link path reaches it over HTTP and WebSocket. The harness samples the current operation
+states as the healthy baseline, then starts the recovery deadline (the plan's
+`recoveryDeadlineMs`, 60 s by default) and observes pending outcomes alongside foreground work. Failure to establish health,
+including a mint that does not come back, is an `infrastructure_failure`. A checkpoint requires a
+healed environment, and a plan must end healed. A healthy environment with an unmet outcome at the
+deadline is a `wallet_failure`, never a pass as "safely blocked".
+
 ## Scheduling
 
 Steps are dispatched in plan order. A step starts once its Wallets' and its token's earlier steps
 have settled, so each Wallet has at most one foreground command outstanding while different Wallets
-act concurrently. Barrier steps wait for all earlier steps and block later ones.
+act concurrently. Barrier steps wait for all earlier steps and block later ones: checkpoints,
+healing, led races, Wallet-unscoped `withholdResponse`, outages, WebSocket drops, crashes and mint
+restarts.
 
 ## Outcomes and evidence
-
-After `heal` establishes environment health, the harness samples public operation states as the
-healthy baseline and observes pending recovery outcomes concurrently with later foreground work.
-The recovery window is `recoveryDeadlineMs` (60 s by default).
 
 A `checkpoint` waits for every Wallet to be idle, collects the recovery observations and runs the
 checker. A success observed during the window remains on time even if later work delays the
@@ -108,7 +180,8 @@ unresolved.
 
 Runs end as `pass`, `wallet_failure`, `unresolved` (missing evidence or an unestablished scenario
 precondition, such as a fault that never fired) or `infrastructure_failure`. Only `pass` passes,
-except that negative controls expect `wallet_failure`. A plan's `checkerControl`
+except that negative controls expect `wallet_failure`, or `infrastructure_failure` for an
+`infrastructureControl` (`mintDoesNotRestart`). A plan's `checkerControl`
 (`hideHeldProof`, `duplicateHeldProof`) tampers with collected evidence, never with Wallet state, to
 show the checker detects lost or duplicated value in evidence from a real run.
 
@@ -119,7 +192,7 @@ Artifacts are written under `.cache/fault-simulation/runs/<run>/` (override with
   configuration, ordered events, fault evidence, per-checkpoint verdicts, race winners and command
   counts. Tokens appear as references. Writing fails if any registered Wallet Seed, token or proof
   secret would appear in it.
-- `gateway-<mint>.log`: gateway process output.
+- `gateway-<mint>.log` and `transport-link.log`: gateway and link process output.
 - `private/`: Wallet Seeds, SQLite stores and Wallet process logs. It is removed when a run meets its
   expectation and kept otherwise, or always with `COCO_FAULT_SIM_KEEP_PRIVATE=1`. Never publish it.
 
@@ -168,33 +241,41 @@ Replays and minimization runs are new runs in their own directories.
 ## Interfaces for fault and artifact work
 
 - **Commands:** add a `ScenarioStep` kind in `scenarios.ts`, its preconditions and scheduling in
-  `WorkloadModel.apply`, and its execution in `runStep`. Fault steps should be barriers unless the
-  rule can only match the intended Wallet's traffic, because gateway rules match by method, path
-  and occurrence, not by Wallet.
-- **Wallet actor:** `WalletActor.request()` accepts `addMints`, `fund`, `send`, `prepareReceive`,
-  `executeReceive`, `reclaim`, `observe` and `dispose`; `crash()` sends `SIGKILL`; `shutdown()`
-  reports whether disposal completed.
-- **Observations:** `ScenarioRun` exposes `checkpoints`, `commands`, `races`, `faultsFired`,
-  `crashes` and the final `verdict`. The trace holds the same, plus the ordered events.
+  `WorkloadModel.apply`, and its execution in `runStep`. A new command kind that needs no `heal`
+  belongs in `minimize.ts` `NON_FAULT_KINDS`.
+- **Faults:** `FaultController` in `faults.ts`. Gateway rules scoped to a Wallet use `walletTag`;
+  link faults use `TransportLink`. Record `fault_installed` with `ruleId`, `mint` and `kind`, and a
+  `FiredFault` once it applied.
+- **Wallet actor:** `WalletActor.request()` accepts `addMints`, `fund`, `prepareSend`,
+  `executeSend`, `sendToken`, `prepareReceive`, `executeReceive`, `reclaim`, `observe`, `recover`
+  (explicit scenarios only) and `dispose`; `crash()` sends `SIGKILL`; `shutdown()` reports whether
+  disposal completed.
+- **Observations:** `ScenarioRun` exposes `checkpoints`, `commands` (with any `exposure`), `races`,
+  `faultsFired` (with `kind`, `wallet` and `step`), `crashes` (with `trigger`), `exchanges`,
+  `recoveries`, `mintRestarts`, `transport` and the final `verdict`. The trace holds the same, plus
+  the ordered events.
 
 ## Modules
 
-| Module                  | Responsibility                                                          |
-| ----------------------- | ----------------------------------------------------------------------- |
-| `scenarios.ts`          | Scenario plans as replayable data                                       |
-| `workload.ts`           | Step preconditions, expected outcomes, token fates and seeded generator |
-| `runner.ts`             | World lifecycle, scheduling, step execution, evidence, outcomes         |
-| `walletActor.ts`        | Harness handle for a Wallet process: commands, crash, shutdown          |
-| `walletActorProcess.ts` | The Wallet process: one Coco Session over SQLite                        |
-| `faultLabGateway.ts`    | Thin adapter over the pinned Fault Lab HTTP gateway                     |
-| `environment.ts`        | Mint containers and infrastructure failure classification               |
-| `evidence.ts`           | Read-only store queries, direct mint probes and token decoding          |
-| `accounting.ts`         | Independent fund accounting checker                                     |
-| `trace.ts`              | Redacted trace writer and v1/v2 trace reader                            |
-| `replay.ts`             | Clean-state replay of recorded commands and replay comparison           |
-| `report.ts`             | Failure identity, exercised coverage and portable reports               |
-| `minimize.ts`           | Bounded failure minimization preserving preconditions and identity      |
-| `artifacts.ts`          | Portable export, secret scanning and private input retention            |
+| Module                    | Responsibility                                                           |
+| ------------------------- | ------------------------------------------------------------------------ |
+| `scenarios.ts`            | Scenario plans as replayable data                                        |
+| `workload.ts`             | Step preconditions, expected outcomes, token fates and seeded generator  |
+| `runner.ts`               | World lifecycle, scheduling, step execution, evidence, outcomes          |
+| `walletActor.ts`          | Harness handle for a Wallet process: commands, crash, shutdown           |
+| `walletActorProcess.ts`   | The Wallet process: one Coco Session over SQLite                         |
+| `faultLabGateway.ts`      | Thin adapter over the pinned Fault Lab HTTP gateway                      |
+| `transportLink.ts`        | Harness handle for the transport link: proxies, outages, WebSocket drops |
+| `transportLinkProcess.ts` | The link process: per-Wallet proxy to gateways and mint WebSockets       |
+| `faults.ts`               | Fault installation, firing evidence, mint restarts, healing and health   |
+| `environment.ts`          | Mint containers and infrastructure failure classification                |
+| `evidence.ts`             | Read-only store queries, direct mint probes and token decoding           |
+| `accounting.ts`           | Independent fund accounting checker                                      |
+| `trace.ts`                | Redacted trace writer and v1/v2 trace reader                             |
+| `replay.ts`               | Clean-state replay of recorded commands and replay comparison            |
+| `report.ts`               | Failure identity, exercised coverage and portable reports                |
+| `minimize.ts`             | Bounded failure minimization preserving preconditions and identity       |
+| `artifacts.ts`            | Portable export, secret scanning and private input retention             |
 
 A run killed with `SIGKILL` can leave mint containers behind; `docker ps --filter name=coco-faultsim-`
 lists them.

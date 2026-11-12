@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'bun:test';
 import { readFileSync } from 'node:fs';
-import { minimizeFailure, type CandidateObservation } from '../../fault-simulation/minimize.ts';
+import {
+  candidatePreconditionViolation,
+  minimizeFailure,
+  type CandidateObservation,
+} from '../../fault-simulation/minimize.ts';
 import { failureSignature, type FailureSignature } from '../../fault-simulation/report.ts';
 import type { ScenarioPlan, ScenarioStep } from '../../fault-simulation/scenarios.ts';
 import { readTrace } from '../../fault-simulation/trace.ts';
@@ -218,5 +222,65 @@ describe('failure minimization', () => {
       error: 'mint container did not start',
     });
     expect(result.status).toBe('minimized');
+  });
+});
+
+describe('candidate validity for the fault palette', () => {
+  const base = {
+    id: 'palette-candidate',
+    description: 'palette candidate',
+    expect: 'pass' as const,
+    recoveryDeadlineMs: 60_000,
+    wallets: ['alice', 'bob', 'carol'],
+    mints: ['mint-a', 'mint-b'],
+  };
+
+  it('accepts explicit recovery, crashes and mint restarts that need no healing step', () => {
+    expect(
+      candidatePreconditionViolation({
+        ...base,
+        recoveryMode: 'explicit',
+        steps: [
+          { kind: 'fund', wallet: 'alice', mint: 'mint-a', amount: 64 },
+          { kind: 'dropResponse', wallet: 'alice', mint: 'mint-a', path: '/v1/swap' },
+          { kind: 'send', wallet: 'alice', mint: 'mint-a', amount: 21, token: 'a1' },
+          { kind: 'heal' },
+          { kind: 'recover', wallet: 'alice' },
+          { kind: 'crash', wallet: 'bob' },
+          { kind: 'restart', wallet: 'bob' },
+          { kind: 'restartMint', mint: 'mint-a' },
+          { kind: 'receive', wallet: 'bob', token: 'a1' },
+          { kind: 'checkpoint' },
+        ],
+      }),
+    ).toBeUndefined();
+  });
+
+  it('rejects a Send crashing on an uninstalled fault; a crash needs no healing step', () => {
+    const steps: ScenarioStep[] = [{ kind: 'fund', wallet: 'alice', mint: 'mint-a', amount: 64 }];
+    expect(
+      candidatePreconditionViolation({
+        ...base,
+        recoveryMode: 'automatic',
+        steps: [
+          ...steps,
+          {
+            kind: 'send',
+            wallet: 'alice',
+            mint: 'mint-a',
+            amount: 21,
+            token: 'a1',
+            crashWhenFaultFires: true,
+          },
+        ],
+      }),
+    ).toBeDefined();
+    expect(
+      candidatePreconditionViolation({
+        ...base,
+        recoveryMode: 'automatic',
+        steps: [...steps, { kind: 'crash', wallet: 'alice' }, { kind: 'checkpoint' }],
+      }),
+    ).toBeUndefined();
   });
 });

@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { failureSignature, sameFailure, type FailureSignature } from './report.ts';
 import type { ScenarioPlan } from './scenarios.ts';
 import { readTraceFile } from './trace.ts';
+import { MINT_INPUT_FEE_PPK } from './environment.ts';
 import { WorkloadModel } from './workload.ts';
 
 /** What one candidate run showed: its failure identity and where its evidence is kept. */
@@ -67,6 +68,11 @@ const NON_FAULT_KINDS = new Set<string>([
   'reclaim',
   'raceReclaim',
   'restart',
+  // Explicit recovery is a caller command; a crash is ended by `restart`, and a mint restart by
+  // the step itself, not by `heal`.
+  'recover',
+  'crash',
+  'restartMint',
   'heal',
   'checkpoint',
 ]);
@@ -77,7 +83,7 @@ const NON_FAULT_KINDS = new Set<string>([
  * since the last healing, and faults must be followed by healing so the run ends healthy.
  */
 export function candidatePreconditionViolation(plan: ScenarioPlan): string | undefined {
-  const model = new WorkloadModel(plan.wallets, plan.mints);
+  const model = new WorkloadModel(plan.wallets, plan.mints, MINT_INPUT_FEE_PPK, plan.recoveryMode);
   let faultInstalled = false;
   for (const [index, step] of plan.steps.entries()) {
     try {
@@ -87,11 +93,21 @@ export function candidatePreconditionViolation(plan: ScenarioPlan): string | und
     }
     if (step.kind === 'heal') faultInstalled = false;
     else if (!NON_FAULT_KINDS.has(step.kind)) faultInstalled = true;
-    else if (step.kind === 'receive' && step.crashWhenFaultFires && !faultInstalled) {
+    else if (
+      (step.kind === 'receive' || step.kind === 'send') &&
+      step.crashWhenFaultFires &&
+      !faultInstalled
+    ) {
       return `step ${index} crashes on a fault that is not installed`;
     }
   }
-  return faultInstalled ? 'a fault is still installed when the plan ends' : undefined;
+  if (faultInstalled) return 'a fault is still installed when the plan ends';
+  try {
+    model.finish();
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  return undefined;
 }
 
 export async function minimizeFailure(

@@ -1,0 +1,2753 @@
+{
+  "format": "coco-wallet-fault-simulation/trace/v2",
+  "runId": "generated-faults-explicit-seed-5-2026-11-12T11-26-41-631Z-8d86f92d",
+  "plan": {
+    "id": "generated-faults-explicit-seed-5",
+    "description": "Generated workload: 24 state-aware commands with fault interactions (explicit recovery) for 3 Wallets at 2 mints from scenario seed 5.",
+    "expect": "pass",
+    "recoveryMode": "explicit",
+    "recoveryDeadlineMs": 60000,
+    "wallets": ["alice", "bob", "carol"],
+    "mints": ["mint-a", "mint-b"],
+    "steps": [
+      {
+        "kind": "fund",
+        "wallet": "alice",
+        "mint": "mint-a",
+        "amount": 128
+      },
+      {
+        "kind": "fund",
+        "wallet": "alice",
+        "mint": "mint-b",
+        "amount": 128
+      },
+      {
+        "kind": "fund",
+        "wallet": "bob",
+        "mint": "mint-a",
+        "amount": 128
+      },
+      {
+        "kind": "fund",
+        "wallet": "bob",
+        "mint": "mint-b",
+        "amount": 128
+      },
+      {
+        "kind": "fund",
+        "wallet": "carol",
+        "mint": "mint-a",
+        "amount": 128
+      },
+      {
+        "kind": "fund",
+        "wallet": "carol",
+        "mint": "mint-b",
+        "amount": 128
+      },
+      {
+        "kind": "send",
+        "wallet": "alice",
+        "mint": "mint-b",
+        "amount": 21,
+        "token": "t1"
+      },
+      {
+        "kind": "send",
+        "wallet": "carol",
+        "mint": "mint-a",
+        "amount": 16,
+        "token": "t2"
+      },
+      {
+        "kind": "dropWebSockets",
+        "wallet": "alice",
+        "mint": "mint-b"
+      },
+      {
+        "kind": "delayResponses",
+        "wallet": "bob",
+        "mint": "mint-a",
+        "delayMs": 217,
+        "count": 2
+      },
+      {
+        "kind": "receive",
+        "wallet": "bob",
+        "token": "t2"
+      },
+      {
+        "kind": "heal"
+      },
+      {
+        "kind": "receive",
+        "wallet": "bob",
+        "token": "t1"
+      },
+      {
+        "kind": "reclaim",
+        "token": "t2"
+      },
+      {
+        "kind": "send",
+        "wallet": "carol",
+        "mint": "mint-a",
+        "amount": 8,
+        "token": "t3"
+      },
+      {
+        "kind": "send",
+        "wallet": "bob",
+        "mint": "mint-a",
+        "amount": 32,
+        "token": "t4"
+      },
+      {
+        "kind": "checkpoint"
+      },
+      {
+        "kind": "send",
+        "wallet": "carol",
+        "mint": "mint-b",
+        "amount": 11,
+        "token": "t5"
+      },
+      {
+        "kind": "send",
+        "wallet": "alice",
+        "mint": "mint-b",
+        "amount": 13,
+        "token": "t6"
+      },
+      {
+        "kind": "send",
+        "wallet": "carol",
+        "mint": "mint-a",
+        "amount": 29,
+        "token": "t7"
+      },
+      {
+        "kind": "reclaim",
+        "token": "t7"
+      },
+      {
+        "kind": "raceReclaim",
+        "token": "t6",
+        "recipient": "carol",
+        "lead": "recipient"
+      },
+      {
+        "kind": "send",
+        "wallet": "bob",
+        "mint": "mint-b",
+        "amount": 2,
+        "token": "t8"
+      },
+      {
+        "kind": "crash",
+        "wallet": "bob"
+      },
+      {
+        "kind": "receive",
+        "wallet": "alice",
+        "token": "t8"
+      },
+      {
+        "kind": "restart",
+        "wallet": "bob"
+      },
+      {
+        "kind": "restart",
+        "wallet": "alice"
+      },
+      {
+        "kind": "heal"
+      },
+      {
+        "kind": "checkpoint"
+      },
+      {
+        "kind": "send",
+        "wallet": "alice",
+        "mint": "mint-b",
+        "amount": 32,
+        "token": "t9"
+      },
+      {
+        "kind": "send",
+        "wallet": "carol",
+        "mint": "mint-a",
+        "amount": 11,
+        "token": "t10"
+      },
+      {
+        "kind": "restart",
+        "wallet": "alice"
+      },
+      {
+        "kind": "send",
+        "wallet": "bob",
+        "mint": "mint-b",
+        "amount": 9,
+        "token": "t11"
+      },
+      {
+        "kind": "crash",
+        "wallet": "alice"
+      },
+      {
+        "kind": "receive",
+        "wallet": "carol",
+        "token": "t9"
+      },
+      {
+        "kind": "restart",
+        "wallet": "alice"
+      },
+      {
+        "kind": "crash",
+        "wallet": "carol"
+      },
+      {
+        "kind": "receive",
+        "wallet": "bob",
+        "token": "t10"
+      },
+      {
+        "kind": "restart",
+        "wallet": "carol"
+      },
+      {
+        "kind": "disconnect",
+        "wallet": "carol",
+        "mint": "mint-b"
+      },
+      {
+        "kind": "receive",
+        "wallet": "carol",
+        "token": "t11"
+      },
+      {
+        "kind": "reconnect",
+        "wallet": "carol",
+        "mint": "mint-b"
+      },
+      {
+        "kind": "recover",
+        "wallet": "carol"
+      },
+      {
+        "kind": "restartMint",
+        "mint": "mint-b"
+      },
+      {
+        "kind": "heal"
+      },
+      {
+        "kind": "checkpoint"
+      }
+    ],
+    "generator": {
+      "seed": 5,
+      "wallets": ["alice", "bob", "carol"],
+      "mints": ["mint-a", "mint-b"],
+      "commands": 24,
+      "initialFunding": 128,
+      "maxAmount": 32,
+      "checkpointEvery": 8,
+      "faults": true,
+      "recoveryMode": "explicit",
+      "version": 1
+    }
+  },
+  "components": {
+    "coco": {
+      "commit": "2867205882fc92dc41a3919655b6d511019e729e",
+      "dirty": true
+    },
+    "bun": "1.3.14",
+    "cashuTs": "5.0.0-rc.4",
+    "faultLab": {
+      "repository": "https://github.com/GautamBytes/cashu-fault-lab.git",
+      "revision": "1cc954d33a1088fd20efc48c5437e3a7441920f7",
+      "component": "apps/http-fault-gateway",
+      "runtime": "node v22.22.1"
+    },
+    "mint": {
+      "image": "cashubtc/mintd:0.17.0-rc.0",
+      "imageId": "sha256:3ea25571aecd6bb47c55781fb9f6566fbca364f6a4a163475ae81c1cae17b852",
+      "paymentBackend": "fakewallet"
+    }
+  },
+  "configuration": {
+    "unit": "sat",
+    "inputFeePpk": 100,
+    "mints": [
+      {
+        "mint": "mint-a",
+        "mnemonic": "test vector 1",
+        "keysets": [
+          {
+            "id": "0187b2e8760759f0d0de2e0b7cae676f106e318e6795206c8b266865e5b9fe6074",
+            "unit": "sat",
+            "inputFeePpk": 100
+          }
+        ],
+        "transport": "Wallets reach this mint only through the transport link: HTTP via its Fault Lab gateway, WebSockets tunnelled to the mint"
+      },
+      {
+        "mint": "mint-b",
+        "mnemonic": "test vector 2",
+        "keysets": [
+          {
+            "id": "01932e27691087a95d2a3e3d9a76dfad4fe438b3c450090fc9f77668e874324de4",
+            "unit": "sat",
+            "inputFeePpk": 100
+          }
+        ],
+        "transport": "Wallets reach this mint only through the transport link: HTTP via its Fault Lab gateway, WebSockets tunnelled to the mint"
+      }
+    ],
+    "wallets": [
+      {
+        "wallet": "alice",
+        "storage": "SQLite file (bun:sqlite through sql-storage)",
+        "backgroundOwners": "Coco defaults: Background Watchers and Processors enabled",
+        "trustedMints": ["mint-a", "mint-b"]
+      },
+      {
+        "wallet": "bob",
+        "storage": "SQLite file (bun:sqlite through sql-storage)",
+        "backgroundOwners": "Coco defaults: Background Watchers and Processors enabled",
+        "trustedMints": ["mint-a", "mint-b"]
+      },
+      {
+        "wallet": "carol",
+        "storage": "SQLite file (bun:sqlite through sql-storage)",
+        "backgroundOwners": "Coco defaults: Background Watchers and Processors enabled",
+        "trustedMints": ["mint-a", "mint-b"]
+      }
+    ],
+    "concurrency": "At most one foreground command per Wallet; different Wallets concurrently",
+    "recoveryMode": "explicit",
+    "recoveryDeadlineMs": 60000,
+    "scenarioSeed": 5
+  },
+  "privateInputs": {
+    "description": "Wallet Seeds and Wallet stores are private replay inputs. Clean-state replay of this plan generates fresh Wallet Seeds and needs none of them.",
+    "references": {
+      "alice.walletSeed": "private/alice.seed",
+      "alice.store": "private/alice.sqlite",
+      "bob.walletSeed": "private/bob.seed",
+      "bob.store": "private/bob.sqlite",
+      "carol.walletSeed": "private/carol.seed",
+      "carol.store": "private/carol.sqlite"
+    }
+  },
+  "events": [
+    {
+      "seq": 1,
+      "atMs": 1271,
+      "source": "carol",
+      "type": "process_started",
+      "data": {
+        "pid": 1565309
+      }
+    },
+    {
+      "seq": 2,
+      "atMs": 1278,
+      "source": "alice",
+      "type": "process_started",
+      "data": {
+        "pid": 1565307
+      }
+    },
+    {
+      "seq": 3,
+      "atMs": 1294,
+      "source": "bob",
+      "type": "process_started",
+      "data": {
+        "pid": 1565308
+      }
+    },
+    {
+      "seq": 4,
+      "atMs": 1456,
+      "source": "harness",
+      "type": "world_ready"
+    },
+    {
+      "seq": 5,
+      "atMs": 1456,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 0,
+        "kind": "fund"
+      }
+    },
+    {
+      "seq": 6,
+      "atMs": 1456,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 1,
+        "kind": "fund"
+      }
+    },
+    {
+      "seq": 7,
+      "atMs": 1456,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 2,
+        "kind": "fund"
+      }
+    },
+    {
+      "seq": 8,
+      "atMs": 1456,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 3,
+        "kind": "fund"
+      }
+    },
+    {
+      "seq": 9,
+      "atMs": 1456,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 4,
+        "kind": "fund"
+      }
+    },
+    {
+      "seq": 10,
+      "atMs": 1456,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 5,
+        "kind": "fund"
+      }
+    },
+    {
+      "seq": 11,
+      "atMs": 1456,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 6,
+        "kind": "send"
+      }
+    },
+    {
+      "seq": 12,
+      "atMs": 1456,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 7,
+        "kind": "send"
+      }
+    },
+    {
+      "seq": 13,
+      "atMs": 1456,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 8,
+        "kind": "dropWebSockets"
+      }
+    },
+    {
+      "seq": 14,
+      "atMs": 1456,
+      "source": "alice",
+      "type": "command",
+      "data": {
+        "step": 0,
+        "type": "fund",
+        "mint": "mint-a",
+        "amount": 128
+      }
+    },
+    {
+      "seq": 15,
+      "atMs": 1456,
+      "source": "bob",
+      "type": "command",
+      "data": {
+        "step": 2,
+        "type": "fund",
+        "mint": "mint-a",
+        "amount": 128
+      }
+    },
+    {
+      "seq": 16,
+      "atMs": 1456,
+      "source": "carol",
+      "type": "command",
+      "data": {
+        "step": 4,
+        "type": "fund",
+        "mint": "mint-a",
+        "amount": 128
+      }
+    },
+    {
+      "seq": 17,
+      "atMs": 1676,
+      "source": "bob",
+      "type": "result",
+      "data": {
+        "step": 2,
+        "type": "fund",
+        "operationId": "b48GrLUwzZL_6YBzxw2e1A",
+        "state": "finalized"
+      }
+    },
+    {
+      "seq": 18,
+      "atMs": 1676,
+      "source": "bob",
+      "type": "command",
+      "data": {
+        "step": 3,
+        "type": "fund",
+        "mint": "mint-b",
+        "amount": 128
+      }
+    },
+    {
+      "seq": 19,
+      "atMs": 1680,
+      "source": "alice",
+      "type": "result",
+      "data": {
+        "step": 0,
+        "type": "fund",
+        "operationId": "S9d58ZD0B8zxe-T8LYxVdQ",
+        "state": "finalized"
+      }
+    },
+    {
+      "seq": 20,
+      "atMs": 1680,
+      "source": "alice",
+      "type": "command",
+      "data": {
+        "step": 1,
+        "type": "fund",
+        "mint": "mint-b",
+        "amount": 128
+      }
+    },
+    {
+      "seq": 21,
+      "atMs": 1699,
+      "source": "carol",
+      "type": "result",
+      "data": {
+        "step": 4,
+        "type": "fund",
+        "operationId": "O7ersNZ0m0XEH5RnxHCx9Q",
+        "state": "finalized"
+      }
+    },
+    {
+      "seq": 22,
+      "atMs": 1699,
+      "source": "carol",
+      "type": "command",
+      "data": {
+        "step": 5,
+        "type": "fund",
+        "mint": "mint-b",
+        "amount": 128
+      }
+    },
+    {
+      "seq": 23,
+      "atMs": 1837,
+      "source": "bob",
+      "type": "result",
+      "data": {
+        "step": 3,
+        "type": "fund",
+        "operationId": "dyzLAEy1cCRjXBTKKOvJpA",
+        "state": "finalized"
+      }
+    },
+    {
+      "seq": 24,
+      "atMs": 1852,
+      "source": "alice",
+      "type": "result",
+      "data": {
+        "step": 1,
+        "type": "fund",
+        "operationId": "fs9rvJRt43TMPfYpAqGdkw",
+        "state": "finalized"
+      }
+    },
+    {
+      "seq": 25,
+      "atMs": 1852,
+      "source": "alice",
+      "type": "command",
+      "data": {
+        "step": 6,
+        "type": "send",
+        "mint": "mint-b",
+        "amount": 21,
+        "token": "t1"
+      }
+    },
+    {
+      "seq": 26,
+      "atMs": 1868,
+      "source": "carol",
+      "type": "result",
+      "data": {
+        "step": 5,
+        "type": "fund",
+        "operationId": "mmirqBnKzIDEJKSHakEPXg",
+        "state": "finalized"
+      }
+    },
+    {
+      "seq": 27,
+      "atMs": 1868,
+      "source": "carol",
+      "type": "command",
+      "data": {
+        "step": 7,
+        "type": "send",
+        "mint": "mint-a",
+        "amount": 16,
+        "token": "t2"
+      }
+    },
+    {
+      "seq": 28,
+      "atMs": 1971,
+      "source": "carol",
+      "type": "result",
+      "data": {
+        "step": 7,
+        "type": "send",
+        "operationId": "3MYcTCeGPBw1Q4lerm6hAQ",
+        "token": "t2",
+        "tokenAmount": 16,
+        "tokenProofs": 1
+      }
+    },
+    {
+      "seq": 29,
+      "atMs": 1989,
+      "source": "alice",
+      "type": "result",
+      "data": {
+        "step": 6,
+        "type": "send",
+        "operationId": "BS3Ya8xKrbrKOrOYXtJBRw",
+        "token": "t1",
+        "tokenAmount": 21,
+        "tokenProofs": 3
+      }
+    },
+    {
+      "seq": 30,
+      "atMs": 1989,
+      "source": "link",
+      "type": "fault_installed",
+      "data": {
+        "step": 8,
+        "ruleId": "link-websocket-8",
+        "kind": "dropWebSockets",
+        "wallet": "alice",
+        "mint": "mint-b"
+      }
+    },
+    {
+      "seq": 31,
+      "atMs": 1994,
+      "source": "link",
+      "type": "websockets_dropped",
+      "data": {
+        "step": 8,
+        "wallet": "alice",
+        "mint": "mint-b",
+        "closed": 1
+      }
+    },
+    {
+      "seq": 32,
+      "atMs": 1994,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 9,
+        "kind": "delayResponses"
+      }
+    },
+    {
+      "seq": 33,
+      "atMs": 1994,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 10,
+        "kind": "receive"
+      }
+    },
+    {
+      "seq": 34,
+      "atMs": 1994,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 11,
+        "kind": "heal"
+      }
+    },
+    {
+      "seq": 35,
+      "atMs": 1996,
+      "source": "gateway",
+      "type": "fault_installed",
+      "data": {
+        "step": 9,
+        "ruleId": "http-rule-1",
+        "kind": "delayResponses",
+        "wallet": "bob",
+        "mint": "mint-a",
+        "delayMs": 217,
+        "count": 2
+      }
+    },
+    {
+      "seq": 36,
+      "atMs": 1996,
+      "source": "bob",
+      "type": "command",
+      "data": {
+        "step": 10,
+        "type": "prepareReceive",
+        "token": "t2",
+        "expect": "finalized"
+      }
+    },
+    {
+      "seq": 37,
+      "atMs": 2016,
+      "source": "bob",
+      "type": "command",
+      "data": {
+        "step": 10,
+        "type": "executeReceive",
+        "operationId": "zWtpD5LX1RGC64YthmrY9Q"
+      }
+    },
+    {
+      "seq": 38,
+      "atMs": 2315,
+      "source": "bob",
+      "type": "result",
+      "data": {
+        "step": 10,
+        "type": "executeReceive",
+        "state": "finalized"
+      }
+    },
+    {
+      "seq": 39,
+      "atMs": 2383,
+      "source": "harness",
+      "type": "environment_healthy",
+      "data": {
+        "step": 11
+      }
+    },
+    {
+      "seq": 40,
+      "atMs": 2383,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 12,
+        "kind": "receive"
+      }
+    },
+    {
+      "seq": 41,
+      "atMs": 2383,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 13,
+        "kind": "reclaim"
+      }
+    },
+    {
+      "seq": 42,
+      "atMs": 2383,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 14,
+        "kind": "send"
+      }
+    },
+    {
+      "seq": 43,
+      "atMs": 2383,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 15,
+        "kind": "send"
+      }
+    },
+    {
+      "seq": 44,
+      "atMs": 2383,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 16,
+        "kind": "checkpoint"
+      }
+    },
+    {
+      "seq": 45,
+      "atMs": 2383,
+      "source": "carol",
+      "type": "command",
+      "data": {
+        "step": 13,
+        "type": "reclaim",
+        "token": "t2",
+        "operationId": "3MYcTCeGPBw1Q4lerm6hAQ",
+        "expect": "rejected"
+      }
+    },
+    {
+      "seq": 46,
+      "atMs": 2383,
+      "source": "bob",
+      "type": "command",
+      "data": {
+        "step": 12,
+        "type": "prepareReceive",
+        "token": "t1",
+        "expect": "finalized"
+      }
+    },
+    {
+      "seq": 47,
+      "atMs": 2386,
+      "source": "carol",
+      "type": "rejected",
+      "data": {
+        "step": 13,
+        "type": "reclaim"
+      }
+    },
+    {
+      "seq": 48,
+      "atMs": 2386,
+      "source": "carol",
+      "type": "command",
+      "data": {
+        "step": 14,
+        "type": "send",
+        "mint": "mint-a",
+        "amount": 8,
+        "token": "t3"
+      }
+    },
+    {
+      "seq": 49,
+      "atMs": 2397,
+      "source": "carol",
+      "type": "result",
+      "data": {
+        "step": 14,
+        "type": "send",
+        "operationId": "cD03Mv0TF3nYtmD9emC4Tg",
+        "token": "t3",
+        "tokenAmount": 8,
+        "tokenProofs": 1
+      }
+    },
+    {
+      "seq": 50,
+      "atMs": 2416,
+      "source": "bob",
+      "type": "command",
+      "data": {
+        "step": 12,
+        "type": "executeReceive",
+        "operationId": "PrXCdsu3abd1gJZd8L56sA"
+      }
+    },
+    {
+      "seq": 51,
+      "atMs": 2451,
+      "source": "bob",
+      "type": "result",
+      "data": {
+        "step": 12,
+        "type": "executeReceive",
+        "state": "finalized"
+      }
+    },
+    {
+      "seq": 52,
+      "atMs": 2451,
+      "source": "bob",
+      "type": "command",
+      "data": {
+        "step": 15,
+        "type": "send",
+        "mint": "mint-a",
+        "amount": 32,
+        "token": "t4"
+      }
+    },
+    {
+      "seq": 53,
+      "atMs": 2546,
+      "source": "bob",
+      "type": "result",
+      "data": {
+        "step": 15,
+        "type": "send",
+        "operationId": "kk_P-ZK1UclFCeuiGacXRA",
+        "token": "t4",
+        "tokenAmount": 32,
+        "tokenProofs": 1
+      }
+    },
+    {
+      "seq": 54,
+      "atMs": 21808,
+      "source": "harness",
+      "type": "outcomes_awaited",
+      "data": {
+        "step": 16,
+        "expected": 6,
+        "unmet": [],
+        "msAwaitingOutcomes": 19425
+      }
+    },
+    {
+      "seq": 55,
+      "atMs": 21845,
+      "source": "checker",
+      "type": "verdict",
+      "data": {
+        "step": 16,
+        "status": "pass",
+        "findings": [],
+        "ledger": {
+          "funded": 768,
+          "held": 723,
+          "holdings": {
+            "alice": 234,
+            "bob": 258,
+            "carol": 231
+          },
+          "outstanding": 40,
+          "stranded": 0,
+          "fees": 5,
+          "unexplained": 0,
+          "mints": {
+            "mint-a": {
+              "funded": 384,
+              "held": 341,
+              "outstanding": 40,
+              "stranded": 0,
+              "fees": 3,
+              "unexplained": 0
+            },
+            "mint-b": {
+              "funded": 384,
+              "held": 382,
+              "outstanding": 0,
+              "stranded": 0,
+              "fees": 2,
+              "unexplained": 0
+            }
+          },
+          "wallets": {
+            "alice": {
+              "mint-a": {
+                "expected": 128,
+                "held": 128,
+                "stranded": 0
+              },
+              "mint-b": {
+                "expected": 106,
+                "held": 106,
+                "stranded": 0
+              }
+            },
+            "bob": {
+              "mint-a": {
+                "expected": 110,
+                "held": 110,
+                "stranded": 0
+              },
+              "mint-b": {
+                "expected": 148,
+                "held": 148,
+                "stranded": 0
+              }
+            },
+            "carol": {
+              "mint-a": {
+                "expected": 103,
+                "held": 103,
+                "stranded": 0
+              },
+              "mint-b": {
+                "expected": 128,
+                "held": 128,
+                "stranded": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "seq": 56,
+      "atMs": 21846,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 17,
+        "kind": "send"
+      }
+    },
+    {
+      "seq": 57,
+      "atMs": 21846,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 18,
+        "kind": "send"
+      }
+    },
+    {
+      "seq": 58,
+      "atMs": 21846,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 19,
+        "kind": "send"
+      }
+    },
+    {
+      "seq": 59,
+      "atMs": 21846,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 20,
+        "kind": "reclaim"
+      }
+    },
+    {
+      "seq": 60,
+      "atMs": 21846,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 21,
+        "kind": "raceReclaim"
+      }
+    },
+    {
+      "seq": 61,
+      "atMs": 21846,
+      "source": "carol",
+      "type": "command",
+      "data": {
+        "step": 17,
+        "type": "send",
+        "mint": "mint-b",
+        "amount": 11,
+        "token": "t5"
+      }
+    },
+    {
+      "seq": 62,
+      "atMs": 21846,
+      "source": "alice",
+      "type": "command",
+      "data": {
+        "step": 18,
+        "type": "send",
+        "mint": "mint-b",
+        "amount": 13,
+        "token": "t6"
+      }
+    },
+    {
+      "seq": 63,
+      "atMs": 21955,
+      "source": "alice",
+      "type": "result",
+      "data": {
+        "step": 18,
+        "type": "send",
+        "operationId": "6rnuXOq7AfukWpVX6QRMbw",
+        "token": "t6",
+        "tokenAmount": 13,
+        "tokenProofs": 3
+      }
+    },
+    {
+      "seq": 64,
+      "atMs": 21964,
+      "source": "carol",
+      "type": "result",
+      "data": {
+        "step": 17,
+        "type": "send",
+        "operationId": "W2-YzlHU9FxeivrDSZNSVA",
+        "token": "t5",
+        "tokenAmount": 11,
+        "tokenProofs": 3
+      }
+    },
+    {
+      "seq": 65,
+      "atMs": 21964,
+      "source": "carol",
+      "type": "command",
+      "data": {
+        "step": 19,
+        "type": "send",
+        "mint": "mint-a",
+        "amount": 29,
+        "token": "t7"
+      }
+    },
+    {
+      "seq": 66,
+      "atMs": 22038,
+      "source": "carol",
+      "type": "result",
+      "data": {
+        "step": 19,
+        "type": "send",
+        "operationId": "EFbHqQ6wz7BthJ1vRNRPQA",
+        "token": "t7",
+        "tokenAmount": 29,
+        "tokenProofs": 4
+      }
+    },
+    {
+      "seq": 67,
+      "atMs": 22038,
+      "source": "carol",
+      "type": "command",
+      "data": {
+        "step": 20,
+        "type": "reclaim",
+        "token": "t7",
+        "operationId": "EFbHqQ6wz7BthJ1vRNRPQA",
+        "expect": "rolled_back"
+      }
+    },
+    {
+      "seq": 68,
+      "atMs": 22109,
+      "source": "carol",
+      "type": "result",
+      "data": {
+        "step": 20,
+        "type": "reclaim",
+        "state": "rolled_back"
+      }
+    },
+    {
+      "seq": 69,
+      "atMs": 22109,
+      "source": "carol",
+      "type": "command",
+      "data": {
+        "step": 21,
+        "type": "prepareReceive",
+        "token": "t6",
+        "race": true
+      }
+    },
+    {
+      "seq": 70,
+      "atMs": 22139,
+      "source": "gateway",
+      "type": "race_hold_installed",
+      "data": {
+        "step": 21,
+        "ruleId": "http-rule-1",
+        "leadSide": "receive"
+      }
+    },
+    {
+      "seq": 71,
+      "atMs": 22139,
+      "source": "carol",
+      "type": "command",
+      "data": {
+        "step": 21,
+        "type": "executeReceive",
+        "token": "t6",
+        "race": true
+      }
+    },
+    {
+      "seq": 72,
+      "atMs": 22166,
+      "source": "gateway",
+      "type": "race_lead_committed",
+      "data": {
+        "step": 21,
+        "ruleId": "http-rule-1"
+      }
+    },
+    {
+      "seq": 73,
+      "atMs": 22166,
+      "source": "alice",
+      "type": "command",
+      "data": {
+        "step": 21,
+        "type": "reclaim",
+        "token": "t6",
+        "race": true
+      }
+    },
+    {
+      "seq": 74,
+      "atMs": 25205,
+      "source": "carol",
+      "type": "race_result",
+      "data": {
+        "step": 21,
+        "side": "receive",
+        "result": "completed"
+      }
+    },
+    {
+      "seq": 75,
+      "atMs": 25205,
+      "source": "alice",
+      "type": "race_result",
+      "data": {
+        "step": 21,
+        "side": "reclaim",
+        "result": "rejected"
+      }
+    },
+    {
+      "seq": 76,
+      "atMs": 25205,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 22,
+        "kind": "send"
+      }
+    },
+    {
+      "seq": 77,
+      "atMs": 25205,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 23,
+        "kind": "crash"
+      }
+    },
+    {
+      "seq": 78,
+      "atMs": 25205,
+      "source": "bob",
+      "type": "command",
+      "data": {
+        "step": 22,
+        "type": "send",
+        "mint": "mint-b",
+        "amount": 2,
+        "token": "t8"
+      }
+    },
+    {
+      "seq": 79,
+      "atMs": 25278,
+      "source": "bob",
+      "type": "result",
+      "data": {
+        "step": 22,
+        "type": "send",
+        "operationId": "XSI2G4-Gp3_44oGpOkwphw",
+        "token": "t8",
+        "tokenAmount": 2,
+        "tokenProofs": 1
+      }
+    },
+    {
+      "seq": 80,
+      "atMs": 25302,
+      "source": "bob",
+      "type": "crashed",
+      "data": {
+        "step": 23,
+        "pid": 1565308,
+        "signal": "SIGKILL"
+      }
+    },
+    {
+      "seq": 81,
+      "atMs": 25302,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 24,
+        "kind": "receive"
+      }
+    },
+    {
+      "seq": 82,
+      "atMs": 25302,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 25,
+        "kind": "restart"
+      }
+    },
+    {
+      "seq": 83,
+      "atMs": 25302,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 26,
+        "kind": "restart"
+      }
+    },
+    {
+      "seq": 84,
+      "atMs": 25302,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 27,
+        "kind": "heal"
+      }
+    },
+    {
+      "seq": 85,
+      "atMs": 25302,
+      "source": "alice",
+      "type": "command",
+      "data": {
+        "step": 24,
+        "type": "prepareReceive",
+        "token": "t8",
+        "expect": "finalized"
+      }
+    },
+    {
+      "seq": 86,
+      "atMs": 25302,
+      "source": "bob",
+      "type": "restart",
+      "data": {
+        "step": 25,
+        "previousProcess": "not_running",
+        "sameStore": true,
+        "sameWalletSeed": true
+      }
+    },
+    {
+      "seq": 87,
+      "atMs": 25322,
+      "source": "alice",
+      "type": "command",
+      "data": {
+        "step": 24,
+        "type": "executeReceive",
+        "operationId": "ZqjOjWSNcdG1lMblvm9WuQ"
+      }
+    },
+    {
+      "seq": 88,
+      "atMs": 25368,
+      "source": "alice",
+      "type": "result",
+      "data": {
+        "step": 24,
+        "type": "executeReceive",
+        "state": "finalized"
+      }
+    },
+    {
+      "seq": 89,
+      "atMs": 25385,
+      "source": "alice",
+      "type": "restart",
+      "data": {
+        "step": 26,
+        "previousProcess": "disposed",
+        "sameStore": true,
+        "sameWalletSeed": true
+      }
+    },
+    {
+      "seq": 90,
+      "atMs": 25468,
+      "source": "bob",
+      "type": "process_started",
+      "data": {
+        "pid": 1565701
+      }
+    },
+    {
+      "seq": 91,
+      "atMs": 25508,
+      "source": "alice",
+      "type": "process_started",
+      "data": {
+        "pid": 1565711
+      }
+    },
+    {
+      "seq": 92,
+      "atMs": 55655,
+      "source": "harness",
+      "type": "environment_healthy",
+      "data": {
+        "step": 27
+      }
+    },
+    {
+      "seq": 93,
+      "atMs": 55655,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 28,
+        "kind": "checkpoint"
+      }
+    },
+    {
+      "seq": 94,
+      "atMs": 55666,
+      "source": "harness",
+      "type": "outcomes_awaited",
+      "data": {
+        "step": 28,
+        "expected": 12,
+        "unmet": [],
+        "msAwaitingOutcomes": 11
+      }
+    },
+    {
+      "seq": 95,
+      "atMs": 55699,
+      "source": "checker",
+      "type": "verdict",
+      "data": {
+        "step": 28,
+        "status": "pass",
+        "findings": [],
+        "ledger": {
+          "funded": 768,
+          "held": 705,
+          "holdings": {
+            "alice": 221,
+            "bob": 255,
+            "carol": 229
+          },
+          "outstanding": 51,
+          "stranded": 0,
+          "fees": 12,
+          "unexplained": 0,
+          "mints": {
+            "mint-a": {
+              "funded": 384,
+              "held": 339,
+              "outstanding": 40,
+              "stranded": 0,
+              "fees": 5,
+              "unexplained": 0
+            },
+            "mint-b": {
+              "funded": 384,
+              "held": 366,
+              "outstanding": 11,
+              "stranded": 0,
+              "fees": 7,
+              "unexplained": 0
+            }
+          },
+          "wallets": {
+            "alice": {
+              "mint-a": {
+                "expected": 128,
+                "held": 128,
+                "stranded": 0
+              },
+              "mint-b": {
+                "expected": 93,
+                "held": 93,
+                "stranded": 0
+              }
+            },
+            "bob": {
+              "mint-a": {
+                "expected": 110,
+                "held": 110,
+                "stranded": 0
+              },
+              "mint-b": {
+                "expected": 145,
+                "held": 145,
+                "stranded": 0
+              }
+            },
+            "carol": {
+              "mint-a": {
+                "expected": 101,
+                "held": 101,
+                "stranded": 0
+              },
+              "mint-b": {
+                "expected": 128,
+                "held": 128,
+                "stranded": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "seq": 96,
+      "atMs": 55699,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 29,
+        "kind": "send"
+      }
+    },
+    {
+      "seq": 97,
+      "atMs": 55699,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 30,
+        "kind": "send"
+      }
+    },
+    {
+      "seq": 98,
+      "atMs": 55699,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 31,
+        "kind": "restart"
+      }
+    },
+    {
+      "seq": 99,
+      "atMs": 55699,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 32,
+        "kind": "send"
+      }
+    },
+    {
+      "seq": 100,
+      "atMs": 55699,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 33,
+        "kind": "crash"
+      }
+    },
+    {
+      "seq": 101,
+      "atMs": 55699,
+      "source": "alice",
+      "type": "command",
+      "data": {
+        "step": 29,
+        "type": "send",
+        "mint": "mint-b",
+        "amount": 32,
+        "token": "t9"
+      }
+    },
+    {
+      "seq": 102,
+      "atMs": 55699,
+      "source": "carol",
+      "type": "command",
+      "data": {
+        "step": 30,
+        "type": "send",
+        "mint": "mint-a",
+        "amount": 11,
+        "token": "t10"
+      }
+    },
+    {
+      "seq": 103,
+      "atMs": 55699,
+      "source": "bob",
+      "type": "command",
+      "data": {
+        "step": 32,
+        "type": "send",
+        "mint": "mint-b",
+        "amount": 9,
+        "token": "t11"
+      }
+    },
+    {
+      "seq": 104,
+      "atMs": 55710,
+      "source": "carol",
+      "type": "result",
+      "data": {
+        "step": 30,
+        "type": "send",
+        "operationId": "Hk5-m8n9-kJnaXFhUAjZyw",
+        "token": "t10",
+        "tokenAmount": 11,
+        "tokenProofs": 3
+      }
+    },
+    {
+      "seq": 105,
+      "atMs": 55827,
+      "source": "bob",
+      "type": "result",
+      "data": {
+        "step": 32,
+        "type": "send",
+        "operationId": "m2356xdKFEVm9tra9yhbsw",
+        "token": "t11",
+        "tokenAmount": 9,
+        "tokenProofs": 2
+      }
+    },
+    {
+      "seq": 106,
+      "atMs": 55877,
+      "source": "alice",
+      "type": "result",
+      "data": {
+        "step": 29,
+        "type": "send",
+        "operationId": "fQrXYglJpakx_bNiG7JM_Q",
+        "token": "t9",
+        "tokenAmount": 32,
+        "tokenProofs": 1
+      }
+    },
+    {
+      "seq": 107,
+      "atMs": 55896,
+      "source": "alice",
+      "type": "restart",
+      "data": {
+        "step": 31,
+        "previousProcess": "disposed",
+        "sameStore": true,
+        "sameWalletSeed": true
+      }
+    },
+    {
+      "seq": 108,
+      "atMs": 56049,
+      "source": "alice",
+      "type": "process_started",
+      "data": {
+        "pid": 1566087
+      }
+    },
+    {
+      "seq": 109,
+      "atMs": 56057,
+      "source": "alice",
+      "type": "crashed",
+      "data": {
+        "step": 33,
+        "pid": 1566087,
+        "signal": "SIGKILL"
+      }
+    },
+    {
+      "seq": 110,
+      "atMs": 56057,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 34,
+        "kind": "receive"
+      }
+    },
+    {
+      "seq": 111,
+      "atMs": 56057,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 35,
+        "kind": "restart"
+      }
+    },
+    {
+      "seq": 112,
+      "atMs": 56057,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 36,
+        "kind": "crash"
+      }
+    },
+    {
+      "seq": 113,
+      "atMs": 56057,
+      "source": "carol",
+      "type": "command",
+      "data": {
+        "step": 34,
+        "type": "prepareReceive",
+        "token": "t9",
+        "expect": "finalized"
+      }
+    },
+    {
+      "seq": 114,
+      "atMs": 56057,
+      "source": "alice",
+      "type": "restart",
+      "data": {
+        "step": 35,
+        "previousProcess": "not_running",
+        "sameStore": true,
+        "sameWalletSeed": true
+      }
+    },
+    {
+      "seq": 115,
+      "atMs": 56081,
+      "source": "carol",
+      "type": "command",
+      "data": {
+        "step": 34,
+        "type": "executeReceive",
+        "operationId": "IkbRMwj1T8JJB8R5EyEuMw"
+      }
+    },
+    {
+      "seq": 116,
+      "atMs": 56147,
+      "source": "carol",
+      "type": "result",
+      "data": {
+        "step": 34,
+        "type": "executeReceive",
+        "state": "finalized"
+      }
+    },
+    {
+      "seq": 117,
+      "atMs": 56233,
+      "source": "alice",
+      "type": "process_started",
+      "data": {
+        "pid": 1566100
+      }
+    },
+    {
+      "seq": 118,
+      "atMs": 56253,
+      "source": "carol",
+      "type": "crashed",
+      "data": {
+        "step": 36,
+        "pid": 1565309,
+        "signal": "SIGKILL"
+      }
+    },
+    {
+      "seq": 119,
+      "atMs": 56253,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 37,
+        "kind": "receive"
+      }
+    },
+    {
+      "seq": 120,
+      "atMs": 56253,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 38,
+        "kind": "restart"
+      }
+    },
+    {
+      "seq": 121,
+      "atMs": 56253,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 39,
+        "kind": "disconnect"
+      }
+    },
+    {
+      "seq": 122,
+      "atMs": 56253,
+      "source": "bob",
+      "type": "command",
+      "data": {
+        "step": 37,
+        "type": "prepareReceive",
+        "token": "t10",
+        "expect": "finalized"
+      }
+    },
+    {
+      "seq": 123,
+      "atMs": 56253,
+      "source": "carol",
+      "type": "restart",
+      "data": {
+        "step": 38,
+        "previousProcess": "not_running",
+        "sameStore": true,
+        "sameWalletSeed": true
+      }
+    },
+    {
+      "seq": 124,
+      "atMs": 56285,
+      "source": "bob",
+      "type": "command",
+      "data": {
+        "step": 37,
+        "type": "executeReceive",
+        "operationId": "_MocVnTXiCsJ4nFQVgxyTA"
+      }
+    },
+    {
+      "seq": 125,
+      "atMs": 56344,
+      "source": "bob",
+      "type": "result",
+      "data": {
+        "step": 37,
+        "type": "executeReceive",
+        "state": "finalized"
+      }
+    },
+    {
+      "seq": 126,
+      "atMs": 56447,
+      "source": "carol",
+      "type": "process_started",
+      "data": {
+        "pid": 1566113
+      }
+    },
+    {
+      "seq": 127,
+      "atMs": 56447,
+      "source": "link",
+      "type": "fault_installed",
+      "data": {
+        "step": 39,
+        "ruleId": "link-outage-39",
+        "kind": "disconnect",
+        "wallet": "carol",
+        "mint": "mint-b"
+      }
+    },
+    {
+      "seq": 128,
+      "atMs": 56450,
+      "source": "link",
+      "type": "outage_started",
+      "data": {
+        "step": 39,
+        "wallet": "carol",
+        "mint": "mint-b",
+        "closedConnections": 3,
+        "closedWebSockets": 1
+      }
+    },
+    {
+      "seq": 129,
+      "atMs": 56451,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 40,
+        "kind": "receive"
+      }
+    },
+    {
+      "seq": 130,
+      "atMs": 56451,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 41,
+        "kind": "reconnect"
+      }
+    },
+    {
+      "seq": 131,
+      "atMs": 56451,
+      "source": "carol",
+      "type": "command",
+      "data": {
+        "step": 40,
+        "type": "prepareReceive",
+        "token": "t11",
+        "expect": "finalized",
+        "exposure": "outage"
+      }
+    },
+    {
+      "seq": 132,
+      "atMs": 56506,
+      "source": "carol",
+      "type": "command",
+      "data": {
+        "step": 40,
+        "type": "executeReceive",
+        "operationId": "cskVvNwzi_-dZtaZ2Dva-w"
+      }
+    },
+    {
+      "seq": 133,
+      "atMs": 56520,
+      "source": "carol",
+      "type": "interrupted",
+      "data": {
+        "step": 40,
+        "type": "executeReceive",
+        "error": "NetworkError"
+      }
+    },
+    {
+      "seq": 134,
+      "atMs": 56525,
+      "source": "harness",
+      "type": "exchange_corroborated",
+      "data": {
+        "step": 40,
+        "wallet": "carol",
+        "mint": "mint-b",
+        "command": "receive",
+        "fault": "outage",
+        "result": "interrupted",
+        "swapAttempts": 0,
+        "restoreRequests": 0,
+        "mintAcceptedRequest": false,
+        "persistedOperationState": "executing"
+      }
+    },
+    {
+      "seq": 135,
+      "atMs": 56528,
+      "source": "link",
+      "type": "outage_ended",
+      "data": {
+        "step": 41,
+        "wallet": "carol",
+        "mint": "mint-b",
+        "closed": 4,
+        "refused": 2
+      }
+    },
+    {
+      "seq": 136,
+      "atMs": 56528,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 42,
+        "kind": "recover"
+      }
+    },
+    {
+      "seq": 137,
+      "atMs": 56528,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 43,
+        "kind": "restartMint"
+      }
+    },
+    {
+      "seq": 138,
+      "atMs": 56533,
+      "source": "carol",
+      "type": "command",
+      "data": {
+        "step": 42,
+        "type": "recover"
+      }
+    },
+    {
+      "seq": 139,
+      "atMs": 56593,
+      "source": "carol",
+      "type": "recovery_observed",
+      "data": {
+        "step": 42,
+        "wallet": "carol",
+        "observed": 8,
+        "transitions": [
+          {
+            "operationId": "cskVvNwzi_-dZtaZ2Dva-w",
+            "kind": "receive",
+            "before": "executing",
+            "after": "finalized"
+          }
+        ]
+      }
+    },
+    {
+      "seq": 140,
+      "atMs": 56847,
+      "source": "mint",
+      "type": "mint_killed",
+      "data": {
+        "step": 43,
+        "mint": "mint-b"
+      }
+    },
+    {
+      "seq": 141,
+      "atMs": 57171,
+      "source": "mint",
+      "type": "mint_restarted",
+      "data": {
+        "step": 43,
+        "mint": "mint-b",
+        "startedAtBefore": "2026-11-12T11:26:42.020108277Z",
+        "startedAtAfter": "2026-11-12T11:27:38.511585079Z",
+        "downMs": 485,
+        "keysetsRetained": true,
+        "proofStatesRetained": true,
+        "proofsChecked": 45,
+        "spentProofsChecked": 16
+      }
+    },
+    {
+      "seq": 142,
+      "atMs": 57171,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 44,
+        "kind": "heal"
+      }
+    },
+    {
+      "seq": 143,
+      "atMs": 87290,
+      "source": "harness",
+      "type": "environment_healthy",
+      "data": {
+        "step": 44
+      }
+    },
+    {
+      "seq": 144,
+      "atMs": 87290,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 45,
+        "kind": "checkpoint"
+      }
+    },
+    {
+      "seq": 145,
+      "atMs": 87304,
+      "source": "harness",
+      "type": "outcomes_awaited",
+      "data": {
+        "step": 45,
+        "expected": 18,
+        "unmet": [],
+        "msAwaitingOutcomes": 14
+      }
+    },
+    {
+      "seq": 146,
+      "atMs": 87336,
+      "source": "checker",
+      "type": "verdict",
+      "data": {
+        "step": 45,
+        "status": "pass",
+        "findings": [],
+        "ledger": {
+          "funded": 768,
+          "held": 700,
+          "holdings": {
+            "alice": 188,
+            "bob": 255,
+            "carol": 257
+          },
+          "outstanding": 51,
+          "stranded": 0,
+          "fees": 17,
+          "unexplained": 0,
+          "mints": {
+            "mint-a": {
+              "funded": 384,
+              "held": 338,
+              "outstanding": 40,
+              "stranded": 0,
+              "fees": 6,
+              "unexplained": 0
+            },
+            "mint-b": {
+              "funded": 384,
+              "held": 362,
+              "outstanding": 11,
+              "stranded": 0,
+              "fees": 11,
+              "unexplained": 0
+            }
+          },
+          "wallets": {
+            "alice": {
+              "mint-a": {
+                "expected": 128,
+                "held": 128,
+                "stranded": 0
+              },
+              "mint-b": {
+                "expected": 60,
+                "held": 60,
+                "stranded": 0
+              }
+            },
+            "bob": {
+              "mint-a": {
+                "expected": 120,
+                "held": 120,
+                "stranded": 0
+              },
+              "mint-b": {
+                "expected": 135,
+                "held": 135,
+                "stranded": 0
+              }
+            },
+            "carol": {
+              "mint-a": {
+                "expected": 90,
+                "held": 90,
+                "stranded": 0
+              },
+              "mint-b": {
+                "expected": 167,
+                "held": 167,
+                "stranded": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "seq": 147,
+      "atMs": 87338,
+      "source": "link",
+      "type": "traffic",
+      "data": {
+        "wallet": "alice",
+        "unrouted": 0,
+        "mints": {
+          "mint-a": {
+            "requests": 9,
+            "requestsByPath": {
+              "GET /v1/info": 1,
+              "GET /v1/keysets": 1,
+              "GET /v1/keys/0187b2e8760759f0d0de2e0b7cae676f106e318e6795206c8b266865e5b9fe6074": 1,
+              "POST /v1/mint/quote/bolt11": 1,
+              "POST /v1/mint/quote/bolt11/:quote_id": 1,
+              "GET /v1/mint/quote/bolt11/:quote_id": 3,
+              "POST /v1/mint/bolt11": 1
+            },
+            "failedRequests": 0,
+            "refusedConnections": 0,
+            "connectionsClosedByFault": 0,
+            "webSocketUpgrades": 1,
+            "webSocketsOpen": 0,
+            "webSocketsClosedByFault": 0,
+            "webSocketBytesToMint": 280,
+            "webSocketBytesFromMint": 1391,
+            "probeRequests": 3,
+            "probeWebSockets": 3,
+            "offline": false
+          },
+          "mint-b": {
+            "requests": 22,
+            "requestsByPath": {
+              "GET /v1/info": 1,
+              "GET /v1/keysets": 1,
+              "GET /v1/keys/01932e27691087a95d2a3e3d9a76dfad4fe438b3c450090fc9f77668e874324de4": 1,
+              "POST /v1/mint/quote/bolt11": 1,
+              "POST /v1/mint/quote/bolt11/:quote_id": 1,
+              "GET /v1/mint/quote/bolt11/:quote_id": 3,
+              "POST /v1/mint/bolt11": 1,
+              "POST /v1/swap": 5,
+              "POST /v1/checkstate": 7,
+              "POST /v1/restore": 1
+            },
+            "failedRequests": 0,
+            "refusedConnections": 0,
+            "connectionsClosedByFault": 3,
+            "webSocketUpgrades": 4,
+            "webSocketsOpen": 0,
+            "webSocketsClosedByFault": 2,
+            "webSocketBytesToMint": 1408,
+            "webSocketBytesFromMint": 2940,
+            "probeRequests": 3,
+            "probeWebSockets": 3,
+            "offline": false
+          }
+        }
+      }
+    },
+    {
+      "seq": 148,
+      "atMs": 87338,
+      "source": "link",
+      "type": "traffic",
+      "data": {
+        "wallet": "bob",
+        "unrouted": 0,
+        "mints": {
+          "mint-a": {
+            "requests": 18,
+            "requestsByPath": {
+              "GET /v1/info": 1,
+              "GET /v1/keysets": 1,
+              "GET /v1/keys/0187b2e8760759f0d0de2e0b7cae676f106e318e6795206c8b266865e5b9fe6074": 1,
+              "POST /v1/mint/quote/bolt11": 1,
+              "POST /v1/mint/quote/bolt11/:quote_id": 1,
+              "GET /v1/mint/quote/bolt11/:quote_id": 3,
+              "POST /v1/mint/bolt11": 1,
+              "POST /v1/swap": 3,
+              "POST /v1/checkstate": 6
+            },
+            "failedRequests": 0,
+            "refusedConnections": 0,
+            "connectionsClosedByFault": 0,
+            "webSocketUpgrades": 2,
+            "webSocketsOpen": 1,
+            "webSocketsClosedByFault": 0,
+            "webSocketBytesToMint": 670,
+            "webSocketBytesFromMint": 1840,
+            "probeRequests": 3,
+            "probeWebSockets": 3,
+            "offline": false
+          },
+          "mint-b": {
+            "requests": 15,
+            "requestsByPath": {
+              "GET /v1/info": 1,
+              "GET /v1/keysets": 1,
+              "GET /v1/keys/01932e27691087a95d2a3e3d9a76dfad4fe438b3c450090fc9f77668e874324de4": 1,
+              "POST /v1/mint/quote/bolt11": 1,
+              "POST /v1/mint/quote/bolt11/:quote_id": 1,
+              "GET /v1/mint/quote/bolt11/:quote_id": 3,
+              "POST /v1/mint/bolt11": 1,
+              "POST /v1/swap": 3,
+              "POST /v1/checkstate": 3
+            },
+            "failedRequests": 0,
+            "refusedConnections": 0,
+            "connectionsClosedByFault": 2,
+            "webSocketUpgrades": 2,
+            "webSocketsOpen": 0,
+            "webSocketsClosedByFault": 1,
+            "webSocketBytesToMint": 836,
+            "webSocketBytesFromMint": 2736,
+            "probeRequests": 3,
+            "probeWebSockets": 3,
+            "offline": false
+          }
+        }
+      }
+    },
+    {
+      "seq": 149,
+      "atMs": 87338,
+      "source": "link",
+      "type": "traffic",
+      "data": {
+        "wallet": "carol",
+        "unrouted": 0,
+        "mints": {
+          "mint-a": {
+            "requests": 20,
+            "requestsByPath": {
+              "GET /v1/info": 1,
+              "GET /v1/keysets": 1,
+              "GET /v1/keys/0187b2e8760759f0d0de2e0b7cae676f106e318e6795206c8b266865e5b9fe6074": 1,
+              "POST /v1/mint/quote/bolt11": 1,
+              "POST /v1/mint/quote/bolt11/:quote_id": 1,
+              "GET /v1/mint/quote/bolt11/:quote_id": 3,
+              "POST /v1/mint/bolt11": 1,
+              "POST /v1/swap": 3,
+              "POST /v1/checkstate": 8
+            },
+            "failedRequests": 0,
+            "refusedConnections": 0,
+            "connectionsClosedByFault": 0,
+            "webSocketUpgrades": 3,
+            "webSocketsOpen": 1,
+            "webSocketsClosedByFault": 0,
+            "webSocketBytesToMint": 2447,
+            "webSocketBytesFromMint": 5429,
+            "probeRequests": 3,
+            "probeWebSockets": 3,
+            "offline": false
+          },
+          "mint-b": {
+            "requests": 25,
+            "requestsByPath": {
+              "GET /v1/info": 1,
+              "GET /v1/keysets": 1,
+              "GET /v1/keys/01932e27691087a95d2a3e3d9a76dfad4fe438b3c450090fc9f77668e874324de4": 1,
+              "POST /v1/mint/quote/bolt11": 1,
+              "POST /v1/mint/quote/bolt11/:quote_id": 1,
+              "GET /v1/mint/quote/bolt11/:quote_id": 3,
+              "POST /v1/mint/bolt11": 1,
+              "POST /v1/swap": 4,
+              "POST /v1/checkstate": 12
+            },
+            "failedRequests": 0,
+            "refusedConnections": 2,
+            "connectionsClosedByFault": 4,
+            "webSocketUpgrades": 3,
+            "webSocketsOpen": 0,
+            "webSocketsClosedByFault": 2,
+            "webSocketBytesToMint": 1283,
+            "webSocketBytesFromMint": 2205,
+            "probeRequests": 3,
+            "probeWebSockets": 3,
+            "offline": false
+          }
+        }
+      }
+    },
+    {
+      "seq": 150,
+      "atMs": 87339,
+      "source": "gateway",
+      "type": "traffic",
+      "data": {
+        "mint": "mint-a",
+        "inbound": 56,
+        "forwarded": 56,
+        "responded": 56,
+        "dropped": 0,
+        "delayed": 1,
+        "requests": {
+          "GET /v1/info": 12,
+          "GET /v1/keysets": 3,
+          "GET /v1/keys/0187b2e8760759f0d0de2e0b7cae676f106e318e6795206c8b266865e5b9fe6074": 3,
+          "POST /v1/mint/quote/bolt11": 3,
+          "POST /v1/mint/quote/bolt11/:quote_id": 3,
+          "GET /v1/mint/quote/bolt11/:quote_id": 9,
+          "POST /v1/mint/bolt11": 3,
+          "POST /v1/swap": 6,
+          "POST /v1/checkstate": 14
+        }
+      }
+    },
+    {
+      "seq": 151,
+      "atMs": 87340,
+      "source": "gateway",
+      "type": "traffic",
+      "data": {
+        "mint": "mint-b",
+        "inbound": 71,
+        "forwarded": 71,
+        "responded": 71,
+        "dropped": 0,
+        "delayed": 1,
+        "requests": {
+          "GET /v1/info": 12,
+          "GET /v1/keysets": 3,
+          "GET /v1/keys/01932e27691087a95d2a3e3d9a76dfad4fe438b3c450090fc9f77668e874324de4": 3,
+          "POST /v1/mint/quote/bolt11": 3,
+          "POST /v1/mint/quote/bolt11/:quote_id": 3,
+          "GET /v1/mint/quote/bolt11/:quote_id": 9,
+          "POST /v1/mint/bolt11": 3,
+          "POST /v1/swap": 12,
+          "POST /v1/checkstate": 22,
+          "POST /v1/restore": 1
+        }
+      }
+    }
+  ],
+  "result": {
+    "outcome": "pass",
+    "expectationMet": true,
+    "checkpoints": [
+      {
+        "step": 16,
+        "status": "pass",
+        "findings": [],
+        "ledger": {
+          "funded": 768,
+          "held": 723,
+          "holdings": {
+            "alice": 234,
+            "bob": 258,
+            "carol": 231
+          },
+          "outstanding": 40,
+          "stranded": 0,
+          "fees": 5,
+          "unexplained": 0,
+          "mints": {
+            "mint-a": {
+              "funded": 384,
+              "held": 341,
+              "outstanding": 40,
+              "stranded": 0,
+              "fees": 3,
+              "unexplained": 0
+            },
+            "mint-b": {
+              "funded": 384,
+              "held": 382,
+              "outstanding": 0,
+              "stranded": 0,
+              "fees": 2,
+              "unexplained": 0
+            }
+          }
+        },
+        "msAwaitingOutcomes": 19425,
+        "expectedOutcomesMet": true
+      },
+      {
+        "step": 28,
+        "status": "pass",
+        "findings": [],
+        "ledger": {
+          "funded": 768,
+          "held": 705,
+          "holdings": {
+            "alice": 221,
+            "bob": 255,
+            "carol": 229
+          },
+          "outstanding": 51,
+          "stranded": 0,
+          "fees": 12,
+          "unexplained": 0,
+          "mints": {
+            "mint-a": {
+              "funded": 384,
+              "held": 339,
+              "outstanding": 40,
+              "stranded": 0,
+              "fees": 5,
+              "unexplained": 0
+            },
+            "mint-b": {
+              "funded": 384,
+              "held": 366,
+              "outstanding": 11,
+              "stranded": 0,
+              "fees": 7,
+              "unexplained": 0
+            }
+          }
+        },
+        "msAwaitingOutcomes": 11,
+        "expectedOutcomesMet": true
+      },
+      {
+        "step": 45,
+        "status": "pass",
+        "findings": [],
+        "ledger": {
+          "funded": 768,
+          "held": 700,
+          "holdings": {
+            "alice": 188,
+            "bob": 255,
+            "carol": 257
+          },
+          "outstanding": 51,
+          "stranded": 0,
+          "fees": 17,
+          "unexplained": 0,
+          "mints": {
+            "mint-a": {
+              "funded": 384,
+              "held": 338,
+              "outstanding": 40,
+              "stranded": 0,
+              "fees": 6,
+              "unexplained": 0
+            },
+            "mint-b": {
+              "funded": 384,
+              "held": 362,
+              "outstanding": 11,
+              "stranded": 0,
+              "fees": 11,
+              "unexplained": 0
+            }
+          }
+        },
+        "msAwaitingOutcomes": 14,
+        "expectedOutcomesMet": true
+      }
+    ],
+    "races": [
+      {
+        "step": 21,
+        "token": "t6",
+        "mint": "mint-b",
+        "recipient": "carol",
+        "sender": "alice",
+        "lead": "recipient",
+        "receive": "completed",
+        "reclaim": "rejected",
+        "overlapped": true,
+        "winner": "recipient"
+      }
+    ],
+    "commands": {
+      "fund:completed": 6,
+      "send:completed": 11,
+      "receive:completed": 5,
+      "reclaim:rejected": 1,
+      "reclaim:completed": 1,
+      "raceReclaim:completed": 1,
+      "crash:completed": 3,
+      "restart:completed": 5,
+      "receive:interrupted": 1,
+      "recover:completed": 1
+    },
+    "faultsFired": [
+      {
+        "ruleId": "link-websocket-8",
+        "mint": "mint-b",
+        "phase": "connection",
+        "action": "drop_websockets",
+        "applied": 1,
+        "kind": "dropWebSockets",
+        "wallet": "alice",
+        "step": 8
+      },
+      {
+        "ruleId": "http-rule-1",
+        "mint": "mint-a",
+        "phase": "after_downstream_response",
+        "action": "delay",
+        "applied": 1,
+        "kind": "delayResponses",
+        "wallet": "bob",
+        "step": 9
+      },
+      {
+        "ruleId": "link-outage-39",
+        "mint": "mint-b",
+        "phase": "connection",
+        "action": "disconnect",
+        "applied": 6,
+        "kind": "disconnect",
+        "wallet": "carol",
+        "step": 39
+      }
+    ],
+    "crashes": [
+      {
+        "wallet": "bob",
+        "signal": "SIGKILL",
+        "step": 23,
+        "trigger": "step"
+      },
+      {
+        "wallet": "alice",
+        "signal": "SIGKILL",
+        "step": 33,
+        "trigger": "step"
+      },
+      {
+        "wallet": "carol",
+        "signal": "SIGKILL",
+        "step": 36,
+        "trigger": "step"
+      }
+    ],
+    "exchanges": [
+      {
+        "step": 40,
+        "wallet": "carol",
+        "mint": "mint-b",
+        "command": "receive",
+        "fault": "outage",
+        "result": "interrupted",
+        "swapAttempts": 0,
+        "restoreRequests": 0,
+        "mintAcceptedRequest": false,
+        "persistedOperationState": "executing"
+      }
+    ],
+    "recoveries": [
+      {
+        "step": 42,
+        "wallet": "carol",
+        "observed": 8,
+        "transitions": [
+          {
+            "operationId": "cskVvNwzi_-dZtaZ2Dva-w",
+            "kind": "receive",
+            "before": "executing",
+            "after": "finalized"
+          }
+        ]
+      }
+    ],
+    "mintRestarts": [
+      {
+        "step": 43,
+        "mint": "mint-b",
+        "startedAtBefore": "2026-11-12T11:26:42.020108277Z",
+        "startedAtAfter": "2026-11-12T11:27:38.511585079Z",
+        "downMs": 485,
+        "keysetsRetained": true,
+        "proofStatesRetained": true,
+        "proofsChecked": 45,
+        "spentProofsChecked": 16
+      }
+    ],
+    "transport": [
+      {
+        "wallet": "alice",
+        "mint": "mint-a",
+        "requests": 9,
+        "failedRequests": 0,
+        "refusedConnections": 0,
+        "connectionsClosedByFault": 0,
+        "webSocketUpgrades": 1,
+        "webSocketsClosedByFault": 0,
+        "unrouted": 0
+      },
+      {
+        "wallet": "alice",
+        "mint": "mint-b",
+        "requests": 22,
+        "failedRequests": 0,
+        "refusedConnections": 0,
+        "connectionsClosedByFault": 3,
+        "webSocketUpgrades": 4,
+        "webSocketsClosedByFault": 2,
+        "unrouted": 0
+      },
+      {
+        "wallet": "bob",
+        "mint": "mint-a",
+        "requests": 18,
+        "failedRequests": 0,
+        "refusedConnections": 0,
+        "connectionsClosedByFault": 0,
+        "webSocketUpgrades": 2,
+        "webSocketsClosedByFault": 0,
+        "unrouted": 0
+      },
+      {
+        "wallet": "bob",
+        "mint": "mint-b",
+        "requests": 15,
+        "failedRequests": 0,
+        "refusedConnections": 0,
+        "connectionsClosedByFault": 2,
+        "webSocketUpgrades": 2,
+        "webSocketsClosedByFault": 1,
+        "unrouted": 0
+      },
+      {
+        "wallet": "carol",
+        "mint": "mint-a",
+        "requests": 20,
+        "failedRequests": 0,
+        "refusedConnections": 0,
+        "connectionsClosedByFault": 0,
+        "webSocketUpgrades": 3,
+        "webSocketsClosedByFault": 0,
+        "unrouted": 0
+      },
+      {
+        "wallet": "carol",
+        "mint": "mint-b",
+        "requests": 25,
+        "failedRequests": 0,
+        "refusedConnections": 2,
+        "connectionsClosedByFault": 4,
+        "webSocketUpgrades": 3,
+        "webSocketsClosedByFault": 2,
+        "unrouted": 0
+      }
+    ]
+  }
+}
