@@ -89,6 +89,35 @@ function buggyWorld(
 }
 
 describe('failure minimization', () => {
+  it('rejects an unexpectedly passing negative control before running candidates', async () => {
+    const trace = readTrace(
+      readFileSync(
+        new URL(
+          '../../fault-simulation/fixtures/v1-negative-control-no-restart.trace.json',
+          import.meta.url,
+        ),
+        'utf8',
+      ),
+    );
+    trace.plan.expect = 'detected-failure';
+    trace.result = { ...trace.result, outcome: 'pass', expectationMet: false };
+    const original = structuredClone(trace);
+    let runs = 0;
+
+    await expect(
+      minimizeFailure(
+        { plan: trace.plan, signature: failureSignature(trace), runId: trace.runId },
+        async () => {
+          runs++;
+          return { signature: passed };
+        },
+        { maxRuns: 40 },
+      ),
+    ).rejects.toThrow('Cannot minimize a passing run');
+    expect(runs).toBe(0);
+    expect(trace).toEqual(original);
+  });
+
   it('cannot minimize a failed startup recovery into the no-restart negative control', async () => {
     const stopped = readTrace(
       readFileSync(

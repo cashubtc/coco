@@ -115,6 +115,13 @@ export async function minimizeFailure(
   run: CandidateRunner,
   options: MinimizationOptions,
 ): Promise<MinimizationResult> {
+  // An unexpected pass is a failed negative control, but equal passing signatures do not
+  // preserve the defect that the control was meant to expose. Do not search by that identity.
+  if (original.signature.outcome === 'pass') {
+    throw new Error(
+      `Cannot minimize a passing run (${original.runId}), even when an expected failure was missed`,
+    );
+  }
   const source = structuredClone(original.plan);
   const { generator, ...withoutGenerator } = source;
   const derivedPlan = (kept: number[]): ScenarioPlan => ({
