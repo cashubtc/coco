@@ -144,7 +144,9 @@ Replays and minimization runs are new runs in their own directories.
 - **Failure identity** is the outcome, the failing findings by code, mint and Wallet, the kind of a
   contradicted command and the error class of an unresolved run. Amounts, operation IDs and step
   indices are excluded.
-- **Minimization** (`minimize.ts`) is best effort and bounded by a run budget. It confirms the
+- **Minimization** (`minimize.ts`) is best effort and bounded by a run budget. Passing original
+  outcomes are rejected, including negative controls that unexpectedly passed: an empty passing
+  plan would not preserve the defect the control should detect. For a non-passing outcome, it confirms the
   failure reproduces, then removes groups of steps, never the final checkpoint. A candidate is run
   only if the workload model accepts it, every fault-triggered crash still has its fault installed
   and every fault is still followed by healing. It is kept only if its run fails with the same
