@@ -2657,6 +2657,99 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         );
       }, 30000);
 
+      // The mint's fake Lightning backend reads the payment outcome from the invoice description.
+      function invoiceWithPaymentOutcome(outcome: {
+        pay_invoice_state: 'PAID' | 'PENDING' | 'UNPAID';
+        check_payment_state: 'PAID' | 'PENDING' | 'UNPAID';
+        pay_err?: boolean;
+        check_err?: boolean;
+      }) {
+        return createFakeInvoice(20, {
+          description: JSON.stringify({ pay_err: false, check_err: false, ...outcome }),
+        });
+      }
+
+      async function heldMeltInputs(repo: Repositories, operationId: string) {
+        return (await repo.proofRepository.getProofsByOperationId(mintUrl, operationId)).filter(
+          (proof) => proof.usedByOperationId === operationId && proof.state !== 'spent',
+        );
+      }
+
+      /** Execute a Melt whose payment does not settle, leaving its inputs held by the operation. */
+      async function interruptedMelt(
+        manager: Manager,
+        repo: Repositories,
+        outcome: Parameters<typeof invoiceWithPaymentOutcome>[0],
+      ) {
+        await mintAmount(manager, mintUrl, 500, testUnit);
+        const prepared = await prepareMeltOperation(
+          manager,
+          mintUrl,
+          invoiceWithPaymentOutcome(outcome),
+          testUnit,
+        );
+        await expect(manager.ops.melt.execute(prepared.id)).rejects.toThrow();
+
+        expect((await manager.ops.melt.get(prepared.id))?.state).toBe('executing');
+        const held = await heldMeltInputs(repo, prepared.id);
+        expect(held.length).toBeGreaterThan(0);
+        expect(held.every((proof) => proof.state === 'pending')).toBe(true);
+        // Held inputs are neither spendable nor reserved.
+        const spendable = await getMintSpendableBalance(manager, mintUrl, testUnit);
+        expect(await getMintTotalBalance(manager, mintUrl, testUnit)).toBe(spendable);
+        return { operationId: prepared.id, held, spendable };
+      }
+
+      it('releases pending Melt inputs during Session startup after the payment failed', async () => {
+        await withSession(async (manager, repo) => {
+          const melt = await interruptedMelt(manager, repo, {
+            pay_invoice_state: 'UNPAID',
+            check_payment_state: 'UNPAID',
+          });
+          await manager.dispose();
+          manager = mgr = await startSession(repo);
+
+          expect((await manager.ops.melt.get(melt.operationId))?.state).toBe('rolled_back');
+          const released = await repo.proofRepository.getProofsBySecrets(
+            mintUrl,
+            melt.held.map((proof) => proof.secret),
+          );
+          expect(released).toHaveLength(melt.held.length);
+          expect(
+            released.every((proof) => proof.state === 'ready' && proof.usedByOperationId == null),
+          ).toBe(true);
+          const heldValue = melt.held.reduce((sum, proof) => sum + proof.amount.toNumber(), 0);
+          expect(await getMintSpendableBalance(manager, mintUrl, testUnit)).toBe(
+            melt.spendable + heldValue,
+          );
+        });
+      }, 30000);
+
+      it('keeps Melt inputs pending across Session startup while the payment outcome is unknown', async () => {
+        await withSession(async (manager, repo) => {
+          // The mint fails both the payment and every later check, so no outcome can be verified.
+          const melt = await interruptedMelt(manager, repo, {
+            pay_invoice_state: 'PAID',
+            check_payment_state: 'UNPAID',
+            pay_err: true,
+            check_err: true,
+          });
+          await manager.dispose();
+          manager = mgr = await startSession(repo);
+
+          expect((await manager.ops.melt.get(melt.operationId))?.state).toBe('executing');
+          const stillHeld = await heldMeltInputs(repo, melt.operationId);
+          const secrets = (proofs: typeof stillHeld) =>
+            proofs
+              .map((proof) => proof.secret)
+              .sort()
+              .join();
+          expect(secrets(stillHeld)).toBe(secrets(melt.held));
+          expect(stillHeld.every((proof) => proof.state === 'pending')).toBe(true);
+          expect(await getMintSpendableBalance(manager, mintUrl, testUnit)).toBe(melt.spendable);
+        });
+      }, 30000);
+
       describe('legacy tokenless P2PK Sends', () => {
         // Older releases persisted these Sends with neither a token nor their output proof rows.
         async function persistLegacySend(manager: Manager, repo: Repositories) {

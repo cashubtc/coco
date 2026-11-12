@@ -180,7 +180,7 @@ export const beginMeltExecution = defineTransition<
     secrets: current.inputProofSecrets,
     state: 'ready',
   });
-  await tx.proofs.markInflight({
+  await tx.proofs.markPending({
     mintUrl: current.mintUrl,
     unit: current.unit,
     operationId: current.id,
@@ -210,7 +210,7 @@ export const applyMeltSwapResult = defineTransition<ApplyMeltSwapResultInput, Ap
       unit: current.unit,
       createdByOperationId: current.id,
     });
-    const sendProofs = mapProofToCoreProof(current.mintUrl, 'inflight', input.sendProofs, {
+    const sendProofs = mapProofToCoreProof(current.mintUrl, 'pending', input.sendProofs, {
       unit: current.unit,
       createdByOperationId: current.id,
     }).map((proof) => ({ ...proof, usedByOperationId: current.id }));
@@ -228,7 +228,7 @@ export const applyMeltSwapResult = defineTransition<ApplyMeltSwapResultInput, Ap
       unit: current.unit,
       outputData: current.swapOutputData,
       kind: 'send',
-      state: 'inflight',
+      state: 'pending',
       createdByOperationId: current.id,
       proofs: sendProofs,
     });
@@ -261,7 +261,7 @@ export const applyMeltSwapResult = defineTransition<ApplyMeltSwapResultInput, Ap
       unit: current.unit,
       operationId: current.id,
       secrets: current.inputProofSecrets,
-      state: ['inflight', 'spent'],
+      state: ['pending', 'inflight', 'spent'],
       outputs: [...keepProofs, ...sendProofs],
     });
     const operation: ExecutingMeltOperation = { ...current, updatedAt: input.now };
@@ -288,7 +288,7 @@ export const applyMeltPending = defineTransition<ApplyMeltPendingInput, ApplyMel
     if (quote.state !== 'PENDING' && quote.state !== 'PAID') {
       throw new Error(`Cannot mark melt operation pending from quote state ${quote.state}`);
     }
-    await requireMeltInputs(tx, current, ['inflight', 'spent']);
+    await requireMeltInputs(tx, current, ['pending', 'inflight', 'spent']);
     const operation: PendingMeltOperation = {
       ...current,
       state: 'pending',
@@ -336,24 +336,26 @@ export const applyMeltPaidResult = defineTransition<ApplyMeltPaidResultInput, Ap
       createdByOperationId: current.id,
     });
     assertChangeProofs(current, changeProofs);
-    const meltInputs = await requireMeltInputs(tx, current, ['inflight', 'spent']);
+    const meltInputs = await requireMeltInputs(tx, current, ['pending', 'inflight', 'spent']);
     await tx.proofs.saveCreated(current.mintUrl, changeProofs);
-    const inflightInputs = meltInputs.filter((proof) => proof.state === 'inflight');
-    if (inflightInputs.length > 0) {
+    const unspentInputs = meltInputs.filter((proof) => proof.state !== 'spent');
+    if (unspentInputs.length > 0) {
       if (current.needsSwap) {
         const meltSend = meltSendProofInput(current);
-        const inflightSecrets = new Set(inflightInputs.map((proof) => proof.secret));
+        const unspentSecrets = new Set(unspentInputs.map((proof) => proof.secret));
         await tx.proofs.recordMeltSendSpent({
           ...meltSend,
-          secrets: [...inflightSecrets],
-          outputs: meltSend.outputs.filter((output) => inflightSecrets.has(output.secret)),
+          secrets: [...unspentSecrets],
+          outputs: meltSend.outputs.filter((output) => unspentSecrets.has(output.secret)),
         });
       } else {
-        await tx.proofs.recordSpent({
+        await tx.proofs.settleSpend({
           mintUrl: current.mintUrl,
           unit: current.unit,
           operationId: current.id,
-          secrets: inflightInputs.map((proof) => proof.secret),
+          secrets: unspentInputs.map((proof) => proof.secret),
+          state: ['pending', 'inflight'],
+          outputs: [],
         });
       }
     }
@@ -372,7 +374,7 @@ export const applyMeltPaidResult = defineTransition<ApplyMeltPaidResultInput, Ap
     return {
       operation,
       changeProofs,
-      spentInputSecrets: inflightInputs.map((proof) => proof.secret),
+      spentInputSecrets: unspentInputs.map((proof) => proof.secret),
       changed: true,
     };
   },
@@ -408,7 +410,7 @@ export const releaseMeltAfterNonPayment = defineTransition<
   let restoredSecrets: string[];
   let releasedSecrets: string[];
   if (!current.needsSwap) {
-    await tx.proofs.releaseUnsubmitted({
+    await tx.proofs.releaseMeltUnsubmitted({
       mintUrl: current.mintUrl,
       unit: current.unit,
       operationId: current.id,
@@ -426,7 +428,7 @@ export const releaseMeltAfterNonPayment = defineTransition<
       restoredSecrets = sendSecrets;
       releasedSecrets = [...sendSecrets, ...current.inputProofSecrets];
     } else if (storedSend.length === 0 && input.evidence.originalProofsUnspent === true) {
-      await tx.proofs.releaseUnsubmitted({
+      await tx.proofs.releaseMeltUnsubmitted({
         mintUrl: current.mintUrl,
         unit: current.unit,
         operationId: current.id,

@@ -9,15 +9,22 @@ import {
   type Wallet,
 } from '@cashu/cashu-ts';
 import { Database } from 'bun:sqlite';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import { SqlStorageRepositories } from '../../../sql-storage/src/repositories.ts';
 import { SqliteDb } from '../../../sqlite-bun/src/db.ts';
 import { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
+import { ProofStateWatcherService } from '../../services/watchers/ProofStateWatcherService.ts';
 import { ProofValidationError } from '../../models/Error.ts';
 import { MeltHandlerProvider } from '../../infra/handlers/melt/MeltHandlerProvider.ts';
 import { MeltBolt11Handler } from '../../infra/handlers/melt/MeltBolt11Handler.ts';
 import { MeltBolt12Handler } from '../../infra/handlers/melt/MeltBolt12Handler.ts';
+import { DefaultSendHandler } from '../../infra/handlers/send/DefaultSendHandler.ts';
+import { P2pkSendHandler } from '../../infra/handlers/send/P2pkSendHandler.ts';
+import { SendHandlerProvider } from '../../infra/handlers/send/SendHandlerProvider.ts';
 import { MintAdapter } from '../../infra/MintAdapter.ts';
 import { PollingTransport } from '../../infra/PollingTransport.ts';
 import { SubscriptionManager } from '../../infra/SubscriptionManager.ts';
@@ -29,6 +36,9 @@ import {
 import type { ExecutingMeltOperation } from '../../operations/melt/MeltOperation.ts';
 import { MeltOperationService } from '../../operations/melt/MeltOperationService.ts';
 import type { MeltMethodHandler } from '../../operations/melt/MeltMethodHandler.ts';
+import { applyRestoreResult } from '../../operations/restore/RestoreTransitions.ts';
+import { SendOperationService } from '../../operations/send/SendOperationService.ts';
+import { StoredBalanceQueries } from '../../proofs/BalanceQueries.ts';
 import { prepareMint } from '../../operations/mint/MintTransitions.ts';
 import {
   applyMeltPaidResult,
@@ -51,6 +61,8 @@ import { MeltSettlementProcessor } from '../../services/watchers/MeltSettlementP
 import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
 import { deserializeOutputData } from '../../utils.ts';
 import { testMintInfo, testMintKeypairs, testMintKeysetId } from '../fixtures/MintMetadata.ts';
+import { createMintServiceForMetadata } from '../fixtures/MintMetadataRefresh.ts';
+import { createSendRemoteDouble } from '../fixtures/SendRemote.ts';
 import { mintQuoteFromBolt11Fixture } from '../normalizedMintQuoteFixtures.ts';
 import { overrideTransactions } from '../overrideTransactions.ts';
 
@@ -60,11 +72,15 @@ const keysetId = testMintKeysetId();
 describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) => {
   let repositories: Repositories;
   let database: Database | undefined;
+  let directory: string | undefined;
+  let databasePath: string;
   let runner: RepositoryCoreTransactionRunner;
 
   beforeEach(async () => {
     if (adapter === 'sqlite') {
-      database = new Database(':memory:');
+      directory = mkdtempSync(join(tmpdir(), 'coco-melt-'));
+      databasePath = join(directory, 'wallet.sqlite');
+      database = new Database(databasePath);
       repositories = new SqlStorageRepositories({ database: new SqliteDb({ database }) });
     } else {
       repositories = new MemoryRepositories();
@@ -157,7 +173,10 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
     runner = new RepositoryCoreTransactionRunner(repositories);
   });
 
-  afterEach(() => database?.close());
+  afterEach(() => {
+    database?.close();
+    if (directory) rmSync(directory, { recursive: true, force: true });
+  });
 
   function input(operationId = 'melt-1'): PrepareMeltInput {
     return {
@@ -223,6 +242,419 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
     return { keep: data.keep.map(make), send: data.send.map(make) };
   }
 
+  /** Real Melt recovery and quote coordination; only the mint's quote check is fake. */
+  function recoveryService(checkMeltQuote: MintAdapter['checkMeltQuote']) {
+    const unused = async (): Promise<never> => {
+      throw new Error('Recovery must not allocate or resubmit a request');
+    };
+    const handlerProvider = new MeltHandlerProvider({ bolt11: new MeltBolt11Handler() });
+    const eventBus = new EventBus<CoreEvents>();
+    const mintService = createMintServiceForMetadata(repositories, undefined, eventBus);
+    const walletService = { getWalletWithActiveKeysetId: unused } as unknown as WalletService;
+    const mintAdapter = {
+      checkMeltQuote,
+      checkMeltQuoteState: MintAdapter.prototype.checkMeltQuoteState,
+      customMeltBolt11: unused,
+    } as unknown as MintAdapter;
+    return new MeltOperationService({
+      handlerProvider,
+      meltOperationQueries: repositories.meltOperationRepository,
+      proofQueries: repositories.proofRepository,
+      transactionRunner: new RepositoryCoreTransactionRunner(repositories),
+      loadSeed: unused,
+      quoteLifecycle: new QuoteLifecycle({
+        mintHandlerProvider: {} as QuoteLifecycleDeps['mintHandlerProvider'],
+        meltHandlerProvider: handlerProvider,
+        mintQuoteRepository: repositories.mintQuoteRepository,
+        meltQuoteRepository: repositories.meltQuoteRepository,
+        proofRepository: repositories.proofRepository,
+        mintService,
+        walletService,
+        mintAdapter,
+        eventBus,
+      }),
+      mintService,
+      walletService,
+      mintAdapter,
+      eventBus,
+    });
+  }
+
+  function meltQuoteResponse(state: 'UNPAID' | 'PENDING' | 'PAID') {
+    return {
+      method: 'bolt11' as const,
+      quote: 'quote-1',
+      request: 'lnbc1test',
+      amount: Amount.from(8),
+      unit: 'sat',
+      fee_reserve: Amount.from(2),
+      expiry: 100,
+      state,
+      payment_preimage: state === 'PAID' ? 'preimage' : null,
+      change: [],
+    };
+  }
+
+  it.each(
+    [10, 16].flatMap((amount) =>
+      (['pending', 'inflight'] as const).flatMap((proofState) =>
+        (['executing', 'pending'] as const).flatMap((operationState) =>
+          (['PAID', 'UNPAID', 'PENDING', 'ambiguous'] as const).map((outcome) => ({
+            amount,
+            proofState,
+            operationState,
+            outcome,
+          })),
+        ),
+      ),
+    ),
+  )('recovers after restart with %j', async ({ amount, proofState, operationState, outcome }) => {
+    await saveReadyProof(amount);
+    const prepared = await runner.run((tx) => tx.perform(prepareMelt, input()));
+    const authorization = await runner.run((tx) =>
+      tx.perform(beginMeltExecution, { operationId: 'melt-1', now: 2_000 }),
+    );
+    const executing = authorization.operation as ExecutingMeltOperation;
+    let secrets = executing.inputProofSecrets;
+    if (executing.needsSwap) {
+      const candidates = swapProofs(executing);
+      const applied = await runner.run((tx) =>
+        tx.perform(applyMeltSwapResult, {
+          operation: executing,
+          keepProofs: candidates.keep,
+          sendProofs: candidates.send,
+          now: 3_000,
+        }),
+      );
+      secrets = applied.sendProofs.map((proof) => proof.secret);
+    }
+    if (proofState === 'inflight') {
+      await repositories.proofRepository.setProofState(mintUrl, secrets, 'inflight');
+    }
+    if (operationState === 'pending') {
+      await saveQuote('PENDING', 3_500);
+      await runner.run((tx) => tx.perform(applyMeltPending, { operation: executing, now: 3_500 }));
+    }
+    const before = await repositories.proofRepository.getProofsBySecrets(mintUrl, secrets);
+    const counter = await repositories.counterRepository.getCounter(mintUrl, keysetId);
+
+    if (adapter === 'sqlite') {
+      database!.close();
+      database = new Database(databasePath);
+      repositories = new SqlStorageRepositories({ database: new SqliteDb({ database }) });
+      await repositories.init();
+    }
+    runner = new RepositoryCoreTransactionRunner(repositories);
+    expect(await repositories.proofRepository.getProofsBySecrets(mintUrl, secrets)).toEqual(before);
+
+    const checkMeltQuote = async () => {
+      if (outcome === 'ambiguous') throw new Error('connection lost');
+      return meltQuoteResponse(outcome);
+    };
+    // Independent coordinators have separate locks; the storage transaction decides the winner.
+    await Promise.all([
+      recoveryService(checkMeltQuote).recoverPendingOperations(),
+      recoveryService(checkMeltQuote).recoverPendingOperations(),
+    ]);
+    const stored = await repositories.meltOperationRepository.getById('melt-1');
+    expect(stored?.state).toBe(
+      outcome === 'PAID'
+        ? 'finalized'
+        : outcome === 'UNPAID'
+          ? 'rolled_back'
+          : outcome === 'PENDING'
+            ? 'pending'
+            : operationState,
+    );
+    expect(stored).toMatchObject({
+      inputProofSecrets: prepared.operation.inputProofSecrets,
+      changeOutputData: prepared.operation.changeOutputData,
+      ...(prepared.operation.swapOutputData
+        ? { swapOutputData: prepared.operation.swapOutputData }
+        : {}),
+    });
+    expect(await repositories.counterRepository.getCounter(mintUrl, keysetId)).toEqual(counter);
+    for (const proof of before) {
+      expect(await repositories.proofRepository.getProofBySecret(mintUrl, proof.secret)).toEqual({
+        ...proof,
+        state: outcome === 'PAID' ? 'spent' : outcome === 'UNPAID' ? 'ready' : proofState,
+        usedByOperationId: outcome === 'UNPAID' ? undefined : 'melt-1',
+      });
+    }
+    const balance = await new StoredBalanceQueries(
+      repositories.proofRepository,
+      repositories.mintRepository,
+    ).getBalanceTotal();
+    const available = (executing.needsSwap ? 6 : 0) + (outcome === 'UNPAID' ? 10 : 0);
+    expect(balance).toEqual({
+      spendable: Amount.from(available),
+      reserved: Amount.zero(),
+      total: Amount.from(available),
+      unit: 'sat',
+    });
+  });
+
+  it.each([10, 16])(
+    'keeps operation ownership through Restore UNSPENT observations (%i)',
+    async (amount) => {
+      await saveReadyProof(amount);
+      await runner.run((tx) => tx.perform(prepareMelt, input()));
+      const authorization = await runner.run((tx) =>
+        tx.perform(beginMeltExecution, { operationId: 'melt-1', now: 2_000 }),
+      );
+      const executing = authorization.operation as ExecutingMeltOperation;
+      let secrets = executing.inputProofSecrets;
+      if (executing.needsSwap) {
+        const candidates = swapProofs(executing);
+        const applied = await runner.run((tx) =>
+          tx.perform(applyMeltSwapResult, {
+            operation: executing,
+            keepProofs: candidates.keep,
+            sendProofs: candidates.send,
+            now: 3_000,
+          }),
+        );
+        secrets = applied.sendProofs.map((proof) => proof.secret);
+      }
+      const before = await repositories.proofRepository.getProofsBySecrets(mintUrl, secrets);
+      const restored = await runner.run((tx) =>
+        tx.perform(applyRestoreResult, {
+          mintUrl,
+          keysetId,
+          nextCounter: 1,
+          proofs: before.map((proof) => ({
+            ...proof,
+            state: 'ready' as const,
+            usedByOperationId: undefined,
+            createdByOperationId: undefined,
+          })),
+        }),
+      );
+      expect(restored.inserted).toEqual([]);
+      expect(restored.updated).toEqual([]);
+      expect(await repositories.proofRepository.getProofsBySecrets(mintUrl, secrets)).toEqual(
+        before,
+      );
+      expect(before.every((proof) => proof.state === 'pending')).toBe(true);
+    },
+  );
+
+  it.each(['authorize', 'swap', 'paid', 'unpaid'] as const)(
+    'rolls back proof changes when the %s operation update fails',
+    async (phase) => {
+      await saveReadyProof(16);
+      const prepared = await runner.run((tx) => tx.perform(prepareMelt, input()));
+      let executing: ExecutingMeltOperation | undefined;
+      if (phase !== 'authorize') {
+        const authorization = await runner.run((tx) =>
+          tx.perform(beginMeltExecution, {
+            operationId: 'melt-1',
+            now: 2_000,
+          }),
+        );
+        executing = authorization.operation as ExecutingMeltOperation;
+        if (phase !== 'swap') {
+          const candidates = swapProofs(executing);
+          await runner.run((tx) =>
+            tx.perform(applyMeltSwapResult, {
+              operation: executing!,
+              keepProofs: candidates.keep,
+              sendProofs: candidates.send,
+              now: 3_000,
+            }),
+          );
+          await saveQuote(phase === 'paid' ? 'PAID' : 'UNPAID', 4_000);
+        }
+      }
+      const operationBefore = await repositories.meltOperationRepository.getById('melt-1');
+      const allSecrets = [
+        ...prepared.operation.inputProofSecrets,
+        ...swapProofs({ ...prepared.operation, state: 'executing' }).keep.map(
+          (proof) => proof.secret,
+        ),
+        ...swapProofs({ ...prepared.operation, state: 'executing' }).send.map(
+          (proof) => proof.secret,
+        ),
+      ];
+      const proofsBefore = await repositories.proofRepository.getProofsBySecrets(
+        mintUrl,
+        allSecrets,
+      );
+      const failing = new RepositoryCoreTransactionRunner(
+        overrideTransactions(repositories, (work) =>
+          repositories.withTransaction((scope) =>
+            work({
+              ...scope,
+              meltOperationRepository: new Proxy(scope.meltOperationRepository, {
+                get(target, property) {
+                  if (property === 'update')
+                    return async () => {
+                      throw new Error('operation write failed');
+                    };
+                  const value = Reflect.get(target, property);
+                  return typeof value === 'function' ? value.bind(target) : value;
+                },
+              }),
+            }),
+          ),
+        ),
+      );
+      await expect(
+        failing.run(async (tx) => {
+          if (phase === 'authorize') {
+            await tx.perform(beginMeltExecution, { operationId: 'melt-1', now: 2_000 });
+          } else if (phase === 'swap') {
+            const candidates = swapProofs(executing!);
+            await tx.perform(applyMeltSwapResult, {
+              operation: executing!,
+              keepProofs: candidates.keep,
+              sendProofs: candidates.send,
+              now: 3_000,
+            });
+          } else if (phase === 'paid') {
+            await tx.perform(applyMeltPaidResult, {
+              operation: executing!,
+              changeProofs: [],
+              finalizedData: { preimage: 'preimage' },
+              now: 4_000,
+            });
+          } else {
+            await tx.perform(releaseMeltAfterNonPayment, {
+              operationId: 'melt-1',
+              reason: 'not paid',
+              now: 4_000,
+              evidence: {
+                kind: 'quote-observation-unpaid',
+                mintUrl,
+                method: 'bolt11',
+                quoteId: 'quote-1',
+                observedAt: 4_000,
+              },
+            });
+          }
+        }),
+      ).rejects.toThrow('operation write failed');
+      expect(await repositories.meltOperationRepository.getById('melt-1')).toEqual(operationBefore);
+      expect(await repositories.proofRepository.getProofsBySecrets(mintUrl, allSecrets)).toEqual(
+        proofsBefore,
+      );
+    },
+  );
+
+  it.each(['pending', 'inflight'] as const)(
+    'never subscribes the proof watcher to owned %s inputs',
+    async (state) => {
+      await saveReadyProof(10);
+      await runner.run((tx) => tx.perform(prepareMelt, input()));
+      await runner.run((tx) =>
+        tx.perform(beginMeltExecution, { operationId: 'melt-1', now: 2_000 }),
+      );
+      if (state === 'inflight')
+        await repositories.proofRepository.setProofState(mintUrl, ['input-10'], state);
+      const before = await repositories.proofRepository.getProofBySecret(mintUrl, 'input-10');
+      const bus = new EventBus<CoreEvents>();
+      // Real Send coordination over the same storage. Only the subscription transport is fake.
+      const sendOperationService = new SendOperationService({
+        operationQueries: repositories.sendOperationRepository,
+        proofQueries: repositories.proofRepository,
+        transactionRunner: runner,
+        mintQueries: repositories.mintRepository,
+        mintMetadataRefresh: createMintServiceForMetadata(repositories, undefined, bus),
+        remote: createSendRemoteDouble(),
+        loadSeed: async () => new Uint8Array(32).fill(1),
+        eventBus: bus,
+        handlerProvider: new SendHandlerProvider({
+          default: new DefaultSendHandler(),
+          p2pk: new P2pkSendHandler(),
+        }),
+      });
+      const subscribe = mock(async () => ({ subId: 'proof-sub', unsubscribe: async () => {} }));
+      const watcher = new ProofStateWatcherService(
+        { subscribe } as unknown as SubscriptionManager,
+        repositories.mintRepository,
+        sendOperationService,
+        bus,
+      );
+      await watcher.start();
+      try {
+        await bus.emit('proofs:state-changed', { mintUrl, secrets: ['input-10'], state });
+        await bus.emit('proofs:saved', { mintUrl, keysetId, proofs: [before!] });
+        // An explicit request cannot observe a Melt-owned input either.
+        await watcher.watchProof(mintUrl, ['input-10']);
+        // Without a subscription no mint notification, SPENT included, can reach this input.
+        expect(subscribe).not.toHaveBeenCalled();
+        expect(await repositories.proofRepository.getProofBySecret(mintUrl, 'input-10')).toEqual(
+          before,
+        );
+        expect((await repositories.meltOperationRepository.getById('melt-1'))?.state).toBe(
+          'executing',
+        );
+      } finally {
+        await watcher.stop();
+      }
+    },
+  );
+
+  it.each(['pending', 'inflight'] as const)(
+    'releases interrupted pre-swap %s inputs only with proof and quote evidence',
+    async (state) => {
+      await saveReadyProof(16);
+      await runner.run((tx) => tx.perform(prepareMelt, input()));
+      await runner.run((tx) =>
+        tx.perform(beginMeltExecution, { operationId: 'melt-1', now: 2_000 }),
+      );
+      if (state === 'inflight') {
+        await repositories.proofRepository.setProofState(mintUrl, ['input-16'], state);
+      }
+      await saveQuote('UNPAID', 3_000);
+      const release = {
+        operationId: 'melt-1',
+        reason: 'pre-swap interrupted',
+        now: 3_000,
+        evidence: {
+          kind: 'quote-observation-unpaid' as const,
+          mintUrl,
+          method: 'bolt11' as const,
+          quoteId: 'quote-1',
+          observedAt: 3_000,
+        },
+      };
+      await expect(
+        runner.run((tx) => tx.perform(releaseMeltAfterNonPayment, release)),
+      ).rejects.toThrow('Melt resources stay owned');
+      expect(
+        await repositories.proofRepository.getProofBySecret(mintUrl, 'input-16'),
+      ).toMatchObject({ state, usedByOperationId: 'melt-1' });
+
+      await saveQuote('PENDING', 4_000);
+      const verified = {
+        ...release,
+        evidence: { ...release.evidence, originalProofsUnspent: true },
+      };
+      await expect(
+        runner.run((tx) => tx.perform(releaseMeltAfterNonPayment, verified)),
+      ).rejects.toThrow('stale or contradicted');
+      expect(
+        await repositories.proofRepository.getProofBySecret(mintUrl, 'input-16'),
+      ).toMatchObject({ state, usedByOperationId: 'melt-1' });
+
+      await saveQuote('UNPAID', 5_000);
+      await runner.run((tx) =>
+        tx.perform(releaseMeltAfterNonPayment, {
+          ...verified,
+          now: 5_000,
+          evidence: { ...verified.evidence, observedAt: 5_000 },
+        }),
+      );
+      const released = await repositories.proofRepository.getProofBySecret(mintUrl, 'input-16');
+      expect(released?.state).toBe('ready');
+      expect(released?.usedByOperationId).toBeUndefined();
+      expect((await repositories.meltOperationRepository.getById('melt-1'))?.state).toBe(
+        'rolled_back',
+      );
+    },
+  );
+
   it('prepares, authorizes, records pending, and finalizes a direct Melt atomically', async () => {
     await saveReadyProof(10);
     const prepared = await runner.run((tx) => tx.perform(prepareMelt, input()));
@@ -237,7 +669,7 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
     );
     expect(authorization.operation.state).toBe('executing');
     expect((await repositories.proofRepository.getProofBySecret(mintUrl, 'input-10'))?.state).toBe(
-      'inflight',
+      'pending',
     );
 
     await saveQuote('PENDING', 3_000);
@@ -398,7 +830,7 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
 
     expect((await repositories.meltOperationRepository.getById('melt-1'))?.state).toBe('executing');
     expect((await repositories.proofRepository.getProofBySecret(mintUrl, 'input-10'))?.state).toBe(
-      'inflight',
+      'pending',
     );
   });
 
@@ -855,7 +1287,7 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
     expect((await repositories.proofRepository.getProofBySecret(mintUrl, 'input-16'))?.state).toBe(
       'spent',
     );
-    expect(applied.sendProofs.every((proof) => proof.state === 'inflight')).toBe(true);
+    expect(applied.sendProofs.every((proof) => proof.state === 'pending')).toBe(true);
 
     const replayed = await runner.run((tx) =>
       tx.perform(applyMeltSwapResult, {
@@ -1011,7 +1443,7 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
     );
 
     expect(applied.changed).toBe(true);
-    expect(applied.sendProofs.every((proof) => proof.state === 'inflight')).toBe(true);
+    expect(applied.sendProofs.every((proof) => proof.state === 'pending')).toBe(true);
     for (const proof of [...candidates.keep, ...candidates.send]) {
       expect(
         await repositories.proofRepository.getProofBySecret(mintUrl, proof.secret),
@@ -1202,7 +1634,7 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
         ).toBe('executing');
         expect(
           await repositories.proofRepository.getProofBySecret(mintUrl, 'pending-paid-race-input'),
-        ).toMatchObject({ state: 'inflight', usedByOperationId: 'pending-paid-race' });
+        ).toMatchObject({ state: 'pending', usedByOperationId: 'pending-paid-race' });
         remoteRequests.push('swap');
         return candidates;
       },
@@ -1218,7 +1650,7 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
         for (const proof of candidates.send) {
           expect(
             await repositories.proofRepository.getProofBySecret(mintUrl, proof.secret),
-          ).toMatchObject({ state: 'inflight', usedByOperationId: 'pending-paid-race' });
+          ).toMatchObject({ state: 'pending', usedByOperationId: 'pending-paid-race' });
         }
         for (const proof of candidates.keep) {
           expect(
@@ -1323,7 +1755,7 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
       expect(stateEvents).toContainEqual({
         mintUrl,
         secrets: ['pending-paid-race-input'],
-        state: 'inflight',
+        state: 'pending',
       });
       expect(stateEvents).toContainEqual({
         mintUrl,
@@ -1365,6 +1797,11 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
         now: 3_000,
       }),
     );
+    await repositories.proofRepository.setProofState(
+      mintUrl,
+      applied.sendProofs.map((proof) => proof.secret),
+      'inflight',
+    );
     await repositories.proofRepository.releaseProofs(
       mintUrl,
       applied.sendProofs.map((proof) => proof.secret),
@@ -1403,6 +1840,11 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
         sendProofs: candidates.send,
         now: 3_000,
       }),
+    );
+    await repositories.proofRepository.setProofState(
+      mintUrl,
+      applied.sendProofs.map((proof) => proof.secret),
+      'inflight',
     );
     await repositories.proofRepository.releaseProofs(
       mintUrl,
@@ -1607,7 +2049,7 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
       mintUrl,
       prepared.operation.inputProofSecrets[0]!,
     );
-    expect(retained?.state).toBe('inflight');
+    expect(retained?.state).toBe('pending');
     expect(retained?.usedByOperationId).toBe('settlement');
   });
 
@@ -1640,7 +2082,7 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
       'executing',
     );
     const proof = await repositories.proofRepository.getProofBySecret(mintUrl, 'ambiguous');
-    expect(proof?.state).toBe('inflight');
+    expect(proof?.state).toBe('pending');
     expect(proof?.usedByOperationId).toBe('ambiguous');
   });
 });

@@ -343,7 +343,7 @@ export function runMintSwapTransitionContract(
       expect(outcomes.filter((result) => result.changed)).toHaveLength(1);
       expect(
         (await fixture.repositories.proofRepository.getProofBySecret(sourceUrl, 'original'))?.state,
-      ).toBe('inflight');
+      ).toBe('pending');
     });
 
     it('requires actual claimability and never starts an unpaid destination', async () => {
@@ -493,7 +493,7 @@ export function runMintSwapTransitionContract(
       ).rejects.toThrow('predates');
       expect(
         (await fixture.repositories.proofRepository.getProofBySecret(sourceUrl, 'original'))?.state,
-      ).toBe('inflight');
+      ).toBe('pending');
     });
 
     it('cancellation after PAID advances toward destination recovery', async () => {

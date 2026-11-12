@@ -239,9 +239,12 @@ local proofs.
 Add a local `pending` proof state for newly restored proofs observed as remotely `PENDING`, so they
 remain unavailable without being confused with an unclaimed Send token. Existing operation-owned
 proofs retain their local state and ownership. A pending proof may become ready after a fresh
-`UNSPENT` observation only if authoritative local checks still permit release. Melt inputs continue
-to use `inflight` in this migration; moving them to `pending` is follow-up work with operation-owned
-release rules. Once this Restore PR is opened, open a linked follow-up issue for that Melt migration.
+`UNSPENT` observation only if authoritative local checks still permit release. Melt authorization
+records inputs as `pending` together with execution; its pre-swap checkpoint spends the original
+inputs and saves operation-owned pending Melt inputs atomically. Only the owning Melt Operation
+releases them after verified non-payment or settles them after payment. Ambiguous outcomes retain
+the exact request, output plans, and ownership. Recovery also accepts legacy `inflight` Melt inputs;
+no bulk rewrite is required. Send proof semantics remain unchanged.
 See [ADR-0012](packages/core/docs/adr/0012-distinguish-mint-held-pending-proofs.md).
 
 Re-running Restore reconciles eligible pending records: fresh observations leave them pending on
@@ -315,10 +318,10 @@ reserves exact input proofs, allocates the blank NUT-08 change plan and optional
 advances their counter positions, and persists the prepared operation. New preparation creates no
 intermediate `init` row; `cleanupMeltInit` exists only for legacy recovery.
 
-`beginMeltExecution` atomically records `executing` and marks the exact original inputs inflight.
+`beginMeltExecution` atomically records `executing` and marks the exact original inputs pending.
 That commit authorizes the first remote effect: NUT-05 directly, or NUT-03 for a pre-swap. A
 successful pre-swap is passed to `applyMeltSwapResult`, which atomically spends the original inputs,
-saves keep proofs ready, and saves the exact Melt inputs inflight before NUT-05 is submitted. This
+saves keep proofs ready, and saves the exact Melt inputs pending before NUT-05 is submitted. This
 local checkpoint is required because the two remote calls cannot share a Wallet transaction.
 
 Handlers create/fetch quotes, perform the pre-swap, and submit Melt requests. They receive no Wallet
