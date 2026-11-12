@@ -79,9 +79,17 @@ act concurrently. Barrier steps wait for all earlier steps and block later ones.
 
 ## Outcomes and evidence
 
-A `checkpoint` waits for every Wallet to be idle, observes without calling any recovery interface
-until each expected operation state holds or the recovery deadline passes, and then runs the
-checker. A plan always ends with one. A failed checkpoint stops further dispatch.
+After `heal` establishes environment health, the harness samples public operation states as the
+healthy baseline and observes pending recovery outcomes concurrently with later foreground work.
+The recovery window is `recoveryDeadlineMs` (60 s by default).
+
+A `checkpoint` waits for every Wallet to be idle, collects the recovery observations and runs the
+checker. A success observed during the window remains on time even if later work delays the
+checkpoint; a missed deadline remains a failure even if recovery subsequently finishes. New
+operations and changed token fates introduced after healing get their own bounded observation at
+the checkpoint. These observations never call recovery interfaces. A later `heal` replaces an
+unfinished window, retaining any deadline misses already incurred. Observation tasks are drained
+before teardown. A plan always ends with a checkpoint, and a failed one stops further dispatch.
 
 `accounting.ts` checks value independently of Coco's displayed balances. Proof states come from the
 mints, token contents from the harness's own decoding, and fees from each mint's keyset input fee

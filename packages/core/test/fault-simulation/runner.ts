@@ -56,6 +56,7 @@ import type { CheckerControl, ScenarioPlan, ScenarioStep } from './scenarios.ts'
 import { TRACE_FORMAT, ScenarioTrace, type TraceDocument } from './trace.ts';
 import {
   ActorCommandError,
+  ActorTerminatedError,
   WalletActor,
   type ActorResults,
   type WalletActorOptions,
@@ -241,8 +242,8 @@ class ScenarioWorld {
   commandFailure: string | undefined;
   /** Set once a command failure or a failed checkpoint ends dispatch of further steps. */
   stopped = false;
-  healthyAt = Date.now();
-  healedSinceCheckpoint = false;
+  recoveryObservation: RecoveryObservation | undefined;
+  readonly missedRecoveryOutcomes = new Map<string, string | undefined>();
 
   constructor(
     readonly plan: ScenarioPlan,
@@ -509,6 +510,7 @@ async function runStep(world: ScenarioWorld, planned: PlannedStep): Promise<void
       return;
     }
     case 'heal': {
+      await stopRecoveryObservation(world);
       await world.captureFiredFaults();
       for (const mint of world.mints.values()) {
         await mint.gateway.clearRules();
@@ -525,8 +527,7 @@ async function runStep(world: ScenarioWorld, planned: PlannedStep): Promise<void
         }
         return true;
       });
-      world.healthyAt = Date.now();
-      world.healedSinceCheckpoint = true;
+      world.recoveryObservation = await startRecoveryObservation(world);
       trace.record('harness', 'environment_healthy', { step: index });
       return;
     }
@@ -733,75 +734,185 @@ async function crashWhenFaultFires(
   }
 }
 
+interface RecoveryObservation {
+  expected: ExpectedOutcome[];
+  startedAt: number;
+  missed: Map<string, string | undefined>;
+  cancelled: boolean;
+  atCheckpoint: boolean;
+  done: Promise<void>;
+  error?: unknown;
+}
+
+const outcomeKey = (outcome: ExpectedOutcome) =>
+  JSON.stringify([outcome.wallet, outcome.kind, outcome.operationId, outcome.expectedStates]);
+
 /**
- * Observes, without invoking any recovery interface, until every expected operation state holds
- * in every running Wallet or the recovery deadline passes. The deadline starts at the last heal
- * when one happened since the previous checkpoint, otherwise now: the environment was healthy.
+ * Capture the healthy baseline before releasing foreground work, then observe recovery alongside
+ * that work. Only outcomes already required here belong to this window; later token transitions
+ * get a separate check. An observed success and a missed deadline are both retained.
  */
-async function awaitExpectedOutcomes(world: ScenarioWorld, step: number) {
-  const start = world.healedSinceCheckpoint ? world.healthyAt : Date.now();
-  const deadline = start + world.plan.recoveryDeadlineMs;
-  const expected = world.expectedOutcomes();
-  const pending = new Map<string, string | undefined>();
-  await Promise.all(
-    world.plan.wallets.map(async (wallet) => {
-      const outcomes = expected.filter((outcome) => outcome.wallet === wallet);
-      if (outcomes.length === 0) return;
-      const actor = world.actors.get(wallet);
-      if (!actor?.running) {
-        for (const outcome of outcomes) pending.set(outcome.operationId, undefined);
-        world.trace.record(wallet, 'outcomes_unobservable', {
-          step,
-          reason: 'Wallet process is not running',
-        });
-        return;
-      }
-      const ids = (kind: 'receive' | 'send') =>
-        outcomes.filter((outcome) => outcome.kind === kind).map((outcome) => outcome.operationId);
-      while (true) {
-        const view = await actor.request({
-          type: 'observe',
-          receiveIds: ids('receive'),
-          sendIds: ids('send'),
-        });
-        const unmet =
-          Date.now() >= deadline
-            ? outcomes
-            : outcomes.filter((outcome) => {
-                const state = view.operations.find((op) => op.id === outcome.operationId)?.state;
-                return state === undefined || !outcome.expectedStates.includes(state);
-              });
-        if (unmet.length === 0 || Date.now() >= deadline) {
-          for (const outcome of unmet) {
-            pending.set(
-              outcome.operationId,
-              view.operations.find((op) => op.id === outcome.operationId)?.state,
-            );
-          }
+async function startRecoveryObservation(
+  world: ScenarioWorld,
+  expected = world.expectedOutcomes(),
+): Promise<RecoveryObservation> {
+  const observation: RecoveryObservation = {
+    expected,
+    startedAt: Date.now(),
+    missed: new Map(),
+    cancelled: false,
+    atCheckpoint: false,
+    done: Promise.resolve(),
+  };
+  const pending = new Map(expected.map((outcome) => [outcomeKey(outcome), outcome]));
+  const states = new Map<string, string | undefined>();
+  const sample = async (baseline: boolean) => {
+    const results = await Promise.allSettled(
+      world.plan.wallets.map(async (wallet) => {
+        const outcomes = [...pending.values()].filter((outcome) => outcome.wallet === wallet);
+        if (!outcomes.length) return;
+        const actor = world.actors.get(wallet);
+        if (!actor?.running) {
           return;
         }
-        await Bun.sleep(250);
+        let view: ActorResults['observe'];
+        try {
+          view = await actor.request({
+            type: 'observe',
+            receiveIds: outcomes
+              .filter((outcome) => outcome.kind === 'receive')
+              .map((outcome) => outcome.operationId),
+            sendIds: outcomes
+              .filter((outcome) => outcome.kind === 'send')
+              .map((outcome) => outcome.operationId),
+          });
+        } catch (error) {
+          // A planned restart can terminate an observation already in flight. The replacement
+          // Session is observed on the next iteration; no recovery call is made here.
+          if (!(error instanceof ActorTerminatedError)) throw error;
+          return;
+        }
+        const inTime =
+          baseline || Date.now() < observation.startedAt + world.plan.recoveryDeadlineMs;
+        for (const outcome of outcomes) {
+          const state = view.operations.find((op) => op.id === outcome.operationId)?.state;
+          states.set(outcome.operationId, state);
+          // A Send can pass through pending and be claimed by later foreground work between polls.
+          // Final accounting still checks the exact fate required by that later work.
+          const advanced =
+            outcome.kind === 'send' &&
+            outcome.expectedStates.includes('pending') &&
+            (state === 'finalized' || state === 'rolled_back');
+          if (
+            inTime &&
+            state !== undefined &&
+            (outcome.expectedStates.includes(state) || advanced)
+          ) {
+            pending.delete(outcomeKey(outcome));
+            world.trace.record('harness', 'outcome_observed', {
+              wallet,
+              operationId: outcome.operationId,
+              state,
+              provenance: 'public',
+              phase: baseline ? 'healthy_baseline' : 'recovery',
+              msSinceHealthy: Date.now() - observation.startedAt,
+            });
+          }
+        }
+      }),
+    );
+    for (const result of results) {
+      if (result.status === 'rejected') throw result.reason;
+    }
+  };
+  await sample(true);
+  // Baseline reads are part of establishing the healthy observation point. No subsequent
+  // foreground command can start until this function returns.
+  observation.startedAt = Date.now();
+  observation.done = (async () => {
+    while (pending.size) {
+      const expired = Date.now() >= observation.startedAt + world.plan.recoveryDeadlineMs;
+      for (const [key, outcome] of pending) {
+        if (expired || (observation.atCheckpoint && !world.actors.get(outcome.wallet)?.running)) {
+          observation.missed.set(outcome.operationId, states.get(outcome.operationId));
+          pending.delete(key);
+        }
       }
-    }),
+      if (!pending.size || observation.cancelled) return;
+      await Bun.sleep(
+        Math.min(
+          100,
+          Math.max(1, observation.startedAt + world.plan.recoveryDeadlineMs - Date.now()),
+        ),
+      );
+      if (!observation.cancelled) await sample(false);
+    }
+  })().catch((error: unknown) => {
+    observation.error = error;
+  });
+  return observation;
+}
+
+async function stopRecoveryObservation(world: ScenarioWorld): Promise<void> {
+  const observation = world.recoveryObservation;
+  if (!observation) return;
+  observation.cancelled = true;
+  await observation.done;
+  for (const [id, state] of observation.missed) world.missedRecoveryOutcomes.set(id, state);
+  world.recoveryObservation = undefined;
+  if (observation.error) throw observation.error;
+}
+
+async function awaitExpectedOutcomes(world: ScenarioWorld, step: number) {
+  const expected = world.expectedOutcomes();
+  const prior = world.recoveryObservation;
+  const start = prior?.startedAt ?? Date.now();
+  if (prior) {
+    prior.atCheckpoint = true;
+    await prior.done;
+    for (const [id, state] of prior.missed) world.missedRecoveryOutcomes.set(id, state);
+    if (prior.error) throw prior.error;
+  }
+  const alreadyObserved = new Set(prior?.expected.map(outcomeKey));
+  const current = await startRecoveryObservation(
+    world,
+    expected.filter((outcome) => !alreadyObserved.has(outcomeKey(outcome))),
   );
+  current.atCheckpoint = true;
+  await current.done;
+  if (current.error) throw current.error;
+  for (const [id, state] of current.missed) world.missedRecoveryOutcomes.set(id, state);
+  for (const wallet of new Set(
+    expected
+      .filter((outcome) => !world.actors.get(outcome.wallet)?.running)
+      .map((outcome) => outcome.wallet),
+  )) {
+    world.trace.record(wallet, 'outcomes_unobservable', {
+      step,
+      reason: 'Wallet process is not running',
+    });
+  }
+  world.recoveryObservation = undefined;
   const msAwaitingOutcomes = Date.now() - start;
   world.trace.record('harness', 'outcomes_awaited', {
     step,
     expected: expected.length,
-    unmet: [...pending].map(([operationId, state]) => ({ operationId, state })),
+    unmet: [...world.missedRecoveryOutcomes].map(([operationId, state]) => ({
+      operationId,
+      state,
+    })),
     msAwaitingOutcomes,
   });
   return {
     msAwaitingOutcomes,
-    met: pending.size === 0,
-    missedDeadlineIds: new Set(pending.keys()),
+    met: world.missedRecoveryOutcomes.size === 0,
+    missedDeadlineIds: new Set(world.missedRecoveryOutcomes.keys()),
   };
 }
 
 async function checkpoint(world: ScenarioWorld, step: number): Promise<void> {
   const awaited = await awaitExpectedOutcomes(world, step);
   const verdict = await evaluate(world, step, awaited.missedDeadlineIds);
-  world.healedSinceCheckpoint = false;
   world.lastVerdict = verdict;
   const { wallets: _wallets, ...ledger } = verdict.ledger;
   world.checkpoints.push({
@@ -1178,7 +1289,6 @@ export async function runScenario(
       }),
     );
     trace.record('harness', 'world_ready');
-    world.healthyAt = Date.now();
 
     await dispatch(world, planned.steps);
     if (!world.lastVerdict || world.commandFailure) {
@@ -1204,6 +1314,13 @@ export async function runScenario(
   } catch (error) {
     outcome = error instanceof InfrastructureFailure ? 'infrastructure_failure' : 'unresolved';
     reason = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  }
+
+  try {
+    await stopRecoveryObservation(world);
+  } catch (error) {
+    outcome = error instanceof InfrastructureFailure ? 'infrastructure_failure' : 'unresolved';
+    reason = error instanceof Error ? error.message : String(error);
   }
 
   const expectationMet = plan.expect === 'pass' ? outcome === 'pass' : outcome === 'wallet_failure';
