@@ -24,6 +24,7 @@ export class ScopedIdbKeysetRepository implements KeysetRepository {
           keypairs: JSON.parse(r.keypairs),
           active: !!r.active,
           feePpk: r.feePpk,
+          finalExpiry: r.finalExpiry,
           updatedAt: r.updatedAt,
         }) satisfies Keyset,
     );
@@ -41,6 +42,7 @@ export class ScopedIdbKeysetRepository implements KeysetRepository {
       keypairs: JSON.parse(row.keypairs),
       active: !!row.active,
       feePpk: row.feePpk,
+      finalExpiry: row.finalExpiry,
       updatedAt: row.updatedAt,
     } satisfies Keyset;
   }
@@ -68,6 +70,7 @@ export class ScopedIdbKeysetRepository implements KeysetRepository {
       ),
       active: keyset.active ? 1 : 0,
       feePpk: keyset.feePpk,
+      finalExpiry: keyset.finalExpiry,
       updatedAt: now,
     };
     await (this.db as any).table('coco_cashu_keysets').put(row);

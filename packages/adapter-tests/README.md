@@ -94,5 +94,6 @@ Transaction contract options:
 - `runAuthSessionRepositoryContract()` verifies the NUT-21/22 auth session
   persistence contract.
 - `runKeysetRepositoryContract()` verifies immutable key storage, empty-key backfilling,
-  concurrent metadata/key writes, and transaction rollback. Supply
+  metadata replacement including `finalExpiry`, concurrent metadata/key writes, and transaction
+  rollback. Supply
   `createSharedRepositories` to exercise independent roots sharing one physical store.
