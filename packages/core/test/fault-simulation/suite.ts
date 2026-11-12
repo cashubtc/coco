@@ -626,10 +626,11 @@ function removeLeftoverContainers(pid: number): string[] {
   return leftover;
 }
 
-interface TestProcessResult {
+interface BudgetedProcessResult {
   exitCode: number | null;
   timedOut: boolean;
   pid: number;
+  leftoverContainers: string[];
 }
 
 /** Runs `bun test` in its own process group so a budget overrun kills every process it started. */
@@ -639,7 +640,7 @@ function runTests(
   junitPath: string,
   logPath: string,
   budgetMs: number,
-): Promise<TestProcessResult> {
+): Promise<BudgetedProcessResult> {
   const args = [
     'test',
     ...plan.files.map((file) => `./${file}`),
@@ -647,6 +648,16 @@ function runTests(
     `--reporter-outfile=${junitPath}`,
     ...(plan.testNamePattern ? ['-t', plan.testNamePattern] : []),
   ];
+  return runBudgetedProcess(args, env, logPath, budgetMs);
+}
+
+/** Runs tests or a replay in a killable process group and cleans up its mint containers. */
+export function runBudgetedProcess(
+  args: string[],
+  env: Record<string, string>,
+  logPath: string,
+  budgetMs: number,
+): Promise<BudgetedProcessResult> {
   return new Promise((resolvePromise, reject) => {
     const child = spawn(process.execPath, args, {
       cwd: repositoryRoot,
@@ -675,7 +686,12 @@ function runTests(
     });
     child.on('close', (exitCode) => {
       clearTimeout(timer);
-      resolvePromise({ exitCode, timedOut, pid: child.pid! });
+      resolvePromise({
+        exitCode,
+        timedOut,
+        pid: child.pid!,
+        leftoverContainers: removeLeftoverContainers(child.pid!),
+      });
     });
   });
 }
@@ -831,9 +847,21 @@ export async function runSuite(args: string[]): Promise<number> {
   const outDir = resolve(
     plan.outDir ?? join(repositoryRoot, '.cache', 'fault-simulation', 'suites', suiteId),
   );
+  // Never mix runs or overwrite evidence from a previous invocation of this directory.
+  if (existsSync(outDir) && readdirSync(outDir).length > 0) {
+    console.error(`Output directory is not empty: ${outDir}. Choose a fresh --out directory.`);
+    return EXIT_CODES.usage_error;
+  }
+  mkdirSync(outDir, { recursive: true });
   const workDir = join(outDir, 'work');
   const portableDir = join(outDir, 'portable');
-  mkdirSync(workDir, { recursive: true });
+  try {
+    // Exclusive creation also prevents two invocations from claiming the same empty directory.
+    mkdirSync(workDir);
+  } catch (cause) {
+    console.error(`Cannot reserve output directory: ${outDir}`, cause);
+    return EXIT_CODES.usage_error;
+  }
   mkdirSync(portableDir, { recursive: true });
   const junitPath = join(workDir, 'junit.xml');
   const logPath = join(workDir, 'test-output.log');
@@ -883,8 +911,6 @@ export async function runSuite(args: string[]): Promise<number> {
     }
 
     budgetStarted = Date.now();
-    // Replays run in this process, so they must use the same artifacts root.
-    process.env.COCO_FAULT_SIM_ARTIFACTS = workDir;
     const tests = await runTests(
       plan,
       {
@@ -897,7 +923,7 @@ export async function runSuite(args: string[]): Promise<number> {
       Math.max(remaining(), 1),
     );
     summary.testExitCode = tests.exitCode;
-    summary.leftoverContainers = removeLeftoverContainers(tests.pid);
+    summary.leftoverContainers = tests.leftoverContainers;
     if (existsSync(junitPath)) {
       summary.tests = parseJunit(readFileSync(junitPath, 'utf8'));
       summary.testSeconds = summary.tests.reduce((sum, testCase) => sum + testCase.seconds, 0);
@@ -959,18 +985,32 @@ export async function runSuite(args: string[]): Promise<number> {
   }
 
   async function replayFailures(failed: RunEntry[]): Promise<void> {
-    const { replayTrace } = await import('./replay.ts');
     for (const run of failed.slice(0, plan.maxReplays)) {
       if (remaining() <= 0) break;
       const before = new Set(readdirSync(join(workDir, 'runs')));
       try {
-        const result = await replayTrace(join(workDir, 'runs', run.runId, 'trace.json'));
+        const result = await runBudgetedProcess(
+          [`${HARNESS}/replay.ts`, join(workDir, 'runs', run.runId, 'trace.json')],
+          { COCO_FAULT_SIM_ARTIFACTS: workDir },
+          logPath,
+          Math.max(remaining(), 1),
+        );
+        summary.leftoverContainers.push(...result.leftoverContainers);
         const replayId = readdirSync(join(workDir, 'runs')).find((id) => !before.has(id));
+        const reportPath = replayId ? join(workDir, 'runs', replayId, 'replay.json') : undefined;
+        const comparison =
+          reportPath && existsSync(reportPath)
+            ? (JSON.parse(readFileSync(reportPath, 'utf8')) as { comparison: { status: string } })
+                .comparison
+            : undefined;
         summary.replays.push({
           original: run.runId,
           ...(replayId ? { replay: replayId } : {}),
-          status: result.comparison.status,
+          status: result.timedOut
+            ? 'budget_exceeded'
+            : (comparison?.status ?? `error: replay exited ${result.exitCode}`),
         });
+        if (result.timedOut) break;
       } catch (error) {
         summary.replays.push({
           original: run.runId,

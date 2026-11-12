@@ -46,7 +46,7 @@ export interface PreparedReplay {
  */
 export function prepareReplay(trace: RecordedTrace): PreparedReplay {
   const plan = structuredClone(trace.plan);
-  const model = new WorkloadModel(plan.wallets, plan.mints ?? []);
+  const model = new WorkloadModel(plan.wallets, plan.mints ?? [], undefined, plan.recoveryMode);
   plan.steps.forEach((step, index) => {
     if (!model.apply(step, index)) {
       throw new UnsupportedTraceError(

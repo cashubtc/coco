@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { buildRunReport, mergeCoverage, type RunReport } from '../../fault-simulation/report.ts';
 import {
   SIM_FILES,
@@ -9,6 +11,8 @@ import {
   corpusCoverageGaps,
   parseJunit,
   planSuite,
+  runSuite,
+  runBudgetedProcess,
 } from '../../fault-simulation/suite.ts';
 import { readTrace } from '../../fault-simulation/trace.ts';
 
@@ -24,6 +28,37 @@ const sequence =
   (...values: number[]) =>
   () =>
     values.shift() ?? 0;
+
+describe('suite execution boundaries', () => {
+  it('refuses reused output without modifying previous evidence', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'coco-suite-reuse-'));
+    try {
+      const evidence = join(dir, 'original-failure.json');
+      writeFileSync(evidence, 'original failure');
+      expect(await runSuite(['--profile', 'seeds', '--seeds', '1', '--out', dir])).toBe(2);
+      expect(readFileSync(evidence, 'utf8')).toBe('original failure');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('terminates a replay worker at its remaining budget', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'coco-suite-budget-'));
+    try {
+      const result = await runBudgetedProcess(
+        ['-e', 'setInterval(() => {}, 1000)'],
+        {},
+        join(dir, 'worker.log'),
+        100,
+      );
+      expect(result.timedOut).toBe(true);
+      expect(result.exitCode).not.toBe(0);
+      expect(() => process.kill(result.pid, 0)).toThrow();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('suite planning', () => {
   it('runs the whole fixed corpus with the fixed seeds on pull requests', () => {

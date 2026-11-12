@@ -51,7 +51,9 @@ Profiles:
 Seeds are unsigned 32-bit integers. Nightly seeds are drawn at random and recorded in the summary,
 so any of them can be rerun with the `seeds` profile. The budget bounds the tests and replays, not
 the build or prerequisites, and `--budget-minutes` overrides it. Other options: `--replay-failures`
-(the nightly default), `--max-replays`, `--strict-runtime`, `--skip-build`, `--out`.
+(the nightly default), `--max-replays`, `--strict-runtime`, `--skip-build`, `--out`. Each replay runs
+in its own process group with only the suite's remaining budget; an overrun kills that group and
+removes its containers, just as for the tests.
 
 The suite passes (exit 0) only if all of these hold:
 
@@ -73,10 +75,13 @@ The suite passes (exit 0) only if all of these hold:
 
 Otherwise it exits 1 (failure), 2 (usage), 3 (missing prerequisite: Docker, Node, Bun 1.3.14 or newer,
 Git, the Fault Lab revision, the mint image or, with `--strict-runtime`, the Node range) or 4 (budget
-exceeded; the test process group is killed and its containers removed). A missing prerequisite or
+exceeded; the active test or replay process group is killed and its containers removed). A missing prerequisite or
 an untriggered fault is never a skip.
 
 Output goes to `--out` (default `.cache/fault-simulation/suites/<profile>-<time>/`):
+
+The output directory must be new or empty. Reusing a nonempty directory exits 2 without changing
+its evidence, so earlier failures cannot contaminate a later verdict or fill gaps in its coverage.
 
 - `work/` is the harness artifacts root for the suite's runs (`COCO_FAULT_SIM_ARTIFACTS`). It holds
   failed runs' `private/` directories and never leaves the machine.
@@ -132,7 +137,9 @@ The fixed seeds 5 and 18 account for about 280 s of the `pr` profile. Image pull
 fetch and the core build are outside the budget; the CI job's 75-minute timeout bounds them. The
 [first GitHub PR run](https://github.com/cashubtc/coco/actions/runs/43217045134) passed all 25 tests
 in 429 s (441 s including suite setup) and uploaded its portable evidence successfully. GitHub
-nightly-profile timings remain unmeasured.
+nightly profile also [passed on GitHub](https://github.com/cashubtc/coco/actions/runs/43219759698)
+with one random seed of each kind: 22 tests in 145 s (153 s including suite setup), with portable
+evidence uploaded.
 
 ### Diagnosing a failure
 
