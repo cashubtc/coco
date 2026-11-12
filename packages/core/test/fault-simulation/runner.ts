@@ -1030,10 +1030,13 @@ async function awaitExpectedOutcomes(world: ScenarioWorld, step: number) {
           receiveIds: ids('receive'),
           sendIds: ids('send'),
         });
-        const unmet = outcomes.filter((outcome) => {
-          const state = view.operations.find((op) => op.id === outcome.operationId)?.state;
-          return state === undefined || !outcome.expectedStates.includes(state);
-        });
+        const unmet =
+          Date.now() >= deadline
+            ? outcomes
+            : outcomes.filter((outcome) => {
+                const state = view.operations.find((op) => op.id === outcome.operationId)?.state;
+                return state === undefined || !outcome.expectedStates.includes(state);
+              });
         if (unmet.length === 0 || Date.now() >= deadline) {
           for (const outcome of unmet) {
             pending.set(
