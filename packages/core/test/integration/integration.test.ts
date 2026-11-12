@@ -1,5 +1,6 @@
 // The CI integration runner selects this entry file explicitly.
 import './RequestRateLimitIntegration.test.ts';
+import './MintTrustRefresh.test.ts';
 import './SweepIntegration.test.ts';
 import './PaymentRequestPlanning.test.ts';
 import './SendProofObservations.test.ts';
