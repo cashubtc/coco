@@ -9,28 +9,43 @@ import { openSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { InfrastructureFailure } from './environment.ts';
 
+/**
+ * Foreground commands and observations a Wallet actor accepts. Every command uses Coco's public
+ * interface; mint URLs are the gateway URLs the Wallet knows. The runner keeps at most one
+ * foreground command per Wallet outstanding; `observe` may run alongside it.
+ */
 export type ActorCommand =
-  | { type: 'addMint' }
-  | { type: 'fund'; amount: number }
-  | { type: 'send'; amount: number }
+  | { type: 'addMints' }
+  | { type: 'fund'; mintUrl: string; amount: number }
+  | { type: 'send'; mintUrl: string; amount: number }
   | { type: 'prepareReceive'; token: string }
   | { type: 'executeReceive'; operationId: string }
-  | { type: 'observe'; operationIds: string[] }
+  | { type: 'reclaim'; operationId: string }
+  | { type: 'observe'; receiveIds: string[]; sendIds: string[] }
   | { type: 'dispose' };
 
 export type ActorReply =
   | { id: number; ok: true; result: unknown }
   | { id: number; ok: false; error: { name: string; message: string } };
 
+export interface ObservedOperation {
+  id: string;
+  kind: 'receive' | 'send';
+  state: string | undefined;
+  historyEntries: number;
+}
+
 export interface ActorResults {
-  addMint: Record<string, never>;
+  addMints: Record<string, never>;
   fund: { operationId: string; state: string };
   send: { operationId: string; token: string };
   prepareReceive: { operationId: string };
   executeReceive: { state: string };
+  reclaim: { state: string | undefined };
   observe: {
-    balance: number;
-    operations: { id: string; state: string | undefined; historyEntries: number }[];
+    /** Displayed total by mint URL. */
+    balances: Record<string, number>;
+    operations: ObservedOperation[];
   };
   dispose: Record<string, never>;
 }
@@ -55,7 +70,7 @@ export interface WalletActorOptions {
   wallet: string;
   dbPath: string;
   seedPath: string;
-  mintUrl: string;
+  mintUrls: string[];
   unit: string;
   /** Private file receiving the actor's stderr. */
   logPath: string;
@@ -127,7 +142,7 @@ export class WalletActor {
         HOME: process.env.HOME ?? '',
         SIM_DB_PATH: options.dbPath,
         SIM_SEED_PATH: options.seedPath,
-        SIM_MINT_URL: options.mintUrl,
+        SIM_MINT_URLS: JSON.stringify(options.mintUrls),
         SIM_UNIT: options.unit,
       },
       stdin: 'pipe',
@@ -178,9 +193,12 @@ export class WalletActor {
     return { signal: this.process.signalCode, exitCode: this.process.exitCode };
   }
 
-  /** Graceful shutdown for teardown; falls back to SIGKILL if disposal does not finish. */
-  async shutdown(): Promise<void> {
-    if (this.terminated) return;
+  /**
+   * Graceful shutdown through `dispose()`, falling back to SIGKILL if disposal does not finish.
+   * Reports which happened so a graceful restart is never mistaken for a crash or vice versa.
+   */
+  async shutdown(): Promise<'disposed' | 'killed' | 'not_running'> {
+    if (this.terminated) return 'not_running';
     const disposed = await Promise.race([
       this.request({ type: 'dispose' }).then(
         () => true,
@@ -190,5 +208,6 @@ export class WalletActor {
     ]);
     if (!disposed) this.process.kill('SIGKILL');
     await this.process.exited;
+    return disposed ? 'disposed' : 'killed';
   }
 }

@@ -20,26 +20,34 @@ interface ProofRow {
   mintUrl: string;
   amount: string;
   id: string;
-  unit: string;
   secret: string;
   state: StoredProof['storeState'];
   usedByOperationId: string | null;
 }
 
-/** Proofs from a Wallet store, without mint states. Missing stores yield no proofs. */
+/**
+ * Proofs from a Wallet store, without mint states. `mintOf` maps a stored mint URL to the logical
+ * mint name; an unknown URL is kept as its own mint so the checker cannot silently ignore it.
+ * Missing stores yield no proofs.
+ *
+ * Coco clears a proof's `usedByOperationId` once its Send settles, so the swap that consumed a
+ * spent proof is also read from each persisted Send operation's recorded input secrets. Fees round
+ * once per swap, and that attribution keeps separate swaps separate.
+ */
 export function readStoredProofs(
   dbPath: string,
   unit: string,
+  mintOf: (mintUrl: string) => string | undefined,
 ): { proofs: Omit<StoredProof, 'mintState'>[]; secrets: string[] } {
   if (!existsSync(dbPath)) return { proofs: [], secrets: [] };
   const database = new Database(dbPath, { readonly: true });
   try {
     const rows = database
       .query(
-        'SELECT mintUrl, amount, id, unit, secret, state, usedByOperationId FROM coco_cashu_proofs WHERE unit = ?',
+        'SELECT mintUrl, amount, id, secret, state, usedByOperationId FROM coco_cashu_proofs ' +
+          'WHERE unit = ?',
       )
       .all(unit) as ProofRow[];
-    // Settled Sends release proof reservations; their input lists preserve fee boundaries.
     const sendInputs = new Map<string, string>();
     const sends = database
       .query('SELECT id, mintUrl, inputProofSecretsJson FROM coco_cashu_send_operations')
@@ -50,14 +58,18 @@ export function readStoredProofs(
       }
     }
     return {
-      proofs: rows.map((row) => ({
-        y: proofY(row.secret),
-        amount: Number(row.amount),
-        keysetId: row.id,
-        storeState: row.state,
-        usedByOperationId: row.usedByOperationId ?? sendInputs.get(`${row.mintUrl}|${row.secret}`),
-        ...(row.usedByOperationId ? { reservedByOperationId: row.usedByOperationId } : {}),
-      })),
+      proofs: rows.map((row) => {
+        const usedBy = row.usedByOperationId ?? sendInputs.get(`${row.mintUrl}|${row.secret}`);
+        return {
+          mint: mintOf(row.mintUrl) ?? row.mintUrl,
+          y: proofY(row.secret),
+          amount: Number(row.amount),
+          keysetId: row.id,
+          storeState: row.state,
+          ...(usedBy ? { usedByOperationId: usedBy } : {}),
+          ...(row.usedByOperationId ? { reservedByOperationId: row.usedByOperationId } : {}),
+        };
+      }),
       secrets: rows.map((row) => row.secret),
     };
   } finally {
@@ -65,12 +77,22 @@ export function readStoredProofs(
   }
 }
 
-/** Persisted Receive operation state, observed without a Coco Session. */
-export function readPersistedReceiveState(dbPath: string, operationId: string): string | undefined {
+const operationTables = {
+  receive: 'coco_cashu_receive_operations',
+  send: 'coco_cashu_send_operations',
+} as const;
+
+/** Persisted operation state, observed without a Coco Session. */
+export function readPersistedOperationState(
+  dbPath: string,
+  kind: keyof typeof operationTables,
+  operationId: string,
+): string | undefined {
+  if (!existsSync(dbPath)) return undefined;
   const database = new Database(dbPath, { readonly: true });
   try {
     const row = database
-      .query('SELECT state FROM coco_cashu_receive_operations WHERE id = ?')
+      .query(`SELECT state FROM ${operationTables[kind]} WHERE id = ?`)
       .get(operationId) as { state: string } | null;
     return row?.state;
   } finally {
@@ -117,11 +139,13 @@ export class MintProbe {
 /** Decodes a token independently of the sending Wallet. */
 export function decodeTokenInputs(
   token: string,
+  mint: string,
   keysetIds: string[],
 ): { inputs: Omit<ObservedProof, 'mintState'>[]; secrets: string[] } {
   const decoded = getDecodedToken(token, keysetIds);
   return {
     inputs: decoded.proofs.map((proof) => ({
+      mint,
       y: proofY(proof.secret),
       amount: Number(proof.amount.toString()),
       keysetId: proof.id,

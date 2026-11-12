@@ -1,8 +1,9 @@
 # Wallet fault simulation
 
-Status: design confirmed. The first implementation step, the Fault Lab adoption experiment, is
-implemented in [the fault simulation harness](../../packages/core/test/fault-simulation/README.md);
-the remaining milestone is not.
+Status: design confirmed. The Fault Lab adoption experiment and the three-Wallet, two-mint
+workload with independent accounting, generated from scenario seeds, are implemented in
+[the fault simulation harness](../../packages/core/test/fault-simulation/README.md). The complete
+fault palette, failure reports and minimization, and the CI corpus are not.
 
 Implementation specification: [GitHub issue #616](https://github.com/cashubtc/coco/issues/616).
 
