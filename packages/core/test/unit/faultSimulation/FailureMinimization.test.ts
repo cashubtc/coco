@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import { minimizeFailure, type CandidateObservation } from '../../fault-simulation/minimize.ts';
-import type { FailureSignature } from '../../fault-simulation/report.ts';
+import { failureSignature, type FailureSignature } from '../../fault-simulation/report.ts';
 import type { ScenarioPlan, ScenarioStep } from '../../fault-simulation/scenarios.ts';
+import { readTrace } from '../../fault-simulation/trace.ts';
 import { planWorkload } from '../../fault-simulation/workload.ts';
 
 const lostResponse: FailureSignature = {
