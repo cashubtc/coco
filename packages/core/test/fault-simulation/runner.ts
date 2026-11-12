@@ -32,6 +32,7 @@ import {
 } from './accounting.ts';
 import {
   InfrastructureFailure,
+  awaitStartup,
   MINT_IMAGE,
   MINT_INPUT_FEE_PPK,
   MINT_MNEMONICS,
@@ -717,6 +718,12 @@ async function race(
     const follower = await start(followSide);
     const leader = await lead;
     record.overlapped = follower.at < leader.at;
+    if (!record.overlapped) {
+      trace.record('harness', 'race_hold_expired', { step: planned.index, token: step.token });
+      throw new ScenarioPreconditionError(
+        'Race follower did not settle while the lead response was held',
+      );
+    }
     results = [leader, follower];
   }
   for (const result of results) {
@@ -1364,7 +1371,7 @@ export async function runScenario(
     }
     const bundlePath = await preparePinnedGateway(artifactsRoot());
     const suffix = `${runId.slice(-8)}-${process.pid}`;
-    await Promise.all(
+    await awaitStartup(
       plan.mints.map(async (name, index) => {
         const container = await MintContainer.start(
           `coco-faultsim-${suffix}-${name}`,
@@ -1441,7 +1448,7 @@ export async function runScenario(
       ...(plan.generator ? { scenarioSeed: plan.generator.seed } : {}),
     };
 
-    await Promise.all(
+    await awaitStartup(
       plan.wallets.map(async (wallet) => {
         const seedPath = join(privateDir, `${wallet}.seed`);
         const seedHex = Buffer.from(crypto.getRandomValues(new Uint8Array(64))).toString('hex');
