@@ -664,6 +664,7 @@ export class MintService {
             keypairs,
             active: ks.active,
             feePpk: ks.input_fee_ppk || 0,
+            finalExpiry: ks.final_expiry,
           });
         } catch (err) {
           // Refusing one keyset's keys must not cost the Wallet the keysets that did verify.

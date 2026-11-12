@@ -9,6 +9,8 @@ export interface Keyset {
   keypairs: KeysetKeypairs;
   active: boolean;
   feePpk: number;
+  /** NUT-02 final expiry in Unix seconds, committed to by V2 keyset IDs. */
+  finalExpiry?: number;
   updatedAt: number;
 }
 

@@ -442,6 +442,47 @@ export async function runKeysetRepositoryContract(
       }
     });
 
+    for (const transactional of [false, true]) {
+      it(`retains final expiry through metadata creation, backfill and updates (transaction: ${transactional})`, async () => {
+        const { repositories, dispose } = await options.createRepositories();
+        const keyset = {
+          ...createDummyKeyset(),
+          keypairs: { '1': '02aa' },
+          finalExpiry: 2059210353,
+        };
+        try {
+          const write = (work: (keysets: Repositories['keysetRepository']) => Promise<void>) =>
+            transactional
+              ? repositories.withTransaction((scope) => work(scope.keysetRepository))
+              : work(repositories.keysetRepository);
+          const expiryOf = async (id: string) =>
+            (await repositories.keysetRepository.getKeysetById(keyset.mintUrl, id))?.finalExpiry;
+          // A keyset first stored with its keys keeps the expiry it arrived with.
+          const created = { ...keyset, id: `${keyset.id}-created` };
+          await write((keysets) => keysets.addKeyset(created));
+          expect(await expiryOf(created.id)).toBe(keyset.finalExpiry);
+          // A row recorded without one gains it when the keyset is next written.
+          await write((keysets) => keysets.updateKeyset({ ...keyset, finalExpiry: undefined }));
+          expect(await expiryOf(keyset.id)).toBe(undefined);
+          await write((keysets) => keysets.addKeyset(keyset));
+          expect(await expiryOf(keyset.id)).toBe(keyset.finalExpiry);
+          await write((keysets) => keysets.updateKeyset({ ...keyset, active: false }));
+          const stored = await repositories.keysetRepository.getKeysetById(
+            keyset.mintUrl,
+            keyset.id,
+          );
+          expect(stored?.finalExpiry).toBe(keyset.finalExpiry);
+          expect(stored?.keypairs['1']).toBe(keyset.keypairs['1']);
+          expect(stored?.active).toBe(false);
+          // The incoming value replaces the stored one, so a mint that withdraws it is followed.
+          await write((keysets) => keysets.updateKeyset({ ...keyset, finalExpiry: undefined }));
+          expect(await expiryOf(keyset.id)).toBe(undefined);
+        } finally {
+          await dispose();
+        }
+      });
+    }
+
     it('keeps stored keys when a keyset is written again', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {

@@ -2,7 +2,6 @@ import {
   isBlsKeyset,
   Mint,
   Wallet,
-  type Keys,
   type MintKeys,
   type MintKeyset,
   type KeyChainCache,
@@ -15,6 +14,7 @@ import type { Logger } from '../logging/Logger.ts';
 import type { SeedService } from './SeedService.ts';
 import type { MintRequestProvider } from '../infra/MintRequestProvider.ts';
 import { DEFAULT_UNIT, normalizeUnit } from '../amounts.ts';
+import { toCachedKeyset } from '../proofs/KeysetSelection.ts';
 import { normalizeMintUrl } from '../utils.ts';
 
 interface CachedWallet {
@@ -209,11 +209,8 @@ export class WalletService {
     }
 
     const keysetCache = validKeysets.map((keyset) => ({
-      id: keyset.id,
+      ...toCachedKeyset(keyset),
       unit: this.normalizeKeysetUnit(keyset.unit),
-      active: keyset.active,
-      input_fee_ppk: keyset.feePpk,
-      keys: keyset.keypairs as Keys,
     }));
 
     const cache: KeyChainCache = {

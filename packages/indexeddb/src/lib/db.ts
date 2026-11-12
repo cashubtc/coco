@@ -133,6 +133,7 @@ export interface KeysetRow {
   keypairs: string; // JSON string
   active: number; // 0/1
   feePpk: number;
+  finalExpiry?: number;
   updatedAt: number;
 }
 
