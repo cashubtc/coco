@@ -1,0 +1,415 @@
+{
+  "format": "coco-wallet-fault-simulation/trace/v1",
+  "runId": "negative-control-receive-lost-response-no-restart-2026-11-12T09-36-29-986Z-3c26c95e",
+  "plan": {
+    "id": "negative-control-receive-lost-response-no-restart",
+    "description": "Negative control: the same accepted Receive with a lost response, but the crashed Wallet is never restarted. The checker must report the missing value and unmet outcome.",
+    "expect": "detected-failure",
+    "recoveryMode": "automatic",
+    "recoveryDeadlineMs": 60000,
+    "wallets": ["alice", "bob"],
+    "steps": [
+      {
+        "kind": "fund",
+        "wallet": "alice",
+        "amount": 64
+      },
+      {
+        "kind": "send",
+        "wallet": "alice",
+        "amount": 32,
+        "token": "token-1"
+      },
+      {
+        "kind": "withholdResponse",
+        "method": "POST",
+        "path": "/v1/swap"
+      },
+      {
+        "kind": "receive",
+        "wallet": "bob",
+        "token": "token-1",
+        "crashWhenFaultFires": true
+      },
+      {
+        "kind": "heal"
+      },
+      {
+        "kind": "awaitRequirements"
+      }
+    ],
+    "requirements": [
+      {
+        "wallet": "bob",
+        "operation": "receive",
+        "token": "token-1",
+        "state": "finalized"
+      }
+    ]
+  },
+  "components": {
+    "coco": {
+      "commit": "d60d308a2957a21d4b4a0cbe1c00dbf4873981ac",
+      "dirty": true
+    },
+    "bun": "1.3.14",
+    "cashuTs": "5.0.0-rc.4",
+    "faultLab": {
+      "repository": "https://github.com/GautamBytes/cashu-fault-lab.git",
+      "revision": "1cc954d33a1088fd20efc48c5437e3a7441920f7",
+      "component": "apps/http-fault-gateway",
+      "runtime": "node v22.22.1"
+    },
+    "mint": {
+      "image": "cashubtc/mintd:0.17.0-rc.0",
+      "imageId": "sha256:3ea25571aecd6bb47c55781fb9f6566fbca364f6a4a163475ae81c1cae17b852",
+      "paymentBackend": "fakewallet"
+    }
+  },
+  "configuration": {
+    "unit": "sat",
+    "inputFeePpk": 100,
+    "mints": 1,
+    "wallets": [
+      {
+        "wallet": "alice",
+        "storage": "SQLite file (bun:sqlite through sql-storage)",
+        "backgroundOwners": "Coco defaults: Background Watchers and Processors enabled"
+      },
+      {
+        "wallet": "bob",
+        "storage": "SQLite file (bun:sqlite through sql-storage)",
+        "backgroundOwners": "Coco defaults: Background Watchers and Processors enabled"
+      }
+    ],
+    "recoveryMode": "automatic",
+    "recoveryDeadlineMs": 60000,
+    "transport": "Every Wallet uses the gateway URL as its mint URL"
+  },
+  "privateInputs": {
+    "description": "Wallet Seeds and Wallet stores are private replay inputs. Clean-state replay of this plan generates fresh Wallet Seeds and needs none of them.",
+    "references": {
+      "alice.walletSeed": "private/alice.seed",
+      "alice.store": "private/alice.sqlite",
+      "bob.walletSeed": "private/bob.seed",
+      "bob.store": "private/bob.sqlite"
+    }
+  },
+  "events": [
+    {
+      "seq": 1,
+      "atMs": 755,
+      "source": "alice",
+      "type": "process_started",
+      "data": {
+        "pid": 1437826
+      }
+    },
+    {
+      "seq": 2,
+      "atMs": 981,
+      "source": "bob",
+      "type": "process_started",
+      "data": {
+        "pid": 1437843
+      }
+    },
+    {
+      "seq": 3,
+      "atMs": 1029,
+      "source": "harness",
+      "type": "world_ready"
+    },
+    {
+      "seq": 4,
+      "atMs": 1029,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 0,
+        "kind": "fund"
+      }
+    },
+    {
+      "seq": 5,
+      "atMs": 1029,
+      "source": "alice",
+      "type": "command",
+      "data": {
+        "type": "fund",
+        "amount": 64
+      }
+    },
+    {
+      "seq": 6,
+      "atMs": 1241,
+      "source": "alice",
+      "type": "result",
+      "data": {
+        "type": "fund",
+        "operationId": "c4UKSIUU2UGC0CFCFmeb8g",
+        "state": "finalized"
+      }
+    },
+    {
+      "seq": 7,
+      "atMs": 1241,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 1,
+        "kind": "send"
+      }
+    },
+    {
+      "seq": 8,
+      "atMs": 1241,
+      "source": "alice",
+      "type": "command",
+      "data": {
+        "type": "send",
+        "amount": 32,
+        "token": "token-1"
+      }
+    },
+    {
+      "seq": 9,
+      "atMs": 1333,
+      "source": "alice",
+      "type": "result",
+      "data": {
+        "type": "send",
+        "operationId": "NR5HmI6gVn-kN65F9r0g4w",
+        "token": "token-1",
+        "tokenAmount": 32,
+        "tokenProofs": 1
+      }
+    },
+    {
+      "seq": 10,
+      "atMs": 1333,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 2,
+        "kind": "withholdResponse"
+      }
+    },
+    {
+      "seq": 11,
+      "atMs": 1336,
+      "source": "gateway",
+      "type": "fault_installed",
+      "data": {
+        "ruleId": "http-rule-1",
+        "kind": "withholdResponse",
+        "method": "POST",
+        "path": "/v1/swap"
+      }
+    },
+    {
+      "seq": 12,
+      "atMs": 1336,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 3,
+        "kind": "receive"
+      }
+    },
+    {
+      "seq": 13,
+      "atMs": 1336,
+      "source": "bob",
+      "type": "command",
+      "data": {
+        "type": "prepareReceive",
+        "token": "token-1"
+      }
+    },
+    {
+      "seq": 14,
+      "atMs": 1399,
+      "source": "bob",
+      "type": "command",
+      "data": {
+        "type": "executeReceive",
+        "operationId": "DvcrxXBc7GsludHV_iwjrg"
+      }
+    },
+    {
+      "seq": 15,
+      "atMs": 1426,
+      "source": "gateway",
+      "type": "fault_fired",
+      "data": {
+        "ruleId": "http-rule-1"
+      }
+    },
+    {
+      "seq": 16,
+      "atMs": 1445,
+      "source": "bob",
+      "type": "crashed",
+      "data": {
+        "pid": 1437843,
+        "signal": "SIGKILL",
+        "pendingCommandInterrupted": true
+      }
+    },
+    {
+      "seq": 17,
+      "atMs": 1451,
+      "source": "harness",
+      "type": "crash_corroborated",
+      "data": {
+        "wallet": "bob",
+        "signal": "SIGKILL",
+        "mintAcceptedRequest": true,
+        "persistedOperationState": "executing"
+      }
+    },
+    {
+      "seq": 18,
+      "atMs": 1451,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 4,
+        "kind": "heal"
+      }
+    },
+    {
+      "seq": 19,
+      "atMs": 1461,
+      "source": "harness",
+      "type": "environment_healthy"
+    },
+    {
+      "seq": 20,
+      "atMs": 1461,
+      "source": "harness",
+      "type": "step",
+      "data": {
+        "index": 5,
+        "kind": "awaitRequirements"
+      }
+    },
+    {
+      "seq": 21,
+      "atMs": 1461,
+      "source": "bob",
+      "type": "requirement_unobservable",
+      "data": {
+        "operationId": "DvcrxXBc7GsludHV_iwjrg",
+        "reason": "Wallet process is not running"
+      }
+    },
+    {
+      "seq": 22,
+      "atMs": 1463,
+      "source": "gateway",
+      "type": "traffic",
+      "data": {
+        "inbound": 14,
+        "forwarded": 14,
+        "responded": 13,
+        "dropped": 0,
+        "delayed": 1,
+        "requests": {
+          "GET /v1/info": 3,
+          "GET /v1/keysets": 2,
+          "GET /v1/keys/0187b2e8760759f0d0de2e0b7cae676f106e318e6795206c8b266865e5b9fe6074": 2,
+          "POST /v1/mint/quote/bolt11": 1,
+          "POST /v1/mint/quote/bolt11/:quote_id": 1,
+          "GET /v1/ws": 1,
+          "GET /v1/mint/quote/bolt11/:quote_id": 1,
+          "POST /v1/mint/bolt11": 1,
+          "POST /v1/swap": 2
+        }
+      }
+    },
+    {
+      "seq": 23,
+      "atMs": 1481,
+      "source": "harness",
+      "type": "outcome_observed",
+      "data": {
+        "wallet": "bob",
+        "operationId": "DvcrxXBc7GsludHV_iwjrg",
+        "state": "executing",
+        "provenance": "persisted_read_only"
+      }
+    },
+    {
+      "seq": 24,
+      "atMs": 1482,
+      "source": "checker",
+      "type": "verdict",
+      "data": {
+        "status": "wallet_failure",
+        "findings": [
+          {
+            "code": "missing_evidence",
+            "wallet": "bob",
+            "message": "Public balance was not observed",
+            "severity": "unresolved"
+          },
+          {
+            "code": "value_deficit",
+            "amount": 31,
+            "message": "31 funded value is unaccounted for",
+            "severity": "failure"
+          },
+          {
+            "wallet": "bob",
+            "operationId": "DvcrxXBc7GsludHV_iwjrg",
+            "code": "outcome_unmet",
+            "message": "receive is executing, expected finalized",
+            "severity": "failure"
+          },
+          {
+            "wallet": "bob",
+            "operationId": "DvcrxXBc7GsludHV_iwjrg",
+            "code": "missing_evidence",
+            "message": "History was not observed",
+            "severity": "unresolved"
+          }
+        ],
+        "ledger": {
+          "funded": 64,
+          "holdings": {
+            "alice": 31,
+            "bob": 0
+          },
+          "outstanding": 0,
+          "stranded": 0,
+          "fees": 2,
+          "unexplained": 31
+        }
+      }
+    }
+  ],
+  "result": {
+    "outcome": "wallet_failure",
+    "expectationMet": true,
+    "faultsFired": [
+      {
+        "ruleId": "http-rule-1",
+        "phase": "after_downstream_response",
+        "action": "delay",
+        "method": "POST",
+        "path": "/v1/swap",
+        "applied": 1
+      }
+    ],
+    "crashes": [
+      {
+        "wallet": "bob",
+        "signal": "SIGKILL",
+        "mintAcceptedRequest": true,
+        "persistedOperationState": "executing"
+      }
+    ]
+  }
+}
