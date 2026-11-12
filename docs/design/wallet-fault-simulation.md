@@ -1,6 +1,8 @@
 # Wallet fault simulation
 
-Status: design confirmed. Implementation has not started.
+Status: design confirmed. The first implementation step, the Fault Lab adoption experiment, is
+implemented in [the fault simulation harness](../../packages/core/test/fault-simulation/README.md);
+the remaining milestone is not.
 
 Implementation specification: [GitHub issue #616](https://github.com/cashubtc/coco/issues/616).
 
@@ -153,3 +155,39 @@ Reuse the gateway if it passes this experiment. Retain the runner only if it acc
 accounting, multiple Wallets, and Coco's recovery requirements without duplicating Coco's state
 machine. Otherwise build the driver within Coco's test tooling. Passing the experiment establishes
 the first integration step; it does not by itself establish all fault or workload coverage above.
+
+## Fault Lab adoption experiment
+
+The harness ran the adoption experiment against revision `1cc954d3` with `cashubtc/mintd:0.17.0-rc.0`
+(`fakewallet`, unit `sat`, 100 ppk input fees). One Wallet funded 64 and sent 32. The gateway held
+the mint's response to the receiving Wallet's `POST /v1/swap`. The harness observed the rule fire,
+confirmed directly at the mint that the token inputs were spent, and sent `SIGKILL` to the Wallet
+process while its Receive was still `executing` in SQLite. A new Coco Session over the same store and
+Wallet Seed finalized the Receive during startup Operation Recovery, without an explicit recovery
+call. Independent accounting matched: 64 funded = 31 + 31 held + 2 input fees. The same scenario
+replayed from clean state using only its recorded plan. A negative control that never restarts the
+Wallet reports the 31 missing value and the unmet outcome. Disabling Coco's startup Receive recovery
+makes the scenario fail at the 60 second deadline.
+
+Decision:
+
+- **Reuse the gateway.** Consume the pinned revision through a verified Git checkout. Bundle its
+  `http-fault-gateway` for Node and run it as a separate process controlled through its
+  `/__faults/v1/` API. Run it under Node. Under Bun's `node:http`, `drop` becomes an empty `200`.
+  Upstream declares Node 24; the experiment ran on Node 22.22.1.
+- **Do not adopt the runner.** The lifecycle driver models one adapter and its own operation state
+  machine with caller-assigned operation IDs, so a Coco adapter would duplicate Coco's state machine.
+  Its quiescence check accepts `recovery_blocked`, which fails a Coco progress requirement. It has no
+  multi-Wallet accounting for outstanding tokens and fees, and its triggers are by request occurrence
+  rather than events that can terminate a process. Coco's test tooling owns the driver.
+
+Gateway limitations for later work:
+
+- It has no WebSocket upgrade handling. Coco's `GET /v1/ws` reaches it as plain HTTP and fails, so
+  WebSocket faults need an extension.
+- Rules match by method, path and occurrence, not by Wallet. One gateway per mint therefore relies on
+  scenario sequencing to target a Wallet.
+- Its evidence omits downstream status codes. Mint acceptance is corroborated by direct mint probes.
+- It forwards only `accept` and `content-type` request headers and caps responses at 64 KiB.
+- Bun's `fetch` retries an idempotent `GET` once when a reused connection closes, so a dropped `GET`
+  response can be masked at the client. A `POST` is not retried.
