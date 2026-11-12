@@ -318,10 +318,10 @@ reserves exact input proofs, allocates the blank NUT-08 change plan and optional
 advances their counter positions, and persists the prepared operation. New preparation creates no
 intermediate `init` row; `cleanupMeltInit` exists only for legacy recovery.
 
-`beginMeltExecution` atomically records `executing` and marks the exact original inputs inflight.
+`beginMeltExecution` atomically records `executing` and marks the exact original inputs pending.
 That commit authorizes the first remote effect: NUT-05 directly, or NUT-03 for a pre-swap. A
 successful pre-swap is passed to `applyMeltSwapResult`, which atomically spends the original inputs,
-saves keep proofs ready, and saves the exact Melt inputs inflight before NUT-05 is submitted. This
+saves keep proofs ready, and saves the exact Melt inputs pending before NUT-05 is submitted. This
 local checkpoint is required because the two remote calls cannot share a Wallet transaction.
 
 Handlers create/fetch quotes, perform the pre-swap, and submit Melt requests. They receive no Wallet

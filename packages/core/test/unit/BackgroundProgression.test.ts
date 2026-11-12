@@ -272,7 +272,7 @@ describe.each(['memory', 'sqlite'] as const)('background progression (%s)', (ada
         secret: 'melt-input',
         mintUrl,
         unit: 'sat',
-        state: 'inflight',
+        state: 'pending',
         usedByOperationId: proofOwner,
       },
     ]);

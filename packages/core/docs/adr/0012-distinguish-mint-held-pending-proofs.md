@@ -7,7 +7,7 @@ status: accepted
 Use a local `pending` proof state for mint-held Melt inputs and newly restored proofs whose mint reports `PENDING`. Local
 `inflight` also represents outgoing Send tokens that a recipient can still claim while the mint
 reports `UNSPENT`; treating both cases identically would either strand restored proofs or make
-outstanding Send tokens spendable again. Restore implements this distinction.
+outstanding Send tokens spendable again. Restore and Melt implement this distinction.
 
 The initial migration preserves existing operation-owned proof state and ownership. Releasing a
 restored pending proof after a fresh `UNSPENT` observation requires checking its current local state

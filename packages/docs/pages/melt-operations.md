@@ -190,9 +190,9 @@ if (operation.state === 'finalized') {
 
 Melt inputs use the local proof state `pending` from execution authorization until settlement or
 verified non-payment, including after an ambiguous response. The Melt Operation retains ownership:
-an `UNSPENT` proof notification or repeated Restore cannot release these inputs. Recovery also
-supports older Melt records whose inputs use `inflight`. Pending inputs contribute to none of the
-spendable, reserved, or total balances; outgoing Send proofs continue to use `inflight`.
+the proof watcher observes Send proofs only, and repeated Restore cannot release these inputs.
+Recovery also supports older Melt records whose inputs use `inflight`. Pending inputs contribute to
+none of the spendable, reserved, or total balances; outgoing Send proofs continue to use `inflight`.
 
 The operation returned by `refresh()` already includes settlement details when the melt has finalized:
 
