@@ -217,7 +217,7 @@ describe('three Wallets at two real mints', () => {
         expectSecretFreeTrace(run);
 
         if (index === 0) {
-          // Replay regenerates the same commands from the recorded seed; scheduling may differ.
+          // Replay executes the recorded commands verbatim; scheduling may differ.
           const replay = await replayScenario(run.tracePath);
           expect(outcomeOf(replay)).toMatchObject({ outcome: 'pass', expectationMet: true });
           const byStep = (commands: ScenarioRun['commands']) =>

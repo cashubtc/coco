@@ -13,7 +13,9 @@ type Outcome = 'pass' | 'wallet_failure' | 'unresolved' | 'infrastructure_failur
 /**
  * What makes two failures "the same": the outcome, the failing findings by code and the mint and
  * Wallet they concern, and for a contradicted command its kind, or for an unresolved run its error
- * class. Amounts, operation IDs and step indices are excluded because they legitimately differ
+ * class. Wallet outcomes unavailable from a live process at the decisive checkpoint are also
+ * part of the identity: omitting startup recovery must not reproduce a failure after recovery.
+ * Amounts, operation IDs and step indices are excluded because they legitimately differ
  * between a run and its replay or minimized form.
  */
 export interface FailureSignature {
@@ -21,6 +23,8 @@ export interface FailureSignature {
   findings: string[];
   commandFailure?: string;
   reasonClass?: string;
+  /** Wallets whose decisive outcomes could not be observed through a running Coco Session. */
+  unobservedWallets?: string[];
 }
 
 interface RecordedFinding {
@@ -68,6 +72,27 @@ export function failureSignature(trace: RecordedTrace): FailureSignature {
   ].sort();
   const signature: FailureSignature = { outcome, findings };
 
+  // Limit provenance to the decisive checkpoint. Earlier stopped Wallets may have recovered by
+  // this point. v1 records read-only fallback; v2 also records an unavailable Wallet explicitly.
+  const unobservedWallets = new Set<string>();
+  if (verdict) {
+    for (const event of trace.events) {
+      if (event.type === 'verdict') {
+        if (event.data === verdict) break;
+        unobservedWallets.clear();
+      } else if (event.type === 'outcomes_unobservable') {
+        unobservedWallets.add(event.source);
+      } else if (
+        event.type === 'outcome_observed' &&
+        event.data?.provenance === 'persisted_read_only' &&
+        typeof event.data.wallet === 'string'
+      ) {
+        unobservedWallets.add(event.data.wallet);
+      }
+    }
+  }
+  if (unobservedWallets.size > 0) signature.unobservedWallets = [...unobservedWallets].sort();
+
   const commandFailed = trace.events.find((event) => event.type === 'command_failed');
   const failedStep = commandFailed?.data?.step;
   if (typeof failedStep === 'number') {
@@ -88,6 +113,7 @@ const canonical = (signature: FailureSignature) => ({
   findings: [...signature.findings].sort(),
   commandFailure: signature.commandFailure ?? null,
   reasonClass: signature.reasonClass ?? null,
+  unobservedWallets: [...(signature.unobservedWallets ?? [])].sort(),
 });
 
 export interface ReplayComparison {

@@ -116,6 +116,7 @@ CI hosts:
 | Run                                        | Tests | Tests wall clock         | Budget |
 | ------------------------------------------ | ----- | ------------------------ | ------ |
 | `pr` profile (two runs)                    | 25    | 434 s and 446 s          | 20 min |
+| `pr` profile (GitHub ubuntu-24.04)         | 25    | 429 s                    | 20 min |
 | `nightly --random-seeds 1`                 | 22    | 157 s                    | 29 min |
 | S3 suite under Bun 1.3.14 and Node 22.22.1 | 22    | 430 s (before the suite) | (n/a)  |
 
@@ -128,8 +129,10 @@ Per test:
 - Evidence tests: 3–33 s, including replay and a 14-run minimization.
 
 The fixed seeds 5 and 18 account for about 280 s of the `pr` profile. Image pulls, the Fault Lab
-fetch and the core build are outside the budget; the CI job's 75-minute timeout bounds them. GitHub
-runner timings have not been measured yet.
+fetch and the core build are outside the budget; the CI job's 75-minute timeout bounds them. The
+[first GitHub PR run](https://github.com/cashubtc/coco/actions/runs/43217045134) passed all 25 tests
+in 429 s (441 s including suite setup) and uploaded its portable evidence successfully. GitHub
+nightly-profile timings remain unmeasured.
 
 ### Diagnosing a failure
 
@@ -349,8 +352,9 @@ Replays and minimization runs are new runs in their own directories.
   original that met its expectation `consistent` / `diverged`, plus changed component versions. A
   replay never resolves the original failure: it stays `unresolved` until a fix is shown.
 - **Failure identity** is the outcome, the failing findings by code, mint and Wallet, the kind of a
-  contradicted command and the error class of an unresolved run. Amounts, operation IDs and step
-  indices are excluded.
+  contradicted command, the error class of an unresolved run, and Wallet outcomes unavailable from
+  a live Session at the decisive checkpoint. A Wallet left stopped therefore cannot reproduce a
+  failure observed after startup recovery. Amounts, operation IDs and step indices are excluded.
 - **Minimization** (`minimize.ts`) is best effort and bounded by a run budget. It confirms the
   failure reproduces, then removes groups of steps, never the final checkpoint. A candidate is run
   only if the workload model accepts it, every fault-triggered crash still has its fault installed

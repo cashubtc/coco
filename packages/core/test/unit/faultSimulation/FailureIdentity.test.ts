@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { readFileSync } from 'node:fs';
-import { compareRuns, failureSignature } from '../../fault-simulation/report.ts';
+import { compareRuns, failureSignature, sameFailure } from '../../fault-simulation/report.ts';
 import { readTrace, type RecordedTrace } from '../../fault-simulation/trace.ts';
 
 const fixture = (name: string) =>
@@ -52,7 +52,22 @@ describe('failure identity', () => {
     expect(failureSignature(fixture('v1-negative-control-no-restart.trace.json'))).toEqual({
       outcome: 'wallet_failure',
       findings: ['outcome_unmet wallet=bob', 'value_deficit'],
+      unobservedWallets: ['bob'],
     });
+  });
+
+  it('distinguishes failed startup recovery from leaving the Wallet stopped', () => {
+    const stopped = fixture('v1-negative-control-no-restart.trace.json');
+    const restarted = structuredClone(stopped);
+    restarted.events = restarted.events.filter((event) => event.type !== 'outcome_observed');
+    expect(sameFailure(failureSignature(restarted), failureSignature(stopped))).toBe(false);
+  });
+
+  it('does not carry observation gaps from an earlier checkpoint into a later failure', () => {
+    const stopped = fixture('v1-negative-control-no-restart.trace.json');
+    const later = structuredClone(stopped);
+    later.events.push({ ...structuredClone(later.events.at(-1)!), seq: 999 });
+    expect(failureSignature(later)).not.toHaveProperty('unobservedWallets');
   });
 
   it('identifies a command failure by the failing command kind, not its step index or message', () => {

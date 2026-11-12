@@ -37,7 +37,6 @@ import {
   MINT_MNEMONICS,
   MINT_UNIT,
   MintContainer,
-  waitUntil,
 } from './environment.ts';
 import {
   MintProbe,

@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import {
   candidatePreconditionViolation,
   minimizeFailure,
   type CandidateObservation,
 } from '../../fault-simulation/minimize.ts';
-import type { FailureSignature } from '../../fault-simulation/report.ts';
-import type { ScenarioPlan, ScenarioStep } from '../../fault-simulation/scenarios.ts';
+import { failureSignature, type FailureSignature } from '../../fault-simulation/report.ts';
+import {
+  scenarios,
+  type ScenarioPlan,
+  type ScenarioStep,
+} from '../../fault-simulation/scenarios.ts';
+import { readTrace } from '../../fault-simulation/trace.ts';
 import { planWorkload } from '../../fault-simulation/workload.ts';
 
 const lostResponse: FailureSignature = {
@@ -83,6 +89,39 @@ function buggyWorld(
 }
 
 describe('failure minimization', () => {
+  it('cannot minimize a failed startup recovery into the no-restart negative control', async () => {
+    const stopped = readTrace(
+      readFileSync(
+        new URL(
+          '../../fault-simulation/fixtures/v1-negative-control-no-restart.trace.json',
+          import.meta.url,
+        ),
+        'utf8',
+      ),
+    );
+    const restarted = structuredClone(stopped);
+    restarted.events = restarted.events.filter((event) => event.type !== 'outcome_observed');
+    const result = await minimizeFailure(
+      {
+        plan: scenarios.lostReceiveResponseCrash,
+        signature: failureSignature(restarted),
+        runId: 'startup-bug',
+      },
+      async (plan) => ({
+        signature: !plan.steps.some((step) => step.kind === 'receive' && step.crashWhenFaultFires)
+          ? passed
+          : failureSignature(
+              plan.steps.some((step) => step.kind === 'restart' && step.wallet === 'bob')
+                ? restarted
+                : stopped,
+            ),
+      }),
+      { maxRuns: 40 },
+    );
+    expect(result.plan.steps).toContainEqual({ kind: 'restart', wallet: 'bob' });
+    expect(result.attempts.some((attempt) => attempt.result === 'different_failure')).toBe(true);
+  });
+
   it('removes irrelevant commands while keeping preconditions and the same failure', async () => {
     const original = structuredClone(failingPlan);
     const world = buggyWorld();
