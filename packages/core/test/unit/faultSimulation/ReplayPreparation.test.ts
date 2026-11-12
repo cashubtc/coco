@@ -64,3 +64,16 @@ describe('replay preparation', () => {
     expect(replay.provenance.generator).toBeUndefined();
   });
 });
+
+it('preserves explicit recovery mode when validating a recorded plan', () => {
+  const trace = readTrace(
+    readFileSync(
+      new URL(
+        '../../fault-simulation/fixtures/v2-generated-faults-explicit-seed-5.trace.json',
+        import.meta.url,
+      ),
+      'utf8',
+    ),
+  );
+  expect(prepareReplay(trace).plan).toEqual(trace.plan);
+});
