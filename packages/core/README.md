@@ -410,6 +410,10 @@ those details are derived from canonical quote storage.
 - `trustMint(mintUrl: string): Promise<void>`
 - `untrustMint(mintUrl: string): Promise<void>`
 
+Trust changes, including `addMint()` with a different `trusted` value for a Known Mint, commit
+before Coco refreshes stale metadata. If that refresh fails, the trust change still succeeds and
+publishes the stored metadata; only a mint with no stored metadata propagates the refresh failure.
+
 ### WalletApi
 
 - `receive(token: Token | string): Promise<void>`
