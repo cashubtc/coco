@@ -294,6 +294,74 @@ describe('Proof watcher with real Send coordination', () => {
     expect(h.unsubscribe).toHaveBeenCalledTimes(1);
   });
 
+  it('watches a proof requested again after its mint was untrusted during acquisition', async () => {
+    const h = await setup();
+    await h.seed('send');
+    const acquired = deferred();
+    // Only the first acquisition is held; later ones subscribe immediately.
+    h.blockAcquisition(async () => {
+      h.blockAcquisition(async () => {});
+      await acquired.promise;
+    });
+    await h.watcher.start();
+    try {
+      const revoked = h.watcher.watchProof(mintUrl, ['send']);
+      await h.subscribed.promise;
+      await h.repositories.mintRepository.setMintTrusted(mintUrl, false);
+      await h.eventBus.emit('mint:untrusted', { mintUrl });
+      await h.repositories.mintRepository.setMintTrusted(mintUrl, true);
+      await h.watcher.watchProof(mintUrl, ['send']);
+      expect(h.subscribe).toHaveBeenCalledTimes(2);
+      acquired.resolve();
+      await revoked;
+      expect(h.unsubscribe).toHaveBeenCalledTimes(1);
+      await h.notify('send');
+      expect(await h.stateOf('send')).toBe('spent');
+    } finally {
+      // Never leave a blocked acquisition behind if an assertion fails.
+      acquired.resolve();
+    }
+  });
+
+  it('keeps a newer acquisition owning its proof when a revoked one finishes first', async () => {
+    const h = await setup();
+    await h.seed('send');
+    const first = deferred();
+    const second = deferred();
+    h.blockAcquisition(async () => {
+      h.blockAcquisition(async () => {
+        h.blockAcquisition(async () => {});
+        await second.promise;
+      });
+      await first.promise;
+    });
+    await h.watcher.start();
+    try {
+      const revoked = h.watcher.watchProof(mintUrl, ['send']);
+      await h.subscribed.promise;
+      await h.eventBus.emit('mint:untrusted', { mintUrl });
+      const current = h.watcher.watchProof(mintUrl, ['send']);
+      for (let i = 0; i < 50 && h.subscribe.mock.calls.length < 2; i++) {
+        await new Promise((done) => setTimeout(done, 0));
+      }
+      expect(h.subscribe).toHaveBeenCalledTimes(2);
+      first.resolve();
+      await revoked;
+      // The second acquisition still owns the proof, so a third request must not subscribe again.
+      await h.watcher.watchProof(mintUrl, ['send']);
+      expect(h.subscribe).toHaveBeenCalledTimes(2);
+      second.resolve();
+      await current;
+      expect(h.unsubscribe).toHaveBeenCalledTimes(1);
+      await h.notify('send');
+      expect(await h.stateOf('send')).toBe('spent');
+    } finally {
+      // Never leave a blocked acquisition behind if an assertion fails.
+      first.resolve();
+      second.resolve();
+    }
+  });
+
   it('waits for subscription cleanup already started by a notification', async () => {
     const h = await setup();
     await h.seed('send');
