@@ -131,7 +131,11 @@ export class WalletRestoreService {
     }
   }
 
-  /** Restore a keyset additively, committing discovered proofs and its counter together. */
+  /**
+   * Restore a keyset additively, committing discovered proofs and its counter together. Local
+   * proofs absent from the scan are left untouched and the counter is never lowered. Success means
+   * the discovered results were applied, not that every historical output was found.
+   */
   async restoreKeyset(
     mintUrl: string,
     wallet: Wallet,

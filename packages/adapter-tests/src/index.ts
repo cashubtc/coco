@@ -92,7 +92,7 @@ export interface KeypairAllocatorForTest {
 }
 
 /**
- * Open a Coco Session without background owners and expose the real key-management gateway on an
+ * Open a Coco Session without background owners and expose real keypair allocation on an
  * initialized adapter. Open it before holding storage locks: session startup also uses storage.
  */
 export async function openKeypairAllocatorForTest(

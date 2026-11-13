@@ -15,9 +15,9 @@ derivation-index exhaustion errors.
 
 Custom repository adapters must implement `KeyRingRepository.getLastAllocatedIndex`,
 `getHighestStoredDerivationIndex`, and `setLastAllocatedIndex` using the current repository scope.
-These persistence primitives replace the legacy derivation methods. Shared scoped commands choose
-the next index, derive synchronously, and persist the key with its high-water mark inside the
+These persistence primitives replace the legacy derivation methods. `ScopedKeypairs` chooses
+the next index, derives synchronously, and persists the key with its high-water mark inside the
 owning Wallet transaction; adapters must not open another transaction for allocation.
 
-Add `runKeypairAllocationContract` and `KeypairAllocationContractOptions` to exercise the real
-key-management gateway in adapter tests.
+Add `runKeypairAllocationContract` and `KeypairAllocationContractOptions` to exercise real keypair
+allocation through the transaction runner in adapter tests.

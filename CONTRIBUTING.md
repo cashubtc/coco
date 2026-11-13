@@ -248,7 +248,7 @@ like `chore: update release workflow` is fine.
 ## Coding standards
 
 Before implementing or reviewing changes, use [CODING_STANDARDS.md](CODING_STANDARDS.md) for coding
-conventions, package boundaries, transaction design and behavioral guarantees.
+conventions, package boundaries, transaction rules and behavioral guarantees.
 
 ## Testing expectations
 

@@ -26,14 +26,13 @@ transaction and ownership model; it does not sandbox plugins.
 - **Keep the services and make each write transactional.** This would keep general mutation paths
   that still bypass the Owning Operation's rules, and every new method would need its own ownership
   checks.
-- **Deprecate first, then remove.** The removal ships as a hard break in the pending
-  `@cashu/coco-core` 3.0.0 major, with a migration note. A deprecation release would delay it to the
-  next major.
+- **Deprecate first, then remove.** The removal is a hard break in `@cashu/coco-core` 3.0.0, with a
+  migration note. A deprecation release would have delayed it to the next major.
 
 ## Consequences
 
 `CounterRepository` and Output Allocation through `ScopedOutputs` are unchanged. The proof watcher
-now observes only pending Sends. The former compatibility path that marked
+observes only pending Sends. The former compatibility path that marked
 unowned inflight proofs spent is retired: missing or terminal operation references no longer
 receive automatic reconciliation. Current supported operation flows retain an Owning Operation
 while their proofs are inflight. Restore still imports unowned ready or pending proofs and owns

@@ -117,4 +117,4 @@ implementations must replace `pause()` / `resume()` with synchronous `ensure(): 
 repair, preserve polling interests, fence retired callbacks, and emit `open` for each fresh connection
 so current registrations can be replayed. Replayed subscriptions must not duplicate polling tasks.
 
-See [Watchers & Processors](../pages/watchers-processors.md) for owner controls and shutdown behavior.
+See [Watchers & Processors](../pages/watchers-processors.md) for owner selection and shutdown behavior.
