@@ -174,6 +174,15 @@ If the mint returns `PAID`, the operation is finalized immediately. If the mint 
 
 ## Handling Pending Operations
 
+### Mint Swap source children
+
+An active Mint Swap exclusively coordinates its exact source Melt child. Reads and quote
+observation remain legal, but ordinary commands that would execute, refresh, cancel, reclaim,
+finalize, or prepare against its source quote reject with `MintSwapChildOperationError`; use the
+reported `parentOperationId` with `ops.mintSwap`. After the parent stops, ordinary processing may
+settle or safely release the child, but it can never authorize the stopped parent's source payment
+or revise the parent outcome. See [Mint Swap Operations](./mint-swap-operations.md).
+
 Pending operations should be checked until they finalize or roll back:
 
 ```ts

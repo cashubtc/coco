@@ -18,6 +18,7 @@ import {
   runMintSwapPersistenceContract,
   runBatchMintPersistenceContract,
   runBatchMintHistoryContract,
+  runHistoryProjectionContract,
 } from '@cashu/coco-adapter-tests';
 import { runSqlDatabaseContract } from '@cashu/coco-sql-storage/test';
 import { SqliteRepositories as Repositories } from '../index.ts';
@@ -119,6 +120,7 @@ runKeypairAllocationContract(
 
 runBatchMintPersistenceContract({ createRepositories }, { describe, it, expect });
 runBatchMintHistoryContract({ createRepositories }, { describe, it, expect });
+runHistoryProjectionContract({ createRepositories }, { describe, it, expect });
 
 runMintSwapPersistenceContract(
   {

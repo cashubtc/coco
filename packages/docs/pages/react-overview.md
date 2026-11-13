@@ -2,7 +2,7 @@
 
 The `@cashu/coco-react` package provides React providers and hooks around a
 Coco `Manager` so UI code can access balance, mints, history, and
-operation-oriented send, receive, mint, and melt flows.
+operation-oriented send, receive, mint, melt, and Mint Swap flows.
 
 The canonical lifecycle surface lives under `manager.ops.*` in core. The React
 package mirrors that model directly with:
@@ -11,6 +11,7 @@ package mirrors that model directly with:
 - `useReceiveOperation()`
 - `useMintOperation()`
 - `useMeltOperation()`
+- `useMintSwapOperation()`
 
 Each hook exposes the same durable-operation story:
 
@@ -27,6 +28,11 @@ target operation changes, remount the hook or component with a new React `key`.
 Use `refresh()` for stale persisted operations or recovery UI, not as normal
 happy-path polling. Lifecycle events update the bound `currentOperation`
 automatically when watchers, processors, or explicit actions move it forward.
+
+`useMintSwapOperation` treats events as invalidations, rereads local durable state, and orders
+same-parent snapshots by `revision`. It polls local `get` while the parent is active so lost hints do
+not stall the UI, then stops at a quiescent outcome. Observation and `waitForOutcome` are passive;
+only an explicit call to the hook's `refresh` method drives recovery.
 
 ## Installation
 

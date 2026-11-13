@@ -1069,6 +1069,7 @@ export class Manager {
 
     const historyService = new HistoryService(
       repositories.historyRepository,
+      this.mintSwapOperationRepository,
       this.eventBus,
       historyLogger,
     );

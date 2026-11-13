@@ -180,6 +180,7 @@ function createMemoryRepositoryState() {
   const receiveOperationRepository = new MemoryReceiveOperationRepository();
   const mintQuoteRepository = new MemoryMintQuoteRepository();
   const batchMintOperationRepository = new MemoryBatchMintOperationRepository();
+  const mintSwapOperationRepository = new MemoryMintSwapOperationRepository();
 
   const state = {
     mintRepository: new MemoryMintRepository(),
@@ -197,6 +198,7 @@ function createMemoryRepositoryState() {
       mintQuoteRepository,
       receiveOperationRepository,
       batchMintOperationRepository,
+      mintSwapOperationRepository,
     }),
     sendOperationRepository,
     meltOperationRepository,
@@ -213,7 +215,7 @@ function createMemoryRepositoryState() {
   const repositories = state satisfies StateOwnerConstraint;
   return {
     ...repositories,
-    mintSwap: { operationRepository: new MemoryMintSwapOperationRepository() },
+    mintSwap: { operationRepository: mintSwapOperationRepository },
     batchMint: { operationRepository: batchMintOperationRepository },
   };
 }

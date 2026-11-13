@@ -28,6 +28,17 @@ Normal setup and use of the supplied adapters retain semantic versioning guarant
 or upgrading a custom adapter, read the
 [repository compatibility policy](https://github.com/cashubtc/coco/blob/master/packages/core/README.md#repository-compatibility).
 
+History projections must group each Mint Swap parent with its exact source Melt and destination
+Mint child before pagination. Lists expose one `mint-swap:<parentId>` row and suppress those exact
+child rows; direct child lookup remains available. Legacy deduplication happens against the complete
+ordinary set before suppression, and list ordering stays `createdAt DESC`, then ID. Use
+`projectMintSwapHistoryEntry` from `@cashu/coco-core/adapter` and run
+`runHistoryProjectionContract()` from `@cashu/coco-adapter-tests` against the real backend.
+
+Repository method signatures and persisted operation records are unchanged. Supplied SQL and
+IndexedDB adapters need no schema or Wallet-data migration; custom adapters need only update their
+read projection and pagination behavior.
+
 ## Security
 
 Coco's built-in storage adapters do not encrypt wallet data at rest. Stored data can include

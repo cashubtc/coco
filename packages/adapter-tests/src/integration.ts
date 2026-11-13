@@ -2565,13 +2565,20 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         await withSession(
           async (manager) => {
             const operation = await prepareMintOperation(manager, mintUrl, 40, testUnit);
-            const observed = waitForEvent<{ quote: MintQuote }>(
-              manager,
-              'mint-quote:updated',
-              ({ quote }) => quote.quoteId === operation.quoteId && isMintQuoteReady(quote),
-            );
+            let stopObserving: (() => void) | undefined;
+            const observed = new Promise<MintQuote>((resolve) => {
+              stopObserving = manager.on('mint-quote:updated', ({ quote }) => {
+                if (quote.quoteId !== operation.quoteId || !isMintQuoteReady(quote)) return;
+                resolve(quote);
+              });
+            });
 
-            await observed;
+            try {
+              const current = await getMintQuoteForOperation(manager, operation);
+              if (!isMintQuoteReady(current)) await observed;
+            } finally {
+              stopObserving?.();
+            }
             await manager.dispose();
 
             expect((await manager.ops.mint.get(operation.id))?.state).toBe('pending');

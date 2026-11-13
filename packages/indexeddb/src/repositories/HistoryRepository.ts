@@ -4,16 +4,20 @@ import type {
   HistoryRepository,
   LegacyHistoryEntry,
   LegacyHistoryRowInput,
+  MeltOperation,
+  MintOperation,
 } from '@cashu/coco-core/adapter';
 import type { Token } from '@cashu/cashu-ts';
 import {
   batchMintHistoryId,
   compareHistoryEntries,
   deserializeAmount,
+  deserializeMintSwapOperation,
   deserializeToken,
   operationHistoryId,
   parseHistoryEntryId,
   projectLegacyHistoryRow,
+  projectMintSwapHistoryEntry,
 } from '@cashu/coco-core/adapter';
 import type {
   BatchMintMemberRow,
@@ -22,6 +26,7 @@ import type {
   MeltOperationRow,
   MintQuoteRow,
   MintOperationRow,
+  MintSwapOperationRow,
   ReceiveOperationRow,
   SendOperationRow,
 } from '../lib/db.ts';
@@ -52,6 +57,7 @@ const stores = [
   'coco_cashu_receive_operations',
   'coco_cashu_batch_mint_operations',
   'coco_cashu_batch_mint_members',
+  'coco_cashu_mint_swap_operations',
   'coco_cashu_history',
 ] as const;
 
@@ -123,29 +129,37 @@ export class IdbHistoryRepository implements HistoryRepository {
     if (pageWindow <= 0) return [];
 
     const entries = await this.db.runTransaction('r', [...stores], async (tx) => {
-      const [sendRows, meltRows, mintRows, receiveRows, legacyRows] = await Promise.all([
-        this.readRecentOperationRows<SendOperationRow>(
-          tx.table('coco_cashu_send_operations'),
-          pageWindow,
-          'send',
-        ),
-        this.readRecentOperationRows<MeltOperationRow>(
-          tx.table('coco_cashu_melt_operations'),
-          pageWindow,
-          'melt',
-        ),
-        this.readRecentOperationRows<MintOperationRow>(
-          tx.table('coco_cashu_mint_operations'),
-          pageWindow,
-          'mint',
-        ),
-        this.readRecentOperationRows<ReceiveOperationRow>(
-          tx.table('coco_cashu_receive_operations'),
-          pageWindow,
-          'receive',
-        ),
-        this.readVisibleLegacyRows(tx, tx.table('coco_cashu_history'), pageWindow),
-      ]);
+      const [sendRows, meltRows, mintRows, receiveRows, mintSwapRows, legacyRows] =
+        await Promise.all([
+          this.readRecentOperationRows<SendOperationRow>(
+            tx.table('coco_cashu_send_operations'),
+            pageWindow,
+            'send',
+          ),
+          this.readRecentUnownedOperationRows<MeltOperationRow>(
+            tx,
+            tx.table('coco_cashu_melt_operations'),
+            pageWindow,
+            'melt',
+          ),
+          this.readRecentUnownedOperationRows<MintOperationRow>(
+            tx,
+            tx.table('coco_cashu_mint_operations'),
+            pageWindow,
+            'mint',
+          ),
+          this.readRecentOperationRows<ReceiveOperationRow>(
+            tx.table('coco_cashu_receive_operations'),
+            pageWindow,
+            'receive',
+          ),
+          this.readRecentRows<MintSwapOperationRow>(
+            tx.table('coco_cashu_mint_swap_operations'),
+            0,
+            pageWindow,
+          ),
+          this.readVisibleLegacyRows(tx, tx.table('coco_cashu_history'), pageWindow),
+        ]);
       const mintRemoteStateByOperationId = await this.readMintRemoteStateByOperationId(
         tx,
         mintRows,
@@ -159,6 +173,7 @@ export class IdbHistoryRepository implements HistoryRepository {
           .filter(Boolean),
         ...receiveRows.map((row) => this.receiveRowToEntry(row)).filter(Boolean),
         ...(await this.readRecentBatchMintEntries(tx, pageWindow)),
+        ...(await this.mintSwapRowsToEntries(tx, mintSwapRows)),
       ] as HistoryEntry[];
 
       return [...operationEntries, ...legacyRows].sort(compareHistoryEntries);
@@ -221,6 +236,21 @@ export class IdbHistoryRepository implements HistoryRepository {
             | undefined;
           return row ? this.receiveRowToEntry(row) : null;
         }
+        case 'mint-swap': {
+          const parent = (await tx
+            .table('coco_cashu_mint_swap_operations')
+            .get(parsed.operationId)) as MintSwapOperationRow | undefined;
+          if (!parent) return null;
+          return this.mintSwapRowToEntry(
+            parent,
+            (await tx.table('coco_cashu_melt_operations').get(parent.sourceOperationId)) as
+              | MeltOperationRow
+              | undefined,
+            (await tx.table('coco_cashu_mint_operations').get(parent.destinationOperationId)) as
+              | MintOperationRow
+              | undefined,
+          );
+        }
       }
     });
   }
@@ -249,6 +279,52 @@ export class IdbHistoryRepository implements HistoryRepository {
       .offset(offset)
       .limit(limit)
       .toArray()) as TRow[];
+  }
+
+  private async readRecentUnownedOperationRows<
+    TRow extends (MeltOperationRow | MintOperationRow) & { createdAt: number },
+  >(
+    tx: { table(name: string): Table },
+    table: Table,
+    limit: number,
+    type: 'mint' | 'melt',
+  ): Promise<TRow[]> {
+    const rows: TRow[] = [];
+    const batchSize = Math.max(limit, 50);
+    let offset = 0;
+
+    while (rows.length < limit) {
+      const candidates = (await table
+        .orderBy('createdAt')
+        .reverse()
+        .filter((row) => this.operationIsHistoryEligible(type, row as OperationRow))
+        .offset(offset)
+        .limit(batchSize)
+        .toArray()) as TRow[];
+      if (candidates.length === 0) break;
+
+      const ownershipIndex = type === 'mint' ? 'destinationOperationId' : 'sourceOperationId';
+      const owned = new Set(
+        (
+          (await tx
+            .table('coco_cashu_mint_swap_operations')
+            .where(ownershipIndex)
+            .anyOf(candidates.map((row) => row.id))
+            .toArray()) as MintSwapOperationRow[]
+        ).map((parent) =>
+          type === 'mint' ? parent.destinationOperationId : parent.sourceOperationId,
+        ),
+      );
+      for (const candidate of candidates) {
+        if (!owned.has(candidate.id)) rows.push(candidate);
+        if (rows.length >= limit) break;
+      }
+
+      if (candidates.length < batchSize) break;
+      offset += candidates.length;
+    }
+
+    return rows;
   }
 
   private async readMintRemoteStateByOperationId(
@@ -410,6 +486,53 @@ export class IdbHistoryRepository implements HistoryRepository {
       ...(remoteState ? { remoteState } : {}),
       ...(operation.error ? { error: operation.error } : {}),
     };
+  }
+
+  private async mintSwapRowsToEntries(
+    tx: { table(name: string): Table },
+    parents: MintSwapOperationRow[],
+  ): Promise<HistoryEntry[]> {
+    if (parents.length === 0) return [];
+    const sourceRows = (await tx
+      .table('coco_cashu_melt_operations')
+      .bulkGet(parents.map((parent) => parent.sourceOperationId))) as Array<
+      MeltOperationRow | undefined
+    >;
+    const destinationRows = (await tx
+      .table('coco_cashu_mint_operations')
+      .bulkGet(parents.map((parent) => parent.destinationOperationId))) as Array<
+      MintOperationRow | undefined
+    >;
+
+    return parents.map((parent, index) =>
+      this.mintSwapRowToEntry(parent, sourceRows[index], destinationRows[index]),
+    );
+  }
+
+  private mintSwapRowToEntry(
+    row: MintSwapOperationRow,
+    sourceRow: MeltOperationRow | undefined,
+    destinationRow: MintOperationRow | undefined,
+  ): HistoryEntry {
+    const sourceChild = sourceRow
+      ? ({
+          id: sourceRow.id,
+          state: sourceRow.state,
+          updatedAt: sourceRow.updatedAt * 1000,
+        } as MeltOperation)
+      : null;
+    const destinationChild = destinationRow
+      ? ({
+          id: destinationRow.id,
+          state: destinationRow.state,
+          updatedAt: destinationRow.updatedAt * 1000,
+        } as MintOperation)
+      : null;
+    return projectMintSwapHistoryEntry(
+      deserializeMintSwapOperation(row.recordJson),
+      sourceChild,
+      destinationChild,
+    );
   }
 
   private receiveRowToEntry(row: ReceiveOperationRow): HistoryEntry | null {

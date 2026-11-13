@@ -87,6 +87,7 @@ history rules. Then load only the references for the requested features:
 | Mint or melt using a BOLT11 invoice                    | [BOLT11](references/bolt11.md)                           |
 | Mint or melt using a BOLT12 offer                      | [BOLT12](references/bolt12.md)                           |
 | Mint from an onchain deposit or melt to an address     | [Onchain](references/onchain.md)                         |
+| Move value between two trusted mints                   | [Mint Swap](references/mint-swap.md)                     |
 | Pay or create a Cashu payment request                  | [Payment requests](references/payment-requests.md)       |
 | Send or receive locked ecash, or manage spending keys  | [P2PK](references/p2pk.md)                               |
 | Import Wallet Recovery Material or reconstruct proofs  | [Wallet Import and Restore](references/restore.md)       |

@@ -362,6 +362,14 @@ To preserve standalone automatic claims and their `mint-op:*` events during migr
 `batchMintQuotes: false` in `processors.mintOperationProcessor` at initialization). Explicit `coco.ops.mint.batch` calls
 still emit batch events, and existing in-flight batches still recover as batches.
 
+## Mint Swap destination children
+
+An active Mint Swap exclusively coordinates its exact destination Mint child. Reads and canonical
+quote observation remain available, but ordinary execute, refresh, finalize, prepare-again, and
+claim commands reject with `MintSwapChildOperationError`; use its `parentOperationId` with
+`ops.mintSwap`. Once the parent is terminal or `needs_attention`, ordinary resolution may finish
+the child without revising the stopped parent. See [Mint Swap Operations](./mint-swap-operations.md).
+
 ## Batch Mint Operations (`coco.ops.mint.batch`)
 
 A Batch Mint Operation claims two or more Mint Quotes from one trusted mint in

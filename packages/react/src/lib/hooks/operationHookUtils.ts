@@ -146,6 +146,18 @@ export function useOperationHookState<TOperation extends { id: string }, TExecut
     return currentOperationRef.current;
   }, []);
 
+  const replaceStatus = useCallback(
+    (nextStatus: OperationHookStatus, nextError: Error | null = null) => {
+      if (!mountedRef.current) {
+        return;
+      }
+
+      setStatus(nextStatus);
+      setError(nextError);
+    },
+    [],
+  );
+
   const runStatefulAction = useCallback(
     async <T>(
       action: () => Promise<T>,
@@ -208,6 +220,7 @@ export function useOperationHookState<TOperation extends { id: string }, TExecut
     replaceCurrentOperation,
     replaceExecuteResult,
     getCurrentOperation,
+    replaceStatus,
     runStatefulAction,
     reset,
   };
