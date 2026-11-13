@@ -27,7 +27,8 @@ export class ProofStateWatcherService {
   private stopping?: Promise<void>;
   private unsubscribeByKey = new Map<ProofKey, UnsubscribeHandler>();
   private inflightByKey = new Set<ProofKey>();
-  private readonly acquiringKeys = new Set<ProofKey>();
+  // Each key maps to the acquisition that owns it, so a stale acquisition never releases a newer one.
+  private readonly acquiringKeys = new Map<ProofKey, symbol>();
   private offProofsStateChanged?: () => void;
   private offProofsSaved?: () => void;
   private offUntrusted?: () => void;
@@ -237,9 +238,10 @@ export class ProofStateWatcherService {
         !this.acquiringKeys.has(toKey(mintUrl, target.secret)),
     );
     if (watchable.length === 0) return;
+    const acquisition = Symbol('proof-watch-acquisition');
     for (const target of watchable) {
       const key = toKey(mintUrl, target.secret);
-      this.acquiringKeys.add(key);
+      this.acquiringKeys.set(key, acquisition);
       this.targetsByProofKey.set(key, target);
     }
     try {
@@ -295,7 +297,10 @@ export class ProofStateWatcherService {
         });
       }
     } finally {
-      for (const target of watchable) this.acquiringKeys.delete(toKey(mintUrl, target.secret));
+      for (const target of watchable) {
+        const key = toKey(mintUrl, target.secret);
+        if (this.acquiringKeys.get(key) === acquisition) this.acquiringKeys.delete(key);
+      }
     }
   }
 
@@ -342,6 +347,11 @@ export class ProofStateWatcherService {
     // Revoke targets before waiting for cleanup, including targets whose acquisition is pending.
     for (const [key, target] of this.targetsByProofKey) {
       if (target.mintUrl === mintUrl) this.targetsByProofKey.delete(key);
+    }
+    // A revoked acquisition no longer owns its keys: a later request may acquire them again, and the
+    // revoked one releases its late subscription because its targets are gone.
+    for (const key of this.acquiringKeys.keys()) {
+      if (key.startsWith(prefix)) this.acquiringKeys.delete(key);
     }
 
     for (const key of this.unsubscribeByKey.keys()) {
