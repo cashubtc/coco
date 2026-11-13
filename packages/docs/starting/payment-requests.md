@@ -28,7 +28,9 @@ The returned `ResolvedPaymentRequest` contains:
   requests, this also requires NUT-11 support. Preparation checks affordability including all fees.
   A request without an amount is checked against zero unless you pass the amount you intend to pay,
   as in `paymentRequests.parse(paymentRequest, { amount: 50 })`. The request stays amountless, so
-  pass the amount to `paymentRequests.prepare()` as well.
+  pass the amount to `paymentRequests.prepare()` as well. An intended amount in a different unit
+  than the request's throws `UnitMismatchError`, and one that differs from a fixed request's amount
+  throws `PaymentRequestError`.
 - **spendingCondition** - Optional NUT-10 requirement details. Valid P2PK
   requirements are exposed as normalized P2PK options; unsupported or malformed
   requirements are exposed as diagnostics.
@@ -270,6 +272,7 @@ try {
   // - Unsupported transport type
   // - Mint not in allowed list
   // - Amount mismatch
+  // - Unit mismatch
   // - Insufficient balance
   // - Unsupported or malformed NUT-10 requirement
   // - Selected mint does not advertise NUT-11 for a P2PK request

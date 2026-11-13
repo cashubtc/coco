@@ -4,6 +4,7 @@ import {
   initializeCoco,
   MemoryRepositories,
   PaymentRequestError,
+  UnitMismatchError,
   type Manager,
 } from '../../index.ts';
 
@@ -79,7 +80,7 @@ describe('Payment Request intended amount', () => {
     expect(parsed.unit).toBe(unit);
     await expect(
       payer.paymentRequests.parse(encoded, { amount: { amount: 32, unit: 'other' } }),
-    ).rejects.toThrow();
+    ).rejects.toBeInstanceOf(UnitMismatchError);
     const fixed = new PaymentRequest([], 'fixed', 32, unit, [mintUrl]).toEncodedRequest();
     await expect(payer.paymentRequests.parse(fixed, { amount: 31 })).rejects.toBeInstanceOf(
       PaymentRequestError,
