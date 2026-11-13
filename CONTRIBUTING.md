@@ -135,6 +135,14 @@ session lifecycle, not a rule for where to put a new test.
   intended tests execute with a nonzero pass count. A file that `integration.test.ts` does not import
   is silently skipped.
 
+#### Wallet fault simulation
+
+`bun run test:fault-simulation` runs the real-mint crash and network-fault scenarios. They start
+their own mint containers, a pinned Cashu Fault Lab gateway under Node and Wallet processes, so
+neither runner above selects them. See the
+[harness README](packages/core/test/fault-simulation/README.md) for prerequisites, artifacts and
+replay.
+
 The `indexeddb` tests also need Playwright browsers. The runner stops and prints the install command
 if they are missing, rather than installing them for you.
 
