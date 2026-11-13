@@ -196,7 +196,10 @@ export const beginMeltExecution = defineTransition<
   return { operation, inputProofs, changed: true };
 });
 
-/** Persist a successful pre-swap before authorizing the following NUT-05 request. */
+/**
+ * Persist a successful pre-swap before authorizing the following NUT-05 request. The two remote
+ * calls cannot share a Wallet transaction, so this checkpoint is what recovery resumes from.
+ */
 export const applyMeltSwapResult = defineTransition<ApplyMeltSwapResultInput, ApplyMeltSwapResult>(
   async (tx, input) => {
     const current = await requireOperation(tx, input.operation.id);

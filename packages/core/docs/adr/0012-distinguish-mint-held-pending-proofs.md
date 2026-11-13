@@ -4,29 +4,26 @@ status: accepted
 
 # Distinguish mint-held pending proofs from unclaimed sends
 
-Add a local `pending` proof state for newly restored proofs whose mint reports `PENDING`. Local
+Restored proofs whose mint reports `PENDING` are stored in a local `pending` proof state. Local
 `inflight` also represents outgoing Send tokens that a recipient can still claim while the mint
 reports `UNSPENT`; treating both cases identically would either strand restored proofs or make
-outstanding Send tokens spendable again. Restore implements this distinction.
+outstanding Send tokens spendable again.
 
-The initial migration preserves existing operation-owned proof state and ownership. Releasing a
-restored pending proof after a fresh `UNSPENT` observation requires checking its current local state
-and ownership inside the applying transaction. The proof remains unavailable until that release or
-confirmation that it was spent.
+Existing operation-owned proofs keep their state and ownership. A pending proof remains unavailable
+until a fresh `UNSPENT` observation releases it or it is confirmed spent. Releasing it requires
+checking its current local state and ownership inside the applying transaction.
 
-Initially, re-running Restore provides reconciliation: eligible pending proofs remain pending on
-`PENDING`, become ready on `UNSPENT`, and become spent on `SPENT`. Current local state and operation
-ownership are rechecked inside the keyset transaction before applying an observation.
+Re-running Restore is the reconciliation path: eligible pending proofs remain pending on `PENDING`,
+become ready on `UNSPENT`, and become spent on `SPENT`. Current local state and operation ownership
+are rechecked inside the keyset transaction before applying an observation.
 
-Automatic pending-proof watching is deferred to a separate change. That work must account for
+There is no automatic pending-proof watching. Adding it is a separate decision that must account for
 subscription acquisition, replacement subscriptions, overlapping notifications, and shutdown,
-including event publication through called services. This migration leaves the existing inflight
-watcher and EventBus lifecycle unchanged.
+including event publication through called services.
 
-Preserve existing balance semantics: pending proofs, like inflight proofs, contribute to none of
-`spendable`, `reserved`, or `total` until they become ready. Separate pending balance reporting is
-outside this migration.
+Pending proofs, like inflight proofs, contribute to none of `spendable`, `reserved`, or `total`
+until they become ready. There is no separate pending balance.
 
-Melt inputs retain `inflight` in this PR. Once the Restore PR is opened, create a linked follow-up
-issue to move Melt inputs to `pending`, preserving the Melt Operation's authority over release and
-settlement. Mint observation alone must not bypass an owning operation's recovery rules.
+Melt inputs retain `inflight`. Moving them to `pending` would have to preserve the Melt Operation's
+authority over release and settlement: mint observation alone must not bypass an owning operation's
+recovery rules.

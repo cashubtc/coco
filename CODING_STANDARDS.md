@@ -37,10 +37,87 @@ dependencies and composition wiring to establish what a module can actually do.
 
 ### Transactions
 
-Before changing or reviewing Wallet persistence, operation coordination or storage adapters, read
-[TRANSACTION_DESIGN](TRANSACTION_DESIGN.md) and
-[ADR-0011](packages/core/docs/adr/0011-compose-wallet-transactions-in-the-owning-coordinator.md). Before handoff, complete every
-[Agent Review step](TRANSACTION_DESIGN.md#agent-review).
+These rules govern Wallet persistence, operation coordination and storage adapters in
+`packages/core`. The decisions behind them are
+[ADR-0011](packages/core/docs/adr/0011-compose-wallet-transactions-in-the-owning-coordinator.md) (coordinator-owned
+transactions), [ADR-0018](packages/core/docs/adr/0018-release-operation-owned-value-only-on-positive-evidence.md)
+(releasing owned value) and [ADR-0019](packages/core/docs/adr/0019-never-lower-or-reclaim-allocated-positions.md)
+(allocated positions). This section holds rules that apply to every operation. The behavior of one
+operation belongs in its code, comments and tests, not here.
+
+| Role              | Does                                                                        | Must not                                                                   |
+| ----------------- | --------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Coordinator       | Orders preflight, `run()` calls, remote effects, recovery and events        | Mutate root repositories or retain a live scope                            |
+| Transition        | Composes the local changes of one domain step inside the `tx` it is given   | Reach a runner, root repositories, coordinators, remote I/O or live events |
+| Scoped capability | Holds reusable local rules, such as proof reservation and Output Allocation | Open a transaction or import workflow transitions                          |
+| Query             | Reads state outside a transaction                                           | Initialize or repair storage, allocate, or commit                          |
+| Handler or Remote | Performs remote I/O and returns candidate facts                             | Receive repositories, mutation services or an event bus                    |
+
+Every workflow with a remote effect has this shape:
+
+```text
+preflight -> authorize in run() -> remote I/O -> apply in run() -> publish
+```
+
+- Only the outermost local workflow calls `transactionRunner.run()`. Never open a transaction
+  inside one, accept an optional transaction argument that opens one when omitted, or keep `tx` or
+  its capabilities after `run()` returns.
+- For one atomic commit, compose transitions inside a single `run()`. Separate `run()` calls, and
+  service entry points that commit on their own, are separate commits.
+- Fix retry-sensitive inputs before `run()`: IDs, timestamps, randomness, the loaded Wallet Seed and
+  method policy. The runner repeats the whole callback after a transient repository conflict.
+- A `run()` callback does local work only. It must not close over remote clients, seed loaders,
+  coordinators, timers, event buses, root repositories or another runner. TypeScript does not
+  enforce this, so read the callback and its helpers.
+- Repeat or validate inside the transaction every read that authorizes a mutation. Reads made in
+  preflight are informational.
+- Applying a remote result reloads the durable operation and checks that the result belongs to its
+  persisted request.
+- Work that writes and may then throw must be a `Transition`. A rejected transition fails the
+  attempt even when its caller catches the rejection, so return expected outcomes as results such as
+  `changed: false`.
+- Await dependent capability calls sequentially. Lifetime tracking contains work but does not order
+  it. Do not await unrelated asynchronous work inside a transaction: an IndexedDB transaction
+  becomes inactive.
+- Publish events only after `run()` returns. Transitions and capabilities return results and never
+  emit. Delivery is best effort, and a listener failure neither undoes the commit nor replays a
+  remote effect.
+- In-memory locks reduce contention. Correctness comes from durable revisions or conditional
+  transitions checked inside the transaction.
+- A capability exists to hold a rule. Do not expose raw counters so that a workflow can rebuild
+  allocation, and do not wrap a scoped repository in a class that only forwards.
+- `CoreTransaction`, `Transition` and the runner stay out of package entry points.
+
+Naming:
+
+| Name                                           | Use                                                                                          |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `<Domain>Service` / `<Domain>OperationService` | Coordinator; the second also owns a durable operation lifecycle                              |
+| `transactionRunner`, `work`, `tx`              | The injected runner, the callback it accepts, and the live scope                             |
+| `<Domain>Transitions.ts`                       | One module per operation for its whole lifecycle, including recovery, beside its coordinator |
+| `<Action>Input` / `<Action>Result`             | A transition's argument and result, without doubling a suffix: `ApplySendResultInput`        |
+| `Scoped<Domain>` / `RepositoryScoped<Domain>`  | A capability and its repository-backed implementation, in one file under `transactions/`     |
+| `<Domain>Queries`                              | Read-only state access outside a transaction                                                 |
+| `<Domain>Remote` / `<Provider><Domain>Remote`  | A remote I/O boundary and its provider implementation                                        |
+| `<Domain>Validation.ts`                        | Pure helpers, with no persistence or remote effects                                          |
+
+Every runtime export of a `*Transitions.ts` or `*TransitionTypes.ts` module under `operations/` must
+be a `Transition`; an export guard test enforces this. Name transitions with domain verbs
+(`prepareSend`) and call them through `tx.perform(prepareSend, input)`. A `changed` flag reports a
+local change, never that the outer transaction committed.
+
+Before handoff of a change to Wallet persistence, operation coordination or adapters:
+
+1. Name each module's role and trace what it can reach, including helpers and composition-root
+   wiring.
+2. Find the owning `run()` for each atomic change. Confirm that every participant uses its scope,
+   authorizing reads happen inside it, and dependent calls are sequential.
+3. Trace effects: preflight and remote I/O outside, inputs fixed before the callback, events after
+   commit. A commit made by an independent workflow must be meant to survive the caller's failure.
+4. Run the flow's behavior tests on memory and a persistent adapter; typecheck alone does not
+   establish adherence. Report the transaction boundaries you inspected and any remaining deviation.
+
+Change this section only when a rule changes, and record a changed decision in its ADR.
 
 ## Syntax and React conventions
 
@@ -54,7 +131,7 @@ Before changing or reviewing Wallet persistence, operation coordination or stora
 
 Validate inputs early; return empty arrays for no-op cases when appropriate to the contract. In core
 and adapters, normalize mint URLs with `normalizeMintUrl()` before persistence. Check repository
-mutations against their atomicity and invariant contracts under the transaction design above.
+mutations against their atomicity and invariant contracts under the transaction rules above.
 
 Keep caller convenience at public boundaries and canonical domain representations internally. In core,
 follow [amounts.ts](packages/core/amounts.ts) for public parsing and internal amount/unit contracts.
@@ -136,8 +213,8 @@ from running the integration runner's package matrix.
 
 Add JSDoc for public APIs and non-obvious flows. Comments should explain contracts, non-obvious
 ordering, authority or compatibility decisions. Update affected public examples and API descriptions
-with behavior or signature changes. Keep each detailed
-architectural rule in its owning design or ADR and link to it here. Mechanical preferences belong in
+with behavior or signature changes. Keep the reasoning
+behind an architectural rule in its ADR and link to it here. Mechanical preferences belong in
 configuration where practical; mixed local syntax is not evidence for an invented universal standard.
 
 Tie review findings to a concrete affected behavior or agreed contract, with evidence and proportionate

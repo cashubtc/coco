@@ -72,7 +72,7 @@ export interface ReceiveOperationServiceDependencies {
   remote: ReceiveRemote;
   eventBus: Pick<EventBus<CoreEvents>, 'emit'>;
   logger?: Logger;
-  /** Shared with counter-consuming legacy workflows until their transaction migration. */
+  /** Shared across operation services to serialize same-mint preparation. Not required for correctness. */
   mintScopedLock?: MintScopedLock;
 }
 

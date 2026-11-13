@@ -156,7 +156,7 @@ export class MintOperationService {
   async prepare(quoteRef: MintQuoteRef, requestedAmount: Amount): Promise<PendingMintOperation> {
     await this.assertCanResolve(quoteRef);
     const quote = await this.dependencies.quoteLifecycle.requireMintQuoteRefForPrepare(quoteRef);
-    // Keep same-session coordination with legacy allocators until their transaction migrations.
+    // Serializes same-mint preparation, including the metadata refresh. Not required for correctness.
     const releaseMintLock = await this.mintScopedLock.acquire(quote.mintUrl);
     let result: PrepareMintResult;
     try {

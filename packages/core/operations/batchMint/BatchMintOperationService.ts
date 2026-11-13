@@ -99,7 +99,7 @@ export interface BatchMintOperationServiceDependencies {
   loadSeed: () => Promise<Uint8Array>;
   eventBus: EventBus<CoreEvents>;
   logger?: Logger;
-  /** Shared with Mint so admission keeps same-session coordination with legacy output allocators. */
+  /** Shared with Mint so same-mint preparation, including the metadata refresh, stays serialized. */
   mintScopedLock?: MintScopedLock;
   operationIdLock?: OperationIdLock;
 }
@@ -289,7 +289,7 @@ export class BatchMintOperationService {
         `Mint quote ${input.members[0]!.quoteId} was not found for ${method}`,
         input.members[0]!.quoteId,
       );
-    // Keep same-session coordination with legacy output allocators, as Mint preparation does.
+    // Serializes same-mint preparation, as Mint preparation does. Not required for correctness.
     const release = await this.mintScopedLock.acquire(mintUrl);
     try {
       const metadata = await this.dependencies.mintService.refreshAndCommitIfStale(mintUrl);

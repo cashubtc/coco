@@ -148,6 +148,7 @@ async function children(tx: CoreTransaction, parent: MintSwapOperation) {
   return { source, destination, canonical };
 }
 
+/** The maximum assumes no change comes back: an expected refund cannot make a request fit its cap. */
 async function bounds(tx: CoreTransaction, source: PreparedOrLaterOperation) {
   const plan = meltPlanAmounts(source);
   const inputs = source.needsSwap

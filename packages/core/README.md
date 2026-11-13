@@ -122,20 +122,14 @@ in the future. Watchers commit canonical quote observations; the parent then coo
 recovery using those observations and shared child locks. Exact authorized recovery interests
 remain observable after trust revocation without trusting the mint again.
 
-Parent and ordinary operation interests are accepted synchronously. Watchers own asynchronous
-subscription setup and its diagnostics, so slow or failed setup does not block cached parent
-progression. Enabling a watcher can resolve while operation-owned setup is pending. Removing an
-interest revokes its permission immediately and waits for required cleanup; other owners retain theirs.
-Disabling a watcher stops ongoing observation, not parent coordination or explicit recovery.
-Periodic parent scans do not replace a disabled watcher with quote polling. Bounded startup
-recovery and explicit `refresh(id)` / `recovery.run()` can still make target-isolated checks;
-automatic startup recovery respects processor configuration and persisted due times. Necessary
-operation recovery effects remain available. Before releasing source inputs on `UNPAID`, recovery
-requires fresh confirmation under the shared source child lock, whether or not a watcher is enabled.
-If new routine quote evidence is needed, the parent remains recoverable until observation resumes
-or a caller supplies it through refresh/recovery. Re-enabling watchers rebuilds parent interests
-without resetting retry deadlines. Mint-provided Retry-After delays remain a lower bound on the next
-automatic attempt.
+Watchers and processors are selected at initialization for the whole Coco Session. Omitting a
+watcher removes its routine quote observation: parent coordination, `refresh(id)` and
+`recovery.run()` still work, but periodic parent scans do not poll quotes in its place. Bounded
+startup recovery can still observe unresolved quotes, and releasing source inputs requires fresh
+`UNPAID` confirmation under the shared source child lock even when the watcher is omitted. A parent
+that needs other new quote evidence stays recoverable until a caller supplies it through refresh
+or recovery. `ensureSubscriptions()` repairs networking without restarting owners or running
+recovery. Mint-provided Retry-After delays remain a lower bound on the next automatic attempt.
 
 `cancel(id)` records intent and returns the actual state. An ambiguous source can remain pending;
 a paid source recovers forward. Cancellation can still incur a completed pre-swap fee. A
@@ -159,37 +153,35 @@ Mint Swap exclusively coordinates its children while it is active: ordinary Mint
 would change a child or use its quote reject with `MintSwapChildOperationError`; pass its
 `parentOperationId` to `ops.mintSwap`. Reads keep returning children. Once the parent is terminal or
 `needs_attention`, its children return to ordinary resolution, but no ordinary command pays its
-source (`parentStopped: true`). See [Mint Swap Operations](https://github.com/cashubtc/coco/blob/master/TRANSACTION_DESIGN.md#mint-swap-operations).
+source (`parentStopped: true`). See [ADR-0020](https://github.com/cashubtc/coco/blob/master/packages/core/docs/adr/0020-mint-swap-exclusively-coordinates-its-children.md).
 History projection and React Mint Swap hooks are outside this slice.
 
 ## Protocol Support
 
-- [x] NUT-00
-- [x] NUT-01
-- [x] NUT-02
-- [x] NUT-03
-- [x] NUT-04
-- [x] NUT-05
-- [x] NUT-06
-- [x] NUT-07
-- [x] NUT-08
-- [x] NUT-09
-- [x] NUT-10
-- [x] NUT-11
-- [x] NUT-12
-- [x] NUT-13
-- [ ] NUT-14
-- [ ] NUT-15
-- [ ] NUT-16
-- [x] NUT-17
-- [x] NUT-18
-- [ ] NUT-19
-- [ ] NUT-20
-- [x] NUT-21
-- [x] NUT-22
-- [x] NUT-23
-- [ ] NUT-24
-- [ ] NUT-25
+| NUT    | Feature                                     | Support                             |
+| ------ | ------------------------------------------- | ----------------------------------- |
+| 00–06  | Core protocol, keys, swap, mint, melt, info | Yes                                 |
+| 07     | Proof state check                           | Yes                                 |
+| 08     | Lightning fee return                        | Yes                                 |
+| 09     | Restore                                     | Yes                                 |
+| 10, 11 | Spending conditions, P2PK                   | Yes                                 |
+| 12     | DLEQ proofs                                 | Yes                                 |
+| 13     | Deterministic secrets                       | Yes                                 |
+| 14     | HTLCs                                       | No                                  |
+| 15     | Multi-path payments                         | No                                  |
+| 16     | Animated QR codes                           | No                                  |
+| 17     | WebSocket subscriptions                     | Yes                                 |
+| 18     | Payment requests                            | Yes                                 |
+| 19     | Cached responses                            | No                                  |
+| 20     | Signed mint quotes                          | Yes                                 |
+| 21, 22 | Clear and blind authentication              | Yes                                 |
+| 23     | BOLT11                                      | Yes                                 |
+| 24     | HTTP 402 payment required                   | Not in core; implemented by `cocod` |
+| 25     | BOLT12                                      | Yes                                 |
+| 26     | Bech32m payment request encoding            | Yes                                 |
+| 27, 28 | Nostr mint backup, pay-to-blinded-key       | No                                  |
+| 29     | Batch minting                               | Yes                                 |
+| 30     | Onchain                                     | Yes                                 |
 
 ## Quick start
 
@@ -493,7 +485,7 @@ application flows and operation APIs when a mint or melt should be finalized.
 
 `Manager` will auto-detect a global `WebSocket` if available (e.g., browsers).
 In non-browser environments, provide a `webSocketFactory` through
-`initializeCoco` or `Manager` construction. App code should not need transport
+`initializeCoco`. App code should not need transport
 internals.
 
 ## Core events
