@@ -68,6 +68,7 @@ import {
 import {
   MintOperationError,
   UnknownMintError,
+  OfflineSendError,
   ProofValidationError,
   OperationInProgressError,
   SendOperationConflictError,
@@ -147,6 +148,12 @@ export interface PrepareSendOptions {
    * remains the separate payer-side preparation cost. Applies to unlocked and P2PK sends.
    */
   coverReceiverFees?: boolean;
+  /**
+   * Prepare from stored proofs and keysets without a mint request. Succeeds only when stored
+   * proofs add up to the amount as they are; otherwise rejects with `OfflineSendError` and
+   * reserves nothing. Cannot be combined with a send target, `forceSwap` or `coverReceiverFees`.
+   */
+  offline?: boolean;
 }
 
 /**
@@ -277,39 +284,59 @@ export class SendOperationService {
         if (!(await this.mintQueries.isTrustedMint(operation.mintUrl))) {
           throw new UnknownMintError(`Mint ${operation.mintUrl} is not trusted`);
         }
-        const metadata = await this.mintMetadataRefresh.refreshAndCommitIfStale(operation.mintUrl);
-        const keys = this.activeKeys(metadata, operation.unit);
-        const seed = await this.loadSeed();
-        const receiverAmount = options.coverReceiverFees ? operation.amount : undefined;
-        // P2PK outputs are randomized in preflight. Unlocked Sends defer fee planning until
-        // authoritative selection determines that existing proofs cannot be sent directly.
-        const plannedOperation =
-          receiverAmount && operation.method === 'p2pk'
-            ? {
-                ...operation,
-                amount: feeCoveredSendAmount(
-                  receiverAmount,
-                  keys,
-                  createKeyChain(operation.mintUrl, operation.unit, metadata.keysets),
-                ),
-              }
-            : operation;
-        const plan = handler.prepare({
-          operation: plannedOperation,
-          activeKeys: keys,
-          mintInfo: metadata.mint.mintInfo,
-          outputDataCreator: this.outputDataCreator,
-        });
-        const updatedAt = Date.now();
-        result = await this.transactionRunner.run((tx) =>
-          tx.perform(prepareSend, {
-            operation: { ...plannedOperation, updatedAt },
+        if (options.offline) {
+          if (
+            operation.method !== 'default' ||
+            ('forceSwap' in operation.methodData && operation.methodData.forceSwap) ||
+            options.coverReceiverFees
+          ) {
+            throw new OfflineSendError(
+              'unsupported_option',
+              'Offline send cannot use a send target, forceSwap or coverReceiverFees',
+            );
+          }
+          // Sending stored proofs as they are creates no outputs, so nothing here needs the mint.
+          const updatedAt = Date.now();
+          result = await this.transactionRunner.run((tx) =>
+            tx.perform(prepareSend, { operation: { ...operation, updatedAt }, offline: true }),
+          );
+        } else {
+          const metadata = await this.mintMetadataRefresh.refreshAndCommitIfStale(
+            operation.mintUrl,
+          );
+          const keys = this.activeKeys(metadata, operation.unit);
+          const seed = await this.loadSeed();
+          const receiverAmount = options.coverReceiverFees ? operation.amount : undefined;
+          // P2PK outputs are randomized in preflight. Unlocked Sends defer fee planning until
+          // authoritative selection determines that existing proofs cannot be sent directly.
+          const plannedOperation =
+            receiverAmount && operation.method === 'p2pk'
+              ? {
+                  ...operation,
+                  amount: feeCoveredSendAmount(
+                    receiverAmount,
+                    keys,
+                    createKeyChain(operation.mintUrl, operation.unit, metadata.keysets),
+                  ),
+                }
+              : operation;
+          const plan = handler.prepare({
+            operation: plannedOperation,
             activeKeys: keys,
-            seed,
-            ...plan,
-            receiverAmount,
-          }),
-        );
+            mintInfo: metadata.mint.mintInfo,
+            outputDataCreator: this.outputDataCreator,
+          });
+          const updatedAt = Date.now();
+          result = await this.transactionRunner.run((tx) =>
+            tx.perform(prepareSend, {
+              operation: { ...plannedOperation, updatedAt },
+              activeKeys: keys,
+              seed,
+              ...plan,
+              receiverAmount,
+            }),
+          );
+        }
       } finally {
         releaseMintLock();
       }

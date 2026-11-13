@@ -13,6 +13,7 @@ import type {
 
 export interface PrepareSendInput {
   operation: InitSendOperation;
+  offline?: false;
   /** Active keys and seed loaded before entering the transaction. */
   activeKeys: MintKeys;
   seed: Uint8Array;
@@ -22,6 +23,12 @@ export interface PrepareSendInput {
   fixedSendOutputs?: readonly OutputDataLike[];
   /** Payment Request net target. Omitted for ordinary face-value Sends. */
   receiverAmount?: Amount;
+}
+
+/** Stored proofs are sent as they are: no outputs, so no active keys or seed are loaded. */
+export interface OfflineSendInput {
+  operation: InitSendOperation;
+  offline: true;
 }
 
 export interface PrepareSendResult {

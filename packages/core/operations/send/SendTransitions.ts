@@ -26,6 +26,7 @@ import type {
   CompletePendingSendResult,
   CompleteSendReclaimInput,
   CompleteSendReclaimResult,
+  OfflineSendInput,
   PrepareSendInput,
   PrepareSendResult,
   ApplySendResult,
@@ -57,7 +58,7 @@ import {
 } from './SendValidation.ts';
 
 /** Reserve inputs and persist their output allocation and prepared Send together. */
-export const prepareSend = defineTransition<PrepareSendInput, PrepareSendResult>(
+export const prepareSend = defineTransition<PrepareSendInput | OfflineSendInput, PrepareSendResult>(
   async (tx, input) => {
     const operation = input.operation;
     const existing = await tx.sendOperations.getById(operation.id);
@@ -74,20 +75,22 @@ export const prepareSend = defineTransition<PrepareSendInput, PrepareSendResult>
       unit: operation.unit,
       operationId: operation.id,
       amount: operation.amount,
-      forceSwap: input.forceSwap,
-      receiver: input.receiverAmount
-        ? {
-            amount: input.receiverAmount,
-            swapOutputKeys: input.fixedSendOutputs ? undefined : input.activeKeys,
-          }
-        : undefined,
+      forceSwap: !input.offline && input.forceSwap,
+      offline: input.offline,
+      receiver:
+        !input.offline && input.receiverAmount
+          ? {
+              amount: input.receiverAmount,
+              swapOutputKeys: input.fixedSendOutputs ? undefined : input.activeKeys,
+            }
+          : undefined,
     });
     const inputAmount = sumProofs(selected.proofs);
     const inputProofSecrets = selected.proofs.map((proof) => proof.secret);
 
     let outputData: PreparedSendOperation['outputData'];
     let counterUpdate: PrepareSendResult['counter'];
-    if (selected.needsSwap) {
+    if (!input.offline && selected.needsSwap) {
       const allocation = await tx.outputs.allocate({
         mintUrl: operation.mintUrl,
         unit: operation.unit,
@@ -99,11 +102,11 @@ export const prepareSend = defineTransition<PrepareSendInput, PrepareSendResult>
       });
       outputData = allocation.outputData;
       counterUpdate = allocation.counter;
-    } else {
+    } else if (!input.offline) {
       await tx.outputs.assertActiveKeys(operation.mintUrl, operation.unit, input.activeKeys);
     }
 
-    if (input.receiverAmount) {
+    if (!input.offline && input.receiverAmount) {
       const outgoing = outputData
         ? outputData.send.map((output) => output.blindedMessage)
         : selected.proofs;

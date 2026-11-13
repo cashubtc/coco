@@ -1805,6 +1805,45 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         expect(operation?.mintUrl).toBe(mintUrl);
       });
 
+      it('should send held proofs with mint requests failing and redeem them once they succeed', async () => {
+        const balanceBefore = await getMintSpendableBalance(mgr!, mintUrl, testUnit);
+        const originalFetch = globalThis.fetch;
+        globalThis.fetch = Object.assign(async () => {
+          throw new Error('network is offline');
+        }, originalFetch);
+        let prepared;
+        let token;
+        try {
+          // 200 was minted as 128 + 64 + 8, so 3 would need a swap and 64 does not.
+          const refused = await mgr!.ops.send
+            .prepare({ mintUrl, amount: testAmount(3), offline: true })
+            .catch((error: unknown) => error as { name?: string; reason?: string });
+          expect((refused as { name?: string }).name).toBe('OfflineSendError');
+          expect((refused as { reason?: string }).reason).toBe('no_exact_match');
+          expect(await getMintSpendableBalance(mgr!, mintUrl, testUnit)).toBe(balanceBefore);
+
+          prepared = await mgr!.ops.send.prepare({
+            mintUrl,
+            amount: testAmount(64),
+            offline: true,
+          });
+          expect(prepared.needsSwap).toBe(false);
+          ({ token } = await mgr!.ops.send.execute(prepared.id));
+        } finally {
+          globalThis.fetch = originalFetch;
+        }
+        expectAmountEquals(
+          expect,
+          token.proofs.reduce((total, proof) => total.add(proof.amount), Amount.zero()),
+          64,
+        );
+
+        // The mint accepts the proofs: they were real, and sending them needed no HTTP request.
+        await mgr!.wallet.receive(token);
+        const refreshed = await mgr!.ops.send.refresh(prepared.id);
+        expect(refreshed.state).toBe('finalized');
+      });
+
       it('should get operation by ID', async () => {
         let operationId: string | undefined;
 
