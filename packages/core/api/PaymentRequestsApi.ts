@@ -86,9 +86,19 @@ export class PaymentRequestsApi {
 
   /**
    * Parse and validate an encoded payment request.
+   *
+   * Pass the amount you intend to pay an amountless request so that `payableMints` only lists Mints
+   * that can afford it. Bare amounts use the request's unit. The request stays amountless, so pass
+   * the amount to `prepare()` as well.
+   *
+   * @throws {UnitMismatchError} If `options.amount` names a unit other than the request's unit.
+   * @throws {PaymentRequestError} If `options.amount` differs from a fixed-amount request's amount.
    */
-  async parse(paymentRequest: string): Promise<ResolvedPaymentRequest> {
-    return this.paymentRequestService.parse(paymentRequest);
+  async parse(
+    paymentRequest: string,
+    options?: { amount?: UnitAmountLike },
+  ): Promise<ResolvedPaymentRequest> {
+    return this.paymentRequestService.parse(paymentRequest, options);
   }
 
   /**

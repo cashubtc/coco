@@ -77,7 +77,7 @@ describe('PaymentRequestsApi', () => {
     const result = await api.parse('creqA...');
 
     expect(result).toBe(resolvedRequest);
-    expect(service.parse).toHaveBeenCalledWith('creqA...');
+    expect(service.parse).toHaveBeenCalledWith('creqA...', undefined);
   });
 
   it('should prepare a payment request', async () => {

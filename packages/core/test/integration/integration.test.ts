@@ -2,6 +2,7 @@
 import './RequestRateLimitIntegration.test.ts';
 import './SweepIntegration.test.ts';
 import './PaymentRequestPlanning.test.ts';
+import './PaymentRequestIntendedAmount.test.ts';
 import './SendProofObservations.test.ts';
 import './MintSwapIntegration.test.ts';
 import { describe, it, beforeEach, afterEach, expect } from 'bun:test';
