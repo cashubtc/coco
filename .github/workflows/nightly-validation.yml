@@ -1,0 +1,40 @@
+name: Validate nightly packages
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/nightly-validation.yml'
+      - '.github/workflows/publish.yml'
+      - '.changeset/config.json'
+      - 'scripts/prepare-nightly*'
+      - 'package.json'
+      - 'bun.lock'
+
+permissions:
+  contents: read
+
+jobs:
+  nightly-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+      - run: bun run security:release-age
+      - run: bun install --frozen-lockfile
+      - name: Test nightly preparation and release isolation
+        run: bun test scripts/prepare-nightly.test.ts
+      - name: Prepare and validate snapshot versions
+        run: bun scripts/prepare-nightly.ts prepare
+      - name: Build and typecheck the snapshot packages
+        run: |
+          bun run build
+          bun run typecheck
+      - name: Recheck the snapshot manifests
+        run: bun scripts/prepare-nightly.ts check

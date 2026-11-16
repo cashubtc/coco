@@ -51,7 +51,8 @@ This relies on changes reaching `master` through PRs that pass the required CI c
 it does not rerun or wait for the full test suite. The publishing job checks dependency
 release age, installs the frozen lockfile, prepares and validates snapshot versions,
 and builds the packages before publishing. Changes to nightly tooling are tested,
-built and typechecked as snapshots on PRs.
+built and typechecked as snapshots on PRs by `.github/workflows/nightly-validation.yml`
+("Validate nightly packages"). The publishing workflow does not run on PRs.
 
 The public packages keep one shared version:
 
