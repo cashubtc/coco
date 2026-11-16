@@ -50,10 +50,10 @@ interface MeltOperationBase extends MeltMethodMeta {
   /** Unit for all amounts, proofs, quotes, outputs, and change in this operation. */
   unit: string;
 
-  /** Timestamp when the operation was created */
+  /** Local lifecycle creation time as Unix milliseconds. */
   createdAt: number;
 
-  /** Timestamp when the operation was last updated */
+  /** Local lifecycle update time as Unix milliseconds. */
   updatedAt: number;
 
   /** Error message if the operation failed */

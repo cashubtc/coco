@@ -9,6 +9,8 @@ import type {
   MeltNonPaymentEvidence,
 } from '../melt/MeltTransitionTypes.ts';
 
+/** Every `now` transition input in this module is a local Unix timestamp in milliseconds. */
+
 export interface PrepareMintSwapInput {
   id: string;
   sourceKeys: MintKeys;

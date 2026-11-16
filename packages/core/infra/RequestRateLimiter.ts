@@ -42,6 +42,7 @@ export class RequestRateLimiter {
   private readonly capacity: number;
   private readonly refillPerMinute: number;
   private tokens: number;
+  /** Last token refill calculation time as Unix milliseconds. */
   private lastRefillAt: number;
   private readonly bypassPathPrefixes: string[];
   private readonly logger?: Logger;

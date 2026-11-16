@@ -23,6 +23,7 @@ import type { Keyset, KeysetKeypairs } from '../models/Keyset.ts';
 import type { MintMetadataObservation } from '../mints/MintMetadata.ts';
 import { KeysetSyncError, KeysetVerificationError, MintFetchError } from '../models/Error.ts';
 import type { MintMethod } from '../operations/mint/MintMethodHandler.ts';
+import { unixMillisecondsToSeconds } from '../time.ts';
 
 type NormalizedMintQuoteSnapshot<M extends MintMethod> = M extends 'bolt11'
   ? MintQuoteBolt11Response
@@ -120,7 +121,7 @@ export class MintAdapter {
     mintUrl: string,
     knownKeysets: readonly Keyset[],
   ): Promise<MintMetadataObservation> {
-    const observedAt = Math.floor(Date.now() / 1000);
+    const observedAt = unixMillisecondsToSeconds(Date.now());
     const mintInfo = await this.fetchMintInfo(mintUrl).catch((error: unknown) => {
       throw new MintFetchError(mintUrl, undefined, error);
     });

@@ -56,6 +56,7 @@ export class MintSwapOperationProcessor {
   private stopping?: Promise<void>;
   private unsubscribe: Array<() => void> = [];
   private sweepRequested = false;
+  /** Last complete sweep in monotonic `performance.now()` milliseconds; `0` forces the first. */
   private lastSweep = 0;
   private readonly parents = new Map<string, MintSwapOperation>();
   private readonly quoteParents = new Map<string, Set<string>>();

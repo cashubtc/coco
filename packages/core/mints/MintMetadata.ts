@@ -4,6 +4,7 @@ import type { Keyset } from '@core/models/Keyset.ts';
 import type { MintInfo } from '@core/types.ts';
 import { normalizeMintUrl } from '@core/utils.ts';
 
+/** Mint metadata freshness duration in seconds. */
 export const MINT_REFRESH_TTL_S = 60 * 5;
 
 export interface MintMetadata {
@@ -15,6 +16,7 @@ export interface MintMetadataObservation {
   mintUrl: string;
   mintInfo: MintInfo;
   keysets: Omit<Keyset, 'updatedAt'>[];
+  /** Request-start observation time as whole Unix seconds. */
   observedAt: number;
 }
 

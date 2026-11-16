@@ -14,6 +14,7 @@ interface QueueItem {
   operationId: string;
   method: string;
   retryCount: number;
+  /** Local retry deadline as Unix milliseconds; `0` is immediately eligible. */
   nextRetryAt: number;
 }
 
@@ -30,9 +31,12 @@ class DefaultMintOperationHandler implements OperationHandler {
 }
 
 export interface MintOperationProcessorOptions {
+  /** Processing cadence in milliseconds. */
   processIntervalMs?: number;
   maxRetries?: number;
+  /** Base retry delay in milliseconds. */
   baseRetryDelayMs?: number;
+  /** Initial queue delay in milliseconds. */
   initialEnqueueDelayMs?: number;
   autoClaimMintQuotes?: boolean;
   /**

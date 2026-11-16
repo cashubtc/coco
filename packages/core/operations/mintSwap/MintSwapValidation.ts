@@ -12,6 +12,8 @@ import type { PreparedOrLaterOperation } from '../melt/MeltOperation.ts';
 import { normalizeMintUrl } from '../../utils.ts';
 import { MintSwapIntentConflictError, MintSwapInvariantError } from './MintSwapErrors.ts';
 
+/** Every `now` argument in this module is a local Unix timestamp in milliseconds. */
+
 export interface MintSwapIntent {
   id: string;
   sourceMintUrl: string;
@@ -111,7 +113,7 @@ export function stopMintSwap(
   return advanceMintSwap(base as MintSwapOperation, state, now, { lastSafe, ...facts });
 }
 
-/** Fixed entropy and clock per owning attempt; Retry-After is an absolute lower bound. */
+/** Fixed entropy and clock per owning attempt; Retry-After is an absolute Unix-ms lower bound. */
 export function scheduleMintSwapRetry(
   current: MintSwapOperation,
   error: Omit<MintSwapRetryError, 'at'>,

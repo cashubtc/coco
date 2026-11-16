@@ -7,6 +7,8 @@ import type {
 } from '@core/operations/receive/ReceiveOperation.ts';
 import type { CoreProof } from '@core/types.ts';
 
+/** Every `updatedAt` transition input in this module is a local Unix timestamp in milliseconds. */
+
 export interface PrepareReceiveInput {
   operation: InitReceiveOperation;
   activeKeys: MintKeys;

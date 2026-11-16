@@ -468,7 +468,9 @@ states such as `UNPAID`, `PENDING`, `PAID`, and `ISSUED`.
 
 ### Ordering and freshness
 
-History entries now expose both `createdAt` and `updatedAt`.
+History entries now expose both `createdAt` and `updatedAt` as Unix milliseconds. Supplied adapters
+may retain legacy operation rows at whole-second precision, so subsecond precision is not guaranteed
+after persistence and hydration.
 
 Pagination is ordered by `createdAt DESC, id DESC`. Use `updatedAt` for
 replacement, freshness, and realtime reconciliation, not for primary ordering.

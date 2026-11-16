@@ -15,6 +15,7 @@ import {
 } from '@core/utils.ts';
 import type { CoreTransaction } from '../../transactions/CoreTransaction.ts';
 import { defineTransition } from '../../transactions/Transition.ts';
+import { unixSecondsToMilliseconds } from '../../time.ts';
 import type {
   ExecutingMeltOperation,
   FinalizedMeltOperation,
@@ -562,7 +563,7 @@ function assertQuoteMatchesPreparation(
   assertSameUnit(quote.unit, unit, `Melt quote ${quote.quoteId}`);
   if (quote.state !== 'UNPAID')
     throw new Error(`Cannot prepare melt quote in state ${quote.state}`);
-  if (quote.expiry * 1000 <= input.now)
+  if (unixSecondsToMilliseconds(quote.expiry) <= input.now)
     throw new ProofValidationError('Cannot prepare expired melt quote');
   switch (input.method) {
     case 'bolt11':
