@@ -1,11 +1,17 @@
 name: Publish to npm
 
 on:
+  push:
+    branches: [master]
   release:
     types: [published]
 
+permissions:
+  contents: read
+
 jobs:
   publish:
+    if: github.event_name == 'release'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -54,3 +60,47 @@ jobs:
       - name: Publish stable to npm
         if: ${{ github.event.release.prerelease == false }}
         run: bunx changeset publish
+
+  publish-nightly:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    # Serialize complete publishes, including reruns. Never cancel a partial package set.
+    concurrency:
+      group: npm-nightly
+      cancel-in-progress: false
+      queue: max
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: 'https://registry.npmjs.org'
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+      - run: bun run security:release-age
+      - run: bun install --frozen-lockfile
+      - run: bun scripts/prepare-nightly.ts prepare
+      - run: bun run build
+      - run: bun scripts/prepare-nightly.ts check
+      - name: Check that this commit is still master
+        id: current
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          master_sha="$(git ls-remote --exit-code origin refs/heads/master | cut -f1)"
+          if [ "$master_sha" = "$EXPECTED_SHA" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Skipping superseded commit $EXPECTED_SHA; master is $master_sha" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Publish nightly packages
+        if: steps.current.outputs.publish == 'true'
+        run: bunx --no-install changeset publish --tag nightly --no-git-tag

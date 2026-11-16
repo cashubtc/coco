@@ -44,6 +44,65 @@ is private but shares changesets with public packages. Keep `cocod` ignored.
 Peer dependency updates now propagate patch bumps; explicitly mark incompatible
 changes as major. The public packages still release together as a fixed group.
 
+## Nightly packages from master
+
+Every push to `master` starts nightly publishing in `.github/workflows/publish.yml`.
+This relies on changes reaching `master` through PRs that pass the required CI checks;
+it does not rerun or wait for the full test suite. The publishing job checks dependency
+release age, installs the frozen lockfile, prepares and validates snapshot versions,
+and builds the packages before publishing. Changes to nightly tooling are tested,
+built and typechecked as snapshots on PRs by `.github/workflows/nightly-validation.yml`
+("Validate nightly packages"). The publishing workflow does not run on PRs.
+
+The public packages keep one shared version:
+
+```text
+0.0.0-nightly-YYYYMMDDHHMMSS-abcdef0
+```
+
+The timestamp is the source commit's committer time in UTC, and the suffix is its
+seven-character SHA. Retrying a run therefore reuses its versions. The `nightly`
+npm dist-tag points to the published snapshot; `latest` and `rc` retain their
+existing release flows. Install matching channels for core and any adapters or
+React bindings, for example:
+
+```bash
+npm install @cashu/coco-core@nightly @cashu/coco-indexeddb@nightly
+```
+
+Rerun that command to update; a lockfile keeps an already installed snapshot pinned.
+For a reproducible bug report, record or explicitly install the full version.
+
+Dependencies are installed with the committed frozen lockfile before snapshot
+versioning. `bun scripts/prepare-nightly.ts prepare` adds a temporary changeset,
+runs Changesets snapshot versioning, and checks that every public package belongs
+to the fixed group, has the expected version, and references other public packages
+at that exact version. This also works when no release changesets are pending.
+`bun scripts/prepare-nightly.ts check` repeats validation without modifying files.
+
+**Run snapshot preparation only in a disposable checkout.** Its package versions,
+consumed changesets and changelog edits are never committed or pushed. The eventual
+stable or RC release still consumes the original changesets from the source branch.
+Nightlies do not create Git tags or GitHub Releases and reject existing RC state.
+
+The publishing job remains in `publish.yml`, using the existing npm trusted
+publisher identity and Node 24. Each public package's npm settings must authorize
+direct publishing from `cashubtc/coco`'s `publish.yml`; no additional workflow or
+dist-tag management permission is needed. Registry-side configuration and OIDC
+can only be confirmed by an actual Actions publish.
+
+Nightly publishes are serialized and are not automatically cancelled mid-publish.
+Immediately before publishing, the job verifies its commit is still the current
+`master` head. Superseded commits are skipped, so an older run or rerun cannot move
+the channel backward. A push arriving during a publish waits for that publish to
+finish before its own publication. Failed preparation or builds leave the last published
+nightly in place; there is no guarantee of an artifact for every intermediate commit.
+
+npm publication is not atomic across packages. If a run partially publishes, rerun
+the failed publishing job while that commit is still `master`; Changesets skips
+versions already published and attempts the remaining packages. If `master` has
+advanced, let its successfully validated run publish a new matching package set.
+
 ## Stable Releases
 
 Use this flow for stable packages published to the default npm dist-tag.
