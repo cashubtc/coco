@@ -11,6 +11,11 @@ in CI.
 
 ## Prerequisites
 
+- Use the Bun version configured in the publish workflow. Changesets runs under
+  Node even when invoked with `bunx`; Node 24 matches publishing CI. Changesets
+  supports Node `^22.11 || ^24 || >=26` and npm `>=10.9.0`; npm trusted publishing
+  requires npm `>=11.5.1` and Node `>=22.14.0`. Check `node --version` and
+  `npm --version` on release machines.
 - Make sure all intended changes are merged into the release branch.
 - Make sure package-impacting changes have changesets in `.changeset/`.
 - Make sure the worktree is clean before generating release files:
@@ -18,6 +23,26 @@ in CI.
 ```bash
 git status --short
 ```
+
+### Changesets v3 and existing RC branches
+
+Upgrade the release toolchain before starting an RC cycle. If an existing v2 RC
+branch must migrate, run `bunx changeset status` after upgrading, review and commit
+the moved changesets and updated `.changeset/pre.json`, then qualify a new RC.
+`status` can modify v2 prerelease state. Keep a selected RC cutoff's toolchain
+through stable finalization; a dependency upgrade is outside that metadata-only
+commit.
+
+V3 moves changesets consumed by RCs into `.changeset/pre/`. Commit that directory
+along with `pre.json`; its entries become the stable changelog. The top-level
+`.changeset/*.md` files represent pending work for the next RC. Before exiting
+prerelease mode, review the historical entries for the stable release. The final
+`changeset version` consumes them and removes `pre.json`.
+
+Keep private-package versioning enabled in `.changeset/config.json`: SQL storage
+is private but shares changesets with public packages. Keep `cocod` ignored.
+Peer dependency updates now propagate patch bumps; explicitly mark incompatible
+changes as major. The public packages still release together as a fixed group.
 
 ## Stable Releases
 
@@ -161,8 +186,11 @@ bunx changeset version
 ```
 
 For follow-up RCs in the same cycle, add or merge the new changesets, then run
-`bunx changeset version` again. Changesets increments the prerelease number from
-the committed `.changeset/pre.json` state.
+`bunx changeset version` again. Changesets derives the next prerelease number from
+the committed package versions. An RC run with only historical entries in
+`.changeset/pre/` does not advance the version; add the intended new changesets
+before cutting another RC. Outside prerelease mode, `version` fails when there
+are no unreleased changesets.
 
 4. Review the generated release files:
 
@@ -181,7 +209,8 @@ bun install --frozen-lockfile
 bun run build
 ```
 
-6. Commit the generated release files, including `.changeset/pre.json`:
+6. Commit the generated release files, including `.changeset/pre.json` and
+   `.changeset/pre/`:
 
 ```bash
 git add .

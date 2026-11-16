@@ -24,7 +24,7 @@
   },
   "peerDependencies": {},
   "dependencies": {
-    "@changesets/cli": "^2.29.8"
+    "@changesets/cli": "^3.0.3"
   },
   "scripts": {
     "build": "bun scripts/build.ts build",

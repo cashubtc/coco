@@ -27,6 +27,9 @@ releases; use `$cut-stable-release` instead.
 
 ## Workflow
 
+Follow [release prerequisites](../../../RELEASING.md#prerequisites) for the
+toolchain and migration of existing v2 prerelease state before starting.
+
 1. Decide whether this is dry-run mode.
 
 2. Confirm the worktree is clean:
@@ -56,7 +59,8 @@ releases; use `$cut-stable-release` instead.
    find .changeset -maxdepth 1 -type f -name '*.md' ! -name 'README.md' | sort
    ```
 
-   If this is empty, stop unless the user explicitly asked for a no-change RC.
+   If this is empty, stop. Entries in `.changeset/pre/` are history for stable
+   finalization; running v3 with only those entries does not advance the RC.
 
 5. Enter prerelease mode only when needed:
 
@@ -72,6 +76,9 @@ releases; use `$cut-stable-release` instead.
    ```bash
    bunx changeset version
    ```
+
+   Review the consumed changesets moved into `.changeset/pre/`; keep them in
+   the release commit so stable finalization can include their changelog entries.
 
 7. Derive release metadata from the versioned files:
 

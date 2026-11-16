@@ -33,6 +33,10 @@ Use this for tags like `v2.0.0`. Use `$cut-rc-release` for RC tags like
 
 ## Choose The Path
 
+Follow [release prerequisites](../../../RELEASING.md#prerequisites) for the
+toolchain and v2 migration. Use the selected RC's toolchain for finalization;
+qualify an upgraded toolchain with a new RC before selecting its cutoff.
+
 - Direct stable release: start from `master` with pending changesets and no RC
   cycle.
 - Final stable after RCs: start from the existing `release/X.Y.Z-rc` branch,
@@ -105,6 +109,10 @@ Use this for tags like `v2.0.0`. Use `$cut-rc-release` for RC tags like
 
 4. Confirm `.changeset/pre.json` is present, then exit prerelease mode and
    generate stable versions:
+
+   Review `.changeset/pre/` entries for the stable changelog first. The version
+   step consumes this history along with pending changesets and removes
+   `pre.json`; include those deletions in the release commit.
 
    ```bash
    test -f .changeset/pre.json
