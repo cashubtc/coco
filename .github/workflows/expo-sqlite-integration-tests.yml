@@ -1,7 +1,6 @@
 name: expo-sqlite-integration-tests
 
 on:
-  workflow_call:
   pull_request:
     paths:
       - 'packages/expo-sqlite/**'

@@ -1,7 +1,6 @@
 name: core-tests
 
 on:
-  workflow_call:
   push:
     branches:
       - master

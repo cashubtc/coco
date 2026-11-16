@@ -1,7 +1,6 @@
 name: build-packages
 
 on:
-  workflow_call:
   push:
     branches:
       - master

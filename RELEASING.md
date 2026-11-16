@@ -46,11 +46,12 @@ changes as major. The public packages still release together as a fixed group.
 
 ## Nightly packages from master
 
-Every push to `master` starts nightly validation in `.github/workflows/publish.yml`.
-Publishing waits for snapshot validation plus the existing build/typecheck, core,
-adapter, authentication, Cocod and formatting workflows. Those workflows are called
-without path filters so the entire package set is checked at the pushed commit.
-Their existing standalone triggers remain available.
+Every push to `master` starts nightly publishing in `.github/workflows/publish.yml`.
+This relies on changes reaching `master` through PRs that pass the required CI checks;
+it does not rerun or wait for the full test suite. The publishing job checks dependency
+release age, installs the frozen lockfile, prepares and validates snapshot versions,
+and builds the packages before publishing. Changes to nightly tooling are tested,
+built and typechecked as snapshots on PRs.
 
 The public packages keep one shared version:
 
@@ -93,8 +94,8 @@ Nightly publishes are serialized and are not automatically cancelled mid-publish
 Immediately before publishing, the job verifies its commit is still the current
 `master` head. Superseded commits are skipped, so an older run or rerun cannot move
 the channel backward. A push arriving during a publish waits for that publish to
-finish before its own publication. Failed checks leave the last published nightly
-in place; there is no guarantee of an artifact for every intermediate commit.
+finish before its own publication. Failed preparation or builds leave the last published
+nightly in place; there is no guarantee of an artifact for every intermediate commit.
 
 npm publication is not atomic across packages. If a run partially publishes, rerun
 the failed publishing job while that commit is still `master`; Changesets skips

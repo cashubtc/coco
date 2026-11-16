@@ -1,7 +1,6 @@
 name: format
 
 on:
-  workflow_call:
   push:
     paths:
       - '**/*.ts'

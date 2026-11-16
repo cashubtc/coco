@@ -1,7 +1,6 @@
 name: core-integration-tests
 
 on:
-  workflow_call:
   push:
     branches:
       - master

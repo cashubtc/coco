@@ -1,7 +1,6 @@
 name: cocod-tests
 
 on:
-  workflow_call:
   push:
     branches:
       - master
