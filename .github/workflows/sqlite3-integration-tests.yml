@@ -1,6 +1,7 @@
 name: sqlite3-integration-tests
 
 on:
+  workflow_call:
   pull_request:
     paths:
       - 'packages/sqlite3/**'

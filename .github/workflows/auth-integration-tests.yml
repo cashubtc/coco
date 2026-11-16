@@ -1,6 +1,7 @@
 name: auth-integration-tests
 
 on:
+  workflow_call:
   pull_request:
     paths:
       - 'packages/core/**'
@@ -10,7 +11,8 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: auth-integration-tests-${{ github.event.pull_request.number || github.ref }}
+  # Reusable nightly calls must not cancel another publishing run.
+  group: auth-integration-tests-${{ github.event_name == 'push' && github.run_id || github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
