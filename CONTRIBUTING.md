@@ -279,6 +279,10 @@ Published packages are versioned with Changesets. If your PR changes runtime
 behavior, public types, package exports, or documentation for a published package,
 you should usually include a changeset unless a maintainer tells you otherwise.
 
+The Changesets v3 CLI needs Node `^22.11 || ^24 || >=26`, including when invoked
+with `bunx`. See [release prerequisites](RELEASING.md#prerequisites) for publishing
+requirements and migration of existing RC branches.
+
 For repository contract changes, choose the changeset bump using the
 [compatibility policy](packages/core/README.md#repository-compatibility). Put required adapter migration
 notes in the changeset: name the affected interfaces, implementation changes, and persistence migration
