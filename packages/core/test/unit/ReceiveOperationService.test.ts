@@ -126,7 +126,7 @@ describe('Receive preparation and execution', () => {
     const secretKey = new Uint8Array(32).fill(2);
     const { schnorr } = await import('@noble/curves/secp256k1.js');
     const { bytesToHex } = await import('@noble/curves/utils.js');
-    const publicKey = bytesToHex(schnorr.getPublicKey(secretKey));
+    const publicKey = '02' + bytesToHex(schnorr.getPublicKey(secretKey));
     await env.repositories.keyRingRepository.setPersistedKeyPair({
       publicKeyHex: publicKey,
       secretKey,

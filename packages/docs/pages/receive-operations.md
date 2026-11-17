@@ -9,7 +9,7 @@ token details, recover after crashes, and avoid duplicate receives.
 The canonical API is exposed through `coco.ops.receive`:
 
 - `prepare({ token })` decodes and validates a token, calculates fees, and
-  atomically persists signed inputs, fees, and deterministic receive outputs
+  atomically persists inputs with any required witnesses, fees, and deterministic receive outputs
 - `execute(operationOrId)` receives the prepared token and saves the new proofs
 - `get(operationId)` returns a persisted receive operation
 - `listPrepared()` lists receives waiting for user confirmation
@@ -17,6 +17,11 @@ The canonical API is exposed through `coco.ops.receive`:
 - `refresh(operationId)` recovers an executing receive and returns the latest
   operation state
 - `cancel(operationId, reason?)` rolls back an `init` or `prepared` receive
+
+P2PK spending paths must be available during preparation. Expired locks without refund keys need
+no signature; refundable locks still require the original key. See
+[Receiving P2PK Tokens](./keyring.md#receiving-p2pk-tokens) for supported conditions and clock
+semantics. Execution and recovery preserve the request chosen during preparation.
 
 ## Operation States
 

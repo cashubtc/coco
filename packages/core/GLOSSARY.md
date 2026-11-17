@@ -103,6 +103,17 @@ NUT-11 P2PK spending condition. Coco uses it while satisfying a NUT-18 payment r
 payer, not while creating an incoming payment request.
 _Avoid_: Payment request key, P2PK target, payment request pubkey
 
+**P2PK Locktime**:
+A spending condition's Unix timestamp after which, according to the mint's clock, a P2PK proof
+becomes spendable without a signature if it has no refund condition, or gains a P2PK Refund Path
+if it does. It is not a deadline for spending the proof through its original authorization path.
+_Avoid_: Token expiry, Quote Expiry
+
+**P2PK Refund Path**:
+An alternative authorization path available after P2PK Locktime, requiring signatures from the
+designated refund keys according to its own signature threshold.
+_Avoid_: Automatic refund, token cancellation
+
 **Melt Quote State**:
 The mint's settlement state for a melt quote. `PAID` is terminal, while `PENDING` can return to
 `UNPAID` when settlement fails; a newer `UNPAID` observation can therefore be more accurate than an
