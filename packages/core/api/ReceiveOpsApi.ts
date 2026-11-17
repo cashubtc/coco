@@ -46,7 +46,10 @@ export class ReceiveOpsApi {
 
   /**
    * Decodes and validates a token, then prepares a receive operation without
-   * executing it.
+   * executing it. Each P2PK proof must have a supported spending path available now:
+   * its original single key or an expired lock without refund keys. The mint is
+   * authoritative about expiry. Preparation persists witnesses for unchanged replay
+   * during execution and recovery.
    */
   async prepare(input: PrepareReceiveInput): Promise<PreparedReceiveOperation> {
     const initOp = await this.receiveOperationService.init(input.token);

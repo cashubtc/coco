@@ -1,10 +1,10 @@
 # KeyRing (P2PK)
 
-The KeyRing feature enables Pay-to-Public-Key (P2PK) functionality in Coco Cashu, allowing you to lock tokens to specific public keys. This adds an extra layer of security by requiring cryptographic signatures to spend tokens.
+The KeyRing feature enables Pay-to-Public-Key (P2PK) functionality in Coco Cashu, allowing you to lock tokens to specific public keys. Spending a locked token requires cryptographic signatures unless its locktime has passed and it has no refund condition.
 
 ## Overview
 
-P2PK tokens are Cashu tokens that can only be spent by someone who possesses the corresponding private key. This prevents unauthorized spending even if someone intercepts the token.
+P2PK tokens are Cashu tokens with public-key spending conditions. Without a locktime, the required private keys remain necessary to spend the token. An optional locktime can make the token spendable by anyone or enable a separate refund path after expiry.
 
 ### Use Cases
 
@@ -92,7 +92,7 @@ await coco.keyring.removeKeyPair(publicKeyHex);
 ```
 
 ::: warning
-Removing a keypair will prevent you from spending any P2PK tokens locked to that key. Ensure you have spent or transferred all associated tokens before removing a keypair.
+Removing a keypair prevents you from signing P2PK proofs with that key. Ensure you have spent or transferred all associated tokens before removing a keypair unless another spending path is available.
 :::
 
 ## Working with P2PK Tokens
@@ -139,7 +139,26 @@ from the request.
 
 ### Receiving P2PK Tokens
 
-When you receive a P2PK token, Coco signs the spending conditions using the corresponding keypairs in your KeyRing. Use the receive operation lifecycle to review the amount and fee before execution:
+When you receive a P2PK token, Coco evaluates each proof's spending conditions during
+`coco.ops.receive.prepare()`. Supported paths are:
+
+- A single original lock key: Coco signs with its KeyRing key, including after locktime expiry.
+- Expired locktime without a refund tag: no key or signature is needed, even if the original
+  condition required multiple signatures.
+
+Locktime expiry means `now > locktime`, using Unix seconds. At equality the lock is still active. Coco uses
+the local clock during preparation; the mint's clock decides acceptance. A missing or invalid
+locktime never enables signature-free spending. If the required key is missing before expiry,
+preparation fails; Coco does not wait for expiry automatically.
+
+Receive supports `SIG_INPUTS` (including an omitted signature flag). Refund conditions still
+require the original single lock key; signing with refund keys is not yet supported. `SIG_ALL`
+and signing original conditions containing multiple keys are unsupported. Malformed conditions
+are rejected even after expiry. Each proof in a mixed token must have a supported spending path.
+
+Preparation saves the chosen witnesses. Execution and recovery reuse them without looking up
+keys or changing paths. Use the receive operation lifecycle to review the amount and fee before
+execution:
 
 ```ts
 // The token is locked to one of your public keys
