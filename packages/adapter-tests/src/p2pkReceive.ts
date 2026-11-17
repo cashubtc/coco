@@ -172,12 +172,12 @@ export function runP2pkReceiveTests(
     }
 
     for (const expired of [false, true]) {
-      it(`retains original-key authorization with a refund condition (locktime expired: ${expired})`, async () => {
+      it(`uses the original key when the receiver owns both keys (locktime expired: ${expired})`, async () => {
         const sender = await session();
         const receiver = await session();
         await mintAmount(sender, mintUrl, 64, unit);
         const primary = await receiver.keyring.generateKeyPair();
-        const refund = await sender.keyring.generateKeyPair();
+        const refund = await receiver.keyring.generateKeyPair();
         const token = await send(sender, {
           data: primary.publicKeyHex,
           locktime: Math.floor(Date.now() / 1000) + (expired ? -60 : 3600),
