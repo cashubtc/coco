@@ -145,16 +145,18 @@ When you receive a P2PK token, Coco evaluates each proof's spending conditions d
 - A single original lock key: Coco signs with its KeyRing key, including after locktime expiry.
 - Expired locktime without a refund tag: no key or signature is needed, even if the original
   condition required multiple signatures.
+- Expired locktime with one refund key requiring one signature: Coco can sign with that KeyRing
+  key if it cannot use the original path. This also works when the original path requires multisig.
 
 Expiry means `now > locktime`, using Unix seconds. At equality the lock is still active. Coco uses
 the local clock during preparation; the mint's clock decides acceptance. A missing or invalid
-locktime never enables signature-free spending. If the required key is missing before expiry,
-preparation fails; Coco does not wait for expiry automatically.
+locktime never enables signature-free spending or the refund path. If the required key is missing
+before expiry, preparation fails; Coco does not wait for expiry automatically.
 
-Receive supports `SIG_INPUTS` (including an omitted signature flag). Refund conditions still
-require the original single lock key; signing with refund keys is not yet supported. `SIG_ALL`
-and signing original conditions containing multiple keys are unsupported. Malformed conditions
-are rejected even after expiry. Each proof in a mixed token must have a supported spending path.
+Receive supports `SIG_INPUTS` (including an omitted signature flag). `SIG_ALL`, signing original
+conditions containing multiple keys, and signing refund conditions containing multiple keys are
+unsupported. Malformed conditions are rejected even after expiry. Each proof in a mixed token
+must have a supported spending path.
 
 Preparation saves the chosen witnesses. Execution and recovery reuse them without looking up
 keys or changing paths. Use the receive operation lifecycle to review the amount and fee before

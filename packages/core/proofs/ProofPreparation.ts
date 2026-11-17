@@ -15,7 +15,7 @@ export async function prepareProofsForReceiving(
       prepared.push({ ...proof, witness: undefined });
       continue;
     }
-    prepared.push(await signer.signProof(proof, signingKeys[0]!));
+    prepared.push(await signer.signProof(proof, signingKeys[0]!, signingKeys.slice(1)));
   }
   return prepared;
 }
