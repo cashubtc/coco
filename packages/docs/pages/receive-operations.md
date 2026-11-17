@@ -18,8 +18,8 @@ The canonical API is exposed through `coco.ops.receive`:
   operation state
 - `cancel(operationId, reason?)` rolls back an `init` or `prepared` receive
 
-P2PK spending paths must be available during preparation. Expired locks without refund keys need
-no signature; a single refund key can authorize receipt after expiry. See
+P2PK spending paths must be available during preparation. Proofs with expired locktime and no refund keys need
+no signature; a single refund key can authorize receipt after locktime expiry. See
 [Receiving P2PK Tokens](./keyring.md#receiving-p2pk-tokens) for supported conditions and clock
 semantics. Execution and recovery preserve the request chosen during preparation.
 

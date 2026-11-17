@@ -67,7 +67,7 @@ function readKeys(secret: Secret, tag: 'pubkeys' | 'refund'): string[] | undefin
 }
 
 // cashu-ts getTag treats a tag without values as absent. In particular, an empty refund tag
-// must not turn an expired proof into an anyone-can-spend proof.
+// must not make a proof spendable by anyone just because its locktime has expired.
 function readTag(secret: Secret, tag: string): string[] | undefined {
   return secret[1].tags?.find((entry) => entry[0] === tag)?.slice(1);
 }

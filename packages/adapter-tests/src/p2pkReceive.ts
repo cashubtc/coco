@@ -84,7 +84,7 @@ export function runP2pkReceiveTests(
     });
 
     for (const multisig of [false, true]) {
-      it(`receives expired no-refund proofs without keys (original multisig: ${multisig})`, async () => {
+      it(`receives proofs with expired locktime and no refund keys (original multisig: ${multisig})`, async () => {
         const sender = await session();
         const receiver = await session();
         await mintAmount(sender, mintUrl, 64, unit);
@@ -127,7 +127,7 @@ export function runP2pkReceiveTests(
       );
     }, 30_000);
 
-    it('rejects expired SIG_ALL proofs during preparation', async () => {
+    it('rejects SIG_ALL proofs with expired locktime during preparation', async () => {
       const sender = await session();
       const receiver = await session();
       await mintAmount(sender, mintUrl, 64, unit);
@@ -142,7 +142,7 @@ export function runP2pkReceiveTests(
     }, 30_000);
 
     for (const multisig of [false, true]) {
-      it(`receives with a single refund key after expiry (original multisig: ${multisig})`, async () => {
+      it(`receives with a single refund key after locktime (original multisig: ${multisig})`, async () => {
         const sender = await session();
         const receiver = await session();
         await mintAmount(sender, mintUrl, 64, unit);
@@ -172,7 +172,7 @@ export function runP2pkReceiveTests(
     }
 
     for (const expired of [false, true]) {
-      it(`retains original-key authorization with a refund condition (expired: ${expired})`, async () => {
+      it(`retains original-key authorization with a refund condition (locktime expired: ${expired})`, async () => {
         const sender = await session();
         const receiver = await session();
         await mintAmount(sender, mintUrl, 64, unit);
@@ -190,7 +190,7 @@ export function runP2pkReceiveTests(
       }, 30_000);
     }
 
-    it('rejects a refund-only receiver before expiry and an expired refund with no owned key', async () => {
+    it('rejects a refund-only receiver before locktime and receipt after locktime without an owned key', async () => {
       const sender = await session();
       const receiver = await session();
       await mintAmount(sender, mintUrl, 64, unit);
