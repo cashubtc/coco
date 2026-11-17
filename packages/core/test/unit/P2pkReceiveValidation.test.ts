@@ -26,6 +26,10 @@ describe('P2PK receive condition validation', () => {
     expect(getReceiveSigningKeys('ordinary-proof', locktime + 1)).toEqual([]);
   });
 
+  it('keeps an equal preparation timestamp locked even when the SDK clock has passed it', () => {
+    expect(getReceiveSigningKeys(secret([['locktime', '1']]), 1)).toEqual([primary]);
+  });
+
   it.each(['no-time', '-1', '1.5', '1e3', '123abc', '9007199254740992'])(
     'treats invalid locktime %s as permanent',
     (value) => {

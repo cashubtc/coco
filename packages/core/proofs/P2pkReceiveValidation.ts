@@ -1,4 +1,4 @@
-import { parseP2PKSecret, pointFromHex, type Secret } from '@cashu/cashu-ts';
+import { getP2PKExpectedWitnessPubkeys, parseP2PKSecret, type Secret } from '@cashu/cashu-ts';
 import { ProofValidationError } from '../models/Error.ts';
 
 /**
@@ -19,6 +19,9 @@ export function getReceiveSigningKeys(secret: string, nowSeconds: number): strin
   let parsed: Secret;
   try {
     parsed = parseP2PKSecret(secret);
+    // This also validates keys in both paths (encoding, curve membership and duplicates).
+    // Ignore its clock-dependent selection: cashu-ts 5.0.0-rc.4 expires at equality.
+    getP2PKExpectedWitnessPubkeys(parsed);
   } catch (error) {
     throw new ProofValidationError(
       error instanceof Error ? error.message : 'Invalid P2PK spending condition',
@@ -34,7 +37,7 @@ export function getReceiveSigningKeys(secret: string, nowSeconds: number): strin
   }
 
   const additionalKeys = readKeys(parsed, 'pubkeys');
-  const mainKeys = validateKeys([parsed[1].data, ...(additionalKeys ?? [])]);
+  const mainKeys = [parsed[1].data.toLowerCase(), ...(additionalKeys ?? [])];
   const refundKeys = readKeys(parsed, 'refund');
   const requiredSignatures = readThreshold(parsed, 'n_sigs', mainKeys.length);
   readThreshold(parsed, 'n_sigs_refund', refundKeys?.length ?? 0);
@@ -57,31 +60,13 @@ function readKeys(secret: Secret, tag: 'pubkeys' | 'refund'): string[] | undefin
   const keys = readTag(secret, tag);
   if (keys === undefined) return undefined;
   if (keys.length === 0) throw new ProofValidationError(`Empty P2PK ${tag} tag`);
-  return validateKeys(keys);
+  return keys.map((key) => key.toLowerCase());
 }
 
 // cashu-ts getTag treats a tag without values as absent. In particular, an empty refund tag
 // must not turn an expired proof into an anyone-can-spend proof.
 function readTag(secret: Secret, tag: string): string[] | undefined {
   return secret[1].tags?.find((entry) => entry[0] === tag)?.slice(1);
-}
-
-function validateKeys(keys: string[]): string[] {
-  const normalized = keys.map((key) => {
-    if (!/^0[23][0-9a-f]{64}$/i.test(key)) {
-      throw new ProofValidationError('P2PK keys must be compressed secp256k1 public keys');
-    }
-    try {
-      pointFromHex(key);
-    } catch {
-      throw new ProofValidationError('Invalid P2PK public key');
-    }
-    return key.toLowerCase();
-  });
-  if (new Set(normalized.map((key) => key.slice(2))).size !== normalized.length) {
-    throw new ProofValidationError('Duplicate keys in P2PK spending path');
-  }
-  return normalized;
 }
 
 function parseInteger(value: string): number | undefined {
