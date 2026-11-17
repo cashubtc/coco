@@ -146,7 +146,7 @@ When you receive a P2PK token, Coco evaluates each proof's spending conditions d
 - Expired locktime without a refund tag: no key or signature is needed, even if the original
   condition required multiple signatures.
 
-Expiry means `now > locktime`, using Unix seconds. At equality the lock is still active. Coco uses
+Locktime expiry means `now > locktime`, using Unix seconds. At equality the lock is still active. Coco uses
 the local clock during preparation; the mint's clock decides acceptance. A missing or invalid
 locktime never enables signature-free spending. If the required key is missing before expiry,
 preparation fails; Coco does not wait for expiry automatically.

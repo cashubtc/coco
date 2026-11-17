@@ -107,7 +107,7 @@ _Avoid_: Payment request key, P2PK target, payment request pubkey
 A spending condition's Unix timestamp after which, according to the mint's clock, a P2PK proof
 becomes spendable without a signature if it has no refund condition, or gains a P2PK Refund Path
 if it does. It is not a deadline for spending the proof through its original authorization path.
-_Avoid_: Token expiry, Quote Expiry
+_Avoid_: Expired proof, proof expiry, token expiry, Quote Expiry
 
 **P2PK Refund Path**:
 An alternative authorization path available after P2PK Locktime, requiring signatures from the
