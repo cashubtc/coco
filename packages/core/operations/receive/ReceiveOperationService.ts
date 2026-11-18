@@ -67,7 +67,7 @@ export interface ReceiveOperationServiceDependencies {
   transactionRunner: CoreTransactionRunner;
   mintQueries: { isTrustedMint(mintUrl: string): Promise<boolean> };
   mintMetadataRefresh: Pick<MintService, 'refreshAndCommitIfStale'>;
-  signer: P2pkSigner;
+  signer: { forPreparation(): P2pkSigner };
   loadSeed: () => Promise<Uint8Array>;
   remote: ReceiveRemote;
   eventBus: Pick<EventBus<CoreEvents>, 'emit'>;
@@ -122,7 +122,7 @@ export class ReceiveOperationService {
     }
     const signed = await prepareProofsForReceiving(
       normalizeProofAmounts(decoded.proofs),
-      this.deps.signer,
+      this.deps.signer.forPreparation(),
     );
     // DLEQ blinding data and local proof metadata must not be sent back to the mint.
     const proofs = signed.map(({ id, amount, secret, C, witness }) => ({

@@ -1,6 +1,13 @@
 import { testMintKeypairs } from '../fixtures/MintMetadata.ts';
-import { Amount, deriveKeysetId } from '@cashu/cashu-ts';
+import { Amount, deriveKeysetId, hasP2PKSignedProof } from '@cashu/cashu-ts';
 import { describe, expect, it, mock } from 'bun:test';
+import { KeypairP2pkSigner } from '../../keypairs/P2pkSigner.ts';
+import { canonicalPublicKeyHex } from '../../keypairs/PublicKeyEncoding.ts';
+import {
+  ODD_Y_CANONICAL_PUBLIC_KEY,
+  ODD_Y_LEGACY_PUBLIC_KEY,
+  ODD_Y_SECRET_KEY,
+} from '../fixtures/P2pkKeys.ts';
 import {
   ProofValidationError,
   ReceiveOperationConflictError,
@@ -119,6 +126,48 @@ describe('Receive preparation and execution', () => {
     expect((await env.repositories.proofRepository.getAvailableProofs(receiveMint)).length).toBe(
       result.outputData.keep.length,
     );
+  });
+
+  it('reuses P2PK lookup hits and misses only within one preparation', async () => {
+    const env = await createReceiveEnvironment();
+    const keys = env.repositories.keyRingRepository;
+    const primarySecret = new Uint8Array(32).fill(1);
+    const primary = canonicalPublicKeyHex(primarySecret);
+    await keys.setPersistedKeyPair({
+      publicKeyHex: ODD_Y_LEGACY_PUBLIC_KEY,
+      secretKey: ODD_Y_SECRET_KEY,
+      purpose: 'p2pk',
+    });
+    const token = receiveToken();
+    for (const proof of token.proofs) {
+      proof.secret = JSON.stringify([
+        'P2PK',
+        { nonce: proof.secret, data: primary, tags: [['pubkeys', ODD_Y_CANONICAL_PUBLIC_KEY]] },
+      ]);
+    }
+
+    const lookup = mock(keys.getPersistedKeyPair.bind(keys));
+    const service = env.buildService({
+      signer: new KeypairP2pkSigner({ getPersistedKeyPair: lookup }),
+    });
+    const prepared = await service.prepare(await service.init(token));
+    // Two reads for the missing primary, two for the legacy alias, across all three proofs.
+    expect(lookup).toHaveBeenCalledTimes(4);
+    for (const proof of prepared.inputProofs) {
+      expect(hasP2PKSignedProof(ODD_Y_CANONICAL_PUBLIC_KEY, proof)).toBe(true);
+    }
+
+    await keys.deletePersistedKeyPair(ODD_Y_LEGACY_PUBLIC_KEY, 'p2pk');
+    await expect(service.init(token)).rejects.toThrow('Key pair not found');
+    await keys.setPersistedKeyPair({
+      publicKeyHex: primary,
+      secretKey: primarySecret,
+      purpose: 'p2pk',
+    });
+    const retried = await service.prepare(await service.init(token));
+    for (const proof of retried.inputProofs) {
+      expect(hasP2PKSignedProof(primary, proof)).toBe(true);
+    }
   });
 
   it('persists P2PK witnesses and executes after removing key and seed access', async () => {

@@ -159,6 +159,8 @@ Receive supports `SIG_INPUTS` (including an omitted signature flag). `SIG_ALL` a
 require two or more signatures are unsupported. Malformed conditions are rejected even after expiry.
 Each proof in a mixed token must have a supported spending path.
 
+Within a single preparation, Coco looks up each candidate key once, including missing keys,
+and signs each proof separately. A new preparation looks up keys again.
 Preparation saves the chosen witnesses. Execution and recovery reuse them without looking up
 keys or changing paths. Use the receive operation lifecycle to review the amount and fee before
 execution:
