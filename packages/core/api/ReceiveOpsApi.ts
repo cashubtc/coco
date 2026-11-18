@@ -46,10 +46,11 @@ export class ReceiveOpsApi {
 
   /**
    * Decodes and validates a token, then prepares a receive operation without
-   * executing it. Each P2PK proof must have a supported spending path available now:
-   * its original single key or an expired lock without refund keys. The mint is
-   * authoritative about expiry. Preparation persists witnesses for unchanged replay
-   * during execution and recovery.
+   * executing it. Each P2PK proof must have a supported spending path available now.
+   * For paths requiring one signature, Coco tries the original keys first, then any
+   * refund keys after locktime expiry. After expiry a proof with no refund condition
+   * can be received without a signature. The mint determines when locktime expires.
+   * Preparation persists witnesses for replay during execution and recovery.
    */
   async prepare(input: PrepareReceiveInput): Promise<PreparedReceiveOperation> {
     const initOp = await this.receiveOperationService.init(input.token);

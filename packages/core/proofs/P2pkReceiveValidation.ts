@@ -2,7 +2,7 @@ import { getP2PKExpectedWitnessPubkeys, parseP2PKSecret, type Secret } from '@ca
 import { ProofValidationError } from '../models/Error.ts';
 
 /**
- * Resolve the supported original-key or unsigned path at preparation time.
+ * Resolve supported, independent single-signature paths at preparation time.
  * An empty list means no witness is needed. The mint remains authoritative about time.
  */
 export function getReceiveSigningKeys(secret: string, nowSeconds: number): string[] {
@@ -40,7 +40,7 @@ export function getReceiveSigningKeys(secret: string, nowSeconds: number): strin
   const mainKeys = [parsed[1].data.toLowerCase(), ...(additionalKeys ?? [])];
   const refundKeys = readKeys(parsed, 'refund');
   const requiredSignatures = readThreshold(parsed, 'n_sigs', mainKeys.length);
-  readThreshold(parsed, 'n_sigs_refund', refundKeys?.length ?? 0);
+  const requiredRefundSignatures = readThreshold(parsed, 'n_sigs_refund', refundKeys?.length ?? 0);
 
   // Invalid/missing locktime means permanent, never unlocked. Avoid parseInt's partial parsing
   // and cashu-ts 5.0.0-rc.4's >= expiry check: NUT-11 keeps the lock active at equality.
@@ -49,11 +49,14 @@ export function getReceiveSigningKeys(secret: string, nowSeconds: number): strin
   const expired = locktime !== undefined && nowSeconds > locktime;
   if (expired && refundKeys === undefined) return [];
 
-  // Refund conditions never make a proof unsigned. The original path remains valid after expiry.
-  if (mainKeys.length !== 1 || requiredSignatures !== 1) {
-    throw new ProofValidationError('Multisig is not supported');
-  }
-  return mainKeys;
+  // Expiry adds a refund path; it never revokes the original authorization. Each candidate
+  // satisfies a complete path by itself, so signatures from different paths are never combined.
+  const originalCandidates = requiredSignatures === 1 ? mainKeys : [];
+  const refundCandidates =
+    expired && refundKeys && requiredRefundSignatures === 1 ? refundKeys : [];
+  const signingKeys = originalCandidates.concat(refundCandidates);
+  if (!signingKeys.length) throw new ProofValidationError('Multisig is not supported');
+  return [...new Set(signingKeys)];
 }
 
 function readKeys(secret: Secret, tag: 'pubkeys' | 'refund'): string[] | undefined {

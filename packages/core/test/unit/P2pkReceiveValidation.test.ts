@@ -56,7 +56,68 @@ describe('P2PK receive condition validation', () => {
         ]),
         locktime + 1,
       ),
+    ).toEqual([primary, refund]);
+  });
+
+  it.each([locktime - 1, locktime])('does not offer a refund key at %i', (now) => {
+    expect(
+      getReceiveSigningKeys(
+        secret([
+          ['locktime', String(locktime)],
+          ['refund', refund],
+        ]),
+        now,
+      ),
     ).toEqual([primary]);
+  });
+
+  it('offers a single refund key independently of the original multisig threshold', () => {
+    expect(
+      getReceiveSigningKeys(
+        secret([
+          ['pubkeys', cosigner],
+          ['n_sigs', '2'],
+          ['refund', refund],
+          ['n_sigs_refund', '1'],
+          ['locktime', String(locktime)],
+        ]),
+        locktime + 1,
+      ),
+    ).toEqual([refund]);
+  });
+
+  it('tries original keys before refund keys when both thresholds default to one', () => {
+    const locked = secret([
+      ['pubkeys', cosigner],
+      ['refund', refund, cosigner],
+      ['locktime', String(locktime)],
+    ]);
+    expect(getReceiveSigningKeys(locked, locktime)).toEqual([primary, cosigner]);
+    expect(getReceiveSigningKeys(locked, locktime + 1)).toEqual([primary, cosigner, refund]);
+  });
+
+  it('excludes a two-signature refund path without blocking the original single-key path', () => {
+    const tags = [
+      ['refund', refund, cosigner],
+      ['n_sigs_refund', '2'],
+      ['locktime', '1'],
+    ];
+    expect(getReceiveSigningKeys(secret(tags), locktime)).toEqual([primary]);
+    expect(() =>
+      getReceiveSigningKeys(secret([...tags, ['pubkeys', cosigner], ['n_sigs', '2']]), locktime),
+    ).toThrow('Multisig');
+  });
+
+  it('does not activate a refund path without a valid locktime', () => {
+    for (const tags of [
+      [['refund', refund]],
+      [
+        ['refund', refund],
+        ['locktime', '1trailing'],
+      ],
+    ]) {
+      expect(getReceiveSigningKeys(secret(tags), locktime)).toEqual([primary]);
+    }
   });
 
   it.each([

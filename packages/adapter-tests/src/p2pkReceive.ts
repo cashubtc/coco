@@ -1,4 +1,4 @@
-import { JSONInt, type P2PKOptions, type Token } from '@cashu/cashu-ts';
+import { hasP2PKSignedProof, JSONInt, type P2PKOptions, type Token } from '@cashu/cashu-ts';
 import { initializeCoco, normalizeUnit, type Manager } from '@cashu/coco-core';
 import type { IntegrationTestOptions, IntegrationTestRunner } from './integration.ts';
 
@@ -51,10 +51,11 @@ export function runP2pkReceiveTests(
     return (await sender.ops.send.execute(prepared.id)).token;
   }
 
-  async function receive(receiver: Manager, token: Token) {
+  async function receive(receiver: Manager, token: Token, beforeExecute?: () => Promise<void>) {
     const prepared = await receiver.ops.receive.prepare({ token });
     expect(prepared.state).toBe('prepared');
     const request = JSONInt.stringify(prepared.inputProofs);
+    await beforeExecute?.();
     const finalized = await receiver.ops.receive.execute(prepared.id);
     expect(finalized.state).toBe('finalized');
     expect(JSONInt.stringify(finalized.inputProofs)).toBe(request);
@@ -140,6 +141,93 @@ export function runP2pkReceiveTests(
       expect(await receiver.ops.receive.listPrepared()).toHaveLength(0);
     }, 30_000);
 
+    for (const multisig of [false, true]) {
+      it(`receives with a single refund key after locktime (original multisig: ${multisig})`, async () => {
+        const sender = await session();
+        const receiver = await session();
+        await mintAmount(sender, mintUrl, 64, unit);
+        const primary = await sender.keyring.generateKeyPair();
+        const cosigner = await sender.keyring.generateKeyPair();
+        const refund = await receiver.keyring.generateKeyPair();
+        const token = await send(sender, {
+          data: primary.publicKeyHex,
+          locktime: Math.floor(Date.now() / 1000) - 60,
+          refundKeys: [refund.publicKeyHex],
+          ...(multisig
+            ? {
+                pubkeys: [cosigner.publicKeyHex],
+                requiredSignatures: 2,
+                requiredRefundSignatures: 1,
+              }
+            : {}),
+        });
+        const prepared = await receive(receiver, token, async () => {
+          // Execution uses the persisted witness even when the signing key is no longer available.
+          await receiver.keyring.removeKeyPair(refund.publicKeyHex);
+        });
+        expect(
+          prepared.inputProofs.every((proof) => hasP2PKSignedProof(refund.publicKeyHex, proof)),
+        ).toBe(true);
+      }, 30_000);
+    }
+
+    it('receives with the second original key when one signature suffices', async () => {
+      const sender = await session();
+      const receiver = await session();
+      await mintAmount(sender, mintUrl, 64, unit);
+      const primary = await sender.keyring.generateKeyPair();
+      const alternative = await receiver.keyring.generateKeyPair();
+      const token = await send(sender, {
+        data: primary.publicKeyHex,
+        pubkeys: [alternative.publicKeyHex],
+      });
+      const prepared = await receive(receiver, token);
+      expect(
+        prepared.inputProofs.every((proof) => hasP2PKSignedProof(alternative.publicKeyHex, proof)),
+      ).toBe(true);
+    }, 30_000);
+
+    it('receives with the second refund key after locktime on a two-signature original path', async () => {
+      const sender = await session();
+      const receiver = await session();
+      await mintAmount(sender, mintUrl, 64, unit);
+      const primary = await sender.keyring.generateKeyPair();
+      const cosigner = await sender.keyring.generateKeyPair();
+      const firstRefund = await sender.keyring.generateKeyPair();
+      const secondRefund = await receiver.keyring.generateKeyPair();
+      const token = await send(sender, {
+        data: primary.publicKeyHex,
+        pubkeys: [cosigner.publicKeyHex],
+        requiredSignatures: 2,
+        locktime: Math.floor(Date.now() / 1000) - 60,
+        refundKeys: [firstRefund.publicKeyHex, secondRefund.publicKeyHex],
+        requiredRefundSignatures: 1,
+      });
+      const prepared = await receive(receiver, token);
+      expect(
+        prepared.inputProofs.every((proof) => hasP2PKSignedProof(secondRefund.publicKeyHex, proof)),
+      ).toBe(true);
+    }, 30_000);
+
+    for (const expired of [false, true]) {
+      it(`uses the original key when the receiver owns both keys (locktime expired: ${expired})`, async () => {
+        const sender = await session();
+        const receiver = await session();
+        await mintAmount(sender, mintUrl, 64, unit);
+        const primary = await receiver.keyring.generateKeyPair();
+        const refund = await receiver.keyring.generateKeyPair();
+        const token = await send(sender, {
+          data: primary.publicKeyHex,
+          locktime: Math.floor(Date.now() / 1000) + (expired ? -60 : 3600),
+          refundKeys: [refund.publicKeyHex],
+        });
+        const prepared = await receive(receiver, token);
+        expect(
+          prepared.inputProofs.every((proof) => hasP2PKSignedProof(primary.publicKeyHex, proof)),
+        ).toBe(true);
+      }, 30_000);
+    }
+
     it('rejects a refund-only receiver before locktime and receipt after locktime without an owned key', async () => {
       const sender = await session();
       const receiver = await session();
@@ -159,6 +247,23 @@ export function runP2pkReceiveTests(
       });
       await receiver.keyring.removeKeyPair(refund.publicKeyHex);
       await expect(receiver.ops.receive.prepare({ token: expired })).rejects.toThrow();
+      expect(await receiver.ops.receive.listPrepared()).toHaveLength(0);
+    }, 30_000);
+
+    it('does not prepare an incomplete refund multisig path', async () => {
+      const sender = await session();
+      const receiver = await session();
+      await mintAmount(sender, mintUrl, 64, unit);
+      const primary = await sender.keyring.generateKeyPair();
+      const refund = await receiver.keyring.generateKeyPair();
+      const cosigner = await sender.keyring.generateKeyPair();
+      const token = await send(sender, {
+        data: primary.publicKeyHex,
+        locktime: Math.floor(Date.now() / 1000) - 60,
+        refundKeys: [refund.publicKeyHex, cosigner.publicKeyHex],
+        requiredRefundSignatures: 2,
+      });
+      await expect(receiver.ops.receive.prepare({ token })).rejects.toThrow();
       expect(await receiver.ops.receive.listPrepared()).toHaveLength(0);
     }, 30_000);
   });
