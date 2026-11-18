@@ -1,7 +1,8 @@
 import { testMintKeypairs } from '../fixtures/MintMetadata.ts';
 import { Amount, deriveKeysetId, hasP2PKSignedProof } from '@cashu/cashu-ts';
 import { describe, expect, it, mock } from 'bun:test';
-import { KeypairP2pkSigner } from '../../keypairs/P2pkSigner.ts';
+import { initializeCoco } from '../../Manager.ts';
+import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 import { canonicalPublicKeyHex } from '../../keypairs/PublicKeyEncoding.ts';
 import {
   ODD_Y_CANONICAL_PUBLIC_KEY,
@@ -17,6 +18,7 @@ import {
   createReceiveEnvironment,
   ReceiveTestRepositories,
   receiveToken,
+  seedReceiveMint,
   receiveMint,
   receiveKeys,
   receivedCoreProofs,
@@ -129,8 +131,9 @@ describe('Receive preparation and execution', () => {
   });
 
   it('reuses P2PK lookup hits and misses only within one preparation', async () => {
-    const env = await createReceiveEnvironment();
-    const keys = env.repositories.keyRingRepository;
+    const repo = new MemoryRepositories();
+    await seedReceiveMint(repo);
+    const keys = repo.keyRingRepository;
     const primarySecret = new Uint8Array(32).fill(1);
     const primary = canonicalPublicKeyHex(primarySecret);
     await keys.setPersistedKeyPair({
@@ -146,27 +149,39 @@ describe('Receive preparation and execution', () => {
       ]);
     }
 
-    const lookup = mock(keys.getPersistedKeyPair.bind(keys));
-    const service = env.buildService({
-      signer: new KeypairP2pkSigner({ getPersistedKeyPair: lookup }),
+    const coco = await initializeCoco({
+      repo,
+      seedGetter: async () => new Uint8Array(64).fill(1),
+      watchers: {
+        mintOperationWatcher: { disabled: true },
+        proofStateWatcher: { disabled: true },
+        meltQuoteWatcher: { disabled: true },
+      },
+      processors: {
+        mintOperationProcessor: { disabled: true },
+        meltSettlementProcessor: { disabled: true },
+        mintSwapOperationProcessor: { disabled: true },
+      },
     });
-    const prepared = await service.prepare(await service.init(token));
-    // Two reads for the missing primary, two for the legacy alias, across all three proofs.
-    expect(lookup).toHaveBeenCalledTimes(4);
-    for (const proof of prepared.inputProofs) {
-      expect(hasP2PKSignedProof(ODD_Y_CANONICAL_PUBLIC_KEY, proof)).toBe(true);
-    }
+    try {
+      const lookup = mock(keys.getPersistedKeyPair.bind(keys));
+      keys.getPersistedKeyPair = lookup;
+      const prepared = await coco.ops.receive.prepare({ token });
+      // Two reads for the missing primary, two for the legacy alias, across all three proofs.
+      expect(lookup).toHaveBeenCalledTimes(4);
+      for (const proof of prepared.inputProofs) {
+        expect(hasP2PKSignedProof(ODD_Y_CANONICAL_PUBLIC_KEY, proof)).toBe(true);
+      }
 
-    await keys.deletePersistedKeyPair(ODD_Y_LEGACY_PUBLIC_KEY, 'p2pk');
-    await expect(service.init(token)).rejects.toThrow('Key pair not found');
-    await keys.setPersistedKeyPair({
-      publicKeyHex: primary,
-      secretKey: primarySecret,
-      purpose: 'p2pk',
-    });
-    const retried = await service.prepare(await service.init(token));
-    for (const proof of retried.inputProofs) {
-      expect(hasP2PKSignedProof(primary, proof)).toBe(true);
+      await coco.keyring.removeKeyPair(ODD_Y_LEGACY_PUBLIC_KEY);
+      await expect(coco.ops.receive.prepare({ token })).rejects.toThrow('Key pair not found');
+      await coco.keyring.addKeyPair(primarySecret);
+      const retried = await coco.ops.receive.prepare({ token });
+      for (const proof of retried.inputProofs) {
+        expect(hasP2PKSignedProof(primary, proof)).toBe(true);
+      }
+    } finally {
+      await coco.dispose();
     }
   });
 
