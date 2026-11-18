@@ -40,10 +40,22 @@ export function useInitialOperationHydration<TOperation extends { id: string }>(
 ): void {
   useEffect(() => {
     if (typeof binding === 'string') {
-      void hydrateOperation(binding).catch(() => {});
+      void hydrateOperation(binding);
     }
   }, [binding, hydrateOperation]);
 }
+
+type HydrationRead = {
+  operationId: string;
+  epoch: number;
+  promise: Promise<void>;
+};
+
+type HydrationHandlers<TResult> = {
+  read: () => Promise<TResult>;
+  onLoaded: (result: TResult) => void;
+  onFailed: () => void;
+};
 
 export function requireCurrentOperationId<TOperation extends { id: string }>(
   currentOperation: TOperation | null,
@@ -110,6 +122,8 @@ export function useOperationHookState<TOperation extends { id: string }, TExecut
   const statefulActionInProgressRef = useRef(false);
   const currentOperationRef = useRef<TOperation | null>(initialOperation);
   const actionEpochRef = useRef(0);
+  const actionCountRef = useRef(0);
+  const hydrationReadRef = useRef<HydrationRead | null>(null);
 
   useLayoutEffect(() => {
     mountedRef.current = true;
@@ -156,6 +170,7 @@ export function useOperationHookState<TOperation extends { id: string }, TExecut
       }
 
       statefulActionInProgressRef.current = true;
+      actionCountRef.current += 1;
       const actionEpoch = actionEpochRef.current;
       if (mountedRef.current) {
         setStatus('loading');
@@ -185,6 +200,74 @@ export function useOperationHookState<TOperation extends { id: string }, TExecut
     [],
   );
 
+  /**
+   * Loads the operation an initial operation id names, outside the action lock.
+   *
+   * Hydration is not a user action, so it must not hold the lock that serializes actions: under
+   * StrictMode the effect that starts it runs twice, and the replay would be rejected as an
+   * overlapping action. A replay for the same id within the same epoch joins the read already in
+   * flight instead of starting a second one. Results are dropped after `reset()` (which advances
+   * the epoch) or unmount, and status is left alone once an action has started since, so a late
+   * read cannot overwrite that action's status.
+   *
+   * The returned promise never rejects; failures are reported through `status` and `error`.
+   */
+  const runHydration = useCallback(
+    <TResult>(
+      operationId: string,
+      { read, onLoaded, onFailed }: HydrationHandlers<TResult>,
+    ): Promise<void> => {
+      const epoch = actionEpochRef.current;
+      const inFlight = hydrationReadRef.current;
+      if (inFlight && inFlight.operationId === operationId && inFlight.epoch === epoch) {
+        return inFlight.promise;
+      }
+
+      const actionCount = actionCountRef.current;
+      const isCurrent = () => epoch === actionEpochRef.current;
+      const ownsStatus = () =>
+        mountedRef.current && isCurrent() && actionCount === actionCountRef.current;
+
+      if (ownsStatus()) {
+        setStatus('loading');
+        setError(null);
+      }
+
+      const hydrationRead: HydrationRead = { operationId, epoch, promise: Promise.resolve() };
+      hydrationRead.promise = (async () => {
+        try {
+          const result = await read();
+          if (!isCurrent()) {
+            return;
+          }
+
+          onLoaded(result);
+          if (ownsStatus()) {
+            setStatus('success');
+          }
+        } catch (error) {
+          if (!isCurrent()) {
+            return;
+          }
+
+          onFailed();
+          if (ownsStatus()) {
+            setError(normalizeHookError(error));
+            setStatus('error');
+          }
+        } finally {
+          if (hydrationReadRef.current === hydrationRead) {
+            hydrationReadRef.current = null;
+          }
+        }
+      })();
+      hydrationReadRef.current = hydrationRead;
+
+      return hydrationRead.promise;
+    },
+    [],
+  );
+
   const reset = useCallback(() => {
     if (!mountedRef.current) {
       return;
@@ -209,6 +292,7 @@ export function useOperationHookState<TOperation extends { id: string }, TExecut
     replaceExecuteResult,
     getCurrentOperation,
     runStatefulAction,
+    runHydration,
     reset,
   };
 }

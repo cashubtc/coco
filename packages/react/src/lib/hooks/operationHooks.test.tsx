@@ -1618,3 +1618,341 @@ describe('useMeltOperation', () => {
     expect(melt.get).toHaveBeenCalledTimes(1);
   });
 });
+
+// Regression coverage for https://github.com/cashubtc/coco/issues/555.
+// StrictMode replays effect setup before the first read settles, so these tests resolve `get()`
+// through a deferred promise to reproduce the interleaving a real storage read produces.
+type HydrationTestOperation = { id: string; mintUrl: string; updatedAt: number };
+
+type HydrationHookResult = {
+  currentOperation: { id: string; updatedAt: number } | null;
+  status: string;
+  error: Error | null;
+  isLoading: boolean;
+  reset(): void;
+};
+
+type HydrationCase = {
+  kind: string;
+  setup(): {
+    manager: Manager;
+    get: ReturnType<typeof vi.fn>;
+    emit: (event: string, payload: unknown) => Promise<void>;
+  };
+  useHook(operationId: string): HydrationHookResult;
+  stored(operationId: string): HydrationTestOperation;
+  updated(operationId: string): HydrationTestOperation;
+  updateEvent: string;
+};
+
+const hydrationCases: HydrationCase[] = [
+  {
+    kind: 'useSendOperation',
+    setup: () => {
+      const { manager, send, emit } = createSendManagerMock();
+      return { manager, get: send.get, emit };
+    },
+    useHook: (operationId) => useSendOperation(operationId),
+    stored: (id) => createPendingSendOperation({ id }),
+    updated: (id) => createFinalizedSendOperation({ id }),
+    updateEvent: 'send:finalized',
+  },
+  {
+    kind: 'useReceiveOperation',
+    setup: () => {
+      const { manager, receive, emit } = createReceiveManagerMock();
+      return { manager, get: receive.get, emit };
+    },
+    useHook: (operationId) => useReceiveOperation(operationId),
+    stored: (id) => createPreparedReceiveOperation({ id }),
+    updated: (id) => createFinalizedReceiveOperation({ id }),
+    updateEvent: 'receive-op:finalized',
+  },
+  {
+    kind: 'useMintOperation',
+    setup: () => {
+      const { manager, mint, emit } = createMintManagerMock();
+      return { manager, get: mint.get, emit };
+    },
+    useHook: (operationId) => useMintOperation(operationId),
+    stored: (id) => createPendingMintOperation({ id }),
+    updated: (id) => createFinalizedMintOperation({ id }),
+    updateEvent: 'mint-op:finalized',
+  },
+  {
+    kind: 'useMeltOperation',
+    setup: () => {
+      const { manager, melt, emit } = createMeltManagerMock();
+      return { manager, get: melt.get, emit };
+    },
+    useHook: (operationId) => useMeltOperation(operationId),
+    stored: (id) => createPendingMeltOperation({ id }),
+    updated: (id) => createFinalizedMeltOperation({ id }),
+    updateEvent: 'melt-op:finalized',
+  },
+];
+
+// React 19 replays effects only when StrictMode wraps the root, so `createStrictHookWrapper`
+// (StrictMode nested inside a wrapper component) does not reproduce the replay. Use the
+// `reactStrictMode` render option instead, which matches `createRoot().render(<StrictMode>…)`.
+function strictModeAtRoot(manager: Manager) {
+  return { wrapper: createHookWrapper(manager), reactStrictMode: true } as const;
+}
+
+async function flushMicrotasks(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+  });
+}
+
+describe('initial operation-id hydration under StrictMode (#555)', () => {
+  describe.each(hydrationCases)('$kind', (hydrationCase: HydrationCase) => {
+    it('hydrates an existing id when the read settles after the effect replay', async () => {
+      const { manager, get } = hydrationCase.setup();
+      const stored = hydrationCase.stored('op-strict-hydrate');
+      const deferredRead = createDeferred<HydrationTestOperation | null>();
+      get.mockReturnValue(deferredRead.promise);
+
+      const { result } = renderHook(() => hydrationCase.useHook(stored.id), {
+        ...strictModeAtRoot(manager),
+      });
+      await flushMicrotasks();
+
+      expect(result.current.status).toBe('loading');
+      expect(result.current.isLoading).toBe(true);
+      expect(result.current.currentOperation).toBeNull();
+
+      await act(async () => {
+        deferredRead.resolve(stored);
+        await deferredRead.promise;
+      });
+
+      expect(result.current.currentOperation).toEqual(stored);
+      expect(result.current.status).toBe('success');
+      expect(result.current.error).toBeNull();
+      expect(get).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps applying lifecycle events after hydrating under StrictMode', async () => {
+      const { manager, get, emit } = hydrationCase.setup();
+      const stored = hydrationCase.stored('op-strict-events');
+      const updated = hydrationCase.updated(stored.id);
+      const deferredRead = createDeferred<HydrationTestOperation | null>();
+      get.mockReturnValue(deferredRead.promise);
+
+      const { result } = renderHook(() => hydrationCase.useHook(stored.id), {
+        ...strictModeAtRoot(manager),
+      });
+      await flushMicrotasks();
+      await act(async () => {
+        deferredRead.resolve(stored);
+        await deferredRead.promise;
+      });
+
+      await act(async () => {
+        await emit(hydrationCase.updateEvent, {
+          mintUrl: updated.mintUrl,
+          operationId: updated.id,
+          operation: updated,
+        });
+      });
+
+      expect(result.current.currentOperation).toEqual(updated);
+    });
+
+    it('surfaces a missing id as an error under StrictMode', async () => {
+      const { manager, get } = hydrationCase.setup();
+      const deferredRead = createDeferred<HydrationTestOperation | null>();
+      get.mockReturnValue(deferredRead.promise);
+
+      const { result } = renderHook(() => hydrationCase.useHook('op-missing'), {
+        ...strictModeAtRoot(manager),
+      });
+      await flushMicrotasks();
+      await act(async () => {
+        deferredRead.resolve(null);
+        await deferredRead.promise;
+      });
+
+      expect(result.current.currentOperation).toBeNull();
+      expect(result.current.status).toBe('error');
+      expect(result.current.error?.message).toBe('Operation op-missing not found');
+    });
+
+    it('ignores a read that settles after reset()', async () => {
+      const { manager, get } = hydrationCase.setup();
+      const stored = hydrationCase.stored('op-reset-during-read');
+      const deferredRead = createDeferred<HydrationTestOperation | null>();
+      get.mockReturnValue(deferredRead.promise);
+
+      const { result } = renderHook(() => hydrationCase.useHook(stored.id), {
+        ...strictModeAtRoot(manager),
+      });
+      await flushMicrotasks();
+
+      act(() => {
+        result.current.reset();
+      });
+      await act(async () => {
+        deferredRead.resolve(stored);
+        await deferredRead.promise;
+      });
+
+      expect(result.current.currentOperation).toBeNull();
+      expect(result.current.status).toBe('idle');
+      expect(result.current.error).toBeNull();
+    });
+
+    it('ignores a read that settles after unmount', async () => {
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const { manager, get } = hydrationCase.setup();
+      const stored = hydrationCase.stored('op-unmount-during-read');
+      const deferredRead = createDeferred<HydrationTestOperation | null>();
+      get.mockReturnValue(deferredRead.promise);
+
+      const { unmount } = renderHook(() => hydrationCase.useHook(stored.id), {
+        ...strictModeAtRoot(manager),
+      });
+      await flushMicrotasks();
+      unmount();
+
+      await act(async () => {
+        deferredRead.resolve(stored);
+        await deferredRead.promise;
+      });
+
+      expect(consoleError).not.toHaveBeenCalled();
+    });
+
+    it('binds the new id after a keyed remount while the old read is still pending', async () => {
+      const { manager, get } = hydrationCase.setup();
+      const first = hydrationCase.stored('op-before-remount');
+      const second = hydrationCase.stored('op-after-remount');
+      const reads = new Map([
+        [first.id, createDeferred<HydrationTestOperation | null>()],
+        [second.id, createDeferred<HydrationTestOperation | null>()],
+      ]);
+      get.mockImplementation((id: string) => reads.get(id)!.promise);
+
+      const firstMount = renderHook(() => hydrationCase.useHook(first.id), {
+        ...strictModeAtRoot(manager),
+      });
+      await flushMicrotasks();
+      firstMount.unmount();
+
+      const { result } = renderHook(() => hydrationCase.useHook(second.id), {
+        ...strictModeAtRoot(manager),
+      });
+      await flushMicrotasks();
+
+      await act(async () => {
+        reads.get(second.id)!.resolve(second);
+        await reads.get(second.id)!.promise;
+      });
+      await act(async () => {
+        reads.get(first.id)!.resolve(first);
+        await reads.get(first.id)!.promise;
+      });
+
+      expect(result.current.currentOperation).toEqual(second);
+      expect(result.current.status).toBe('success');
+    });
+  });
+
+  it('exposes the persisted token of a reloaded pending send', async () => {
+    const { manager, send } = createSendManagerMock();
+    const persistedToken = { mint: MINT_URL, proofs: [] } as unknown as SendExecuteResult['token'];
+    const stored = createPendingSendOperation({ id: 'send-op-reload', token: persistedToken });
+    const deferredRead = createDeferred<SendOperationRecord | null>();
+    send.get.mockReturnValue(deferredRead.promise);
+
+    const { result } = renderHook(() => useSendOperation(stored.id), {
+      ...strictModeAtRoot(manager),
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      deferredRead.resolve(stored);
+      await deferredRead.promise;
+    });
+
+    expect(result.current.currentOperation?.state).toBe('pending');
+    expect(
+      result.current.currentOperation?.state === 'pending' && result.current.currentOperation.token,
+    ).toBe(persistedToken);
+  });
+
+  it('lets prepare start right after reset() while the abandoned read is pending', async () => {
+    const { manager, send } = createSendManagerMock();
+    const deferredRead = createDeferred<SendOperationRecord | null>();
+    const prepared = createPreparedSendOperation({ id: 'send-op-new' });
+    send.get.mockReturnValue(deferredRead.promise);
+    send.prepare.mockResolvedValue(prepared);
+
+    const { result } = renderHook(() => useSendOperation('send-op-abandoned'), {
+      wrapper: createHookWrapper(manager),
+    });
+    await flushMicrotasks();
+
+    act(() => {
+      result.current.reset();
+    });
+    await act(async () => {
+      await result.current.prepare(SEND_PREPARE_INPUT);
+    });
+    await act(async () => {
+      deferredRead.resolve(createPendingSendOperation({ id: 'send-op-abandoned' }));
+      await deferredRead.promise;
+    });
+
+    expect(result.current.currentOperation).toEqual(prepared);
+    expect(result.current.status).toBe('success');
+  });
+
+  it('does not let a late hydration result overwrite the status of a running action', async () => {
+    const { manager, send, emit } = createSendManagerMock();
+    const prepared = createPreparedSendOperation({ id: 'send-op-race', updatedAt: 20 });
+    const deferredRead = createDeferred<SendOperationRecord | null>();
+    const deferredExecute = createDeferred<SendExecuteResult>();
+    send.get.mockReturnValue(deferredRead.promise);
+    send.execute.mockReturnValue(deferredExecute.promise);
+
+    const { result } = renderHook(() => useSendOperation(prepared.id), {
+      wrapper: createHookWrapper(manager),
+    });
+    await flushMicrotasks();
+
+    // An event binds the operation before the initial read settles, so actions become available.
+    await act(async () => {
+      await emit('send:prepared', {
+        mintUrl: prepared.mintUrl,
+        operationId: prepared.id,
+        operation: prepared,
+      });
+    });
+
+    let executePromise!: Promise<SendExecuteResult>;
+    act(() => {
+      executePromise = result.current.execute();
+    });
+    expect(result.current.status).toBe('loading');
+
+    await act(async () => {
+      deferredRead.resolve(createPreparedSendOperation({ id: prepared.id, updatedAt: 10 }));
+      await deferredRead.promise;
+    });
+
+    expect(result.current.status).toBe('loading');
+    expect(result.current.currentOperation).toEqual(prepared);
+
+    const executeResult = createSendExecuteResult({
+      operation: createPendingSendOperation({ id: prepared.id, updatedAt: 30 }),
+    });
+    await act(async () => {
+      deferredExecute.resolve(executeResult);
+      await executePromise;
+    });
+
+    expect(result.current.status).toBe('success');
+    expect(result.current.currentOperation).toEqual(executeResult.operation);
+  });
+});
