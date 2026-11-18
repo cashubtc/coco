@@ -47,6 +47,24 @@ export class ProofValidationError extends Error {
   }
 }
 
+/** Why an offline Send could not be prepared from stored proofs and keysets. */
+export type OfflineSendReason =
+  /** The balance covers the amount, but selection found no stored proofs adding up to it. */
+  | 'no_exact_match'
+  /** `offline` was combined with a send target, `forceSwap` or `coverReceiverFees`. */
+  | 'unsupported_option';
+
+/** An offline Send was refused locally; nothing was reserved and the mint was not contacted. */
+export class OfflineSendError extends Error {
+  constructor(
+    readonly reason: OfflineSendReason,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'OfflineSendError';
+  }
+}
+
 export class MintQuoteValidationError extends Error {
   constructor(message: string, cause?: unknown) {
     super(message);
