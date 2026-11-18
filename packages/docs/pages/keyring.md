@@ -140,23 +140,24 @@ from the request.
 ### Receiving P2PK Tokens
 
 When you receive a P2PK token, Coco evaluates each proof's spending conditions during
-`coco.ops.receive.prepare()`. Supported paths are:
+`coco.ops.receive.prepare()`. Each path has its own signature threshold, which defaults to one.
 
-- A single original lock key: Coco signs with its KeyRing key, including after locktime expiry.
-- Expired locktime without a refund tag: no key or signature is needed, even if the original
-  condition required multiple signatures.
-- Expired locktime with one refund key requiring one signature: Coco can sign with that KeyRing
-  key if it cannot use the original path. This also works when the original path requires multisig.
+- When the original path requires one signature, Coco tries the key in `data` followed by the
+  keys in `pubkeys`. It signs with the first key it owns.
+- After locktime expiry, if the original path is unavailable and the refund path requires one
+  signature, Coco can sign with any listed refund key it owns. This also works when the original
+  path requires multiple signatures.
+- After locktime expiry, a proof without a refund tag can be received without a signature,
+  regardless of its original threshold.
 
 Locktime expiry means `now > locktime`, using Unix seconds. At equality the lock is still active. Coco uses
 the local clock during preparation; the mint's clock decides acceptance. A missing or invalid
-locktime never enables signature-free spending or the refund path. If the required key is missing
-before expiry, preparation fails; Coco does not wait for expiry automatically.
+locktime keeps the original path in effect. If the Wallet cannot satisfy that path before expiry,
+preparation fails.
 
-Receive supports `SIG_INPUTS` (including an omitted signature flag). `SIG_ALL`, signing original
-conditions containing multiple keys, and signing refund conditions containing multiple keys are
-unsupported. Malformed conditions are rejected even after expiry. Each proof in a mixed token
-must have a supported spending path.
+Receive supports `SIG_INPUTS` (including an omitted signature flag). `SIG_ALL` and paths that
+require two or more signatures are unsupported. Malformed conditions are rejected even after expiry.
+Each proof in a mixed token must have a supported spending path.
 
 Preparation saves the chosen witnesses. Execution and recovery reuse them without looking up
 keys or changing paths. Use the receive operation lifecycle to review the amount and fee before

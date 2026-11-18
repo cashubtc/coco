@@ -47,9 +47,9 @@ export class ReceiveOpsApi {
   /**
    * Decodes and validates a token, then prepares a receive operation without
    * executing it. Each P2PK proof must have a supported spending path available now.
-   * Its original single key can authorize receipt before or after locktime expiry.
-   * After expiry, Coco can also use a single refund key or receive without a signature
-   * if there is no refund condition. The mint determines when locktime expires.
+   * For paths requiring one signature, Coco tries the original keys first, then any
+   * refund keys after locktime expiry. After expiry a proof with no refund condition
+   * can be received without a signature. The mint determines when locktime expires.
    * Preparation persists witnesses for replay during execution and recovery.
    */
   async prepare(input: PrepareReceiveInput): Promise<PreparedReceiveOperation> {

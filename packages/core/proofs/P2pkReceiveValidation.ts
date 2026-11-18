@@ -51,10 +51,10 @@ export function getReceiveSigningKeys(secret: string, nowSeconds: number): strin
 
   // Expiry adds a refund path; it never revokes the original authorization. Each candidate
   // satisfies a complete path by itself, so signatures from different paths are never combined.
-  const signingKeys = mainKeys.length === 1 && requiredSignatures === 1 ? [...mainKeys] : [];
-  if (expired && refundKeys?.length === 1 && requiredRefundSignatures === 1) {
-    signingKeys.push(refundKeys[0]!);
-  }
+  const originalCandidates = requiredSignatures === 1 ? mainKeys : [];
+  const refundCandidates =
+    expired && refundKeys && requiredRefundSignatures === 1 ? refundKeys : [];
+  const signingKeys = originalCandidates.concat(refundCandidates);
   if (!signingKeys.length) throw new ProofValidationError('Multisig is not supported');
   return [...new Set(signingKeys)];
 }

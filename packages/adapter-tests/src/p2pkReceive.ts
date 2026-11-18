@@ -171,6 +171,44 @@ export function runP2pkReceiveTests(
       }, 30_000);
     }
 
+    it('receives with the second original key when one signature suffices', async () => {
+      const sender = await session();
+      const receiver = await session();
+      await mintAmount(sender, mintUrl, 64, unit);
+      const primary = await sender.keyring.generateKeyPair();
+      const alternative = await receiver.keyring.generateKeyPair();
+      const token = await send(sender, {
+        data: primary.publicKeyHex,
+        pubkeys: [alternative.publicKeyHex],
+      });
+      const prepared = await receive(receiver, token);
+      expect(
+        prepared.inputProofs.every((proof) => hasP2PKSignedProof(alternative.publicKeyHex, proof)),
+      ).toBe(true);
+    }, 30_000);
+
+    it('receives with the second refund key after locktime on a two-signature original path', async () => {
+      const sender = await session();
+      const receiver = await session();
+      await mintAmount(sender, mintUrl, 64, unit);
+      const primary = await sender.keyring.generateKeyPair();
+      const cosigner = await sender.keyring.generateKeyPair();
+      const firstRefund = await sender.keyring.generateKeyPair();
+      const secondRefund = await receiver.keyring.generateKeyPair();
+      const token = await send(sender, {
+        data: primary.publicKeyHex,
+        pubkeys: [cosigner.publicKeyHex],
+        requiredSignatures: 2,
+        locktime: Math.floor(Date.now() / 1000) - 60,
+        refundKeys: [firstRefund.publicKeyHex, secondRefund.publicKeyHex],
+        requiredRefundSignatures: 1,
+      });
+      const prepared = await receive(receiver, token);
+      expect(
+        prepared.inputProofs.every((proof) => hasP2PKSignedProof(secondRefund.publicKeyHex, proof)),
+      ).toBe(true);
+    }, 30_000);
+
     for (const expired of [false, true]) {
       it(`uses the original key when the receiver owns both keys (locktime expired: ${expired})`, async () => {
         const sender = await session();

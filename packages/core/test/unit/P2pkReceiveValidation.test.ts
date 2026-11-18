@@ -86,7 +86,17 @@ describe('P2PK receive condition validation', () => {
     ).toEqual([refund]);
   });
 
-  it('keeps multiple refund keys unsupported without blocking the original single-key path', () => {
+  it('tries original keys before refund keys when both thresholds default to one', () => {
+    const locked = secret([
+      ['pubkeys', cosigner],
+      ['refund', refund, cosigner],
+      ['locktime', String(locktime)],
+    ]);
+    expect(getReceiveSigningKeys(locked, locktime)).toEqual([primary, cosigner]);
+    expect(getReceiveSigningKeys(locked, locktime + 1)).toEqual([primary, cosigner, refund]);
+  });
+
+  it('excludes a two-signature refund path without blocking the original single-key path', () => {
     const tags = [
       ['refund', refund, cosigner],
       ['n_sigs_refund', '2'],

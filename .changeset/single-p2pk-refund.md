@@ -2,7 +2,7 @@
 '@cashu/coco-core': patch
 ---
 
-Receive P2PK proofs using a single refund key after locktime when the original authorization
-path is unavailable, including when the original condition requires multisig. Preserve the
-original single-key path before and after locktime expiry, and reuse the witness selected during
-preparation for execution and recovery. No storage migration is required.
+Receive P2PK proofs with any listed original key when one signature suffices. After locktime
+expiry, the Wallet can also sign with any listed refund key when the refund threshold is one,
+including when the original path requires multiple signatures. Preparation prefers original
+keys and saves the witness for execution and recovery. No storage migration is required.
