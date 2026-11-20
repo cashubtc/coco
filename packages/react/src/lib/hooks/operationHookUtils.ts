@@ -206,9 +206,10 @@ export function useOperationHookState<TOperation extends { id: string }, TExecut
    * Hydration is not a user action, so it must not hold the lock that serializes actions: under
    * StrictMode the effect that starts it runs twice, and the replay would be rejected as an
    * overlapping action. A replay for the same id within the same epoch joins the read already in
-   * flight instead of starting a second one. Results are dropped after `reset()` (which advances
-   * the epoch) or unmount, and status is left alone once an action has started since, so a late
-   * read cannot overwrite that action's status.
+   * flight instead of starting a second one. The result is dropped after `reset()` (which advances
+   * the epoch) or once any action has started: an action needs a bound operation, and its own
+   * result is newer than the read, so applying the read could only overwrite that action's
+   * operation, `executeResult`, status or error. Unmounted hooks ignore it through `mountedRef`.
    *
    * The returned promise never rejects; failures are reported through `status` and `error`.
    */
@@ -224,11 +225,10 @@ export function useOperationHookState<TOperation extends { id: string }, TExecut
       }
 
       const actionCount = actionCountRef.current;
-      const isCurrent = () => epoch === actionEpochRef.current;
-      const ownsStatus = () =>
-        mountedRef.current && isCurrent() && actionCount === actionCountRef.current;
+      const isSuperseded = () =>
+        epoch !== actionEpochRef.current || actionCount !== actionCountRef.current;
 
-      if (ownsStatus()) {
+      if (mountedRef.current) {
         setStatus('loading');
         setError(null);
       }
@@ -237,21 +237,21 @@ export function useOperationHookState<TOperation extends { id: string }, TExecut
       hydrationRead.promise = (async () => {
         try {
           const result = await read();
-          if (!isCurrent()) {
+          if (isSuperseded()) {
             return;
           }
 
           onLoaded(result);
-          if (ownsStatus()) {
+          if (mountedRef.current) {
             setStatus('success');
           }
         } catch (error) {
-          if (!isCurrent()) {
+          if (isSuperseded()) {
             return;
           }
 
           onFailed();
-          if (ownsStatus()) {
+          if (mountedRef.current) {
             setError(normalizeHookError(error));
             setStatus('error');
           }

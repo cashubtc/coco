@@ -1955,4 +1955,40 @@ describe('initial operation-id hydration under StrictMode (#555)', () => {
     expect(result.current.status).toBe('success');
     expect(result.current.currentOperation).toEqual(executeResult.operation);
   });
+
+  it('keeps executeResult when execute completes before the initial read resolves', async () => {
+    const { manager, send, emit } = createSendManagerMock();
+    const prepared = createPreparedSendOperation({ id: 'send-op-late-read', updatedAt: 10 });
+    const executeResult = createSendExecuteResult({
+      operation: createPendingSendOperation({ id: prepared.id, updatedAt: 20 }),
+    });
+    const deferredRead = createDeferred<SendOperationRecord | null>();
+    send.get.mockReturnValue(deferredRead.promise);
+    send.execute.mockResolvedValue(executeResult);
+
+    const { result } = renderHook(() => useSendOperation(prepared.id), strictModeAtRoot(manager));
+    await flushMicrotasks();
+
+    await act(async () => {
+      await emit('send:prepared', {
+        mintUrl: prepared.mintUrl,
+        operationId: prepared.id,
+        operation: prepared,
+      });
+    });
+    await act(async () => {
+      await result.current.execute();
+    });
+    expect(result.current.executeResult).toEqual(executeResult);
+
+    // The read returns the same record execute() produced, so the updatedAt guard alone accepts it.
+    await act(async () => {
+      deferredRead.resolve(executeResult.operation);
+      await deferredRead.promise;
+    });
+
+    expect(result.current.executeResult).toEqual(executeResult);
+    expect(result.current.currentOperation).toEqual(executeResult.operation);
+    expect(result.current.status).toBe('success');
+  });
 });
