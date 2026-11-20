@@ -58,6 +58,7 @@ export function useMintOperation(
     replaceExecuteResult,
     getCurrentOperation,
     runStatefulAction,
+    runHydration,
     reset: resetState,
   } = useOperationHookState<MintOperation, MintOperationExecuteResult>(initialOperation);
 
@@ -93,27 +94,21 @@ export function useMintOperation(
   );
 
   const hydrateInitialOperation = useCallback(
-    async (operationId: string): Promise<void> => {
-      try {
-        await runStatefulAction(
-          async () => requireOperation((id) => manager.ops.mint.get(id), operationId),
-          async (operation) => {
-            if (boundOperationIdRef.current !== operationId) {
-              return;
-            }
-
+    (operationId: string): Promise<void> =>
+      runHydration(operationId, {
+        read: () => requireOperation((id) => manager.ops.mint.get(id), operationId),
+        onLoaded: (operation) => {
+          if (boundOperationIdRef.current === operationId) {
             bindOperation(operation, { clearExecuteResult: true });
-          },
-        );
-      } catch (error) {
-        if (boundOperationIdRef.current === operationId && !getCurrentOperation()) {
-          boundOperationIdRef.current = null;
-        }
-
-        throw error;
-      }
-    },
-    [bindOperation, getCurrentOperation, manager, runStatefulAction],
+          }
+        },
+        onFailed: () => {
+          if (boundOperationIdRef.current === operationId && !getCurrentOperation()) {
+            boundOperationIdRef.current = null;
+          }
+        },
+      }),
+    [bindOperation, getCurrentOperation, manager, runHydration],
   );
 
   useInitialOperationHydration(initialBindingRef.current, hydrateInitialOperation);
