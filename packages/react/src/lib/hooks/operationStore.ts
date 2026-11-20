@@ -6,7 +6,6 @@ import type { Manager } from '@cashu/coco-core';
  * Define each kind once at module scope: the store registry keys stores by the kind object.
  */
 export interface OperationKind<TOperation extends { id: string }> {
-  name: string;
   /** Passive storage read of one operation; `null` when the ID does not exist. */
   read(manager: Manager, operationId: string): Promise<TOperation | null>;
   /** Subscribes to the Manager events that carry this kind's records. */
@@ -47,6 +46,10 @@ export class OperationStore<TOperation extends { id: string }> {
 
   subscribe(operationId: string, listener: () => void): () => void {
     const entry = this.ensureEntry(operationId);
+    if (entry.listeners.has(listener)) {
+      // Each observer needs its own listener, or the observer count could not reach zero.
+      throw new Error(`Listener already observes operation ${operationId}`);
+    }
     entry.listeners.add(listener);
     this.observerCount += 1;
     if (this.observerCount === 1) {

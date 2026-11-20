@@ -14,7 +14,6 @@ const SEND_EVENTS = [
  * previous ordering for records written before revisions existed.
  */
 export const sendOperationKind: OperationKind<SendOperation> = {
-  name: 'send',
   read: (manager, operationId) => manager.ops.send.get(operationId),
   subscribe: (manager, onObserved) => {
     const unsubscribes = SEND_EVENTS.map((event) =>

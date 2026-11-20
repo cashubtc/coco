@@ -36,10 +36,13 @@ export interface UseSendOperationResult extends OperationHookResult<
  * The Send this hook instance follows. `record` holds what this instance itself received (an
  * operation object passed as the binding or an action result), so the hook can display it before
  * its store subscription exists. The shared store supplies everything observed after that.
+ * `record` counts only while `manager` is still the hook's Manager, so a record never outlives a
+ * Manager change even when the next Manager has an operation with the same ID.
  */
 type SendSelection = {
   id: string;
   record: SendOperation | null;
+  manager: Manager;
 };
 
 const unsubscribeNothing = () => {};
@@ -47,9 +50,14 @@ const subscribeNothing = () => unsubscribeNothing;
 
 function getInitialSelection(
   binding: OperationBinding<SendOperation> | null | undefined,
+  manager: Manager,
 ): SendSelection | null {
   const id = getInitialOperationIdFromBinding(binding);
-  return id ? { id, record: getInitialOperationFromBinding(binding) } : null;
+  return id ? { id, record: getInitialOperationFromBinding(binding), manager } : null;
+}
+
+function ownRecordFor(selection: SendSelection | null, manager: Manager): SendOperation | null {
+  return selection?.manager === manager ? selection.record : null;
 }
 
 export function useSendOperation(
@@ -58,7 +66,7 @@ export function useSendOperation(
   const manager = useManager();
   const store = useMemo(() => getOperationStore(manager, sendOperationKind), [manager]);
   const initialBindingRef = useRef(initialBinding);
-  const [selection, setSelection] = useState(() => getInitialSelection(initialBinding));
+  const [selection, setSelection] = useState(() => getInitialSelection(initialBinding, manager));
   const selectionRef = useRef(selection);
   const {
     executeResult,
@@ -87,7 +95,7 @@ export function useSendOperation(
   const currentOperation = newerOperation(
     sendOperationKind,
     observedOperation,
-    selection?.record ?? null,
+    ownRecordFor(selection, manager),
   );
 
   const select = useCallback(
@@ -108,20 +116,27 @@ export function useSendOperation(
       return null;
     }
 
-    return newerOperation(sendOperationKind, store.getSnapshot(current.id), current.record);
-  }, [store]);
+    return newerOperation(
+      sendOperationKind,
+      store.getSnapshot(current.id),
+      ownRecordFor(current, manager),
+    );
+  }, [manager, store]);
 
-  /** Shows a record this instance received if it still follows that ID. */
+  /** Shows a record this instance received from `source` if it still follows that ID. */
   const keepOwnRecord = useCallback(
-    (operation: SendOperation) => {
+    (operation: SendOperation, source: Manager) => {
       const current = selectionRef.current;
       if (current?.id !== operation.id) {
         return;
       }
 
-      const record = newerOperation(sendOperationKind, current.record, operation);
-      if (record !== current.record) {
-        select({ id: current.id, record });
+      const record =
+        current.manager === source
+          ? newerOperation(sendOperationKind, current.record, operation)
+          : operation;
+      if (record !== current.record || current.manager !== source) {
+        select({ id: current.id, record, manager: source });
       }
     },
     [select],
@@ -129,16 +144,20 @@ export function useSendOperation(
 
   const hydrateInitialOperation = useCallback(
     (operationId: string): Promise<void> =>
-      runHydration(operationId, {
-        read: () => requireOperation((id) => store.read(id), operationId),
-        // The store has already shared the record with every observer of this ID.
-        onLoaded: () => {},
-        onFailed: () => {
-          if (selectionRef.current?.id === operationId && !getCurrentOperation()) {
-            select(null);
-          }
+      runHydration(
+        operationId,
+        {
+          read: () => requireOperation((id) => store.read(id), operationId),
+          // The store has already shared the record with every observer of this ID.
+          onLoaded: () => {},
+          onFailed: () => {
+            if (selectionRef.current?.id === operationId && !getCurrentOperation()) {
+              select(null);
+            }
+          },
         },
-      }),
+        store,
+      ),
     [getCurrentOperation, runHydration, select, store],
   );
 
@@ -164,12 +183,12 @@ export function useSendOperation(
           return result;
         },
         (result) => {
-          keepOwnRecord(recordOf(result));
+          keepOwnRecord(recordOf(result), manager);
           onSuccess?.(result);
         },
       );
     },
-    [getCurrentOperation, keepOwnRecord, runStatefulAction, store],
+    [getCurrentOperation, keepOwnRecord, manager, runStatefulAction, store],
   );
 
   /** Settles a command, then rereads the Send so observers see the state it left behind. */
@@ -190,7 +209,7 @@ export function useSendOperation(
         (operation) => {
           if (!selectionRef.current) {
             replaceExecuteResult(null);
-            select({ id: operation.id, record: operation });
+            select({ id: operation.id, record: operation, manager });
           }
         },
       );

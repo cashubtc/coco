@@ -1,10 +1,12 @@
 import 'fake-indexeddb/auto';
 import { Amount, initializeCoco, type Manager } from '@cashu/coco-core';
 import { IndexedDbRepositories } from '@cashu/coco-indexeddb';
-import { act, cleanup, renderHook } from '@testing-library/react';
+import { act, cleanup, render, renderHook } from '@testing-library/react';
+import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ManagerProvider } from '../providers/Manager';
 import { createDeferred, createHookWrapper } from '../../test/testUtils';
-import { useSendOperation } from './useSendOperation';
+import { useSendOperation, type UseSendOperationResult } from './useSendOperation';
 
 type SendOperationRecord = NonNullable<Awaited<ReturnType<Manager['ops']['send']['get']>>>;
 type PendingSendOperationRecord = Extract<SendOperationRecord, { state: 'pending' }>;
@@ -136,20 +138,33 @@ describe('a persisted Send shared between two observers', () => {
   it('shows the reopened token and the next lifecycle update to both observers', async () => {
     const { manager, repositories, persisted } = await reopenWallet('send-shared-reopen');
 
-    const { result } = renderHook(
-      () => ({ first: useSendOperation(persisted.id), second: useSendOperation(persisted.id) }),
+    const reads = vi.spyOn(manager.ops.send, 'get');
+    const observed = new Map<string, UseSendOperationResult>();
+    function SendObserver({ name }: { name: string }) {
+      observed.set(name, useSendOperation(persisted.id));
+      return null;
+    }
+    const current = (name: string) => observed.get(name)!;
+
+    render(
+      <>
+        <SendObserver name="first" />
+        <SendObserver name="second" />
+      </>,
       strictModeAtRoot(manager),
     );
 
     await waitFor(() => {
-      expect(result.current.first.currentOperation?.state).toBe('pending');
-      expect(result.current.second.currentOperation?.state).toBe('pending');
+      expect(current('first').currentOperation?.state).toBe('pending');
+      expect(current('second').currentOperation?.state).toBe('pending');
     });
-    for (const observer of [result.current.first, result.current.second]) {
-      const operation = observer.currentOperation as PendingSendOperationRecord;
+    for (const name of ['first', 'second']) {
+      const operation = current(name).currentOperation as PendingSendOperationRecord;
       expect(operation.token).toEqual(persisted.token);
-      expect(observer.status).toBe('success');
+      expect(current(name).status).toBe('success');
     }
+    // Both components and their StrictMode effect replays shared one storage read.
+    expect(reads).toHaveBeenCalledTimes(1);
 
     // The recipient claimed the token, and the wallet has recorded that its proofs are spent.
     await repositories.proofRepository.setProofState(
@@ -161,9 +176,9 @@ describe('a persisted Send shared between two observers', () => {
       await manager.ops.send.finalize(persisted.id);
     });
 
-    expect(result.current.first.currentOperation?.state).toBe('finalized');
-    expect(result.current.second.currentOperation?.state).toBe('finalized');
-    expect(result.current.first.currentOperation).toBe(result.current.second.currentOperation);
+    expect(current('first').currentOperation?.state).toBe('finalized');
+    expect(current('second').currentOperation?.state).toBe('finalized');
+    expect(current('first').currentOperation).toBe(current('second').currentOperation);
   });
 });
 
@@ -255,11 +270,11 @@ describe('observers of one Send with a fake Manager', () => {
     const { manager, send, emit, listenerCount } = createSendManagerMock();
     const pending = sendRecord({ id: 'send-op-observers' });
     send.get.mockResolvedValue(pending);
-    const wrapper = createHookWrapper(manager);
+    const options = strictModeAtRoot(manager);
 
-    const first = renderHook(() => useSendOperation(pending.id), { wrapper });
-    const second = renderHook(() => useSendOperation(pending.id), { wrapper });
-    const third = renderHook(() => useSendOperation(pending.id), { wrapper });
+    const first = renderHook(() => useSendOperation(pending.id), options);
+    const second = renderHook(() => useSendOperation(pending.id), options);
+    const third = renderHook(() => useSendOperation(pending.id), options);
     await waitFor(() => {
       expect(third.result.current.currentOperation).toEqual(pending);
     });
@@ -302,6 +317,54 @@ describe('observers of one Send with a fake Manager', () => {
 
     expect(leftObserver.result.current.currentOperation).toEqual(leftFinalized);
     expect(rightObserver.result.current.currentOperation).toEqual(rightRecord);
+  });
+  it('reads the new Manager after a Manager change with the same ID', async () => {
+    const left = createSendManagerMock();
+    const right = createSendManagerMock();
+    const leftRead = createDeferred<SendOperationRecord | null>();
+    const leftRecord = sendRecord({ id: 'send-op-switch', mintUrl: 'https://left.example' });
+    const rightRecord = sendRecord({ id: leftRecord.id, mintUrl: 'https://right.example' });
+    left.send.get.mockReturnValue(leftRead.promise);
+    right.send.get.mockResolvedValue(rightRecord);
+    let manager = left.manager;
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <ManagerProvider manager={manager}>{children}</ManagerProvider>
+    );
+
+    const { result, rerender } = renderHook(() => useSendOperation(leftRecord.id), { wrapper });
+    manager = right.manager;
+    rerender();
+    await waitFor(() => {
+      expect(result.current.currentOperation).toEqual(rightRecord);
+    });
+    await act(async () => {
+      leftRead.resolve(leftRecord);
+      await leftRead.promise;
+    });
+
+    expect(right.send.get).toHaveBeenCalledWith(rightRecord.id);
+    expect(result.current.currentOperation).toEqual(rightRecord);
+  });
+
+  it('does not show a record from the previous Manager after a Manager change', async () => {
+    const left = createSendManagerMock();
+    const right = createSendManagerMock();
+    const leftRecord = sendRecord({ id: 'send-op-own-record', mintUrl: 'https://left.example' });
+    let manager = left.manager;
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <ManagerProvider manager={manager}>{children}</ManagerProvider>
+    );
+
+    const { result, rerender } = renderHook(() => useSendOperation(leftRecord), { wrapper });
+    expect(result.current.currentOperation).toEqual(leftRecord);
+
+    manager = right.manager;
+    rerender();
+
+    expect(result.current.currentOperation).toBeNull();
+    const rightRecord = sendRecord({ id: leftRecord.id, mintUrl: 'https://right.example' });
+    await right.emit('send:pending', rightRecord);
+    expect(result.current.currentOperation).toEqual(rightRecord);
   });
 });
 
