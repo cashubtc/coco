@@ -11,143 +11,147 @@ export type UsePaginatedHistoryResult = {
   isFetching: boolean;
 };
 
+type Cursor = { mode: 'infinite' | 'page'; start: number };
+type ReadIntent = { cursor: Cursor | 'current' | 'next'; background: boolean };
+
 export const usePaginatedHistory = (pageSize = 100): UsePaginatedHistoryResult => {
-  const [history, setHistory] = useState<HistoryEntry[]>([]);
-  const [isFetching, setIsFetching] = useState(false);
   const manager = useManager();
+  const managerRef = useRef(manager);
+  const pageSizeRef = useRef(pageSize);
+  const generationRef = useRef(0);
+  const cursorRef = useRef<Cursor>({ mode: 'infinite', start: 0 });
+  const fetchingRef = useRef(false);
+  const queuedInvalidationRef = useRef(false);
+  const activeReadRef = useRef<Promise<void> | null>(null);
+  const runReadRef = useRef<(intent: ReadIntent) => Promise<void>>(async () => {});
 
-  const startRef = useRef(0);
-  const hasMoreRef = useRef(true);
-  const modeRef = useRef<'infinite' | 'page'>('infinite');
-  const isMountedRef = useRef(true);
-  const isFetchingRef = useRef(false);
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [hasMore, setHasMore] = useState(true);
+  const [isFetching, setIsFetching] = useState(false);
 
-  const setFetching = (value: boolean) => {
-    isFetchingRef.current = value;
-    setIsFetching(value);
-  };
+  const runRead = useCallback(async (intent: ReadIntent): Promise<void> => {
+    const generation = generationRef.current;
+    const selectedManager = managerRef.current;
+    const selectedPageSize = pageSizeRef.current;
 
-  useEffect(() => {
-    return () => {
-      isMountedRef.current = false;
-    };
+    while (fetchingRef.current) {
+      if (intent.background) {
+        queuedInvalidationRef.current = true;
+        return activeReadRef.current ?? Promise.resolve();
+      }
+
+      await (activeReadRef.current ?? Promise.resolve());
+    }
+
+    if (
+      generation !== generationRef.current ||
+      selectedManager !== managerRef.current ||
+      selectedPageSize !== pageSizeRef.current
+    ) {
+      return;
+    }
+
+    const cursor =
+      intent.cursor === 'current'
+        ? cursorRef.current
+        : intent.cursor === 'next'
+          ? {
+              mode: 'infinite' as const,
+              start:
+                cursorRef.current.mode === 'infinite'
+                  ? cursorRef.current.start + selectedPageSize
+                  : 0,
+            }
+          : intent.cursor;
+    const offset = cursor.mode === 'infinite' ? 0 : cursor.start;
+    const limit = cursor.mode === 'infinite' ? cursor.start + selectedPageSize : selectedPageSize;
+    fetchingRef.current = true;
+    setIsFetching(true);
+
+    const read = (async () => {
+      try {
+        const entries = (await selectedManager.history.getPaginatedHistory(offset, limit)) ?? [];
+        if (generation !== generationRef.current || selectedManager !== managerRef.current) return;
+        cursorRef.current = cursor;
+        setHistory(entries);
+        setHasMore(entries.length === limit);
+      } catch (readError) {
+        console.error(readError);
+      } finally {
+        if (generation === generationRef.current && selectedManager === managerRef.current) {
+          fetchingRef.current = false;
+          setIsFetching(false);
+          activeReadRef.current = null;
+          if (queuedInvalidationRef.current) {
+            queuedInvalidationRef.current = false;
+            void runReadRef.current({ cursor: 'current', background: true });
+          }
+        }
+      }
+    })();
+    activeReadRef.current = read;
+    return read;
   }, []);
 
-  const fetchPage = useCallback(
-    async (offset: number): Promise<HistoryEntry[]> => {
-      try {
-        const page = await manager.history.getPaginatedHistory(offset, pageSize);
-        return page || [];
-      } catch (error) {
-        console.error(error);
-        return [];
+  runReadRef.current = runRead;
+
+  useEffect(() => {
+    managerRef.current = manager;
+    pageSizeRef.current = pageSize;
+    generationRef.current += 1;
+    cursorRef.current = { mode: 'infinite', start: 0 };
+    fetchingRef.current = false;
+    queuedInvalidationRef.current = false;
+    activeReadRef.current = null;
+    setHistory([]);
+    setHasMore(true);
+    setIsFetching(false);
+
+    const generation = generationRef.current;
+    const unsubscribe = manager.on('history:updated', () => {
+      if (generation !== generationRef.current) return;
+      if (fetchingRef.current) {
+        queuedInvalidationRef.current = true;
+        return;
       }
-    },
-    [manager, pageSize],
-  );
+      void runReadRef.current({ cursor: 'current', background: true });
+    });
+    void runReadRef.current({
+      cursor: { mode: 'infinite', start: 0 },
+      background: true,
+    });
+
+    return () => {
+      unsubscribe();
+      generationRef.current += 1;
+      fetchingRef.current = false;
+      queuedInvalidationRef.current = false;
+      activeReadRef.current = null;
+    };
+  }, [manager, pageSize]);
 
   const refresh = useCallback(async () => {
-    if (isFetchingRef.current) return;
-    setFetching(true);
-    try {
-      if (modeRef.current === 'infinite' && startRef.current === 0) {
-        const top = await fetchPage(0);
-        if (!isMountedRef.current) return;
-        setHistory((prev) => {
-          const withoutTop = prev.filter((e) => !top.some((t) => t.id === e.id));
-          return [...top, ...withoutTop];
-        });
-      } else {
-        const page = await fetchPage(startRef.current);
-        if (!isMountedRef.current) return;
-        setHistory(page);
-      }
-    } finally {
-      setFetching(false);
-    }
-  }, [fetchPage]);
-
-  const refreshRef = useRef<() => Promise<void>>(async () => {});
-  useEffect(() => {
-    refreshRef.current = refresh;
-  }, [refresh]);
-
-  useEffect(() => {
-    const handler = () => {
-      void refreshRef.current();
-    };
-    manager.on('history:updated', handler);
-    return () => {
-      manager.off('history:updated', handler);
-    };
-  }, [manager]);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      if (isFetchingRef.current) return;
-      setFetching(true);
-      modeRef.current = 'infinite';
-      startRef.current = 0;
-      const page = await fetchPage(0);
-      hasMoreRef.current = page.length === pageSize;
-      if (!cancelled && isMountedRef.current) setHistory(page);
-      setFetching(false);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [fetchPage, pageSize]);
+    await runReadRef.current({ cursor: 'current', background: false });
+  }, []);
 
   const loadMore = useCallback(async () => {
-    if (!hasMoreRef.current || isFetchingRef.current) return;
-    setFetching(true);
-    modeRef.current = 'infinite';
-    const nextStart = startRef.current + pageSize;
-    const page = await fetchPage(nextStart);
-    hasMoreRef.current = page.length === pageSize;
-    if (isMountedRef.current) {
-      setHistory((prev) => {
-        const seen = new Set<string>();
-        const merged: HistoryEntry[] = [];
-        for (const entry of [...prev, ...page]) {
-          if (seen.has(entry.id)) continue;
-          seen.add(entry.id);
-          merged.push(entry);
-        }
-        return merged;
-      });
-      startRef.current = nextStart;
-    }
-    setFetching(false);
-  }, [fetchPage, pageSize]);
+    if (!hasMore) return;
+    await runReadRef.current({ cursor: 'next', background: false });
+  }, [hasMore]);
 
-  const goToPage = useCallback(
-    async (pageNumber: number) => {
-      const offset = pageNumber * pageSize;
-      if (isFetchingRef.current) return;
-      setFetching(true);
-      modeRef.current = 'page';
-      const data = await fetchPage(offset);
-      hasMoreRef.current = data.length === pageSize;
-      if (isMountedRef.current) {
-        setHistory(data);
-        startRef.current = offset;
-      }
-      setFetching(false);
-    },
-    [fetchPage, pageSize],
-  );
+  const goToPage = useCallback(async (page: number) => {
+    if (!Number.isSafeInteger(page) || page < 0) {
+      console.error(new TypeError('History page must be a nonnegative safe integer'));
+      return;
+    }
+    await runReadRef.current({
+      cursor: { mode: 'page', start: page * pageSizeRef.current },
+      background: false,
+    });
+  }, []);
 
   return useMemo(
-    () => ({
-      history,
-      loadMore,
-      goToPage,
-      refresh,
-      hasMore: hasMoreRef.current,
-      isFetching,
-    }),
-    [history, loadMore, goToPage, refresh, isFetching],
+    () => ({ history, loadMore, goToPage, refresh, hasMore, isFetching }),
+    [goToPage, hasMore, history, isFetching, loadMore, refresh],
   );
 };

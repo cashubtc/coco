@@ -74,7 +74,10 @@ skips automatic parent startup passes and timers; all explicit commands remain a
 including preparation, execution, `ops.mintSwap.refresh(id)` and `ops.mintSwap.recovery.run()`. Generic Mint/Melt
 recovery, ordinary processors and automatic quote claiming leave children of active Mint Swaps to
 the parent, so disabling this processor also pauses them; see
-[ADR-0020](https://github.com/cashubtc/coco/blob/master/packages/core/docs/adr/0020-mint-swap-exclusively-coordinates-its-children.md). Scan defaults are `processIntervalMs: 1000`,
+[ADR-0020](https://github.com/cashubtc/coco/blob/master/packages/core/docs/adr/0020-mint-swap-exclusively-coordinates-its-children.md)
+and [Mint Swap Operations](./mint-swap-operations.md). `get`, `listActive`, and `waitForOutcome` are
+passive; `refresh` and `recovery.run()` may contact a mint to reconcile already-created work. Scan
+defaults are `processIntervalMs: 1000`,
 `sweepIntervalMs: 30000`, and `batchSize: 25`; durable retry deadlines remain authoritative.
 
 `processors.mintOperationProcessor.batchMintQuotes` defaults to `true`. Automatic claiming then
@@ -130,8 +133,8 @@ const outputDataCreator = createRuntimeOutputDataCreator();
 const coco = await initializeCoco({ repo, seedGetter, outputDataCreator });
 ```
 
-The same creator object is used by every mint-and-unit-scoped Wallet Instance and by Coco's mint,
-send, receive, melt, Restore, and sweep output paths. If it throws, the requesting operation fails;
+The same creator object is used by every mint-and-unit-scoped Wallet Instance and by Coco's Mint,
+Batch Mint, Mint Swap, Send, Receive, Melt, Restore, and Sweep output paths. If it throws, the requesting operation fails;
 Coco does not fall back to built-in construction. Omitting it preserves the standard `cashu-ts`
 behavior.
 

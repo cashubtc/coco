@@ -63,6 +63,7 @@ composition, load the [Providers guide](https://cashubtc.github.io/coco/pages/re
 | Browse history by page or load more                        | `usePaginatedHistory(pageSize?)`                                                        |
 | Bind an ecash send or receive                              | `useSendOperation(initialOperationOrId?)`, `useReceiveOperation(initialOperationOrId?)` |
 | Bind a quote-backed mint or melt                           | `useMintOperation(initialOperationOrId?)`, `useMeltOperation(initialOperationOrId?)`    |
+| Bind a Mint Swap parent                                    | `useMintSwapOperation(initialOperationOrId?)`                                           |
 
 `useBalanceContext()` consumes the provider's snapshot; `useBalances(scope?)` owns a separate
 query/subscription and returns a `refresh()` action. Use the scoped hook when the view needs its
@@ -71,7 +72,8 @@ declarations for individual return values and action signatures.
 
 ## Bind UI to operations
 
-Use `useSendOperation`, `useReceiveOperation`, `useMintOperation`, and `useMeltOperation` for their
+Use `useSendOperation`, `useReceiveOperation`, `useMintOperation`, `useMeltOperation`, and
+`useMintSwapOperation` for their
 respective flows. Each hook owns one local operation binding:
 
 - `prepare(input)` creates and binds an operation. Once bound, call `execute()`, `cancel()`,
@@ -92,6 +94,14 @@ respective flows. Each hook owns one local operation binding:
 
 The operation hooks observe operation events; app-level polling is unnecessary for ordinary
 state updates.
+
+Mint Swap is the exception that also performs passive local polling while active so a lost hint
+cannot stall the view. It orders snapshots by parent `revision` and stops at quiescence. Its
+observer and waiter never call effect-driving `execute`, `refresh`, or recovery.
+
+`usePaginatedHistory` treats events as invalidations: it replaces the current page or full loaded
+window from durable history, queues one invalidation during a read, and keeps the last good view on
+background failure. Do not splice event entries into the list.
 
 ## Use core APIs for flows without dedicated hooks
 

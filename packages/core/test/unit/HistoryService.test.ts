@@ -16,18 +16,37 @@ import type {
   PendingSendOperation,
   PreparedSendOperation,
 } from '../../operations/send/SendOperation';
+import type { MintSwapOperation } from '../../operations/mintSwap/MintSwapOperation.ts';
+import type { MintSwapOperationRepository } from '../../operations/mintSwap/MintSwapOperationRepository.ts';
+import { projectMintSwapHistoryEntry } from '../../repositories/MintSwapHistoryProjection.ts';
+import { mintSwapFixtures } from '../fixtures/MintSwap.ts';
 
 describe('HistoryService', () => {
   let service: HistoryService;
   let eventBus: EventBus<CoreEvents>;
   let historyUpdateEvents: Array<{ mintUrl: string; entry: HistoryEntry }>;
   let repositoryEntries: Map<string, HistoryEntry>;
+  let linkedParents: Map<string, MintSwapOperation>;
+  let quoteParent: MintSwapOperation | null;
+  let childLookupError: Error | null;
+  let quoteLookupError: Error | null;
+  let historyLookupError: Error | null;
+  let quoteLookups: Array<{
+    kind: 'mint' | 'melt';
+    quote: Parameters<MintSwapOperationRepository['getByQuote']>[1];
+  }>;
 
   const mintUrl = 'https://mint.test';
   const receiveProofs = [{ id: 'keyset-1', amount: Amount.from(42), secret: 'secret-1', C: 'C-1' }];
 
   beforeEach(() => {
     repositoryEntries = new Map();
+    linkedParents = new Map();
+    quoteParent = null;
+    childLookupError = null;
+    quoteLookupError = null;
+    historyLookupError = null;
+    quoteLookups = [];
     historyUpdateEvents = [];
     eventBus = new EventBus<CoreEvents>();
     eventBus.on('history:updated', (payload) => {
@@ -40,11 +59,27 @@ describe('HistoryService', () => {
         return Array.from(repositoryEntries.values()).slice(offset, offset + limit);
       },
       async getHistoryEntryById(id: string): Promise<HistoryEntry | null> {
+        if (historyLookupError) throw historyLookupError;
         return repositoryEntries.get(id) ?? null;
       },
     };
 
-    service = new HistoryService(historyRepository, eventBus);
+    const mintSwapOperationRepository = {
+      async getByChild(kind: 'mint' | 'melt', operationId: string) {
+        if (childLookupError) throw childLookupError;
+        return linkedParents.get(`${kind}:${operationId}`) ?? null;
+      },
+      async getByQuote(
+        kind: 'mint' | 'melt',
+        quote: Parameters<MintSwapOperationRepository['getByQuote']>[1],
+      ) {
+        quoteLookups.push({ kind, quote });
+        if (quoteLookupError) throw quoteLookupError;
+        return quoteParent;
+      },
+    } as MintSwapOperationRepository;
+
+    service = new HistoryService(historyRepository, mintSwapOperationRepository, eventBus);
   });
 
   it('emits deterministic operation-backed send entries from send lifecycle events', async () => {
@@ -178,6 +213,131 @@ describe('HistoryService', () => {
       state: 'failed',
       error: 'expired',
     });
+  });
+
+  it('rereads and emits the grouped row for parent hints', async () => {
+    const parent = mintSwapFixtures('hinted').prepared;
+    const entry = projectMintSwapHistoryEntry(parent, null, null);
+    repositoryEntries.set(entry.id, entry);
+
+    await eventBus.emit('mint-swap:updated', {
+      operationId: parent.id,
+      revision: parent.revision,
+      state: parent.state,
+    });
+
+    expect(historyUpdateEvents).toEqual([{ mintUrl: parent.destinationMintUrl, entry }]);
+  });
+
+  it('emits a stopped grouped parent instead of its exact child row', async () => {
+    const parent = mintSwapFixtures('stopped').needs_attention;
+    const child = makePreparedMeltOperation(parent.sourceOperationId, 'source-quote');
+    const entry = projectMintSwapHistoryEntry(parent, child, null);
+    repositoryEntries.set(entry.id, entry);
+    linkedParents.set(`melt:${child.id}`, parent);
+
+    await eventBus.emit('melt-op:prepared', {
+      mintUrl: child.mintUrl,
+      operationId: child.id,
+      operation: child,
+    });
+
+    expect(historyUpdateEvents).toHaveLength(1);
+    expect(historyUpdateEvents[0]).toEqual({ mintUrl: parent.destinationMintUrl, entry });
+    expect(historyUpdateEvents[0]?.entry.id).not.toBe(`melt:${child.id}`);
+  });
+
+  it('falls back to child projections when an adapter has no grouped parent row', async () => {
+    const parent = mintSwapFixtures('adapter-fallback').prepared;
+    const source = makePreparedMeltOperation(parent.sourceOperationId, 'source-quote');
+    const destination = makeFailedMintOperation(parent.destinationOperationId, 'destination-quote');
+    linkedParents.set(`melt:${source.id}`, parent);
+    linkedParents.set(`mint:${destination.id}`, parent);
+
+    await eventBus.emit('melt-op:prepared', {
+      mintUrl: source.mintUrl,
+      operationId: source.id,
+      operation: source,
+    });
+    await eventBus.emit('mint-op:failed', {
+      mintUrl: destination.mintUrl,
+      operationId: destination.id,
+      operation: destination,
+    });
+
+    expect(historyUpdateEvents.map(({ entry }) => entry.id)).toEqual([
+      `melt:${source.id}`,
+      `mint:${destination.id}`,
+    ]);
+  });
+
+  it('uses the quote reverse lookup before emitting a child after an ID lookup failure', async () => {
+    const source = makePreparedMeltOperation('ordinary-source', 'ordinary-quote');
+    childLookupError = new Error('child index unavailable');
+
+    await eventBus.emit('melt-op:prepared', {
+      mintUrl: source.mintUrl,
+      operationId: source.id,
+      operation: source,
+    });
+
+    expect(quoteLookups).toEqual([
+      {
+        kind: 'melt',
+        quote: { mintUrl: source.mintUrl, method: source.method, quoteId: source.quoteId },
+      },
+    ]);
+    expect(historyUpdateEvents.map(({ entry }) => entry.id)).toEqual([`melt:${source.id}`]);
+  });
+
+  it('emits the grouped parent when quote lookup recovers a failed child lookup', async () => {
+    const parent = mintSwapFixtures('quote-fallback').prepared;
+    const source = {
+      ...makePreparedMeltOperation(parent.sourceOperationId, parent.sourceQuote.quoteId),
+      mintUrl: parent.sourceMintUrl,
+    };
+    const entry = projectMintSwapHistoryEntry(parent, source, null);
+    repositoryEntries.set(entry.id, entry);
+    childLookupError = new Error('child index unavailable');
+    quoteParent = parent;
+
+    await eventBus.emit('melt-op:prepared', {
+      mintUrl: source.mintUrl,
+      operationId: source.id,
+      operation: source,
+    });
+
+    expect(historyUpdateEvents).toEqual([{ mintUrl: parent.destinationMintUrl, entry }]);
+  });
+
+  it('does not guess child ownership when both reverse lookups fail', async () => {
+    const source = makePreparedMeltOperation('unknown-source', 'unknown-quote');
+    childLookupError = new Error('child index unavailable');
+    quoteLookupError = new Error('quote index unavailable');
+
+    await eventBus.emit('melt-op:prepared', {
+      mintUrl: source.mintUrl,
+      operationId: source.id,
+      operation: source,
+    });
+
+    expect(historyUpdateEvents).toHaveLength(0);
+  });
+
+  it('does not emit a known parent child when the grouped projection fails', async () => {
+    const parent = mintSwapFixtures('projection-failure').prepared;
+    const source = makePreparedMeltOperation(parent.sourceOperationId, parent.sourceQuote.quoteId);
+    linkedParents.set(`melt:${source.id}`, parent);
+    historyLookupError = new Error('grouped projection unavailable');
+
+    await eventBus.emit('melt-op:prepared', {
+      mintUrl: source.mintUrl,
+      operationId: source.id,
+      operation: source,
+    });
+
+    expect(quoteLookups).toHaveLength(0);
+    expect(historyUpdateEvents).toHaveLength(0);
   });
 
   it('ignores receive prepared and emits only terminal receive history', async () => {

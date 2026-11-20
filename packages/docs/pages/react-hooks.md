@@ -34,6 +34,36 @@ For state-machine details, see [Send Operations](./send-operations.md),
 [Receive Operations](./receive-operations.md), [Mint Operations](./mint-operations.md),
 and [Melt Operations](./melt-operations.md).
 
+## useMintSwapOperation
+
+Use this for one durable parent operation. `prepare` binds the stable parent ID; `execute`,
+`refresh`, and `cancel` operate on that binding. `waitForOutcome` remains passive and `listActive`
+is a stateless read.
+
+```tsx
+import { useMintSwapOperation } from '@cashu/coco-react';
+
+const { prepare, execute, refresh, cancel, waitForOutcome, currentOperation } =
+  useMintSwapOperation();
+
+const operation = await prepare({
+  id: stableId,
+  sourceMintUrl,
+  destinationMintUrl,
+  destinationAmount: { amount: 1_000, unit: 'sat' },
+});
+if (operation.state === 'prepared') await execute();
+const outcome = await waitForOutcome({ timeoutMs: 30_000 });
+```
+
+The hook subscribes before its first read, treats update events as hints, and orders same-ID parent
+snapshots by `revision`. While active it polls local `get` every second, without calling `execute`,
+`refresh`, or recovery. It stops polling at `completed`, `cancelled`, `failed`, or
+`needs_attention`. `refresh()` is effect-driving and is never scheduled by the hook.
+
+See [Mint Swap Operations](./mint-swap-operations.md) for economics, child ownership, and grouped
+history.
+
 ## useSendOperation
 
 Use this for the full send lifecycle, including resume, reclaim, and finalize
@@ -174,6 +204,12 @@ const {
 } = usePaginatedHistory(50);
 const { balances: trustedBalances } = useTrustedBalance();
 ```
+
+`usePaginatedHistory` treats `history:updated` as an invalidation. Infinite mode rereads and
+replaces the complete loaded window; page mode rereads and replaces the current page. One
+invalidation arriving during a read is queued, including after a failed read. Failed background
+reads retain the last good data, cursor, and `hasMore`; call `refreshHistory()` for an explicit
+passive reread whose failure is returned to the caller.
 
 `useBalances()` returns the full wallet snapshot:
 

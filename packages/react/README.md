@@ -6,7 +6,7 @@ applications.
 The package exports the `CocoCashuProvider` convenience wrapper, which can
 initialize Coco from config or accept an existing manager, the underlying
 providers, operation-oriented hooks such as `useSendOperation`,
-`useReceiveOperation`, `useMintOperation`, and `useMeltOperation`, plus
+`useReceiveOperation`, `useMintOperation`, `useMeltOperation`, and `useMintSwapOperation`, plus
 derived-data hooks such as `usePaginatedHistory`, `useBalances`, and
 `useTrustedBalance`.
 
@@ -92,3 +92,8 @@ the first render; if a mounted component needs to switch to a different
 operation, remount the hook or component with a new React `key`.
 
 See the docs in `packages/docs` for provider composition and hook usage details.
+
+`useMintSwapOperation` rereads durable parent state on best-effort hints and polls local `get` while
+the operation is active. It orders snapshots by parent revision and never schedules effect-driving
+`execute`, `refresh`, or recovery. `usePaginatedHistory` likewise rereads the current page or full
+loaded window on invalidation and retains the last good view after background read failure.

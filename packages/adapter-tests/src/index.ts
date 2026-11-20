@@ -3164,3 +3164,4 @@ export {
   runBatchMintHistoryContract,
   type BatchMintContractOptions,
 } from './batchMint.ts';
+export { runHistoryProjectionContract, type HistoryProjectionContractOptions } from './history.ts';

@@ -71,6 +71,11 @@ export class MemoryMintSwapOperationRepository implements MintSwapOperationRepos
     return operation ? parseMintSwapOperation(operation) : null;
   }
 
+  /** Complete read model used by the in-memory history projection. */
+  async getAll(): Promise<MintSwapOperation[]> {
+    return Array.from(this.operations.values()).sort(compareCreated).map(parseMintSwapOperation);
+  }
+
   async getByChild(kind: 'mint' | 'melt', operationId: string): Promise<MintSwapOperation | null> {
     const id = (kind === 'mint' ? this.destinationChildren : this.sourceChildren).get(operationId);
     return id ? this.getById(id) : null;

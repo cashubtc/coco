@@ -490,9 +490,10 @@ operation lifecycle state.
 
 ### Realtime updates
 
-`history:updated` still exists, but it now carries the operation-backed
-projection for the changed operation. Consumers can update optimistically from
-the payload, but repository reads remain authoritative.
+`history:updated` still exists, but it is an invalidation hint rather than a page patch. Reread the
+current page or complete loaded window so grouping, suppression, ordering, and pagination remain
+authoritative. Mint Swap contributes one parent row to lists while exact child rows remain directly
+readable. See [Mint Swap Operations](../pages/mint-swap-operations.md#grouped-history).
 
 History ignores `receive-op:prepared`. Receive entries are projected only for
 `finalized` and `rolled_back` states.
