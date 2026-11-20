@@ -1,17 +1,18 @@
 import type { Manager, PreparedSendOperation, SendOperation } from '@cashu/coco-core';
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useManager } from '../contexts/ManagerContext';
 import type { OperationBinding, OperationHookResult } from './operation-types';
 import {
-  getInitialOperationIdFromBinding,
   getInitialOperationFromBinding,
+  getInitialOperationIdFromBinding,
   requireCurrentOperationId,
   requireOperation,
   requireUnboundOperationCreation,
-  shouldReplaceBoundOperation,
   useInitialOperationHydration,
-  useOperationHookState,
+  useOperationActionState,
 } from './operationHookUtils';
+import { sendOperationKind } from './operationKinds';
+import { getOperationStore, newerOperation } from './operationStore';
 
 type SendOps = Manager['ops']['send'];
 
@@ -31,182 +32,218 @@ export interface UseSendOperationResult extends OperationHookResult<
   listInFlight(): Promise<SendOperation[]>;
 }
 
+/**
+ * The Send this hook instance follows. `record` holds what this instance itself received (an
+ * operation object passed as the binding or an action result), so the hook can display it before
+ * its store subscription exists. The shared store supplies everything observed after that.
+ */
+type SendSelection = {
+  id: string;
+  record: SendOperation | null;
+};
+
+const unsubscribeNothing = () => {};
+const subscribeNothing = () => unsubscribeNothing;
+
+function getInitialSelection(
+  binding: OperationBinding<SendOperation> | null | undefined,
+): SendSelection | null {
+  const id = getInitialOperationIdFromBinding(binding);
+  return id ? { id, record: getInitialOperationFromBinding(binding) } : null;
+}
+
 export function useSendOperation(
   initialBinding?: OperationBinding<SendOperation> | null,
 ): UseSendOperationResult {
   const manager = useManager();
+  const store = useMemo(() => getOperationStore(manager, sendOperationKind), [manager]);
   const initialBindingRef = useRef(initialBinding);
-  const boundOperationIdRef = useRef<string | null>(
-    getInitialOperationIdFromBinding(initialBindingRef.current),
-  );
+  const [selection, setSelection] = useState(() => getInitialSelection(initialBinding));
+  const selectionRef = useRef(selection);
   const {
-    currentOperation,
     executeResult,
     status,
     error,
     isLoading,
     isError,
-    replaceCurrentOperation,
+    isMounted,
     replaceExecuteResult,
-    getCurrentOperation,
     runStatefulAction,
     runHydration,
-    reset: resetState,
-  } = useOperationHookState<SendOperation, SendOperationExecuteResult>(
-    getInitialOperationFromBinding(initialBindingRef.current),
+    resetActionState,
+  } = useOperationActionState<SendOperationExecuteResult>();
+
+  const selectedId = selection?.id ?? null;
+  const subscribe = useCallback(
+    (listener: () => void) =>
+      selectedId ? store.subscribe(selectedId, listener) : subscribeNothing(),
+    [selectedId, store],
+  );
+  const getSnapshot = useCallback(
+    () => (selectedId ? store.getSnapshot(selectedId) : null),
+    [selectedId, store],
+  );
+  const observedOperation = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const currentOperation = newerOperation(
+    sendOperationKind,
+    observedOperation,
+    selection?.record ?? null,
   );
 
-  const bindOperation = useCallback(
-    (operation: SendOperation | null, options?: Parameters<typeof replaceCurrentOperation>[1]) => {
-      if (!operation) {
-        boundOperationIdRef.current = null;
-        replaceCurrentOperation(null, options);
+  const select = useCallback(
+    (next: SendSelection | null) => {
+      if (!isMounted()) {
         return;
       }
 
-      if (boundOperationIdRef.current && boundOperationIdRef.current !== operation.id) {
-        return;
-      }
-
-      if (!shouldReplaceBoundOperation(getCurrentOperation(), operation)) {
-        return;
-      }
-
-      boundOperationIdRef.current = operation.id;
-      replaceCurrentOperation(operation, options);
+      selectionRef.current = next;
+      setSelection(next);
     },
-    [getCurrentOperation, replaceCurrentOperation],
+    [isMounted],
   );
 
-  const handleObservedOperation = useCallback(
+  const getCurrentOperation = useCallback((): SendOperation | null => {
+    const current = selectionRef.current;
+    if (!current) {
+      return null;
+    }
+
+    return newerOperation(sendOperationKind, store.getSnapshot(current.id), current.record);
+  }, [store]);
+
+  /** Shows a record this instance received if it still follows that ID. */
+  const keepOwnRecord = useCallback(
     (operation: SendOperation) => {
-      if (operation.id === boundOperationIdRef.current) {
-        bindOperation(operation);
+      const current = selectionRef.current;
+      if (current?.id !== operation.id) {
+        return;
+      }
+
+      const record = newerOperation(sendOperationKind, current.record, operation);
+      if (record !== current.record) {
+        select({ id: current.id, record });
       }
     },
-    [bindOperation],
+    [select],
   );
 
   const hydrateInitialOperation = useCallback(
     (operationId: string): Promise<void> =>
       runHydration(operationId, {
-        read: () => requireOperation((id) => manager.ops.send.get(id), operationId),
-        onLoaded: (operation) => {
-          if (boundOperationIdRef.current === operationId) {
-            bindOperation(operation, { clearExecuteResult: true });
-          }
-        },
+        read: () => requireOperation((id) => store.read(id), operationId),
+        // The store has already shared the record with every observer of this ID.
+        onLoaded: () => {},
         onFailed: () => {
-          if (boundOperationIdRef.current === operationId && !getCurrentOperation()) {
-            boundOperationIdRef.current = null;
+          if (selectionRef.current?.id === operationId && !getCurrentOperation()) {
+            select(null);
           }
         },
       }),
-    [bindOperation, getCurrentOperation, manager, runHydration],
+    [getCurrentOperation, runHydration, select, store],
   );
 
   useInitialOperationHydration(initialBindingRef.current, hydrateInitialOperation);
 
-  useEffect(() => {
-    const unsubscribePrepared = manager.on('send:prepared', ({ operation }) => {
-      handleObservedOperation(operation);
-    });
-    const unsubscribePending = manager.on('send:pending', ({ operation }) => {
-      handleObservedOperation(operation);
-    });
-    const unsubscribeFinalized = manager.on('send:finalized', ({ operation }) => {
-      handleObservedOperation(operation);
-    });
-    const unsubscribeRolledBack = manager.on('send:rolled-back', ({ operation }) => {
-      handleObservedOperation(operation);
-    });
-
-    return () => {
-      unsubscribePrepared();
-      unsubscribePending();
-      unsubscribeFinalized();
-      unsubscribeRolledBack();
-    };
-  }, [handleObservedOperation, manager]);
-
-  const prepare = useCallback(
-    async (input: SendOperationPrepareInput): Promise<PreparedSendOperation> => {
-      requireUnboundOperationCreation(boundOperationIdRef.current, 'prepare');
+  /**
+   * Runs a command for the selected Send. Its resulting record reaches every observer of that ID
+   * through the store of the Manager that ran it, even after this hook was reset.
+   */
+  const runSelectedAction = useCallback(
+    async <T>(
+      actionName: string,
+      action: (operationId: string) => Promise<T>,
+      recordOf: (result: T) => SendOperation,
+      onSuccess?: (result: T) => void,
+    ): Promise<T> => {
+      const operationId = requireCurrentOperationId(getCurrentOperation(), actionName);
 
       return runStatefulAction(
-        async () => manager.ops.send.prepare(input),
-        async (operation) => {
-          bindOperation(operation, { clearExecuteResult: true });
+        async () => {
+          const result = await action(operationId);
+          store.observe(recordOf(result));
+          return result;
+        },
+        (result) => {
+          keepOwnRecord(recordOf(result));
+          onSuccess?.(result);
         },
       );
     },
-    [bindOperation, manager, runStatefulAction],
+    [getCurrentOperation, keepOwnRecord, runStatefulAction, store],
   );
 
-  const refresh = useCallback(async (): Promise<SendOperation> => {
-    const targetOperationId = requireCurrentOperationId(getCurrentOperation(), 'refresh');
+  /** Settles a command, then rereads the Send so observers see the state it left behind. */
+  const settleAndReread = useCallback(
+    async (operationId: string, command: (operationId: string) => Promise<void>) => {
+      await command(operationId);
+      return requireOperation((id) => manager.ops.send.get(id), operationId);
+    },
+    [manager],
+  );
 
-    return runStatefulAction(
-      async () => manager.ops.send.refresh(targetOperationId),
-      async (operation) => {
-        bindOperation(operation);
-      },
-    );
-  }, [bindOperation, getCurrentOperation, manager, runStatefulAction]);
+  const prepare = useCallback(
+    async (input: SendOperationPrepareInput): Promise<PreparedSendOperation> => {
+      requireUnboundOperationCreation(selectionRef.current?.id ?? null, 'prepare');
 
-  const execute = useCallback(async (): Promise<SendOperationExecuteResult> => {
-    const targetOperationId = requireCurrentOperationId(getCurrentOperation(), 'execute');
+      return runStatefulAction(
+        async () => manager.ops.send.prepare(input),
+        (operation) => {
+          if (!selectionRef.current) {
+            replaceExecuteResult(null);
+            select({ id: operation.id, record: operation });
+          }
+        },
+      );
+    },
+    [manager, replaceExecuteResult, runStatefulAction, select],
+  );
 
-    return runStatefulAction(
-      async () => manager.ops.send.execute(targetOperationId),
-      async (result) => {
-        bindOperation(result.operation);
-        replaceExecuteResult(result);
-      },
-    );
-  }, [bindOperation, getCurrentOperation, manager, replaceExecuteResult, runStatefulAction]);
+  const refresh = useCallback(
+    (): Promise<SendOperation> =>
+      runSelectedAction(
+        'refresh',
+        (id) => manager.ops.send.refresh(id),
+        (operation) => operation,
+      ),
+    [manager, runSelectedAction],
+  );
+
+  const execute = useCallback(
+    (): Promise<SendOperationExecuteResult> =>
+      runSelectedAction(
+        'execute',
+        (id) => manager.ops.send.execute(id),
+        (result) => result.operation,
+        replaceExecuteResult,
+      ),
+    [manager, replaceExecuteResult, runSelectedAction],
+  );
 
   const cancel = useCallback(async (): Promise<void> => {
-    const targetOperationId = requireCurrentOperationId(getCurrentOperation(), 'cancel');
-
-    await runStatefulAction(
-      async () => {
-        await manager.ops.send.cancel(targetOperationId);
-        return requireOperation((id) => manager.ops.send.get(id), targetOperationId);
-      },
-      async (operation) => {
-        bindOperation(operation, { clearExecuteResult: true });
-      },
+    await runSelectedAction(
+      'cancel',
+      (id) => settleAndReread(id, (operationId) => manager.ops.send.cancel(operationId)),
+      (operation) => operation,
+      () => replaceExecuteResult(null),
     );
-  }, [bindOperation, getCurrentOperation, manager, runStatefulAction]);
+  }, [manager, replaceExecuteResult, runSelectedAction, settleAndReread]);
 
   const reclaim = useCallback(async (): Promise<void> => {
-    const targetOperationId = requireCurrentOperationId(getCurrentOperation(), 'reclaim');
-
-    await runStatefulAction(
-      async () => {
-        await manager.ops.send.reclaim(targetOperationId);
-        return requireOperation((id) => manager.ops.send.get(id), targetOperationId);
-      },
-      async (operation) => {
-        bindOperation(operation, { clearExecuteResult: true });
-      },
+    await runSelectedAction(
+      'reclaim',
+      (id) => settleAndReread(id, (operationId) => manager.ops.send.reclaim(operationId)),
+      (operation) => operation,
+      () => replaceExecuteResult(null),
     );
-  }, [bindOperation, getCurrentOperation, manager, runStatefulAction]);
+  }, [manager, replaceExecuteResult, runSelectedAction, settleAndReread]);
 
   const finalize = useCallback(async (): Promise<void> => {
-    const targetOperationId = requireCurrentOperationId(getCurrentOperation(), 'finalize');
-
-    await runStatefulAction(
-      async () => {
-        await manager.ops.send.finalize(targetOperationId);
-        return requireOperation((id) => manager.ops.send.get(id), targetOperationId);
-      },
-      async (operation) => {
-        bindOperation(operation);
-      },
+    await runSelectedAction(
+      'finalize',
+      (id) => settleAndReread(id, (operationId) => manager.ops.send.finalize(operationId)),
+      (operation) => operation,
     );
-  }, [bindOperation, getCurrentOperation, manager, runStatefulAction]);
+  }, [manager, runSelectedAction, settleAndReread]);
 
   const listPrepared = useCallback(async (): Promise<PreparedSendOperation[]> => {
     return manager.ops.send.listPrepared();
@@ -216,10 +253,14 @@ export function useSendOperation(
     return manager.ops.send.listInFlight();
   }, [manager]);
 
-  const resetBoundOperation = useCallback(() => {
-    boundOperationIdRef.current = null;
-    resetState();
-  }, [resetState]);
+  const reset = useCallback(() => {
+    if (!isMounted()) {
+      return;
+    }
+
+    select(null);
+    resetActionState();
+  }, [isMounted, resetActionState, select]);
 
   return {
     currentOperation,
@@ -236,6 +277,6 @@ export function useSendOperation(
     finalize,
     listPrepared,
     listInFlight,
-    reset: resetBoundOperation,
+    reset,
   };
 }

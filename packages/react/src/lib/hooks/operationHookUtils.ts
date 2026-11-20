@@ -110,17 +110,19 @@ export function shouldReplaceBoundOperation<TOperation extends BindableOperation
   return incomingOperation.updatedAt >= currentOperation.updatedAt;
 }
 
-export function useOperationHookState<TOperation extends { id: string }, TExecuteResult>(
-  initialOperation: TOperation | null = null,
-) {
-  const [currentOperation, setCurrentOperation] = useState<TOperation | null>(initialOperation);
+/**
+ * Per-hook action lock, status, error and `executeResult`, without the displayed operation.
+ *
+ * Hooks that observe their operation through the shared store use this directly. The legacy hooks
+ * combine it with a per-hook record through {@link useOperationHookState}.
+ */
+export function useOperationActionState<TExecuteResult>() {
   const [executeResult, setExecuteResult] = useState<TExecuteResult | null>(null);
   const [status, setStatus] = useState<OperationHookStatus>('idle');
   const [error, setError] = useState<Error | null>(null);
 
   const mountedRef = useRef(true);
   const statefulActionInProgressRef = useRef(false);
-  const currentOperationRef = useRef<TOperation | null>(initialOperation);
   const actionEpochRef = useRef(0);
   const actionCountRef = useRef(0);
   const hydrationReadRef = useRef<HydrationRead | null>(null);
@@ -133,20 +135,7 @@ export function useOperationHookState<TOperation extends { id: string }, TExecut
     };
   }, []);
 
-  const replaceCurrentOperation = useCallback(
-    (operation: TOperation | null, options: ReplaceCurrentOperationOptions = {}) => {
-      if (!mountedRef.current) {
-        return;
-      }
-
-      currentOperationRef.current = operation;
-      setCurrentOperation(operation);
-      if (options.clearExecuteResult) {
-        setExecuteResult(null);
-      }
-    },
-    [],
-  );
+  const isMounted = useCallback(() => mountedRef.current, []);
 
   const replaceExecuteResult = useCallback((result: TExecuteResult | null) => {
     if (!mountedRef.current) {
@@ -154,10 +143,6 @@ export function useOperationHookState<TOperation extends { id: string }, TExecut
     }
 
     setExecuteResult(result);
-  }, []);
-
-  const getCurrentOperation = useCallback(() => {
-    return currentOperationRef.current;
   }, []);
 
   const runStatefulAction = useCallback(
@@ -268,31 +253,81 @@ export function useOperationHookState<TOperation extends { id: string }, TExecut
     [],
   );
 
-  const reset = useCallback(() => {
+  /** Abandons this hook's actions and reads: their late results no longer touch its state. */
+  const resetActionState = useCallback(() => {
     if (!mountedRef.current) {
       return;
     }
 
     actionEpochRef.current += 1;
-    currentOperationRef.current = null;
-    setCurrentOperation(null);
     setExecuteResult(null);
     setStatus('idle');
     setError(null);
   }, []);
 
   return {
-    currentOperation,
     executeResult,
     status,
     error,
     isLoading: status === 'loading',
     isError: status === 'error',
+    isMounted,
+    replaceExecuteResult,
+    runStatefulAction,
+    runHydration,
+    resetActionState,
+  };
+}
+
+export function useOperationHookState<TOperation extends { id: string }, TExecuteResult>(
+  initialOperation: TOperation | null = null,
+) {
+  const actionState = useOperationActionState<TExecuteResult>();
+  const { isMounted, replaceExecuteResult, resetActionState } = actionState;
+  const [currentOperation, setCurrentOperation] = useState<TOperation | null>(initialOperation);
+  const currentOperationRef = useRef<TOperation | null>(initialOperation);
+
+  const replaceCurrentOperation = useCallback(
+    (operation: TOperation | null, options: ReplaceCurrentOperationOptions = {}) => {
+      if (!isMounted()) {
+        return;
+      }
+
+      currentOperationRef.current = operation;
+      setCurrentOperation(operation);
+      if (options.clearExecuteResult) {
+        replaceExecuteResult(null);
+      }
+    },
+    [isMounted, replaceExecuteResult],
+  );
+
+  const getCurrentOperation = useCallback(() => {
+    return currentOperationRef.current;
+  }, []);
+
+  const reset = useCallback(() => {
+    if (!isMounted()) {
+      return;
+    }
+
+    resetActionState();
+    currentOperationRef.current = null;
+    setCurrentOperation(null);
+  }, [isMounted, resetActionState]);
+
+  return {
+    currentOperation,
+    executeResult: actionState.executeResult,
+    status: actionState.status,
+    error: actionState.error,
+    isLoading: actionState.isLoading,
+    isError: actionState.isError,
     replaceCurrentOperation,
     replaceExecuteResult,
     getCurrentOperation,
-    runStatefulAction,
-    runHydration,
+    runStatefulAction: actionState.runStatefulAction,
+    runHydration: actionState.runHydration,
     reset,
   };
 }
