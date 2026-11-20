@@ -1,6 +1,4 @@
-import 'fake-indexeddb/auto';
-import { Amount, initializeCoco, type Manager } from '@cashu/coco-core';
-import { IndexedDbRepositories } from '@cashu/coco-indexeddb';
+import { Amount, initializeCoco, MemoryRepositories, type Manager } from '@cashu/coco-core';
 import { act, cleanup, render, renderHook } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -10,9 +8,7 @@ import { useSendOperation, type UseSendOperationResult } from './useSendOperatio
 
 type SendOperationRecord = NonNullable<Awaited<ReturnType<Manager['ops']['send']['get']>>>;
 type PendingSendOperationRecord = Extract<SendOperationRecord, { state: 'pending' }>;
-type CoreProofRecord = Parameters<
-  IndexedDbRepositories['proofRepository']['saveProofs']
->[1][number];
+type CoreProofRecord = Parameters<MemoryRepositories['proofRepository']['saveProofs']>[1][number];
 
 const MINT_URL = 'https://mint.example';
 const KEYSET_ID = '00aabbccddeeff00';
@@ -35,7 +31,7 @@ function strictModeAtRoot(manager: Manager) {
  * Session would have left it.
  */
 async function persistPendingSend(
-  repositories: IndexedDbRepositories,
+  repositories: MemoryRepositories,
   operationId: string,
 ): Promise<PendingSendOperationRecord> {
   const proofs: CoreProofRecord[] = [
@@ -96,7 +92,9 @@ async function reopenWallet(operationId: string) {
     }),
   );
 
-  const repositories = new IndexedDbRepositories({ name: `coco-react-${crypto.randomUUID()}` });
+  // A fresh Manager over the stored records stands in for reopening the wallet. Memory
+  // repositories copy records in and out, so the Manager never sees the objects written here.
+  const repositories = new MemoryRepositories();
   await repositories.init();
   const persisted = await persistPendingSend(repositories, operationId);
   const manager = await initializeCoco({
