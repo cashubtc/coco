@@ -85,6 +85,12 @@ import {
 } from './api';
 import { PluginHost } from './plugins/PluginHost.ts';
 import type { MintMethodQuoteSnapshot } from './operations/mint';
+import type {
+  WalletRestoreKeysetResult,
+  WalletRestoreOptions,
+  WalletRestoreReport,
+  WalletRestoreSignal,
+} from './api/WalletApi.ts';
 import type { Plugin, PluginExtensions, ServiceMap } from './plugin.ts';
 import { QuoteLifecycle } from './quotes/QuoteLifecycle.ts';
 import {
@@ -227,8 +233,19 @@ export interface CocoConfig {
 
 export type CocoInitializationCleanupState = 'confirmed' | 'unconfirmed';
 
+export interface CocoRestoreSelection extends WalletRestoreOptions {
+  mintUrl: string;
+}
+
+function throwIfRestoreAborted(signal?: WalletRestoreSignal): void {
+  if (!signal?.aborted) return;
+  const error = new Error('Restore was aborted', { cause: signal.reason });
+  error.name = 'AbortError';
+  throw error;
+}
+
 /**
- * Reports a failed `initializeCoco()` call and whether its partially initialized Manager was
+ * Reports a failed Coco initialization call and whether its partially initialized Manager was
  * disposed successfully.
  */
 export class CocoInitializationError extends Error {
@@ -242,6 +259,19 @@ export class CocoInitializationError extends Error {
   }
 }
 
+/** Reports failed restore-first initialization, including keysets committed before failure. */
+export class CocoRestoreInitializationError extends CocoInitializationError {
+  constructor(
+    message: string,
+    cleanupState: CocoInitializationCleanupState,
+    cause: unknown,
+    readonly restoreReports: WalletRestoreReport[],
+  ) {
+    super(message, cleanupState, cause);
+    this.name = 'CocoRestoreInitializationError';
+  }
+}
+
 /**
  * Starts a Coco Session and returns its Manager. Equivalent to {@link Manager.create}.
  * @param config - Configuration options including repositories, seed, and optional features
@@ -249,6 +279,18 @@ export class CocoInitializationError extends Error {
  */
 export async function initializeCoco(config: CocoConfig): Promise<Manager> {
   return Manager.create(config);
+}
+
+/** Restore selected mints before activating plugins, Background Watchers or Processors. */
+export async function initializeCocoWithRestore(
+  config: CocoConfig,
+  options: {
+    mints: CocoRestoreSelection[];
+    signal?: WalletRestoreSignal;
+    onKeysetProgress?: (result: WalletRestoreKeysetResult) => void;
+  },
+): Promise<Manager> {
+  return Manager.createWithRestore(config, options);
 }
 
 export class Manager {
@@ -318,22 +360,76 @@ export class Manager {
    * @throws {CocoInitializationError} When initialization fails; reports whether cleanup completed.
    */
   static async create(config: CocoConfig): Promise<Manager> {
+    return Manager.createSession(config);
+  }
+
+  /** Restore selected mints before the shared session startup sequence runs. */
+  static async createWithRestore(
+    config: CocoConfig,
+    options: {
+      mints: CocoRestoreSelection[];
+      signal?: WalletRestoreSignal;
+      onKeysetProgress?: (result: WalletRestoreKeysetResult) => void;
+    },
+  ): Promise<Manager> {
+    if (!options.mints.length) throw new TypeError('At least one mint must be selected for restore');
+    return Manager.createSession(config, options);
+  }
+
+  private static async createSession(
+    config: CocoConfig,
+    restoreOptions?: {
+      mints: CocoRestoreSelection[];
+      signal?: WalletRestoreSignal;
+      onKeysetProgress?: (result: WalletRestoreKeysetResult) => void;
+    },
+  ): Promise<Manager> {
     validateMintSwapProcessorConfiguration(config.processors?.mintSwapOperationProcessor);
     await config.repo.init();
     const coco = new Manager(config);
-
+    const restoreReports: WalletRestoreReport[] = [];
     try {
+      if (restoreOptions) {
+        for (const selection of restoreOptions.mints) {
+          throwIfRestoreAborted(restoreOptions.signal);
+          const report = await coco.wallet.restoreWithReport(selection.mintUrl, {
+            units: selection.units,
+            signal: restoreOptions.signal,
+            onKeysetProgress: restoreOptions.onKeysetProgress,
+          });
+          restoreReports.push(report);
+          if (report.keysets.some(({ status }) => status === 'failed')) {
+            throw new Error(`Restore failed for mint ${selection.mintUrl}`);
+          }
+        }
+        throwIfRestoreAborted(restoreOptions.signal);
+      }
       await coco.initialize();
-
       return coco;
     } catch (error) {
       try {
         await coco.dispose();
       } catch (cleanupError) {
+        if (restoreOptions) {
+          throw new CocoRestoreInitializationError(
+            'Coco restore initialization failed and cleanup could not be confirmed',
+            'unconfirmed',
+            new AggregateError([error, cleanupError]),
+            restoreReports,
+          );
+        }
         throw new CocoInitializationError(
           'Coco initialization failed and cleanup could not be confirmed',
           'unconfirmed',
           new AggregateError([error, cleanupError]),
+        );
+      }
+      if (restoreOptions) {
+        throw new CocoRestoreInitializationError(
+          'Coco restore initialization failed',
+          'confirmed',
+          error,
+          restoreReports,
         );
       }
       throw new CocoInitializationError('Coco initialization failed', 'confirmed', error);

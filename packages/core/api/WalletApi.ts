@@ -26,6 +26,32 @@ export interface WalletRestoreOptions {
   units?: string[];
 }
 
+export interface WalletRestoreKeysetResult {
+  mintUrl: string;
+  keysetId: string;
+  unit: string;
+  status: 'restored' | 'failed';
+  error?: Error;
+}
+
+export interface WalletRestoreReport {
+  mintUrl: string;
+  keysets: WalletRestoreKeysetResult[];
+}
+
+/** Structural cancellation signal accepted without requiring DOM or Node type libraries. */
+export interface WalletRestoreSignal {
+  readonly aborted: boolean;
+  readonly reason?: unknown;
+}
+
+function throwIfRestoreAborted(signal?: WalletRestoreSignal): void {
+  if (!signal?.aborted) return;
+  const error = new Error('Restore was aborted', { cause: signal.reason });
+  error.name = 'AbortError';
+  throw error;
+}
+
 export interface WalletSweepOptions {
   /**
    * Optional unit filter. Units are normalized to lowercase.
@@ -74,6 +100,23 @@ export class WalletApi {
   // Restoration logic is delegated to WalletRestoreService
 
   async restore(mintUrl: string, options?: WalletRestoreOptions) {
+    const report = await this.restoreWithReport(mintUrl, options);
+    if (report.keysets.some(({ status }) => status === 'failed')) {
+      throw new Error('Failed to restore some keysets');
+    }
+  }
+
+  /**
+   * Restore a mint and retain each independently committed keyset outcome.
+   * Cancellation is checked between keysets; completed keysets remain committed.
+   */
+  async restoreWithReport(
+    mintUrl: string,
+    options?: WalletRestoreOptions & {
+      signal?: WalletRestoreSignal;
+      onKeysetProgress?: (result: WalletRestoreKeysetResult) => void;
+    },
+  ): Promise<WalletRestoreReport> {
     this.logger?.info('Starting restore', { mintUrl });
     const mint = await this.mintService.addMintByUrl(mintUrl, { trusted: true });
     this.logger?.debug('Mint fetched for restore', {
@@ -81,29 +124,53 @@ export class WalletApi {
       keysetCount: mint.keysets.length,
     });
     const unitFilter = this.getUnitFilter(options?.units);
-    const failedKeysetIds: { [keysetId: string]: Error } = {};
+    const report: WalletRestoreReport = { mintUrl, keysets: [] };
     for (const { keyset, unit } of this.getUnitScopedKeysets(mint.keysets, unitFilter)) {
+      throwIfRestoreAborted(options?.signal);
+      let result: WalletRestoreKeysetResult;
       try {
         const wallet = await this.walletService.getWallet(mintUrl, unit);
         await this.walletRestoreService.restoreKeyset(mintUrl, wallet, keyset.id, unit);
+        result = {
+          mintUrl,
+          keysetId: keyset.id,
+          unit,
+          status: 'restored',
+        };
       } catch (error) {
+        if (options?.signal?.aborted) throwIfRestoreAborted(options.signal);
+        result = {
+          mintUrl,
+          keysetId: keyset.id,
+          unit,
+          status: 'failed',
+          error: error instanceof Error ? error : new Error(String(error)),
+        };
         this.logger?.error('Keyset restore failed', {
           mintUrl,
           keysetId: keyset.id,
           unit,
           error,
         });
-        failedKeysetIds[keyset.id] = error as Error;
+      }
+      report.keysets.push(result);
+      try {
+        options?.onKeysetProgress?.(result);
+      } catch (error) {
+        this.logger?.warn('Restore progress callback failed', { mintUrl, keysetId: keyset.id, error });
       }
     }
-    if (Object.keys(failedKeysetIds).length > 0) {
+    if (report.keysets.some(({ status }) => status === 'failed')) {
       this.logger?.error('Restore completed with failures', {
         mintUrl,
-        failedKeysetIds: Object.keys(failedKeysetIds),
+        failedKeysetIds: report.keysets
+          .filter(({ status }) => status === 'failed')
+          .map(({ keysetId }) => keysetId),
       });
-      throw new Error('Failed to restore some keysets');
+      return report;
     }
     this.logger?.info('Restore completed successfully', { mintUrl });
+    return report;
   }
 
   /**
