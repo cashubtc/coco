@@ -172,9 +172,12 @@ export interface CocoConfig {
     /** Mint operation processor (enabled by default) */
     mintOperationProcessor?: {
       disabled?: boolean;
+      /** Processing cadence in milliseconds. */
       processIntervalMs?: number;
       maxRetries?: number;
+      /** Base retry delay in milliseconds. */
       baseRetryDelayMs?: number;
+      /** Initial queue delay in milliseconds. */
       initialEnqueueDelayMs?: number;
       /** Automatically claim cached and newly observed Mint Quote value (default: true). */
       autoClaimMintQuotes?: boolean;

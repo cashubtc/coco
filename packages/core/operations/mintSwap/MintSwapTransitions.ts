@@ -1,6 +1,7 @@
 import { Amount, type Proof } from '@cashu/cashu-ts';
 import type { CoreTransaction } from '../../transactions/CoreTransaction.ts';
 import { defineTransition } from '../../transactions/Transition.ts';
+import { unixSecondsToMilliseconds } from '../../time.ts';
 import { RepositoryTransactionConflictError } from '../../repositories/index.ts';
 import { ProofValidationError } from '../../models/Error.ts';
 import { getSecretsFromSerializedOutputData } from '../../utils.ts';
@@ -50,6 +51,8 @@ import {
   MintSwapDebitCapError,
   MintSwapInvariantError,
 } from './MintSwapErrors.ts';
+
+/** Every `now` or `at` value in this transition module is local Unix milliseconds. */
 
 async function requireParent(tx: CoreTransaction, id: string): Promise<MintSwapOperation> {
   const operation = await tx.mintSwapOperations.getById(id);
@@ -314,8 +317,10 @@ export const beginMintSwapSource = defineTransition<
     return { operation: await reconcile(tx, parent, input.now), inputProofs: [], changed: false };
   const now = Math.max(input.now, parent.updatedAt);
   if (
-    (canonical.source.expiry != null && canonical.source.expiry * 1000 <= now) ||
-    (canonical.destination.expiry != null && canonical.destination.expiry * 1000 <= now)
+    (canonical.source.expiry != null &&
+      unixSecondsToMilliseconds(canonical.source.expiry) <= now) ||
+    (canonical.destination.expiry != null &&
+      unixSecondsToMilliseconds(canonical.destination.expiry) <= now)
   )
     throw new ProofValidationError('Mint Swap payment deadline has passed');
   if (!canonical.destination.amountPaid.isZero() || !canonical.destination.amountIssued.isZero())
@@ -702,6 +707,7 @@ export const deferMintSwap = defineTransition<
     now: number;
     random: number;
     error: Omit<MintSwapRetryError, 'at'>;
+    /** Absolute retry lower bound as local Unix milliseconds. */
     retryAfter?: number;
   },
   MintSwapOperation

@@ -28,9 +28,12 @@ export interface PaymentRequestReceiveOperation {
   mints: string[];
   singleUse: boolean;
   description?: string;
+  /** Local lifecycle creation time as Unix milliseconds. */
   createdAt: number;
+  /** Local lifecycle update time as Unix milliseconds. */
   updatedAt: number;
   error?: string;
+  /** Local completion time as Unix milliseconds, absent until completed. */
   completedAt?: number;
 }
 
@@ -52,7 +55,9 @@ export interface PaymentRequestReceiveAttempt {
   state: PaymentRequestReceiveAttemptState;
   error?: string;
   payload?: PaymentRequestPayload;
+  /** Local lifecycle creation time as Unix milliseconds. */
   createdAt: number;
+  /** Local lifecycle update time as Unix milliseconds. */
   updatedAt: number;
 }
 

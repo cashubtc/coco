@@ -26,7 +26,9 @@ export type HistoryType = 'mint' | 'melt' | 'send' | 'receive';
 type BaseHistoryEntry = {
   id: string;
   type: HistoryType;
+  /** Local lifecycle creation time as Unix milliseconds. */
   createdAt: number;
+  /** Local lifecycle update time as Unix milliseconds. */
   updatedAt: number;
   mintUrl: string;
   unit: string;
@@ -137,6 +139,7 @@ export type HistoryEntry = OperationHistoryEntry | LegacyHistoryEntry;
 export type LegacyHistoryRowInput = {
   legacyHistoryId: string | number;
   type: HistoryType;
+  /** Persisted legacy history creation time as Unix milliseconds. */
   createdAt: number;
   mintUrl: string;
   unit: string;

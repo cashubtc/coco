@@ -1,6 +1,11 @@
 import type { Amount } from '@cashu/cashu-ts';
 import type { MeltQuoteRef, MintQuoteRef } from '../../models/QuoteIdentity.ts';
 
+/**
+ * Unless stated otherwise, every `*At` field in this module is a local Unix timestamp in
+ * milliseconds. Nullable retry timestamps mean no attempt or scheduled work in the current state.
+ */
+
 export interface SourceDebitBounds {
   minimum: Amount;
   maximum: Amount;
@@ -36,7 +41,10 @@ export type MintSwapRetryError = (
       category: 'ambiguous';
       code: 'source_outcome_unknown' | 'destination_outcome_unknown';
     }
-) & { at: number };
+) & {
+  /** Local failed-attempt time as Unix milliseconds. */
+  at: number;
+};
 
 /** Consecutive unsuccessful attempts in the current state; reset on state entry. */
 export interface MintSwapRetryState {
@@ -100,7 +108,7 @@ interface MintSwapBase {
   destinationOperationId: string;
   /** SHA-256 of the exact BOLT11 invoice, encoded as lowercase hexadecimal. */
   paymentRequestHash: string;
-  /** All parent timestamps are monotonic Unix milliseconds. */
+  /** Parent lifecycle timestamps use local Unix milliseconds. */
   createdAt: number;
   updatedAt: number;
   stateEnteredAt: number;

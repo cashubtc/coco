@@ -49,6 +49,9 @@ export interface MintSwapOperationRepository {
   }): Promise<boolean>;
   /** All nonterminal records, including prepared and needs_attention; order by createdAt, then ID. */
   listActive(): Promise<MintSwapOperation[]>;
-  /** Automatic states due at/before now; order by nextAttemptAt, createdAt, then ID. Limit 0 is a no-op. */
+  /**
+   * Automatic states due at/before local Unix time `now` in milliseconds; order by nextAttemptAt,
+   * createdAt, then ID. Limit 0 is a no-op.
+   */
   listDue(now: number, limit: number): Promise<MintSwapOperation[]>;
 }

@@ -11,6 +11,7 @@ export interface Keyset {
   feePpk: number;
   /** NUT-02 final expiry in Unix seconds, committed to by V2 keyset IDs. */
   finalExpiry?: number;
+  /** Local metadata update time as whole Unix seconds. */
   updatedAt: number;
 }
 

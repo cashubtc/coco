@@ -20,6 +20,7 @@ export class AuthApi {
     tokens: {
       access_token: string;
       refresh_token?: string;
+      /** Token lifetime duration in seconds; omitted values default to one hour. */
       expires_in?: number;
       scope?: string;
     },

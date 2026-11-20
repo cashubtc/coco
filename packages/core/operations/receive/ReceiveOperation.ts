@@ -48,10 +48,10 @@ interface ReceiveOperationBase {
   /** Proofs contained in the received token (prepared for receiving) */
   inputProofs: Proof[];
 
-  /** Timestamp when the operation was created */
+  /** Local lifecycle creation time as Unix milliseconds. */
   createdAt: number;
 
-  /** Timestamp when the operation was last updated */
+  /** Local lifecycle update time as Unix milliseconds. */
   updatedAt: number;
 
   /** Error message if the operation failed */

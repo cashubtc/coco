@@ -11,7 +11,10 @@ import type { MintQuote } from './MintQuote';
 export function mintQuoteObservationFromBolt11Response(
   mintUrl: string,
   quote: MintQuoteBolt11Response,
-  options?: { now?: number },
+  options?: {
+    /** Local canonical-row time as Unix milliseconds. */
+    now?: number;
+  },
 ): MintQuote<'bolt11'> {
   const now = options?.now ?? Date.now();
   const amount = Amount.from(quote.amount as unknown as AmountLike);
@@ -40,7 +43,10 @@ export function mintQuoteObservationFromBolt11Response(
 export function mintQuoteObservationFromOnchainResponse(
   mintUrl: string,
   quote: MintQuoteOnchainResponse,
-  options?: { now?: number },
+  options?: {
+    /** Local canonical-row time as Unix milliseconds. */
+    now?: number;
+  },
 ): MintQuote<'onchain'> {
   const now = options?.now ?? Date.now();
   return {
@@ -66,7 +72,10 @@ export function mintQuoteObservationFromOnchainResponse(
 export function mintQuoteObservationFromBolt12Response(
   mintUrl: string,
   quote: MintQuoteBolt12Response,
-  options?: { now?: number },
+  options?: {
+    /** Local canonical-row time as Unix milliseconds. */
+    now?: number;
+  },
 ): MintQuote<'bolt12'> {
   const now = options?.now ?? Date.now();
   const amount = quote.amount ? Amount.from(quote.amount as unknown as AmountLike) : undefined;

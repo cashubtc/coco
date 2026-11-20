@@ -9,6 +9,8 @@ import type {
   FinalizedBatchMintOperation,
 } from './BatchMintOperation.ts';
 
+/** Every `now` transition input in this module is a local Unix timestamp in milliseconds. */
+
 export interface AdmitBatchMintInput {
   operationId: string;
   mintUrl: string;

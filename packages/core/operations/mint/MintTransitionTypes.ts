@@ -11,6 +11,8 @@ import type {
   TerminalMintOperation,
 } from '@core/operations/mint/MintOperation.ts';
 
+/** Every `now` transition input in this module is a local Unix timestamp in milliseconds. */
+
 export interface PrepareMintInput {
   operationId: string;
   mintUrl: string;

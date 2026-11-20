@@ -189,6 +189,7 @@ export type MintExecutionResult =
 export type RecoverExecutingResult =
   | { status: 'ISSUED'; proofs: Proof[] }
   | { status: 'REJECTED'; error: string }
+  /** Suggested retry delay in milliseconds. */
   | { status: 'UNRESOLVED'; error?: string; retryAfterMs?: number };
 
 export type PendingMintCheckCategory = 'waiting' | 'ready' | 'completed' | 'terminal';
@@ -196,6 +197,7 @@ export type PendingMintCheckCategory = 'waiting' | 'ready' | 'completed' | 'term
 export interface PendingMintCheckResult<M extends MintMethod = MintMethod> {
   /** @deprecated Return `quoteSnapshot` with canonical accounting whenever available. */
   observedRemoteState?: MintMethodRemoteState<M>;
+  /** Local remote-state observation time as Unix milliseconds. */
   observedRemoteStateAt: number;
   quoteSnapshot?: MintMethodQuoteSnapshot<M>;
   category: PendingMintCheckCategory;
@@ -210,11 +212,13 @@ export interface PendingMintCheckResult<M extends MintMethod = MintMethod> {
  */
 export type PendingMintObservationResult<M extends MintMethod = MintMethod> =
   | {
+      /** Local observation time as Unix milliseconds. */
       observedAt: number;
       quoteSnapshot: MintMethodQuoteSnapshot<M>;
       validationFailure?: never;
     }
   | {
+      /** Local observation time as Unix milliseconds. */
       observedAt: number;
       quoteSnapshot?: MintMethodQuoteSnapshot<M>;
       validationFailure: MintOperationFailure;

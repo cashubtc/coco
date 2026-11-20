@@ -203,6 +203,7 @@ export interface MintQuoteRepository {
 
   /**
    * Update canonical BOLT11 accounting from a legacy state observation.
+   * `observedAt`, when supplied, is a local Unix timestamp in milliseconds.
    *
    * @deprecated Persist a canonical quote observation with `amountPaid` and `amountIssued`.
    */

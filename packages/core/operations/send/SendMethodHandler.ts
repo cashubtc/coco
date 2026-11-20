@@ -18,6 +18,7 @@ import type { MintInfo } from '@core/types.ts';
  */
 type LegacyP2pkSendOptions = {
   pubkey: string | string[];
+  /** NUT-11 lock time as whole Unix seconds. */
   locktime?: number;
   refundKeys?: string[];
   requiredSignatures?: number;

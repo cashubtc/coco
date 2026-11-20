@@ -143,9 +143,10 @@ coexist for a reusable Mint Quote within its claimable balance.
 _Avoid_: Remote issued amount, proof reservation, quote ownership
 
 **Quote Expiry**:
-The payment deadline advertised by a quote. For a Mint Quote it is advisory metadata for initiating
-new payments, not a determinant of Mint Quote Claimability, issuance, Operation Recovery, or Quote
-Observation.
+The payment deadline advertised by a quote as a Unix timestamp in protocol seconds. For a Mint Quote
+`null` or `0` means no advertised expiry; otherwise it is advisory metadata for initiating new
+payments, not a determinant of Mint Quote Claimability, issuance, Operation Recovery, or Quote
+Observation. Melt Quotes use their numeric expiry as a payment deadline.
 _Avoid_: Claim deadline, quote invalidity
 
 **Background Watcher**:

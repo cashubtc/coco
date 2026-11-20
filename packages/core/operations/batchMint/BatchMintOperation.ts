@@ -38,6 +38,7 @@ export interface BatchMintMember {
 export interface BatchMintOperationFailure {
   reason: string;
   code?: string;
+  /** Local failure observation time as Unix milliseconds. */
   observedAt: number;
 }
 
@@ -50,7 +51,9 @@ interface BatchMintOperationBase {
   members: BatchMintMember[];
   /** One aggregate output set for the whole request. Outputs are never attributed to members. */
   outputData: SerializedOutputData;
+  /** Local lifecycle creation time as Unix milliseconds. */
   createdAt: number;
+  /** Local lifecycle update time as Unix milliseconds. */
   updatedAt: number;
   /** Last unresolved execution or recovery error, retained while the outcome is ambiguous. */
   error?: string;

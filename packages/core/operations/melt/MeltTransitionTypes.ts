@@ -12,6 +12,8 @@ import type {
 } from './MeltOperation.ts';
 import type { MeltMethod, MeltMethodData } from './MeltMethodHandler.ts';
 
+/** Every `now` or `observedAt` input in this module is a local Unix timestamp in milliseconds. */
+
 export interface PrepareMeltInput<M extends MeltMethod = MeltMethod> {
   operationId: string;
   mintUrl: string;

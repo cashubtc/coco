@@ -31,6 +31,7 @@ interface MintQuoteBase<M extends MintMethod> {
   quote: string;
   request: string;
   unit: string;
+  /** Mint-advertised payment deadline in Unix seconds; `null` or `0` means no advertised expiry. */
   expiry: number | null;
   pubkey?: string;
   reusable: boolean;
@@ -44,7 +45,9 @@ interface MintQuoteBase<M extends MintMethod> {
    */
   remoteUpdatedAt: number | null;
   quoteData: MintMethodQuoteData<M>;
+  /** Local canonical-row creation time as Unix milliseconds. */
   createdAt: number;
+  /** Local canonical-row update time as Unix milliseconds. */
   updatedAt: number;
 }
 
@@ -96,6 +99,7 @@ export function deriveBolt11MintQuoteState(
 /**
  * Applies a legacy BOLT11 state observation without allowing it to reduce canonical accounting.
  *
+ * @param observedAt - Local observation time as Unix milliseconds.
  * @deprecated Legacy state is a fallback for snapshots that do not carry Mint Quote Accounting.
  */
 export function applyBolt11MintQuoteStateFallback(
@@ -182,7 +186,10 @@ function assertValidMintQuoteAccounting(
 export function mintQuoteFromBolt11Response(
   mintUrl: string,
   quote: MintQuoteBolt11Response,
-  options?: { now?: number },
+  options?: {
+    /** Local canonical-row time as Unix milliseconds. */
+    now?: number;
+  },
 ): MintQuote<'bolt11'> {
   const observation = mintQuoteObservationFromBolt11Response(mintUrl, quote, options);
   const canonicalQuote: MintQuote<'bolt11'> = {
@@ -200,7 +207,10 @@ export function mintQuoteFromBolt11Response(
 export function mintQuoteFromOnchainResponse(
   mintUrl: string,
   quote: CashuMintQuoteOnchainResponse,
-  options?: { now?: number },
+  options?: {
+    /** Local canonical-row time as Unix milliseconds. */
+    now?: number;
+  },
 ): MintQuote<'onchain'> {
   const canonicalQuote = mintQuoteObservationFromOnchainResponse(mintUrl, quote, options);
   assertValidMintQuoteAccounting(
@@ -214,7 +224,10 @@ export function mintQuoteFromOnchainResponse(
 export function mintQuoteFromBolt12Response(
   mintUrl: string,
   quote: MintQuoteBolt12Response,
-  options?: { now?: number },
+  options?: {
+    /** Local canonical-row time as Unix milliseconds. */
+    now?: number;
+  },
 ): MintQuote<'bolt12'> {
   const canonicalQuote = mintQuoteObservationFromBolt12Response(mintUrl, quote, options);
   assertValidMintQuoteAccounting(
