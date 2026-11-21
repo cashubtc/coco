@@ -41,3 +41,11 @@ export const cancelPaymentRequestReceive = defineTransition(async (tx, input: Ca
   }
   return saveCancellation(tx, operation, input);
 });
+
+export const cancelAfterActivationFailure = defineTransition(async (tx, input: CancelInput) => {
+  const operation = await tx.paymentRequestReceiveOperations.getById(input.operationId);
+  if (operation?.state !== 'active') return null;
+  const attempts = await tx.paymentRequestReceiveAttempts.getByRequestOperationId(operation.id);
+  if (attempts.some((attempt) => attempt.state !== 'rejected')) return null;
+  return saveCancellation(tx, operation, input);
+});

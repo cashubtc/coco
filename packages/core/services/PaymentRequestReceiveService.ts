@@ -22,6 +22,7 @@ import {
 } from '../models/Error';
 import type { CoreTransactionRunner } from '../transactions/CoreTransaction.ts';
 import {
+  cancelAfterActivationFailure,
   cancelPaymentRequestReceive,
   createPaymentRequestReceive,
 } from '../operations/paymentRequestReceive/PaymentRequestReceiveTransitions.ts';
@@ -208,21 +209,15 @@ export class PaymentRequestReceiveService {
         await this.activateTransport(operation);
         return (await this.operationRepository.getById(operation.id)) ?? operation;
       } catch (error) {
-        const current = await this.operationRepository.getById(operation.id);
-        const attempts = await this.attemptRepository.getByRequestOperationId(operation.id);
-        const hasClaimToPreserve = attempts.some(
-          (attempt) => this.isInFlightAttempt(attempt) || attempt.state === 'finalized',
-        );
-        if (!current || current.state !== 'active' || hasClaimToPreserve) {
-          throw error;
-        }
-        const cancelled: PaymentRequestReceiveOperation = {
-          ...current,
-          state: 'cancelled',
-          error: error instanceof Error ? error.message : String(error),
+        const cancellation = {
+          operationId: operation.id,
+          reason: error instanceof Error ? error.message : String(error),
           updatedAt: Date.now(),
         };
-        await this.operationRepository.update(cancelled);
+        const cancelled = await this.transactionRunner.run((tx) =>
+          tx.perform(cancelAfterActivationFailure, cancellation),
+        );
+        if (!cancelled) throw error;
         try {
           await this.deactivateTransport(cancelled, { ignoreMissingHandler: true });
         } catch (deactivationError) {
