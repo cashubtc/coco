@@ -1086,6 +1086,7 @@ export class Manager {
     const paymentRequestReceiveTransportHandlerProvider =
       new PaymentRequestReceiveTransportHandlerProvider();
     const paymentRequestReceiveService = new PaymentRequestReceiveService(
+      transactionRunner,
       paymentRequestReceiveOperationRepository,
       paymentRequestReceiveAttemptRepository,
       receiveOperationService,

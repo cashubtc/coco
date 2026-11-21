@@ -31,6 +31,7 @@ import {
 } from '@cashu/cashu-ts';
 import { createFakeInvoice } from 'fake-bolt11';
 import { runPaymentRequestFeeTests } from './paymentRequestFees.ts';
+import { runPaymentRequestReceiveLifecycleTests } from './paymentRequestReceiveLifecycle.ts';
 import { runP2pkReceiveTests } from './p2pkReceive.ts';
 
 export type OutputDataFactory = (amount: AmountLike, keys: MintKeys | HasKeysetKeys) => OutputData;
@@ -57,7 +58,7 @@ type ExpectApi = {
   toHaveLength(len: number): void;
   toContain(value: unknown): void;
   rejects: {
-    toThrow(): Promise<void>;
+    toThrow(message?: string): Promise<void>;
   };
 };
 
@@ -3580,6 +3581,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
     });
 
     runPaymentRequestFeeTests(options, runner, mintAmount);
+    runPaymentRequestReceiveLifecycleTests(options, runner, mintAmount);
     runP2pkReceiveTests(options, runner, mintAmount);
 
     describe('Payment Requests', () => {

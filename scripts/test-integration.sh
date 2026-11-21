@@ -177,17 +177,24 @@ find_free_port() {
 }
 
 run_mint_container() {
-    local container_name=$1
+    local package_name=$1
     local port=$2
     local custom_unit="${3:-}"
     local mnemonic="${4:-$MINT_MNEMONIC}"
+    local container_name
+    container_name=$(mint_container_name "$package_name")
 
     if [ -n "$custom_unit" ]; then
         local config_file="${TMPDIR:-/tmp}/coco-integration-${container_name}.toml"
         write_custom_unit_mint_config "$port" "$custom_unit" "$config_file" "$mnemonic"
         MINT_CONFIG_FILES+=("$config_file")
 
-        docker run -d "${PLATFORM_FLAG[@]}" \
+        local price_host_args=()
+        if [[ "$custom_unit" == usd && ( "$package_name" == core || "$package_name" == core-b ) ]]; then
+            # Refuse CDK's price lookup locally so the fake wallet uses its built-in USD rate.
+            price_host_args+=(--add-host=mempool.space:127.0.0.1)
+        fi
+        docker run -d "${PLATFORM_FLAG[@]}" "${price_host_args[@]}" \
             -p "${port}:3338" \
             --name "$container_name" \
             -v "${config_file}:/config/config.toml:ro" \
@@ -216,8 +223,6 @@ start_mint_container() {
     local package_name=$1
     local custom_unit="${2:-}"
     local mnemonic="${3:-$MINT_MNEMONIC}"
-    local container_name
-    container_name=$(mint_container_name "$package_name")
     local port=""
     local attempt
 
@@ -228,12 +233,12 @@ start_mint_container() {
     for ((attempt = 1; attempt <= MINT_START_ATTEMPTS; attempt++)); do
         port=$(find_free_port)
         log_info "Starting mint container for $package_name on port $port..."
-        if run_mint_container "$container_name" "$port" "$custom_unit" "$mnemonic"; then
+        if run_mint_container "$package_name" "$port" "$custom_unit" "$mnemonic"; then
             break
         fi
 
         # A failed bind leaves the created container behind, holding the name.
-        docker rm -f "$container_name" >/dev/null 2>&1 || true
+        docker rm -f "$(mint_container_name "$package_name")" >/dev/null 2>&1 || true
         if [ "$attempt" -eq "$MINT_START_ATTEMPTS" ]; then
             log_error "Failed to start mint container after $MINT_START_ATTEMPTS attempts"
             return 1

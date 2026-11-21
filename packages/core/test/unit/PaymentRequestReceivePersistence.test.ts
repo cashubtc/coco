@@ -42,6 +42,7 @@ describe('Payment Request Receive child persistence', () => {
       };
       const makeParent = (attemptRepository = attempts) =>
         new PaymentRequestReceiveService(
+          env.transactionRunner,
           repositories.paymentRequestReceiveOperationRepository,
           attemptRepository,
           env.buildService(),
