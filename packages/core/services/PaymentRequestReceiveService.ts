@@ -18,7 +18,13 @@ import {
   OperationInProgressError,
   PaymentRequestError,
   ProofValidationError,
+  UnknownMintError,
 } from '../models/Error';
+import type { CoreTransactionRunner } from '../transactions/CoreTransaction.ts';
+import {
+  cancelPaymentRequestReceive,
+  createPaymentRequestReceive,
+} from '../operations/paymentRequestReceive/PaymentRequestReceiveTransitions.ts';
 import type { MintService } from './MintService';
 import type { ReceiveOperationService } from '../operations/receive/ReceiveOperationService';
 import type {
@@ -88,6 +94,7 @@ export class PaymentRequestReceiveService {
   private readonly lock = new OperationIdLock();
 
   constructor(
+    private readonly transactionRunner: CoreTransactionRunner,
     private readonly operationRepository: PaymentRequestReceiveOperationRepository,
     private readonly attemptRepository: PaymentRequestReceiveAttemptRepository,
     private readonly receiveOperationService: ReceiveOperationService,
@@ -139,12 +146,13 @@ export class PaymentRequestReceiveService {
       `payment-request-receive:create:${requestId}`,
     );
     try {
-      const existingActive = await this.operationRepository.getActiveByRequestId(requestId);
-      if (existingActive.length > 0) {
-        throw new PaymentRequestError(
+      const duplicateRequest = () =>
+        new PaymentRequestError(
           `An active payment request already exists for request id ${requestId}`,
         );
-      }
+      // Avoid preparing a transport for an already active ID. Creation rechecks under the write lock.
+      const existingActive = await this.operationRepository.getActiveByRequestId(requestId);
+      if (existingActive.length > 0) throw duplicateRequest();
 
       const singleUse = input.singleUse ?? true;
       const { transport, paymentRequestTransports } = await this.resolveTransportInput(
@@ -172,7 +180,7 @@ export class PaymentRequestReceiveService {
           ? paymentRequest.toEncodedCreqA()
           : paymentRequest.toEncodedCreqB();
       const now = Date.now();
-      const operation: PaymentRequestReceiveOperation = {
+      const operation = {
         id: generateSubId(),
         requestId,
         encodedRequest,
@@ -185,9 +193,17 @@ export class PaymentRequestReceiveService {
         description: input.description,
         createdAt: now,
         updatedAt: now,
-      };
+      } satisfies PaymentRequestReceiveOperation;
 
-      await this.operationRepository.create(operation);
+      try {
+        const created = await this.transactionRunner.run((tx) =>
+          tx.perform(createPaymentRequestReceive, operation),
+        );
+        if (!created) throw duplicateRequest();
+      } catch (error) {
+        if (error instanceof UnknownMintError) throw new PaymentRequestError(error.message, error);
+        throw error;
+      }
       try {
         await this.activateTransport(operation);
         return (await this.operationRepository.getById(operation.id)) ?? operation;
@@ -227,20 +243,10 @@ export class PaymentRequestReceiveService {
   async cancel(operationId: string, reason?: string): Promise<PaymentRequestReceiveOperation> {
     const releaseLock = await this.lock.acquire(operationId);
     try {
-      const operation = await this.requireOperation(operationId);
-      if (operation.state !== 'active') {
-        throw new PaymentRequestError(
-          `Cannot cancel payment request receive operation in state '${operation.state}'`,
-        );
-      }
-
-      const cancelled: PaymentRequestReceiveOperation = {
-        ...operation,
-        state: 'cancelled',
-        error: reason,
-        updatedAt: Date.now(),
-      };
-      await this.operationRepository.update(cancelled);
+      const cancellation = { operationId, reason, updatedAt: Date.now() };
+      const cancelled = await this.transactionRunner.run((tx) =>
+        tx.perform(cancelPaymentRequestReceive, cancellation),
+      );
       try {
         await this.deactivateTransport(cancelled, { ignoreMissingHandler: true });
       } catch (error) {
