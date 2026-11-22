@@ -31,7 +31,10 @@ interface MintQuoteBase<M extends MintMethod> {
   quote: string;
   request: string;
   unit: string;
-  /** Mint-advertised payment deadline in Unix seconds; `null` or `0` means no advertised expiry. */
+  /**
+   * Mint-advertised payment deadline in Unix seconds. Mint Quote claimability and observation
+   * treat `null` or `0` as no advertised expiry; Mint Swap currently treats only `null` that way.
+   */
   expiry: number | null;
   pubkey?: string;
   reusable: boolean;

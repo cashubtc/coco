@@ -17,7 +17,10 @@ export type MintSwapOutcome =
 
 export interface MintSwapWaitOptions {
   signal?: AbortSignal;
-  /** Local observation duration in milliseconds; `0` requests one final read without waiting. */
+  /**
+   * Local observation duration in milliseconds; `0` requests one final read without waiting.
+   * Omit to wait until outcome, abort or disposal.
+   */
   timeoutMs?: number;
   /** Local read fallback even if every event is lost. Default: 1000 ms. */
   pollIntervalMs?: number;

@@ -95,9 +95,10 @@ Coco preserves the units defined by each boundary instead of coercing every time
 | NUT-11 `locktime`                                    | Whole Unix seconds    | The value is passed through as protocol data.                                                                      |
 | Names ending in `Ms`                                 | Millisecond durations | Monotonic `performance.now()` values are elapsed milliseconds, never epoch timestamps.                             |
 
-Some supplied adapters retain legacy operation rows at whole-second precision and hydrate their
-public operation/history timestamps back to Unix milliseconds. Subsecond precision is therefore not
-guaranteed across persistence, and this compatibility behavior requires no data migration.
+The supplied SQL and IndexedDB adapters persist Send, Melt, Mint, Receive and Payment Request
+Receive operation rows at whole-second precision and hydrate their public operation/history
+timestamps back to Unix milliseconds. Subsecond precision is therefore not guaranteed across
+persistence for those records; this is current behavior and requires no data migration.
 
 ## Mint Swap operations
 

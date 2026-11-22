@@ -108,7 +108,7 @@ interface MintSwapBase {
   destinationOperationId: string;
   /** SHA-256 of the exact BOLT11 invoice, encoded as lowercase hexadecimal. */
   paymentRequestHash: string;
-  /** Parent lifecycle timestamps use local Unix milliseconds. */
+  /** Parent lifecycle timestamps are monotonic local Unix milliseconds. */
   createdAt: number;
   updatedAt: number;
   stateEnteredAt: number;
