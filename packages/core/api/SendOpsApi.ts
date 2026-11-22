@@ -82,6 +82,7 @@ export class SendOpsApi {
     );
     return this.sendOperationService.prepare(initOp, {
       coverReceiverFees: input.coverReceiverFees,
+      offline: input.offline,
     });
   }
 

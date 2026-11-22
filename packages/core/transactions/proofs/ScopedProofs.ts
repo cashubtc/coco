@@ -35,6 +35,8 @@ export interface SelectAndReserveProofsInput {
   operationId: string;
   amount: Amount;
   forceSwap: boolean;
+  /** Select only proofs that can be sent as they are; reject instead of planning a swap. */
+  offline?: boolean;
   /** Opt-in receiver fee coverage for Payment Requests. */
   receiver?: ReceiverFeePolicy;
 }
