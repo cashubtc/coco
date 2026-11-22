@@ -468,7 +468,11 @@ states such as `UNPAID`, `PENDING`, `PAID`, and `ISSUED`.
 
 ### Ordering and freshness
 
-History entries now expose both `createdAt` and `updatedAt`.
+History entries now expose both `createdAt` and `updatedAt` as Unix milliseconds. The supplied SQL
+and IndexedDB adapters persist Send, Melt, Mint, Receive and Payment Request Receive operation rows
+at whole-second precision and hydrate their public operation/history timestamps back to Unix
+milliseconds. Subsecond precision is therefore not guaranteed across persistence for those records;
+this is current behavior and requires no data migration.
 
 Pagination is ordered by `createdAt DESC, id DESC`. Use `updatedAt` for
 replacement, freshness, and realtime reconciliation, not for primary ordering.

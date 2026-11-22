@@ -25,12 +25,16 @@ interface MeltQuoteBase<M extends MeltMethod> {
   request: string;
   amount: Amount;
   unit: string;
+  /** Mint-advertised payment deadline in Unix seconds; `0` is already expired. */
   expiry: number;
   state: MeltMethodRemoteState<M>;
   change?: SerializedBlindedSignature[];
   lastObservedRemoteState?: MeltMethodRemoteState<M>;
+  /** Local time of the last remote-state observation as Unix milliseconds. */
   lastObservedRemoteStateAt?: number;
+  /** Local canonical-row creation time as Unix milliseconds. */
   createdAt: number;
+  /** Local canonical-row update time as Unix milliseconds. */
   updatedAt: number;
 }
 
@@ -56,7 +60,10 @@ function meltQuoteFromBoltResponse<M extends BoltMeltMethod>(
   mintUrl: string,
   method: M,
   quote: BoltMeltQuoteResponse,
-  options?: { now?: number },
+  options?: {
+    /** Local canonical-row time as Unix milliseconds. */
+    now?: number;
+  },
 ): MeltQuote<M> {
   const now = options?.now ?? Date.now();
   return {
@@ -83,7 +90,10 @@ function meltQuoteFromBoltResponse<M extends BoltMeltMethod>(
 export function meltQuoteFromBolt11Response(
   mintUrl: string,
   quote: MeltMethodQuoteSnapshot<'bolt11'>,
-  options?: { now?: number },
+  options?: {
+    /** Local canonical-row time as Unix milliseconds. */
+    now?: number;
+  },
 ): MeltQuote<'bolt11'> {
   return meltQuoteFromBoltResponse(mintUrl, 'bolt11', quote, options);
 }
@@ -92,7 +102,10 @@ export function meltQuoteFromBolt11Response(
 export function meltQuoteFromBolt12Response(
   mintUrl: string,
   quote: MeltMethodQuoteSnapshot<'bolt12'>,
-  options?: { now?: number },
+  options?: {
+    /** Local canonical-row time as Unix milliseconds. */
+    now?: number;
+  },
 ): MeltQuote<'bolt12'> {
   return meltQuoteFromBoltResponse(mintUrl, 'bolt12', quote, options);
 }
@@ -101,7 +114,10 @@ export function meltQuoteFromBolt12Response(
 export function meltQuoteFromOnchainResponse(
   mintUrl: string,
   quote: MeltMethodQuoteSnapshot<'onchain'>,
-  options?: { now?: number },
+  options?: {
+    /** Local canonical-row time as Unix milliseconds. */
+    now?: number;
+  },
 ): MeltQuote<'onchain'> {
   const now = options?.now ?? Date.now();
   const feeOptions = normalizeOnchainFeeOptions(quote.quote, quote.fee_options);

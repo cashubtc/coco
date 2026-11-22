@@ -21,6 +21,7 @@ type Task = {
 };
 
 type MintScheduler = {
+  /** Earliest next request time as Unix milliseconds; `0` is immediately eligible. */
   nextAllowedAt: number;
   timer?: ReturnType<typeof setTimeout>;
   queue: Task[];

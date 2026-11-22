@@ -38,6 +38,7 @@ export class MintSwapInvariantError extends Error {
     super(`Mint Swap ${leg} ${invariant}: ${code}`);
     this.name = 'MintSwapInvariantError';
   }
+  /** Build attention evidence observed at local Unix time `now` in milliseconds. */
   evidence(now: number): MintSwapAttention {
     return {
       reason: [

@@ -11,6 +11,8 @@ import type {
   RollingBackSendOperation,
 } from './SendOperation.ts';
 
+/** Every `updatedAt` transition input in this module is a local Unix timestamp in milliseconds. */
+
 export interface PrepareSendInput {
   operation: InitSendOperation;
   /** Active keys and seed loaded before entering the transaction. */

@@ -39,6 +39,7 @@ import type { MintService } from '../services/MintService';
 import type { WalletService } from '../services/WalletService';
 import type { InitMeltOperation } from '../operations/melt/MeltOperation';
 import { normalizeMintUrl } from '../utils';
+import { unixSecondsToMilliseconds } from '../time.ts';
 import type {
   MeltMethod,
   MeltMethodInputData,
@@ -1686,7 +1687,7 @@ export class QuoteLifecycle {
   }
 
   private assertMeltQuoteCanPrepare(quote: MeltQuote, context: string): void {
-    if (quote.expiry * 1000 <= Date.now()) {
+    if (unixSecondsToMilliseconds(quote.expiry) <= Date.now()) {
       throw new Error(`Cannot prepare ${context}: quote is expired`);
     }
 

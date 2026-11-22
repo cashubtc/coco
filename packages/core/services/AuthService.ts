@@ -10,6 +10,7 @@ import type { Logger } from '@core/logging';
 import type { AuthSession } from '@core/models';
 import type { AuthSessionService } from './AuthSessionService';
 import { normalizeMintUrl } from '@core/utils';
+import { unixMillisecondsToSeconds } from '../time.ts';
 
 /**
  * Core service for NUT-21/22 authentication.
@@ -92,6 +93,7 @@ export class AuthService {
     tokens: {
       access_token: string;
       refresh_token?: string;
+      /** Token lifetime duration in seconds; omitted values default to one hour. */
       expires_in?: number;
       scope?: string;
     },
@@ -134,7 +136,7 @@ export class AuthService {
     const session = await this.authSessionService.getSession(mintUrl);
     if (!session) return false;
 
-    const now = Math.floor(Date.now() / 1000);
+    const now = unixMillisecondsToSeconds(Date.now());
     const expired = session.expiresAt <= now;
 
     if (expired && !session.refreshToken) {
@@ -295,7 +297,13 @@ export class AuthService {
   private async saveSessionWithPool(
     mintUrl: string,
     auth: AuthManager,
-    tokens: { access_token: string; refresh_token?: string; expires_in?: number; scope?: string },
+    tokens: {
+      access_token: string;
+      refresh_token?: string;
+      /** Token lifetime duration in seconds; omitted values default to one hour. */
+      expires_in?: number;
+      scope?: string;
+    },
   ): Promise<AuthSession> {
     const batPool = auth.exportPool();
     return this.authSessionService.saveSession(

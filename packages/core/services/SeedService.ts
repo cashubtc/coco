@@ -1,7 +1,9 @@
 export class SeedService {
   private readonly seedGetter: () => Promise<Uint8Array>;
+  /** Seed cache duration in milliseconds; `0` disables caching. */
   private readonly seedTtlMs: number;
   private cachedSeed: Uint8Array | null = null;
+  /** Local cache deadline as Unix milliseconds; `0` means no cached deadline. */
   private cachedUntil = 0;
   private inFlight: Promise<Uint8Array> | null = null;
 

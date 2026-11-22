@@ -29,6 +29,7 @@ import type { MintInfo } from '../types';
 import type { Logger } from '../logging/Logger.ts';
 import { normalizeMintUrl } from '../utils';
 import { DEFAULT_UNIT, normalizeUnit, normalizeUnitAmount, type UnitAmount } from '../amounts.ts';
+import { unixMillisecondsToSeconds } from '../time.ts';
 
 function excludeBlsKeysets<T extends { id: string }>(keysets: T[]): T[] {
   // TODO: Admit BLS keysets after every proof-state lookup uses curve-aware Y derivation.
@@ -191,7 +192,7 @@ export class MintService {
       return this.ensureUpdatedMint(mintUrl);
     }
 
-    const now = Math.floor(Date.now() / 1000);
+    const now = unixMillisecondsToSeconds(Date.now());
     const newMint: Mint = {
       mintUrl,
       name: mintUrl,
@@ -212,7 +213,7 @@ export class MintService {
     const mint = await this.mintRepo.getMintByUrl(mintUrl).catch(() => null);
     if (!mint) {
       // Mint doesn't exist, create it as untrusted
-      const now = Math.floor(Date.now() / 1000);
+      const now = unixMillisecondsToSeconds(Date.now());
       const newMint: Mint = {
         mintUrl,
         name: mintUrl,
@@ -240,7 +241,10 @@ export class MintService {
   async refreshAndCommitIfStale(mintUrl: string, defer?: DeferPublication): Promise<MintMetadata> {
     mintUrl = normalizeMintUrl(mintUrl);
     const cached = await this.metadata.queries.getMetadata(mintUrl);
-    if (cached && cached.mint.updatedAt >= Math.floor(Date.now() / 1000) - MINT_REFRESH_TTL_S)
+    if (
+      cached &&
+      cached.mint.updatedAt >= unixMillisecondsToSeconds(Date.now()) - MINT_REFRESH_TTL_S
+    )
       return cached;
     const observation = await this.mintAdapter.fetchMintMetadata(mintUrl, cached?.keysets ?? []);
     const result = await this.metadata.transactionRunner.run((tx) =>
@@ -698,7 +702,7 @@ export class MintService {
 
     // Persist mint updates only after successful fetch and keyset sync
     mint.mintInfo = mintInfo;
-    mint.updatedAt = Math.floor(Date.now() / 1000);
+    mint.updatedAt = unixMillisecondsToSeconds(Date.now());
     await this.mintRepo.addOrUpdateMint(mint);
     await this.eventBus?.emit('mint:metadata-refreshed', { mintUrl: mint.mintUrl });
 

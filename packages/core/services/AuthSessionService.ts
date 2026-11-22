@@ -5,6 +5,7 @@ import { AuthSessionError, AuthSessionExpiredError } from '@core/models';
 import type { AuthSessionRepository } from '@core/repositories';
 import { normalizeMintUrl } from '@core/utils';
 import type { AuthSession } from '../models/AuthSession';
+import { unixMillisecondsToSeconds } from '../time.ts';
 
 export class AuthSessionService {
   private readonly repo: AuthSessionRepository;
@@ -24,7 +25,7 @@ export class AuthSessionService {
     if (!session) {
       throw new AuthSessionError(mintUrl, 'No auth session found');
     }
-    const now = Math.floor(Date.now() / 1000);
+    const now = unixMillisecondsToSeconds(Date.now());
     if (session.expiresAt <= now) {
       await this.eventBus.emit('auth-session:expired', { mintUrl });
       throw new AuthSessionExpiredError(mintUrl);
@@ -35,11 +36,17 @@ export class AuthSessionService {
   /** Save OIDC tokens as a session. */
   async saveSession(
     mintUrl: string,
-    tokens: { access_token: string; refresh_token?: string; expires_in?: number; scope?: string },
+    tokens: {
+      access_token: string;
+      refresh_token?: string;
+      /** Token lifetime duration in seconds; omitted values default to one hour. */
+      expires_in?: number;
+      scope?: string;
+    },
     batPool?: Proof[],
   ): Promise<AuthSession> {
     mintUrl = normalizeMintUrl(mintUrl);
-    const now = Math.floor(Date.now() / 1000);
+    const now = unixMillisecondsToSeconds(Date.now());
     const session: AuthSession = {
       mintUrl,
       accessToken: tokens.access_token,

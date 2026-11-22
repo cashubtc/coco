@@ -11,6 +11,7 @@ import type { MeltMethod, MeltMethodQuoteSnapshot } from '@core/operations/melt'
 import type { QuoteLifecycle } from '@core/quotes/QuoteLifecycle.ts';
 import type { MintService } from '@core/services/MintService.ts';
 import type { Logger } from '../../logging/Logger.ts';
+import { unixSecondsToMilliseconds } from '../../time.ts';
 import { normalizeMintUrl } from '../../utils.ts';
 import {
   QuoteWatchInterests,
@@ -63,7 +64,7 @@ function toKey(mintUrl: string, method: string, quoteId: string): QuoteKey {
 }
 
 function isExpiredMeltQuote(quote: Pick<MeltQuote, 'expiry'>): boolean {
-  return quote.expiry * 1000 <= Date.now();
+  return unixSecondsToMilliseconds(quote.expiry) <= Date.now();
 }
 
 function isMeltQuoteState(value: unknown): value is MeltQuote['state'] {

@@ -19,11 +19,13 @@ import { normalizeMintUrl } from '../utils.ts';
 
 interface CachedWallet {
   wallet: Wallet;
+  /** Local cache check time as Unix milliseconds. */
   lastCheck: number;
 }
 
 export class WalletService {
   private walletCache: Map<string, CachedWallet> = new Map();
+  /** Cache freshness duration in milliseconds. */
   private readonly CACHE_TTL = 5 * 60 * 1000;
   private readonly mintService: MintService;
   private readonly seedService: SeedService;

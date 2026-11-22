@@ -40,6 +40,30 @@ describe('MintQuote model', () => {
     expect(quote.remoteUpdatedAt).toBe(null);
   });
 
+  it('keeps protocol seconds separate from local lifecycle milliseconds', () => {
+    const quote = mintQuoteFromBolt11Response(
+      'https://mint.test',
+      {
+        quote: 'quote-timestamps',
+        request: 'lnbc...',
+        method: 'bolt11',
+        amount: Amount.from(100),
+        unit: 'sat',
+        expiry: 0,
+        amount_paid: Amount.zero(),
+        amount_issued: Amount.zero(),
+        updated_at: 123,
+        state: 'UNPAID',
+      } satisfies MintQuoteBolt11Response,
+      { now: 456_789 },
+    );
+
+    expect(quote.expiry).toBe(0);
+    expect(quote.remoteUpdatedAt).toBe(123);
+    expect(quote.createdAt).toBe(456_789);
+    expect(quote.updatedAt).toBe(456_789);
+  });
+
   it('uses BOLT11 accounting instead of the deprecated state projection', () => {
     const quote = mintQuoteFromBolt11Response('https://mint.test', {
       quote: 'quote-accounting',

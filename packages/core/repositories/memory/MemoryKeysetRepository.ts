@@ -1,4 +1,5 @@
 import { reconcileKeysetKeypairs, type Keyset } from '../../models/Keyset';
+import { unixMillisecondsToSeconds } from '../../time.ts';
 import type { KeysetRepository } from '..';
 import { cloneMemoryValue, COPY_MEMORY_REPOSITORY_STATE } from './MemoryRepositoryTransaction.ts';
 
@@ -40,7 +41,7 @@ export class MemoryKeysetRepository implements KeysetRepository {
           mintMap.get(keyset.id)?.keypairs,
           keyset.keypairs,
         ),
-        updatedAt: Math.floor(Date.now() / 1000),
+        updatedAt: unixMillisecondsToSeconds(Date.now()),
       }),
     );
   }

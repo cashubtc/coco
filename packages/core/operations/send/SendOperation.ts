@@ -61,10 +61,10 @@ interface SendOperationBase<M extends SendMethod = SendMethod> {
   /** Method-specific data */
   methodData: SendMethodData<M>;
 
-  /** Timestamp when the operation was created */
+  /** Local lifecycle creation time as Unix milliseconds. */
   createdAt: number;
 
-  /** Timestamp when the operation was last updated */
+  /** Local lifecycle update time as Unix milliseconds. */
   updatedAt: number;
 
   /**

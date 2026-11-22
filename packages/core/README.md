@@ -82,6 +82,24 @@ operation recovery support.
 
 See [ADR-0013](docs/adr/0013-keep-custom-adapters-with-scoped-compatibility.md) for the rationale.
 
+## Timestamp units
+
+Coco preserves the units defined by each boundary instead of coercing every timestamp to one unit:
+
+| Value                                                | Unit                  | Notes                                                                                                              |
+| ---------------------------------------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Operation, history, and local quote lifecycle fields | Unix milliseconds     | Created from `Date.now()` unless a caller supplies the local clock value.                                          |
+| Mint and keyset metadata fields                      | Whole Unix seconds    | Metadata refreshes round down; an `updatedAt` value of `0` means not yet refreshed.                                |
+| Quote expiry and Remote Quote Update Time            | Protocol Unix seconds | Mint Quote `null`/`0` means no advertised expiry; Melt Quote and Mint Swap deadlines retain their existing policy. |
+| Auth session `expiresAt`                             | Unix seconds          | OIDC `expires_in` is a duration in seconds and retains fractional precision; `0` is already expired.               |
+| NUT-11 `locktime`                                    | Whole Unix seconds    | The value is passed through as protocol data.                                                                      |
+| Names ending in `Ms`                                 | Millisecond durations | Monotonic `performance.now()` values are elapsed milliseconds, never epoch timestamps.                             |
+
+The supplied SQL and IndexedDB adapters persist Send, Melt, Mint, Receive and Payment Request
+Receive operation rows at whole-second precision and hydrate their public operation/history
+timestamps back to Unix milliseconds. Subsecond precision is therefore not guaranteed across
+persistence for those records; this is current behavior and requires no data migration.
+
 ## Mint Swap operations
 
 Mint Swap moves an exact sat amount between two distinct trusted mints using BOLT11. Its API is

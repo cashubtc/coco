@@ -1,4 +1,5 @@
 import { RateLimitError, type Proof } from '@cashu/cashu-ts';
+import { unixSecondsToMilliseconds } from '../../time.ts';
 import type { DeferPublication } from '../../events/DeferredPublication.ts';
 import type { CoreTransaction, CoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
 import type { MintSwapOperationRepository } from './MintSwapOperationRepository.ts';
@@ -481,8 +482,10 @@ export class MintSwapOperationService {
       if (!destinationQuote)
         throw new MintSwapInvariantError('quote_identity', 'quote_missing', 'destination');
       return Math.min(
-        sourceQuote.expiry == null ? Infinity : sourceQuote.expiry * 1000,
-        destinationQuote.expiry == null ? Infinity : destinationQuote.expiry * 1000,
+        sourceQuote.expiry == null ? Infinity : unixSecondsToMilliseconds(sourceQuote.expiry),
+        destinationQuote.expiry == null
+          ? Infinity
+          : unixSecondsToMilliseconds(destinationQuote.expiry),
       );
     });
     // Authorization has already committed: expiry defers recovery, never releases inputs here.

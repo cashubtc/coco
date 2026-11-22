@@ -313,7 +313,35 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
     ).toBeUndefined();
   });
 
-  it('rejects an expired quote before reserving proofs', async () => {
+  it('accepts a quote one millisecond before its expiry boundary', async () => {
+    await repositories.meltQuoteRepository.upsertMeltQuote(
+      meltQuoteFromBolt11Response(mintUrl, {
+        quote: 'quote-almost-expired',
+        request: 'lnbc1almostexpired',
+        amount: Amount.from(8),
+        unit: 'sat',
+        fee_reserve: Amount.from(2),
+        expiry: 1,
+        state: 'UNPAID',
+        payment_preimage: null,
+        change: [],
+      }),
+    );
+    await saveReadyProof(10, 'almost-expired-input');
+
+    const result = await runner.run((tx) =>
+      tx.perform(prepareMelt, {
+        ...input('almost-expired'),
+        methodData: { invoice: 'lnbc1almostexpired' },
+        quoteId: 'quote-almost-expired',
+        now: 999,
+      }),
+    );
+
+    expect(result.operation.state).toBe('prepared');
+  });
+
+  it('rejects a quote at its exact expiry boundary before reserving proofs', async () => {
     await repositories.meltQuoteRepository.upsertMeltQuote(
       meltQuoteFromBolt11Response(mintUrl, {
         quote: 'quote-expired',

@@ -21,7 +21,9 @@ import { normalizeUnit, type UnitAmount } from '../../amounts.ts';
 interface MintOperationBase<M extends MintMethod = MintMethod> extends MintMethodMeta<M> {
   id: string;
   mintUrl: string;
+  /** Local lifecycle creation time as Unix milliseconds. */
   createdAt: number;
+  /** Local lifecycle update time as Unix milliseconds. */
   updatedAt: number;
   error?: string;
   terminalFailure?: MintOperationFailure;
@@ -31,6 +33,7 @@ export interface MintOperationFailure {
   reason: string;
   code?: string;
   retryable?: boolean;
+  /** Local failure observation time as Unix milliseconds. */
   observedAt: number;
 }
 
@@ -42,6 +45,10 @@ interface MintIntentData {
 interface MintQuoteSnapshot {
   quoteId: string;
   request: string;
+  /**
+   * Mint-advertised payment deadline in Unix seconds. Mint Quote claimability and observation
+   * treat `null` or `0` as no advertised expiry; Mint Swap currently treats only `null` that way.
+   */
   expiry: number | null;
   pubkey?: string;
 }
