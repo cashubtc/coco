@@ -102,10 +102,7 @@ export function proofStates(
   })) as ProofState[];
 }
 
-/** Real persistence and signing with controllable remote effects. */
-export async function createReceiveEnvironment(
-  repositories: Repositories = new ReceiveTestRepositories(),
-) {
+export async function seedReceiveMint(repositories: Repositories): Promise<void> {
   await repositories.mintRepository.addNewMint({
     mintUrl: receiveMint,
     name: 'Test',
@@ -122,6 +119,13 @@ export async function createReceiveEnvironment(
     active: true,
     feePpk: 0,
   });
+}
+
+/** Real persistence and signing with controllable remote effects. */
+export async function createReceiveEnvironment(
+  repositories: Repositories = new ReceiveTestRepositories(),
+) {
+  await seedReceiveMint(repositories);
   const transactionRunner = new RepositoryCoreTransactionRunner(repositories);
   const run =
     <I, O>(transition: Transition<I, O>) =>
