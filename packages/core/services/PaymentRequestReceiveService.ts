@@ -22,6 +22,8 @@ import {
 } from '../models/Error';
 import type { CoreTransactionRunner } from '../transactions/CoreTransaction.ts';
 import {
+  acceptPaymentRequestDelivery,
+  type AcceptDeliveryInput,
   cancelAfterActivationFailure,
   cancelPaymentRequestReceive,
   createPaymentRequestReceive,
@@ -34,6 +36,7 @@ import type {
   PreparedReceiveOperation,
   ReceiveOperation,
 } from '../operations/receive/ReceiveOperation';
+import { singleUseClaimConflict } from '../operations/paymentRequestReceive/PaymentRequestReceiveOperation';
 import type {
   PaymentRequestReceiveAttempt,
   PaymentRequestReceiveOperation,
@@ -273,13 +276,8 @@ export class PaymentRequestReceiveService {
     payloadInput: PaymentRequestPayload | string,
     source?: PaymentRequestReceiveSource,
   ): Promise<PaymentRequestReceiveClaimResult> {
-    const operation = await this.requireOperation(operationOrId);
-    const releaseLock = await this.lock.acquire(operation.id);
-    try {
-      return await this.claimPayloadLocked(operation.id, payloadInput, source);
-    } finally {
-      releaseLock();
-    }
+    const operationId = typeof operationOrId === 'string' ? operationOrId : operationOrId.id;
+    return this.receiveDelivery(this.parsePayload(payloadInput), source, operationId);
   }
 
   async ingestPayload(
@@ -287,54 +285,57 @@ export class PaymentRequestReceiveService {
     source?: PaymentRequestReceiveSource,
   ): Promise<PaymentRequestReceiveClaimResult> {
     const payload = this.parsePayload(payloadInput);
-    if (!payload.id) {
+    if (!payload.id)
       throw new PaymentRequestError('Payment request payload id is required for ingestion');
-    }
+    return this.receiveDelivery(payload, source);
+  }
 
-    const payloadHash = this.hashPayload(payload);
-    if (source?.transportMessageId) {
-      const existingByMessage = await this.attemptRepository.getByTransportMessageId(
-        source.transportMessageId,
-      );
-      if (existingByMessage) {
-        if (existingByMessage.payloadHash !== payloadHash) {
-          throw new PaymentRequestError(
-            `Transport message ${source.transportMessageId} belongs to a different payload`,
-          );
-        }
-        return this.resultForStoredAttempt(existingByMessage);
+  private async receiveDelivery(
+    payload: ParsedPaymentRequestPayload,
+    source?: PaymentRequestReceiveSource,
+    operationId?: string,
+  ): Promise<PaymentRequestReceiveClaimResult> {
+    const { result, release } = await this.acceptDelivery({
+      operationId,
+      payload,
+      source: source && { ...source },
+      payloadHash: this.hashPayload(payload),
+      grossAmount: sumProofs(payload.proofs),
+      attemptId: generateSubId(),
+      now: Date.now(),
+    });
+    try {
+      if (result.kind === 'stored')
+        return await this.resultForAttempt(result.operation, result.attempt);
+      return await this.claimAcceptedDelivery(result.operation, result.attempt, payload);
+    } finally {
+      release?.();
+    }
+  }
+
+  private async acceptDelivery(input: AcceptDeliveryInput) {
+    let operationId = input.operationId;
+    if (operationId === undefined && input.payload.id) {
+      // This lookup only selects a session lock. The transition resolves the authoritative
+      // request and any settled replay again before writing, including after request ID reuse.
+      const [active] = await this.operationRepository.getActiveByRequestId(input.payload.id);
+      if (active && !this.lock.isLocked(active.id)) operationId = active.id;
+    }
+    for (;;) {
+      const release = operationId === undefined ? undefined : await this.lock.acquire(operationId);
+      try {
+        const lockedOperationId = operationId;
+        const result = await this.transactionRunner.run((tx) =>
+          tx.perform(acceptPaymentRequestDelivery, { ...input, lockedOperationId }),
+        );
+        if (result.kind !== 'lock') return { result, release };
+        operationId = result.operationId;
+      } catch (error) {
+        release?.();
+        throw error;
       }
+      release?.();
     }
-
-    const existingByRequestPayload = await this.attemptRepository.getByRequestIdAndPayloadHash(
-      payload.id,
-      payloadHash,
-    );
-    if (existingByRequestPayload?.state === 'finalized') {
-      return this.resultForStoredAttempt(existingByRequestPayload);
-    }
-
-    const candidates = await this.operationRepository.getActiveByRequestId(payload.id);
-    if (candidates.length === 0) {
-      if (existingByRequestPayload) {
-        return this.resultForStoredAttempt(existingByRequestPayload);
-      }
-      throw new PaymentRequestError(`No active payment request found for id ${payload.id}`);
-    }
-    if (candidates.length > 1) {
-      throw new PaymentRequestError(`Multiple active payment requests found for id ${payload.id}`);
-    }
-
-    const operation = candidates[0]!;
-    const existingByPayload = await this.attemptRepository.getByPayloadHash(
-      operation.id,
-      payloadHash,
-    );
-    if (existingByPayload) {
-      return this.resultForAttempt(operation, existingByPayload);
-    }
-
-    return this.claimPayload(operation, payload, source);
   }
 
   async recoverPendingAttempts(): Promise<void> {
@@ -669,74 +670,16 @@ export class PaymentRequestReceiveService {
     }
   }
 
-  private async claimPayloadLocked(
-    operationId: string,
-    payloadInput: PaymentRequestPayload | string,
-    source?: PaymentRequestReceiveSource,
+  private async claimAcceptedDelivery(
+    operation: PaymentRequestReceiveOperation,
+    accepted: PaymentRequestReceiveAttempt,
+    payload: ParsedPaymentRequestPayload,
   ): Promise<PaymentRequestReceiveClaimResult> {
-    const operation = await this.requireOperation(operationId);
-    const payload = this.parsePayload(payloadInput);
-    const payloadHash = this.hashPayload(payload);
-    if (source?.transportMessageId) {
-      const existingByMessage = await this.attemptRepository.getByTransportMessageId(
-        source.transportMessageId,
-      );
-      if (existingByMessage) {
-        if (existingByMessage.requestOperationId !== operation.id) {
-          throw new PaymentRequestError(
-            `Transport message ${source.transportMessageId} belongs to another ` +
-              'payment request receive operation',
-          );
-        }
-        if (existingByMessage.payloadHash !== payloadHash) {
-          throw new PaymentRequestError(
-            `Transport message ${source.transportMessageId} belongs to a different payload`,
-          );
-        }
-        return this.resultForAttempt(operation, existingByMessage);
-      }
-    }
-
-    const existingByPayload = await this.attemptRepository.getByPayloadHash(
-      operation.id,
-      payloadHash,
-    );
-    if (existingByPayload) {
-      return this.resultForAttempt(operation, existingByPayload);
-    }
-
-    if (operation.state !== 'active') {
-      throw new PaymentRequestError(
-        `Cannot claim payload for payment request receive operation in state '${operation.state}'`,
-      );
-    }
-
-    const grossAmount = sumProofs(payload.proofs);
-    const now = Date.now();
-    let attempt: PaymentRequestReceiveAttempt = {
-      id: generateSubId(),
-      requestOperationId: operation.id,
-      requestId: payload.id,
-      transport: source?.transport ?? operation.transport,
-      transportMessageId: source?.transportMessageId,
-      payloadHash,
-      senderPubkey: source?.senderPubkey,
-      memo: payload.memo,
-      mintUrl: payload.mint,
-      unit: payload.unit,
-      grossAmount,
-      state: 'received',
-      payload,
-      createdAt: now,
-      updatedAt: now,
-    };
-    await this.attemptRepository.create(attempt);
-
+    let attempt = accepted;
     let validationCompleted = false;
     try {
       attempt = await this.updateAttempt({ ...attempt, state: 'validating' });
-      await this.validatePayload(operation, payload, grossAmount);
-      await this.assertSingleUseAvailable(operation, attempt.id);
+      await this.validatePayload(operation, payload, accepted.grossAmount);
       validationCompleted = true;
 
       const sourceMetadata = {
@@ -975,19 +918,8 @@ export class PaymentRequestReceiveService {
   ): Promise<void> {
     if (!operation.singleUse) return;
     const attempts = await this.attemptRepository.getByRequestOperationId(operation.id);
-    const blockingAttempt = attempts.find(
-      (attempt) =>
-        attempt.id !== currentAttemptId &&
-        (attempt.state === 'received' ||
-          attempt.state === 'validating' ||
-          attempt.state === 'receiving' ||
-          attempt.state === 'finalized'),
-    );
-    if (!blockingAttempt) return;
-    if (blockingAttempt.state === 'finalized') {
-      throw new PaymentRequestError('Single-use payment request has already been paid');
-    }
-    throw new PaymentRequestError('Single-use payment request has an in-flight claim');
+    const conflict = singleUseClaimConflict(attempts, currentAttemptId);
+    if (conflict) throw new PaymentRequestError(conflict);
   }
 
   private hashPayload(payload: ParsedPaymentRequestPayload): string {
@@ -1246,36 +1178,11 @@ export class PaymentRequestReceiveService {
     };
   }
 
-  private async resultForStoredAttempt(
-    attempt: PaymentRequestReceiveAttempt,
-  ): Promise<PaymentRequestReceiveClaimResult> {
-    const operation = await this.operationRepository.getById(attempt.requestOperationId);
-    if (!operation) {
-      throw new PaymentRequestError(
-        `Payment request receive operation ${attempt.requestOperationId} not found`,
-      );
-    }
-    return this.resultForAttempt(operation, attempt);
-  }
-
   private isInFlightAttempt(attempt: PaymentRequestReceiveAttempt): boolean {
     return (
       attempt.state === 'received' ||
       attempt.state === 'validating' ||
       attempt.state === 'receiving'
     );
-  }
-
-  private async requireOperation(
-    operationOrId: PaymentRequestReceiveOperation | string,
-  ): Promise<PaymentRequestReceiveOperation> {
-    if (typeof operationOrId !== 'string') {
-      return operationOrId;
-    }
-    const operation = await this.operationRepository.getById(operationOrId);
-    if (!operation) {
-      throw new PaymentRequestError(`Payment request receive operation ${operationOrId} not found`);
-    }
-    return operation;
   }
 }

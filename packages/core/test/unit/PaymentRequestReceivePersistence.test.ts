@@ -23,11 +23,9 @@ describe('Payment Request Receive child persistence', () => {
       let failLinks = true;
       let receivedCheckpoint: PaymentRequestReceiveAttempt | undefined;
       const faultyAttempts: PaymentRequestReceiveAttemptRepository = {
-        create: (attempt) => {
-          receivedCheckpoint = attempt;
-          return attempts.create(attempt);
-        },
+        create: (attempt) => attempts.create(attempt),
         update: async (attempt) => {
+          if (attempt.state === 'validating') receivedCheckpoint = attempt;
           if (failLinks && attempt.state === 'receiving') throw new Error('Child link failed');
           return attempts.update(attempt);
         },
