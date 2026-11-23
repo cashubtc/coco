@@ -96,6 +96,7 @@ export interface PaymentRequestReceiveClaimResult {
 
 export class PaymentRequestReceiveService {
   private readonly lock = new OperationIdLock();
+  private readonly activating = new Map<string, Set<Promise<unknown>>>();
 
   constructor(
     private readonly transactionRunner: CoreTransactionRunner,
@@ -208,10 +209,15 @@ export class PaymentRequestReceiveService {
         if (error instanceof UnknownMintError) throw new PaymentRequestError(error.message, error);
         throw error;
       }
+      const deliveries = new Set<Promise<unknown>>();
+      this.activating.set(requestId, deliveries);
       try {
         await this.activateTransport(operation);
         return (await this.operationRepository.getById(operation.id)) ?? operation;
       } catch (error) {
+        // A transport can start ingestion and throw before acceptance commits. Wait only for
+        // the local decision: child preparation and mint settlement can continue independently.
+        await Promise.allSettled(deliveries);
         const cancellation = {
           operationId: operation.id,
           reason: error instanceof Error ? error.message : String(error),
@@ -232,6 +238,8 @@ export class PaymentRequestReceiveService {
           });
         }
         throw error;
+      } finally {
+        this.activating.delete(requestId);
       }
     } finally {
       releaseCreateLock();
@@ -295,7 +303,7 @@ export class PaymentRequestReceiveService {
     source?: PaymentRequestReceiveSource,
     operationId?: string,
   ): Promise<PaymentRequestReceiveClaimResult> {
-    const { result, release } = await this.acceptDelivery({
+    const acceptance = this.acceptDelivery({
       operationId,
       payload,
       source: source && { ...source },
@@ -304,6 +312,9 @@ export class PaymentRequestReceiveService {
       attemptId: generateSubId(),
       now: Date.now(),
     });
+    const activating = payload.id ? this.activating.get(payload.id) : undefined;
+    activating?.add(acceptance);
+    const { result, release } = await acceptance.finally(() => activating?.delete(acceptance));
     try {
       if (result.kind === 'stored')
         return await this.resultForAttempt(result.operation, result.attempt);
