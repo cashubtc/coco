@@ -63,3 +63,17 @@ export type ParsedPaymentRequestPayload = {
   unit: string;
   proofs: Proof[];
 };
+
+/** A rejected delivery leaves a single-use request available for another payment. */
+export function singleUseClaimConflict(
+  attempts: PaymentRequestReceiveAttempt[],
+  resumingAttemptId?: string,
+): string | undefined {
+  const blocking = attempts.find(
+    (attempt) => attempt.id !== resumingAttemptId && attempt.state !== 'rejected',
+  );
+  if (!blocking) return;
+  return blocking.state === 'finalized'
+    ? 'Single-use payment request has already been paid'
+    : 'Single-use payment request has an in-flight claim';
+}

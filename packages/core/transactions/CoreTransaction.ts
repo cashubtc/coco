@@ -5,6 +5,8 @@ import {
   type RepositoryTransactionScope,
   type SendOperationRepository,
   type ReceiveOperationRepository,
+  type PaymentRequestReceiveOperationRepository,
+  type PaymentRequestReceiveAttemptRepository,
   type MintOperationRepository,
   type MintQuoteRepository,
   type MeltOperationRepository,
@@ -59,6 +61,18 @@ export interface CoreTransaction {
   readonly receiveOperations: Pick<
     ReceiveOperationRepository,
     'getById' | 'create' | 'transition' | 'delete'
+  >;
+  readonly paymentRequestReceiveOperations: Pick<
+    PaymentRequestReceiveOperationRepository,
+    'getById' | 'getActiveByRequestId' | 'create' | 'update'
+  >;
+  readonly paymentRequestReceiveAttempts: Pick<
+    PaymentRequestReceiveAttemptRepository,
+    | 'getByRequestOperationId'
+    | 'getByPayloadHash'
+    | 'getByRequestIdAndPayloadHash'
+    | 'getByTransportMessageId'
+    | 'create'
   >;
   readonly sendOperations: Pick<
     SendOperationRepository,
@@ -142,6 +156,8 @@ export class RepositoryCoreTransactionRunner implements CoreTransactionRunner {
         repositories.batchMint.operationRepository,
       ),
       receiveOperations: repositories.receiveOperationRepository,
+      paymentRequestReceiveOperations: repositories.paymentRequestReceiveOperationRepository,
+      paymentRequestReceiveAttempts: repositories.paymentRequestReceiveAttemptRepository,
       sendOperations: repositories.sendOperationRepository,
     });
     return scoped;

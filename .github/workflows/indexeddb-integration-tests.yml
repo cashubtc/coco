@@ -13,6 +13,8 @@ jobs:
   integration-tests:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      VITEST_MAX_WORKERS: '1'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5

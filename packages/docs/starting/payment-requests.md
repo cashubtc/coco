@@ -201,8 +201,16 @@ await coco.paymentRequests.incoming.create({
 });
 ```
 
-Core then validates the payload, deduplicates redeliveries, runs the normal receive
-operation, and completes the request if it is single-use.
+Coco records the delivery before starting the Receive Operation. Replaying a settled
+payment returns the original attempt. A duplicate in progress reports that the
+operation is busy. For a single-use request, only one competing payment proceeds.
+
+If a payment arrives during `activate()`, call `ingestPayload()` on the same Coco
+instance that called `create()`. If activation then throws, Coco waits for that
+instance's acceptance step before checking whether to cancel the request. `create()`
+reports the transport error, and an accepted payment can still settle.
+If another session handles the delivery, cancellation can happen before that session
+records the attempt.
 
 Incoming payment request creation with `nut10` is not supported yet. Receiver-side
 validation of incoming payloads against a request's `nut10` requirement is also

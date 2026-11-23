@@ -22,11 +22,9 @@ import type {
   ReceiveOperationSource,
 } from '../../operations/receive/ReceiveOperation';
 import type { ParsedPaymentRequestPayload } from '../../operations/paymentRequestReceive/PaymentRequestReceiveOperation';
-import {
-  MemoryPaymentRequestReceiveAttemptRepository,
-  MemoryPaymentRequestReceiveOperationRepository,
-  MemoryReceiveOperationRepository,
-} from '../../repositories/memory';
+import { MemoryRepositories } from '../../repositories/memory';
+import { RepositoryCoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
+import { seedReceiveMint } from '../fixtures/ReceiveEnvironment.ts';
 import { PaymentRequestReceiveTransportHandlerProvider } from '../../infra/handlers/paymentRequestReceive';
 
 describe('PaymentRequestReceiveService', () => {
@@ -35,9 +33,9 @@ describe('PaymentRequestReceiveService', () => {
     'nprofile1qqsqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgp',
     'zpmhxue69uhhyetvv9ujuar9wd6qymamsk',
   ].join('');
-  let operationRepository: MemoryPaymentRequestReceiveOperationRepository;
-  let attemptRepository: MemoryPaymentRequestReceiveAttemptRepository;
-  let receiveOperationRepository: MemoryReceiveOperationRepository;
+  let operationRepository: MemoryRepositories['paymentRequestReceiveOperationRepository'];
+  let attemptRepository: MemoryRepositories['paymentRequestReceiveAttemptRepository'];
+  let receiveOperationRepository: MemoryRepositories['receiveOperationRepository'];
   let mintService: MintService;
   let receiveOperationService: ReceiveOperationService;
   let transportHandlerProvider: PaymentRequestReceiveTransportHandlerProvider;
@@ -89,10 +87,12 @@ describe('PaymentRequestReceiveService', () => {
     };
   }
 
-  beforeEach(() => {
-    operationRepository = new MemoryPaymentRequestReceiveOperationRepository();
-    attemptRepository = new MemoryPaymentRequestReceiveAttemptRepository();
-    receiveOperationRepository = new MemoryReceiveOperationRepository();
+  beforeEach(async () => {
+    const repositories = new MemoryRepositories();
+    await seedReceiveMint(repositories);
+    operationRepository = repositories.paymentRequestReceiveOperationRepository;
+    attemptRepository = repositories.paymentRequestReceiveAttemptRepository;
+    receiveOperationRepository = repositories.receiveOperationRepository;
     mintService = {
       isTrustedMint: mock(async () => true),
     } as unknown as MintService;
@@ -132,6 +132,7 @@ describe('PaymentRequestReceiveService', () => {
     transportHandlerProvider = new PaymentRequestReceiveTransportHandlerProvider();
 
     service = new PaymentRequestReceiveService(
+      new RepositoryCoreTransactionRunner(repositories),
       operationRepository,
       attemptRepository,
       receiveOperationService,
