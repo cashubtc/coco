@@ -47,6 +47,7 @@ export function useInitialOperationHydration<TOperation extends { id: string }>(
 
 type HydrationRead = {
   operationId: string;
+  source: unknown;
   epoch: number;
   promise: Promise<void>;
 };
@@ -110,17 +111,19 @@ export function shouldReplaceBoundOperation<TOperation extends BindableOperation
   return incomingOperation.updatedAt >= currentOperation.updatedAt;
 }
 
-export function useOperationHookState<TOperation extends { id: string }, TExecuteResult>(
-  initialOperation: TOperation | null = null,
-) {
-  const [currentOperation, setCurrentOperation] = useState<TOperation | null>(initialOperation);
+/**
+ * Per-hook action lock, status, error and `executeResult`, without the displayed operation.
+ *
+ * Hooks that observe their operation through the shared store use this directly. The legacy hooks
+ * combine it with a per-hook record through {@link useOperationHookState}.
+ */
+export function useOperationActionState<TExecuteResult>() {
   const [executeResult, setExecuteResult] = useState<TExecuteResult | null>(null);
   const [status, setStatus] = useState<OperationHookStatus>('idle');
   const [error, setError] = useState<Error | null>(null);
 
   const mountedRef = useRef(true);
   const statefulActionInProgressRef = useRef(false);
-  const currentOperationRef = useRef<TOperation | null>(initialOperation);
   const actionEpochRef = useRef(0);
   const actionCountRef = useRef(0);
   const hydrationReadRef = useRef<HydrationRead | null>(null);
@@ -133,20 +136,7 @@ export function useOperationHookState<TOperation extends { id: string }, TExecut
     };
   }, []);
 
-  const replaceCurrentOperation = useCallback(
-    (operation: TOperation | null, options: ReplaceCurrentOperationOptions = {}) => {
-      if (!mountedRef.current) {
-        return;
-      }
-
-      currentOperationRef.current = operation;
-      setCurrentOperation(operation);
-      if (options.clearExecuteResult) {
-        setExecuteResult(null);
-      }
-    },
-    [],
-  );
+  const isMounted = useCallback(() => mountedRef.current, []);
 
   const replaceExecuteResult = useCallback((result: TExecuteResult | null) => {
     if (!mountedRef.current) {
@@ -154,10 +144,6 @@ export function useOperationHookState<TOperation extends { id: string }, TExecut
     }
 
     setExecuteResult(result);
-  }, []);
-
-  const getCurrentOperation = useCallback(() => {
-    return currentOperationRef.current;
   }, []);
 
   const runStatefulAction = useCallback(
@@ -205,9 +191,11 @@ export function useOperationHookState<TOperation extends { id: string }, TExecut
    *
    * Hydration is not a user action, so it must not hold the lock that serializes actions: under
    * StrictMode the effect that starts it runs twice, and the replay would be rejected as an
-   * overlapping action. A replay for the same id within the same epoch joins the read already in
-   * flight instead of starting a second one. The result is dropped after `reset()` (which advances
-   * the epoch) or once any action has started: an action needs a bound operation, and its own
+   * overlapping action. A replay for the same id and `source` within the same epoch joins the read
+   * already in flight instead of starting a second one. Pass the store or Manager a read comes from
+   * as `source`, so that a read from a replaced source is not reused. The result is dropped after
+   * `reset()` (which advances the epoch), once a newer hydration has started, or once any action has
+   * started: an action needs a bound operation, and its own
    * result is newer than the read, so applying the read could only overwrite that action's
    * operation, `executeResult`, status or error. Unmounted hooks ignore it through `mountedRef`.
    *
@@ -217,23 +205,37 @@ export function useOperationHookState<TOperation extends { id: string }, TExecut
     <TResult>(
       operationId: string,
       { read, onLoaded, onFailed }: HydrationHandlers<TResult>,
+      source?: unknown,
     ): Promise<void> => {
       const epoch = actionEpochRef.current;
       const inFlight = hydrationReadRef.current;
-      if (inFlight && inFlight.operationId === operationId && inFlight.epoch === epoch) {
+      if (
+        inFlight &&
+        inFlight.operationId === operationId &&
+        inFlight.source === source &&
+        inFlight.epoch === epoch
+      ) {
         return inFlight.promise;
       }
 
       const actionCount = actionCountRef.current;
+      let hydrationRead: HydrationRead | null = null;
       const isSuperseded = () =>
-        epoch !== actionEpochRef.current || actionCount !== actionCountRef.current;
+        epoch !== actionEpochRef.current ||
+        actionCount !== actionCountRef.current ||
+        hydrationReadRef.current !== hydrationRead;
 
       if (mountedRef.current) {
         setStatus('loading');
         setError(null);
       }
 
-      const hydrationRead: HydrationRead = { operationId, epoch, promise: Promise.resolve() };
+      hydrationRead = {
+        operationId,
+        source,
+        epoch,
+        promise: Promise.resolve(),
+      };
       hydrationRead.promise = (async () => {
         try {
           const result = await read();
@@ -268,31 +270,81 @@ export function useOperationHookState<TOperation extends { id: string }, TExecut
     [],
   );
 
-  const reset = useCallback(() => {
+  /** Abandons this hook's actions and reads: their late results no longer touch its state. */
+  const resetActionState = useCallback(() => {
     if (!mountedRef.current) {
       return;
     }
 
     actionEpochRef.current += 1;
-    currentOperationRef.current = null;
-    setCurrentOperation(null);
     setExecuteResult(null);
     setStatus('idle');
     setError(null);
   }, []);
 
   return {
-    currentOperation,
     executeResult,
     status,
     error,
     isLoading: status === 'loading',
     isError: status === 'error',
+    isMounted,
+    replaceExecuteResult,
+    runStatefulAction,
+    runHydration,
+    resetActionState,
+  };
+}
+
+export function useOperationHookState<TOperation extends { id: string }, TExecuteResult>(
+  initialOperation: TOperation | null = null,
+) {
+  const actionState = useOperationActionState<TExecuteResult>();
+  const { isMounted, replaceExecuteResult, resetActionState } = actionState;
+  const [currentOperation, setCurrentOperation] = useState<TOperation | null>(initialOperation);
+  const currentOperationRef = useRef<TOperation | null>(initialOperation);
+
+  const replaceCurrentOperation = useCallback(
+    (operation: TOperation | null, options: ReplaceCurrentOperationOptions = {}) => {
+      if (!isMounted()) {
+        return;
+      }
+
+      currentOperationRef.current = operation;
+      setCurrentOperation(operation);
+      if (options.clearExecuteResult) {
+        replaceExecuteResult(null);
+      }
+    },
+    [isMounted, replaceExecuteResult],
+  );
+
+  const getCurrentOperation = useCallback(() => {
+    return currentOperationRef.current;
+  }, []);
+
+  const reset = useCallback(() => {
+    if (!isMounted()) {
+      return;
+    }
+
+    resetActionState();
+    currentOperationRef.current = null;
+    setCurrentOperation(null);
+  }, [isMounted, resetActionState]);
+
+  return {
+    currentOperation,
+    executeResult: actionState.executeResult,
+    status: actionState.status,
+    error: actionState.error,
+    isLoading: actionState.isLoading,
+    isError: actionState.isError,
     replaceCurrentOperation,
     replaceExecuteResult,
     getCurrentOperation,
-    runStatefulAction,
-    runHydration,
+    runStatefulAction: actionState.runStatefulAction,
+    runHydration: actionState.runHydration,
     reset,
   };
 }
