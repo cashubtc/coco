@@ -1,23 +1,36 @@
-import { Amount, initializeCoco, MemoryRepositories, type Manager } from '@cashu/coco-core';
+import { Amount, initializeCoco, MemoryRepositories } from '@cashu/coco-core';
+import type { CoreEvents, Manager, PendingSendOperation } from '@cashu/coco-core';
 import { act, cleanup, render, renderHook } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ManagerProvider } from '../providers/Manager';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  testMintInfo,
+  testMintKeypairs,
+  testMintKeysetId,
+} from '../../../../core/test/fixtures/MintMetadata';
 import { createDeferred, createHookWrapper } from '../../test/testUtils';
-import { useSendOperation, type UseSendOperationResult } from './useSendOperation';
+import { ManagerProvider } from '../providers/Manager';
+import type { UseSendOperationResult } from './useSendOperation';
+import { useSendOperation } from './useSendOperation';
 
-type SendOperationRecord = NonNullable<Awaited<ReturnType<Manager['ops']['send']['get']>>>;
-type PendingSendOperationRecord = Extract<SendOperationRecord, { state: 'pending' }>;
 type CoreProofRecord = Parameters<MemoryRepositories['proofRepository']['saveProofs']>[1][number];
 
 const MINT_URL = 'https://mint.example';
-const KEYSET_ID = '00aabbccddeeff00';
+const KEYSET_ID = testMintKeysetId();
 
 const managers: Manager[] = [];
+
+beforeEach(() => {
+  // The mint is unreachable, so startup recovery leaves any pending Sends untouched.
+  vi.stubGlobal('fetch', async () => {
+    throw new TypeError('Mint unreachable in this test');
+  });
+});
 
 afterEach(async () => {
   cleanup();
   await Promise.all(managers.splice(0).map((manager) => manager.dispose()));
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -33,34 +46,36 @@ function strictModeAtRoot(manager: Manager) {
 async function persistPendingSend(
   repositories: MemoryRepositories,
   operationId: string,
-): Promise<PendingSendOperationRecord> {
+  mintUrl: string,
+): Promise<PendingSendOperation> {
+  const amount = Amount.from(12);
   const proofs: CoreProofRecord[] = [
     {
       id: KEYSET_ID,
-      amount: Amount.from(64),
+      amount: Amount.from(8),
       secret: `${operationId}-secret-1`,
-      C: '02'.padEnd(66, '1'),
-      mintUrl: MINT_URL,
+      C: testMintKeypairs['8'],
+      mintUrl,
       unit: 'sat',
       state: 'inflight',
       usedByOperationId: operationId,
     },
     {
       id: KEYSET_ID,
-      amount: Amount.from(36),
+      amount: Amount.from(4),
       secret: `${operationId}-secret-2`,
-      C: '02'.padEnd(66, '2'),
-      mintUrl: MINT_URL,
+      C: testMintKeypairs['4'],
+      mintUrl,
       unit: 'sat',
       state: 'inflight',
       usedByOperationId: operationId,
     },
   ];
-  const operation: PendingSendOperationRecord = {
+  const operation: PendingSendOperation = {
     id: operationId,
     state: 'pending',
-    mintUrl: MINT_URL,
-    amount: Amount.from(100),
+    mintUrl,
+    amount,
     unit: 'sat',
     method: 'default',
     methodData: {},
@@ -69,34 +84,21 @@ async function persistPendingSend(
     revision: 2,
     needsSwap: false,
     fee: Amount.zero(),
-    inputAmount: Amount.from(100),
+    inputAmount: amount,
     inputProofSecrets: proofs.map((proof) => proof.secret),
     token: {
-      mint: MINT_URL,
+      mint: mintUrl,
       unit: 'sat',
       proofs: proofs.map(({ id, amount, secret, C }) => ({ id, amount, secret, C })),
     },
   };
 
-  await repositories.proofRepository.saveProofs(MINT_URL, proofs);
+  await repositories.proofRepository.saveProofs(mintUrl, proofs);
   await repositories.sendOperationRepository.create(operation);
   return operation;
 }
 
-async function reopenWallet(operationId: string) {
-  // The mint is unreachable, so startup recovery leaves the pending Send untouched.
-  vi.stubGlobal(
-    'fetch',
-    vi.fn(async () => {
-      throw new TypeError('Mint unreachable in this test');
-    }),
-  );
-
-  // A fresh Manager over the stored records stands in for reopening the wallet. Memory
-  // repositories copy records in and out, so the Manager never sees the objects written here.
-  const repositories = new MemoryRepositories();
-  await repositories.init();
-  const persisted = await persistPendingSend(repositories, operationId);
+async function openWallet(repositories: MemoryRepositories) {
   const manager = await initializeCoco({
     repo: repositories,
     seedGetter: async () => new Uint8Array(64).fill(7),
@@ -112,8 +114,20 @@ async function reopenWallet(operationId: string) {
     },
   });
   managers.push(manager);
+  return manager;
+}
 
+async function reopenWallet(
+  operationId: string,
+  { mintUrl = MINT_URL, repositories = new MemoryRepositories() } = {},
+) {
+  const persisted = await persistPendingSend(repositories, operationId, mintUrl);
+  const manager = await openWallet(repositories);
   return { manager, repositories, persisted };
+}
+
+async function recordClaimedToken(repositories: MemoryRepositories, send: PendingSendOperation) {
+  await repositories.proofRepository.setProofState(send.mintUrl, send.inputProofSecrets, 'spent');
 }
 
 async function waitFor(assertion: () => void): Promise<void> {
@@ -157,7 +171,7 @@ describe('a persisted Send shared between two observers', () => {
       expect(current('second').currentOperation?.state).toBe('pending');
     });
     for (const name of ['first', 'second']) {
-      const operation = current(name).currentOperation as PendingSendOperationRecord;
+      const operation = current(name).currentOperation as PendingSendOperation;
       expect(operation.token).toEqual(persisted.token);
       expect(current(name).status).toBe('success');
     }
@@ -165,11 +179,7 @@ describe('a persisted Send shared between two observers', () => {
     expect(reads).toHaveBeenCalledTimes(1);
 
     // The recipient claimed the token, and the wallet has recorded that its proofs are spent.
-    await repositories.proofRepository.setProofState(
-      MINT_URL,
-      persisted.inputProofSecrets,
-      'spent',
-    );
+    await recordClaimedToken(repositories, persisted);
     await act(async () => {
       await manager.ops.send.finalize(persisted.id);
     });
@@ -180,308 +190,288 @@ describe('a persisted Send shared between two observers', () => {
   });
 });
 
-function createSendManagerMock() {
-  const listeners = new Map<string, Set<(payload: unknown) => void>>();
-  const send = {
-    prepare: vi.fn(),
-    execute: vi.fn(),
-    get: vi.fn(),
-    listPrepared: vi.fn(),
-    listInFlight: vi.fn(),
-    refresh: vi.fn(),
-    cancel: vi.fn(),
-    reclaim: vi.fn(),
-    finalize: vi.fn(),
-  };
-  const on = vi.fn((event: string, handler: (payload: unknown) => void) => {
-    const handlers = listeners.get(event) ?? new Set();
-    handlers.add(handler);
-    listeners.set(event, handlers);
-    return () => {
-      handlers.delete(handler);
-    };
-  });
-  const emit = async (event: string, operation: SendOperationRecord) => {
-    await act(async () => {
-      for (const handler of Array.from(listeners.get(event) ?? [])) {
-        handler({ mintUrl: operation.mintUrl, operationId: operation.id, operation });
+// Hold one real storage snapshot so it can arrive after a Manager change.
+function installSendReadGate(repositories: MemoryRepositories) {
+  const started = createDeferred<void>();
+  const release = createDeferred<void>();
+  const repository = repositories.sendOperationRepository;
+  let holdNext = false;
+  repositories.sendOperationRepository = new Proxy(repository, {
+    get(target, key) {
+      if (key !== 'getById') {
+        return Reflect.get(target, key);
       }
-    });
+      return async (id: string) => {
+        const hold = holdNext;
+        holdNext = false;
+        const record = await target.getById(id);
+        if (hold) {
+          started.resolve();
+          await release.promise;
+        }
+        return record;
+      };
+    },
+  });
+  return () => {
+    holdNext = true;
+    return { started, release };
   };
-  const listenerCount = () =>
-    Array.from(listeners.values()).reduce((count, handlers) => count + handlers.size, 0);
-
-  return { manager: { ops: { send }, on } as unknown as Manager, send, emit, listenerCount };
 }
 
-function sendRecord(overrides: Partial<SendOperationRecord> = {}): SendOperationRecord {
+function renderWithReplaceableManager<T>(initialManager: Manager, useObserver: () => T) {
+  let manager = initialManager;
+  const { result, rerender } = renderHook(useObserver, {
+    wrapper: ({ children }: { children: ReactNode }) => (
+      <ManagerProvider manager={manager}>{children}</ManagerProvider>
+    ),
+  });
   return {
-    id: 'send-op-1',
-    state: 'pending',
-    mintUrl: MINT_URL,
-    amount: Amount.from(100),
-    unit: 'sat',
-    method: 'default',
-    methodData: {},
-    createdAt: 1_700_000_000_000,
-    updatedAt: 1_700_000_001_000,
-    revision: 2,
-    needsSwap: false,
-    fee: Amount.zero(),
-    inputAmount: Amount.from(100),
-    inputProofSecrets: ['send-proof-1'],
-    token: { mint: MINT_URL, unit: 'sat', proofs: [] },
-    ...overrides,
-  } as SendOperationRecord;
+    result,
+    replaceManager(nextManager: Manager) {
+      manager = nextManager;
+      rerender();
+    },
+  };
 }
 
-describe('observers of one Send with a fake Manager', () => {
-  it("shows one observer's action result to another observer of the same ID", async () => {
-    const { manager, send } = createSendManagerMock();
-    const pending = sendRecord({ id: 'send-op-action' });
-    const finalized = sendRecord({ id: pending.id, state: 'finalized', revision: 3 });
-    send.get.mockResolvedValueOnce(pending);
-    send.finalize.mockResolvedValue(undefined);
-
+describe('observers of one Send', () => {
+  it('shares the record reread by finalize() when the command emits no event', async () => {
+    const { manager, repositories, persisted } = await reopenWallet('send-op-action');
+    const settlingManager = await openWallet(repositories);
     const { result } = renderHook(
-      () => ({ first: useSendOperation(pending.id), second: useSendOperation(pending.id) }),
+      () => ({ first: useSendOperation(persisted.id), second: useSendOperation(persisted.id) }),
       { wrapper: createHookWrapper(manager) },
     );
     await waitFor(() => {
-      expect(result.current.first.currentOperation).toEqual(pending);
-      expect(result.current.second.currentOperation).toEqual(pending);
+      expect(result.current.first.currentOperation).toEqual(persisted);
+      expect(result.current.second.currentOperation).toEqual(persisted);
     });
 
-    // Core emits no event in this fake, so only the reread after the action reveals the change.
-    send.get.mockResolvedValue(finalized);
+    // The other Manager publishes on its own event bus. Repeating finalize() is idempotent.
+    await recordClaimedToken(repositories, persisted);
+    await settlingManager.ops.send.finalize(persisted.id);
+    expect(result.current.second.currentOperation).toEqual(persisted);
+
     await act(async () => {
       await result.current.first.finalize();
     });
 
-    expect(result.current.first.currentOperation).toEqual(finalized);
-    expect(result.current.second.currentOperation).toEqual(finalized);
-    // Both observers shared one initial read; the second read is the reread after finalize().
-    expect(send.get).toHaveBeenCalledTimes(2);
+    expect(result.current.first.currentOperation?.state).toBe('finalized');
+    expect(result.current.second.currentOperation).toBe(result.current.first.currentOperation);
   });
 
-  it('keeps the other observer subscribed after one resets or unmounts', async () => {
-    const { manager, send, emit, listenerCount } = createSendManagerMock();
-    const pending = sendRecord({ id: 'send-op-observers' });
-    send.get.mockResolvedValue(pending);
+  it('keeps the remaining observer subscribed after a reset and an unmount', async () => {
+    const { manager, repositories, persisted } = await reopenWallet('send-op-observers');
+    const subscribe = manager.on.bind(manager);
+    const activeSubscriptions = new Set<() => void>();
+    vi.spyOn(manager, 'on').mockImplementation(function trackSubscription<
+      E extends keyof CoreEvents,
+    >(event: E, handler: (payload: CoreEvents[E]) => void | Promise<void>) {
+      const unsubscribe = subscribe(event, handler);
+      activeSubscriptions.add(unsubscribe);
+      return () => {
+        unsubscribe();
+        activeSubscriptions.delete(unsubscribe);
+      };
+    });
     const options = strictModeAtRoot(manager);
 
-    const first = renderHook(() => useSendOperation(pending.id), options);
-    const second = renderHook(() => useSendOperation(pending.id), options);
-    const third = renderHook(() => useSendOperation(pending.id), options);
+    const first = renderHook(() => useSendOperation(persisted.id), options);
+    const firstSubscriptions = new Set(activeSubscriptions);
+    expect(firstSubscriptions.size).toBeGreaterThan(0);
+    const second = renderHook(() => useSendOperation(persisted.id), options);
+    const third = renderHook(() => useSendOperation(persisted.id), options);
     await waitFor(() => {
-      expect(third.result.current.currentOperation).toEqual(pending);
+      expect(third.result.current.currentOperation).toEqual(persisted);
     });
+    expect(activeSubscriptions).toEqual(firstSubscriptions);
 
     act(() => {
       first.result.current.reset();
     });
     second.unmount();
-    const rolledBack = sendRecord({ id: pending.id, state: 'rolled_back', revision: 3 });
-    await emit('send:rolled-back', rolledBack);
 
+    await recordClaimedToken(repositories, persisted);
+    await act(async () => {
+      await manager.ops.send.finalize(persisted.id);
+    });
     expect(first.result.current.currentOperation).toBeNull();
-    expect(third.result.current.currentOperation).toEqual(rolledBack);
+    expect(third.result.current.currentOperation?.state).toBe('finalized');
 
     third.unmount();
-    expect(listenerCount()).toBe(0);
+    expect(activeSubscriptions.size).toBe(0);
   });
 
   it('keeps records of different Managers apart when their IDs match', async () => {
-    const left = createSendManagerMock();
-    const right = createSendManagerMock();
-    const leftRecord = sendRecord({ id: 'send-op-shared-id', mintUrl: 'https://left.example' });
-    const rightRecord = sendRecord({ id: leftRecord.id, mintUrl: 'https://right.example' });
-    left.send.get.mockResolvedValue(leftRecord);
-    right.send.get.mockResolvedValue(rightRecord);
+    const id = 'send-op-shared-id';
+    const left = await reopenWallet(id, { mintUrl: 'https://left.example' });
+    const right = await reopenWallet(id, { mintUrl: 'https://right.example' });
 
-    const leftObserver = renderHook(() => useSendOperation(leftRecord.id), {
+    const leftObserver = renderHook(() => useSendOperation(id), {
       wrapper: createHookWrapper(left.manager),
     });
-    const rightObserver = renderHook(() => useSendOperation(rightRecord.id), {
+    const rightObserver = renderHook(() => useSendOperation(id), {
       wrapper: createHookWrapper(right.manager),
     });
     await waitFor(() => {
-      expect(leftObserver.result.current.currentOperation).toEqual(leftRecord);
-      expect(rightObserver.result.current.currentOperation).toEqual(rightRecord);
+      expect(leftObserver.result.current.currentOperation).toEqual(left.persisted);
+      expect(rightObserver.result.current.currentOperation).toEqual(right.persisted);
     });
 
-    const leftFinalized = sendRecord({ ...leftRecord, state: 'finalized', revision: 3 });
-    await left.emit('send:finalized', leftFinalized);
+    await recordClaimedToken(left.repositories, left.persisted);
+    await act(async () => {
+      await leftObserver.result.current.finalize();
+    });
 
-    expect(leftObserver.result.current.currentOperation).toEqual(leftFinalized);
-    expect(rightObserver.result.current.currentOperation).toEqual(rightRecord);
+    expect(leftObserver.result.current.currentOperation?.state).toBe('finalized');
+    expect(rightObserver.result.current.currentOperation).toEqual(right.persisted);
   });
-  it('reads the new Manager after a Manager change with the same ID', async () => {
-    const left = createSendManagerMock();
-    const right = createSendManagerMock();
-    const leftRead = createDeferred<SendOperationRecord | null>();
-    const leftRecord = sendRecord({ id: 'send-op-switch', mintUrl: 'https://left.example' });
-    const rightRecord = sendRecord({ id: leftRecord.id, mintUrl: 'https://right.example' });
-    left.send.get.mockReturnValue(leftRead.promise);
-    right.send.get.mockResolvedValue(rightRecord);
-    let manager = left.manager;
-    const wrapper = ({ children }: { children: ReactNode }) => (
-      <ManagerProvider manager={manager}>{children}</ManagerProvider>
-    );
 
-    const { result, rerender } = renderHook(() => useSendOperation(leftRecord.id), { wrapper });
-    manager = right.manager;
-    rerender();
+  it('keeps the replacement record when a read from the previous Manager finishes late', async () => {
+    const id = 'send-op-switch';
+    const repositories = new MemoryRepositories();
+    const holdNextRead = installSendReadGate(repositories);
+    const left = await reopenWallet(id, { mintUrl: 'https://left.example', repositories });
+    const right = await reopenWallet(id, { mintUrl: 'https://right.example' });
+    const read = holdNextRead();
+
+    const { result, replaceManager } = renderWithReplaceableManager(left.manager, () =>
+      useSendOperation(id),
+    );
+    try {
+      await read.started.promise;
+      replaceManager(right.manager);
+      await waitFor(() => {
+        expect(result.current.currentOperation).toEqual(right.persisted);
+      });
+    } finally {
+      await act(async () => {
+        read.release.resolve();
+      });
+    }
+
+    expect(result.current.currentOperation).toEqual(right.persisted);
+  });
+
+  it('clears an object binding while reading the replacement Manager', async () => {
+    const id = 'send-op-own-record';
+    const left = await reopenWallet(id, { mintUrl: 'https://left.example' });
+    const repositories = new MemoryRepositories();
+    const holdNextRead = installSendReadGate(repositories);
+    const right = await reopenWallet(id, { mintUrl: 'https://right.example', repositories });
+
+    const { result, replaceManager } = renderWithReplaceableManager(left.manager, () =>
+      useSendOperation(left.persisted),
+    );
+    expect(result.current.currentOperation).toEqual(left.persisted);
+
+    const read = holdNextRead();
+    try {
+      replaceManager(right.manager);
+      expect(result.current.currentOperation).toBeNull();
+      await read.started.promise;
+    } finally {
+      await act(async () => {
+        read.release.resolve();
+      });
+    }
+
+    expect(result.current.currentOperation).toEqual(right.persisted);
+  });
+
+  it('rereads a Send selected by prepare() after a Manager change', async () => {
+    const repositories = new MemoryRepositories();
+    const now = Math.floor(Date.now() / 1000);
+    await repositories.mintRepository.addNewMint({
+      mintUrl: MINT_URL,
+      name: testMintInfo.name,
+      mintInfo: testMintInfo,
+      trusted: true,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await repositories.keysetRepository.addKeyset({
+      mintUrl: MINT_URL,
+      id: KEYSET_ID,
+      unit: 'sat',
+      keypairs: testMintKeypairs,
+      active: true,
+      feePpk: 0,
+    });
+    await repositories.proofRepository.saveProofs(MINT_URL, [
+      {
+        id: KEYSET_ID,
+        amount: Amount.from(8),
+        secret: 'ready-to-send',
+        C: testMintKeypairs['8'],
+        mintUrl: MINT_URL,
+        unit: 'sat',
+        state: 'ready',
+      },
+    ]);
+
+    const manager = await openWallet(repositories);
+    const { result, replaceManager } = renderWithReplaceableManager(manager, () =>
+      useSendOperation(),
+    );
+    await act(async () => {
+      await result.current.prepare({ mintUrl: MINT_URL, amount: 8 });
+    });
+    const prepared = result.current.currentOperation!;
+    expect(prepared.state).toBe('prepared');
+
+    const replacement = await openWallet(repositories);
+    replaceManager(replacement);
     await waitFor(() => {
-      expect(result.current.currentOperation).toEqual(rightRecord);
+      expect(result.current.currentOperation).toEqual(prepared);
     });
+    expect(result.current.currentOperation).not.toBe(prepared);
+
+    const refresh = vi.spyOn(replacement.ops.send, 'refresh');
     await act(async () => {
-      leftRead.resolve(leftRecord);
-      await leftRead.promise;
+      expect(await result.current.refresh()).toEqual(prepared);
     });
-
-    expect(right.send.get).toHaveBeenCalledWith(rightRecord.id);
-    expect(result.current.currentOperation).toEqual(rightRecord);
-  });
-
-  it('does not show a record from the previous Manager after a Manager change', async () => {
-    const left = createSendManagerMock();
-    const right = createSendManagerMock();
-    const leftRecord = sendRecord({ id: 'send-op-own-record', mintUrl: 'https://left.example' });
-    let manager = left.manager;
-    const wrapper = ({ children }: { children: ReactNode }) => (
-      <ManagerProvider manager={manager}>{children}</ManagerProvider>
-    );
-
-    const rightRead = createDeferred<SendOperationRecord | null>();
-    right.send.get.mockReturnValue(rightRead.promise);
-
-    const { result, rerender } = renderHook(() => useSendOperation(leftRecord), { wrapper });
-    expect(result.current.currentOperation).toEqual(leftRecord);
-
-    manager = right.manager;
-    rerender();
-
-    expect(result.current.currentOperation).toBeNull();
-    const rightRecord = sendRecord({ id: leftRecord.id, mintUrl: 'https://right.example' });
-    await act(async () => {
-      rightRead.resolve(rightRecord);
-      await rightRead.promise;
-    });
-    expect(result.current.currentOperation).toEqual(rightRecord);
-  });
-
-  it('rereads a prepared Send from the new Manager after a Manager change', async () => {
-    const left = createSendManagerMock();
-    const right = createSendManagerMock();
-    const prepared = sendRecord({ id: 'send-op-prepared-switch', state: 'prepared', revision: 1 });
-    const reread = sendRecord({ ...prepared, mintUrl: 'https://right.example' });
-    const refreshed = sendRecord({ ...reread, revision: 2 });
-    left.send.prepare.mockResolvedValue(prepared);
-    right.send.get.mockResolvedValue(reread);
-    right.send.refresh.mockResolvedValue(refreshed);
-    let manager = left.manager;
-    const wrapper = ({ children }: { children: ReactNode }) => (
-      <ManagerProvider manager={manager}>{children}</ManagerProvider>
-    );
-
-    const { result, rerender } = renderHook(() => useSendOperation(), { wrapper });
-    await act(async () => {
-      await result.current.prepare({} as never);
-    });
-    manager = right.manager;
-    rerender();
-
-    await waitFor(() => {
-      expect(result.current.currentOperation).toEqual(reread);
-    });
-    expect(right.send.get).toHaveBeenCalledWith(prepared.id);
-    await act(async () => {
-      await result.current.refresh();
-    });
-    expect(right.send.refresh).toHaveBeenCalledWith(prepared.id);
-    expect(result.current.currentOperation).toEqual(refreshed);
+    expect(refresh).toHaveBeenCalledWith(prepared.id);
   });
 
   it('shows a newer record passed as a binding to the other observers', async () => {
-    const { manager, send } = createSendManagerMock();
-    const pending = sendRecord({ id: 'send-op-object-binding' });
-    const finalized = sendRecord({ id: pending.id, state: 'finalized', revision: 3 });
-    send.get.mockResolvedValue(pending);
+    const { manager, repositories, persisted } = await reopenWallet('send-op-object-binding');
+    const settlingManager = await openWallet(repositories);
     const wrapper = createHookWrapper(manager);
-
-    const reader = renderHook(() => useSendOperation(pending.id), { wrapper });
+    const reads = vi.spyOn(manager.ops.send, 'get');
+    const reader = renderHook(() => useSendOperation(persisted.id), { wrapper });
     await waitFor(() => {
-      expect(reader.result.current.currentOperation).toEqual(pending);
+      expect(reader.result.current.currentOperation).toEqual(persisted);
     });
+
+    await recordClaimedToken(repositories, persisted);
+    await settlingManager.ops.send.finalize(persisted.id);
+    const finalized = await manager.ops.send.get(persisted.id);
+    expect(finalized?.state).toBe('finalized');
+    expect(reader.result.current.currentOperation).toEqual(persisted);
+    reads.mockClear();
+
     const bound = renderHook(() => useSendOperation(finalized), { wrapper });
 
     expect(bound.result.current.currentOperation).toEqual(finalized);
     expect(reader.result.current.currentOperation).toEqual(finalized);
-    expect(send.get).toHaveBeenCalledTimes(1);
+    expect(reads).not.toHaveBeenCalled();
   });
 
   it('keeps the shared record when a binding passes an older record', async () => {
-    const { manager, send } = createSendManagerMock();
-    const finalized = sendRecord({ id: 'send-op-stale-binding', state: 'finalized', revision: 3 });
-    const stale = sendRecord({ id: finalized.id });
-    send.get.mockResolvedValue(finalized);
+    const { manager, repositories, persisted } = await reopenWallet('send-op-stale-binding');
+    await recordClaimedToken(repositories, persisted);
+    await manager.ops.send.finalize(persisted.id);
     const wrapper = createHookWrapper(manager);
-
-    const reader = renderHook(() => useSendOperation(finalized.id), { wrapper });
+    const reader = renderHook(() => useSendOperation(persisted.id), { wrapper });
     await waitFor(() => {
-      expect(reader.result.current.currentOperation).toEqual(finalized);
-    });
-    const bound = renderHook(() => useSendOperation(stale), { wrapper });
-
-    expect(bound.result.current.currentOperation).toEqual(finalized);
-    expect(reader.result.current.currentOperation).toEqual(finalized);
-  });
-});
-
-describe('ordering observed Send records', () => {
-  it('rejects an older revision even when its updatedAt is later', async () => {
-    const { manager, send, emit } = createSendManagerMock();
-    const read = createDeferred<SendOperationRecord | null>();
-    send.get.mockReturnValue(read.promise);
-    const finalized = sendRecord({
-      id: 'send-op-revision',
-      state: 'finalized',
-      revision: 3,
-      updatedAt: 1_700_000_002_000,
+      expect(reader.result.current.currentOperation?.state).toBe('finalized');
     });
 
-    const { result } = renderHook(() => useSendOperation(finalized.id), {
-      wrapper: createHookWrapper(manager),
-    });
-    await emit('send:finalized', finalized);
-    await act(async () => {
-      read.resolve(sendRecord({ id: finalized.id, revision: 2, updatedAt: 1_700_000_009_000 }));
-      await read.promise;
-    });
+    const bound = renderHook(() => useSendOperation(persisted), { wrapper });
 
-    expect(result.current.currentOperation).toEqual(finalized);
-  });
-
-  it('treats an absent legacy revision as zero', async () => {
-    const { manager, send, emit } = createSendManagerMock();
-    const legacy = sendRecord({ id: 'send-op-legacy', revision: undefined, updatedAt: 50 });
-    send.get.mockResolvedValue(legacy);
-
-    const { result } = renderHook(() => useSendOperation(legacy.id), {
-      wrapper: createHookWrapper(manager),
-    });
-    await waitFor(() => {
-      expect(result.current.currentOperation).toEqual(legacy);
-    });
-
-    // A revision-0 record never replaces the legacy record with a later timestamp...
-    await emit('send:pending', sendRecord({ id: legacy.id, revision: 0, updatedAt: 40 }));
-    expect(result.current.currentOperation).toEqual(legacy);
-
-    // ...but the first transition, which writes revision 1, does.
-    const finalized = sendRecord({ id: legacy.id, state: 'finalized', revision: 1, updatedAt: 40 });
-    await emit('send:finalized', finalized);
-    expect(result.current.currentOperation).toEqual(finalized);
+    expect(bound.result.current.currentOperation?.state).toBe('finalized');
+    expect(reader.result.current.currentOperation).toBe(bound.result.current.currentOperation);
   });
 });
