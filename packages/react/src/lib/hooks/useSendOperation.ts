@@ -1,5 +1,5 @@
 import type { Manager, PreparedSendOperation, SendOperation } from '@cashu/coco-core';
-import { useCallback, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useManager } from '../contexts/ManagerContext';
 import type { OperationBinding, OperationHookResult } from './operation-types';
 import {
@@ -8,7 +8,6 @@ import {
   requireCurrentOperationId,
   requireOperation,
   requireUnboundOperationCreation,
-  useInitialOperationHydration,
   useOperationActionState,
 } from './operationHookUtils';
 import { sendOperationKind } from './operationKinds';
@@ -65,7 +64,6 @@ export function useSendOperation(
 ): UseSendOperationResult {
   const manager = useManager();
   const store = useMemo(() => getOperationStore(manager, sendOperationKind), [manager]);
-  const initialBindingRef = useRef(initialBinding);
   const [selection, setSelection] = useState(() => getInitialSelection(initialBinding, manager));
   const selectionRef = useRef(selection);
   const {
@@ -83,9 +81,21 @@ export function useSendOperation(
 
   const selectedId = selection?.id ?? null;
   const subscribe = useCallback(
-    (listener: () => void) =>
-      selectedId ? store.subscribe(selectedId, listener) : subscribeNothing(),
-    [selectedId, store],
+    (listener: () => void) => {
+      if (!selectedId) {
+        return subscribeNothing();
+      }
+
+      const unsubscribe = store.subscribe(selectedId, listener);
+      // Share a record this instance received, such as an object binding, with the other
+      // observers. The store's ordering drops it when they have already seen a newer one.
+      const ownRecord = ownRecordFor(selectionRef.current, manager);
+      if (ownRecord?.id === selectedId) {
+        store.observe(ownRecord);
+      }
+      return unsubscribe;
+    },
+    [manager, selectedId, store],
   );
   const getSnapshot = useCallback(
     () => (selectedId ? store.getSnapshot(selectedId) : null),
@@ -142,7 +152,7 @@ export function useSendOperation(
     [select],
   );
 
-  const hydrateInitialOperation = useCallback(
+  const hydrateSelectedOperation = useCallback(
     (operationId: string): Promise<void> =>
       runHydration(
         operationId,
@@ -161,7 +171,14 @@ export function useSendOperation(
     [getCurrentOperation, runHydration, select, store],
   );
 
-  useInitialOperationHydration(initialBindingRef.current, hydrateInitialOperation);
+  // Read the selected Send whenever this instance holds no record of it from the current Manager:
+  // an ID binding on mount, or any selection after a Manager change.
+  const needsRead = selection !== null && ownRecordFor(selection, manager) === null;
+  useEffect(() => {
+    if (selectedId && needsRead) {
+      void hydrateSelectedOperation(selectedId);
+    }
+  }, [hydrateSelectedOperation, needsRead, selectedId]);
 
   /**
    * Runs a command for the selected Send. Its resulting record reaches every observer of that ID

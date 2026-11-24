@@ -353,6 +353,9 @@ describe('observers of one Send with a fake Manager', () => {
       <ManagerProvider manager={manager}>{children}</ManagerProvider>
     );
 
+    const rightRead = createDeferred<SendOperationRecord | null>();
+    right.send.get.mockReturnValue(rightRead.promise);
+
     const { result, rerender } = renderHook(() => useSendOperation(leftRecord), { wrapper });
     expect(result.current.currentOperation).toEqual(leftRecord);
 
@@ -361,8 +364,78 @@ describe('observers of one Send with a fake Manager', () => {
 
     expect(result.current.currentOperation).toBeNull();
     const rightRecord = sendRecord({ id: leftRecord.id, mintUrl: 'https://right.example' });
-    await right.emit('send:pending', rightRecord);
+    await act(async () => {
+      rightRead.resolve(rightRecord);
+      await rightRead.promise;
+    });
     expect(result.current.currentOperation).toEqual(rightRecord);
+  });
+
+  it('rereads a prepared Send from the new Manager after a Manager change', async () => {
+    const left = createSendManagerMock();
+    const right = createSendManagerMock();
+    const prepared = sendRecord({ id: 'send-op-prepared-switch', state: 'prepared', revision: 1 });
+    const reread = sendRecord({ ...prepared, mintUrl: 'https://right.example' });
+    const refreshed = sendRecord({ ...reread, revision: 2 });
+    left.send.prepare.mockResolvedValue(prepared);
+    right.send.get.mockResolvedValue(reread);
+    right.send.refresh.mockResolvedValue(refreshed);
+    let manager = left.manager;
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <ManagerProvider manager={manager}>{children}</ManagerProvider>
+    );
+
+    const { result, rerender } = renderHook(() => useSendOperation(), { wrapper });
+    await act(async () => {
+      await result.current.prepare({} as never);
+    });
+    manager = right.manager;
+    rerender();
+
+    await waitFor(() => {
+      expect(result.current.currentOperation).toEqual(reread);
+    });
+    expect(right.send.get).toHaveBeenCalledWith(prepared.id);
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(right.send.refresh).toHaveBeenCalledWith(prepared.id);
+    expect(result.current.currentOperation).toEqual(refreshed);
+  });
+
+  it('shows a newer record passed as a binding to the other observers', async () => {
+    const { manager, send } = createSendManagerMock();
+    const pending = sendRecord({ id: 'send-op-object-binding' });
+    const finalized = sendRecord({ id: pending.id, state: 'finalized', revision: 3 });
+    send.get.mockResolvedValue(pending);
+    const wrapper = createHookWrapper(manager);
+
+    const reader = renderHook(() => useSendOperation(pending.id), { wrapper });
+    await waitFor(() => {
+      expect(reader.result.current.currentOperation).toEqual(pending);
+    });
+    const bound = renderHook(() => useSendOperation(finalized), { wrapper });
+
+    expect(bound.result.current.currentOperation).toEqual(finalized);
+    expect(reader.result.current.currentOperation).toEqual(finalized);
+    expect(send.get).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the shared record when a binding passes an older record', async () => {
+    const { manager, send } = createSendManagerMock();
+    const finalized = sendRecord({ id: 'send-op-stale-binding', state: 'finalized', revision: 3 });
+    const stale = sendRecord({ id: finalized.id });
+    send.get.mockResolvedValue(finalized);
+    const wrapper = createHookWrapper(manager);
+
+    const reader = renderHook(() => useSendOperation(finalized.id), { wrapper });
+    await waitFor(() => {
+      expect(reader.result.current.currentOperation).toEqual(finalized);
+    });
+    const bound = renderHook(() => useSendOperation(stale), { wrapper });
+
+    expect(bound.result.current.currentOperation).toEqual(finalized);
+    expect(reader.result.current.currentOperation).toEqual(finalized);
   });
 });
 
