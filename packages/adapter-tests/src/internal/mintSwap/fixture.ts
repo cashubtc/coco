@@ -186,7 +186,7 @@ export async function mintSwapFixture(
     id: parent.id,
     sourceKeys: keys,
     destinationKeys: keys,
-    seed: new Uint8Array(32).fill(2),
+    seed: new Uint8Array(64).fill(2),
     now: time,
   };
   const create = () => runner.run((tx) => tx.perform(createMintSwap, parent));
@@ -331,7 +331,7 @@ export async function mintSwapFixture(
     mintAdapter: {} as MintAdapter,
     loadSeed: async () => {
       assertRemote();
-      return new Uint8Array(32).fill(2);
+      return new Uint8Array(64).fill(2);
     },
     sourceOperationLock: new OperationIdLock(),
     destinationOperationLock: new OperationIdLock(),

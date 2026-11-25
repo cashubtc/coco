@@ -137,7 +137,7 @@ describe.each(['memory', 'sqlite'] as const)('Restore transactions (%s)', (adapt
           mintUrl,
           unit: 'sat',
           activeKeys: { id: activeId, unit: 'sat', keys: testMintKeypairs },
-          seed: new Uint8Array(32).fill(1),
+          seed: new Uint8Array(64).fill(1),
           keepAmount: Amount.from(8),
           sendAmount: Amount.zero(),
         }),

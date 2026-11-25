@@ -64,7 +64,7 @@ describe('initializeCoco', () => {
 
   beforeEach(() => {
     repositories = new MemoryRepositories();
-    seedGetter = async () => new Uint8Array(32);
+    seedGetter = async () => new Uint8Array(64);
     baseConfig = {
       repo: repositories,
       seedGetter,

@@ -72,7 +72,7 @@ describe('Auth Login (automated — password grant)', () => {
 
     mgr = await initializeCoco({
       repo: repositories,
-      seedGetter: async () => new Uint8Array(32),
+      seedGetter: async () => new Uint8Array(64),
       watchers: {
         mintOperationWatcher: { disabled: true },
         proofStateWatcher: { disabled: true },
@@ -99,7 +99,7 @@ describe('Auth Login (automated — password grant)', () => {
     // Create a new Manager with the same repository
     const mgr2 = await initializeCoco({
       repo: repositories,
-      seedGetter: async () => new Uint8Array(32),
+      seedGetter: async () => new Uint8Array(64),
       watchers: {
         mintOperationWatcher: { disabled: true },
         proofStateWatcher: { disabled: true },

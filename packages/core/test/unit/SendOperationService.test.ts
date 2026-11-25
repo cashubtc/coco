@@ -780,7 +780,7 @@ describe('SendOperationService', () => {
     const intent = await service.init(mintUrl, unitAmount(10));
     loadSeed.mockImplementationOnce(async () => {
       await repositories.mintRepository.setMintTrusted(mintUrl, false);
-      return new Uint8Array(32).fill(1);
+      return new Uint8Array(64).fill(1);
     });
     await expect(service.prepare(intent)).rejects.toThrow('not trusted');
     expect(await sendOpRepo.getById(intent.id)).toBeNull();
@@ -829,7 +829,7 @@ describe('SendOperationService', () => {
     }));
     loadSeed.mockImplementationOnce(async () => {
       await repositories.mintRepository.setMintTrusted(mintUrl, false);
-      return new Uint8Array(32).fill(1);
+      return new Uint8Array(64).fill(1);
     });
     const intent = await service.init(mintUrl, unitAmount(10));
     await expect(service.prepare(intent)).rejects.toThrow('not trusted');

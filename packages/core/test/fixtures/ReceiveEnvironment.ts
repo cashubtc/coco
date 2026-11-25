@@ -151,7 +151,7 @@ export async function createReceiveEnvironment(
     restoreOutputs: mock<ReceiveRemoteSession['restoreOutputs']>(async () => []),
   };
   const remote = { ...remoteSession, open: mock(() => remoteSession) };
-  const loadSeed = mock(async () => new Uint8Array(32).fill(1));
+  const loadSeed = mock(async () => new Uint8Array(64).fill(1));
   const logger = {
     debug: mock(() => {}),
     info: mock(() => {}),

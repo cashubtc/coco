@@ -160,7 +160,7 @@ describe('MeltOperationService coordinator', () => {
           }),
         ),
       },
-      loadSeed: mock(async () => new Uint8Array(32)),
+      loadSeed: mock(async () => new Uint8Array(64)),
       quoteLifecycle: {
         getMeltQuote: mock(async () => quote('UNPAID')),
         getMeltQuoteById: mock(async () => quote('UNPAID')),
