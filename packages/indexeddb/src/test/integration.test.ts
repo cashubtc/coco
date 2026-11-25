@@ -25,13 +25,20 @@ let dbCounter = 0;
 async function createRepositories() {
   // Use unique database name for each test to avoid conflicts
   const dbName = `coco_cashu_test_${Date.now()}_${dbCounter++}`;
-  const repositories = new IndexedDbRepositories({ name: dbName });
-  await repositories.init();
+  const open = async () => {
+    const repositories = new IndexedDbRepositories({ name: dbName });
+    await repositories.init();
+    return repositories;
+  };
+  let repositories = await open();
   return {
     repositories,
-    // No cleanup needed - each test uses a unique database name and
-    // the browser session is ephemeral (Playwright closes it after tests)
-    dispose: async () => {},
+    reopen: async () => {
+      repositories.db.close();
+      repositories = await open();
+      return repositories;
+    },
+    dispose: async () => repositories.db.close(),
   };
 }
 

@@ -41,6 +41,7 @@ import {
   type FinalizedReceiveOperation,
   type RolledBackReceiveOperation,
 } from './ReceiveOperation.ts';
+import { prepareReceiveToken } from './prepareReceiveToken.ts';
 import type { ReceiveOperationQueries } from './ReceiveOperationQueries.ts';
 import type { ReceiveRemote, ReceiveRemoteSession } from './ReceiveRemote.ts';
 
@@ -180,7 +181,7 @@ export class ReceiveOperationService {
   }
 
   async receive(token: Token | string): Promise<void> {
-    await this.execute(await this.prepare(await this.init(token)));
+    await this.execute(await prepareReceiveToken(this, token));
   }
 
   async execute(operationOrId: ReceiveOperation | string): Promise<FinalizedReceiveOperation> {
