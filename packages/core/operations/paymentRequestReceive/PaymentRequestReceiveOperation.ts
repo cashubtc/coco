@@ -1,3 +1,5 @@
+import type { PreparedOrLaterOperation } from '../receive/ReceiveOperation.ts';
+import { PaymentRequestError } from '@core/models/Error.ts';
 import type { Amount, PaymentRequestPayload, Proof } from '@cashu/cashu-ts';
 
 export type PaymentRequestReceiveState = 'active' | 'completed' | 'cancelled';
@@ -76,4 +78,16 @@ export function singleUseClaimConflict(
   return blocking.state === 'finalized'
     ? 'Single-use payment request has already been paid'
     : 'Single-use payment request has an in-flight claim';
+}
+
+export function amountsFromReceive(receive: PreparedOrLaterOperation) {
+  return { fee: receive.fee, netAmount: receive.amount.subtract(receive.fee) };
+}
+
+/** Incoming Coco requests currently advertise no supported-method fee. */
+export function assertPaymentRequestNetAmount(requested: Amount, net: Amount): void {
+  if (net.lessThan(requested))
+    throw new PaymentRequestError(
+      'Payment request net amount after input fees is below requested amount',
+    );
 }

@@ -68,6 +68,7 @@ export interface CoreTransaction {
   >;
   readonly paymentRequestReceiveAttempts: Pick<
     PaymentRequestReceiveAttemptRepository,
+    | 'getByReceiveOperationId'
     | 'getByRequestOperationId'
     | 'getByPayloadHash'
     | 'getByRequestIdAndPayloadHash'
