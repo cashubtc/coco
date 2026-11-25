@@ -189,6 +189,16 @@ const result = await coco.paymentRequests.incoming.claimPayload(request.id, payl
 console.log(result.operation.state);
 ```
 
+If `claimPayload()` throws after the child Receive Operation is saved, the payment can still
+finish. On startup, Coco resumes a `prepared` child using its saved inputs and outputs.
+For an `executing` child, recovery first checks the wallet for output proofs saved by that
+child. If the wallet has the complete set, recovery can finalize the child offline.
+Otherwise it checks the inputs at the mint. It replays the saved swap if all inputs are
+unspent, or asks the mint to restore the saved outputs if all inputs are spent. If the
+mint is unreachable and the local proofs are incomplete, the attempt stays in `receiving`.
+To retry recovery while the wallet is open, call
+`coco.paymentRequests.incoming.recovery.run()`.
+
 For Nostr delivery, install a Nostr payment-request plugin. The plugin registers the
 transport handler that creates the Nostr descriptor, subscribes to relays, decrypts
 incoming events, and calls `ingestPayload()`:

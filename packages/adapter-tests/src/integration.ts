@@ -30,6 +30,7 @@ import {
   type Secret,
 } from '@cashu/cashu-ts';
 import { createFakeInvoice } from 'fake-bolt11';
+import { runReceiveRecoveryTests } from './receiveRecovery.ts';
 import { runPaymentRequestFeeTests } from './paymentRequestFees.ts';
 import { runPaymentRequestReceiveLifecycleTests } from './paymentRequestReceiveLifecycle.ts';
 import { runP2pkReceiveTests } from './p2pkReceive.ts';
@@ -65,6 +66,8 @@ type ExpectApi = {
 export type IntegrationTestOptions<TRepositories extends Repositories = Repositories> = {
   createRepositories: () => Promise<{
     repositories: TRepositories;
+    /** Close the connection and reopen the same persistent wallet for restart tests. */
+    reopen?(): Promise<TRepositories>;
     dispose(): Promise<void>;
   }>;
   mintUrl: string;
@@ -3580,6 +3583,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       });
     });
 
+    runReceiveRecoveryTests(options, runner, mintAmount);
     runPaymentRequestFeeTests(options, runner, mintAmount);
     runPaymentRequestReceiveLifecycleTests(options, runner, mintAmount);
     runP2pkReceiveTests(options, runner, mintAmount);

@@ -5,6 +5,7 @@ import type {
   ReceiveOperation,
 } from '../operations/receive/ReceiveOperation';
 import type { ReceiveOperationService } from '../operations/receive/ReceiveOperationService';
+import { prepareReceiveToken } from '../operations/receive/prepareReceiveToken.ts';
 
 export interface PrepareReceiveInput {
   /** Token to receive, either encoded or already decoded. */
@@ -53,8 +54,7 @@ export class ReceiveOpsApi {
    * Preparation persists witnesses for replay during execution and recovery.
    */
   async prepare(input: PrepareReceiveInput): Promise<PreparedReceiveOperation> {
-    const initOp = await this.receiveOperationService.init(input.token);
-    return this.receiveOperationService.prepare(initOp);
+    return prepareReceiveToken(this.receiveOperationService, input.token);
   }
 
   /**
