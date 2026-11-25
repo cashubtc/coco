@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'bun:test';
+import { Amount } from '@cashu/cashu-ts';
 import {
   runKeysetRepositoryContract,
   runRepositoryTransactionContract,
 } from '@cashu/coco-adapter-tests';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
+import type { CoreProof } from '../../types.ts';
 
 async function createRepositories() {
   return {
@@ -54,5 +56,47 @@ describe('MemoryRepositories transaction byte isolation', () => {
 
     const stored = await repositories.keyRingRepository.getPersistedKeyPair(publicKeyHex, 'p2pk');
     expect(Array.from(stored!.secretKey)).toEqual([1, 2, 3]);
+  });
+});
+
+describe('MemoryRepositories stored amounts', () => {
+  const mintUrl = 'https://mint.test';
+
+  const makeProof = (secret: string, amount: number): CoreProof => ({
+    id: 'keyset-1',
+    unit: 'sat',
+    amount: Amount.from(amount),
+    secret,
+    C: `C_${secret}`,
+    mintUrl,
+    state: 'ready',
+  });
+
+  // cashu-ts accepts only Amount instances it constructed itself, so a stored Amount must come back
+  // as one that Amount.from and Amount arithmetic still accept.
+  const expectUsableAmount = (amount: Amount, expected: number) => {
+    expect(Amount.from(amount).toNumber()).toBe(expected);
+    expect(amount.add(Amount.from(2)).toNumber()).toBe(expected + 2);
+    expect(Amount.from(2).add(amount).toNumber()).toBe(expected + 2);
+  };
+
+  it('returns a stored Amount that cashu-ts accepts, inside and outside a transaction', async () => {
+    const repositories = new MemoryRepositories();
+    await repositories.proofRepository.saveProofs(mintUrl, [makeProof('outside', 8)]);
+
+    await repositories.withTransaction(async ({ proofRepository }) => {
+      const [read] = await proofRepository.getProofsBySecrets(mintUrl, ['outside']);
+      expectUsableAmount(read!.amount, 8);
+      await proofRepository.saveProofs(mintUrl, [makeProof('inside', 16)]);
+      const [written] = await proofRepository.getProofsBySecrets(mintUrl, ['inside']);
+      expectUsableAmount(written!.amount, 16);
+    });
+
+    const [outside, inside] = await repositories.proofRepository.getProofsBySecrets(mintUrl, [
+      'outside',
+      'inside',
+    ]);
+    expectUsableAmount(outside!.amount, 8);
+    expectUsableAmount(inside!.amount, 16);
   });
 });
