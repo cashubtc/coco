@@ -2,10 +2,16 @@ import { JSONInt } from '@cashu/cashu-ts';
 import type { Logger } from '../logging/Logger.ts';
 import { HttpResponseError, NetworkError, MintOperationError } from '../models/Error';
 
+/**
+ * A mint request body. cashu-ts may hand over a string it already serialized (NUT-22 blind auth
+ * signs those exact bytes); such a body is sent verbatim. An object is serialized here.
+ */
+export type MintRequestBody = Record<string, unknown> | string;
+
 type RequestFunction = <T>(
   options: {
     endpoint: string;
-    requestBody?: Record<string, unknown> | string;
+    requestBody?: MintRequestBody;
     headers?: Record<string, string>;
   } & Omit<RequestInit, 'body' | 'headers'>,
 ) => Promise<T>;
@@ -86,7 +92,7 @@ export class RequestRateLimiter {
   private performFetch = async <T>(
     options: {
       endpoint: string;
-      requestBody?: Record<string, unknown> | string;
+      requestBody?: MintRequestBody;
       headers?: Record<string, string>;
     } & Omit<RequestInit, 'body' | 'headers'>,
   ): Promise<T> => {
@@ -99,23 +105,20 @@ export class RequestRateLimiter {
     });
     // Avoid DOM-specific BodyInit type to keep this file platform-agnostic
     let body: unknown | undefined = undefined;
+    let loggedBody: string | undefined = undefined;
     if (requestBody !== undefined) {
       finalHeaders.set('Content-Type', 'application/json');
-      // cashu-ts may hand over a body it already serialized (NUT-22 blind auth signs those exact
-      // bytes), so a string is sent verbatim and only an object is serialized here.
-      body = typeof requestBody === 'string' ? requestBody : stringifyJson(requestBody);
+      // A pre-serialized body is sent and logged as it is; only an object is serialized here.
+      const preSerialized = typeof requestBody === 'string';
+      body = preSerialized ? requestBody : stringifyJson(requestBody);
+      loggedBody = preSerialized ? requestBody : stringifyJson(requestBody, 2);
     }
 
     // Log request payload
     this.logger?.debug('Mint request', {
       method: init.method || 'GET',
       endpoint,
-      requestBody:
-        typeof requestBody === 'string'
-          ? requestBody
-          : requestBody
-            ? stringifyJson(requestBody, 2)
-            : undefined,
+      requestBody: loggedBody,
     });
 
     let response: Response;

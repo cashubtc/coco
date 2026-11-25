@@ -8,10 +8,12 @@ import {
 } from '@cashu/cashu-ts';
 import { describe, expect, it, mock } from 'bun:test';
 
+import type { MintRequestBody } from '../../infra/RequestRateLimiter.ts';
 import type { Keyset } from '../../models/Keyset.ts';
 import type { Mint } from '../../models/Mint.ts';
 import { WalletService } from '../../services/WalletService.ts';
 import type { MintInfo } from '../../types.ts';
+import { parseRequestBody } from '../fixtures/MintRequestBody.ts';
 import { makeOutputDataCreator } from '../fixtures/OutputDataCreator.ts';
 
 const mintUrl = 'https://mint.test';
@@ -62,7 +64,7 @@ function makeService(
   outputDataCreator?: OutputDataCreator,
   request: (options: {
     endpoint: string;
-    requestBody?: unknown;
+    requestBody?: MintRequestBody;
   }) => Promise<unknown> = async () => ({}),
 ) {
   const ensureUpdatedMint = mock(async (url: string) => ({
@@ -76,7 +78,7 @@ function makeService(
   const getSeed = mock(async () => new Uint8Array(64).fill(1));
   const getRequestFn = mock(
     () =>
-      async <T>(options: { endpoint: string; requestBody?: unknown }) =>
+      async <T>(options: { endpoint: string; requestBody?: MintRequestBody }) =>
         (await request(options)) as T,
   );
 
@@ -173,9 +175,11 @@ describe('WalletService unit scoping', () => {
       keypairs: olderKeypairs,
       active: false,
     };
-    const swapBodies: unknown[] = [];
+    const swapBodies: Array<Record<string, unknown> | undefined> = [];
     const { service } = makeService([activeKeyset, olderKeyset], undefined, async (options) => {
-      if (options.endpoint.endsWith('/v1/swap')) swapBodies.push(options.requestBody);
+      if (options.endpoint.endsWith('/v1/swap')) {
+        swapBodies.push(parseRequestBody(options.requestBody));
+      }
       return { signatures: [] };
     });
     const wallet = await service.getWallet(mintUrl, 'sat');
@@ -192,10 +196,12 @@ describe('WalletService unit scoping', () => {
       proof(olderKeyset.id, 2, 'older-2'),
     ];
 
+    // The double signs nothing, so the swap fails after its request went out. Only the request
+    // matters here.
     await wallet.send(Amount.from(8), inputs, { keysetId: activeKeyset.id }).catch(() => undefined);
 
     expect(swapBodies).toHaveLength(1);
-    const sent = (swapBodies[0] as { inputs: Proof[] }).inputs;
+    const sent = swapBodies[0]!.inputs as Proof[];
     expect(sent.map((input) => [input.id, input.secret])).toEqual([
       [olderKeyset.id, 'older-4'],
       [activeKeyset.id, 'active-8'],

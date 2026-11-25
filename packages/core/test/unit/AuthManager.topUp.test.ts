@@ -5,6 +5,8 @@ import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
 
+import { parseRequestBody } from '../fixtures/MintRequestBody.ts';
+
 // ────────────────────────────────────────────────────────────────
 // Helpers
 // ────────────────────────────────────────────────────────────────
@@ -113,13 +115,7 @@ function createMockMint(): MockMint {
 
   const request = async (rawArgs: any) => {
     // cashu-ts may hand over a pre-serialized body; read it the same way either way.
-    const args = {
-      ...rawArgs,
-      requestBody:
-        typeof rawArgs.requestBody === 'string'
-          ? JSON.parse(rawArgs.requestBody)
-          : rawArgs.requestBody,
-    };
+    const args = { ...rawArgs, requestBody: parseRequestBody(rawArgs.requestBody) as any };
     calls.push({
       endpoint: args.endpoint,
       method: args.method,

@@ -19,6 +19,7 @@ import type { MintRequestFn } from '../../infra/MintRequestProvider.ts';
 import type { MintMetadata } from '../../mints/MintMetadata.ts';
 import { serializeOutputData, deserializeOutputData } from '../../utils.ts';
 import { testMintInfo } from '../fixtures/MintMetadata.ts';
+import { parseRequestBody } from '../fixtures/MintRequestBody.ts';
 
 const mintUrl = 'https://mint.test';
 const mintKeys = createNewMintKeys(8, new Uint8Array(32).fill(2));
@@ -49,13 +50,6 @@ const metadata: MintMetadata = {
   ],
 };
 type WireOutput = { id: string; amount: number; B_: string };
-
-/** A mint double reads the body whether cashu-ts hands it over as an object or pre-serialized. */
-function parseRequestBody(
-  body: Parameters<MintRequestFn>[0]['requestBody'],
-): Record<string, unknown> | undefined {
-  return typeof body === 'string' ? (JSON.parse(body) as Record<string, unknown>) : body;
-}
 
 /** Compares outputs independent of whether an amount is an `Amount` or a wire number. */
 function withNumericAmounts(outputs: ReadonlyArray<{ amount: AmountLike }>) {

@@ -17,6 +17,7 @@ import type { MintMetadata } from '../../mints/MintMetadata.ts';
 import { ProofValidationError } from '../../models/Error.ts';
 import { getProofStateInputsFromSerializedOutputs, serializeOutputData } from '../../utils.ts';
 import { testMintInfo } from '../fixtures/MintMetadata.ts';
+import { parseRequestBody } from '../fixtures/MintRequestBody.ts';
 
 const mintUrl = 'https://mint.test';
 const unit = 'sat';
@@ -56,13 +57,6 @@ function sign(outputs: WireOutput[], signingKeyset = keyset) {
     );
     return { id: output.id, amount: output.amount, C_: signature.C_.toHex(true) };
   });
-}
-
-/** A mint double reads the body whether cashu-ts hands it over as an object or pre-serialized. */
-function parseRequestBody(
-  body: Parameters<MintRequestFn>[0]['requestBody'],
-): Record<string, unknown> | undefined {
-  return typeof body === 'string' ? (JSON.parse(body) as Record<string, unknown>) : body;
 }
 
 type RestoreResponse = { outputs: WireOutput[]; signatures: ReturnType<typeof sign> };
