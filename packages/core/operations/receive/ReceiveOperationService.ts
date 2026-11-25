@@ -29,7 +29,7 @@ import {
   mapProofToCoreProof,
   normalizeMintUrl,
 } from '@core/utils.ts';
-import { MintScopedLock } from '../MintScopedLock.ts';
+import type { MintScopedLock } from '../MintScopedLock.ts';
 import { OperationIdLock } from '../OperationIdLock.ts';
 import {
   createReceiveOperation,
@@ -41,6 +41,7 @@ import {
   type FinalizedReceiveOperation,
   type RolledBackReceiveOperation,
 } from './ReceiveOperation.ts';
+import { ReceivePreparation, emitReceiveEvent } from './ReceivePreparation.ts';
 import { prepareReceiveToken } from './prepareReceiveToken.ts';
 import type { ReceiveOperationQueries } from './ReceiveOperationQueries.ts';
 import type { ReceiveRemote, ReceiveRemoteSession } from './ReceiveRemote.ts';
@@ -80,12 +81,12 @@ export interface ReceiveOperationServiceDependencies {
 /** Coordinates preflight, committed transitions, remote effects, and best-effort live events. */
 export class ReceiveOperationService {
   private readonly operationLocks = new OperationIdLock();
-  private readonly mintLock: MintScopedLock;
   private recovering = false;
 
-  constructor(private readonly deps: ReceiveOperationServiceDependencies) {
-    this.mintLock = deps.mintScopedLock ?? new MintScopedLock();
-  }
+  constructor(
+    private readonly deps: ReceiveOperationServiceDependencies,
+    private readonly preparation = new ReceivePreparation(deps),
+  ) {}
 
   /** Decode and sign an in-memory draft. Preparation is the first durable Receive state. */
   async init(
@@ -149,33 +150,10 @@ export class ReceiveOperationService {
       const stored = await this.deps.operations.getById(draft.id);
       if (stored && stored.state !== 'init') throw new ReceiveOperationConflictError(draft.id);
       const operation = stored ?? draft;
-      const metadata = await this.deps.mintMetadataRefresh.refreshAndCommitIfStale(
-        operation.mintUrl,
+      const prepared = await this.preparation.withInput(operation, (input) =>
+        this.deps.transactionRunner.run((tx) => tx.perform(prepareReceive, input)),
       );
-      const activeKeys = createKeyChain(operation.mintUrl, operation.unit, metadata.keysets)
-        .getCheapestKeyset()
-        .toMintKeys();
-      if (!activeKeys) throw new ProofValidationError('Active keyset is missing mint keys');
-      const seed = await this.deps.loadSeed();
-      const updatedAt = Date.now();
-      const releaseMint = await this.mintLock.acquire(operation.mintUrl);
-      let prepared;
-      try {
-        const preparedInput = { operation, activeKeys, seed, updatedAt };
-        prepared = await this.deps.transactionRunner.run((tx) =>
-          tx.perform(prepareReceive, preparedInput),
-        );
-      } finally {
-        releaseMint();
-      }
-      publications.push(() => this.emit('counter:updated', prepared.counter));
-      publications.push(() =>
-        this.emit('receive-op:prepared', {
-          mintUrl: prepared.operation.mintUrl,
-          operationId: prepared.operation.id,
-          operation: prepared.operation,
-        }),
-      );
+      publications.push(() => this.preparation.publish(prepared));
       return prepared.operation;
     });
   }
@@ -499,20 +477,10 @@ export class ReceiveOperationService {
   }
 
   private publishRolledBack(publications: Publications, operation: RolledBackReceiveOperation) {
-    publications.push(() =>
-      this.emit('receive-op:rolled-back', {
-        mintUrl: operation.mintUrl,
-        operationId: operation.id,
-        operation,
-      }),
-    );
+    publications.push(() => this.preparation.publishRollback(operation));
   }
 
   private async emit<K extends keyof CoreEvents>(event: K, payload: CoreEvents[K]): Promise<void> {
-    try {
-      await this.deps.eventBus.emit(event, payload, { throwOnError: true });
-    } catch (error) {
-      this.deps.logger?.warn('Receive event listener failed after commit', { event, error });
-    }
+    return emitReceiveEvent(this.deps, event, payload);
   }
 }
