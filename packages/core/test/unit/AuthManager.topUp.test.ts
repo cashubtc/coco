@@ -111,7 +111,15 @@ function createMockMint(): MockMint {
     };
   }
 
-  const request = async (args: any) => {
+  const request = async (rawArgs: any) => {
+    // cashu-ts may hand over a pre-serialized body; read it the same way either way.
+    const args = {
+      ...rawArgs,
+      requestBody:
+        typeof rawArgs.requestBody === 'string'
+          ? JSON.parse(rawArgs.requestBody)
+          : rawArgs.requestBody,
+    };
     calls.push({
       endpoint: args.endpoint,
       method: args.method,

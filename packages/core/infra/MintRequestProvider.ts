@@ -6,7 +6,7 @@ import { RequestRateLimiter } from './RequestRateLimiter.ts';
  */
 export type MintRequestFn = <T>(options: {
   endpoint: string;
-  requestBody?: Record<string, unknown>;
+  requestBody?: Record<string, unknown> | string;
   headers?: Record<string, string>;
   method?: string;
 }) => Promise<T>;

@@ -3,6 +3,7 @@ import { MintOperationError as CashuMintOperationError } from '@cashu/cashu-ts';
 import type { HeadersInit } from 'bun';
 
 import { RequestRateLimiter } from '../../infra/RequestRateLimiter.ts';
+import type { Logger } from '../../logging/Logger.ts';
 import { HttpResponseError, NetworkError, MintOperationError } from '../../models/Error.ts';
 
 const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
@@ -74,6 +75,59 @@ describe('RequestRateLimiter', () => {
     });
 
     expect(capturedBody).toBe('{"amount":50,"unit":"sat"}');
+  });
+
+  it('sends a pre-serialized string body byte-for-byte', async () => {
+    const calls: Array<{ init?: RequestInit }> = [];
+    // @ts-ignore
+    globalThis.fetch = async (_input: any, init?: RequestInit) => {
+      calls.push({ init });
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    };
+
+    // Key order, spacing and an amount beyond Number.MAX_SAFE_INTEGER would all change if the
+    // body were parsed or encoded again; blind auth signs these exact bytes.
+    const serialized = '{"unit":"sat", "amount":9007199254740993}';
+    const limiter = new RequestRateLimiter();
+
+    await limiter.request({
+      endpoint: 'https://mint.test/v1/swap',
+      method: 'POST',
+      requestBody: serialized,
+    });
+
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.init?.body).toBe(serialized);
+    const hdrs = new Headers(calls[0]!.init?.headers as HeadersInit);
+    expect(hdrs.get('Content-Type')).toBe('application/json');
+  });
+
+  it('logs a pre-serialized string body as it was sent', async () => {
+    // @ts-ignore
+    globalThis.fetch = async () => new Response(JSON.stringify({ ok: true }), { status: 200 });
+
+    const logged: Array<{ message: string; meta: unknown[] }> = [];
+    const logger: Logger = {
+      error: () => {},
+      warn: () => {},
+      info: () => {},
+      debug: (message, ...meta) => logged.push({ message, meta }),
+    };
+    const serialized = '{"unit":"sat","amount":21}';
+    const limiter = new RequestRateLimiter({ logger });
+
+    await limiter.request({
+      endpoint: 'https://mint.test/v1/swap',
+      method: 'POST',
+      requestBody: serialized,
+    });
+
+    const entry = logged.find((e) => e.message === 'Mint request');
+    expect(entry?.meta[0]).toEqual({
+      method: 'POST',
+      endpoint: 'https://mint.test/v1/swap',
+      requestBody: serialized,
+    });
   });
 
   it('parses bigint JSON numbers in responses', async () => {
