@@ -189,8 +189,24 @@ const result = await coco.paymentRequests.incoming.claimPayload(request.id, payl
 console.log(result.operation.state);
 ```
 
-If `claimPayload()` throws after the child Receive Operation is saved, the payment can still
-finish. On startup, Coco resumes a `prepared` child using its saved inputs and outputs.
+Coco checks the amount the wallet will receive after the mint deducts its input fee.
+For a 100-sat request with a 1-sat input fee, a delivery of 100 sats returns a
+`rejected` attempt and leaves the request open. A delivery of 101 sats covers the
+request. Coco checks this before sending the first swap to the mint.
+
+The prepared child, its outputs and counter allocation, and the attempt's child ID,
+fee, and net amount commit in one wallet transaction. If linking fails during a live
+claim, the transport can redeliver the same payload. Redelivery also works if the mint
+rotates its output keyset during preparation. On restart, Coco checks a saved
+payload against its hash before preparing it. A temporary failure leaves it available
+for another recovery pass. For wallets that saved the child before the link, Coco
+finds the original child using its attempt ID. If both the child and the payload are missing, the wallet
+can accept redelivery.
+
+If a live claim encounters an error, Coco checks the saved attempt and child before
+reporting it. A finalized child lets Coco repair the local records and return the settled
+payment without another swap. If `claimPayload()` still throws after the child is saved,
+the payment can still finish. On startup, Coco resumes a `prepared` child using its saved inputs and outputs.
 For an `executing` child, recovery first checks the wallet for output proofs saved by that
 child. If the wallet has the complete set, recovery can finalize the child offline.
 Otherwise it checks the inputs at the mint. It replays the saved swap if all inputs are
