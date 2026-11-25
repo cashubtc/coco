@@ -279,6 +279,50 @@ export function runPaymentRequestReceiveLifecycleTests(
       }, 30000);
     }
 
+    for (const seedOutcome of ['available', 'unavailable'] as const) {
+      it(`returns the payment settled by another session when the original seed becomes ${seedOutcome}`, async () => {
+        const payload = await fundedPayload();
+        const paused = Promise.withResolvers<void>();
+        const resume = Promise.withResolvers<void>();
+        let pauseNextRead = false;
+        const { open, repositories } = await createWallet(async () => {
+          if (!pauseNextRead) return;
+          pauseNextRead = false;
+          paused.resolve();
+          await resume.promise;
+          if (seedOutcome === 'unavailable') throw new Error('Seed temporarily unavailable');
+        });
+        const first = await open();
+        const second = await open();
+        await first.mint.addMint(mintUrl, { trusted: true });
+        const request = await first.paymentRequests.incoming.create({
+          requestId: payload.id,
+          amount: 7,
+          unit,
+        });
+        pauseNextRead = true;
+        const claim = first.paymentRequests.incoming.claimPayload(request, payload);
+        try {
+          await Promise.race([paused.promise, claim]);
+          await second.paymentRequests.incoming.recovery.run();
+        } finally {
+          resume.resolve();
+        }
+        const result = await claim;
+        expect(result.attempt.state).toBe('finalized');
+        expect(result.attempt.receiveOperationId).toBe(result.receiveOperation?.id);
+        expect(await repositories.receiveOperationRepository.getByMintUrl(mintUrl)).toHaveLength(1);
+        expect(
+          await repositories.paymentRequestReceiveAttemptRepository.getByRequestOperationId(
+            request.id,
+          ),
+        ).toHaveLength(1);
+        expect((await first.wallet.balances.total({ units: [unit] })).spendable.toString()).toBe(
+          '7',
+        );
+      }, 30000);
+    }
+
     it('deduplicates in-flight and settled deliveries and detects message ID conflicts', async () => {
       const firstPayload = await fundedPayload();
       const otherPayload = await fundedPayload();
