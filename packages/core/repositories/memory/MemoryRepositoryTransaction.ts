@@ -1,3 +1,5 @@
+import { Amount } from '@cashu/cashu-ts';
+
 /** Internal protocol that lets each memory repository own its transaction-state representation. */
 export const COPY_MEMORY_REPOSITORY_STATE = Symbol('copyMemoryRepositoryState');
 
@@ -11,6 +13,9 @@ export function cloneMemoryValue<T>(value: T, seen = new Map<object, unknown>())
   if (seen.has(value)) return seen.get(value) as T;
 
   if (value instanceof Date) return new Date(value.getTime()) as T;
+  // Amount is immutable, so sharing the instance cannot change stored state. cashu-ts also accepts
+  // only Amount instances it constructed, which rules out a prototype copy.
+  if (value instanceof Amount) return value;
   // Buffer overrides slice() to return a view over the same storage; use the intrinsic copy.
   if (value instanceof Uint8Array) return Uint8Array.prototype.slice.call(value) as T;
 
