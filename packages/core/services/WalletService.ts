@@ -1,6 +1,7 @@
 import {
   isBlsKeyset,
   Mint,
+  normalizeProofAmounts,
   Wallet,
   type MintKeys,
   type MintKeyset,
@@ -231,6 +232,8 @@ export class WalletService {
           this.logger && this.logger.child ? this.logger.child({ module: 'Wallet' }) : undefined,
         bip39seed: seed,
         outputDataCreator: this.outputDataCreator,
+        // Callers hand this wallet inputs they already committed to. Spend exactly those, in order.
+        selectProofs: (proofs) => ({ keep: [], send: normalizeProofAmounts(proofs) }),
       },
     );
     wallet.loadMintFromCache(mint.mintInfo, cache);
