@@ -5,7 +5,7 @@ import { HttpResponseError, NetworkError, MintOperationError } from '../models/E
 type RequestFunction = <T>(
   options: {
     endpoint: string;
-    requestBody?: Record<string, unknown>;
+    requestBody?: Record<string, unknown> | string;
     headers?: Record<string, string>;
   } & Omit<RequestInit, 'body' | 'headers'>,
 ) => Promise<T>;
@@ -86,7 +86,7 @@ export class RequestRateLimiter {
   private performFetch = async <T>(
     options: {
       endpoint: string;
-      requestBody?: Record<string, unknown>;
+      requestBody?: Record<string, unknown> | string;
       headers?: Record<string, string>;
     } & Omit<RequestInit, 'body' | 'headers'>,
   ): Promise<T> => {
@@ -101,14 +101,21 @@ export class RequestRateLimiter {
     let body: unknown | undefined = undefined;
     if (requestBody !== undefined) {
       finalHeaders.set('Content-Type', 'application/json');
-      body = stringifyJson(requestBody);
+      // cashu-ts may hand over a body it already serialized (NUT-22 blind auth signs those exact
+      // bytes), so a string is sent verbatim and only an object is serialized here.
+      body = typeof requestBody === 'string' ? requestBody : stringifyJson(requestBody);
     }
 
     // Log request payload
     this.logger?.debug('Mint request', {
       method: init.method || 'GET',
       endpoint,
-      requestBody: requestBody ? stringifyJson(requestBody, 2) : undefined,
+      requestBody:
+        typeof requestBody === 'string'
+          ? requestBody
+          : requestBody
+            ? stringifyJson(requestBody, 2)
+            : undefined,
     });
 
     let response: Response;
