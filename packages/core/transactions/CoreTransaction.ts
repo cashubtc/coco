@@ -60,7 +60,7 @@ export interface CoreTransaction {
   readonly meltQuotes: Pick<MeltQuoteRepository, 'getMeltQuote' | 'getMeltQuoteById'>;
   readonly receiveOperations: Pick<
     ReceiveOperationRepository,
-    'getById' | 'create' | 'transition' | 'delete'
+    'getById' | 'getByPaymentRequestAttemptId' | 'create' | 'transition' | 'delete'
   >;
   readonly paymentRequestReceiveOperations: Pick<
     PaymentRequestReceiveOperationRepository,
@@ -68,6 +68,9 @@ export interface CoreTransaction {
   >;
   readonly paymentRequestReceiveAttempts: Pick<
     PaymentRequestReceiveAttemptRepository,
+    | 'getById'
+    | 'update'
+    | 'delete'
     | 'getByReceiveOperationId'
     | 'getByRequestOperationId'
     | 'getByPayloadHash'

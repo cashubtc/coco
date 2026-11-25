@@ -1,8 +1,17 @@
 import type { Amount } from '@cashu/cashu-ts';
-import { PaymentRequestError } from '@core/models/Error.ts';
+import { prepareReceive, cancelReceive } from '../receive/ReceiveTransitions.ts';
+import type {
+  PrepareReceiveInput,
+  PrepareReceiveResult,
+} from '../receive/ReceiveTransitionTypes.ts';
+import { OperationInProgressError, PaymentRequestError } from '@core/models/Error.ts';
 import type { CoreTransaction } from '@core/transactions/CoreTransaction.ts';
 import { defineTransition } from '@core/transactions/Transition.ts';
-import { singleUseClaimConflict } from './PaymentRequestReceiveOperation.ts';
+import {
+  amountsFromReceive,
+  assertPaymentRequestNetAmount,
+  singleUseClaimConflict,
+} from './PaymentRequestReceiveOperation.ts';
 import type {
   ParsedPaymentRequestPayload,
   PaymentRequestReceiveAttempt,
@@ -164,5 +173,119 @@ export const acceptPaymentRequestDelivery = defineTransition(
     };
     await attempts.create(attempt);
     return { kind: conflict ? 'stored' : 'accepted', operation, attempt };
+  },
+);
+
+type AttemptLookup = { attemptId: string; findLegacyChild: boolean };
+
+export const loadPaymentRequestAttempt = defineTransition(async (tx, input: AttemptLookup) => {
+  const attempt = await tx.paymentRequestReceiveAttempts.getById(input.attemptId);
+  if (!attempt) return null;
+  const operation = await tx.paymentRequestReceiveOperations.getById(attempt.requestOperationId);
+  const linked = attempt.receiveOperationId
+    ? await tx.receiveOperations.getById(attempt.receiveOperationId)
+    : null;
+  // A freshly accepted delivery can only acquire a child together with its link.
+  // Recovery also recognizes older wallets that committed the child first.
+  const child =
+    !linked && input.findLegacyChild
+      ? await tx.receiveOperations.getByPaymentRequestAttemptId(attempt.id)
+      : linked;
+  return { attempt, operation, child };
+});
+
+export const beginPaymentRequestAttempt = defineTransition(
+  async (tx, input: AttemptLookup & { updatedAt: number }) => {
+    const stored = await tx.perform(loadPaymentRequestAttempt, input);
+    if (stored?.attempt.state !== 'received') return stored;
+    const attempt = { ...stored.attempt, state: 'validating' as const, updatedAt: input.updatedAt };
+    await tx.paymentRequestReceiveAttempts.update(attempt);
+    return { ...stored, attempt };
+  },
+);
+
+type LinkInput = AttemptLookup & { updatedAt: number; preparation?: PrepareReceiveInput };
+
+export const prepareAndLinkPaymentRequestChild = defineTransition(async (tx, input: LinkInput) => {
+  const stored = await tx.perform(loadPaymentRequestAttempt, input);
+  if (!stored || stored.attempt.state === 'rejected' || stored.attempt.state === 'finalized')
+    return null;
+  const { attempt, operation } = stored;
+  if (!operation) throw new PaymentRequestError('Payment request receive operation was not found');
+  let child = stored.child;
+  let prepared: PrepareReceiveResult | undefined;
+  if (!child || child.state === 'init') {
+    if (!input.preparation || (child && child.id !== input.preparation.operation.id))
+      throw new OperationInProgressError(attempt.id);
+    if (operation.state !== 'active')
+      throw new PaymentRequestError(
+        `Cannot prepare payment for request in state '${operation.state}'`,
+      );
+    if (operation.singleUse) {
+      const conflict = singleUseClaimConflict(
+        await tx.paymentRequestReceiveAttempts.getByRequestOperationId(operation.id),
+        attempt.id,
+      );
+      if (conflict) throw new PaymentRequestError(conflict);
+    }
+    prepared = await tx.perform(prepareReceive, input.preparation);
+    child = prepared.operation;
+  }
+  const { fee, netAmount } = amountsFromReceive(child);
+  if (child.state === 'prepared') assertPaymentRequestNetAmount(operation.amount, netAmount);
+  if (
+    attempt.state === 'receiving' &&
+    attempt.receiveOperationId === child.id &&
+    attempt.fee?.equals(fee) &&
+    attempt.netAmount?.equals(netAmount)
+  )
+    return { attempt, child, prepared };
+  const linked: PaymentRequestReceiveAttempt = {
+    ...attempt,
+    state: 'receiving',
+    receiveOperationId: child.id,
+    fee,
+    netAmount,
+    updatedAt: input.updatedAt,
+  };
+  await tx.paymentRequestReceiveAttempts.update(linked);
+  return { attempt: linked, child, prepared };
+});
+
+/** A competing session may have linked or submitted the child while preflight was running. */
+export const resolvePreSubmissionFailure = defineTransition(
+  async (tx, input: AttemptLookup & { childId?: string; error?: string; updatedAt: number }) => {
+    const stored = await tx.perform(loadPaymentRequestAttempt, input);
+    if (!stored || stored.attempt.state === 'finalized' || stored.attempt.state === 'rejected')
+      return;
+    const { attempt, child } = stored;
+    if (input.error === undefined) {
+      if (!child) await tx.paymentRequestReceiveAttempts.delete(attempt.id);
+      return;
+    }
+    if (
+      child &&
+      (child.id !== input.childId || (child.state !== 'init' && child.state !== 'prepared'))
+    )
+      return;
+    const cancelled = child
+      ? await tx.perform(cancelReceive, {
+          operationId: child.id,
+          updatedAt: input.updatedAt,
+          reason: input.error,
+        })
+      : null;
+    await tx.paymentRequestReceiveAttempts.update({
+      ...attempt,
+      ...(cancelled && {
+        receiveOperationId: cancelled.id,
+        ...amountsFromReceive(cancelled),
+      }),
+      state: 'rejected',
+      payload: undefined,
+      error: input.error,
+      updatedAt: input.updatedAt,
+    });
+    return cancelled;
   },
 );

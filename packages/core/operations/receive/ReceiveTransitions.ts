@@ -231,7 +231,13 @@ export const cancelReceive = defineTransition(
 export const cleanupReceiveInit = defineTransition(
   async (tx, operationId: string): Promise<void> => {
     const current = await tx.receiveOperations.getById(operationId);
-    if (current?.state === 'init') await tx.receiveOperations.delete(operationId);
+    if (current?.state !== 'init') return;
+    const attempt =
+      current.source?.type === 'payment-request'
+        ? await tx.paymentRequestReceiveAttempts.getById(current.source.attemptId)
+        : await tx.paymentRequestReceiveAttempts.getByReceiveOperationId(operationId);
+    if (attempt && attempt.state !== 'rejected' && attempt.state !== 'finalized') return;
+    await tx.receiveOperations.delete(operationId);
   },
 );
 
