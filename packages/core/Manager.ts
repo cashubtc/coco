@@ -34,6 +34,7 @@ import { SendOperationService } from './operations/send/SendOperationService';
 import { MeltOperationService } from './operations/melt/MeltOperationService';
 import { MintOperationService } from './operations/mint/MintOperationService';
 import { CashuReceiveRemote } from './infra/handlers/receive/CashuReceiveRemote.ts';
+import { ReceivePreparation } from './operations/receive/ReceivePreparation.ts';
 import { ReceiveOperationService } from './operations/receive/ReceiveOperationService';
 import { MintScopedLock } from './operations/MintScopedLock';
 import { OperationIdLock } from './operations/OperationIdLock.ts';
@@ -934,18 +935,25 @@ export class Manager {
     const tokenService = new TokenService(mintService, tokenLogger);
 
     const receiveOperationLogger = this.getChildLogger('ReceiveOperationService');
-    const receiveOperationService = new ReceiveOperationService({
-      operations: repositories.receiveOperationRepository,
-      transactionRunner,
-      mintQueries: repositories.mintRepository,
+    const receivePreparationDeps = {
       mintMetadataRefresh: mintService,
-      signer: p2pkSigner,
       loadSeed: () => seedService.getSeed(),
-      remote: new CashuReceiveRemote(this.mintAdapter, this.mintRequestProvider),
       eventBus: this.eventBus,
       logger: receiveOperationLogger,
       mintScopedLock,
-    });
+    };
+    const receivePreparation = new ReceivePreparation(receivePreparationDeps);
+    const receiveOperationService = new ReceiveOperationService(
+      {
+        ...receivePreparationDeps,
+        operations: repositories.receiveOperationRepository,
+        transactionRunner,
+        mintQueries: repositories.mintRepository,
+        signer: p2pkSigner,
+        remote: new CashuReceiveRemote(this.mintAdapter, this.mintRequestProvider),
+      },
+      receivePreparation,
+    );
     const walletRestoreService = new WalletRestoreService(
       receiveOperationService,
       transactionRunner,
@@ -1086,10 +1094,11 @@ export class Manager {
     const paymentRequestReceiveTransportHandlerProvider =
       new PaymentRequestReceiveTransportHandlerProvider();
     const paymentRequestReceiveService = new PaymentRequestReceiveService(
+      transactionRunner,
       paymentRequestReceiveOperationRepository,
       paymentRequestReceiveAttemptRepository,
       receiveOperationService,
-      receiveOperationRepository,
+      receivePreparation,
       mintService,
       paymentRequestReceiveTransportHandlerProvider,
       paymentRequestReceiveLogger,

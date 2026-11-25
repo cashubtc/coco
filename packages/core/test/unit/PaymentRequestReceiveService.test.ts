@@ -18,15 +18,12 @@ import type {
   FinalizedReceiveOperation,
   InitReceiveOperation,
   PreparedReceiveOperation,
-  ReceiveOperation,
   ReceiveOperationSource,
 } from '../../operations/receive/ReceiveOperation';
 import type { ParsedPaymentRequestPayload } from '../../operations/paymentRequestReceive/PaymentRequestReceiveOperation';
-import {
-  MemoryPaymentRequestReceiveAttemptRepository,
-  MemoryPaymentRequestReceiveOperationRepository,
-  MemoryReceiveOperationRepository,
-} from '../../repositories/memory';
+import { MemoryRepositories } from '../../repositories/memory';
+import { testMintKeypairs, testMintKeysetId } from '../fixtures/MintMetadata.ts';
+import { createReceiveEnvironment } from '../fixtures/ReceiveEnvironment.ts';
 import { PaymentRequestReceiveTransportHandlerProvider } from '../../infra/handlers/paymentRequestReceive';
 
 describe('PaymentRequestReceiveService', () => {
@@ -35,9 +32,9 @@ describe('PaymentRequestReceiveService', () => {
     'nprofile1qqsqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgp',
     'zpmhxue69uhhyetvv9ujuar9wd6qymamsk',
   ].join('');
-  let operationRepository: MemoryPaymentRequestReceiveOperationRepository;
-  let attemptRepository: MemoryPaymentRequestReceiveAttemptRepository;
-  let receiveOperationRepository: MemoryReceiveOperationRepository;
+  let operationRepository: MemoryRepositories['paymentRequestReceiveOperationRepository'];
+  let attemptRepository: MemoryRepositories['paymentRequestReceiveAttemptRepository'];
+  let receiveOperationRepository: MemoryRepositories['receiveOperationRepository'];
   let mintService: MintService;
   let receiveOperationService: ReceiveOperationService;
   let transportHandlerProvider: PaymentRequestReceiveTransportHandlerProvider;
@@ -48,7 +45,14 @@ describe('PaymentRequestReceiveService', () => {
       id: 'request-id',
       mint: mintUrl,
       unit: 'sat',
-      proofs: [{ id: 'keyset-id', amount: Amount.from(100), secret: 'secret-1', C: 'C-1' }],
+      proofs: [
+        {
+          id: testMintKeysetId(overrides.unit?.toLowerCase() ?? 'sat'),
+          amount: Amount.from(100),
+          secret: 'secret-1',
+          C: 'C-1',
+        },
+      ],
       ...overrides,
     };
   }
@@ -62,7 +66,7 @@ describe('PaymentRequestReceiveService', () => {
       state: 'prepared',
       mintUrl,
       unit: 'sat',
-      amount: Amount.from(100),
+      amount: Amount.from(101),
       inputProofs: createPayload().proofs,
       fee: Amount.from(1),
       outputData: { keep: [], send: [] },
@@ -89,53 +93,61 @@ describe('PaymentRequestReceiveService', () => {
     };
   }
 
-  beforeEach(() => {
-    operationRepository = new MemoryPaymentRequestReceiveOperationRepository();
-    attemptRepository = new MemoryPaymentRequestReceiveAttemptRepository();
-    receiveOperationRepository = new MemoryReceiveOperationRepository();
+  beforeEach(async () => {
+    const repositories = new MemoryRepositories();
+    const env = await createReceiveEnvironment(repositories);
+    await repositories.keysetRepository.addKeyset({
+      mintUrl,
+      unit: 'usd',
+      id: testMintKeysetId('usd'),
+      active: true,
+      feePpk: 0,
+      keypairs: testMintKeypairs,
+    });
+    let childCount = 0;
+    operationRepository = repositories.paymentRequestReceiveOperationRepository;
+    attemptRepository = repositories.paymentRequestReceiveAttemptRepository;
+    receiveOperationRepository = repositories.receiveOperationRepository;
     mintService = {
       isTrustedMint: mock(async () => true),
     } as unknown as MintService;
     receiveOperationService = {
-      init: mock(async (_token, source?: ReceiveOperationSource): Promise<InitReceiveOperation> => {
-        return {
-          id: 'receive-op-1',
-          state: 'init',
-          mintUrl,
-          unit: 'sat',
-          amount: Amount.from(100),
-          inputProofs: createPayload().proofs,
-          source,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-        };
-      }),
-      prepare: mock(async (operation: InitReceiveOperation): Promise<PreparedReceiveOperation> => {
-        return {
-          ...operation,
-          state: 'prepared',
-          fee: Amount.from(1),
-          outputData: { keep: [], send: [] },
-        };
-      }),
-      execute: mock(
-        async (operation: PreparedReceiveOperation): Promise<FinalizedReceiveOperation> => {
+      init: mock(
+        async (
+          token: PaymentRequestPayload,
+          source?: ReceiveOperationSource,
+        ): Promise<InitReceiveOperation> => {
           return {
-            ...operation,
-            state: 'finalized',
+            id: 'receive-op-' + ++childCount,
+            state: 'init',
+            mintUrl,
+            unit: token.unit,
+            amount: Amount.from(100),
+            inputProofs: token.proofs,
+            source,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
           };
         },
       ),
-      getOperation: mock(async () => null),
+      execute: mock(
+        async (operation: PreparedReceiveOperation): Promise<FinalizedReceiveOperation> => {
+          const finalized = { ...operation, state: 'finalized' as const };
+          await receiveOperationRepository.update(finalized);
+          return finalized;
+        },
+      ),
+      getOperation: mock((id: string) => receiveOperationRepository.getById(id)),
       recoverPendingOperations: mock(async () => undefined),
     } as unknown as ReceiveOperationService;
     transportHandlerProvider = new PaymentRequestReceiveTransportHandlerProvider();
 
     service = new PaymentRequestReceiveService(
+      env.transactionRunner,
       operationRepository,
       attemptRepository,
       receiveOperationService,
-      receiveOperationRepository,
+      env.preparation,
       mintService,
       transportHandlerProvider,
     );
@@ -553,8 +565,8 @@ describe('PaymentRequestReceiveService', () => {
     expect(result.operation.state).toBe('completed');
     expect(result.attempt.state).toBe('finalized');
     expect(result.attempt.receiveOperationId).toBe('receive-op-1');
-    expect(result.attempt.fee?.equals(Amount.from(1))).toBe(true);
-    expect(result.attempt.netAmount?.equals(Amount.from(99))).toBe(true);
+    expect(result.attempt.fee?.equals(Amount.zero())).toBe(true);
+    expect(result.attempt.netAmount?.equals(Amount.from(100))).toBe(true);
     expect(receiveOperationService.init).toHaveBeenCalledWith(
       expect.objectContaining({ mint: mintUrl }),
       expect.objectContaining({
@@ -1214,9 +1226,7 @@ describe('PaymentRequestReceiveService', () => {
       ...createPreparedReceiveOperation({ id: 'receive-op-finalized' }),
       state: 'finalized',
     };
-    (receiveOperationService.getOperation as unknown as ReturnType<typeof mock>).mockResolvedValue(
-      finalizedReceive,
-    );
+    await receiveOperationRepository.create(finalizedReceive);
 
     await service.recoverPendingAttempts();
 
@@ -1230,44 +1240,47 @@ describe('PaymentRequestReceiveService', () => {
     );
   });
 
-  it('resumes stored pre-child payloads during recovery', async () => {
-    const operation = await service.create({
-      amount: Amount.from(100),
-      mints: [mintUrl],
-      requestId: 'request-id',
-    });
-    const payload = createPayload();
-    const payloadHash = (
-      service as unknown as {
-        hashPayload(payload: ParsedPaymentRequestPayload): string;
-      }
-    ).hashPayload(payload);
-    const now = Date.now();
-    await attemptRepository.create({
-      id: 'attempt-1',
-      requestOperationId: operation.id,
-      requestId: operation.requestId,
-      transport: 'inband',
-      payloadHash,
-      mintUrl,
-      unit: 'sat',
-      grossAmount: Amount.from(100),
-      state: 'validating',
-      payload,
-      createdAt: now,
-      updatedAt: now,
-    });
+  it.each(['received', 'validating'] as const)(
+    'resumes a stored %s payload during recovery',
+    async (state) => {
+      const operation = await service.create({
+        amount: Amount.from(100),
+        mints: [mintUrl],
+        requestId: 'request-id',
+      });
+      const payload = createPayload();
+      const payloadHash = (
+        service as unknown as {
+          hashPayload(payload: ParsedPaymentRequestPayload): string;
+        }
+      ).hashPayload(payload);
+      const now = Date.now();
+      await attemptRepository.create({
+        id: 'attempt-1',
+        requestOperationId: operation.id,
+        requestId: operation.requestId,
+        transport: 'inband',
+        payloadHash,
+        mintUrl,
+        unit: 'sat',
+        grossAmount: Amount.from(100),
+        state,
+        payload,
+        createdAt: now,
+        updatedAt: now,
+      });
 
-    await service.recoverPendingAttempts();
+      await service.recoverPendingAttempts();
 
-    const storedAttempt = await attemptRepository.getById('attempt-1');
-    const storedOperation = await operationRepository.getById(operation.id);
-    expect(storedAttempt?.state).toBe('finalized');
-    expect(storedAttempt?.receiveOperationId).toBe('receive-op-1');
-    expect(storedAttempt?.payload).toBeUndefined();
-    expect(storedOperation?.state).toBe('completed');
-    expect(receiveOperationService.init).toHaveBeenCalledTimes(1);
-  });
+      const storedAttempt = await attemptRepository.getById('attempt-1');
+      const storedOperation = await operationRepository.getById(operation.id);
+      expect(storedAttempt?.state).toBe('finalized');
+      expect(storedAttempt?.receiveOperationId).toBe('receive-op-1');
+      expect(storedAttempt?.payload).toBeUndefined();
+      expect(storedOperation?.state).toBe('completed');
+      expect(receiveOperationService.init).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it('drops incomplete pre-child attempts during recovery so redelivery can retry', async () => {
     const operation = await service.create({
@@ -1347,9 +1360,6 @@ describe('PaymentRequestReceiveService', () => {
       state: 'finalized',
     };
     await receiveOperationRepository.create(finalizedReceive);
-    (receiveOperationService.getOperation as unknown as ReturnType<typeof mock>).mockResolvedValue(
-      finalizedReceive,
-    );
 
     await service.recoverPendingAttempts();
 
@@ -1466,17 +1476,17 @@ describe('PaymentRequestReceiveService', () => {
       createdAt: now,
       updatedAt: now,
     });
-    (
-      receiveOperationService.getOperation as unknown as ReturnType<typeof mock>
-    ).mockResolvedValueOnce(preparedReceive);
+    await receiveOperationRepository.create(preparedReceive);
 
     await service.recoverPendingAttempts();
 
-    expect(receiveOperationService.execute).toHaveBeenCalledWith(preparedReceive);
+    expect(receiveOperationService.execute).toHaveBeenCalledWith(
+      expect.objectContaining({ id: preparedReceive.id }),
+    );
     const storedAttempt = await attemptRepository.getById('attempt-1');
     expect(storedAttempt?.state).toBe('finalized');
     expect(storedAttempt?.fee?.equals(Amount.from(1))).toBe(true);
-    expect(storedAttempt?.netAmount?.equals(Amount.from(99))).toBe(true);
+    expect(storedAttempt?.netAmount?.equals(Amount.from(100))).toBe(true);
     expect(storedAttempt?.payload).toBeUndefined();
     const storedOperation = await operationRepository.getById(operation.id);
     expect(storedOperation?.state).toBe('completed');
@@ -1495,7 +1505,6 @@ describe('PaymentRequestReceiveService', () => {
       }
     ).hashPayload(payload);
     const initReceive = createInitReceiveOperation();
-    let currentReceive: ReceiveOperation | null = initReceive;
     const order: string[] = [];
     const now = Date.now();
     await attemptRepository.create({
@@ -1513,27 +1522,12 @@ describe('PaymentRequestReceiveService', () => {
       createdAt: now,
       updatedAt: now,
     });
-    (receiveOperationService.getOperation as unknown as ReturnType<typeof mock>).mockImplementation(
-      async () => currentReceive,
-    );
-    (receiveOperationService.prepare as unknown as ReturnType<typeof mock>).mockImplementation(
-      async (receiveOperation: InitReceiveOperation): Promise<PreparedReceiveOperation> => {
-        order.push('prepare');
-        const preparedReceive = {
-          ...receiveOperation,
-          state: 'prepared' as const,
-          fee: Amount.from(1),
-          outputData: { keep: [], send: [] },
-        };
-        currentReceive = preparedReceive;
-        return preparedReceive;
-      },
-    );
+    await receiveOperationRepository.create(initReceive);
     (receiveOperationService.execute as unknown as ReturnType<typeof mock>).mockImplementation(
       async (receiveOperation: PreparedReceiveOperation): Promise<FinalizedReceiveOperation> => {
         order.push('execute');
         const finalizedReceive = { ...receiveOperation, state: 'finalized' as const };
-        currentReceive = finalizedReceive;
+        await receiveOperationRepository.update(finalizedReceive);
         return finalizedReceive;
       },
     );
@@ -1541,14 +1535,16 @@ describe('PaymentRequestReceiveService', () => {
       receiveOperationService.recoverPendingOperations as unknown as ReturnType<typeof mock>
     ).mockImplementation(async () => {
       order.push('generic');
-      if (currentReceive?.state === 'init') {
-        currentReceive = null;
-      }
+      if ((await receiveOperationRepository.getById(initReceive.id))?.state === 'init')
+        await receiveOperationRepository.delete(initReceive.id);
     });
 
     await service.recoverPendingAttempts();
 
-    expect(order).toEqual(['prepare', 'execute', 'generic']);
+    expect(order).toEqual(['execute', 'generic']);
+    expect(await receiveOperationRepository.getById(initReceive.id)).toMatchObject({
+      state: 'finalized',
+    });
     const storedAttempt = await attemptRepository.getById('attempt-1');
     expect(storedAttempt?.state).toBe('finalized');
     expect(storedAttempt?.payload).toBeUndefined();
@@ -1556,7 +1552,7 @@ describe('PaymentRequestReceiveService', () => {
     expect(storedOperation?.state).toBe('completed');
   });
 
-  it('drops receiving attempts with missing child operations so redelivery can retry', async () => {
+  it.each([true, false])('recovers a missing child with saved payload = %s', async (hasPayload) => {
     const operation = await service.create({
       amount: Amount.from(100),
       mints: [mintUrl],
@@ -1580,17 +1576,18 @@ describe('PaymentRequestReceiveService', () => {
       grossAmount: Amount.from(100),
       state: 'receiving',
       receiveOperationId: 'missing-receive-op',
-      payload,
+      payload: hasPayload ? payload : undefined,
       createdAt: now,
       updatedAt: now,
     });
 
     await service.recoverPendingAttempts();
 
-    expect(await attemptRepository.getById('attempt-1')).toBeNull();
+    if (hasPayload) expect((await attemptRepository.getById('attempt-1'))?.state).toBe('finalized');
+    else expect(await attemptRepository.getById('attempt-1')).toBeNull();
 
     const result = await service.claimPayload(operation.id, payload);
-    expect(result.attempt.id).not.toBe('attempt-1');
+    expect(result.attempt.id === 'attempt-1').toBe(hasPayload);
     expect(result.attempt.state).toBe('finalized');
   });
 
@@ -1753,9 +1750,10 @@ describe('PaymentRequestReceiveService', () => {
       createdAt: now,
       updatedAt: now,
     });
-    (receiveOperationService.getOperation as unknown as ReturnType<typeof mock>)
-      .mockResolvedValueOnce(preparedReceive)
-      .mockResolvedValueOnce(rolledBackReceive);
+    await receiveOperationRepository.create(preparedReceive);
+    (
+      receiveOperationService.getOperation as unknown as ReturnType<typeof mock>
+    ).mockResolvedValueOnce(rolledBackReceive);
     (receiveOperationService.execute as unknown as ReturnType<typeof mock>).mockRejectedValueOnce(
       new Error('receive failed'),
     );

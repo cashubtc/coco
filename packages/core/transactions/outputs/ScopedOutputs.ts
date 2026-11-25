@@ -12,6 +12,14 @@ import { ProofValidationError } from '@core/models/Error.ts';
 import type { CounterRepository, KeysetRepository } from '@core/repositories';
 import { normalizeMintUrl, serializeOutputData, type SerializedOutputData } from '@core/utils.ts';
 
+/** The selected issuing keys changed between preflight and the allocation transaction. */
+export class StaleOutputKeysetError extends ProofValidationError {
+  constructor(keysetId: string) {
+    super(`Active keyset ${keysetId} changed after preflight`);
+    this.name = 'StaleOutputKeysetError';
+  }
+}
+
 export interface AllocateOutputsInput {
   mintUrl: string;
   unit: string;
@@ -101,7 +109,7 @@ export class RepositoryScopedOutputs implements ScopedOutputs {
       JSON.stringify(Object.entries(keyset.keypairs).sort()) !==
         JSON.stringify(Object.entries(activeKeys.keys).sort())
     ) {
-      throw new ProofValidationError(`Active keyset ${activeKeys.id} changed after preflight`);
+      throw new StaleOutputKeysetError(activeKeys.id);
     }
   }
 
