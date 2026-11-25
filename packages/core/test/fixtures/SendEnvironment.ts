@@ -59,7 +59,7 @@ export async function createSendEnvironment(units = ['sat']) {
   const eventBus = new EventBus<CoreEvents>();
   const remote = createSendRemoteDouble();
   const metadataRemote = createMintMetadataRemoteDouble();
-  const loadSeed = mock(async () => new Uint8Array(32).fill(1));
+  const loadSeed = mock(async () => new Uint8Array(64).fill(1));
   const logger = {
     debug: mock(() => {}),
     info: mock(() => {}),

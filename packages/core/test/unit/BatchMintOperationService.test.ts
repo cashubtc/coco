@@ -63,7 +63,7 @@ describe('Batch Mint Operations', () => {
         h.mint.mintUrl,
         operation.id,
       );
-      expect(proofs.reduce((sum, p) => sum + Number(p.amount), 0)).toBe(30);
+      expect(proofs.reduce((sum, p) => sum + p.amount.toNumber(), 0)).toBe(30);
       expect(proofs.every((p) => p.state === 'ready')).toBe(true);
       expect(h.eventNames()).toEqual(['batch-mint-op:executing', 'batch-mint-op:finalized']);
     });
@@ -454,7 +454,7 @@ describe('Batch Mint Operations', () => {
         expect(recoveryPaths(start)).toEqual([batchPath, '/v1/restore']);
         expect(h.mint.batchRequests[1]!.outputs).toEqual(h.mint.batchRequests[0]!.outputs);
         expect(
-          (await savedProofs(executing.id)).reduce((sum, p) => sum + Number(p.amount), 0),
+          (await savedProofs(executing.id)).reduce((sum, p) => sum + p.amount.toNumber(), 0),
         ).toBe(30);
         expect(h.eventNames()).toEqual(['batch-mint-op:executing', 'batch-mint-op:finalized']);
         const requests = h.mint.requests.length;
@@ -567,9 +567,9 @@ describe('Batch Mint Operations', () => {
       expect((await h.coco.ops.mint.batch.get(executing.id))?.state).toBe('finalized');
       expect(h.mint.quotes.get('a')!.amountIssued).toBe(10);
       expect(h.mint.quotes.get('b')!.amountIssued).toBe(20);
-      expect((await savedProofs(executing.id)).reduce((sum, p) => sum + Number(p.amount), 0)).toBe(
-        30,
-      );
+      expect(
+        (await savedProofs(executing.id)).reduce((sum, p) => sum + p.amount.toNumber(), 0),
+      ).toBe(30);
     });
 
     for (const behavior of ['partial', 'unavailable'] as const) {

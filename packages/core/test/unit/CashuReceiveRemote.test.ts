@@ -100,7 +100,7 @@ function environment() {
     { getRequestFn: () => request },
   );
   const outputData = serializeOutputData({
-    keep: OutputData.createDeterministicData(7, new Uint8Array(32).fill(1), 0, keys),
+    keep: OutputData.createDeterministicData(7, new Uint8Array(64).fill(1), 0, keys),
     send: [],
   });
   const inputProofs: Proof[] = [

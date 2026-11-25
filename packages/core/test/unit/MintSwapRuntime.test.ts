@@ -421,7 +421,7 @@ describe('Mint Swap Manager runtime', () => {
     await repo.mintSwap.operationRepository.create(mintSwapFixtures().needs_attention);
     const manager = await initializeCoco({
       repo,
-      seedGetter: async () => new Uint8Array(32),
+      seedGetter: async () => new Uint8Array(64),
       processors: { mintSwapOperationProcessor: { disabled: true } },
     });
     managers.push(manager);
@@ -431,7 +431,7 @@ describe('Mint Swap Manager runtime', () => {
   });
 
   it('rejects malformed processor configuration before seed/quote effects', async () => {
-    const seed = mock(async () => new Uint8Array(32));
+    const seed = mock(async () => new Uint8Array(64));
     await expect(
       initializeCoco({
         repo: new MemoryRepositories(),

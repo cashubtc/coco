@@ -168,7 +168,7 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
       quoteId: 'quote-1',
       unit: 'sat',
       activeKeys: { id: keysetId, unit: 'sat', keys: testMintKeypairs },
-      seed: new Uint8Array(32).fill(1),
+      seed: new Uint8Array(64).fill(1),
       now: 1_000,
     };
   }
@@ -561,7 +561,7 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
         meltOperationQueries: repositories.meltOperationRepository,
         proofQueries: repositories.proofRepository,
         transactionRunner: runner,
-        loadSeed: async () => new Uint8Array(32),
+        loadSeed: async () => new Uint8Array(64),
         quoteLifecycle,
         mintService,
         walletService,
@@ -1141,7 +1141,7 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
       tx.perform(prepareMelt, {
         ...input('pending-paid-race'),
         activeKeys,
-        seed: new Uint8Array(32).fill(9),
+        seed: new Uint8Array(64).fill(9),
       }),
     );
     expect(prepared.operation.needsSwap).toBe(true);
@@ -1249,7 +1249,7 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
       meltOperationQueries: repositories.meltOperationRepository,
       proofQueries: repositories.proofRepository,
       transactionRunner: observedRunner,
-      loadSeed: async () => new Uint8Array(32),
+      loadSeed: async () => new Uint8Array(64),
       quoteLifecycle: {
         requireMeltQuoteRefForPrepare: getMeltQuoteById,
         getMeltQuote: (url, method, quoteId) =>
@@ -1524,7 +1524,7 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
           amount: Amount.from(4),
           unit: 'sat',
           activeKeys: { id: keysetId, unit: 'sat', keys: testMintKeypairs },
-          seed: new Uint8Array(32).fill(2),
+          seed: new Uint8Array(64).fill(2),
           now: 1_000,
         });
         throw new Error('parent composition failed');
