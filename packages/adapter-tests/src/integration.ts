@@ -1533,7 +1533,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
             finalizedData?: { preimage?: string };
           };
           const meltQuote = await createTestMint(mintUrl).checkMeltQuoteBolt11(prepared.quoteId);
-          const expectedPreimage = meltQuote.payment_preimage ?? undefined;
+          const expectedPreimage = meltQuote.payment_preimage || undefined;
           expect(settlement.changeAmount).toBeDefined();
           expect(settlement.effectiveFee).toBeDefined();
           expect(settlement.finalizedData?.preimage || undefined).toBe(expectedPreimage);
@@ -1573,7 +1573,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
               finalizedData?: { preimage?: string };
             };
             const meltQuote = await createTestMint(mintUrl).checkMeltQuoteBolt11(refreshed.quoteId);
-            const expectedPreimage = meltQuote.payment_preimage ?? undefined;
+            const expectedPreimage = meltQuote.payment_preimage || undefined;
             expect(operationAfterRetry!.state).toBe('finalized');
             expect(settlement.changeAmount).toBeDefined();
             expect(settlement.effectiveFee).toBeDefined();

@@ -414,7 +414,7 @@ Trust changes, including `addMint()` with a different `trusted` value for a Know
 before Coco refreshes stale metadata. If that refresh fails, the trust change still succeeds and
 publishes the stored metadata; only a mint with no stored metadata propagates the refresh failure.
 
-Coco never loads a mint's keysets inside an operation. When a mint rejects a swap, a mint or a
+Outside Sweep, Coco never loads a mint's keysets inside an operation. When a mint rejects a swap, a mint or a
 batch mint for its keyset (a NUT-00 code from 12000 to 12999), the operation reports the mint's
 own error and ends as it would for any such rejection; once that outcome is stored, Coco fetches
 the mint's current metadata so the next operation prepares on keysets the mint accepts. This

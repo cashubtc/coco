@@ -1,6 +1,6 @@
 import { Amount, CTSError, type Proof } from '@cashu/cashu-ts';
-import { unwrapKeysetRejection } from '@core/infra/KeysetRejection.ts';
 import { bytesToHex } from '@noble/curves/utils.js';
+import { unwrapKeysetRejection } from '@core/infra/KeysetRejection.ts';
 import type { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
 import { restoreOutputProofs } from '../../infra/ProofRestore.ts';

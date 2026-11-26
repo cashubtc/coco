@@ -146,7 +146,7 @@ export class WalletRestoreService {
   ): Promise<void> {
     mintUrl = normalizeMintUrl(mintUrl);
     const normalizedUnit = normalizeUnit(unit, { defaultUnit: DEFAULT_UNIT });
-    const { proofs, lastCounterWithSignature } = await this.replayKeyset(wallet, keysetId);
+    const { proofs, lastCounterWithSignature } = await this.scanKeyset(wallet, keysetId);
     // All remote work completes before opening the local transaction.
     const states = proofs.length ? await wallet.checkProofsStates(proofs) : [];
     if (
@@ -204,14 +204,14 @@ export class WalletRestoreService {
   }
 
   /**
-   * Replay the keyset's outputs in counter order until the gap limit of unissued counters. Spent
+   * Scan the keyset's outputs in counter order until the gap limit of unissued counters. Spent
    * outputs are returned too: Restore needs them to correct stored proofs and to detect a conflict
    * with a stored proof. cashu-ts `batchRestore` drops them, so this uses the raw NUT-09 replay and
    * scans as `batchRestore` did before cashu-ts 5.0.0-rc.13: fixed waves of requests in flight,
    * every batch of a wave used, and a stop after enough empty batches in a row to cover the gap
    * limit.
    */
-  private async replayKeyset(
+  private async scanKeyset(
     wallet: Wallet,
     keysetId: string,
   ): Promise<{ proofs: Proof[]; lastCounterWithSignature?: number }> {

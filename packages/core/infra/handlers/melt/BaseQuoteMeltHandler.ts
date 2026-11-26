@@ -1,5 +1,4 @@
 import { Amount } from '@cashu/cashu-ts';
-import { unwrapKeysetRejection } from '@core/infra/KeysetRejection.ts';
 import type {
   MeltQuoteBolt11Response,
   MeltQuoteBolt12Response,
@@ -8,6 +7,7 @@ import type {
   Proof,
   SerializedBlindedSignature,
 } from '@cashu/cashu-ts';
+import { unwrapKeysetRejection } from '@core/infra/KeysetRejection.ts';
 import type {
   CreateMeltQuoteContext,
   ExecuteMeltContext,
