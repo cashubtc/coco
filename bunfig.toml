@@ -1,4 +1,4 @@
 [install]
 # Only resolve npm package versions that have been available for at least 7 days.
 minimumReleaseAge = 604800
-minimumReleaseAgeExcludes = ["@cashu/cashu-ts"]
+minimumReleaseAgeExcludes = ["@cashu/cashu-ts", "fake-bolt11"]
