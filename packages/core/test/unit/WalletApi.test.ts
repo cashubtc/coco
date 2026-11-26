@@ -8,7 +8,7 @@ import { WalletRestoreService } from '../../services/WalletRestoreService';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { SweepKeysetResult } from '../../models/Sweep.ts';
-import { UnknownMintError } from '../../models/Error';
+import { ProofValidationError, UnknownMintError } from '../../models/Error';
 import { getEncodedToken, OutputData, PaymentRequest } from '@cashu/cashu-ts';
 import type { Proof } from '@cashu/cashu-ts';
 import type { ReceiveOperationService } from '../../operations/receive/ReceiveOperationService';
@@ -257,6 +257,25 @@ describe('WalletApi - Trust Enforcement', () => {
   });
 
   describe('sweep', () => {
+    it.each([
+      ['a 16-byte seed', new Uint8Array(16).fill(1)],
+      ['a 63-byte seed', new Uint8Array(63).fill(1)],
+      ['a 65-byte seed', new Uint8Array(65).fill(1)],
+      ['a seed that is not a Uint8Array', Array.from({ length: 64 }, () => 1)],
+    ])('rejects %s before it touches any keyset', async (_name, seed) => {
+      mockWalletRestoreService.sweepKeyset = mock(async () => {
+        throw new Error('not reached');
+      });
+      const error = await walletApi
+        .sweep(testMintUrl, seed as unknown as Uint8Array)
+        .catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(ProofValidationError);
+      expect((error as Error).message).toBe('Sweep seed must be a 64-byte Uint8Array');
+      expect(mockMintService.addMintByUrl).not.toHaveBeenCalled();
+      expect(mockWalletRestoreService.sweepKeyset).not.toHaveBeenCalled();
+    });
+
     it('sweeps only requested units when a unit filter is provided', async () => {
       const bip39seed = new Uint8Array(64).fill(1);
       mockMintService.addMintByUrl.mockImplementation(async () => ({

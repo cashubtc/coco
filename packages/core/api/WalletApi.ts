@@ -15,6 +15,7 @@ import type { Logger } from '../logging/Logger.ts';
 import type { BalanceQueries } from '../proofs/BalanceQueries.ts';
 import { WalletBalancesApi } from './WalletBalancesApi.ts';
 import type { SweepReport } from '../models/Sweep.ts';
+import { ProofValidationError } from '../models/Error.ts';
 import { normalizeMintUrl } from '../utils.ts';
 import { DEFAULT_UNIT, normalizeUnit, normalizeUnitList } from '../amounts.ts';
 
@@ -112,15 +113,20 @@ export class WalletApi {
    * @returns All per-keyset outcomes, even if every keyset fails or remains unresolved.
    * Callers must inspect the report; resolution does not imply a successful transfer.
    * Amounts are scoped to each keyset's unit. Inspect unresolved Receive IDs before retrying.
-   * @throws If input validation or mint setup fails before keyset processing.
+   * @throws If input validation or mint setup fails before keyset processing, including a
+   * `ProofValidationError` for a seed that is not a 64-byte `Uint8Array`.
    * @param mintUrl - The URL of the mint to sweep
-   * @param bip39seed - The BIP39 seed of the wallet to sweep
+   * @param bip39seed - The 64-byte BIP39 seed of the wallet to sweep
    */
   async sweep(
     mintUrl: string,
     bip39seed: Uint8Array,
     options?: WalletSweepOptions,
   ): Promise<SweepReport> {
+    // cashu-ts refuses any other seed per keyset, which would report every keyset as failed.
+    if (!(bip39seed instanceof Uint8Array) || bip39seed.length !== 64) {
+      throw new ProofValidationError('Sweep seed must be a 64-byte Uint8Array');
+    }
     mintUrl = normalizeMintUrl(mintUrl);
     const unitFilter = this.getUnitFilter(options?.units);
     this.logger?.info('Starting sweep', { mintUrl });
