@@ -19,6 +19,7 @@ export class WalletRestoreService {
   private readonly restoreGapLimit = 300;
   private readonly restoreBatchSize = 100;
   private readonly restoreStartCounter = 0;
+  private readonly restoreRequestsInFlight = 4;
 
   constructor(
     private readonly receive: Pick<
@@ -63,7 +64,6 @@ export class WalletRestoreService {
         batchSize: this.restoreBatchSize,
         counter: this.restoreStartCounter,
         keysetId,
-        filterSpent: false,
       });
       const states = proofs.length ? await sweepWallet.checkProofsStates(proofs) : [];
       if (
@@ -144,13 +144,7 @@ export class WalletRestoreService {
   ): Promise<void> {
     mintUrl = normalizeMintUrl(mintUrl);
     const normalizedUnit = normalizeUnit(unit, { defaultUnit: DEFAULT_UNIT });
-    const { proofs, lastCounterWithSignature } = await wallet.batchRestore({
-      gapLimit: this.restoreGapLimit,
-      batchSize: this.restoreBatchSize,
-      counter: this.restoreStartCounter,
-      keysetId,
-      filterSpent: false,
-    });
+    const { proofs, lastCounterWithSignature } = await this.replayKeyset(wallet, keysetId);
     // All remote work completes before opening the local transaction.
     const states = proofs.length ? await wallet.checkProofsStates(proofs) : [];
     if (
@@ -200,6 +194,43 @@ export class WalletRestoreService {
         secrets: [proof.secret],
         state: proof.state,
       });
+  }
+
+  /**
+   * Replay the keyset's outputs in counter order until the gap limit of unissued counters. Spent
+   * outputs are returned too: Restore needs them to correct stored proofs. cashu-ts `batchRestore`
+   * drops them, so this uses the raw NUT-09 replay.
+   */
+  private async replayKeyset(
+    wallet: Wallet,
+    keysetId: string,
+  ): Promise<{ proofs: Proof[]; lastCounterWithSignature?: number }> {
+    const proofs: Proof[] = [];
+    let lastCounterWithSignature: number | undefined;
+    let counter = this.restoreStartCounter;
+    let emptyBatches = 0;
+    const emptyBatchesToStop = Math.ceil(this.restoreGapLimit / this.restoreBatchSize);
+    while (emptyBatches < emptyBatchesToStop) {
+      const starts = Array.from(
+        { length: this.restoreRequestsInFlight },
+        (_, index) => counter + index * this.restoreBatchSize,
+      );
+      // Every batch of a wave is used, also one past the gap limit: its request is already sent.
+      const wave = await Promise.all(
+        starts.map((start) => wallet.restore(start, this.restoreBatchSize, { keysetId })),
+      );
+      for (const batch of wave) {
+        if (batch.lastCounterWithSignature == null) {
+          emptyBatches += 1;
+          continue;
+        }
+        emptyBatches = 0;
+        proofs.push(...batch.proofs);
+        lastCounterWithSignature = batch.lastCounterWithSignature;
+      }
+      counter += starts.length * this.restoreBatchSize;
+    }
+    return { proofs, lastCounterWithSignature };
   }
 
   private async publishCommittedEvent<E extends keyof CoreEvents>(

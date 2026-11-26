@@ -18,6 +18,7 @@ import {
   OutputData,
   Amount,
   type AmountLike,
+  type MintQuoteBolt11Response,
   type OutputConfig,
   type RequestFn,
   type RequestOptions,
@@ -1535,11 +1536,11 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           const expectedPreimage = meltQuote.payment_preimage ?? undefined;
           expect(settlement.changeAmount).toBeDefined();
           expect(settlement.effectiveFee).toBeDefined();
-          expect(settlement.finalizedData?.preimage).toBe(expectedPreimage);
+          expect(settlement.finalizedData?.preimage || undefined).toBe(expectedPreimage);
           expect(operationAfterExecute?.state).toBe('finalized');
           expectAmountEquals(expect, storedSettlement.changeAmount, settlement.changeAmount!);
           expectAmountEquals(expect, storedSettlement.effectiveFee, settlement.effectiveFee!);
-          expect(storedSettlement.finalizedData?.preimage).toBe(expectedPreimage);
+          expect(storedSettlement.finalizedData?.preimage || undefined).toBe(expectedPreimage);
         }
 
         if (executed?.state === 'pending') {
@@ -1576,10 +1577,10 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
             expect(operationAfterRetry!.state).toBe('finalized');
             expect(settlement.changeAmount).toBeDefined();
             expect(settlement.effectiveFee).toBeDefined();
-            expect(settlement.finalizedData?.preimage).toBe(expectedPreimage);
+            expect(settlement.finalizedData?.preimage || undefined).toBe(expectedPreimage);
             expectAmountEquals(expect, storedSettlement.changeAmount, settlement.changeAmount!);
             expectAmountEquals(expect, storedSettlement.effectiveFee, settlement.effectiveFee!);
-            expect(storedSettlement.finalizedData?.preimage).toBe(expectedPreimage);
+            expect(storedSettlement.finalizedData?.preimage || undefined).toBe(expectedPreimage);
           } else if (refreshed.state === 'rolled_back') {
             expect(operationAfterRetry!.state).toBe('rolled_back');
           } else {
@@ -3167,7 +3168,9 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         await senderWallet.loadMint();
 
         // Fund the sender wallet
-        const senderQuote = await senderWallet.createMintQuoteBolt11(100);
+        const senderQuote = await senderWallet.createMintQuote<MintQuoteBolt11Response>('bolt11', {
+          amount: 100,
+        });
         let quoteState = await senderWallet.checkMintQuoteBolt11(senderQuote.quote);
         let attempts = 0;
         while (quoteState.state !== 'PAID' && attempts <= 3) {
@@ -3182,7 +3185,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const sendAmount = 50;
         const { send: p2pkProofs } = await senderWallet.ops
           .send(sendAmount, senderProofs)
-          .asP2PK({ kind: 'P2PK', data: keypair.publicKeyHex })
+          .asLocked({ mainKeys: [keypair.publicKeyHex] })
           .run();
 
         expect(p2pkProofs.length).toBeGreaterThan(0);
@@ -3228,7 +3231,9 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         await senderWallet.loadMint();
 
         // Fund the sender wallet
-        const senderQuote = await senderWallet.createMintQuoteBolt11(100);
+        const senderQuote = await senderWallet.createMintQuote<MintQuoteBolt11Response>('bolt11', {
+          amount: 100,
+        });
         let quoteState = await senderWallet.checkMintQuoteBolt11(senderQuote.quote);
         let attempts = 0;
         while (quoteState.state !== 'PAID' && attempts <= 3) {
@@ -3243,7 +3248,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const sendAmount = 50;
         const { send: p2pkProofs } = await senderWallet.ops
           .send(sendAmount, senderProofs)
-          .asP2PK({ kind: 'P2PK', data: keypair.publicKeyHex })
+          .asLocked({ mainKeys: [keypair.publicKeyHex] })
           .run();
 
         expect(p2pkProofs.length).toBeGreaterThan(0);
@@ -3288,7 +3293,9 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         await senderWallet.loadMint();
 
         // Fund the sender wallet
-        const senderQuote = await senderWallet.createMintQuoteBolt11(100);
+        const senderQuote = await senderWallet.createMintQuote<MintQuoteBolt11Response>('bolt11', {
+          amount: 100,
+        });
         let quoteState = await senderWallet.checkMintQuoteBolt11(senderQuote.quote);
         let attempts = 0;
         while (quoteState.state !== 'PAID' && attempts <= 3) {
@@ -3307,7 +3314,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const fakePublicKey = '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798';
         const { send: p2pkProofs } = await senderWallet.ops
           .send(50, senderProofs)
-          .asP2PK({ kind: 'P2PK', data: fakePublicKey })
+          .asLocked({ mainKeys: [fakePublicKey] })
           .run();
 
         const p2pkToken: Token = {
@@ -3442,7 +3449,9 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const keyset = senderWallet.keyChain.getCheapestKeyset();
 
         // Fund sender with more amount
-        const senderQuote = await senderWallet.createMintQuoteBolt11(200);
+        const senderQuote = await senderWallet.createMintQuote<MintQuoteBolt11Response>('bolt11', {
+          amount: 200,
+        });
         let quoteState = await senderWallet.checkMintQuoteBolt11(senderQuote.quote);
         let attempts = 0;
         while (quoteState.state !== 'PAID' && attempts <= 3) {
@@ -3521,7 +3530,9 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           await baseWallet.loadMint();
 
           // Create and pay mint quote
-          const quote = await baseWallet.createMintQuoteBolt11(100);
+          const quote = await baseWallet.createMintQuote<MintQuoteBolt11Response>('bolt11', {
+            amount: 100,
+          });
 
           // Wait for quote to be marked as paid
           let quoteState = await baseWallet.checkMintQuoteBolt11(quote.quote);
@@ -3612,14 +3623,14 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       });
 
       it('should process an inband payment request', async () => {
-        const pr = new PaymentRequest(
-          [], // empty transport = inband
-          'test-request-id',
-          50,
-          testUnit,
-          [mintUrl],
-          'Test payment',
-        );
+        const pr = new PaymentRequest({
+          transport: [],
+          id: 'test-request-id',
+          amount: 50,
+          unit: testUnit,
+          mints: [mintUrl],
+          description: 'Test payment',
+        });
         const encoded = pr.toEncodedRequest();
 
         const parsed = await mgr!.paymentRequests.parse(encoded);
@@ -3632,14 +3643,14 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
       it('should process an HTTP POST payment request', async () => {
         const targetUrl = 'https://receiver.example.com/callback';
-        const pr = new PaymentRequest(
-          [{ type: PaymentRequestTransportType.POST, target: targetUrl }],
-          'test-request-id-2',
-          75,
-          testUnit,
-          [mintUrl],
-          'HTTP payment',
-        );
+        const pr = new PaymentRequest({
+          transport: [{ type: PaymentRequestTransportType.POST, target: targetUrl }],
+          id: 'test-request-id-2',
+          amount: 75,
+          unit: testUnit,
+          mints: [mintUrl],
+          description: 'HTTP payment',
+        });
         const encoded = pr.toEncodedRequest();
 
         const parsed = await mgr!.paymentRequests.parse(encoded);
@@ -3652,13 +3663,12 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       });
 
       it('should process a payment request without amount', async () => {
-        const pr = new PaymentRequest(
-          [],
-          'test-request-no-amount',
-          undefined, // no amount
-          testUnit,
-          [mintUrl],
-        );
+        const pr = new PaymentRequest({
+          transport: [],
+          id: 'test-request-no-amount',
+          unit: testUnit,
+          mints: [mintUrl],
+        });
         const encoded = pr.toEncodedRequest();
 
         const parsed = await mgr!.paymentRequests.parse(encoded);
@@ -3668,7 +3678,13 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       });
 
       it('should handle inband payment request with amount in request', async () => {
-        const pr = new PaymentRequest([], 'inband-with-amount', 30, testUnit, [mintUrl]);
+        const pr = new PaymentRequest({
+          transport: [],
+          id: 'inband-with-amount',
+          amount: 30,
+          unit: testUnit,
+          mints: [mintUrl],
+        });
         const encoded = pr.toEncodedRequest();
 
         const parsed = await mgr!.paymentRequests.parse(encoded);
@@ -3698,13 +3714,12 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       });
 
       it('should handle inband payment request with amount as parameter', async () => {
-        const pr = new PaymentRequest(
-          [],
-          'inband-no-amount',
-          undefined, // no amount in request
-          testUnit,
-          [mintUrl],
-        );
+        const pr = new PaymentRequest({
+          transport: [],
+          id: 'inband-no-amount',
+          unit: testUnit,
+          mints: [mintUrl],
+        });
         const encoded = pr.toEncodedRequest();
 
         const parsed = await mgr!.paymentRequests.parse(encoded);
@@ -3732,13 +3747,13 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
       it('should throw if mint is not in allowed mints list', async () => {
         const otherMintUrl = 'https://other-mint.example.com';
-        const pr = new PaymentRequest(
-          [],
-          'wrong-mint-request',
-          50,
-          testUnit,
-          [otherMintUrl], // only allows other mint
-        );
+        const pr = new PaymentRequest({
+          transport: [],
+          id: 'wrong-mint-request',
+          amount: 50,
+          unit: testUnit,
+          mints: [otherMintUrl],
+        });
         const encoded = pr.toEncodedRequest();
 
         const parsed = await mgr!.paymentRequests.parse(encoded);
@@ -3753,7 +3768,12 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       });
 
       it('should throw if amount is missing when preparing transaction', async () => {
-        const pr = new PaymentRequest([], 'no-amount-request', undefined, testUnit, [mintUrl]);
+        const pr = new PaymentRequest({
+          transport: [],
+          id: 'no-amount-request',
+          unit: testUnit,
+          mints: [mintUrl],
+        });
         const encoded = pr.toEncodedRequest();
 
         const parsed = await mgr!.paymentRequests.parse(encoded);
@@ -3765,13 +3785,13 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       });
 
       it('should decode Nostr payment requests for plugin delivery', async () => {
-        const pr = new PaymentRequest(
-          [{ type: PaymentRequestTransportType.NOSTR, target: 'npub1...' }],
-          'nostr-request',
-          50,
-          testUnit,
-          [mintUrl],
-        );
+        const pr = new PaymentRequest({
+          transport: [{ type: PaymentRequestTransportType.NOSTR, target: 'npub1...' }],
+          id: 'nostr-request',
+          amount: 50,
+          unit: testUnit,
+          mints: [mintUrl],
+        });
         const encoded = pr.toEncodedRequest();
 
         const parsed = await mgr!.paymentRequests.parse(encoded);
@@ -3785,7 +3805,13 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
       it('should complete full payment request flow with token reuse', async () => {
         // Create inband payment request
-        const pr = new PaymentRequest([], 'full-flow-test', 40, testUnit, [mintUrl]);
+        const pr = new PaymentRequest({
+          transport: [],
+          id: 'full-flow-test',
+          amount: 40,
+          unit: testUnit,
+          mints: [mintUrl],
+        });
         const encoded = pr.toEncodedRequest();
 
         // Process the payment request
@@ -3814,7 +3840,13 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       });
 
       it('should execute inband payment requests through manager.paymentRequests', async () => {
-        const pr = new PaymentRequest([], 'legacy-wallet-api', 20, testUnit, [mintUrl]);
+        const pr = new PaymentRequest({
+          transport: [],
+          id: 'legacy-wallet-api',
+          amount: 20,
+          unit: testUnit,
+          mints: [mintUrl],
+        });
         const encoded = pr.toEncodedRequest();
 
         const parsed = await mgr!.paymentRequests.parse(encoded);

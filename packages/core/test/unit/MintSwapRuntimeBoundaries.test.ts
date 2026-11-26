@@ -153,8 +153,9 @@ describe('Mint Swap real runtime boundaries', () => {
     const melt = spyOn(MintAdapter.prototype, 'customMeltBolt11').mockImplementation(
       async (_mintUrl, _proofs, _outputs, quoteId) => sourceResponse(quoteId),
     );
-    const issuance = spyOn(Wallet.prototype, 'mintProofsBolt11').mockImplementation(
-      async (_amount, quoteId) => {
+    const issuance = spyOn(Wallet.prototype, 'mintProofs').mockImplementation(
+      async (_method, _amount, quote) => {
+        const quoteId = quote.quote;
         const children = await repo.mintOperationRepository.getByQuoteId(
           fixture.parent.destinationMintUrl,
           'bolt11',
@@ -1055,7 +1056,7 @@ describe('Mint Swap real runtime boundaries', () => {
     const { manager, fixture, sourceResponse, destinationResponse } = await setup({
       prepared: false,
     });
-    spyOn(Wallet.prototype, 'createLockedMintQuote').mockImplementation(
+    spyOn(Wallet.prototype, 'createMintQuoteBolt11').mockImplementation(
       async (_amount, ownedPubkey) => ({
         ...destinationResponse(),
         quote: 'created-destination',

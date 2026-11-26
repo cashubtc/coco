@@ -556,16 +556,19 @@ export class PaymentRequestService {
 
     const paymentRequest = amountUnchanged
       ? request.paymentRequest
-      : new PaymentRequest(
-          request.paymentRequest.transport,
-          request.paymentRequest.id,
+      : new PaymentRequest({
+          transport: request.paymentRequest.transport,
+          id: request.paymentRequest.id,
           amount,
-          request.unit,
-          request.paymentRequest.mints,
-          request.paymentRequest.description,
-          request.paymentRequest.singleUse,
-          request.paymentRequest.nut10,
-        );
+          unit: request.unit,
+          mints: request.paymentRequest.mints,
+          description: request.paymentRequest.description,
+          singleUse: request.paymentRequest.singleUse,
+          nut10: request.paymentRequest.nut10,
+          mintsPreferred: request.paymentRequest.mintsPreferred,
+          supportedMethods: request.paymentRequest.supportedMethods,
+          nutroot: request.paymentRequest.nutroot,
+        });
     const spendingCondition = this.resolveSpendingCondition(paymentRequest);
     const payableMints = await this.findMatchingMints(
       paymentRequest,

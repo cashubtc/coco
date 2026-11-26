@@ -68,9 +68,12 @@ describe('Payment Request intended amount', () => {
     const { coco: receiver } = await session();
     await fund(payer, 64);
 
-    const encoded = new PaymentRequest([], 'amountless', undefined, unit, [
-      mintUrl,
-    ]).toEncodedRequest();
+    const encoded = new PaymentRequest({
+      transport: [],
+      id: 'amountless',
+      unit,
+      mints: [mintUrl],
+    }).toEncodedRequest();
     expect((await payer.paymentRequests.parse(encoded)).payableMints).toEqual([mintUrl]);
     expect((await payer.paymentRequests.parse(encoded, { amount: 65 })).payableMints).toEqual([]);
     const parsed = await payer.paymentRequests.parse(encoded, { amount: 32 });
@@ -81,7 +84,13 @@ describe('Payment Request intended amount', () => {
     await expect(
       payer.paymentRequests.parse(encoded, { amount: { amount: 32, unit: 'other' } }),
     ).rejects.toBeInstanceOf(UnitMismatchError);
-    const fixed = new PaymentRequest([], 'fixed', 32, unit, [mintUrl]).toEncodedRequest();
+    const fixed = new PaymentRequest({
+      transport: [],
+      id: 'fixed',
+      amount: 32,
+      unit,
+      mints: [mintUrl],
+    }).toEncodedRequest();
     await expect(payer.paymentRequests.parse(fixed, { amount: 31 })).rejects.toBeInstanceOf(
       PaymentRequestError,
     );

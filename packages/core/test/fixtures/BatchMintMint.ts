@@ -67,9 +67,14 @@ export type RestoreBehavior = 'all' | 'none' | 'partial' | 'unavailable';
 
 const keysetSeed = (unit: string) => new Uint8Array(32).fill(unit === 'sat' ? 7 : 9);
 
+/** A NUT-00 error the mint answers a request with, without processing it. */
+export type MintRejection = { code: number; detail?: string };
+
 /**
  * In-process HTTP mint for Batch Mint tests. It implements the NUT-04/09/20/29 endpoints Coco uses
- * with real blind signatures and NUT-20 signature verification, and records every request.
+ * with real blind signatures and NUT-20 signature verification, and records every request. Swaps
+ * (NUT-03) sign the requested outputs without checking the inputs, so tests that need a swap can
+ * script its rejection.
  */
 export class FakeBatchMint {
   readonly keysets = ['sat', 'usd'].map((unit) => {
@@ -96,6 +101,22 @@ export class FakeBatchMint {
   };
   /** Called after a batch request is issued but before its response is returned. */
   onBatchIssued?: () => Promise<void> | void;
+  /** Rejections for the next swaps, in order. A swap with none queued signs its outputs. */
+  readonly swapRejections: MintRejection[] = [];
+  /** Rejections for the next single-quote mint requests, in order. */
+  readonly mintRejections: MintRejection[] = [];
+  /** Further `/v1/keysets` entries the mint advertises without serving keys for them. */
+  readonly advertisedKeysets: Array<{
+    id: string;
+    unit: string;
+    active: boolean;
+    input_fee_ppk: number;
+  }> = [];
+  /** Whether the mint advertises NUT-20 quote locking. */
+  nut20 = true;
+  /** `unavailable` answers info and keyset requests with HTTP 503. */
+  metadataBehavior: 'ok' | 'unavailable' = 'ok';
+  private createdQuotes = 0;
 
   private originalFetch?: typeof fetch;
 
@@ -166,15 +187,23 @@ export class FakeBatchMint {
     const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
     const error = (code: number, detail: string) => json({ code, detail }, 400);
 
+    if (
+      this.metadataBehavior === 'unavailable' &&
+      (path === '/v1/info' || path === '/v1/keysets' || path.startsWith('/v1/keys'))
+    )
+      return json({ error: 'unavailable' }, 503);
     if (path === '/v1/info') return json(this.info());
     if (path === '/v1/keysets')
       return json({
-        keysets: this.keysets.map(({ unit, keys }) => ({
-          id: keys.keysetId,
-          unit,
-          active: true,
-          input_fee_ppk: 0,
-        })),
+        keysets: [
+          ...this.keysets.map(({ unit, keys }) => ({
+            id: keys.keysetId,
+            unit,
+            active: true,
+            input_fee_ppk: 0,
+          })),
+          ...this.advertisedKeysets,
+        ],
       });
     const keysMatch = path.match(/^\/v1\/keys\/(.+)$/);
     if (keysMatch) {
@@ -199,6 +228,23 @@ export class FakeBatchMint {
       const quotes = (body.quotes as string[]).map((quoteId) => this.quoteResponse(quoteId));
       return json(quotes);
     }
+    const createMatch = path.match(/^\/v1\/mint\/quote\/(\w+)$/);
+    if (createMatch) {
+      const created = this.addQuote({
+        quote: `created-${++this.createdQuotes}`,
+        method: createMatch[1] as Method,
+        unit: body.unit,
+        amount: body.amount == null ? undefined : Number(body.amount),
+        amountPaid: 0,
+        ...(body.pubkey ? { pubkey: body.pubkey } : {}),
+      });
+      return json(this.quoteResponse(created.quote));
+    }
+    if (path === '/v1/swap') {
+      const rejection = this.swapRejections.shift();
+      if (rejection) return error(rejection.code, rejection.detail ?? 'rejected');
+      return json({ signatures: this.sign(body.outputs as WireOutput[]) });
+    }
     const quoteMatch = path.match(/^\/v1\/mint\/quote\/(\w+)\/(.+)$/);
     if (quoteMatch) {
       if (this.quoteCheckBehavior === 'unavailable') return json({ error: 'unavailable' }, 503);
@@ -208,6 +254,8 @@ export class FakeBatchMint {
     if (batchMatch) return this.batchMint(batchMatch[1] as Method, body, json, error);
     const mintMatch = path.match(/^\/v1\/mint\/(\w+)$/);
     if (mintMatch) {
+      const rejection = this.mintRejections.shift();
+      if (rejection) return error(rejection.code, rejection.detail ?? 'rejected');
       const result = this.issue(mintMatch[1] as Method, {
         quotes: [body.quote],
         // Reusable quotes mint the outputs' total, as NUT-04 requests carry no amount for them.
@@ -327,7 +375,11 @@ export class FakeBatchMint {
       return { code: 10002, detail: 'outputs already signed' };
     for (const [index, quoteId] of body.quotes.entries())
       this.quotes.get(quoteId)!.amountIssued += amounts[index]!;
-    const signatures = body.outputs.map((output) => {
+    return { signatures: this.sign(body.outputs) };
+  }
+
+  private sign(outputs: WireOutput[]): WireSignature[] {
+    return outputs.map((output) => {
       const keyset = this.keysets.find(({ keys }) => keys.keysetId === output.id)!;
       const signature = {
         id: output.id,
@@ -341,7 +393,6 @@ export class FakeBatchMint {
       this.signed.set(output.B_, signature);
       return signature;
     });
-    return { signatures };
   }
 
   private info() {
@@ -360,10 +411,14 @@ export class FakeBatchMint {
       contact: [],
       nuts: {
         '4': { methods, disabled: false },
-        '5': { methods: [], disabled: false },
+        // Melt quotes are not served; Melt tests store their quote and only swap here.
+        '5': {
+          methods: ['sat', 'usd'].map((unit) => ({ method: 'bolt11', unit })),
+          disabled: false,
+        },
         '7': { supported: true },
         '9': { supported: true },
-        '20': { supported: true },
+        ...(this.nut20 ? { '20': { supported: true } } : {}),
         ...(this.nut29 ? { '29': this.nut29 } : {}),
       },
     };

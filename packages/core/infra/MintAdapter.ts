@@ -1,6 +1,7 @@
 import {
   Keyset as CashuKeyset,
   Mint,
+  MintInfo as CashuMintInfo,
   isBlsKeyset,
   type CheckStatePayload,
   type Keys,
@@ -66,7 +67,8 @@ export class MintAdapter {
 
   async fetchMintInfo(mintUrl: string): Promise<MintInfo> {
     const cashuMint = this.getCashuMint(mintUrl);
-    return await cashuMint.getInfo();
+    // getInfo() returns the wire response; normalize it so stored mint info reads as before.
+    return CashuMintInfo.normalizeInfo(await cashuMint.getInfo());
   }
 
   async fetchKeysets(mintUrl: string): Promise<GetKeysetsResponse> {

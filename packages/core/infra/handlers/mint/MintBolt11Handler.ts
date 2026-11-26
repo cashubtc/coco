@@ -1,4 +1,5 @@
 import { Amount, RateLimitError, type MintQuoteBolt11Response } from '@cashu/cashu-ts';
+import { unwrapKeysetRejection } from '@core/infra/KeysetRejection.ts';
 import { bytesToHex } from '@noble/curves/utils.js';
 import { assertSameUnit } from '@core/amounts';
 import type {
@@ -25,6 +26,22 @@ import { mintQuoteObservationFromBolt11Response } from '../../../models/MintQuot
 import { assessMintQuoteClaimability } from '../../../models/MintQuoteClaimability.ts';
 import { hasSameMintQuoteOwnership } from '../../../quotes/MintQuoteOwnership.ts';
 
+/**
+ * The quote argument for a mint submission. Zero accounting tells cashu-ts to use it as given, so
+ * no quote check runs before the mint request. It is never persisted or read as an observation.
+ */
+function submissionQuote(
+  operation: Pick<PendingMintOperation<'bolt11'>, 'quoteId' | 'unit' | 'pubkey'>,
+) {
+  return {
+    quote: operation.quoteId,
+    unit: operation.unit,
+    amount_paid: Amount.zero(),
+    amount_issued: Amount.zero(),
+    ...(operation.pubkey ? { pubkey: operation.pubkey } : {}),
+  };
+}
+
 export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
   constructor(private readonly keyRingService: KeyRingService) {}
 
@@ -48,9 +65,16 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
       // redeem every created quote, so an explicitly supplied key must be locally owned.
       await this.requireQuoteKey(lockPubkey);
     }
+    // cashu-ts locks every typed bolt11 quote. Coco keeps its policy: an unlocked quote goes
+    // through the generic creator, which works on a mint without NUT-20.
     const remoteQuote = lockPubkey
-      ? await ctx.wallet.createLockedMintQuote(amount.amount, lockPubkey)
-      : await ctx.wallet.createMintQuoteBolt11(amount.amount);
+      ? await ctx.wallet.createMintQuoteBolt11(amount.amount, lockPubkey)
+      : await ctx.wallet.createMintQuote<MintQuoteBolt11Response>('bolt11', {
+          amount: Amount.from(amount.amount).toBigInt(),
+        });
+    if (!Amount.from(remoteQuote.amount).equals(amount.amount)) {
+      throw new MintQuoteValidationError('Mint returned a BOLT11 quote for a different amount');
+    }
     if (lockPubkey && remoteQuote.pubkey !== lockPubkey) {
       throw new MintQuoteValidationError(
         'Mint returned a BOLT11 quote with an unexpected NUT-20 public key',
@@ -73,14 +97,17 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
     const signingOptions = await this.getMintQuoteSigningOptions(ctx.operation.pubkey);
 
     try {
-      const proofs = await ctx.wallet.mintProofsBolt11(
-        ctx.operation.amount,
-        ctx.operation.quoteId,
-        { ...signingOptions, keysetId: outputData.keep[0]!.blindedMessage.id },
-        {
-          type: 'custom',
-          data: outputData.keep,
-        },
+      const proofs = await unwrapKeysetRejection(
+        ctx.wallet.mintProofs(
+          'bolt11',
+          ctx.operation.amount,
+          submissionQuote(ctx.operation),
+          { ...signingOptions, keysetId: outputData.keep[0]!.blindedMessage.id },
+          {
+            type: 'custom',
+            data: outputData.keep,
+          },
+        ),
       );
 
       return { status: 'ISSUED', proofs };
@@ -161,14 +188,17 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
       const outputData = deserializeOutputData(ctx.operation.outputData);
       try {
         const signingOptions = await this.getMintQuoteSigningOptions(ctx.operation.pubkey);
-        const proofs = await ctx.wallet.mintProofsBolt11(
-          ctx.operation.amount,
-          ctx.operation.quoteId,
-          { ...signingOptions, keysetId: outputData.keep[0]!.blindedMessage.id },
-          {
-            type: 'custom',
-            data: outputData.keep,
-          },
+        const proofs = await unwrapKeysetRejection(
+          ctx.wallet.mintProofs(
+            'bolt11',
+            ctx.operation.amount,
+            submissionQuote(ctx.operation),
+            { ...signingOptions, keysetId: outputData.keep[0]!.blindedMessage.id },
+            {
+              type: 'custom',
+              data: outputData.keep,
+            },
+          ),
         );
 
         return { status: 'ISSUED', proofs };

@@ -53,8 +53,10 @@ describe('Send fee calculations', () => {
       false,
       { amount: Amount.from(net) },
     );
-    expect(selected).toEqual({
-      proofs,
+    // The selector may return the inputs in any order.
+    expect(selected.proofs).toHaveLength(proofs.length);
+    expect(selected.proofs).toEqual(expect.arrayContaining(proofs));
+    expect(selected).toMatchObject({
       fee: Amount.zero(),
       needsSwap: false,
       sendAmount: Amount.from(8),

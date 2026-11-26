@@ -227,6 +227,8 @@ describe('initializeCoco', () => {
             unit,
             amount: Amount.from(1),
             state: 'PAID',
+            amount_paid: Amount.zero(),
+            amount_issued: Amount.zero(),
             expiry: null,
           },
           undefined,
@@ -255,7 +257,7 @@ describe('initializeCoco', () => {
           keysetId,
         ]);
         expect(previews.map((preview) => preview.outputData[0])).toEqual(randomOutputs);
-        expect(previews.map((preview) => preview.payload.outputs[0])).toEqual(
+        expect(previews.map((preview) => preview.outputData[0]!.blindedMessage)).toEqual(
           randomOutputs.map((output) => output.blindedMessage),
         );
         expect(createRandomData).toHaveBeenCalledTimes(3);

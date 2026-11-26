@@ -232,6 +232,8 @@ export class WalletService {
           this.logger && this.logger.child ? this.logger.child({ module: 'Wallet' }) : undefined,
         bip39seed: seed,
         outputDataCreator: this.outputDataCreator,
+        // Keysets come only from Coco's snapshot, so a keyset Coco gates out is never loaded.
+        strictCachedKeysets: true,
         // Callers hand this wallet inputs they already committed to. Spend exactly those, in order.
         selectProofs: (proofs) => ({ keep: [], send: normalizeProofAmounts(proofs) }),
       },

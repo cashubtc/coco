@@ -388,10 +388,10 @@ describe('MintOperationService', () => {
     walletService = {
       getWalletWithActiveKeysetId: mock(async (_mintUrl: string, unit: string) => ({
         wallet: {
-          createMintQuoteBolt11: mock(async (amount: Amount) => ({
+          createMintQuote: mock(async (_method: string, payload: { amount: bigint }) => ({
             quote: quoteId,
             request: 'lnbc1test',
-            amount,
+            amount: Amount.from(payload.amount),
             unit,
             expiry: Math.floor(Date.now() / 1000) + 3600,
             state: 'UNPAID',
@@ -2677,7 +2677,7 @@ describe('MintOperationService', () => {
     );
     (walletService.getWalletWithActiveKeysetId as Mock<any>).mockResolvedValue({
       wallet: {
-        mintProofsBolt11: mock(async () => outputProofs(pendingOp)),
+        mintProofs: mock(async () => outputProofs(pendingOp)),
       } as unknown as Wallet,
       keysetId,
     });

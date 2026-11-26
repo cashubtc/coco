@@ -811,7 +811,8 @@ describe.each(['memory', 'sqlite'] as const)('background progression (%s)', (ada
       notifySpent(subscriptionFor(outputs[0]!.secret)!, outputs[0]!.secret);
       await legacyDone;
       expect(legacyChecks).toHaveLength(3);
-      expect(legacyChecks.at(-1)).toEqual(legacyYs);
+      // cashu-ts shuffles the Ys of a state check, so compare them as a set.
+      expect([...legacyChecks.at(-1)!].sort()).toEqual([...legacyYs].sort());
       expect((await coco.ops.send.get('legacy-send'))?.state).toBe('finalized');
       expect(finalized).toEqual(['ordinary-send', 'legacy-send']);
       for (const proof of inputs) {

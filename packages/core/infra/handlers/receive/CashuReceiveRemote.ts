@@ -7,6 +7,7 @@ import {
   type OutputDataLike,
   type SerializedBlindedSignature,
 } from '@cashu/cashu-ts';
+import { unwrapKeysetRejection } from '@core/infra/KeysetRejection.ts';
 import { normalizeUnit } from '@core/amounts.ts';
 import { createKeyChain } from '@core/proofs/KeysetSelection.ts';
 import type { MintMetadata } from '@core/mints/MintMetadata.ts';
@@ -32,7 +33,7 @@ export class CashuReceiveRemote implements ReceiveRemote {
       authProvider: this.auth.getAuthProvider(mintUrl),
       customRequest: this.requests.getRequestFn(mintUrl),
     });
-    const wallet = new Wallet(mint, { unit });
+    const wallet = new Wallet(mint, { unit, strictCachedKeysets: true });
     wallet.loadMintFromCache(
       metadata.mint.mintInfo,
       createKeyChain(mintUrl, unit, metadata.keysets).cache,
@@ -63,13 +64,15 @@ export class CashuReceiveRemote implements ReceiveRemote {
         const amount = Amount.sum(outputs.map((output) => output.blindedMessage.amount));
         // Complete an already prepared swap. This preserves cashu-ts's established wire sorting
         // and witness normalization for legacy requests without redoing selection or allocation.
-        const result = await wallet.completeSwap({
-          inputs: request.inputProofs,
-          keepOutputs: outputs,
-          keysetId,
-          amount,
-          fees: sumProofs(request.inputProofs).subtract(amount),
-        });
+        const result = await unwrapKeysetRejection(
+          wallet.completeSwap({
+            inputs: request.inputProofs,
+            keepOutputs: outputs,
+            sendTotal: Amount.zero(),
+            amount,
+            fees: sumProofs(request.inputProofs).subtract(amount),
+          }),
+        );
         return result.keep;
       },
       checkProofStates: async (proofs) => {

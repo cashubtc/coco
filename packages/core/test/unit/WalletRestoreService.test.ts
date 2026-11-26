@@ -167,7 +167,10 @@ describe('WalletRestoreService', () => {
         expect.objectContaining({ id: sweepKeysetId }),
         [0],
       );
-      expect(restoreRequest).toHaveBeenCalledWith({ outputs: [output.blindedMessage] });
+      expect(restoreRequest).toHaveBeenCalledWith(
+        { outputs: [output.blindedMessage] },
+        expect.anything(),
+      );
     });
 
     it('reports pending source value without creating an exchange', async () => {
@@ -385,10 +388,11 @@ describe('WalletRestoreService', () => {
         bus,
       );
       const wallet = {
-        batchRestore: mock(async () => ({
-          proofs: [makeProof(8, 'zero')],
-          lastCounterWithSignature: 0,
-        })),
+        restore: mock(async (start: number) =>
+          start === 0
+            ? { proofs: [makeProof(8, 'zero')], lastCounterWithSignature: 0 }
+            : { proofs: [] },
+        ),
         checkProofsStates: mock(async () => [{ state: 'PENDING' }]),
       } as unknown as Wallet;
       await restored.restoreKeyset(mintUrl, wallet, keysetId, 'USD');
@@ -423,10 +427,10 @@ describe('WalletRestoreService', () => {
         );
         let remoteState: 'PENDING' | 'UNSPENT' | 'SPENT' = 'PENDING';
         const wallet = {
-          batchRestore: async () => ({
-            proofs: [makeProof(8, 'pending')],
-            lastCounterWithSignature: 4,
-          }),
+          restore: async (start: number) =>
+            start === 0
+              ? { proofs: [makeProof(8, 'pending')], lastCounterWithSignature: 4 }
+              : { proofs: [] },
           checkProofsStates: async () => [{ state: remoteState }],
         } as unknown as Wallet;
         await restored.restoreKeyset(mintUrl, wallet, keysetId);
@@ -452,10 +456,10 @@ describe('WalletRestoreService', () => {
       );
       for (const states of [[], [{ state: 'UNKNOWN' }]]) {
         const wallet = {
-          batchRestore: async () => ({
-            proofs: [makeProof(8, 'bad')],
-            lastCounterWithSignature: 10,
-          }),
+          restore: async (start: number) =>
+            start === 0
+              ? { proofs: [makeProof(8, 'bad')], lastCounterWithSignature: 10 }
+              : { proofs: [] },
           checkProofsStates: async () => states,
         } as unknown as Wallet;
         await expect(restored.restoreKeyset(mintUrl, wallet, keysetId)).rejects.toThrow(

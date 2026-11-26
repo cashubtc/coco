@@ -2,6 +2,7 @@ import {
   type MintQuoteOnchainResponse as CashuMintQuoteOnchainResponse,
   type Wallet,
 } from '@cashu/cashu-ts';
+import { unwrapKeysetRejection } from '@core/infra/KeysetRejection.ts';
 import { assertSameUnit } from '@core/amounts';
 import type { KeyRingService } from '@core/services';
 import { deserializeOutputData } from '@core/utils';
@@ -90,12 +91,14 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
       );
     }
 
-    const proofs = await ctx.wallet.mintProofsOnchain(
-      ctx.operation.amount,
-      remoteQuote as CashuMintQuoteOnchainResponse,
-      bytesToHex(quoteKey.secretKey),
-      { keysetId: outputData.keep[0]!.blindedMessage.id },
-      { type: 'custom', data: outputData.keep },
+    const proofs = await unwrapKeysetRejection(
+      ctx.wallet.mintProofsOnchain(
+        ctx.operation.amount,
+        remoteQuote as CashuMintQuoteOnchainResponse,
+        bytesToHex(quoteKey.secretKey),
+        { keysetId: outputData.keep[0]!.blindedMessage.id },
+        { type: 'custom', data: outputData.keep },
+      ),
     );
 
     return { status: 'ISSUED', proofs };
@@ -173,12 +176,14 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
 
     const outputData = deserializeOutputData(operation.outputData);
     try {
-      const proofs = await ctx.wallet.mintProofsOnchain(
-        operation.amount,
-        remoteQuote as CashuMintQuoteOnchainResponse,
-        bytesToHex(quoteKey.secretKey),
-        { keysetId: outputData.keep[0]!.blindedMessage.id },
-        { type: 'custom', data: outputData.keep },
+      const proofs = await unwrapKeysetRejection(
+        ctx.wallet.mintProofsOnchain(
+          operation.amount,
+          remoteQuote as CashuMintQuoteOnchainResponse,
+          bytesToHex(quoteKey.secretKey),
+          { keysetId: outputData.keep[0]!.blindedMessage.id },
+          { type: 'custom', data: outputData.keep },
+        ),
       );
 
       return { status: 'ISSUED', proofs };

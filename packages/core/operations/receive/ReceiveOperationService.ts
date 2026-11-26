@@ -1,6 +1,6 @@
 import {
   getTokenMetadata,
-  verifyProofsForReceive,
+  verifyReceivedProofs,
   normalizeProofAmounts,
   sumProofs,
   type Proof,
@@ -112,11 +112,12 @@ export class ReceiveOperationService {
     try {
       decoded = decodeTokenWithKeysets(token, metadata.keysets);
       const keyChain = createKeyChain(mintUrl, decoded.unit!, metadata.keysets);
-      verifyProofsForReceive(decoded.proofs, (id) => {
+      const { invalid } = await verifyReceivedProofs(decoded.proofs, (id) => {
         const keys = keyChain.getKeyset(id).toMintKeys();
         if (!keys) throw new ProofValidationError('Receive input keyset has no keys');
         return keys;
       });
+      if (invalid.length > 0) throw invalid[0]!.error;
     } catch (error) {
       throw new ProofValidationError(error instanceof Error ? error.message : 'Invalid token');
     }

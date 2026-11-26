@@ -158,15 +158,15 @@ export class PaymentRequestReceiveService {
           singleUse,
         },
       );
-      const paymentRequest = new PaymentRequest(
-        paymentRequestTransports,
-        requestId,
+      const paymentRequest = new PaymentRequest({
+        transport: paymentRequestTransports,
+        id: requestId,
         amount,
         unit,
-        mints.length > 0 ? mints : undefined,
-        input.description,
+        mints: mints.length > 0 ? mints : undefined,
+        description: input.description,
         singleUse,
-      );
+      });
       const encodedRequest =
         input.encoding === 'creqA'
           ? paymentRequest.toEncodedCreqA()

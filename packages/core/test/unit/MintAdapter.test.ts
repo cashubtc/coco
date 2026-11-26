@@ -336,3 +336,38 @@ describe('MintAdapter', () => {
     });
   });
 });
+
+describe('MintAdapter mint info', () => {
+  it('reads a wire info response that omits the optional method fields as before', async () => {
+    const wire = {
+      name: 'test mint',
+      pubkey: 'pubkey',
+      version: '1.0.0',
+      contact: [],
+      nuts: {
+        '4': { methods: [{ method: 'bolt11', unit: 'sat' }], disabled: false },
+        '5': { methods: [{ method: 'bolt11', unit: 'sat', min_amount: 1 }], disabled: false },
+      },
+    };
+    const requests: string[] = [];
+    const adapter = new MintAdapter({
+      getRequestFn:
+        () =>
+        async ({ endpoint }: { endpoint: string }) => {
+          requests.push(endpoint);
+          return structuredClone(wire);
+        },
+    } as unknown as MintRequestProvider);
+
+    const info = await adapter.fetchMintInfo(mintUrl);
+
+    expect(requests).toEqual([`${mintUrl}/v1/info`]);
+    // cashu-ts normalized the response this way inside `getInfo` before 5.0.0-rc.13.
+    expect(info.nuts['4'].methods).toEqual([
+      { method: 'bolt11', unit: 'sat', method_name: 'Bolt11', min_amount: null, max_amount: null },
+    ]);
+    expect(info.nuts['5'].methods).toEqual([
+      { method: 'bolt11', unit: 'sat', method_name: 'Bolt11', min_amount: 1, max_amount: null },
+    ]);
+  });
+});

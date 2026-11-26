@@ -5,6 +5,7 @@ import {
   type OutputDataCreator,
   type OutputDataLike,
 } from '@cashu/cashu-ts';
+import { unwrapKeysetRejection } from '@core/infra/KeysetRejection.ts';
 import type { MintMetadata } from '@core/mints/MintMetadata.ts';
 import { ProofValidationError } from '@core/models/Error.ts';
 import type { SendRemote, SendRemoteSession } from '@core/operations/send/SendRemote.ts';
@@ -32,6 +33,8 @@ export class CashuSendRemote implements SendRemote {
       {
         unit,
         outputDataCreator: this.outputDataCreator,
+        // Keysets come only from Coco's snapshot, so a keyset Coco gates out is never loaded.
+        strictCachedKeysets: true,
         // Send preparation already committed these inputs. Preserve their order on every replay.
         selectProofs: (proofs) => ({ keep: [], send: normalizeProofAmounts(proofs) }),
       },
@@ -44,14 +47,16 @@ export class CashuSendRemote implements SendRemote {
       swap: (request) => {
         const data = deserializeOutputData(request.outputData);
         const keysetId = getOutputKeysetId([...data.keep, ...data.send]);
-        return wallet.send(
-          request.amount,
-          request.inputProofs,
-          { keysetId },
-          {
-            send: { type: 'custom', data: data.send },
-            keep: { type: 'custom', data: data.keep },
-          },
+        return unwrapKeysetRejection(
+          wallet.send(
+            request.amount,
+            request.inputProofs,
+            { keysetId },
+            {
+              send: { type: 'custom', data: data.send },
+              keep: { type: 'custom', data: data.keep },
+            },
+          ),
         );
       },
       checkProofStates: (proofs) => wallet.checkProofsStates(proofs),
@@ -60,13 +65,15 @@ export class CashuSendRemote implements SendRemote {
       reclaim: (proofs, outputs) => {
         const data = deserializeOutputData(outputs).keep;
         const keysetId = getOutputKeysetId(data);
-        return wallet.receive(
-          { mint: mintUrl, proofs, unit },
-          { keysetId },
-          {
-            type: 'custom',
-            data,
-          },
+        return unwrapKeysetRejection(
+          wallet.receive(
+            { mint: mintUrl, proofs, unit },
+            { keysetId },
+            {
+              type: 'custom',
+              data,
+            },
+          ),
         );
       },
     };

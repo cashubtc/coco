@@ -1482,11 +1482,13 @@ export function runMintSwapCoordinatorContract(
           return {
             ...original,
             wallet: {
-              mintProofsBolt11: async (
-                ...[amount, quoteId, signingOptions, outputData]: Parameters<
-                  Wallet['mintProofsBolt11']
+              mintProofs: async (
+                ...[method, amount, quote, signingOptions, outputData]: Parameters<
+                  Wallet['mintProofs']
                 >
               ) => {
+                expect(method).toBe('bolt11');
+                const quoteId = quote.quote;
                 expect(fixture.transactionActive).toBe(false);
                 expect(Amount.from(amount).equals(destination.amount)).toBe(true);
                 expect(quoteId).toBe(destination.quoteId);

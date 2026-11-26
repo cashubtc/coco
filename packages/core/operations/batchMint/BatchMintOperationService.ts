@@ -1,4 +1,5 @@
 import { Amount, CTSError, type Proof } from '@cashu/cashu-ts';
+import { unwrapKeysetRejection } from '@core/infra/KeysetRejection.ts';
 import { bytesToHex } from '@noble/curves/utils.js';
 import type { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
@@ -336,7 +337,14 @@ export class BatchMintOperationService {
         operation.method,
         operation.members.map((member) => ({
           amount: member.amount,
-          quote: { quote: member.quoteId, ...(member.pubkey ? { pubkey: member.pubkey } : {}) },
+          // Zero accounting: cashu-ts uses the quote as given and sends no quote check first.
+          quote: {
+            quote: member.quoteId,
+            unit: operation.unit,
+            amount_paid: Amount.zero(),
+            amount_issued: Amount.zero(),
+            ...(member.pubkey ? { pubkey: member.pubkey } : {}),
+          },
         })),
         {
           keysetId: outputs[0]!.blindedMessage.id,
@@ -346,12 +354,14 @@ export class BatchMintOperationService {
       );
       const persistedOutputs = operation.outputData.keep.map((output) => output.blindedMessage.B_);
       if (
-        preview.payload.outputs.length !== persistedOutputs.length ||
-        preview.payload.outputs.some((output, index) => output.B_ !== persistedOutputs[index])
+        preview.outputData.length !== persistedOutputs.length ||
+        preview.outputData.some(
+          (output, index) => output.blindedMessage.B_ !== persistedOutputs[index],
+        )
       )
         throw new Error('Prepared Batch Mint outputs differ from the persisted request');
       submitted = true;
-      proofs = await wallet.completeBatchMint(preview);
+      proofs = await unwrapKeysetRejection(wallet.completeBatchMint(preview));
     } catch (error) {
       if (submitted && isBatchMintIncompatibility(error))
         this.markBatchMintUnavailable(operation.mintUrl, operation.method, error);
