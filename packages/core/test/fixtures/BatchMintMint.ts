@@ -114,6 +114,8 @@ export class FakeBatchMint {
   }> = [];
   /** Whether the mint advertises NUT-20 quote locking. */
   nut20 = true;
+  /** When set, every created quote is for this amount, whatever was requested. */
+  createdQuoteAmount?: number;
   /** `unavailable` answers info and keyset requests with HTTP 503. */
   metadataBehavior: 'ok' | 'unavailable' = 'ok';
   private createdQuotes = 0;
@@ -242,7 +244,7 @@ export class FakeBatchMint {
         quote: `created-${++this.createdQuotes}`,
         method: createMatch[1] as Method,
         unit: body.unit,
-        amount: body.amount == null ? undefined : Number(body.amount),
+        amount: this.createdQuoteAmount ?? (body.amount == null ? undefined : Number(body.amount)),
         amountPaid: 0,
         ...(body.pubkey ? { pubkey: body.pubkey } : {}),
       });

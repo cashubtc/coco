@@ -16,6 +16,7 @@ import type { MintMethod, PendingMintCheckResult } from './MintMethodHandler';
 import type { MintService } from '../../services/MintService';
 import type { WalletService } from '../../services/WalletService';
 import type { KeysetRejectionRefresh } from '../../services/KeysetRejectionRefresh';
+import { isKeysetRejection } from '../../infra/KeysetRejection';
 import type { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
@@ -324,12 +325,13 @@ export class MintOperationService {
             throw new Error(result.error ?? 'Mint execution failed');
         }
       } catch (e) {
-        await this.tryRecoverExecutingOperation(executing);
+        const replayError = await this.tryRecoverExecutingOperation(executing);
         // Once the rejection has left the handler and recovery has run. Nothing is stored for it:
-        // the operation stays as recovery left it.
+        // the operation stays as recovery left it. One refresh, for the submission or for the
+        // replay that followed it.
         await this.dependencies.keysetRejectionRefresh.refreshAfter(
           executing.mintUrl,
-          submissionError,
+          isKeysetRejection(submissionError) ? submissionError : replayError,
         );
 
         const current = await this.dependencies.mintOperationQueries.getById(operationId);
@@ -477,6 +479,18 @@ export class MintOperationService {
     op: ExecutingMintOperation,
     options?: { skipLock?: boolean },
   ): Promise<void> {
+    await this.recoverExecuting(op, options);
+  }
+
+  /**
+   * Recovers an executing operation. When the caller already holds the operation lock, the mint's
+   * error for a rejected replay is returned instead of acted on, so that the caller refreshes the
+   * mint's metadata once.
+   */
+  private async recoverExecuting(
+    op: ExecutingMintOperation,
+    options?: { skipLock?: boolean },
+  ): Promise<unknown> {
     await this.assertCanResolve(op.id);
     const releaseLock = options?.skipLock ? undefined : await this.acquireOperationLock(op.id);
     try {
@@ -548,12 +562,12 @@ export class MintOperationService {
         }
         case 'UNRESOLVED':
           await this.deferRecovery(executing, result.error);
-          // The outermost entry refreshes; execute() does so once after its own recovery attempt.
-          if (releaseLock)
-            await this.dependencies.keysetRejectionRefresh.refreshAfter(
-              executing.mintUrl,
-              result.cause,
-            );
+          // execute() holds the lock and refreshes once, for its submission or for this replay.
+          if (!releaseLock) return result.cause;
+          await this.dependencies.keysetRejectionRefresh.refreshAfter(
+            executing.mintUrl,
+            result.cause,
+          );
           break;
         case 'REJECTED':
           await this.failOperation(executing, result.error);
@@ -842,12 +856,14 @@ export class MintOperationService {
     return ops.filter((op): op is PendingMintOperation => op.state === 'pending');
   }
 
-  private async tryRecoverExecutingOperation(op: ExecutingMintOperation): Promise<void> {
+  /** Returns the mint's error when the replay it attempted was rejected. */
+  private async tryRecoverExecutingOperation(op: ExecutingMintOperation): Promise<unknown> {
     try {
-      await this.recoverExecutingOperation(op, { skipLock: true });
+      const replayError = await this.recoverExecuting(op, { skipLock: true });
       this.dependencies.logger?.info('Recovered executing mint operation after failure', {
         operationId: op.id,
       });
+      return replayError;
     } catch (recoveryError) {
       this.dependencies.logger?.warn(
         'Failed to recover executing mint operation, will retry on startup',

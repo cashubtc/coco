@@ -176,6 +176,30 @@ describe('Keyset rejection', () => {
     ]);
   });
 
+  it('refreshes when only the replay after a failed submission is rejected for its keyset', async () => {
+    const h = await setup();
+    await h.quote({ quote: 'q', method: 'bolt11', amount: 8, amountPaid: 8 });
+    const operation = await h.coco.ops.mint.prepare({
+      quote: { mintUrl, method: 'bolt11', quoteId: 'q' },
+      amount: 8,
+    });
+    const outputsPending = { code: 11004, detail: 'Outputs are pending' };
+    // The submission, then the replay that execute() attempts after it.
+    h.mint.mintRejections.push(outputsPending, keysetInactive);
+    const start = h.mint.requests.length;
+
+    const error = await h.coco.ops.mint.execute(operation.id).catch((caught: unknown) => caught);
+
+    expectMintError(error, outputsPending.code);
+    expect((await h.coco.ops.mint.get(operation.id))?.state).toBe('executing');
+    expect(paths(h, start)).toEqual([
+      '/v1/mint/bolt11',
+      '/v1/mint/quote/bolt11/q',
+      '/v1/mint/bolt11',
+      ...metadataRefresh,
+    ]);
+  });
+
   it('fails a Batch Mint Operation on the definitive code 12002', async () => {
     const h = await setup();
     for (const quote of ['a', 'b'])
@@ -277,6 +301,27 @@ describe('BOLT11 minting over cashu-ts', () => {
       }),
     ).rejects.toThrow('NUT-20');
     expect(h.mint.requests).toHaveLength(start + 1);
+  });
+});
+
+describe('BOLT11 quote amount', () => {
+  let h: BatchMintHarness;
+
+  afterEach(async () => {
+    await h.dispose();
+    h.uninstall();
+  });
+
+  it('refuses an unlocked quote the mint creates for another amount than requested', async () => {
+    const mint = new FakeBatchMint();
+    mint.nut20 = false;
+    mint.createdQuoteAmount = 11;
+    mint.install();
+    h = await createBatchMintHarness({ mint });
+
+    await expect(
+      h.coco.quotes.mint.create({ mintUrl: mint.mintUrl, method: 'bolt11', amount: 10 }),
+    ).rejects.toThrow('Mint returned a BOLT11 quote for a different amount');
   });
 });
 
