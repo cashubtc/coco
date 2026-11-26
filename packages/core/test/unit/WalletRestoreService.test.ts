@@ -25,6 +25,7 @@ describe('WalletRestoreService', () => {
     batchRestore: Wallet.prototype.batchRestore,
     checkProofsStates: Wallet.prototype.checkProofsStates,
     getFeesForProofs: Wallet.prototype.getFeesForProofs,
+    getMintInfo: Wallet.prototype.getMintInfo,
   };
 
   afterEach(() => {
@@ -80,6 +81,8 @@ describe('WalletRestoreService', () => {
     // Prevent actual network calls when a new Wallet is created inside sweepKeyset
     // by stubbing loadMint on the Wallet prototype.
     (Wallet.prototype as any).loadMint = mock(() => Promise.resolve());
+    // The stubbed load stores no mint info; Sweep reads the mint's array limit from it.
+    (Wallet.prototype as any).getMintInfo = () => ({ maxArrayLength: 500 });
 
     service = new WalletRestoreService(receive, transactionRunner, requestProvider, logger);
   });
@@ -172,6 +175,29 @@ describe('WalletRestoreService', () => {
         expect.anything(),
       );
     });
+
+    it.each([
+      [500, 100],
+      [40, 40],
+    ])(
+      'restores with batches within the array limit of %i the mint advertises',
+      async (maxArrayLength, batchSize) => {
+        (Wallet.prototype as any).getMintInfo = () => ({ maxArrayLength });
+        const batchRestore = mock(async () => ({ proofs: [] }));
+        Wallet.prototype.batchRestore = batchRestore;
+
+        expect(await service.sweepKeyset(mintUrl, keysetId, bip39seed)).toMatchObject({
+          status: 'noop',
+        });
+
+        expect(batchRestore).toHaveBeenCalledWith({
+          gapLimit: 300,
+          batchSize,
+          counter: 0,
+          keysetId,
+        });
+      },
+    );
 
     it('reports pending source value without creating an exchange', async () => {
       Wallet.prototype.batchRestore = mock(async () => ({ proofs: [makeProof(8, 'pending')] }));
@@ -368,6 +394,95 @@ describe('WalletRestoreService', () => {
   });
 
   describe('restoreKeyset', () => {
+    /**
+     * A wallet whose raw NUT-09 replay signs the batches starting at the given counters, reporting
+     * the given last signed counter for each, and reports every restored proof unspent.
+     */
+    const scanningWallet = (signed: Record<number, number>, maxArrayLength = 500) => {
+      const batches: Array<[start: number, count: number]> = [];
+      const wallet = {
+        getMintInfo: () => ({ maxArrayLength }),
+        restore: async (start: number, count: number, config?: { keysetId?: string }) => {
+          expect(config?.keysetId).toBe(keysetId);
+          batches.push([start, count]);
+          const last = signed[start];
+          return last === undefined
+            ? { proofs: [] }
+            : { proofs: [makeProof(1, `at-${start}`)], lastCounterWithSignature: last };
+        },
+        checkProofsStates: async (proofs: Proof[]) =>
+          proofs.map(() => ({ state: 'UNSPENT' as const })),
+      } as unknown as Wallet;
+      return { wallet, batches };
+    };
+    const restoreWith = async (wallet: Wallet) => {
+      const repositories = new MemoryRepositories();
+      await repositories.init();
+      await new WalletRestoreService(
+        receive,
+        new RepositoryCoreTransactionRunner(repositories),
+        requestProvider,
+      ).restoreKeyset(mintUrl, wallet, keysetId);
+      const ready = await repositories.proofRepository.getAvailableProofs(mintUrl);
+      return {
+        secrets: ready.map((proof) => proof.secret).sort(),
+        counter: (await repositories.counterRepository.getCounter(mintUrl, keysetId))?.counter,
+      };
+    };
+
+    it('sends four batches per wave and stops after three empty batches in a row', async () => {
+      const { wallet, batches } = scanningWallet({ 0: 41 });
+
+      const result = await restoreWith(wallet);
+
+      expect(batches).toEqual([
+        [0, 100],
+        [100, 100],
+        [200, 100],
+        [300, 100],
+      ]);
+      expect(result).toEqual({ secrets: ['at-0'], counter: 42 });
+    });
+
+    it('continues past a gap shorter than the gap limit', async () => {
+      const { wallet, batches } = scanningWallet({ 0: 10, 300: 350, 500: 530 });
+
+      const result = await restoreWith(wallet);
+
+      expect(batches.map(([start]) => start)).toEqual([
+        0, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100,
+      ]);
+      expect(result).toEqual({ secrets: ['at-0', 'at-300', 'at-500'], counter: 531 });
+    });
+
+    it('imports a signed batch that follows three empty ones in the same wave', async () => {
+      const { wallet, batches } = scanningWallet({ 300: 312 });
+
+      const result = await restoreWith(wallet);
+
+      expect(batches.map(([start]) => start)).toEqual([0, 100, 200, 300, 400, 500, 600, 700]);
+      expect(result).toEqual({ secrets: ['at-300'], counter: 313 });
+    });
+
+    it('returns the highest signed counter when several batches are signed', async () => {
+      const { wallet } = scanningWallet({ 0: 99, 100: 199, 200: 205 });
+
+      expect((await restoreWith(wallet)).counter).toBe(206);
+    });
+
+    it('stays within the array limit the mint advertises', async () => {
+      const { wallet, batches } = scanningWallet({ 40: 45 }, 40);
+
+      const result = await restoreWith(wallet);
+
+      // Batches of 40 need eight empty batches in a row to cover the gap limit of 300.
+      expect(batches.every(([, count]) => count === 40)).toBe(true);
+      expect(batches.map(([start]) => start)).toEqual(
+        Array.from({ length: 12 }, (_, index) => index * 40),
+      );
+      expect(result).toEqual({ secrets: ['at-40'], counter: 46 });
+    });
+
     it('commits the proof at counter zero and publishes only committed changes', async () => {
       const repositories = new MemoryRepositories();
       await repositories.init();
@@ -394,6 +509,7 @@ describe('WalletRestoreService', () => {
             : { proofs: [] },
         ),
         checkProofsStates: mock(async () => [{ state: 'PENDING' }]),
+        getMintInfo: () => ({ maxArrayLength: 500 }),
       } as unknown as Wallet;
       await restored.restoreKeyset(mintUrl, wallet, keysetId, 'USD');
       const proof = await repositories.proofRepository.getProofBySecret(mintUrl, 'zero');
@@ -432,6 +548,7 @@ describe('WalletRestoreService', () => {
               ? { proofs: [makeProof(8, 'pending')], lastCounterWithSignature: 4 }
               : { proofs: [] },
           checkProofsStates: async () => [{ state: remoteState }],
+          getMintInfo: () => ({ maxArrayLength: 500 }),
         } as unknown as Wallet;
         await restored.restoreKeyset(mintUrl, wallet, keysetId);
         expect(await repositories.proofRepository.getAvailableProofs(mintUrl)).toHaveLength(0);
@@ -461,6 +578,7 @@ describe('WalletRestoreService', () => {
               ? { proofs: [makeProof(8, 'bad')], lastCounterWithSignature: 10 }
               : { proofs: [] },
           checkProofsStates: async () => states,
+          getMintInfo: () => ({ maxArrayLength: 500 }),
         } as unknown as Wallet;
         await expect(restored.restoreKeyset(mintUrl, wallet, keysetId)).rejects.toThrow(
           'Malformed state check',

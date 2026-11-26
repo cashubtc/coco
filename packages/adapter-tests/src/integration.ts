@@ -3512,6 +3512,65 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
     });
 
     describe('Wallet Restore', () => {
+      it('should restore the balance and the Output Counter from the Wallet Seed', async () => {
+        const original = await createRepositories();
+        const restored = await createRepositories();
+        let restoredManager: Manager | undefined;
+        try {
+          mgr = await initializeCoco({ repo: original.repositories, seedGetter, logger });
+          await mgr.mint.addMint(mintUrl, { trusted: true });
+          await mintAmount(mgr, mintUrl, 100, testUnit);
+          // A Send and its Receive leave spent outputs behind, which Restore must replay too.
+          const { token } = await mgr.ops.send.execute(
+            await mgr.ops.send.prepare({ mintUrl, amount: { amount: 10, unit: testUnit } }),
+          );
+          await mgr.ops.receive.execute(await mgr.ops.receive.prepare({ token }));
+          const balance = await getMintTotalBalance(mgr, mintUrl, testUnit);
+          const keysetIds = [
+            ...new Set(
+              (
+                await original.repositories.proofRepository.getAvailableProofs(mintUrl, {
+                  unit: testUnit,
+                })
+              ).map((proof) => proof.id),
+            ),
+          ];
+          expect(balance).toBeGreaterThan(0);
+          expect(keysetIds.length).toBeGreaterThan(0);
+
+          // A new Coco Session for the same Wallet Seed, without any local proofs.
+          restoredManager = await initializeCoco({
+            repo: restored.repositories,
+            seedGetter,
+            logger,
+          });
+          expect(await getMintTotalBalance(restoredManager, mintUrl, testUnit)).toBe(0);
+          await restoredManager.wallet.restore(mintUrl, { units: [testUnit] });
+
+          expect(await getMintTotalBalance(restoredManager, mintUrl, testUnit)).toBe(balance);
+          for (const keysetId of keysetIds) {
+            const expected = await original.repositories.counterRepository.getCounter(
+              mintUrl,
+              keysetId,
+            );
+            const actual = await restored.repositories.counterRepository.getCounter(
+              mintUrl,
+              keysetId,
+            );
+            expect(expected?.counter).toBeGreaterThan(0);
+            expect(actual?.counter).toBe(expected!.counter);
+          }
+        } finally {
+          await restoredManager?.dispose();
+          if (mgr) {
+            await mgr.dispose();
+            mgr = undefined;
+          }
+          await restored.dispose();
+          await original.dispose();
+        }
+      });
+
       it('should sweep a mint from another seed', async () => {
         const { repositories, dispose } = await createRepositories();
         try {
