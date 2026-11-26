@@ -15,7 +15,7 @@ import type { Logger } from '../logging/Logger.ts';
 import type { SeedService } from './SeedService.ts';
 import type { MintRequestProvider } from '../infra/MintRequestProvider.ts';
 import { DEFAULT_UNIT, normalizeUnit } from '../amounts.ts';
-import { toCachedKeyset } from '../proofs/KeysetSelection.ts';
+import { normalizeKeysetUnit, toCachedKeyset } from '../proofs/KeysetSelection.ts';
 import { normalizeMintUrl } from '../utils.ts';
 
 interface CachedWallet {
@@ -111,7 +111,7 @@ export class WalletService {
       throw new Error('MintKeys is null. Cannot return a valid response.');
     }
 
-    const keysetUnit = this.normalizeKeysetUnit(mintKeyset.unit);
+    const keysetUnit = normalizeKeysetUnit(mintKeyset.unit);
     if (keysetUnit !== normalizedUnit) {
       throw new Error(
         `Active keyset ${keyset.id} unit ${keysetUnit} does not match requested unit ${normalizedUnit}`,
@@ -182,10 +182,6 @@ export class WalletService {
     return `${normalizeMintUrl(mintUrl)}::${normalizeUnit(unit, { defaultUnit: DEFAULT_UNIT })}`;
   }
 
-  private normalizeKeysetUnit(unit?: string | null): string {
-    return normalizeUnit(unit || DEFAULT_UNIT, { defaultUnit: DEFAULT_UNIT });
-  }
-
   private async buildWallet(
     mintUrl: string,
     unit: string,
@@ -200,7 +196,7 @@ export class WalletService {
         !isBlsKeyset(keyset.id) &&
         keyset.keypairs &&
         Object.keys(keyset.keypairs).length > 0 &&
-        this.normalizeKeysetUnit(keyset.unit) === normalizedUnit,
+        normalizeKeysetUnit(keyset.unit) === normalizedUnit,
     );
 
     if (validKeysets.length === 0) {
@@ -209,10 +205,7 @@ export class WalletService {
       );
     }
 
-    const keysetCache = validKeysets.map((keyset) => ({
-      ...toCachedKeyset(keyset),
-      unit: this.normalizeKeysetUnit(keyset.unit),
-    }));
+    const keysetCache = validKeysets.map(toCachedKeyset);
 
     const cache: KeyChainCache = {
       mintUrl: mint.mintUrl,
