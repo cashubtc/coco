@@ -171,12 +171,14 @@ export class PaymentRequestService {
    * otherwise ignores an amountless request's real cost; `prepare()` still takes the amount to pay.
    * It is parsed here because a bare amount uses the unit encoded in the request.
    * @returns The resolved payment request
+   * @throws PaymentRequestError if the request is locked only with `nutroot`, which Coco cannot pay
    */
   async parse(
     paymentRequest: string,
     options: { amount?: UnitAmountLike } = {},
   ): Promise<ResolvedPaymentRequest> {
     const decodedPaymentRequest = await this.readPaymentRequest(paymentRequest);
+    this.assertLockIsPayable(decodedPaymentRequest);
     const transport = this.getPaymentRequestTransport(decodedPaymentRequest);
     const unit = normalizeUnit(decodedPaymentRequest.unit, { defaultUnit: DEFAULT_UNIT });
     const spendingCondition = this.resolveSpendingCondition(decodedPaymentRequest);
@@ -207,12 +209,14 @@ export class PaymentRequestService {
 
   /**
    * Prepare a payment request for execution.
+   * @throws PaymentRequestError if the request is locked only with `nutroot`, which Coco cannot pay
    */
   async prepare(
     request: ResolvedPaymentRequest,
     options: { mintUrl: string; amount?: UnitAmount },
   ): Promise<PreparedPaymentRequest> {
     const { mintUrl, amount } = options;
+    this.assertLockIsPayable(request.paymentRequest);
     this.validateMint(mintUrl, request.allowedMints);
     const finalAmount = this.validateAmount(request, amount);
     const preparedRequest = await this.resolvePreparedRequest(request, finalAmount);
@@ -304,6 +308,19 @@ export class PaymentRequestService {
       decodedPaymentRequest,
     });
     return decodedPaymentRequest;
+  }
+
+  /**
+   * Coco locks a payment only through the request's NUT-10 option. A request that carries a
+   * `nutroot` lock and no NUT-10 lock cannot be satisfied, so refuse it instead of paying with
+   * unlocked proofs. A request that carries both is paid through its NUT-10 lock.
+   */
+  private assertLockIsPayable(paymentRequest: PaymentRequest): void {
+    if (paymentRequest.nutroot && !paymentRequest.nut10) {
+      throw new PaymentRequestError(
+        'Payment request is locked only with nutroot, which Coco cannot pay yet',
+      );
+    }
   }
 
   private validateMint(mintUrl: string, mints?: string[]): void {

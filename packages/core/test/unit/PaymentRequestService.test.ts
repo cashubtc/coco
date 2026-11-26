@@ -323,6 +323,43 @@ describe('PaymentRequestService', () => {
       expect(result.payableMints).toEqual([testMintUrl]);
     });
 
+    it('refuses a request locked only with nutroot instead of paying it unlocked', async () => {
+      const encoded = new PaymentRequest({
+        transport: [],
+        id: 'request-id-nutroot',
+        amount: 100,
+        unit: 'sat',
+        mints: [testMintUrl],
+        nutroot: { receiverKey: testPubkey },
+      }).toEncodedRequest();
+
+      const error = await service.parse(encoded).catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(PaymentRequestError);
+      expect((error as Error).message).toContain('nutroot');
+    });
+
+    it('pays a request with both a NUT-10 and a nutroot lock through its NUT-10 lock', async () => {
+      const encoded = new PaymentRequest({
+        transport: [],
+        id: 'request-id-nut10-nutroot',
+        amount: 100,
+        unit: 'sat',
+        mints: [testMintUrl],
+        nut10: p2pkNut10(),
+        nutroot: { receiverKey: testPubkey },
+      }).toEncodedRequest();
+
+      const result = await service.parse(encoded);
+
+      expect(result.paymentRequest.nutroot).toBeDefined();
+      expect(result.spendingCondition).toEqual({
+        kind: 'P2PK',
+        p2pk: { kind: 'P2PK', options: { pubkey: testPubkey }, rawNut10: p2pkNut10() },
+      });
+      expect(result.payableMints).toEqual([testMintUrl]);
+    });
+
     it('filters P2PK payable mints to trusted sufficient allowed mints with NUT-11 support', async () => {
       const pr = new PaymentRequest({
         transport: [],
@@ -640,6 +677,29 @@ describe('PaymentRequestService', () => {
           },
         },
       );
+    });
+
+    it('rejects a request locked only with nutroot before initializing a send operation', async () => {
+      const request: ResolvedPaymentRequest = {
+        paymentRequest: new PaymentRequest({
+          transport: [],
+          id: 'request-id-nutroot-prepare',
+          amount: 100,
+          unit: 'sat',
+          mints: [testMintUrl],
+          nutroot: { receiverKey: testPubkey },
+        }),
+        payableMints: [testMintUrl],
+        allowedMints: [testMintUrl],
+        amount: Amount.from(100),
+        unit: 'sat',
+        transport: { type: 'inband' },
+      };
+
+      await expect(service.prepare(request, { mintUrl: testMintUrl })).rejects.toBeInstanceOf(
+        PaymentRequestError,
+      );
+      expect(mockSendOperationService.init).not.toHaveBeenCalled();
     });
 
     it('initializes P2PK send operations for valid P2PK payment requests', async () => {
