@@ -33,6 +33,7 @@ import {
   createMintMetadataRemoteDouble,
   createMintServiceForMetadata,
 } from './MintMetadataRefresh.ts';
+import { noKeysetRejectionRefresh } from './KeysetRejectionRefresh.ts';
 
 export const receiveMint = 'https://mint.test';
 export const receiveKeys = testMintKeysetId();
@@ -164,6 +165,7 @@ export async function createReceiveEnvironment(
     transactionRunner,
     mintQueries: repositories.mintRepository,
     mintMetadataRefresh: createMintServiceForMetadata(repositories, metadataRemote, eventBus),
+    keysetRejectionRefresh: noKeysetRejectionRefresh,
     signer: new KeypairP2pkSigner(repositories.keyRingRepository),
     loadSeed,
     remote,

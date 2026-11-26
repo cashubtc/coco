@@ -1375,6 +1375,8 @@ export function runMintSwapCoordinatorContract(
         },
         mintService: fixture.dependencies.mintService,
         walletService: fixture.dependencies.walletService,
+        // This child never swaps, so no keyset rejection reaches it.
+        keysetRejectionRefresh: { refreshAfter: async () => {} },
         mintAdapter: fixture.dependencies.mintAdapter,
         eventBus: fixture.events,
         operationIdLock: fixture.dependencies.sourceOperationLock,

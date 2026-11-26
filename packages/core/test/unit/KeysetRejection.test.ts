@@ -13,9 +13,13 @@ const keysetInactive = { code: 12002, detail: 'Keyset is inactive' };
 const invoice =
   'lnbc2500u1pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdq5xysxxatsyp3k7enxv4jsxqzpuaztrnwngzn3kdzw5hydlzf03qdgm2hdq27cqv3agm2awhz5se903vruatfhq77w3ls4evs3ch9zw97j25emudupq63nyw24cg27h2rspfj9srp';
 
+/** What the mint receives when Coco fetches its metadata: info, then its keysets. */
+const metadataRefresh = ['/v1/info', '/v1/keysets'];
+
 /**
  * Keyset rejections at the Manager boundary: a real Manager over Memory repositories and an
- * in-process HTTP mint. The mint's own error reaches the caller and each flow ends as before.
+ * in-process HTTP mint. The mint's own error reaches the caller and each flow ends as before; once
+ * the outcome is stored, Coco fetches the mint's metadata once.
  */
 describe('Keyset rejection', () => {
   const harnesses: BatchMintHarness[] = [];
@@ -54,26 +58,50 @@ describe('Keyset rejection', () => {
     });
     expect((await h.coco.ops.mint.execute(operation.id)).state).toBe('finalized');
   };
+  /** Melt quotes are not served by the fake mint, so the canonical quote is stored directly. */
+  const storeMeltQuote = (h: BatchMintHarness) =>
+    h.repo.meltQuoteRepository.upsertMeltQuote(
+      meltQuoteFromBolt11Response(mintUrl, {
+        quote: 'melt',
+        request: invoice,
+        amount: Amount.from(3),
+        fee_reserve: Amount.zero(),
+        unit: 'sat',
+        expiry: 9_999_999_999,
+        state: 'UNPAID',
+        payment_preimage: null,
+      }),
+    );
   const expectMintError = (error: unknown, code = keysetInactive.code) => {
     expect(error).toBeInstanceOf(MintOperationError);
     expect((error as MintOperationError).code).toBe(code);
   };
 
-  it('fails a Send with the mint error and releases its inputs', async () => {
-    const h = await setup();
-    await fund(h, 'fund', 8);
-    const prepared = await h.coco.ops.send.prepare({ mintUrl, amount: 3 });
-    expect(prepared.needsSwap).toBe(true);
-    h.mint.swapRejections.push(keysetInactive);
-    const start = h.mint.requests.length;
+  it.each([
+    ['', 'ok'],
+    [' when the refresh fails', 'unavailable'],
+  ] as const)(
+    'fails a Send with the mint error and releases its inputs%s',
+    async (_name, metadataBehavior) => {
+      const h = await setup();
+      await fund(h, 'fund', 8);
+      const prepared = await h.coco.ops.send.prepare({ mintUrl, amount: 3 });
+      expect(prepared.needsSwap).toBe(true);
+      h.mint.swapRejections.push(keysetInactive);
+      h.mint.metadataBehavior = metadataBehavior;
+      const start = h.mint.requests.length;
 
-    const error = await h.coco.ops.send.execute(prepared.id).catch((caught: unknown) => caught);
+      const error = await h.coco.ops.send.execute(prepared.id).catch((caught: unknown) => caught);
 
-    expectMintError(error);
-    expect((await h.coco.ops.send.get(prepared.id))?.state).toBe('rolled_back');
-    expect(await readyAmounts(h)).toEqual([8]);
-    expect(paths(h, start)).toEqual(['/v1/swap']);
-  });
+      expectMintError(error);
+      expect((await h.coco.ops.send.get(prepared.id))?.state).toBe('rolled_back');
+      expect(await readyAmounts(h)).toEqual([8]);
+      // A failed refresh stops at the info request and changes nothing about the outcome.
+      expect(paths(h, start)).toEqual(
+        metadataBehavior === 'ok' ? ['/v1/swap', ...metadataRefresh] : ['/v1/swap', '/v1/info'],
+      );
+    },
+  );
 
   it('rolls back a Receive with the mint error', async () => {
     const sender = await setup();
@@ -92,24 +120,13 @@ describe('Keyset rejection', () => {
 
     expectMintError(error);
     expect((await receiver.coco.ops.receive.get(prepared.id))?.state).toBe('rolled_back');
-    expect(paths(sender, start)).toEqual(['/v1/swap']);
+    expect(paths(sender, start)).toEqual(['/v1/swap', ...metadataRefresh]);
   });
 
   it('defers a Melt whose pre-swap the mint rejects and reports the mint error', async () => {
     const h = await setup();
     await fund(h, 'fund', 8);
-    await h.repo.meltQuoteRepository.upsertMeltQuote(
-      meltQuoteFromBolt11Response(mintUrl, {
-        quote: 'melt',
-        request: invoice,
-        amount: Amount.from(3),
-        fee_reserve: Amount.zero(),
-        unit: 'sat',
-        expiry: 9_999_999_999,
-        state: 'UNPAID',
-        payment_preimage: null,
-      }),
-    );
+    await storeMeltQuote(h);
     const prepared = await h.coco.ops.melt.prepare({
       quote: { mintUrl, method: 'bolt11', quoteId: 'melt' },
     });
@@ -123,7 +140,7 @@ describe('Keyset rejection', () => {
     const deferred = await h.coco.ops.melt.get(prepared.id);
     expect(deferred?.state).toBe('executing');
     expect(deferred && 'error' in deferred && deferred.error).toBe(keysetInactive.detail);
-    expect(paths(h, start)).toEqual(['/v1/swap']);
+    expect(paths(h, start)).toEqual(['/v1/swap', ...metadataRefresh]);
   });
 
   it('leaves a bolt11 Mint Operation executing and reports the mint error', async () => {
@@ -145,7 +162,70 @@ describe('Keyset rejection', () => {
       '/v1/mint/bolt11',
       '/v1/mint/quote/bolt11/q',
       '/v1/mint/bolt11',
+      ...metadataRefresh,
     ]);
+
+    // Operation Recovery replays the same request; its rejection is followed by a refresh too.
+    h.mint.mintRejections.push(keysetInactive);
+    const recoveryStart = h.mint.requests.length;
+    expect((await h.coco.ops.mint.refresh(operation.id)).state).toBe('executing');
+    expect(paths(h, recoveryStart)).toEqual([
+      '/v1/mint/quote/bolt11/q',
+      '/v1/mint/bolt11',
+      ...metadataRefresh,
+    ]);
+  });
+
+  it('fails a Batch Mint Operation on the definitive code 12002', async () => {
+    const h = await setup();
+    for (const quote of ['a', 'b'])
+      await h.quote({ quote, method: 'bolt11', amount: 8, amountPaid: 8 });
+    h.mint.batchBehaviors.push(keysetInactive);
+    const start = h.mint.requests.length;
+
+    const operation = await h.coco.ops.mint.batch.execute({
+      mintUrl,
+      method: 'bolt11',
+      members: [{ quoteId: 'a' }, { quoteId: 'b' }],
+    });
+
+    expect(operation.state === 'failed' && operation.terminalFailure.code).toBe('12002');
+    expect(paths(h, start)).toEqual(['/v1/mint/bolt11/batch', ...metadataRefresh]);
+  });
+
+  it('stays off a v3 keyset the mint advertises after it rejects a Melt pre-swap', async () => {
+    const v3KeysetId = `02${'00'.repeat(32)}`;
+    const mint = new FakeBatchMint();
+    mint.install();
+    installed = mint;
+    let walletService: WalletService | undefined;
+    const plugin: Plugin<['walletService']> = {
+      name: 'wallet-service-probe',
+      required: ['walletService'],
+      onReady: ({ services }) => {
+        walletService = services.walletService;
+      },
+    };
+    const h = await createBatchMintHarness({ mint, plugins: [plugin] });
+    harnesses.push(h);
+    await fund(h, 'fund', 8);
+    await storeMeltQuote(h);
+    const prepared = await h.coco.ops.melt.prepare({
+      quote: { mintUrl, method: 'bolt11', quoteId: 'melt' },
+    });
+    // The pre-swap runs on the Wallet Service's cached Wallet Instance.
+    const { wallet: used } = await walletService!.getWalletWithActiveKeysetId(mintUrl, 'sat');
+    // The mint rotates to a v3 keyset, newer and as cheap as the current one.
+    mint.advertisedKeysets.push({ id: v3KeysetId, unit: 'sat', active: true, input_fee_ppk: 0 });
+    mint.swapRejections.push(keysetInactive);
+
+    expectMintError(await h.coco.ops.melt.execute(prepared.id).catch((caught: unknown) => caught));
+
+    expect(used.keyChain.hasKeyset(v3KeysetId)).toBe(false);
+    const { wallet, keysetId } = await walletService!.getWalletWithActiveKeysetId(mintUrl, 'sat');
+    expect(wallet).not.toBe(used);
+    expect(keysetId).toBe(mint.keysetId('sat'));
+    expect(wallet.keyChain.hasKeyset(v3KeysetId)).toBe(false);
   });
 });
 

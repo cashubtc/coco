@@ -205,6 +205,14 @@ export class FakeBatchMint {
           ...this.advertisedKeysets,
         ],
       });
+    if (path === '/v1/keys')
+      return json({
+        keysets: this.keysets.map(({ unit, keys }) => ({
+          id: keys.keysetId,
+          unit,
+          keys: serializeMintKeys(keys.pubKeys),
+        })),
+      });
     const keysMatch = path.match(/^\/v1\/keys\/(.+)$/);
     if (keysMatch) {
       const keyset = this.keysets.find(({ keys }) => keys.keysetId === keysMatch[1]);

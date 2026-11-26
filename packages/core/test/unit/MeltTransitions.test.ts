@@ -53,6 +53,7 @@ import { deserializeOutputData } from '../../utils.ts';
 import { testMintInfo, testMintKeypairs, testMintKeysetId } from '../fixtures/MintMetadata.ts';
 import { mintQuoteFromBolt11Fixture } from '../normalizedMintQuoteFixtures.ts';
 import { overrideTransactions } from '../overrideTransactions.ts';
+import { noKeysetRejectionRefresh } from '../fixtures/KeysetRejectionRefresh.ts';
 
 const mintUrl = 'https://mint.test';
 const keysetId = testMintKeysetId();
@@ -565,6 +566,7 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
         quoteLifecycle,
         mintService,
         walletService,
+        keysetRejectionRefresh: noKeysetRejectionRefresh,
         mintAdapter,
         eventBus: bus,
       });
@@ -1245,6 +1247,7 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
       updatedAt: 1,
     };
     const service = new MeltOperationService({
+      keysetRejectionRefresh: noKeysetRejectionRefresh,
       handlerProvider: new MeltHandlerProvider({ bolt11: handler }),
       meltOperationQueries: repositories.meltOperationRepository,
       proofQueries: repositories.proofRepository,

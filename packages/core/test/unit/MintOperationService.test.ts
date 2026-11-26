@@ -56,6 +56,7 @@ import type { Logger } from '../../logging/Logger';
 import { serializeOutputData, deserializeOutputData } from '../../utils';
 import type { CoreProof } from '../../types';
 import { MintQuoteValidationError, QuoteIdentityConflictError } from '../../models/Error';
+import { noKeysetRejectionRefresh } from '../fixtures/KeysetRejectionRefresh.ts';
 
 describe('MintOperationService', () => {
   const mintUrl = 'https://mint.test';
@@ -427,6 +428,7 @@ describe('MintOperationService', () => {
     mintScopedLock = new MintScopedLock();
     service = new MintOperationService({
       mintScopedLock,
+      keysetRejectionRefresh: noKeysetRejectionRefresh,
       handlerProvider,
       mintOperationQueries: operationRepo,
       quoteLifecycle,

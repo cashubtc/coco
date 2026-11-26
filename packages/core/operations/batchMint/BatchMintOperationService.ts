@@ -21,6 +21,7 @@ import type { ProofRepository } from '../../repositories/index.ts';
 import type { KeyRingService } from '../../services/KeyRingService.ts';
 import type { MintService } from '../../services/MintService.ts';
 import type { WalletService } from '../../services/WalletService.ts';
+import type { KeysetRejectionRefresh } from '../../services/KeysetRejectionRefresh.ts';
 import type { CoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
 import {
   deserializeOutputData,
@@ -96,6 +97,8 @@ export interface BatchMintOperationServiceDependencies {
     'isTrustedMint' | 'getNut29BatchMintLimit' | 'refreshAndCommitIfStale'
   >;
   walletService: Pick<WalletService, 'getWalletWithActiveKeysetId'>;
+  /** Refreshes the mint's metadata after the mint rejects a submission for its keyset. */
+  keysetRejectionRefresh: Pick<KeysetRejectionRefresh, 'refreshAfter'>;
   keyRingService: Pick<KeyRingService, 'getMintQuoteKeyPair'>;
   loadSeed: () => Promise<Uint8Array>;
   eventBus: EventBus<CoreEvents>;
@@ -363,17 +366,30 @@ export class BatchMintOperationService {
       submitted = true;
       proofs = await unwrapKeysetRejection(wallet.completeBatchMint(preview));
     } catch (error) {
-      if (submitted && isBatchMintIncompatibility(error))
-        this.markBatchMintUnavailable(operation.mintUrl, operation.method, error);
-      if (submitted && error instanceof MintOperationError) {
-        if (context === 'initial' && DEFINITIVE_REJECTION_CODES.has(error.code))
-          return this.fail(operation, error.message, String(error.code));
-        if (context === 'recovery' && RESTORE_AFTER_REPLAY_CODES.has(error.code))
-          return this.restoreRejectedReplay(operation, error);
-      }
-      return this.defer(operation, message(error));
+      const stored = await this.settleRejectedSubmission(operation, context, submitted, error);
+      // After the failure or deferral is stored.
+      if (submitted)
+        await this.dependencies.keysetRejectionRefresh.refreshAfter(operation.mintUrl, error);
+      return stored;
     }
     return this.settle(operation, proofs);
+  }
+
+  private async settleRejectedSubmission(
+    operation: ExecutingBatchMintOperation,
+    context: 'initial' | 'recovery',
+    submitted: boolean,
+    error: unknown,
+  ): Promise<BatchMintOperation> {
+    if (submitted && isBatchMintIncompatibility(error))
+      this.markBatchMintUnavailable(operation.mintUrl, operation.method, error);
+    if (submitted && error instanceof MintOperationError) {
+      if (context === 'initial' && DEFINITIVE_REJECTION_CODES.has(error.code))
+        return this.fail(operation, error.message, String(error.code));
+      if (context === 'recovery' && RESTORE_AFTER_REPLAY_CODES.has(error.code))
+        return this.restoreRejectedReplay(operation, error);
+    }
+    return this.defer(operation, message(error));
   }
 
   private async loadQuoteKeys(operation: ExecutingBatchMintOperation): Promise<string[]> {

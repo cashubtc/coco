@@ -242,6 +242,24 @@ export class MintService {
     const cached = await this.metadata.queries.getMetadata(mintUrl);
     if (cached && cached.mint.updatedAt >= Math.floor(Date.now() / 1000) - MINT_REFRESH_TTL_S)
       return cached;
+    return this.fetchAndCommit(mintUrl, cached, defer);
+  }
+
+  /**
+   * @internal Fetch and commit the mint's metadata however fresh the stored snapshot is, as after
+   * the mint rejected a keyset. Otherwise behaves as `refreshAndCommitIfStale`, including keeping
+   * the first commit when an observation has the same second-precision timestamp.
+   */
+  async refreshAndCommit(mintUrl: string, defer?: DeferPublication): Promise<MintMetadata> {
+    mintUrl = normalizeMintUrl(mintUrl);
+    return this.fetchAndCommit(mintUrl, await this.metadata.queries.getMetadata(mintUrl), defer);
+  }
+
+  private async fetchAndCommit(
+    mintUrl: string,
+    cached: MintMetadata | null,
+    defer?: DeferPublication,
+  ): Promise<MintMetadata> {
     const observation = await this.mintAdapter.fetchMintMetadata(mintUrl, cached?.keysets ?? []);
     const result = await this.metadata.transactionRunner.run((tx) =>
       tx.mintMetadata.applyObservation(observation),

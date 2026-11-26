@@ -397,15 +397,15 @@ describe('MintBolt11Handler', () => {
     });
 
     it('leaves other mint operation errors unresolved during recovery', async () => {
-      (wallet.mintProofs as Mock<any>).mockRejectedValueOnce(
-        new MintOperationError(20001, 'Unknown quote'),
-      );
+      const unknownQuote = new MintOperationError(20001, 'Unknown quote');
+      (wallet.mintProofs as Mock<any>).mockRejectedValueOnce(unknownQuote);
 
       const result = await handler.recoverExecuting(buildRecoverContext());
 
       expect(result).toEqual({
         status: 'UNRESOLVED',
         error: 'Unknown quote',
+        cause: unknownQuote,
       });
       expect(wallet.mintProofs).toHaveBeenCalledTimes(1);
     });

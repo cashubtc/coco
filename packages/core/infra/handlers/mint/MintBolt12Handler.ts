@@ -220,6 +220,7 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
       return {
         status: 'UNRESOLVED',
         error: error instanceof Error ? error.message : String(error),
+        cause: error,
       };
     }
   }

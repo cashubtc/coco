@@ -215,6 +215,7 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
             return {
               status: 'UNRESOLVED',
               error: err.message,
+              cause: err,
             };
           }
         } else {

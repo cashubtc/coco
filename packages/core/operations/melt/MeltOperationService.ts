@@ -22,6 +22,7 @@ import type {
 } from './MeltMethodHandler';
 import type { MintService } from '../../services/MintService';
 import type { WalletService } from '../../services/WalletService';
+import type { KeysetRejectionRefresh } from '../../services/KeysetRejectionRefresh';
 import type { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
@@ -78,6 +79,8 @@ export interface MeltOperationServiceDependencies {
   quoteLifecycle: MeltQuoteLifecycle;
   mintService: Pick<MintService, 'refreshAndCommitIfStale'>;
   walletService: Pick<WalletService, 'getWalletWithActiveKeysetId'>;
+  /** Refreshes the mint's metadata after the mint rejects a pre-swap for its keyset. */
+  keysetRejectionRefresh: Pick<KeysetRejectionRefresh, 'refreshAfter'>;
   mintAdapter: MintAdapter;
   eventBus: EventBus<CoreEvents>;
   logger?: Logger;
@@ -267,6 +270,7 @@ export class MeltOperationService {
         'inflight',
       );
       let meltInputs = authorization.inputProofs;
+      let preSwapError: unknown;
       try {
         const handler = this.dependencies.handlerProvider.get(executing.method);
         const { wallet } = await this.dependencies.walletService.getWalletWithActiveKeysetId(
@@ -274,12 +278,17 @@ export class MeltOperationService {
           executing.unit,
         );
         if (executing.needsSwap) {
-          const swapped = await handler.swap({
-            operation: executing as any,
-            wallet,
-            inputProofs: meltInputs,
-            logger: this.dependencies.logger,
-          });
+          const swapped = await handler
+            .swap({
+              operation: executing as any,
+              wallet,
+              inputProofs: meltInputs,
+              logger: this.dependencies.logger,
+            })
+            .catch((error: unknown) => {
+              preSwapError = error;
+              throw error;
+            });
           const swapAppliedAt = Date.now();
           const applied = await this.runChecked(executing.id, (tx) =>
             tx.perform(applyMeltSwapResult, {
@@ -301,7 +310,12 @@ export class MeltOperationService {
         const quote = await this.recordRemoteResult(executing, remote);
         return await this.applyObservedQuote(executing, quote);
       } catch (error) {
+        // Any failure defers the operation for recovery, the pre-swap's included.
         await this.defer(executing.id, error);
+        await this.dependencies.keysetRejectionRefresh.refreshAfter(
+          executing.mintUrl,
+          preSwapError,
+        );
         throw error;
       }
     } finally {

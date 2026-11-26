@@ -28,6 +28,7 @@ import {
   releaseMeltAfterNonPayment,
 } from '../../operations/melt/MeltTransitions.ts';
 import { serializeOutputData } from '../../utils.ts';
+import { noKeysetRejectionRefresh } from '../fixtures/KeysetRejectionRefresh.ts';
 
 const mintUrl = 'https://mint.test';
 const quoteId = 'quote-1';
@@ -171,6 +172,7 @@ describe('MeltOperationService coordinator', () => {
       },
       mintService: { refreshAndCommitIfStale: mock(async () => ({ keysets: [] })) },
       walletService: { getWalletWithActiveKeysetId: mock(async () => ({ wallet: {} })) },
+      keysetRejectionRefresh: noKeysetRejectionRefresh,
       mintAdapter: {},
       eventBus: { emit: mock(async () => undefined) },
     };

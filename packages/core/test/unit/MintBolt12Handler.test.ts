@@ -492,15 +492,15 @@ describe('MintBolt12Handler', () => {
       expiry: Math.floor(Date.now() / 1000) - 1,
       amount_paid: Amount.from(10),
     });
-    (wallet.mintProofsBolt12 as Mock<any>).mockRejectedValueOnce(
-      new Error('Authentication session expired'),
-    );
+    const expired = new Error('Authentication session expired');
+    (wallet.mintProofsBolt12 as Mock<any>).mockRejectedValueOnce(expired);
 
     const result = await handler.recoverExecuting(buildRecoverContext(expiredQuote));
 
     expect(result).toEqual({
       status: 'UNRESOLVED',
       error: 'Authentication session expired',
+      cause: expired,
     });
   });
 

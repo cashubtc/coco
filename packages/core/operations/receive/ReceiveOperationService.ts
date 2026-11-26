@@ -21,6 +21,8 @@ import {
 import { createKeyChain } from '@core/proofs/KeysetSelection.ts';
 import { prepareProofsForReceiving } from '@core/proofs/ProofPreparation.ts';
 import type { MintService } from '@core/services/MintService.ts';
+import type { KeysetRejectionRefresh } from '@core/services/KeysetRejectionRefresh.ts';
+import { isKeysetRejection } from '@core/infra/KeysetRejection.ts';
 import { decodeTokenWithKeysets } from '@core/tokens/TokenDecoding.ts';
 import type { CoreTransactionRunner } from '@core/transactions/CoreTransaction.ts';
 import {
@@ -67,6 +69,8 @@ export interface ReceiveOperationServiceDependencies {
   transactionRunner: CoreTransactionRunner;
   mintQueries: { isTrustedMint(mintUrl: string): Promise<boolean> };
   mintMetadataRefresh: Pick<MintService, 'refreshAndCommitIfStale'>;
+  /** Refreshes the mint's metadata after the mint rejects a Receive swap for its keyset. */
+  keysetRejectionRefresh: Pick<KeysetRejectionRefresh, 'refreshAfter'>;
   signer: { forPreparation(): P2pkSigner };
   loadSeed: () => Promise<Uint8Array>;
   remote: ReceiveRemote;
@@ -79,6 +83,7 @@ export interface ReceiveOperationServiceDependencies {
 /** Coordinates preflight, committed transitions, remote effects, and best-effort live events. */
 export class ReceiveOperationService {
   private readonly operationLocks = new OperationIdLock();
+  private readonly queuedRefreshes = new WeakSet<Publications>();
   private readonly mintLock: MintScopedLock;
   private recovering = false;
 
@@ -207,28 +212,33 @@ export class ReceiveOperationService {
       try {
         received = await remote.receive(executing);
       } catch (error) {
-        if (error instanceof MintOperationError && INITIAL_REJECTION_CODES.has(error.code)) {
-          try {
-            const failedInput = {
-              operationId: id,
-              expectedRevision: executing.revision ?? 0,
-              updatedAt: Date.now(),
-              error: error.message,
-            };
-            const failed = await this.deps.transactionRunner.run((tx) =>
-              tx.perform(failReceiveExecution, failedInput),
-            );
-            this.publishRolledBack(publications, failed);
-            throw error;
-          } catch (failure) {
-            if (!(failure instanceof ReceiveOperationConflictError)) throw failure;
+        try {
+          if (error instanceof MintOperationError && INITIAL_REJECTION_CODES.has(error.code)) {
+            try {
+              const failedInput = {
+                operationId: id,
+                expectedRevision: executing.revision ?? 0,
+                updatedAt: Date.now(),
+                error: error.message,
+              };
+              const failed = await this.deps.transactionRunner.run((tx) =>
+                tx.perform(failReceiveExecution, failedInput),
+              );
+              this.publishRolledBack(publications, failed);
+              throw error;
+            } catch (failure) {
+              if (!(failure instanceof ReceiveOperationConflictError)) throw failure;
+            }
           }
+          // A competing recovery or a lost response may already have committed this exact request.
+          await this.tryRecover(id, publications);
+          const recovered = await this.require(id);
+          if (recovered.state === 'finalized') return recovered;
+          throw error;
+        } finally {
+          // Runs after the lock is released and the stored failure is published.
+          this.refreshAfterKeysetRejection(publications, executing.mintUrl, error);
         }
-        // A competing recovery or a lost response may already have committed this exact request.
-        await this.tryRecover(id, publications);
-        const recovered = await this.require(id);
-        if (recovered.state === 'finalized') return recovered;
-        throw error;
       }
       return this.apply(executing, received, publications);
     });
@@ -297,6 +307,7 @@ export class ReceiveOperationService {
         } catch (error) {
           // Replay failure cannot establish non-effect. Reobserve before deciding from Restore.
           if (!(error instanceof MintOperationError)) throw error;
+          this.refreshAfterKeysetRejection(publications, claimed.mintUrl, error);
           states = await this.observeStates(remote, claimed.inputProofs);
         }
       }
@@ -496,6 +507,16 @@ export class ReceiveOperationService {
         operation: result.operation,
       }),
     );
+  }
+
+  /**
+   * Queue the mint metadata refresh to run once the locked work is done and published, at most
+   * once per run even when a replay in the same run is rejected again.
+   */
+  private refreshAfterKeysetRejection(publications: Publications, mintUrl: string, error: unknown) {
+    if (!isKeysetRejection(error) || this.queuedRefreshes.has(publications)) return;
+    this.queuedRefreshes.add(publications);
+    publications.push(() => this.deps.keysetRejectionRefresh.refreshAfter(mintUrl, error));
   }
 
   private publishRolledBack(publications: Publications, operation: RolledBackReceiveOperation) {

@@ -15,6 +15,7 @@ import { getOutputProofSecrets, hasPendingData, isTerminalOperation } from './Mi
 import type { MintMethod, PendingMintCheckResult } from './MintMethodHandler';
 import type { MintService } from '../../services/MintService';
 import type { WalletService } from '../../services/WalletService';
+import type { KeysetRejectionRefresh } from '../../services/KeysetRejectionRefresh';
 import type { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
@@ -84,6 +85,8 @@ export class MintOperationService {
         'isTrustedMint' | 'assertMethodUnitSupported' | 'refreshAndCommitIfStale'
       >;
       walletService: Pick<WalletService, 'getWalletWithActiveKeysetId'>;
+      /** Refreshes the mint's metadata after the mint rejects a submission for its keyset. */
+      keysetRejectionRefresh: Pick<KeysetRejectionRefresh, 'refreshAfter'>;
       mintAdapter: MintAdapter;
       eventBus: EventBus<CoreEvents>;
       logger?: Logger;
@@ -290,18 +293,24 @@ export class MintOperationService {
         operation: executing,
       });
 
+      let submissionError: unknown;
       try {
         const handler = this.dependencies.handlerProvider.get(executing.method);
         const { wallet } = await this.dependencies.walletService.getWalletWithActiveKeysetId(
           executing.mintUrl,
           executing.unit,
         );
-        const result = await handler.execute({
-          mintAdapter: this.dependencies.mintAdapter,
-          logger: this.dependencies.logger,
-          operation: executing as any,
-          wallet,
-        });
+        const result = await handler
+          .execute({
+            mintAdapter: this.dependencies.mintAdapter,
+            logger: this.dependencies.logger,
+            operation: executing as any,
+            wallet,
+          })
+          .catch((error: unknown) => {
+            submissionError = error;
+            throw error;
+          });
 
         switch (result.status) {
           case 'ISSUED':
@@ -316,6 +325,12 @@ export class MintOperationService {
         }
       } catch (e) {
         await this.tryRecoverExecutingOperation(executing);
+        // Once the rejection has left the handler and recovery has run. Nothing is stored for it:
+        // the operation stays as recovery left it.
+        await this.dependencies.keysetRejectionRefresh.refreshAfter(
+          executing.mintUrl,
+          submissionError,
+        );
 
         const current = await this.dependencies.mintOperationQueries.getById(operationId);
         if (current && isTerminalOperation(current)) {
@@ -533,6 +548,12 @@ export class MintOperationService {
         }
         case 'UNRESOLVED':
           await this.deferRecovery(executing, result.error);
+          // The outermost entry refreshes; execute() does so once after its own recovery attempt.
+          if (releaseLock)
+            await this.dependencies.keysetRejectionRefresh.refreshAfter(
+              executing.mintUrl,
+              result.cause,
+            );
           break;
         case 'REJECTED':
           await this.failOperation(executing, result.error);

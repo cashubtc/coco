@@ -207,6 +207,7 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
       return {
         status: 'UNRESOLVED',
         error: error instanceof Error ? error.message : String(error),
+        cause: error,
       };
     }
   }

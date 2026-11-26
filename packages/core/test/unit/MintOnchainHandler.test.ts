@@ -436,15 +436,15 @@ describe('MintOnchainHandler', () => {
   });
 
   it('leaves non-protocol expiry errors unresolved during onchain recovery', async () => {
-    (wallet.mintProofsOnchain as Mock<any>).mockRejectedValueOnce(
-      new Error('Authentication session expired'),
-    );
+    const expired = new Error('Authentication session expired');
+    (wallet.mintProofsOnchain as Mock<any>).mockRejectedValueOnce(expired);
 
     const result = await handler.recoverExecuting(buildRecoverContext());
 
     expect(result).toEqual({
       status: 'UNRESOLVED',
       error: 'Authentication session expired',
+      cause: expired,
     });
   });
 
