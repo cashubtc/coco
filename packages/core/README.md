@@ -414,6 +414,12 @@ Trust changes, including `addMint()` with a different `trusted` value for a Know
 before Coco refreshes stale metadata. If that refresh fails, the trust change still succeeds and
 publishes the stored metadata; only a mint with no stored metadata propagates the refresh failure.
 
+Coco never loads a mint's keysets inside an operation. When a mint rejects a swap, a mint or a
+batch mint for its keyset (a NUT-00 code from 12000 to 12999), the operation reports the mint's
+own error and ends as it would for any such rejection; once that outcome is stored, Coco fetches
+the mint's current metadata so the next operation prepares on keysets the mint accepts. This
+refresh is best effort: a failure is logged and does not change the operation's outcome.
+
 ### WalletApi
 
 - `receive(token: Token | string): Promise<void>`
@@ -424,6 +430,7 @@ publishes the stored metadata; only a mint with no stored metadata propagates th
 - `balances.totalByUnit(scope?: { mintUrls?: string[]; units?: string[]; trustedOnly?: boolean }): Promise<BalancesByUnit>`
 - `restore(mintUrl: string, options?: { units?: string[] }): Promise<void>`
 - `sweep(mintUrl: string, bip39seed: Uint8Array, options?: { units?: string[] }): Promise<SweepReport>`
+  (`bip39seed` must be a 64-byte `Uint8Array`)
 - `decodeToken(tokenString: string, mintUrl?: string): Promise<Token>`
 - `encodeToken(token: Token, opts?: { removeDleq?: boolean }): string`
 - `encodePaymentRequest(paymentRequest: PaymentRequest, version?: 'creqA' | 'creqB'): string`
@@ -458,6 +465,10 @@ restart or deduplicate a later sweep against unresolved exchanges. See the [Swee
 - `prepare(request: ResolvedPaymentRequest, options: { mintUrl: string; amount?: UnitAmountLike }): Promise<PreparedPaymentRequest>`
 - `execute(transaction: PreparedPaymentRequest): Promise<PaymentRequestExecutionResult>`
 - `incoming.create(input: CreateIncomingPaymentRequestInput): Promise<PaymentRequestReceiveOperation>`
+
+`parse()` and `prepare()` reject a request locked only with `nutroot` with a `PaymentRequestError`,
+because Coco locks a payment only through the request's NUT-10 option. A request that carries both
+is paid through its NUT-10 lock.
 
 ### QuoteApi
 

@@ -40,6 +40,7 @@ await coco.wallet.restore('https://mint.url', { units: ['usd'] });
 > **Note:** The `restore()` method will add and trust the mint automatically. If you want to display mint info to the user before proceeding use `addMint()` as described in [Adding a Mint](../starting/adding-mints.md)
 
 Restore adds missing proofs without deleting local proofs or lowering the stored output counter.
+It scans each keyset in batches no larger than the mint's advertised NUT-06 `max_array_length`.
 Repeating it preserves existing proof state and operation ownership. Each keyset commits independently;
 a failure on a later keyset leaves earlier successful keysets committed.
 
@@ -54,7 +55,8 @@ not imported.
 Sweep exchanges a source Wallet Seed's available proofs into the current Wallet through ordinary
 Receive operations. It adds and trusts the mint automatically, and creates ordinary Receive history.
 Only `UNSPENT` proofs are exchanged. `PENDING` proofs are skipped and may be swept later if they become
-available; `SPENT` proofs are excluded.
+available; `SPENT` proofs are excluded. The source Wallet Seed must be a 64-byte `Uint8Array`; any other
+seed is rejected with `ProofValidationError` before Sweep adds the mint.
 
 ```ts
 // Input validation and mint setup can reject before keyset processing starts.
