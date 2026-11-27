@@ -13,6 +13,7 @@ import type { P2pkSigner } from '@core/keypairs/P2pkSigner.ts';
 import type { Logger } from '@core/logging/Logger.ts';
 import {
   MintOperationError,
+  PaymentRequestError,
   ProofValidationError,
   ReceiveOperationConflictError,
   TokenValidationError,
@@ -29,7 +30,7 @@ import {
   mapProofToCoreProof,
   normalizeMintUrl,
 } from '@core/utils.ts';
-import { MintScopedLock } from '../MintScopedLock.ts';
+import type { MintScopedLock } from '../MintScopedLock.ts';
 import { OperationIdLock } from '../OperationIdLock.ts';
 import {
   createReceiveOperation,
@@ -41,6 +42,8 @@ import {
   type FinalizedReceiveOperation,
   type RolledBackReceiveOperation,
 } from './ReceiveOperation.ts';
+import { ReceivePreparation, emitReceiveEvent } from './ReceivePreparation.ts';
+import { prepareReceiveToken } from './prepareReceiveToken.ts';
 import type { ReceiveOperationQueries } from './ReceiveOperationQueries.ts';
 import type { ReceiveRemote, ReceiveRemoteSession } from './ReceiveRemote.ts';
 
@@ -48,11 +51,15 @@ import {
   prepareReceive,
   beginReceiveExecution,
   claimReceiveRecovery,
-  applyReceiveResult,
-  failReceiveExecution,
-  cancelReceive,
   cleanupReceiveInit,
 } from './ReceiveTransitions.ts';
+import {
+  settleReceiveResult,
+  cancelReceiveDelivery,
+  failReceiveDelivery,
+} from '../paymentRequestReceive/PaymentRequestReceiveTransitions.ts';
+import type { PaymentRequestReceiveTransportHandlerProvider } from '@core/infra/handlers/paymentRequestReceive';
+import type { PaymentRequestReceiveOperation } from '../paymentRequestReceive/PaymentRequestReceiveOperation.ts';
 import type { ApplyReceiveResult } from './ReceiveTransitionTypes.ts';
 
 // Request-validation failures prove non-effect only on the first submission, before any recovery
@@ -70,6 +77,7 @@ export interface ReceiveOperationServiceDependencies {
   signer: { forPreparation(): P2pkSigner };
   loadSeed: () => Promise<Uint8Array>;
   remote: ReceiveRemote;
+  paymentRequestTransports: Pick<PaymentRequestReceiveTransportHandlerProvider, 'deactivate'>;
   eventBus: Pick<EventBus<CoreEvents>, 'emit'>;
   logger?: Logger;
   /** Shared across operation services to serialize same-mint preparation. Not required for correctness. */
@@ -79,12 +87,12 @@ export interface ReceiveOperationServiceDependencies {
 /** Coordinates preflight, committed transitions, remote effects, and best-effort live events. */
 export class ReceiveOperationService {
   private readonly operationLocks = new OperationIdLock();
-  private readonly mintLock: MintScopedLock;
   private recovering = false;
 
-  constructor(private readonly deps: ReceiveOperationServiceDependencies) {
-    this.mintLock = deps.mintScopedLock ?? new MintScopedLock();
-  }
+  constructor(
+    private readonly deps: ReceiveOperationServiceDependencies,
+    private readonly preparation = new ReceivePreparation(deps),
+  ) {}
 
   /** Decode and sign an in-memory draft. Preparation is the first durable Receive state. */
   async init(
@@ -148,39 +156,16 @@ export class ReceiveOperationService {
       const stored = await this.deps.operations.getById(draft.id);
       if (stored && stored.state !== 'init') throw new ReceiveOperationConflictError(draft.id);
       const operation = stored ?? draft;
-      const metadata = await this.deps.mintMetadataRefresh.refreshAndCommitIfStale(
-        operation.mintUrl,
+      const prepared = await this.preparation.withInput(operation, (input) =>
+        this.deps.transactionRunner.run((tx) => tx.perform(prepareReceive, input)),
       );
-      const activeKeys = createKeyChain(operation.mintUrl, operation.unit, metadata.keysets)
-        .getCheapestKeyset()
-        .toMintKeys();
-      if (!activeKeys) throw new ProofValidationError('Active keyset is missing mint keys');
-      const seed = await this.deps.loadSeed();
-      const updatedAt = Date.now();
-      const releaseMint = await this.mintLock.acquire(operation.mintUrl);
-      let prepared;
-      try {
-        const preparedInput = { operation, activeKeys, seed, updatedAt };
-        prepared = await this.deps.transactionRunner.run((tx) =>
-          tx.perform(prepareReceive, preparedInput),
-        );
-      } finally {
-        releaseMint();
-      }
-      publications.push(() => this.emit('counter:updated', prepared.counter));
-      publications.push(() =>
-        this.emit('receive-op:prepared', {
-          mintUrl: prepared.operation.mintUrl,
-          operationId: prepared.operation.id,
-          operation: prepared.operation,
-        }),
-      );
+      publications.push(() => this.preparation.publish(prepared));
       return prepared.operation;
     });
   }
 
   async receive(token: Token | string): Promise<void> {
-    await this.execute(await this.prepare(await this.init(token)));
+    await this.execute(await prepareReceiveToken(this, token));
   }
 
   async execute(operationOrId: ReceiveOperation | string): Promise<FinalizedReceiveOperation> {
@@ -215,7 +200,7 @@ export class ReceiveOperationService {
               error: error.message,
             };
             const failed = await this.deps.transactionRunner.run((tx) =>
-              tx.perform(failReceiveExecution, failedInput),
+              tx.perform(failReceiveDelivery, failedInput),
             );
             this.publishRolledBack(publications, failed);
             throw error;
@@ -249,7 +234,7 @@ export class ReceiveOperationService {
         updatedAt: Date.now(),
       };
       const result = await this.deps.transactionRunner.run((tx) =>
-        tx.perform(applyReceiveResult, resultInput),
+        tx.perform(settleReceiveResult, resultInput),
       );
       if (!result)
         throw new ProofValidationError('Cannot finalize receive operation: outputs not persisted');
@@ -271,7 +256,7 @@ export class ReceiveOperationService {
         updatedAt: Date.now(),
       };
       const local = await this.deps.transactionRunner.run((tx) =>
-        tx.perform(applyReceiveResult, localInput),
+        tx.perform(settleReceiveResult, localInput),
       );
       if (local) {
         this.publishApplied(publications, local);
@@ -317,7 +302,7 @@ export class ReceiveOperationService {
         updatedAt: Date.now(),
       };
       const result = await this.deps.transactionRunner.run((tx) =>
-        tx.perform(applyReceiveResult, resultInput),
+        tx.perform(settleReceiveResult, resultInput),
       );
       if (result) {
         this.publishApplied(publications, result);
@@ -331,7 +316,7 @@ export class ReceiveOperationService {
           error: 'Recovered: input proofs spent without recoverable outputs',
         };
         const failed = await this.deps.transactionRunner.run((tx) =>
-          tx.perform(failReceiveExecution, failedInput),
+          tx.perform(failReceiveDelivery, failedInput),
         );
         this.publishRolledBack(publications, failed);
       }
@@ -374,9 +359,23 @@ export class ReceiveOperationService {
         createdByOperationId: operation.id,
       }),
     };
-    const result = await this.deps.transactionRunner.run((tx) =>
-      tx.perform(applyReceiveResult, resultInput),
-    );
+    const commit = () =>
+      this.deps.transactionRunner.run((tx) => tx.perform(settleReceiveResult, resultInput));
+    let result;
+    try {
+      result = await commit();
+    } catch (error) {
+      // Preserve live claim recovery after a one-time settlement write failure.
+      // Reapply the same mint response locally, without making a second submission.
+      if (
+        operation.source?.type !== 'payment-request' ||
+        error instanceof ProofValidationError ||
+        error instanceof ReceiveOperationConflictError ||
+        error instanceof PaymentRequestError
+      )
+        throw error;
+      result = await commit();
+    }
     if (!result) throw new ProofValidationError('Receive result is incomplete');
     this.publishApplied(publications, result);
     return result.operation;
@@ -424,7 +423,7 @@ export class ReceiveOperationService {
         reason,
       };
       const result = await this.deps.transactionRunner.run((tx) =>
-        tx.perform(cancelReceive, resultInput),
+        tx.perform(cancelReceiveDelivery, resultInput),
       );
       if (result) this.publishRolledBack(publications, result);
     });
@@ -468,7 +467,13 @@ export class ReceiveOperationService {
     }
   }
 
-  private publishApplied(publications: Publications, result: ApplyReceiveResult) {
+  private publishApplied(
+    publications: Publications,
+    result: ApplyReceiveResult & { completedRequest?: PaymentRequestReceiveOperation },
+  ) {
+    const completed = result.completedRequest;
+    const transports = this.deps.paymentRequestTransports;
+    if (completed) publications.push(() => transports.deactivate(completed, this.deps.logger));
     if (!result.changed) return;
     const byKeyset = new Map<string, typeof result.savedProofs>();
     for (const proof of result.savedProofs) {
@@ -498,20 +503,10 @@ export class ReceiveOperationService {
   }
 
   private publishRolledBack(publications: Publications, operation: RolledBackReceiveOperation) {
-    publications.push(() =>
-      this.emit('receive-op:rolled-back', {
-        mintUrl: operation.mintUrl,
-        operationId: operation.id,
-        operation,
-      }),
-    );
+    publications.push(() => this.preparation.publishRollback(operation));
   }
 
   private async emit<K extends keyof CoreEvents>(event: K, payload: CoreEvents[K]): Promise<void> {
-    try {
-      await this.deps.eventBus.emit(event, payload, { throwOnError: true });
-    } catch (error) {
-      this.deps.logger?.warn('Receive event listener failed after commit', { event, error });
-    }
+    return emitReceiveEvent(this.deps, event, payload);
   }
 }

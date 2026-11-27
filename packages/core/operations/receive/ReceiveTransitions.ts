@@ -1,4 +1,8 @@
 import { Amount, sumProofs } from '@cashu/cashu-ts';
+import {
+  amountsFromReceive,
+  assertPaymentRequestNetAmount,
+} from '../paymentRequestReceive/PaymentRequestReceiveOperation.ts';
 import { normalizeUnit } from '@core/amounts.ts';
 import { ProofValidationError, ReceiveOperationConflictError } from '@core/models/Error.ts';
 import type {
@@ -76,6 +80,18 @@ export const beginReceiveExecution = defineTransition(
         current.id,
         `Cannot execute Receive in state '${current.state}'`,
       );
+    // Direct execution of an older prepared child must observe the same first-swap limit.
+    const requestOperationId =
+      current.source?.type === 'payment-request'
+        ? current.source.requestOperationId
+        : (await tx.paymentRequestReceiveAttempts.getByReceiveOperationId(current.id))
+            ?.requestOperationId;
+    if (requestOperationId) {
+      const parent = await tx.paymentRequestReceiveOperations.getById(requestOperationId);
+      if (!parent)
+        throw new ProofValidationError('Payment request receive operation was not found');
+      assertPaymentRequestNetAmount(parent.amount, amountsFromReceive(current).netAmount);
+    }
     assertRequest(current);
     const executing: ExecutingReceiveOperation = {
       ...current,
@@ -215,7 +231,13 @@ export const cancelReceive = defineTransition(
 export const cleanupReceiveInit = defineTransition(
   async (tx, operationId: string): Promise<void> => {
     const current = await tx.receiveOperations.getById(operationId);
-    if (current?.state === 'init') await tx.receiveOperations.delete(operationId);
+    if (current?.state !== 'init') return;
+    const attempt =
+      current.source?.type === 'payment-request'
+        ? await tx.paymentRequestReceiveAttempts.getById(current.source.attemptId)
+        : await tx.paymentRequestReceiveAttempts.getByReceiveOperationId(operationId);
+    if (attempt && attempt.state !== 'rejected' && attempt.state !== 'finalized') return;
+    await tx.receiveOperations.delete(operationId);
   },
 );
 

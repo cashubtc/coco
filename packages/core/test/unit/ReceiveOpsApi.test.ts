@@ -78,7 +78,7 @@ describe('ReceiveOpsApi', () => {
     const token = { mint: mintUrl, proofs: [] } as Token;
     const result = await api.prepare({ token });
 
-    expect(receiveOperationService.init).toHaveBeenCalledWith(token);
+    expect(receiveOperationService.init).toHaveBeenCalledWith(token, undefined);
     expect(receiveOperationService.prepare).toHaveBeenCalledWith(initOperation);
     expect(result).toBe(preparedOperation);
   });

@@ -189,6 +189,41 @@ const result = await coco.paymentRequests.incoming.claimPayload(request.id, payl
 console.log(result.operation.state);
 ```
 
+Coco checks the amount the wallet will receive after the mint deducts its input fee.
+For a 100-sat request with a 1-sat input fee, a delivery of 100 sats returns a
+`rejected` attempt and leaves the request open. A delivery of 101 sats covers the
+request. Coco checks this before sending the first swap to the mint.
+
+The prepared child, its outputs and counter allocation, and the attempt's child ID,
+fee, and net amount commit in one wallet transaction. If linking fails during a live
+claim, the transport can redeliver the same payload. Redelivery also works if the mint
+rotates its output keyset during preparation. On restart, Coco checks a saved
+payload against its hash before preparing it. A temporary failure leaves it available
+for another recovery pass. For wallets that saved the child before the link, Coco
+finds the original child using its attempt ID. If both the child and the payload are missing, the wallet
+can accept redelivery.
+
+When the swap succeeds, Coco saves the wallet's proofs, finalizes the child and the
+delivery attempt, records the fee and net amount, and clears the saved payload in one
+wallet transaction. The same commit completes a single-use request. A reusable request
+stays active for the next payment. Receive events and transport cleanup happen after
+commit. A transport cleanup failure leaves the payment settled.
+
+If Coco rolls back a child, it rejects that attempt and clears its payload. If the mint
+accepted the swap but the wallet could not commit it, the child stays `executing` and
+the attempt stays `receiving`. Direct child commands and restart use the same settlement
+logic. For older wallets with a finalized child and an unfinished request, recovery
+repairs the local records without another swap or wallet credit.
+
+On startup, Coco resumes a `prepared` child using its saved inputs and outputs.
+For an `executing` child, recovery first checks the wallet for output proofs saved by that
+child. If the wallet has the complete set, recovery can finalize the child offline.
+Otherwise it checks the inputs at the mint. It replays the saved swap if all inputs are
+unspent, or asks the mint to restore the saved outputs if all inputs are spent. If the
+mint is unreachable and the local proofs are incomplete, the attempt stays in `receiving`.
+To retry recovery while the wallet is open, call
+`coco.paymentRequests.incoming.recovery.run()`.
+
 For Nostr delivery, install a Nostr payment-request plugin. The plugin registers the
 transport handler that creates the Nostr descriptor, subscribes to relays, decrypts
 incoming events, and calls `ingestPayload()`:
@@ -201,8 +236,16 @@ await coco.paymentRequests.incoming.create({
 });
 ```
 
-Core then validates the payload, deduplicates redeliveries, runs the normal receive
-operation, and completes the request if it is single-use.
+Coco records the delivery before starting the Receive Operation. Replaying a settled
+payment returns the original attempt. A duplicate in progress reports that the
+operation is busy. For a single-use request, only one competing payment proceeds.
+
+If a payment arrives during `activate()`, call `ingestPayload()` on the same Coco
+instance that called `create()`. If activation then throws, Coco waits for that
+instance's acceptance step before checking whether to cancel the request. `create()`
+reports the transport error, and an accepted payment can still settle.
+If another session handles the delivery, cancellation can happen before that session
+records the attempt.
 
 Incoming payment request creation with `nut10` is not supported yet. Receiver-side
 validation of incoming payloads against a request's `nut10` requirement is also

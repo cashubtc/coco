@@ -7,6 +7,7 @@ import {
   ReceiveOperationService,
   type ReceiveOperationServiceDependencies,
 } from '../../operations/receive/ReceiveOperationService.ts';
+import { ReceivePreparation } from '../../operations/receive/ReceivePreparation.ts';
 import type { ReceiveRemoteSession } from '../../operations/receive/ReceiveRemote.ts';
 import type { PreparedOrLaterOperation } from '../../operations/receive/ReceiveOperation.ts';
 import type { Repositories, RepositoryTransactionScope } from '../../repositories/index.ts';
@@ -161,6 +162,7 @@ export async function createReceiveEnvironment(
   const metadataRemote = createMintMetadataRemoteDouble();
   const dependencies: ReceiveOperationServiceDependencies = {
     operations: repositories.receiveOperationRepository,
+    paymentRequestTransports: { deactivate: async () => {} },
     transactionRunner,
     mintQueries: repositories.mintRepository,
     mintMetadataRefresh: createMintServiceForMetadata(repositories, metadataRemote, eventBus),
@@ -178,6 +180,7 @@ export async function createReceiveEnvironment(
     repositories,
     transactionRunner,
     transactions,
+    preparation: new ReceivePreparation(dependencies),
     eventBus,
     remote,
     loadSeed,
