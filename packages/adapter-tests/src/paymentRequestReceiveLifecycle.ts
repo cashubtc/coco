@@ -279,6 +279,151 @@ export function runPaymentRequestReceiveLifecycleTests(
       }, 30000);
     }
 
+    it('recovers another request while a live claim holds its request lock', async () => {
+      const firstPayload = await fundedPayload();
+      const secondPayload = { ...(await fundedPayload()), id: 'busy-request' };
+      const paused = Promise.withResolvers<void>();
+      const resume = Promise.withResolvers<void>();
+      let pauseNext = false;
+      const { open, repositories } = await createWallet(async () => {
+        if (!pauseNext) return;
+        pauseNext = false;
+        paused.resolve();
+        await resume.promise;
+      });
+      const manager = await open();
+      await manager.mint.addMint(mintUrl, { trusted: true });
+      const incoming = manager.paymentRequests.incoming;
+      const first = await incoming.create({ requestId: firstPayload.id, amount: 7, unit });
+      const paid = await incoming.claimPayload(first, firstPayload);
+      const second = await incoming.create({ requestId: secondPayload.id, amount: 7, unit });
+      const attempts = repositories.paymentRequestReceiveAttemptRepository;
+      // Reproduce the old split commit: the first child finished, but its request and attempt did not.
+      await repositories.paymentRequestReceiveOperationRepository.update(first);
+      await attempts.update({ ...paid.attempt, state: 'receiving' });
+      pauseNext = true;
+      const claim = incoming.claimPayload(second, secondPayload);
+      try {
+        await Promise.race([paused.promise, claim]);
+        await incoming.recovery.run();
+        expect((await attempts.getByRequestOperationId(second.id))[0]?.state).toBe('validating');
+        expect((await attempts.getById(paid.attempt.id))?.state).toBe('finalized');
+        expect((await incoming.get(first.id))?.state).toBe('completed');
+        expect((await manager.wallet.balances.total({ units: [unit] })).spendable.toString()).toBe(
+          '7',
+        );
+      } finally {
+        resume.resolve();
+        await claim;
+      }
+      expect((await claim).attempt.state).toBe('finalized');
+      expect((await manager.wallet.balances.total({ units: [unit] })).spendable.toString()).toBe(
+        '14',
+      );
+    }, 30000);
+
+    it('preserves a cancellation committed by another session before legacy settlement repair', async () => {
+      const payload = await fundedPayload();
+      const { open, repositories } = await createWallet();
+      const deactivated: string[] = [];
+      const handler: TransportHandler = {
+        type: 'post',
+        activate() {},
+        deactivate(operation) {
+          deactivated.push(operation.state);
+        },
+      };
+      const receiver = await open(handler);
+      const other = await open(handler);
+      await receiver.mint.addMint(mintUrl, { trusted: true });
+      const incoming = receiver.paymentRequests.incoming;
+      const request = await incoming.create({
+        requestId: payload.id,
+        amount: 7,
+        unit,
+        transport: post,
+      });
+      const paid = await incoming.claimPayload(request, payload);
+      // Older wallets could finalize the child and attempt while leaving the parent active.
+      await repositories.paymentRequestReceiveOperationRepository.update(request);
+
+      // With only a finalized attempt, recovery's first transaction repairs the selected parent.
+      // Let the other session commit after selection, just before the adapter opens that transaction.
+      const transact = repositories.withTransaction.bind(repositories);
+      repositories.withTransaction = async (work) => {
+        repositories.withTransaction = transact;
+        const cancelled = await other.paymentRequests.incoming.cancel(
+          request.id,
+          'Order withdrawn',
+        );
+        expect(cancelled.state).toBe('cancelled');
+        return transact(work);
+      };
+      try {
+        await incoming.recovery.run();
+      } finally {
+        repositories.withTransaction = transact;
+      }
+      const stored = await incoming.get(request.id);
+      expect(stored?.state).toBe('cancelled');
+      expect(stored?.error).toBe('Order withdrawn');
+      expect(stored?.completedAt).toBe(undefined);
+      const replay = await incoming.claimPayload(request, payload);
+      expect(replay.attempt.id).toBe(paid.attempt.id);
+      expect(replay.attempt.state).toBe('finalized');
+      expect(replay.receiveOperation?.state).toBe('finalized');
+      expect((await receiver.wallet.balances.total({ units: [unit] })).spendable.toString()).toBe(
+        '7',
+      );
+      expect(deactivated.join(',')).toBe('completed,cancelled');
+    }, 30000);
+
+    it('publishes settlement and cleans up the transport after the payment commits', async () => {
+      const payload = await fundedPayload();
+      const { open, repositories } = await createWallet();
+      const observations: string[] = [];
+      async function observe(caller: 'transport' | 'event', requestId: string) {
+        const parent =
+          await repositories.paymentRequestReceiveOperationRepository.getById(requestId);
+        const [attempt] =
+          await repositories.paymentRequestReceiveAttemptRepository.getByRequestOperationId(
+            requestId,
+          );
+        const balance = await receiver.wallet.balances.total({ units: [unit] });
+        observations.push(
+          [caller, parent?.state, attempt?.state, balance.spendable.toString()].join('/'),
+        );
+      }
+      const receiver: Manager = await open({
+        type: 'post',
+        activate() {},
+        async deactivate(operation) {
+          await observe('transport', operation.id);
+          throw new Error('Transport temporarily unavailable');
+        },
+      });
+      await receiver.mint.addMint(mintUrl, { trusted: true });
+      const incoming = receiver.paymentRequests.incoming;
+      const request = await incoming.create({
+        requestId: payload.id,
+        amount: 7,
+        unit,
+        transport: post,
+      });
+      const off = receiver.on('receive-op:finalized', () => observe('event', request.id));
+      try {
+        const paid = await incoming.ingestPayload(payload);
+        expect(paid.attempt.state).toBe('finalized');
+        await incoming.recovery.run();
+        expect((await incoming.ingestPayload(payload)).attempt.id).toBe(paid.attempt.id);
+        expect(observations.sort().join(',')).toBe(
+          'event/completed/finalized/7,transport/completed/finalized/7',
+        );
+      } finally {
+        off();
+      }
+    }, 30000);
+
     for (const seedOutcome of ['available', 'unavailable'] as const) {
       it(`returns the payment settled by another session when the original seed becomes ${seedOutcome}`, async () => {
         const payload = await fundedPayload();

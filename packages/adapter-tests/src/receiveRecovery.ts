@@ -202,50 +202,261 @@ export function runReceiveRecoveryTests(
       }
     }, 30000);
 
-    for (const failedWrite of ['attempt', 'parent'] as const) {
-      it(`returns a settled claim when the first ${failedWrite} finalization write fails`, async () => {
+    for (const failure of ['once', 'until restart'] as const) {
+      it(`commits the whole payment once when settlement writes fail ${failure}`, async () => {
         const token = await payment();
-        const { manager, repositories } = await wallet();
+        let childId: string | undefined;
+        let blocked = true;
+        let failedCommits = 0;
+        let sawWholePayment = false;
+        const receiver = await wallet((repo) => {
+          const transact = repo.withTransaction.bind(repo);
+          repo.withTransaction = (work) =>
+            transact(async (scope) => {
+              const result = await work(scope);
+              if (!blocked || !childId) return result;
+              const child = await scope.receiveOperationRepository.getById(childId);
+              if (child?.state !== 'finalized') return result;
+              const attempt =
+                await scope.paymentRequestReceiveAttemptRepository.getByReceiveOperationId(
+                  child.id,
+                );
+              const parent =
+                attempt &&
+                (await scope.paymentRequestReceiveOperationRepository.getById(
+                  attempt.requestOperationId,
+                ));
+              const outputs = await scope.proofRepository.getProofsByOperationId(mintUrl, child.id);
+              sawWholePayment =
+                attempt?.state === 'finalized' &&
+                !attempt.payload &&
+                attempt.fee?.equals(child.fee) === true &&
+                attempt.netAmount?.equals(child.amount.subtract(child.fee)) === true &&
+                parent?.state === 'completed' &&
+                sumProofs(outputs).toString() === '7';
+              failedCommits++;
+              if (failure === 'once') blocked = false;
+              throw new Error('Cannot commit payment settlement');
+            });
+        });
+        const { manager, repositories } = receiver;
         const incoming = manager.paymentRequests.incoming;
         const request = await incoming.create({ amount: { amount: 7, unit }, mints: [mintUrl] });
-        const payload = { ...token, id: request.requestId, unit };
-        let failures = 0;
-        function failOnce() {
-          if (!failures) {
-            failures++;
-            throw new Error('Temporary finalization write failure');
-          }
-        }
-        if (failedWrite === 'attempt') {
-          const attempts = repositories.paymentRequestReceiveAttemptRepository;
-          const update = attempts.update.bind(attempts);
-          attempts.update = async (attempt) => {
-            if (attempt.state === 'finalized') failOnce();
-            return update(attempt);
-          };
-        } else {
-          const parents = repositories.paymentRequestReceiveOperationRepository;
-          const update = parents.update.bind(parents);
-          parents.update = async (parent) => {
-            if (parent.state === 'completed') failOnce();
-            return update(parent);
-          };
-        }
+        const payload = { ...token, unit, id: request.requestId };
+        const off = manager.once('receive-op:prepared', ({ operationId }) => {
+          childId = operationId;
+        });
+        let finalizedEvents = 0;
+        const offFinalized = manager.on('receive-op:finalized', () => {
+          finalizedEvents++;
+        });
         const wire = observeMint(mintUrl);
         try {
-          const paid = await incoming.claimPayload(request, payload);
-          expect(failures).toBe(1);
-          expect(paid.attempt.state).toBe('finalized');
-          expect(paid.operation.state).toBe('completed');
-          expect(paid.receiveOperation?.state).toBe('finalized');
-          expect((await incoming.claimPayload(request, payload)).attempt.id).toBe(paid.attempt.id);
-          expect(await spendable(manager)).toBe('7');
+          const claim = incoming.claimPayload(request, payload);
+          if (failure === 'once') {
+            const paid = await claim;
+            expect(paid.attempt.state).toBe('finalized');
+            expect(paid.operation.state).toBe('completed');
+            expect(paid.receiveOperation?.state).toBe('finalized');
+            expect(finalizedEvents).toBe(1);
+          } else {
+            await expect(claim).rejects.toThrow('Cannot commit payment settlement');
+            expect((await incoming.get(request.id))?.state).toBe('active');
+            expect((await manager.ops.receive.get(childId!))?.state).toBe('executing');
+            expect(
+              (
+                await repositories.paymentRequestReceiveAttemptRepository.getByReceiveOperationId(
+                  childId!,
+                )
+              )?.state,
+            ).toBe('receiving');
+            expect(await spendable(manager)).toBe('0');
+            expect(finalizedEvents).toBe(0);
+          }
+          expect(sawWholePayment).toBe(true);
+          expect(failedCommits).toBeGreaterThan(0);
+          expect(wire.committed).toBe(1);
+          blocked = false;
+          const { manager: reopened } = await receiver.restart();
+          const replay = await reopened.paymentRequests.incoming.claimPayload(request.id, payload);
+          expect(replay.attempt.state).toBe('finalized');
+          expect(replay.attempt.receiveOperationId).toBe(childId);
+          expect(replay.operation.state).toBe('completed');
+          expect(await spendable(reopened)).toBe('7');
           expect(wire.swaps).toHaveLength(1);
+        } finally {
+          off();
+          offFinalized();
+          wire.dispose();
+        }
+      }, 30000);
+    }
+
+    for (const priorState of ['receiving', 'finalized'] as const) {
+      it(`repairs an old ${priorState} attempt and active request without resubmitting the child`, async () => {
+        const token = await payment();
+        const receiver = await wallet();
+        const { manager, repositories } = receiver;
+        const request = await manager.paymentRequests.incoming.create({
+          amount: { amount: 7, unit },
+          mints: [mintUrl],
+        });
+        const payload = { ...token, unit, id: request.requestId };
+        const wire = observeMint(mintUrl);
+        try {
+          const paid = await manager.paymentRequests.incoming.claimPayload(request, payload);
+          const childId = paid.attempt.receiveOperationId!;
+          await repositories.paymentRequestReceiveOperationRepository.update(request);
+          if (priorState === 'receiving') {
+            await repositories.paymentRequestReceiveAttemptRepository.update({
+              ...paid.attempt,
+              state: priorState,
+              receiveOperationId: undefined,
+              fee: undefined,
+              netAmount: undefined,
+              payload,
+            });
+          } else {
+            // Old wallets may retain the finalized attempt after pruning its child.
+            await repositories.receiveOperationRepository.delete(childId);
+          }
+          const { manager: reopened, repositories: persisted } = await receiver.restart();
+          const repaired = await reopened.paymentRequests.incoming.get(request.id);
+          expect(repaired?.state).toBe('completed');
+          await reopened.paymentRequests.incoming.recovery.run();
+          const attempt = await persisted.paymentRequestReceiveAttemptRepository.getById(
+            paid.attempt.id,
+          );
+          expect(attempt?.state).toBe('finalized');
+          expect(attempt?.receiveOperationId).toBe(childId);
+          expect(attempt?.fee?.toString()).toBe(paid.attempt.fee?.toString());
+          expect(attempt?.netAmount?.toString()).toBe('7');
+          expect(attempt?.payload).toBe(undefined);
+          expect((await reopened.paymentRequests.incoming.get(request.id))?.completedAt).toBe(
+            repaired?.completedAt,
+          );
+          expect(await spendable(reopened)).toBe('7');
+          expect(wire.swaps).toHaveLength(1);
+          expect(wire.restored).toBe(0);
         } finally {
           wire.dispose();
         }
       }, 30000);
     }
+
+    it('accepts a second payment on a reusable request after reopening the wallet', async () => {
+      const first = await payment();
+      const second = await payment();
+      const receiver = await wallet();
+      const incoming = receiver.manager.paymentRequests.incoming;
+      const request = await incoming.create({
+        amount: { amount: 7, unit },
+        mints: [mintUrl],
+        singleUse: false,
+      });
+      const firstPayload = { ...first, unit, id: request.requestId };
+      const wire = observeMint(mintUrl);
+      try {
+        const paid = await incoming.claimPayload(request, firstPayload);
+        const { manager, repositories } = await receiver.restart();
+        const reopened = manager.paymentRequests.incoming;
+        const next = await reopened.claimPayload(request, {
+          ...second,
+          unit,
+          id: request.requestId,
+        });
+        expect((await reopened.claimPayload(request, firstPayload)).attempt.id).toBe(
+          paid.attempt.id,
+        );
+        expect(next.operation.state).toBe('active');
+        const attempts =
+          await repositories.paymentRequestReceiveAttemptRepository.getByRequestOperationId(
+            request.id,
+          );
+        expect(attempts).toHaveLength(2);
+        expect(new Set(attempts.map((attempt) => attempt.receiveOperationId)).size).toBe(2);
+        expect(
+          attempts.every(
+            (attempt) => attempt.state === 'finalized' && attempt.netAmount?.toString() === '7',
+          ),
+        ).toBe(true);
+        expect(wire.swaps).toHaveLength(2);
+        expect(await spendable(manager)).toBe('14');
+      } finally {
+        wire.dispose();
+      }
+    }, 30000);
+
+    for (const command of ['execute', 'cancel'] as const) {
+      it(`updates the request attempt during direct child ${command}`, async () => {
+        const token = await payment();
+        const { manager, repositories } = await wallet();
+        const incoming = manager.paymentRequests.incoming;
+        const request = await incoming.create({ amount: { amount: 7, unit }, mints: [mintUrl] });
+        let observedAttempt: string | undefined;
+        let observedParent: string | undefined;
+        const off = manager.once('receive-op:prepared', async ({ operationId }) => {
+          if (command === 'execute') await manager.ops.receive.execute(operationId);
+          else await manager.ops.receive.cancel(operationId, 'Stopped before submission');
+          observedAttempt = (
+            await repositories.paymentRequestReceiveAttemptRepository.getByReceiveOperationId(
+              operationId,
+            )
+          )?.state;
+          observedParent = (await incoming.get(request.id))?.state;
+        });
+        const wire = observeMint(mintUrl);
+        try {
+          const result = await incoming.claimPayload(request, {
+            ...token,
+            unit,
+            id: request.requestId,
+          });
+          expect(observedAttempt).toBe(command === 'execute' ? 'finalized' : 'rejected');
+          expect(observedParent).toBe(command === 'execute' ? 'completed' : 'active');
+          expect(result.attempt.state).toBe(observedAttempt);
+          expect(result.attempt.payload).toBe(undefined);
+          if (command === 'cancel') expect(result.attempt.error).toBe('Stopped before submission');
+          expect(await spendable(manager)).toBe(command === 'execute' ? '7' : '0');
+          expect(wire.swaps).toHaveLength(command === 'execute' ? 1 : 0);
+        } finally {
+          off();
+          wire.dispose();
+        }
+      }, 30000);
+    }
+
+    it('rejects the attempt when direct child refresh confirms its inputs were spent elsewhere', async () => {
+      const token = await payment();
+      const other = await wallet();
+      await other.manager.wallet.receive(token);
+      const { manager, repositories } = await wallet();
+      const incoming = manager.paymentRequests.incoming;
+      const request = await incoming.create({ amount: { amount: 7, unit }, mints: [mintUrl] });
+      const payload = { ...token, unit, id: request.requestId };
+      const wire = observeMint(mintUrl, 'before swap');
+      try {
+        await expect(incoming.claimPayload(request, payload)).rejects.toThrow();
+        const [pending] = await manager.ops.receive.listInFlight();
+        if (!pending) throw new Error('Expected an executing child');
+        wire.reconnect();
+        const child = await manager.ops.receive.refresh(pending.id);
+        expect(child.state).toBe('rolled_back');
+        const stored =
+          await repositories.paymentRequestReceiveAttemptRepository.getByReceiveOperationId(
+            child.id,
+          );
+        expect(stored?.state).toBe('rejected');
+        expect(stored?.error).toContain('input proofs spent');
+        expect(stored?.payload).toBe(undefined);
+        expect((await incoming.get(request.id))?.state).toBe('active');
+        expect((await incoming.claimPayload(request, payload)).attempt.id).toBe(stored?.id);
+        expect(await spendable(manager)).toBe('0');
+        expect(wire.committed).toBe(0);
+      } finally {
+        wire.dispose();
+      }
+    }, 30000);
 
     for (const gross of [100, 101]) {
       it(`checks the NUT-18 net amount before swapping a ${gross}-unit delivery`, async () => {
@@ -500,7 +711,6 @@ export function runReceiveRecoveryTests(
               wire.reconnect();
               await reopened.ops.receive.recovery.run();
               expect((await reopened.ops.receive.get(child.id))?.state).toBe('finalized');
-              if (request) await reopened.paymentRequests.incoming.recovery.run();
             }
             const final = await reopened.ops.receive.get(child.id);
             expect(final?.state).toBe('finalized');
