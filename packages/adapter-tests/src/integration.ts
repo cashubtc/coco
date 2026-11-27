@@ -138,7 +138,11 @@ const testMintRequest: RequestFn = async <T>(options: RequestOptions): Promise<T
   void ttl;
   void logger;
 
-  const body = requestBody === undefined ? undefined : JSONInt.stringify(requestBody);
+  // A string body was already serialized by cashu-ts (blind auth signs those bytes): send it as is.
+  const body =
+    requestBody === undefined || typeof requestBody === 'string'
+      ? requestBody
+      : JSONInt.stringify(requestBody);
   if (requestBody !== undefined && body === undefined) {
     throw new TypeError('Failed to serialize JSON body');
   }

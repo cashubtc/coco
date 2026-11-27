@@ -1,12 +1,12 @@
 import type { Logger } from '../logging/Logger.ts';
-import { RequestRateLimiter } from './RequestRateLimiter.ts';
+import { RequestRateLimiter, type MintRequestBody } from './RequestRateLimiter.ts';
 
 /**
  * A function compatible with cashu-ts's `_customRequest` parameter.
  */
 export type MintRequestFn = <T>(options: {
   endpoint: string;
-  requestBody?: Record<string, unknown>;
+  requestBody?: MintRequestBody;
   headers?: Record<string, string>;
   method?: string;
 }) => Promise<T>;

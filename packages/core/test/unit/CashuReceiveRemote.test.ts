@@ -9,6 +9,7 @@ import {
   hashToCurve,
   pointFromHex,
   serializeMintKeys,
+  type AmountLike,
   type MintKeys,
   type Proof,
 } from '@cashu/cashu-ts';
@@ -18,6 +19,7 @@ import type { MintRequestFn } from '../../infra/MintRequestProvider.ts';
 import type { MintMetadata } from '../../mints/MintMetadata.ts';
 import { serializeOutputData, deserializeOutputData } from '../../utils.ts';
 import { testMintInfo } from '../fixtures/MintMetadata.ts';
+import { parseRequestBody } from '../fixtures/MintRequestBody.ts';
 
 const mintUrl = 'https://mint.test';
 const mintKeys = createNewMintKeys(8, new Uint8Array(32).fill(2));
@@ -49,6 +51,11 @@ const metadata: MintMetadata = {
 };
 type WireOutput = { id: string; amount: number; B_: string };
 
+/** Compares outputs independent of whether an amount is an `Amount` or a wire number. */
+function withNumericAmounts(outputs: ReadonlyArray<{ amount: AmountLike }>) {
+  return outputs.map((output) => ({ ...output, amount: Amount.from(output.amount).toNumber() }));
+}
+
 function environment() {
   const calls: Array<{ endpoint: string; body?: Record<string, unknown> }> = [];
   const behavior = { restore: 'all', states: 'UNSPENT', swap: 'valid' };
@@ -61,7 +68,8 @@ function environment() {
       output.id,
     ).C_.toHex(true),
   });
-  const request: MintRequestFn = async <T>(input: Parameters<MintRequestFn>[0]): Promise<T> => {
+  const request: MintRequestFn = async <T>(raw: Parameters<MintRequestFn>[0]): Promise<T> => {
+    const input = { ...raw, requestBody: parseRequestBody(raw.requestBody) };
     calls.push({ endpoint: input.endpoint, body: input.requestBody });
     if (input.endpoint.endsWith('/swap')) {
       const outputs = input.requestBody!.outputs as WireOutput[];
@@ -100,7 +108,7 @@ function environment() {
     { getRequestFn: () => request },
   );
   const outputData = serializeOutputData({
-    keep: OutputData.createDeterministicData(7, new Uint8Array(32).fill(1), 0, keys),
+    keep: OutputData.createDeterministicData(7, new Uint8Array(64).fill(1), 0, keys),
     send: [],
   });
   const inputProofs: Proof[] = [
@@ -152,8 +160,8 @@ describe('Cashu Receive protocol', () => {
     expect((env.calls[0]!.body!.inputs as Proof[])[0]!.witness).toBe(
       env.request.inputProofs[0]!.witness,
     );
-    expect(JSON.stringify(env.calls[0]!.body!.outputs)).toBe(
-      JSON.stringify(
+    expect(withNumericAmounts(env.calls[0]!.body!.outputs as WireOutput[])).toEqual(
+      withNumericAmounts(
         env.request.outputData.keep
           .map((output) => output.blindedMessage)
           .sort((a, b) => Amount.from(a.amount).compareTo(b.amount)),

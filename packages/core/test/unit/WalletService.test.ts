@@ -4,13 +4,16 @@ import {
   OutputData,
   type OutputDataCreator,
   type OutputDataLike,
+  type Proof,
 } from '@cashu/cashu-ts';
 import { describe, expect, it, mock } from 'bun:test';
 
+import type { MintRequestBody } from '../../infra/RequestRateLimiter.ts';
 import type { Keyset } from '../../models/Keyset.ts';
 import type { Mint } from '../../models/Mint.ts';
 import { WalletService } from '../../services/WalletService.ts';
 import type { MintInfo } from '../../types.ts';
+import { parseRequestBody } from '../fixtures/MintRequestBody.ts';
 import { makeOutputDataCreator } from '../fixtures/OutputDataCreator.ts';
 
 const mintUrl = 'https://mint.test';
@@ -56,7 +59,14 @@ function makeKeyset(unit: string): Keyset {
   };
 }
 
-function makeService(keysets: Keyset[], outputDataCreator?: OutputDataCreator) {
+function makeService(
+  keysets: Keyset[],
+  outputDataCreator?: OutputDataCreator,
+  request: (options: {
+    endpoint: string;
+    requestBody?: MintRequestBody;
+  }) => Promise<unknown> = async () => ({}),
+) {
   const ensureUpdatedMint = mock(async (url: string) => ({
     mint: makeMint(url),
     keysets: keysets.map((keyset) => ({ ...keyset, mintUrl: url })),
@@ -68,8 +78,8 @@ function makeService(keysets: Keyset[], outputDataCreator?: OutputDataCreator) {
   const getSeed = mock(async () => new Uint8Array(64).fill(1));
   const getRequestFn = mock(
     () =>
-      async <T>() =>
-        ({}) as T,
+      async <T>(options: { endpoint: string; requestBody?: MintRequestBody }) =>
+        (await request(options)) as T,
   );
 
   const service = new WalletService(
@@ -154,6 +164,49 @@ describe('WalletService unit scoping', () => {
     expect(wallet.mint.restore).toHaveBeenCalledWith({
       outputs: [output.blindedMessage],
     });
+  });
+
+  it('spends every input it is given, in order, across keysets of one unit', async () => {
+    const activeKeyset = makeKeyset('sat');
+    const olderKeypairs = { '1': keypairs['1'], '2': keypairs['2'], '4': keypairs['4'] };
+    const olderKeyset: Keyset = {
+      ...activeKeyset,
+      id: deriveKeysetId(olderKeypairs, { unit: 'sat' }),
+      keypairs: olderKeypairs,
+      active: false,
+    };
+    const swapBodies: Array<Record<string, unknown> | undefined> = [];
+    const { service } = makeService([activeKeyset, olderKeyset], undefined, async (options) => {
+      if (options.endpoint.endsWith('/v1/swap')) {
+        swapBodies.push(parseRequestBody(options.requestBody));
+      }
+      return { signatures: [] };
+    });
+    const wallet = await service.getWallet(mintUrl, 'sat');
+    const proof = (id: string, amount: number, secret: string): Proof => ({
+      id,
+      amount: Amount.from(amount),
+      secret,
+      C: keypairs['1'],
+    });
+    // The 8 alone covers the amount, so a selector that is free to choose would keep the others back.
+    const inputs = [
+      proof(olderKeyset.id, 4, 'older-4'),
+      proof(activeKeyset.id, 8, 'active-8'),
+      proof(olderKeyset.id, 2, 'older-2'),
+    ];
+
+    // The double signs nothing, so the swap fails after its request went out. Only the request
+    // matters here.
+    await wallet.send(Amount.from(8), inputs, { keysetId: activeKeyset.id }).catch(() => undefined);
+
+    expect(swapBodies).toHaveLength(1);
+    const sent = swapBodies[0]!.inputs as Proof[];
+    expect(sent.map((input) => [input.id, input.secret])).toEqual([
+      [olderKeyset.id, 'older-4'],
+      [activeKeyset.id, 'active-8'],
+      [olderKeyset.id, 'older-2'],
+    ]);
   });
 
   it('builds sat wallets when sat is requested explicitly', async () => {

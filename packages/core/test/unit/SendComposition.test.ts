@@ -35,7 +35,7 @@ function input(id = 'composed-send'): PrepareSendInput {
       updatedAt: 2000,
     },
     activeKeys: { id: keysetId, unit: 'sat', keys: testMintKeypairs },
-    seed: new Uint8Array(32).fill(1),
+    seed: new Uint8Array(64).fill(1),
     forceSwap: true,
   };
 }

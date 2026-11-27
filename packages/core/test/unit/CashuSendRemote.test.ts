@@ -17,6 +17,7 @@ import type { MintMetadata } from '../../mints/MintMetadata.ts';
 import { ProofValidationError } from '../../models/Error.ts';
 import { getProofStateInputsFromSerializedOutputs, serializeOutputData } from '../../utils.ts';
 import { testMintInfo } from '../fixtures/MintMetadata.ts';
+import { parseRequestBody } from '../fixtures/MintRequestBody.ts';
 
 const mintUrl = 'https://mint.test';
 const unit = 'sat';
@@ -69,8 +70,9 @@ function environment(
   const calls: Array<{ endpoint: string; body?: Record<string, unknown> }> = [];
   const request: MintRequestFn = async <T>({
     endpoint,
-    requestBody,
+    requestBody: rawBody,
   }: Parameters<MintRequestFn>[0]): Promise<T> => {
+    const requestBody = parseRequestBody(rawBody);
     calls.push({ endpoint, body: requestBody });
     if (endpoint.endsWith('/swap'))
       return { signatures: sign(requestBody!.outputs as WireOutput[], signingKeyset) } as T;
@@ -126,10 +128,12 @@ describe('CashuSendRemote', () => {
       const cache = new Map<string, { signatures: ReturnType<typeof sign> }>();
       const request: MintRequestFn = async <T>({
         endpoint,
-        requestBody,
+        requestBody: rawBody,
       }: Parameters<MintRequestFn>[0]): Promise<T> => {
         expect(endpoint).toBe(`${mintUrl}/v1/swap`);
-        const body = JSON.stringify(requestBody);
+        // A pre-serialized body is already the bytes the mint would see; keep it as the cache key.
+        const body = typeof rawBody === 'string' ? rawBody : JSON.stringify(rawBody);
+        const requestBody = parseRequestBody(rawBody);
         bodies.push(body);
         const cached = cache.get(body);
         if (cached) return cached as T;

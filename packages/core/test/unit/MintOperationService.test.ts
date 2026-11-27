@@ -445,7 +445,7 @@ describe('MintOperationService', () => {
           ),
         ],
       }),
-      loadSeed: async () => new Uint8Array(32),
+      loadSeed: async () => new Uint8Array(64),
       mintService,
       walletService,
       mintAdapter,

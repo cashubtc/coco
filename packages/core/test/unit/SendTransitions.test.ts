@@ -135,7 +135,7 @@ function prepareInput(id: string, forceSwap = true): PrepareSendInput {
   return {
     operation: operation(id, forceSwap),
     activeKeys: keys,
-    seed: new Uint8Array(32).fill(1),
+    seed: new Uint8Array(64).fill(1),
     forceSwap,
   };
 }
@@ -1543,7 +1543,7 @@ describe('Send transitions reclaim', () => {
         operationId: operation.id,
         updatedAt: 400,
         activeKeys: keys,
-        seed: new Uint8Array(32),
+        seed: new Uint8Array(64),
       }),
     );
     const stored = await repositories.sendOperationRepository.getById(operation.id);
@@ -1589,7 +1589,7 @@ describe('Send transitions reclaim', () => {
           operationId: operation.id,
           updatedAt: 400,
           activeKeys: keys,
-          seed: new Uint8Array(32),
+          seed: new Uint8Array(64),
         }),
       ),
     ).rejects.toThrow('conflict');
@@ -1606,7 +1606,7 @@ describe('Send transitions reclaim', () => {
         operationId: operation.id,
         updatedAt: 400,
         activeKeys: keys,
-        seed: new Uint8Array(32),
+        seed: new Uint8Array(64),
       }),
     );
     const rejecting = new RepositoryCoreTransactionRunner(
@@ -1646,7 +1646,7 @@ describe('Send transitions reclaim', () => {
         operationId: operation.id,
         updatedAt: 400,
         activeKeys: keys,
-        seed: new Uint8Array(32),
+        seed: new Uint8Array(64),
       }),
     );
     await expect(
@@ -1672,7 +1672,7 @@ describe('Send transitions reclaim', () => {
         operationId: environment.operation.id,
         updatedAt: 400,
         activeKeys: keys,
-        seed: new Uint8Array(32),
+        seed: new Uint8Array(64),
       }),
     );
     return { ...environment, begun };
@@ -1794,7 +1794,7 @@ describe('Send transitions reclaim', () => {
         operationId: operation.id,
         updatedAt: 500,
         activeKeys: keys,
-        seed: new Uint8Array(32),
+        seed: new Uint8Array(64),
       });
     });
 
@@ -1819,7 +1819,7 @@ describe('Send transitions reclaim', () => {
           operationId: operation.id,
           updatedAt: 500,
           activeKeys: keys,
-          seed: new Uint8Array(32),
+          seed: new Uint8Array(64),
         });
       });
     // Another Coco Session replaces the request first; its request may already be at the mint.
