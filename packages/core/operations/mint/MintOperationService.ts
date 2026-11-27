@@ -49,7 +49,7 @@ import {
   deferMintRecovery,
 } from './MintTransitions.ts';
 import type { PrepareMintResult } from './MintTransitionTypes.ts';
-import { createKeyChain } from '../../proofs/KeysetSelection.ts';
+import { assertOutputKeysets, createKeyChain } from '../../proofs/KeysetSelection.ts';
 import { restoreOutputProofs } from '../../infra/ProofRestore.ts';
 
 export interface ClaimMintQuoteOptions {
@@ -280,6 +280,11 @@ export class MintOperationService {
         throw new UnknownMintError(`Mint ${operation.mintUrl} is not trusted`);
       }
 
+      const { wallet } = await this.dependencies.walletService.getWalletWithActiveKeysetId(
+        operation.mintUrl,
+        operation.unit,
+      );
+      assertOutputKeysets(wallet, operation.outputData);
       const now = Date.now();
       const authorization = await this.runChecked(operationId, (tx) =>
         tx.perform(beginMintExecution, { operationId, now }),
@@ -297,10 +302,6 @@ export class MintOperationService {
       let submissionError: unknown;
       try {
         const handler = this.dependencies.handlerProvider.get(executing.method);
-        const { wallet } = await this.dependencies.walletService.getWalletWithActiveKeysetId(
-          executing.mintUrl,
-          executing.unit,
-        );
         const result = await handler
           .execute({
             mintAdapter: this.dependencies.mintAdapter,

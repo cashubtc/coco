@@ -26,6 +26,8 @@ Changes from Coco:
 - After a mint rejects a swap, a mint or a batch mint for its keyset (a NUT-00 code from 12000 to
   12999), Coco fetches the mint's metadata once the operation's outcome is stored. The outcome
   itself is unchanged, and a failed refresh is only logged.
+- Initial submission checks the saved output keysets before marking an operation executing. A
+  prepared swap Send can still be cancelled if a keyset refresh has retired its outputs.
 - `wallet.sweep()` rejects a seed that is not a 64-byte `Uint8Array` with a `ProofValidationError`
   before it adds the mint. A seed of 16 to 63 bytes could be swept before.
 - A bolt11 mint quote whose amount differs from the requested amount is rejected, locked or not:

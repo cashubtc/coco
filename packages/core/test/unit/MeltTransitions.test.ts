@@ -486,7 +486,7 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
       } satisfies Pick<MintService, 'isTrustedMint' | 'refreshAndCommitIfStale'>;
       const walletService = {
         getWalletWithActiveKeysetId: async () => ({
-          wallet: {} as Wallet,
+          wallet: { getKeyset: () => ({ isActive: true, hasHexId: true }) } as unknown as Wallet,
           keysetId,
           keyset: { id: keysetId, unit: 'sat', active: true, input_fee_ppk: 0 },
           keys: { id: keysetId, unit: 'sat', keys: testMintKeypairs },
@@ -1278,7 +1278,7 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
       },
       walletService: {
         getWalletWithActiveKeysetId: async () => ({
-          wallet: {} as any,
+          wallet: { getKeyset: () => ({ isActive: true, hasHexId: true }) } as any,
           keysetId: activeKeys.id,
           keyset: {
             id: activeKeys.id,

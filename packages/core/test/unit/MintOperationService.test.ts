@@ -389,6 +389,7 @@ describe('MintOperationService', () => {
     walletService = {
       getWalletWithActiveKeysetId: mock(async (_mintUrl: string, unit: string) => ({
         wallet: {
+          getKeyset: () => ({ isActive: true, hasHexId: true }),
           createMintQuote: mock(async (_method: string, payload: { amount: bigint }) => ({
             quote: quoteId,
             request: 'lnbc1test',
@@ -2587,7 +2588,10 @@ describe('MintOperationService', () => {
     await operationRepo.create(pendingOp);
     (handler.execute as Mock<any>).mockResolvedValueOnce({ status: 'ALREADY_ISSUED' });
     (walletService.getWalletWithActiveKeysetId as Mock<any>).mockResolvedValueOnce({
-      wallet: { mint: { restore: mock(async () => ({ outputs: [], signatures: [] })) } },
+      wallet: {
+        getKeyset: () => ({ isActive: true, hasHexId: true }),
+        mint: { restore: mock(async () => ({ outputs: [], signatures: [] })) },
+      },
     });
     // The execution wallet is opened first, then restore opens its own remote context.
     (walletService.getWalletWithActiveKeysetId as Mock<any>).mockResolvedValueOnce({
@@ -2679,6 +2683,7 @@ describe('MintOperationService', () => {
     );
     (walletService.getWalletWithActiveKeysetId as Mock<any>).mockResolvedValue({
       wallet: {
+        getKeyset: () => ({ isActive: true, hasHexId: true }),
         mintProofs: mock(async () => outputProofs(pendingOp)),
       } as unknown as Wallet,
       keysetId,

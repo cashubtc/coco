@@ -9,14 +9,18 @@ import {
 } from '@cashu/cashu-ts';
 import { unwrapKeysetRejection } from '@core/infra/KeysetRejection.ts';
 import { normalizeUnit } from '@core/amounts.ts';
-import { createKeyChain } from '@core/proofs/KeysetSelection.ts';
+import { assertOutputKeysets, createKeyChain } from '@core/proofs/KeysetSelection.ts';
 import type { MintMetadata } from '@core/mints/MintMetadata.ts';
 import { ProofValidationError } from '@core/models/Error.ts';
 import type {
   ReceiveRemote,
   ReceiveRemoteSession,
 } from '@core/operations/receive/ReceiveRemote.ts';
-import { computeYHexForSecrets, deserializeOutputData } from '@core/utils.ts';
+import {
+  computeYHexForSecrets,
+  deserializeOutputData,
+  type SerializedOutputData,
+} from '@core/utils.ts';
 import type { MintAdapter } from '../../MintAdapter.ts';
 import type { MintRequestProvider } from '../../MintRequestProvider.ts';
 
@@ -27,7 +31,11 @@ export class CashuReceiveRemote implements ReceiveRemote {
     private readonly requests: Pick<MintRequestProvider, 'getRequestFn'>,
   ) {}
 
-  open(metadata: MintMetadata, unit: string): ReceiveRemoteSession {
+  open(
+    metadata: MintMetadata,
+    unit: string,
+    initialOutputs?: SerializedOutputData,
+  ): ReceiveRemoteSession {
     const mintUrl = metadata.mint.mintUrl;
     const mint = new Mint(mintUrl, {
       authProvider: this.auth.getAuthProvider(mintUrl),
@@ -38,6 +46,7 @@ export class CashuReceiveRemote implements ReceiveRemote {
       metadata.mint.mintInfo,
       createKeyChain(mintUrl, unit, metadata.keysets).cache,
     );
+    if (initialOutputs) assertOutputKeysets(wallet, initialOutputs);
     const unblind = (output: OutputDataLike, signature: SerializedBlindedSignature) => {
       if (
         signature.id !== output.blindedMessage.id ||

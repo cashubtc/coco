@@ -1,6 +1,24 @@
-import { KeyChain, type KeyChainCache } from '@cashu/cashu-ts';
+import { KeyChain, type KeyChainCache, type Wallet } from '@cashu/cashu-ts';
 import { DEFAULT_UNIT, normalizeUnit } from '@core/amounts.ts';
+import { ProofValidationError } from '@core/models/Error.ts';
 import type { Keyset } from '@core/models/Keyset.ts';
+import type { SerializedOutputData } from '@core/utils.ts';
+
+/**
+ * Check new outputs on the Wallet Instance that will use them, before authorizing submission.
+ * getKeyset checks the unit, version and loaded keys. Only new outputs require an active hex ID.
+ */
+export function assertOutputKeyset(wallet: Wallet, id: string): void {
+  if (!id) throw new ProofValidationError('Missing output keyset ID');
+  const keyset = wallet.getKeyset(id);
+  if (!keyset.hasHexId || !keyset.isActive)
+    throw new ProofValidationError(`Keyset ${id} cannot issue new outputs`);
+}
+
+export function assertOutputKeysets(wallet: Wallet, outputs: SerializedOutputData): void {
+  const ids = new Set([...outputs.keep, ...outputs.send].map((output) => output.blindedMessage.id));
+  for (const id of ids) assertOutputKeyset(wallet, id);
+}
 
 /**
  * The unit a stored keyset is read in: trimmed, lower case, and a blank unit read as the default

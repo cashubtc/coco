@@ -79,7 +79,7 @@ export type MintRejection = { code: number; detail?: string };
 export class FakeBatchMint {
   readonly keysets = ['sat', 'usd'].map((unit) => {
     const keys = createNewMintKeys(10, keysetSeed(unit), { unit });
-    return { unit, keys };
+    return { unit, keys, active: true };
   });
   readonly quotes = new Map<string, FakeMintQuote>();
   readonly signed = new Map<string, { id: string; amount: number; C_: string }>();
@@ -135,7 +135,15 @@ export class FakeBatchMint {
   }
 
   keysetId(unit = 'sat'): string {
-    return this.keysets.find((keyset) => keyset.unit === unit)!.keys.keysetId;
+    return this.keysets.find((keyset) => keyset.unit === unit && keyset.active)!.keys.keysetId;
+  }
+
+  rotateSatKeyset(): void {
+    this.keysets.find((keyset) => keyset.unit === 'sat' && keyset.active)!.active = false;
+    const keys = createNewMintKeys(10, new Uint8Array(32).fill(this.keysets.length), {
+      unit: 'sat',
+    });
+    this.keysets.push({ unit: 'sat', keys, active: true });
   }
 
   addQuote(
@@ -198,10 +206,10 @@ export class FakeBatchMint {
     if (path === '/v1/keysets')
       return json({
         keysets: [
-          ...this.keysets.map(({ unit, keys }) => ({
+          ...this.keysets.map(({ unit, keys, active }) => ({
             id: keys.keysetId,
             unit,
-            active: true,
+            active,
             input_fee_ppk: 0,
           })),
           ...this.advertisedKeysets,
@@ -253,6 +261,12 @@ export class FakeBatchMint {
     if (path === '/v1/swap') {
       const rejection = this.swapRejections.shift();
       if (rejection) return error(rejection.code, rejection.detail ?? 'rejected');
+      if (
+        (body.outputs as WireOutput[]).some((output) =>
+          this.keysets.some((keyset) => keyset.keys.keysetId === output.id && !keyset.active),
+        )
+      )
+        return error(12002, 'Keyset is inactive');
       return json({ signatures: this.sign(body.outputs as WireOutput[]) });
     }
     const quoteMatch = path.match(/^\/v1\/mint\/quote\/(\w+)\/(.+)$/);

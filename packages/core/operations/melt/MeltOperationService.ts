@@ -52,7 +52,7 @@ import {
   prepareMelt,
   releaseMeltAfterNonPayment,
 } from './MeltTransitions.ts';
-import { createKeyChain } from '../../proofs/KeysetSelection.ts';
+import { assertOutputKeysets, createKeyChain } from '../../proofs/KeysetSelection.ts';
 import { restoreOutputProofs } from '../../infra/ProofRestore.ts';
 
 type MeltOperationQueries = Pick<
@@ -254,6 +254,12 @@ export class MeltOperationService {
           `Cannot execute operation ${operationId}: expected state 'prepared' but found '${current?.state ?? 'not found'}'`,
         );
       }
+      const { wallet } = await this.dependencies.walletService.getWalletWithActiveKeysetId(
+        current.mintUrl,
+        current.unit,
+      );
+      assertOutputKeysets(wallet, current.changeOutputData);
+      if (current.swapOutputData) assertOutputKeysets(wallet, current.swapOutputData);
       const authorizationNow = Date.now();
       const authorization = await this.runChecked(
         operationId,
@@ -273,10 +279,6 @@ export class MeltOperationService {
       let preSwapError: unknown;
       try {
         const handler = this.dependencies.handlerProvider.get(executing.method);
-        const { wallet } = await this.dependencies.walletService.getWalletWithActiveKeysetId(
-          executing.mintUrl,
-          executing.unit,
-        );
         if (executing.needsSwap) {
           const swapped = await handler
             .swap({

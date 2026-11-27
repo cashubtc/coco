@@ -1,10 +1,14 @@
 import { Amount } from '@cashu/cashu-ts';
-import { afterEach, describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it, setSystemTime } from 'bun:test';
 import { MintOperationError } from '../../models/Error.ts';
 import { meltQuoteFromBolt11Response } from '../../models/MeltQuote.ts';
 import type { Plugin } from '../../plugins/types.ts';
 import type { WalletService } from '../../services/WalletService.ts';
-import { createBatchMintHarness, type BatchMintHarness } from '../fixtures/BatchMintHarness.ts';
+import {
+  createBatchMintHarness,
+  ownedKey,
+  type BatchMintHarness,
+} from '../fixtures/BatchMintHarness.ts';
 import { FakeBatchMint } from '../fixtures/BatchMintMint.ts';
 
 /** NUT-00 12002: the mint no longer accepts outputs on this keyset. */
@@ -29,6 +33,7 @@ describe('Keyset rejection', () => {
     for (const harness of harnesses.splice(0)) await harness.dispose();
     installed?.uninstall();
     installed = undefined;
+    setSystemTime();
   });
 
   /** A Manager over the shared fake mint, installed on first use. */
@@ -39,7 +44,10 @@ describe('Keyset rejection', () => {
       mint.install();
       installed = mint;
     }
-    const harness = await createBatchMintHarness({ mint });
+    const harness = await createBatchMintHarness({
+      mint,
+      seedGetter: options.mint ? async () => new Uint8Array(64).fill(6) : undefined,
+    });
     harnesses.push(harness);
     return harness;
   };
@@ -59,13 +67,13 @@ describe('Keyset rejection', () => {
     expect((await h.coco.ops.mint.execute(operation.id)).state).toBe('finalized');
   };
   /** Melt quotes are not served by the fake mint, so the canonical quote is stored directly. */
-  const storeMeltQuote = (h: BatchMintHarness) =>
+  const storeMeltQuote = (h: BatchMintHarness, feeReserve = 0) =>
     h.repo.meltQuoteRepository.upsertMeltQuote(
       meltQuoteFromBolt11Response(mintUrl, {
         quote: 'melt',
         request: invoice,
         amount: Amount.from(3),
-        fee_reserve: Amount.zero(),
+        fee_reserve: Amount.from(feeReserve),
         unit: 'sat',
         expiry: 9_999_999_999,
         state: 'UNPAID',
@@ -100,6 +108,190 @@ describe('Keyset rejection', () => {
       expect(paths(h, start)).toEqual(
         metadataBehavior === 'ok' ? ['/v1/swap', ...metadataRefresh] : ['/v1/swap', '/v1/info'],
       );
+    },
+  );
+
+  /** An initial rejection teaches this Manager the mint's new keys. */
+  const rotateAfterPrepare = async (h: BatchMintHarness, triggerId: string) => {
+    // Metadata observations have second precision and keep the first observation on ties.
+    setSystemTime(new Date(Date.now() + 2_000));
+    h.mint.rotateSatKeyset();
+    const start = h.mint.requests.length;
+    expectMintError(await h.coco.ops.send.execute(triggerId).catch((error: unknown) => error));
+    expect(paths(h, start)).toEqual([
+      '/v1/swap',
+      ...metadataRefresh,
+      `/v1/keys/${h.mint.keysetId()}`,
+    ]);
+    expect((await h.coco.ops.send.get(triggerId))?.state).toBe('rolled_back');
+  };
+
+  it('keeps a second prepared Send cancellable after the first learns of keyset rotation', async () => {
+    const h = await setup();
+    await fund(h, 'first', 8);
+    await fund(h, 'second', 8);
+    const first = await h.coco.ops.send.prepare({ mintUrl, amount: 3 });
+    const second = await h.coco.ops.send.prepare({ mintUrl, amount: 3 });
+    expect([first, second].map((op) => [op.needsSwap, op.inputAmount.toNumber()])).toEqual([
+      [true, 8],
+      [true, 8],
+    ]);
+    const originalKeyset = h.mint.keysetId();
+    const counter = await h.repo.counterRepository.getCounter(mintUrl, originalKeyset);
+    expect(counter).not.toBeNull();
+    await rotateAfterPrepare(h, first.id);
+    const start = h.mint.requests.length;
+
+    await expect(h.coco.ops.send.execute(second.id)).rejects.toThrow('cannot issue new outputs');
+    expect(await h.coco.ops.send.get(second.id)).toEqual(second);
+    expect(await readyAmounts(h)).toEqual([8]);
+    await h.coco.ops.send.cancel(second.id);
+    expect(await readyAmounts(h)).toEqual([8, 8]);
+    expect(paths(h, start)).toEqual([]);
+    expect(await h.repo.counterRepository.getCounter(mintUrl, originalKeyset)).toEqual(counter);
+
+    // A proof on the retired keyset can fund a fresh swap onto the new keyset.
+    const fresh = await h.coco.ops.send.prepare({ mintUrl, amount: 3 });
+    expect((await h.coco.ops.send.execute(fresh)).operation.state).toBe('pending');
+  });
+
+  it('retains the inputs and exact request of an uncertain Send across rotation and recovery', async () => {
+    const h = await setup();
+    await fund(h, 'first', 8);
+    await fund(h, 'second', 8);
+    const uncertain = await h.coco.ops.send.prepare({ mintUrl, amount: 3 });
+    const trigger = await h.coco.ops.send.prepare({ mintUrl, amount: 3 });
+    h.mint.swapRejections.push({ code: 11004, detail: 'Outputs are pending' });
+    await expect(h.coco.ops.send.execute(uncertain)).rejects.toThrow();
+    await rotateAfterPrepare(h, trigger.id);
+    await h.coco.ops.send.recovery.run();
+
+    expect(await h.coco.ops.send.get(uncertain.id)).toMatchObject({
+      state: 'executing',
+      inputProofSecrets: uncertain.inputProofSecrets,
+      outputData: uncertain.outputData,
+    });
+    await expect(h.coco.ops.send.cancel(uncertain.id)).rejects.toThrow();
+    expect(await readyAmounts(h)).toEqual([8]);
+  });
+
+  it('retains a prepared Receive when its output keyset has rotated', async () => {
+    const sender = await setup();
+    await fund(sender, 'sender', 8);
+    const { token } = await sender.coco.ops.send.execute(
+      await sender.coco.ops.send.prepare({ mintUrl, amount: 8 }),
+    );
+    const receiver = await setup({ mint: sender.mint });
+    const prepared = await receiver.coco.ops.receive.prepare({ token });
+    await fund(receiver, 'receiver', 8);
+    const trigger = await receiver.coco.ops.send.prepare({ mintUrl, amount: 3 });
+    await rotateAfterPrepare(receiver, trigger.id);
+    const start = receiver.mint.requests.length;
+    await expect(receiver.coco.ops.receive.execute(prepared.id)).rejects.toThrow(
+      'cannot issue new outputs',
+    );
+    expect(await receiver.coco.ops.receive.get(prepared.id)).toEqual(prepared);
+    expect(paths(receiver, start)).toEqual([]);
+    await receiver.coco.ops.receive.cancel(prepared.id);
+  });
+
+  it('replays a possibly submitted Receive on its saved keyset after rotation', async () => {
+    const sender = await setup();
+    await fund(sender, 'sender', 8);
+    const { token } = await sender.coco.ops.send.execute(
+      await sender.coco.ops.send.prepare({ mintUrl, amount: 8 }),
+    );
+    const receiver = await setup({ mint: sender.mint });
+    const prepared = await receiver.coco.ops.receive.prepare({ token });
+    await fund(receiver, 'receiver', 8);
+    const trigger = await receiver.coco.ops.send.prepare({ mintUrl, amount: 3 });
+    receiver.mint.swapRejections.push({ code: 11004, detail: 'Outputs pending' });
+    receiver.mint.restoredProofState = 'PENDING';
+    const start = receiver.mint.requests.length;
+    await expect(receiver.coco.ops.receive.execute(prepared.id)).rejects.toThrow('Outputs pending');
+    const initialRequests = receiver.mint.requests
+      .slice(start)
+      .filter(({ path }) => path === '/v1/swap');
+    expect(initialRequests).toHaveLength(1);
+    await rotateAfterPrepare(receiver, trigger.id);
+
+    receiver.mint.restoredProofState = 'UNSPENT';
+    const recoveryStart = receiver.mint.requests.length;
+    const recovered = await receiver.coco.ops.receive.refresh(prepared.id);
+    expect(recovered).toMatchObject({ state: 'executing', outputData: prepared.outputData });
+    expect(
+      receiver.mint.requests.slice(recoveryStart).filter(({ path }) => path === '/v1/swap'),
+    ).toEqual(initialRequests);
+  });
+
+  it('uses the Batch Mint admission wallet if a listener learns of rotation before submission', async () => {
+    const h = await setup();
+    await fund(h, 'fund', 8);
+    const trigger = await h.coco.ops.send.prepare({ mintUrl, amount: 3 });
+    for (const quote of ['a', 'b'])
+      await h.quote({ quote, method: 'bolt11', amount: 8, amountPaid: 8 });
+    h.coco.on('batch-mint-op:executing', () => rotateAfterPrepare(h, trigger.id));
+    h.mint.batchBehaviors.push(keysetInactive);
+    const result = await h.coco.ops.mint.batch.execute({
+      mintUrl,
+      method: 'bolt11',
+      members: [{ quoteId: 'a' }, { quoteId: 'b' }],
+    });
+    expect((await h.coco.ops.send.get(trigger.id))?.state).toBe('rolled_back');
+    expect(result.state === 'failed' && result.terminalFailure.code).toBe('12002');
+    expect(h.mint.batchRequests).toHaveLength(1);
+  });
+
+  it.each(['bolt11', 'bolt12', 'onchain'] as const)(
+    'keeps the %s quote claim pending when its output keyset has rotated',
+    async (method) => {
+      const h = await setup();
+      await fund(h, 'fund', 8);
+      const trigger = await h.coco.ops.send.prepare({ mintUrl, amount: 3 });
+      await h.quote({
+        quote: 'q',
+        method,
+        amountPaid: 4,
+        ...(method === 'bolt11' ? { amount: 4 } : { pubkey: ownedKey.publicKeyHex }),
+      });
+      const prepared = await h.coco.ops.mint.prepare({
+        quote: { mintUrl, method, quoteId: 'q' },
+        amount: 4,
+      });
+      await rotateAfterPrepare(h, trigger.id);
+      const start = h.mint.requests.length;
+      await expect(h.coco.ops.mint.execute(prepared.id)).rejects.toThrow(
+        'cannot issue new outputs',
+      );
+      expect((await h.coco.ops.mint.get(prepared.id))?.state).toBe('pending');
+      expect(paths(h, start)).toEqual([]);
+    },
+  );
+
+  it.each([
+    ['pre-swap', 8, 0, true],
+    ['direct payment with change', 16, 13, false],
+  ] as const)(
+    'keeps a prepared Melt cancellable after rotation before %s',
+    async (_label, funding, reserve, needsSwap) => {
+      const h = await setup();
+      await fund(h, 'trigger', 8);
+      const trigger = await h.coco.ops.send.prepare({ mintUrl, amount: 3 });
+      await fund(h, 'melt-input', funding);
+      await storeMeltQuote(h, reserve);
+      const prepared = await h.coco.ops.melt.prepare({
+        quote: { mintUrl, method: 'bolt11', quoteId: 'melt' },
+      });
+      expect(prepared.needsSwap).toBe(needsSwap);
+      if (!needsSwap) expect(prepared.changeOutputData.keep.length).toBeGreaterThan(0);
+      await rotateAfterPrepare(h, trigger.id);
+      const start = h.mint.requests.length;
+      await expect(h.coco.ops.melt.execute(prepared.id)).rejects.toThrow(
+        'cannot issue new outputs',
+      );
+      expect(await h.coco.ops.melt.get(prepared.id)).toEqual(prepared);
+      await h.coco.ops.melt.cancel(prepared.id);
+      expect(paths(h, start)).toEqual([]);
     },
   );
 

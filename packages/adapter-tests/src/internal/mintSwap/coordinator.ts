@@ -1226,6 +1226,33 @@ export function runMintSwapCoordinatorContract(
       expect((await fixture.service().cancel('swap')).state).toBe('destination_funded');
     });
 
+    it('keeps a funded destination pending when its outputs rotate before first issuance', async () => {
+      await fixture.create();
+      await fixture.prepare();
+      fixture.setDestinationState('UNPAID');
+      expect((await fixture.service().execute('swap')).state).toBe('destination_funded');
+      const original = await fixture.repositories.keysetRepository.getKeysetById(
+        destinationUrl,
+        keys.id,
+      );
+      await fixture.repositories.keysetRepository.updateKeyset({ ...original!, active: false });
+      const next = createNewMintKeys(5, new Uint8Array(32).fill(8));
+      await fixture.repositories.keysetRepository.addKeyset({
+        ...original!,
+        id: next.keysetId,
+        keypairs: serializeMintKeys(next.pubKeys),
+        active: true,
+      });
+      fixture.setDestinationState('PAID');
+
+      expect((await fixture.service().reconcile('swap')).state).toBe('destination_funded');
+      expect(
+        (await fixture.repositories.mintOperationRepository.getById('destination-child'))?.state,
+      ).toBe('pending');
+      expect(fixture.requests.filter((request) => request === 'melt')).toHaveLength(1);
+      expect(fixture.requests).not.toContain('mint');
+    });
+
     it('recovers a lost issuance response through the child handler without replacing outputs', async () => {
       await fixture.create();
       await fixture.prepare();
@@ -1484,6 +1511,7 @@ export function runMintSwapCoordinatorContract(
           return {
             ...original,
             wallet: {
+              getKeyset: original.wallet.getKeyset.bind(original.wallet),
               mintProofs: async (
                 ...[method, amount, quote, signingOptions, outputData]: Parameters<
                   Wallet['mintProofs']

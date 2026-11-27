@@ -401,6 +401,7 @@ export class SendOperationService {
     const remote = this.remote.open(
       await this.mintMetadataRefresh.refreshAndCommitIfStale(operation.mintUrl),
       operation.unit,
+      operation.outputData,
     );
     const updatedAt = Date.now();
     const memo = options?.memo ? this.normalizeMemo(options.memo) : undefined;

@@ -1,16 +1,10 @@
-import {
-  Mint,
-  Wallet,
-  normalizeProofAmounts,
-  type OutputDataCreator,
-  type OutputDataLike,
-} from '@cashu/cashu-ts';
+import { Mint, Wallet, normalizeProofAmounts, type OutputDataCreator } from '@cashu/cashu-ts';
 import { unwrapKeysetRejection } from '@core/infra/KeysetRejection.ts';
 import type { MintMetadata } from '@core/mints/MintMetadata.ts';
 import { ProofValidationError } from '@core/models/Error.ts';
 import type { SendRemote, SendRemoteSession } from '@core/operations/send/SendRemote.ts';
-import { createKeyChain } from '@core/proofs/KeysetSelection.ts';
-import { deserializeOutputData } from '@core/utils.ts';
+import { assertOutputKeyset, createKeyChain } from '@core/proofs/KeysetSelection.ts';
+import { deserializeOutputData, type SerializedOutputData } from '@core/utils.ts';
 import type { MintAdapter } from '../../MintAdapter.ts';
 import type { MintRequestProvider } from '../../MintRequestProvider.ts';
 import { restoreOutputProofs } from '../../ProofRestore.ts';
@@ -23,7 +17,11 @@ export class CashuSendRemote implements SendRemote {
     private readonly outputDataCreator?: OutputDataCreator,
   ) {}
 
-  open(metadata: MintMetadata, unit: string): SendRemoteSession {
+  open(
+    metadata: MintMetadata,
+    unit: string,
+    initialOutputs?: SerializedOutputData,
+  ): SendRemoteSession {
     const mintUrl = metadata.mint.mintUrl;
     const wallet = new Wallet(
       new Mint(mintUrl, {
@@ -43,6 +41,10 @@ export class CashuSendRemote implements SendRemote {
       metadata.mint.mintInfo,
       createKeyChain(mintUrl, unit, metadata.keysets).cache,
     );
+    if (initialOutputs) {
+      const id = getOutputKeysetId([...initialOutputs.keep, ...initialOutputs.send]);
+      assertOutputKeyset(wallet, id);
+    }
     return {
       swap: (request) => {
         const data = deserializeOutputData(request.outputData);
@@ -81,7 +83,7 @@ export class CashuSendRemote implements SendRemote {
 }
 
 /** Pin unblinding to the committed output plan, even if the wallet now prefers another keyset. */
-function getOutputKeysetId(outputs: readonly OutputDataLike[]): string {
+function getOutputKeysetId(outputs: readonly { blindedMessage: { id: string } }[]): string {
   const keysetId = outputs[0]?.blindedMessage.id;
   if (!keysetId || outputs.some((output) => output.blindedMessage.id !== keysetId)) {
     throw new ProofValidationError('Send outputs must specify a single non-empty keyset id');

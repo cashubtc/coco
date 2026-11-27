@@ -242,6 +242,7 @@ describe('CashuSendRemote', () => {
           ],
         },
         unit,
+        operation === 'swap' ? outputData : undefined,
       );
       // Inputs belong to the cheaper keyset. Only the output plan determines unblinding keys.
       const result =
@@ -292,6 +293,8 @@ describe('CashuSendRemote', () => {
           : { keep: [...outputs.keep, different], send: [] };
       for (const outputData of [{ keep: [], send: [] }, { keep: [missing], send: [] }, mixed]) {
         const { remote, calls } = environment();
+        if (operation === 'swap')
+          expect(() => remote.open(metadata, unit, outputData)).toThrow(ProofValidationError);
         const session = remote.open(metadata, unit);
         await expect(
           (async () =>

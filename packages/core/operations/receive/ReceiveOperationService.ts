@@ -396,7 +396,11 @@ export class ReceiveOperationService {
 
   private async openRemote(operation: ReceiveOperation) {
     const metadata = await this.deps.mintMetadataRefresh.refreshAndCommitIfStale(operation.mintUrl);
-    return this.deps.remote.open(metadata, operation.unit);
+    return this.deps.remote.open(
+      metadata,
+      operation.unit,
+      operation.state === 'prepared' ? operation.outputData : undefined,
+    );
   }
 
   async recoverPendingOperations(): Promise<void> {
