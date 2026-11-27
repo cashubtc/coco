@@ -203,10 +203,19 @@ for another recovery pass. For wallets that saved the child before the link, Coc
 finds the original child using its attempt ID. If both the child and the payload are missing, the wallet
 can accept redelivery.
 
-If a live claim encounters an error, Coco checks the saved attempt and child before
-reporting it. A finalized child lets Coco repair the local records and return the settled
-payment without another swap. If `claimPayload()` still throws after the child is saved,
-the payment can still finish. On startup, Coco resumes a `prepared` child using its saved inputs and outputs.
+When the swap succeeds, Coco saves the wallet's proofs, finalizes the child and the
+delivery attempt, records the fee and net amount, and clears the saved payload in one
+wallet transaction. The same commit completes a single-use request. A reusable request
+stays active for the next payment. Receive events and transport cleanup happen after
+commit. A transport cleanup failure leaves the payment settled.
+
+If Coco rolls back a child, it rejects that attempt and clears its payload. If the mint
+accepted the swap but the wallet could not commit it, the child stays `executing` and
+the attempt stays `receiving`. Direct child commands and restart use the same settlement
+logic. For older wallets with a finalized child and an unfinished request, recovery
+repairs the local records without another swap or wallet credit.
+
+On startup, Coco resumes a `prepared` child using its saved inputs and outputs.
 For an `executing` child, recovery first checks the wallet for output proofs saved by that
 child. If the wallet has the complete set, recovery can finalize the child offline.
 Otherwise it checks the inputs at the mint. It replays the saved swap if all inputs are
