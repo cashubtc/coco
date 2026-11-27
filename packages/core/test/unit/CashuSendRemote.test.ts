@@ -14,7 +14,7 @@ import { describe, expect, it, mock, spyOn } from 'bun:test';
 import { CashuSendRemote } from '../../infra/handlers/send/CashuSendRemote.ts';
 import type { MintRequestFn } from '../../infra/MintRequestProvider.ts';
 import type { MintMetadata } from '../../mints/MintMetadata.ts';
-import { ProofValidationError } from '../../models/Error.ts';
+import { MintOperationError, ProofValidationError } from '../../models/Error.ts';
 import { getProofStateInputsFromSerializedOutputs, serializeOutputData } from '../../utils.ts';
 import { testMintInfo } from '../fixtures/MintMetadata.ts';
 import { parseRequestBody } from '../fixtures/MintRequestBody.ts';
@@ -65,6 +65,8 @@ function environment(
   mintBehavior: {
     restore?: (complete: RestoreResponse) => RestoreResponse;
     proofState?: 'UNSPENT' | 'PENDING' | 'SPENT';
+    /** The mint's answer to a swap, instead of signing its outputs. */
+    swapRejection?: MintOperationError;
   } = {},
 ) {
   const calls: Array<{ endpoint: string; body?: Record<string, unknown> }> = [];
@@ -74,6 +76,7 @@ function environment(
   }: Parameters<MintRequestFn>[0]): Promise<T> => {
     const requestBody = parseRequestBody(rawBody);
     calls.push({ endpoint, body: requestBody });
+    if (endpoint.endsWith('/swap') && mintBehavior.swapRejection) throw mintBehavior.swapRejection;
     if (endpoint.endsWith('/swap'))
       return { signatures: sign(requestBody!.outputs as WireOutput[], signingKeyset) } as T;
     if (endpoint.endsWith('/restore')) {
@@ -166,6 +169,40 @@ describe('CashuSendRemote', () => {
   );
 
   it.each(['swap', 'reclaim'] as const)(
+    'hands back the mint error for a keyset rejection of the %s and never loads keysets',
+    async (operation) => {
+      const { remote, calls } = environment(keyset, {
+        swapRejection: new MintOperationError(12002, 'Keyset is inactive'),
+      });
+      const outputData = serializeOutputData({
+        keep: OutputData.createDeterministicData(Amount.from(8), seed, 0, keys),
+        send:
+          operation === 'swap'
+            ? OutputData.createDeterministicData(Amount.from(8), seed, 1, keys)
+            : [],
+      });
+      const session = remote.open(metadata, unit);
+
+      const error = await (
+        operation === 'swap'
+          ? session.swap({
+              mintUrl,
+              unit,
+              amount: Amount.from(8),
+              inputProofs: [inputProof()],
+              outputData,
+            })
+          : session.reclaim([inputProof('input', 8)], outputData)
+      ).catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(MintOperationError);
+      expect((error as MintOperationError).code).toBe(12002);
+      // Strict cached keysets: the wallet asks the mint for no keyset or key after the rejection.
+      expect(calls.map((call) => call.endpoint)).toEqual([`${mintUrl}/v1/swap`]);
+    },
+  );
+
+  it.each(['swap', 'reclaim'] as const)(
     'unblinds %s with the persisted output keyset when another active keyset is cheaper',
     async (operation) => {
       const original = createNewMintKeys(8, new Uint8Array(32).fill(3), {
@@ -205,6 +242,7 @@ describe('CashuSendRemote', () => {
           ],
         },
         unit,
+        operation === 'swap' ? outputData : undefined,
       );
       // Inputs belong to the cheaper keyset. Only the output plan determines unblinding keys.
       const result =
@@ -255,6 +293,8 @@ describe('CashuSendRemote', () => {
           : { keep: [...outputs.keep, different], send: [] };
       for (const outputData of [{ keep: [], send: [] }, { keep: [missing], send: [] }, mixed]) {
         const { remote, calls } = environment();
+        if (operation === 'swap')
+          expect(() => remote.open(metadata, unit, outputData)).toThrow(ProofValidationError);
         const session = remote.open(metadata, unit);
         await expect(
           (async () =>

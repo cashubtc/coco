@@ -189,7 +189,13 @@ export type MintExecutionResult =
 export type RecoverExecutingResult =
   | { status: 'ISSUED'; proofs: Proof[] }
   | { status: 'REJECTED'; error: string }
-  | { status: 'UNRESOLVED'; error?: string; retryAfterMs?: number };
+  | {
+      status: 'UNRESOLVED';
+      error?: string;
+      retryAfterMs?: number;
+      /** The mint's error when a replayed submission was rejected. */
+      cause?: unknown;
+    };
 
 export type PendingMintCheckCategory = 'waiting' | 'ready' | 'completed' | 'terminal';
 

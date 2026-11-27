@@ -15,6 +15,7 @@ import {
   createMintServiceForMetadata,
 } from './MintMetadataRefresh.ts';
 import { createSendRemoteDouble } from './SendRemote.ts';
+import { noKeysetRejectionRefresh } from './KeysetRejectionRefresh.ts';
 
 class ObservedMemoryRepositories extends MemoryRepositories {
   transactionCount = 0;
@@ -83,6 +84,7 @@ export async function createSendEnvironment(units = ['sat']) {
         metadataRemote,
         overrides.eventBus ?? eventBus,
       ),
+      keysetRejectionRefresh: noKeysetRejectionRefresh,
       remote,
       loadSeed,
       eventBus,

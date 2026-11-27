@@ -7,15 +7,20 @@ import {
   type OutputDataLike,
   type SerializedBlindedSignature,
 } from '@cashu/cashu-ts';
+import { unwrapKeysetRejection } from '@core/infra/KeysetRejection.ts';
 import { normalizeUnit } from '@core/amounts.ts';
-import { createKeyChain } from '@core/proofs/KeysetSelection.ts';
+import { assertOutputKeysets, createKeyChain } from '@core/proofs/KeysetSelection.ts';
 import type { MintMetadata } from '@core/mints/MintMetadata.ts';
 import { ProofValidationError } from '@core/models/Error.ts';
 import type {
   ReceiveRemote,
   ReceiveRemoteSession,
 } from '@core/operations/receive/ReceiveRemote.ts';
-import { computeYHexForSecrets, deserializeOutputData } from '@core/utils.ts';
+import {
+  computeYHexForSecrets,
+  deserializeOutputData,
+  type SerializedOutputData,
+} from '@core/utils.ts';
 import type { MintAdapter } from '../../MintAdapter.ts';
 import type { MintRequestProvider } from '../../MintRequestProvider.ts';
 
@@ -26,17 +31,22 @@ export class CashuReceiveRemote implements ReceiveRemote {
     private readonly requests: Pick<MintRequestProvider, 'getRequestFn'>,
   ) {}
 
-  open(metadata: MintMetadata, unit: string): ReceiveRemoteSession {
+  open(
+    metadata: MintMetadata,
+    unit: string,
+    initialOutputs?: SerializedOutputData,
+  ): ReceiveRemoteSession {
     const mintUrl = metadata.mint.mintUrl;
     const mint = new Mint(mintUrl, {
       authProvider: this.auth.getAuthProvider(mintUrl),
       customRequest: this.requests.getRequestFn(mintUrl),
     });
-    const wallet = new Wallet(mint, { unit });
+    const wallet = new Wallet(mint, { unit, strictCachedKeysets: true });
     wallet.loadMintFromCache(
       metadata.mint.mintInfo,
       createKeyChain(mintUrl, unit, metadata.keysets).cache,
     );
+    if (initialOutputs) assertOutputKeysets(wallet, initialOutputs);
     const unblind = (output: OutputDataLike, signature: SerializedBlindedSignature) => {
       if (
         signature.id !== output.blindedMessage.id ||
@@ -63,13 +73,15 @@ export class CashuReceiveRemote implements ReceiveRemote {
         const amount = Amount.sum(outputs.map((output) => output.blindedMessage.amount));
         // Complete an already prepared swap. This preserves cashu-ts's established wire sorting
         // and witness normalization for legacy requests without redoing selection or allocation.
-        const result = await wallet.completeSwap({
-          inputs: request.inputProofs,
-          keepOutputs: outputs,
-          keysetId,
-          amount,
-          fees: sumProofs(request.inputProofs).subtract(amount),
-        });
+        const result = await unwrapKeysetRejection(
+          wallet.completeSwap({
+            inputs: request.inputProofs,
+            keepOutputs: outputs,
+            sendTotal: Amount.zero(),
+            amount,
+            fees: sumProofs(request.inputProofs).subtract(amount),
+          }),
+        );
         return result.keep;
       },
       checkProofStates: async (proofs) => {

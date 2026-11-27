@@ -15,6 +15,8 @@ import { getOutputProofSecrets, hasPendingData, isTerminalOperation } from './Mi
 import type { MintMethod, PendingMintCheckResult } from './MintMethodHandler';
 import type { MintService } from '../../services/MintService';
 import type { WalletService } from '../../services/WalletService';
+import type { KeysetRejectionRefresh } from '../../services/KeysetRejectionRefresh';
+import { isKeysetRejection } from '../../infra/KeysetRejection';
 import type { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
@@ -47,7 +49,7 @@ import {
   deferMintRecovery,
 } from './MintTransitions.ts';
 import type { PrepareMintResult } from './MintTransitionTypes.ts';
-import { createKeyChain } from '../../proofs/KeysetSelection.ts';
+import { assertOutputKeysets, createKeyChain } from '../../proofs/KeysetSelection.ts';
 import { restoreOutputProofs } from '../../infra/ProofRestore.ts';
 
 export interface ClaimMintQuoteOptions {
@@ -84,6 +86,8 @@ export class MintOperationService {
         'isTrustedMint' | 'assertMethodUnitSupported' | 'refreshAndCommitIfStale'
       >;
       walletService: Pick<WalletService, 'getWalletWithActiveKeysetId'>;
+      /** Refreshes the mint's metadata after the mint rejects a submission for its keyset. */
+      keysetRejectionRefresh: Pick<KeysetRejectionRefresh, 'refreshAfter'>;
       mintAdapter: MintAdapter;
       eventBus: EventBus<CoreEvents>;
       logger?: Logger;
@@ -276,6 +280,11 @@ export class MintOperationService {
         throw new UnknownMintError(`Mint ${operation.mintUrl} is not trusted`);
       }
 
+      const { wallet } = await this.dependencies.walletService.getWalletWithActiveKeysetId(
+        operation.mintUrl,
+        operation.unit,
+      );
+      assertOutputKeysets(wallet, operation.outputData);
       const now = Date.now();
       const authorization = await this.runChecked(operationId, (tx) =>
         tx.perform(beginMintExecution, { operationId, now }),
@@ -290,18 +299,20 @@ export class MintOperationService {
         operation: executing,
       });
 
+      let submissionError: unknown;
       try {
         const handler = this.dependencies.handlerProvider.get(executing.method);
-        const { wallet } = await this.dependencies.walletService.getWalletWithActiveKeysetId(
-          executing.mintUrl,
-          executing.unit,
-        );
-        const result = await handler.execute({
-          mintAdapter: this.dependencies.mintAdapter,
-          logger: this.dependencies.logger,
-          operation: executing as any,
-          wallet,
-        });
+        const result = await handler
+          .execute({
+            mintAdapter: this.dependencies.mintAdapter,
+            logger: this.dependencies.logger,
+            operation: executing as any,
+            wallet,
+          })
+          .catch((error: unknown) => {
+            submissionError = error;
+            throw error;
+          });
 
         switch (result.status) {
           case 'ISSUED':
@@ -315,7 +326,14 @@ export class MintOperationService {
             throw new Error(result.error ?? 'Mint execution failed');
         }
       } catch (e) {
-        await this.tryRecoverExecutingOperation(executing);
+        const replayError = await this.tryRecoverExecutingOperation(executing);
+        // Once the rejection has left the handler and recovery has run. Nothing is stored for it:
+        // the operation stays as recovery left it. One refresh, for the submission or for the
+        // replay that followed it.
+        await this.dependencies.keysetRejectionRefresh.refreshAfter(
+          executing.mintUrl,
+          isKeysetRejection(submissionError) ? submissionError : replayError,
+        );
 
         const current = await this.dependencies.mintOperationQueries.getById(operationId);
         if (current && isTerminalOperation(current)) {
@@ -462,6 +480,18 @@ export class MintOperationService {
     op: ExecutingMintOperation,
     options?: { skipLock?: boolean },
   ): Promise<void> {
+    await this.recoverExecuting(op, options);
+  }
+
+  /**
+   * Recovers an executing operation. When the caller already holds the operation lock, the mint's
+   * error for a rejected replay is returned instead of acted on, so that the caller refreshes the
+   * mint's metadata once.
+   */
+  private async recoverExecuting(
+    op: ExecutingMintOperation,
+    options?: { skipLock?: boolean },
+  ): Promise<unknown> {
     await this.assertCanResolve(op.id);
     const releaseLock = options?.skipLock ? undefined : await this.acquireOperationLock(op.id);
     try {
@@ -533,6 +563,12 @@ export class MintOperationService {
         }
         case 'UNRESOLVED':
           await this.deferRecovery(executing, result.error);
+          // execute() holds the lock and refreshes once, for its submission or for this replay.
+          if (!releaseLock) return result.cause;
+          await this.dependencies.keysetRejectionRefresh.refreshAfter(
+            executing.mintUrl,
+            result.cause,
+          );
           break;
         case 'REJECTED':
           await this.failOperation(executing, result.error);
@@ -821,12 +857,14 @@ export class MintOperationService {
     return ops.filter((op): op is PendingMintOperation => op.state === 'pending');
   }
 
-  private async tryRecoverExecutingOperation(op: ExecutingMintOperation): Promise<void> {
+  /** Returns the mint's error when the replay it attempted was rejected. */
+  private async tryRecoverExecutingOperation(op: ExecutingMintOperation): Promise<unknown> {
     try {
-      await this.recoverExecutingOperation(op, { skipLock: true });
+      const replayError = await this.recoverExecuting(op, { skipLock: true });
       this.dependencies.logger?.info('Recovered executing mint operation after failure', {
         operationId: op.id,
       });
+      return replayError;
     } catch (recoveryError) {
       this.dependencies.logger?.warn(
         'Failed to recover executing mint operation, will retry on startup',

@@ -2,7 +2,7 @@ import {
   AuthManager,
   Mint,
   type AuthProvider,
-  type OIDCAuth,
+  OIDCAuth,
   type TokenResponse,
 } from '@cashu/cashu-ts';
 import type { MintAdapter } from '@core/infra/MintAdapter';
@@ -230,9 +230,10 @@ export class AuthService {
    */
   private async attachOIDC(mintUrl: string, auth: AuthManager): Promise<OIDCAuth> {
     const mint = new Mint(mintUrl, { authProvider: auth });
-    const oidc = await mint.oidcAuth({
+    // The AuthManager installs the token record itself once the provider is attached. Calling
+    // setCAT here as well would drop the refresh token.
+    const oidc = OIDCAuth.fromMintInfo(await mint.fetchMintInfo(), {
       onTokens: async (t: TokenResponse) => {
-        auth.setCAT(t.access_token);
         if (t.access_token) {
           // OAuth refresh may omit refresh_token (RFC 6749 §6) —
           // preserve the existing one so restore() can re-attach OIDC.

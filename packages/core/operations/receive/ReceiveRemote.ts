@@ -18,5 +18,10 @@ export interface ReceiveRemoteSession {
 }
 
 export interface ReceiveRemote {
-  open(metadata: MintMetadata, unit: string): ReceiveRemoteSession;
+  /** Passing the initial output plan checks it against the submitting session before authorization. */
+  open(
+    metadata: MintMetadata,
+    unit: string,
+    initialOutputs?: SerializedOutputData,
+  ): ReceiveRemoteSession;
 }

@@ -1,5 +1,6 @@
-import { Amount, CTSError, type Proof } from '@cashu/cashu-ts';
+import { Amount, CTSError, type Proof, type Wallet } from '@cashu/cashu-ts';
 import { bytesToHex } from '@noble/curves/utils.js';
+import { unwrapKeysetRejection } from '@core/infra/KeysetRejection.ts';
 import type { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
 import { restoreOutputProofs } from '../../infra/ProofRestore.ts';
@@ -14,12 +15,13 @@ import {
   UnknownMintError,
 } from '../../models/Error.ts';
 import type { QuoteIdentity } from '../../models/QuoteIdentity.ts';
-import { createKeyChain } from '../../proofs/KeysetSelection.ts';
+import { assertOutputKeyset, createKeyChain } from '../../proofs/KeysetSelection.ts';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
 import type { ProofRepository } from '../../repositories/index.ts';
 import type { KeyRingService } from '../../services/KeyRingService.ts';
 import type { MintService } from '../../services/MintService.ts';
 import type { WalletService } from '../../services/WalletService.ts';
+import type { KeysetRejectionRefresh } from '../../services/KeysetRejectionRefresh.ts';
 import type { CoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
 import {
   deserializeOutputData,
@@ -95,6 +97,8 @@ export interface BatchMintOperationServiceDependencies {
     'isTrustedMint' | 'getNut29BatchMintLimit' | 'refreshAndCommitIfStale'
   >;
   walletService: Pick<WalletService, 'getWalletWithActiveKeysetId'>;
+  /** Refreshes the mint's metadata after the mint rejects a submission for its keyset. */
+  keysetRejectionRefresh: Pick<KeysetRejectionRefresh, 'refreshAfter'>;
   keyRingService: Pick<KeyRingService, 'getMintQuoteKeyPair'>;
   loadSeed: () => Promise<Uint8Array>;
   eventBus: EventBus<CoreEvents>;
@@ -178,7 +182,7 @@ export class BatchMintOperationService {
         operationId,
         operation: admitted.operation,
       });
-      return await this.submit(admitted.operation, 'initial');
+      return await this.submit(admitted.operation, { initialWallet: admitted.wallet });
     } finally {
       releaseOperation();
     }
@@ -276,7 +280,7 @@ export class BatchMintOperationService {
     operationId: string,
     mintUrl: string,
     input: ExecuteBatchMintInput,
-  ): Promise<AdmitBatchMintResult> {
+  ): Promise<AdmitBatchMintResult & { wallet: Wallet }> {
     const { method } = input;
     const first = await this.dependencies.quoteLifecycle.getMintQuote(
       mintUrl,
@@ -297,9 +301,16 @@ export class BatchMintOperationService {
         .getCheapestKeyset()
         .toMintKeys();
       if (!activeKeys) throw new ProofValidationError('Active keyset is missing mint keys');
+      // Admission allocates the outputs directly as executing. Pin their keyset and the wallet
+      // before this commit, including across publication to listeners that may refresh the mint.
+      const { wallet } = await this.dependencies.walletService.getWalletWithActiveKeysetId(
+        mintUrl,
+        first.unit,
+      );
+      assertOutputKeyset(wallet, activeKeys.id);
       const seed = await this.dependencies.loadSeed();
       const now = Date.now();
-      return await this.dependencies.transactionRunner.run((tx) =>
+      const result = await this.dependencies.transactionRunner.run((tx) =>
         tx.perform(admitBatchMint, {
           operationId,
           mintUrl,
@@ -311,6 +322,7 @@ export class BatchMintOperationService {
           now,
         }),
       );
+      return { ...result, wallet };
     } finally {
       release();
     }
@@ -319,15 +331,20 @@ export class BatchMintOperationService {
   /** Send exactly the persisted request through cashu-ts and settle its outcome. */
   private async submit(
     operation: ExecutingBatchMintOperation,
-    context: 'initial' | 'recovery',
+    submission: { initialWallet: Wallet } | 'recovery',
   ): Promise<BatchMintOperation> {
     let proofs: Proof[];
     let submitted = false;
     try {
-      const { wallet } = await this.dependencies.walletService.getWalletWithActiveKeysetId(
-        operation.mintUrl,
-        operation.unit,
-      );
+      const wallet =
+        submission === 'recovery'
+          ? (
+              await this.dependencies.walletService.getWalletWithActiveKeysetId(
+                operation.mintUrl,
+                operation.unit,
+              )
+            ).wallet
+          : submission.initialWallet;
       const outputs = deserializeOutputData(operation.outputData).keep;
       const privkeys = await this.loadQuoteKeys(operation);
       // As for a Mint Operation, the Wallet signs at submission through cashu-ts, which retries with
@@ -336,7 +353,14 @@ export class BatchMintOperationService {
         operation.method,
         operation.members.map((member) => ({
           amount: member.amount,
-          quote: { quote: member.quoteId, ...(member.pubkey ? { pubkey: member.pubkey } : {}) },
+          // Zero accounting: cashu-ts uses the quote as given and sends no quote check first.
+          quote: {
+            quote: member.quoteId,
+            unit: operation.unit,
+            amount_paid: Amount.zero(),
+            amount_issued: Amount.zero(),
+            ...(member.pubkey ? { pubkey: member.pubkey } : {}),
+          },
         })),
         {
           keysetId: outputs[0]!.blindedMessage.id,
@@ -346,24 +370,44 @@ export class BatchMintOperationService {
       );
       const persistedOutputs = operation.outputData.keep.map((output) => output.blindedMessage.B_);
       if (
-        preview.payload.outputs.length !== persistedOutputs.length ||
-        preview.payload.outputs.some((output, index) => output.B_ !== persistedOutputs[index])
+        preview.outputData.length !== persistedOutputs.length ||
+        preview.outputData.some(
+          (output, index) => output.blindedMessage.B_ !== persistedOutputs[index],
+        )
       )
         throw new Error('Prepared Batch Mint outputs differ from the persisted request');
       submitted = true;
-      proofs = await wallet.completeBatchMint(preview);
+      proofs = await unwrapKeysetRejection(wallet.completeBatchMint(preview));
     } catch (error) {
-      if (submitted && isBatchMintIncompatibility(error))
-        this.markBatchMintUnavailable(operation.mintUrl, operation.method, error);
-      if (submitted && error instanceof MintOperationError) {
-        if (context === 'initial' && DEFINITIVE_REJECTION_CODES.has(error.code))
-          return this.fail(operation, error.message, String(error.code));
-        if (context === 'recovery' && RESTORE_AFTER_REPLAY_CODES.has(error.code))
-          return this.restoreRejectedReplay(operation, error);
-      }
-      return this.defer(operation, message(error));
+      const stored = await this.settleRejectedSubmission(
+        operation,
+        submission === 'recovery' ? 'recovery' : 'initial',
+        submitted,
+        error,
+      );
+      // After the failure or deferral is stored.
+      if (submitted)
+        await this.dependencies.keysetRejectionRefresh.refreshAfter(operation.mintUrl, error);
+      return stored;
     }
     return this.settle(operation, proofs);
+  }
+
+  private async settleRejectedSubmission(
+    operation: ExecutingBatchMintOperation,
+    context: 'initial' | 'recovery',
+    submitted: boolean,
+    error: unknown,
+  ): Promise<BatchMintOperation> {
+    if (submitted && isBatchMintIncompatibility(error))
+      this.markBatchMintUnavailable(operation.mintUrl, operation.method, error);
+    if (submitted && error instanceof MintOperationError) {
+      if (context === 'initial' && DEFINITIVE_REJECTION_CODES.has(error.code))
+        return this.fail(operation, error.message, String(error.code));
+      if (context === 'recovery' && RESTORE_AFTER_REPLAY_CODES.has(error.code))
+        return this.restoreRejectedReplay(operation, error);
+    }
+    return this.defer(operation, message(error));
   }
 
   private async loadQuoteKeys(operation: ExecutingBatchMintOperation): Promise<string[]> {

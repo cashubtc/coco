@@ -1,4 +1,4 @@
-import { RateLimitError, type Proof } from '@cashu/cashu-ts';
+import { RateLimitError, type Proof, type Wallet } from '@cashu/cashu-ts';
 import type { DeferPublication } from '../../events/DeferredPublication.ts';
 import type { CoreTransaction, CoreTransactionRunner } from '../../transactions/CoreTransaction.ts';
 import type { MintSwapOperationRepository } from './MintSwapOperationRepository.ts';
@@ -22,7 +22,11 @@ import type { MintSwapOperation } from './MintSwapOperation.ts';
 import { isMintSwapAutomaticState, isMintSwapTerminalState } from './MintSwapOperation.ts';
 import { OperationIdLock } from '../OperationIdLock.ts';
 import type { MintScopedLock } from '../MintScopedLock.ts';
-import { createKeyChain } from '../../proofs/KeysetSelection.ts';
+import {
+  assertOutputKeyset,
+  assertOutputKeysets,
+  createKeyChain,
+} from '../../proofs/KeysetSelection.ts';
 import { generateSubId, getSecretsFromSerializedOutputData } from '../../utils.ts';
 import { OperationInProgressError, ProofValidationError } from '../../models/Error.ts';
 import { restoreOutputProofs } from '../../infra/ProofRestore.ts';
@@ -212,16 +216,17 @@ export class MintSwapOperationService {
       if (parent.state !== 'prepared') return this.recoverParent(parent);
       const release = await this.dependencies.sourceOperationLock.acquire(parent.sourceOperationId);
       try {
-        const keys = await this.preflight(parent);
+        const { sourceKeys, destinationKeys, sourceWallet } = await this.preflight(parent);
         const now = this.now();
         const authorization = await this.commit(id, (tx) =>
-          tx.perform(beginMintSwapSource, { id, ...keys, now }),
+          tx.perform(beginMintSwapSource, { id, sourceKeys, destinationKeys, now }),
         );
         if (authorization.changed && authorization.source) {
           await this.dispatchSource(
             authorization.operation,
             authorization.source,
             authorization.inputProofs,
+            sourceWallet,
           );
         }
       } catch (error) {
@@ -353,11 +358,11 @@ export class MintSwapOperationService {
       if (parent.state !== 'preparing') return parent;
       for (const url of [parent.sourceMintUrl, parent.destinationMintUrl].sort())
         releases.push(await this.dependencies.mintScopedLock.acquire(url));
-      const keys = await this.preflight(parent);
+      const { sourceKeys, destinationKeys } = await this.preflight(parent);
       const seed = await this.dependencies.loadSeed();
       const now = this.now();
       const result = await this.commit(parent.id, (tx) =>
-        tx.perform(prepareMintSwap, { id: parent.id, ...keys, seed, now }),
+        tx.perform(prepareMintSwap, { id: parent.id, sourceKeys, destinationKeys, seed, now }),
       );
 
       return result;
@@ -369,6 +374,7 @@ export class MintSwapOperationService {
   }
 
   private async preflight(parent: MintSwapIntent | MintSwapOperation) {
+    let sourceNeedsSwap = false;
     let sourceKeysetId: string | undefined;
     let destinationKeysetId: string | undefined;
     if ('state' in parent && parent.state === 'prepared') {
@@ -380,11 +386,13 @@ export class MintSwapOperationService {
       const destinationOperation = await this.dependencies.destinationQueries.getById(
         parent.destinationOperationId,
       );
-      if (sourceOperation && sourceOperation.state !== 'init')
+      if (sourceOperation && sourceOperation.state !== 'init') {
+        sourceNeedsSwap = sourceOperation.needsSwap;
         sourceKeysetId =
           sourceOperation.changeOutputData?.keep[0]?.blindedMessage.id ??
           sourceOperation.swapOutputData?.keep[0]?.blindedMessage.id ??
           sourceOperation.swapOutputData?.send[0]?.blindedMessage.id;
+      }
       if (destinationOperation && destinationOperation.state !== 'init')
         destinationKeysetId = destinationOperation.outputData?.keep[0]?.blindedMessage.id;
     }
@@ -420,13 +428,25 @@ export class MintSwapOperationService {
       .toMintKeys();
     if (!sourceKeys || !destinationKeys)
       throw new ProofValidationError('Mint Swap active keys are unavailable');
-    return { sourceKeys, destinationKeys };
+    // beginMintSwapSource checks every source output against sourceKeys in its transaction.
+    const sourceWallet = sourceNeedsSwap
+      ? (
+          await this.dependencies.walletService.getWalletWithActiveKeysetId(
+            parent.sourceMintUrl,
+            'sat',
+            this.deferPublication(parent.id),
+          )
+        ).wallet
+      : undefined;
+    if (sourceWallet) assertOutputKeyset(sourceWallet, sourceKeys.id);
+    return { sourceKeys, destinationKeys, sourceWallet };
   }
 
   private async dispatchSource(
     parent: MintSwapOperation,
     operation: ExecutingMeltOperation,
     inputProofs: CoreProof[],
+    wallet: Wallet | undefined,
   ) {
     const handler = this.dependencies.meltHandlerProvider.get('bolt11');
     const source = operation as ExecutingMeltOperation & {
@@ -435,11 +455,7 @@ export class MintSwapOperationService {
     };
     let inputs: Proof[] = inputProofs;
     if (source.needsSwap) {
-      const { wallet } = await this.dependencies.walletService.getWalletWithActiveKeysetId(
-        source.mintUrl,
-        source.unit,
-        this.deferPublication(parent.id),
-      );
+      if (!wallet) throw new Error('Missing Mint Swap pre-swap wallet');
       const result = await handler.swap({
         operation: source,
         wallet,
@@ -697,26 +713,27 @@ export class MintSwapOperationService {
         tx.perform(reconcileMintSwap, { id: parent.id, now }),
       );
       if (parent.state === 'completed' || parent.state === 'needs_attention') return parent;
+      let child = await this.dependencies.destinationQueries.getById(parent.destinationOperationId);
+      if (!child || (child.state !== 'pending' && child.state !== 'executing')) return parent;
+      const { wallet } = await this.dependencies.walletService.getWalletWithActiveKeysetId(
+        child.mintUrl,
+        child.unit,
+        this.deferPublication(parent.id),
+      );
       let newlyAuthorized = false;
       if (parent.state === 'destination_funded') {
+        if (child.state === 'pending') assertOutputKeysets(wallet, child.outputData);
         now = this.now();
         const result = await this.commit(parent.id, (tx) =>
           tx.perform(beginMintSwapDestination, { id: parent.id, now }),
         );
         parent = result.operation;
         newlyAuthorized = result.changed;
+        child = result.destination ?? child;
       }
-      const child = await this.dependencies.destinationQueries.getById(
-        parent.destinationOperationId,
-      );
       if (parent.state !== 'destination_pending' || child?.state !== 'executing') return parent;
       const operation = child as ExecutingMintOperation<'bolt11'>;
       const handler = this.dependencies.mintHandlerProvider.get('bolt11');
-      const { wallet } = await this.dependencies.walletService.getWalletWithActiveKeysetId(
-        operation.mintUrl,
-        operation.unit,
-        this.deferPublication(parent.id),
-      );
       const context = {
         operation,
         wallet,

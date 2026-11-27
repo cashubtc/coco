@@ -74,9 +74,13 @@ describe('Payment Request planning after keyset rotation', () => {
 
   it('pays directly from older proofs without planning unusable new outputs', async () => {
     const { payer, repositories } = await wallet();
-    const encoded = new PaymentRequest([], 'direct', Amount.from(7), 'sat', [
-      mintUrl,
-    ]).toEncodedRequest();
+    const encoded = new PaymentRequest({
+      transport: [],
+      id: 'direct',
+      amount: Amount.from(7),
+      unit: 'sat',
+      mints: [mintUrl],
+    }).toEncodedRequest();
     const prepared = await payer.paymentRequests.prepare(
       await payer.paymentRequests.parse(encoded),
       { mintUrl },
@@ -120,16 +124,14 @@ describe('Payment Request planning after keyset rotation', () => {
     'rejects unusable swap outputs without reservations (P2PK: %s)',
     async (locked) => {
       const { payer, repositories } = await wallet();
-      const encoded = new PaymentRequest(
-        [],
-        'swap',
-        Amount.from(locked ? 7 : 8),
-        'sat',
-        [mintUrl],
-        undefined,
-        undefined,
-        locked ? { kind: 'P2PK', data: testMintKeypairs['1'], tags: [] } : undefined,
-      ).toEncodedRequest();
+      const encoded = new PaymentRequest({
+        transport: [],
+        id: 'swap',
+        amount: Amount.from(locked ? 7 : 8),
+        unit: 'sat',
+        mints: [mintUrl],
+        nut10: locked ? { kind: 'P2PK', data: testMintKeypairs['1'], tags: [] } : undefined,
+      }).toEncodedRequest();
       await expect(
         payer.paymentRequests.prepare(await payer.paymentRequests.parse(encoded), { mintUrl }),
       ).rejects.toThrow('Unable to fund receiver input fees');

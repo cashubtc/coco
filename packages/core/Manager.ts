@@ -30,6 +30,7 @@ import {
   AuthService,
   TokenService,
 } from './services';
+import { KeysetRejectionRefresh } from './services/KeysetRejectionRefresh.ts';
 import { SendOperationService } from './operations/send/SendOperationService';
 import { MeltOperationService } from './operations/melt/MeltOperationService';
 import { MintOperationService } from './operations/mint/MintOperationService';
@@ -894,6 +895,11 @@ export class Manager {
       (mintUrl: string) => this.mintAdapter.getAuthProvider(mintUrl),
       this.outputDataCreator,
     );
+    const keysetRejectionRefresh = new KeysetRejectionRefresh({
+      mintService,
+      walletService,
+      logger: this.getChildLogger('KeysetRejectionRefresh'),
+    });
     const balanceQueries = new StoredBalanceQueries(
       repositories.proofRepository,
       repositories.mintRepository,
@@ -917,6 +923,7 @@ export class Manager {
       transactionRunner,
       mintQueries: repositories.mintRepository,
       mintMetadataRefresh: mintService,
+      keysetRejectionRefresh,
       remote: new CashuSendRemote(
         this.mintAdapter,
         this.mintRequestProvider,
@@ -939,6 +946,7 @@ export class Manager {
       transactionRunner,
       mintQueries: repositories.mintRepository,
       mintMetadataRefresh: mintService,
+      keysetRejectionRefresh,
       signer: p2pkSigner,
       loadSeed: () => seedService.getSeed(),
       remote: new CashuReceiveRemote(this.mintAdapter, this.mintRequestProvider),
@@ -999,6 +1007,7 @@ export class Manager {
       quoteLifecycle,
       mintService,
       walletService,
+      keysetRejectionRefresh,
       mintAdapter: this.mintAdapter,
       eventBus: this.eventBus,
       logger: meltOperationLogger,
@@ -1014,6 +1023,7 @@ export class Manager {
       quoteLifecycle,
       mintService,
       walletService,
+      keysetRejectionRefresh,
       keyRingService,
       loadSeed: () => seedService.getSeed(),
       eventBus: this.eventBus,
@@ -1031,6 +1041,7 @@ export class Manager {
       quoteLifecycle,
       mintService,
       walletService,
+      keysetRejectionRefresh,
       mintAdapter: this.mintAdapter,
       eventBus: this.eventBus,
       logger: mintOperationLogger,

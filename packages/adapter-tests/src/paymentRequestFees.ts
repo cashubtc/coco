@@ -98,16 +98,14 @@ export function runPaymentRequestFeeTests(
         ).toBe(JSON.stringify([feePpk]));
         const key = locked ? await receiver.keyring.generateKeyPair() : undefined;
         const target = 'https://receiver.test/payment';
-        const encoded = new PaymentRequest(
-          http ? [{ type: PaymentRequestTransportType.POST, target }] : [],
-          'fee-request',
-          chosenAmount ? undefined : Amount.from(net),
+        const encoded = new PaymentRequest({
+          transport: http ? [{ type: PaymentRequestTransportType.POST, target }] : [],
+          id: 'fee-request',
+          amount: chosenAmount ? undefined : Amount.from(net),
           unit,
-          [mintUrl],
-          undefined,
-          undefined,
-          key ? { kind: 'P2PK', data: key.publicKeyHex, tags: [] } : undefined,
-        ).toEncodedRequest();
+          mints: [mintUrl],
+          nut10: key ? { kind: 'P2PK', data: key.publicKeyHex, tags: [] } : undefined,
+        }).toEncodedRequest();
         const request = await payer.paymentRequests.parse(encoded);
         const prepared = await payer.paymentRequests.prepare(request, {
           mintUrl,
@@ -213,16 +211,14 @@ export function runPaymentRequestFeeTests(
         const receiver = await session();
         await fund(payer);
         const key = await receiver.keyring.generateKeyPair();
-        const encoded = new PaymentRequest(
-          [],
-          'recovery',
-          Amount.from(7),
+        const encoded = new PaymentRequest({
+          transport: [],
+          id: 'recovery',
+          amount: Amount.from(7),
           unit,
-          [mintUrl],
-          undefined,
-          undefined,
-          { kind: 'P2PK', data: key.publicKeyHex, tags: [] },
-        ).toEncodedRequest();
+          mints: [mintUrl],
+          nut10: { kind: 'P2PK', data: key.publicKeyHex, tags: [] },
+        }).toEncodedRequest();
         const prepared = await payer.paymentRequests.prepare(
           await payer.paymentRequests.parse(encoded),
           { mintUrl },
@@ -273,16 +269,14 @@ export function runPaymentRequestFeeTests(
           const receiver = await session();
           await fund(payer, balance);
           const key = await receiver.keyring.generateKeyPair();
-          const encoded = new PaymentRequest(
-            [],
-            'insufficient',
-            Amount.from(7),
+          const encoded = new PaymentRequest({
+            transport: [],
+            id: 'insufficient',
+            amount: Amount.from(7),
             unit,
-            [mintUrl],
-            undefined,
-            undefined,
-            { kind: 'P2PK', data: key.publicKeyHex, tags: [] },
-          ).toEncodedRequest();
+            mints: [mintUrl],
+            nut10: { kind: 'P2PK', data: key.publicKeyHex, tags: [] },
+          }).toEncodedRequest();
           const request = await payer.paymentRequests.parse(encoded);
           expect(request.payableMints).toContain(mintUrl);
           await expect(payer.paymentRequests.prepare(request, { mintUrl })).rejects.toThrow();

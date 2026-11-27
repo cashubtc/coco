@@ -16,5 +16,10 @@ export interface SendRemoteSession {
 }
 
 export interface SendRemote {
-  open(metadata: MintMetadata, unit: string): SendRemoteSession;
+  /** Passing the initial output plan checks it against the submitting session before authorization. */
+  open(
+    metadata: MintMetadata,
+    unit: string,
+    initialOutputs?: SerializedOutputData,
+  ): SendRemoteSession;
 }

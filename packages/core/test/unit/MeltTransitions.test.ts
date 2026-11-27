@@ -53,6 +53,7 @@ import { deserializeOutputData } from '../../utils.ts';
 import { testMintInfo, testMintKeypairs, testMintKeysetId } from '../fixtures/MintMetadata.ts';
 import { mintQuoteFromBolt11Fixture } from '../normalizedMintQuoteFixtures.ts';
 import { overrideTransactions } from '../overrideTransactions.ts';
+import { noKeysetRejectionRefresh } from '../fixtures/KeysetRejectionRefresh.ts';
 
 const mintUrl = 'https://mint.test';
 const keysetId = testMintKeysetId();
@@ -485,7 +486,7 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
       } satisfies Pick<MintService, 'isTrustedMint' | 'refreshAndCommitIfStale'>;
       const walletService = {
         getWalletWithActiveKeysetId: async () => ({
-          wallet: {} as Wallet,
+          wallet: { getKeyset: () => ({ isActive: true, hasHexId: true }) } as unknown as Wallet,
           keysetId,
           keyset: { id: keysetId, unit: 'sat', active: true, input_fee_ppk: 0 },
           keys: { id: keysetId, unit: 'sat', keys: testMintKeypairs },
@@ -565,6 +566,7 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
         quoteLifecycle,
         mintService,
         walletService,
+        keysetRejectionRefresh: noKeysetRejectionRefresh,
         mintAdapter,
         eventBus: bus,
       });
@@ -1245,6 +1247,7 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
       updatedAt: 1,
     };
     const service = new MeltOperationService({
+      keysetRejectionRefresh: noKeysetRejectionRefresh,
       handlerProvider: new MeltHandlerProvider({ bolt11: handler }),
       meltOperationQueries: repositories.meltOperationRepository,
       proofQueries: repositories.proofRepository,
@@ -1275,7 +1278,7 @@ describe.each(['memory', 'sqlite'] as const)('Melt transitions (%s)', (adapter) 
       },
       walletService: {
         getWalletWithActiveKeysetId: async () => ({
-          wallet: {} as any,
+          wallet: { getKeyset: () => ({ isActive: true, hasHexId: true }) } as any,
           keysetId: activeKeys.id,
           keyset: {
             id: activeKeys.id,

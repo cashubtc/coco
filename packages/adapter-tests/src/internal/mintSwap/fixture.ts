@@ -1,4 +1,5 @@
-import { Amount, type Proof, type Wallet } from '@cashu/cashu-ts';
+import { Amount, Wallet, type Proof } from '@cashu/cashu-ts';
+import { createKeyChain } from '../../../../core/proofs/KeysetSelection.ts';
 import type { Repositories } from '../../../../core/repositories/index.ts';
 import { RepositoryCoreTransactionRunner } from '../../../../core/transactions/CoreTransaction.ts';
 import {
@@ -315,10 +316,14 @@ export async function mintSwapFixture(
       },
     }),
     walletService: {
-      getWalletWithActiveKeysetId: async () => {
+      getWalletWithActiveKeysetId: async (mintUrl, unit) => {
         assertRemote();
+        const wallet = new Wallet(mintUrl, { unit, strictCachedKeysets: true });
+        const keysets = await repositories.keysetRepository.getKeysetsByMintUrl(mintUrl);
+        wallet.loadMintFromCache(testMintInfo, createKeyChain(mintUrl, unit, keysets).cache);
         return {
           wallet: {
+            getKeyset: wallet.getKeyset.bind(wallet),
             checkProofsStates: async (proofs: Proof[]) => proofs.map(() => ({ state: 'UNSPENT' })),
           } as unknown as Wallet,
           keysetId: keys.id,

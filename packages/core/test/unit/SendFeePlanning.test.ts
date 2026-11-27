@@ -6,7 +6,13 @@ import {
   feeCoveredSendAmount,
   selectProofInputs,
 } from '../../proofs/ProofSelection.ts';
-import { testMintKeypairs, testMintKeysetId } from '../fixtures/MintMetadata.ts';
+import type { CoreProof } from '../../types.ts';
+import {
+  testLegacyMintKeysetId,
+  testMintKeypairs,
+  testMintKeysetId,
+} from '../fixtures/MintMetadata.ts';
+import { createSendEnvironment } from '../fixtures/SendEnvironment.ts';
 
 const mintUrl = 'https://mint.test';
 const keyset = (feePpk: number, active = true) => ({
@@ -53,8 +59,10 @@ describe('Send fee calculations', () => {
       false,
       { amount: Amount.from(net) },
     );
-    expect(selected).toEqual({
-      proofs,
+    // The selector may return the inputs in any order.
+    expect(selected.proofs).toHaveLength(proofs.length);
+    expect(selected.proofs).toEqual(expect.arrayContaining(proofs));
+    expect(selected).toMatchObject({
       fee: Amount.zero(),
       needsSwap: false,
       sendAmount: Amount.from(8),
@@ -71,4 +79,45 @@ describe('Send fee calculations', () => {
       ),
     ).toThrow('Unable to fund receiver input fees');
   });
+});
+
+describe('Send proof selection over stored keyset units', () => {
+  // Storage adapters return an empty unit for a keyset row without one, and an older row may differ
+  // in case. cashu-ts selects only proofs whose keyset unit is exactly the selection unit.
+  it.each([
+    ['blank', ''],
+    ['upper case', 'SAT'],
+  ])(
+    'selects ready proofs on an older keyset whose stored unit is %s',
+    async (_name, storedUnit) => {
+      const { repositories, service } = await createSendEnvironment(['sat']);
+      const older = testLegacyMintKeysetId();
+      await repositories.keysetRepository.addKeyset({
+        mintUrl,
+        id: older,
+        unit: storedUnit,
+        keypairs: testMintKeypairs,
+        active: false,
+        feePpk: 0,
+      });
+      await repositories.proofRepository.saveProofs(mintUrl, [
+        {
+          id: older,
+          amount: Amount.from(8),
+          secret: 'older',
+          C: 'C_older',
+          mintUrl,
+          unit: 'sat',
+          state: 'ready',
+        } as CoreProof,
+      ]);
+
+      const prepared = await service.prepare(
+        await service.init(mintUrl, { amount: Amount.from(8), unit: 'sat' }),
+      );
+
+      expect(prepared.inputProofSecrets).toEqual(['older']);
+      expect(prepared.needsSwap).toBe(false);
+    },
+  );
 });

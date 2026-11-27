@@ -167,6 +167,9 @@ and malformed or off-curve keys.
 The selected mint must advertise NUT-11 support. P2PK payment requests use this
 same structured send method internally: `paymentRequests.prepare()` converts a
 valid NUT-18 P2PK requirement into a P2PK send operation before funds move.
+Coco reads a payment request's lock only from its NUT-10 option: a request locked
+only with `nutroot` is rejected with `PaymentRequestError` by `paymentRequests.parse()`
+and `prepare()` rather than paid with unlocked proofs.
 
 ### Cancelling a Prepared Send
 

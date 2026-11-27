@@ -6,6 +6,7 @@ import {
   type ProofState as CashuProofState,
 } from '@cashu/cashu-ts';
 import type { MintService } from '@core/services/MintService.ts';
+import type { KeysetRejectionRefresh } from '@core/services/KeysetRejectionRefresh.ts';
 import type { ProofQueries } from '@core/proofs/ProofQueries.ts';
 import { createKeyChain } from '@core/proofs/KeysetSelection.ts';
 import { feeCoveredSendAmount } from '@core/proofs/ProofSelection.ts';
@@ -130,6 +131,8 @@ export interface SendOperationServiceDependencies {
   transactionRunner: CoreTransactionRunner;
   mintQueries: { isTrustedMint(mintUrl: string): Promise<boolean> };
   mintMetadataRefresh: Pick<MintService, 'refreshAndCommitIfStale'>;
+  /** Refreshes the mint's metadata after the mint rejects a swap or reclaim for its keyset. */
+  keysetRejectionRefresh: Pick<KeysetRejectionRefresh, 'refreshAfter'>;
   remote: SendRemote;
   loadSeed: () => Promise<Uint8Array>;
   eventBus: Pick<EventBus<CoreEvents>, 'emit'>;
@@ -169,6 +172,7 @@ export class SendOperationService {
   private readonly transactionRunner: CoreTransactionRunner;
   private readonly mintQueries: SendOperationServiceDependencies['mintQueries'];
   private readonly mintMetadataRefresh: Pick<MintService, 'refreshAndCommitIfStale'>;
+  private readonly keysetRejectionRefresh: Pick<KeysetRejectionRefresh, 'refreshAfter'>;
   private readonly remote: SendRemote;
   private readonly loadSeed: () => Promise<Uint8Array>;
   private readonly eventBus: Pick<EventBus<CoreEvents>, 'emit'>;
@@ -189,6 +193,7 @@ export class SendOperationService {
     this.transactionRunner = dependencies.transactionRunner;
     this.mintQueries = dependencies.mintQueries;
     this.mintMetadataRefresh = dependencies.mintMetadataRefresh;
+    this.keysetRejectionRefresh = dependencies.keysetRejectionRefresh;
     this.remote = dependencies.remote;
     this.loadSeed = dependencies.loadSeed;
     this.eventBus = dependencies.eventBus;
@@ -396,6 +401,7 @@ export class SendOperationService {
     const remote = this.remote.open(
       await this.mintMetadataRefresh.refreshAndCommitIfStale(operation.mintUrl),
       operation.unit,
+      operation.outputData,
     );
     const updatedAt = Date.now();
     const memo = options?.memo ? this.normalizeMemo(options.memo) : undefined;
@@ -421,6 +427,7 @@ export class SendOperationService {
     } catch (error) {
       // A rejected replay cannot rule out an earlier submission still completing.
       if (submission === 'replay' || !this.isDefinitiveSwapFailure(error)) {
+        await this.keysetRejectionRefresh.refreshAfter(request.mintUrl, error);
         throw error;
       }
       const updatedAt = Date.now();
@@ -432,6 +439,8 @@ export class SendOperationService {
           error: error.message,
         }),
       );
+      // After the rollback that released the inputs.
+      await this.keysetRejectionRefresh.refreshAfter(request.mintUrl, error);
       return { status: 'FAILED', result: failed, error };
     }
     const keepProofs = mapProofToCoreProof(request.mintUrl, 'ready', result.keep, {
@@ -766,9 +775,16 @@ export class SendOperationService {
     remote: SendRemoteSession,
     reason: string,
   ): Promise<CompleteSendReclaimResult> {
-    const proofs = operation.reclaimData
-      ? await remote.reclaim(inputProofs, operation.reclaimData.outputData)
-      : [];
+    let proofs: Proof[] = [];
+    if (operation.reclaimData) {
+      try {
+        proofs = await remote.reclaim(inputProofs, operation.reclaimData.outputData);
+      } catch (error) {
+        // Nothing is stored for a rejected reclaim; the caller settles it from mint evidence.
+        await this.keysetRejectionRefresh.refreshAfter(operation.mintUrl, error);
+        throw error;
+      }
+    }
     return this.applySendReclaim(operation, proofs, reason);
   }
 

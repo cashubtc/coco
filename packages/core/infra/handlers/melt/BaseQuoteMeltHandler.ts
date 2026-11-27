@@ -7,6 +7,7 @@ import type {
   Proof,
   SerializedBlindedSignature,
 } from '@cashu/cashu-ts';
+import { unwrapKeysetRejection } from '@core/infra/KeysetRejection.ts';
 import type {
   CreateMeltQuoteContext,
   ExecuteMeltContext,
@@ -84,7 +85,9 @@ export abstract class BaseQuoteMeltHandler<M extends MeltMethod> implements Melt
       (sum, output) => sum.add(output.blindedMessage.amount),
       Amount.zero(),
     );
-    return ctx.wallet.send(sendAmount, ctx.inputProofs, { keysetId }, outputConfig);
+    return unwrapKeysetRejection(
+      ctx.wallet.send(sendAmount, ctx.inputProofs, { keysetId }, outputConfig),
+    );
   }
 
   async melt(ctx: ExecuteMeltContext<M>): Promise<MeltRemoteResult<M>> {

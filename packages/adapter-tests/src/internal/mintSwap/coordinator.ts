@@ -1226,6 +1226,33 @@ export function runMintSwapCoordinatorContract(
       expect((await fixture.service().cancel('swap')).state).toBe('destination_funded');
     });
 
+    it('keeps a funded destination pending when its outputs rotate before first issuance', async () => {
+      await fixture.create();
+      await fixture.prepare();
+      fixture.setDestinationState('UNPAID');
+      expect((await fixture.service().execute('swap')).state).toBe('destination_funded');
+      const original = await fixture.repositories.keysetRepository.getKeysetById(
+        destinationUrl,
+        keys.id,
+      );
+      await fixture.repositories.keysetRepository.updateKeyset({ ...original!, active: false });
+      const next = createNewMintKeys(5, new Uint8Array(32).fill(8));
+      await fixture.repositories.keysetRepository.addKeyset({
+        ...original!,
+        id: next.keysetId,
+        keypairs: serializeMintKeys(next.pubKeys),
+        active: true,
+      });
+      fixture.setDestinationState('PAID');
+
+      expect((await fixture.service().reconcile('swap')).state).toBe('destination_funded');
+      expect(
+        (await fixture.repositories.mintOperationRepository.getById('destination-child'))?.state,
+      ).toBe('pending');
+      expect(fixture.requests.filter((request) => request === 'melt')).toHaveLength(1);
+      expect(fixture.requests).not.toContain('mint');
+    });
+
     it('recovers a lost issuance response through the child handler without replacing outputs', async () => {
       await fixture.create();
       await fixture.prepare();
@@ -1375,6 +1402,8 @@ export function runMintSwapCoordinatorContract(
         },
         mintService: fixture.dependencies.mintService,
         walletService: fixture.dependencies.walletService,
+        // This child never swaps, so no keyset rejection reaches it.
+        keysetRejectionRefresh: { refreshAfter: async () => {} },
         mintAdapter: fixture.dependencies.mintAdapter,
         eventBus: fixture.events,
         operationIdLock: fixture.dependencies.sourceOperationLock,
@@ -1482,11 +1511,14 @@ export function runMintSwapCoordinatorContract(
           return {
             ...original,
             wallet: {
-              mintProofsBolt11: async (
-                ...[amount, quoteId, signingOptions, outputData]: Parameters<
-                  Wallet['mintProofsBolt11']
+              getKeyset: original.wallet.getKeyset.bind(original.wallet),
+              mintProofs: async (
+                ...[method, amount, quote, signingOptions, outputData]: Parameters<
+                  Wallet['mintProofs']
                 >
               ) => {
+                expect(method).toBe('bolt11');
+                const quoteId = quote.quote;
                 expect(fixture.transactionActive).toBe(false);
                 expect(Amount.from(amount).equals(destination.amount)).toBe(true);
                 expect(quoteId).toBe(destination.quoteId);

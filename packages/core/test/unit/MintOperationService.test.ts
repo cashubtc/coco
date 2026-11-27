@@ -56,6 +56,7 @@ import type { Logger } from '../../logging/Logger';
 import { serializeOutputData, deserializeOutputData } from '../../utils';
 import type { CoreProof } from '../../types';
 import { MintQuoteValidationError, QuoteIdentityConflictError } from '../../models/Error';
+import { noKeysetRejectionRefresh } from '../fixtures/KeysetRejectionRefresh.ts';
 
 describe('MintOperationService', () => {
   const mintUrl = 'https://mint.test';
@@ -388,10 +389,11 @@ describe('MintOperationService', () => {
     walletService = {
       getWalletWithActiveKeysetId: mock(async (_mintUrl: string, unit: string) => ({
         wallet: {
-          createMintQuoteBolt11: mock(async (amount: Amount) => ({
+          getKeyset: () => ({ isActive: true, hasHexId: true }),
+          createMintQuote: mock(async (_method: string, payload: { amount: bigint }) => ({
             quote: quoteId,
             request: 'lnbc1test',
-            amount,
+            amount: Amount.from(payload.amount),
             unit,
             expiry: Math.floor(Date.now() / 1000) + 3600,
             state: 'UNPAID',
@@ -427,6 +429,7 @@ describe('MintOperationService', () => {
     mintScopedLock = new MintScopedLock();
     service = new MintOperationService({
       mintScopedLock,
+      keysetRejectionRefresh: noKeysetRejectionRefresh,
       handlerProvider,
       mintOperationQueries: operationRepo,
       quoteLifecycle,
@@ -2585,7 +2588,10 @@ describe('MintOperationService', () => {
     await operationRepo.create(pendingOp);
     (handler.execute as Mock<any>).mockResolvedValueOnce({ status: 'ALREADY_ISSUED' });
     (walletService.getWalletWithActiveKeysetId as Mock<any>).mockResolvedValueOnce({
-      wallet: { mint: { restore: mock(async () => ({ outputs: [], signatures: [] })) } },
+      wallet: {
+        getKeyset: () => ({ isActive: true, hasHexId: true }),
+        mint: { restore: mock(async () => ({ outputs: [], signatures: [] })) },
+      },
     });
     // The execution wallet is opened first, then restore opens its own remote context.
     (walletService.getWalletWithActiveKeysetId as Mock<any>).mockResolvedValueOnce({
@@ -2677,7 +2683,8 @@ describe('MintOperationService', () => {
     );
     (walletService.getWalletWithActiveKeysetId as Mock<any>).mockResolvedValue({
       wallet: {
-        mintProofsBolt11: mock(async () => outputProofs(pendingOp)),
+        getKeyset: () => ({ isActive: true, hasHexId: true }),
+        mintProofs: mock(async () => outputProofs(pendingOp)),
       } as unknown as Wallet,
       keysetId,
     });

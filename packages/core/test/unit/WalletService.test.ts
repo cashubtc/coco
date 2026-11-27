@@ -118,6 +118,8 @@ describe('WalletService unit scoping', () => {
         unit: 'sat',
         amount: Amount.from(1),
         state: 'PAID',
+        amount_paid: Amount.zero(),
+        amount_issued: Amount.zero(),
         expiry: null,
       },
       undefined,
@@ -161,9 +163,10 @@ describe('WalletService unit scoping', () => {
       expect.objectContaining({ id: keyset.id }),
       [0],
     );
-    expect(wallet.mint.restore).toHaveBeenCalledWith({
-      outputs: [output.blindedMessage],
-    });
+    expect(wallet.mint.restore).toHaveBeenCalledWith(
+      { outputs: [output.blindedMessage] },
+      expect.anything(),
+    );
   });
 
   it('spends every input it is given, in order, across keysets of one unit', async () => {

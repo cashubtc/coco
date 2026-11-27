@@ -24,6 +24,7 @@ type QuoteSpec = Omit<FakeMintQuote, 'request' | 'expiry' | 'amountIssued' | 'un
 export async function createBatchMintHarness(
   options: {
     repo?: MemoryRepositories;
+    seedGetter?: CocoConfig['seedGetter'];
     watchers?: CocoConfig['watchers'];
     plugins?: CocoConfig['plugins'];
     processors?: CocoConfig['processors'];
@@ -39,7 +40,7 @@ export async function createBatchMintHarness(
   const coco = await initializeCoco({
     repo,
     plugins: options.plugins,
-    seedGetter: async () => new Uint8Array(64).fill(5),
+    seedGetter: options.seedGetter ?? (async () => new Uint8Array(64).fill(5)),
     requestRateLimit: { disabled: true },
     subscriptions: { slowPollingIntervalMs: 10, fastPollingIntervalMs: 10 },
     watchers: {

@@ -17,6 +17,7 @@ import { describe, expect, it } from 'bun:test';
 import { CashuReceiveRemote } from '../../infra/handlers/receive/CashuReceiveRemote.ts';
 import type { MintRequestFn } from '../../infra/MintRequestProvider.ts';
 import type { MintMetadata } from '../../mints/MintMetadata.ts';
+import { MintOperationError } from '../../models/Error.ts';
 import { serializeOutputData, deserializeOutputData } from '../../utils.ts';
 import { testMintInfo } from '../fixtures/MintMetadata.ts';
 import { parseRequestBody } from '../fixtures/MintRequestBody.ts';
@@ -71,6 +72,8 @@ function environment() {
   const request: MintRequestFn = async <T>(raw: Parameters<MintRequestFn>[0]): Promise<T> => {
     const input = { ...raw, requestBody: parseRequestBody(raw.requestBody) };
     calls.push({ endpoint: input.endpoint, body: input.requestBody });
+    if (input.endpoint.endsWith('/swap') && behavior.swap === 'keyset-inactive')
+      throw new MintOperationError(12002, 'Keyset is inactive');
     if (input.endpoint.endsWith('/swap')) {
       const outputs = input.requestBody!.outputs as WireOutput[];
       const signatures = outputs.map(sign);
@@ -198,6 +201,21 @@ describe('Cashu Receive protocol', () => {
     const env = environment();
     env.behavior.swap = kind;
     await expect(env.remote.open(metadata, 'sat').receive(env.request)).rejects.toThrow();
+  });
+
+  it('hands back the mint error for a keyset rejection of the swap and never loads keysets', async () => {
+    const env = environment();
+    env.behavior.swap = 'keyset-inactive';
+
+    const error = await env.remote
+      .open(metadata, 'sat')
+      .receive(env.request)
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(MintOperationError);
+    expect((error as MintOperationError).code).toBe(12002);
+    // Strict cached keysets: the wallet asks the mint for no keyset or key after the rejection.
+    expect(env.calls.map((call) => call.endpoint)).toEqual([`${mintUrl}/v1/swap`]);
   });
 
   it('restores by blinded-message identity and retains spent outputs for the coordinator', async () => {

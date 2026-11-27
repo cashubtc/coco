@@ -15,10 +15,11 @@ export class WalletRestoreService {
   private readonly logger?: Logger;
   private readonly outputDataCreator?: OutputDataCreator;
 
-  // Defaults for batch restore behavior
+  // Restore scan defaults. The batch size is capped at the mint's advertised array limit.
   private readonly restoreGapLimit = 300;
   private readonly restoreBatchSize = 100;
   private readonly restoreStartCounter = 0;
+  private readonly restoreRequestsInFlight = 4;
 
   constructor(
     private readonly receive: Pick<
@@ -58,12 +59,13 @@ export class WalletRestoreService {
         { bip39seed, unit: normalizedUnit, outputDataCreator: this.outputDataCreator },
       );
       await sweepWallet.loadMint();
+      // Sweep uses only unspent and pending proofs, so cashu-ts's batch restore, which drops spent
+      // ones, is enough here. It refuses a batch above the mint's advertised array limit.
       const { proofs } = await sweepWallet.batchRestore({
         gapLimit: this.restoreGapLimit,
-        batchSize: this.restoreBatchSize,
+        batchSize: this.restoreBatchSizeFor(sweepWallet),
         counter: this.restoreStartCounter,
         keysetId,
-        filterSpent: false,
       });
       const states = proofs.length ? await sweepWallet.checkProofsStates(proofs) : [];
       if (
@@ -144,13 +146,7 @@ export class WalletRestoreService {
   ): Promise<void> {
     mintUrl = normalizeMintUrl(mintUrl);
     const normalizedUnit = normalizeUnit(unit, { defaultUnit: DEFAULT_UNIT });
-    const { proofs, lastCounterWithSignature } = await wallet.batchRestore({
-      gapLimit: this.restoreGapLimit,
-      batchSize: this.restoreBatchSize,
-      counter: this.restoreStartCounter,
-      keysetId,
-      filterSpent: false,
-    });
+    const { proofs, lastCounterWithSignature } = await this.scanKeyset(wallet, keysetId);
     // All remote work completes before opening the local transaction.
     const states = proofs.length ? await wallet.checkProofsStates(proofs) : [];
     if (
@@ -200,6 +196,53 @@ export class WalletRestoreService {
         secrets: [proof.secret],
         state: proof.state,
       });
+  }
+
+  /** The restore batch size, within the array limit the mint advertises (NUT-06). */
+  private restoreBatchSizeFor(wallet: Wallet): number {
+    return Math.min(this.restoreBatchSize, wallet.getMintInfo().maxArrayLength);
+  }
+
+  /**
+   * Scan the keyset's outputs in counter order until the gap limit of unissued counters. Spent
+   * outputs are returned too: Restore needs them to correct stored proofs and to detect a conflict
+   * with a stored proof. cashu-ts `batchRestore` drops them, so this uses the raw NUT-09 replay and
+   * scans as `batchRestore` did before cashu-ts 5.0.0-rc.13: fixed waves of requests in flight,
+   * every batch of a wave used, and a stop after enough empty batches in a row to cover the gap
+   * limit.
+   */
+  private async scanKeyset(
+    wallet: Wallet,
+    keysetId: string,
+  ): Promise<{ proofs: Proof[]; lastCounterWithSignature?: number }> {
+    const batchSize = this.restoreBatchSizeFor(wallet);
+    const proofs: Proof[] = [];
+    let lastCounterWithSignature: number | undefined;
+    let counter = this.restoreStartCounter;
+    let emptyBatches = 0;
+    const emptyBatchesToStop = Math.ceil(this.restoreGapLimit / batchSize);
+    while (emptyBatches < emptyBatchesToStop) {
+      const starts = Array.from(
+        { length: this.restoreRequestsInFlight },
+        (_, index) => counter + index * batchSize,
+      );
+      // Every batch of a wave is used, also one past the gap limit: its request is already sent.
+      // A signed batch resets the count, also after empty batches earlier in the same wave.
+      const wave = await Promise.all(
+        starts.map((start) => wallet.restore(start, batchSize, { keysetId })),
+      );
+      for (const batch of wave) {
+        if (batch.lastCounterWithSignature == null) {
+          emptyBatches += 1;
+          continue;
+        }
+        emptyBatches = 0;
+        proofs.push(...batch.proofs);
+        lastCounterWithSignature = batch.lastCounterWithSignature;
+      }
+      counter += starts.length * batchSize;
+    }
+    return { proofs, lastCounterWithSignature };
   }
 
   private async publishCommittedEvent<E extends keyof CoreEvents>(
