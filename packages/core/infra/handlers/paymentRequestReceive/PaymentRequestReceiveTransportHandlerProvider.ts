@@ -1,5 +1,6 @@
 import type { Amount, PaymentRequestTransport } from '@cashu/cashu-ts';
 
+import type { Logger } from '@core/logging/Logger.ts';
 import { PaymentRequestError } from '../../../models/Error';
 import type {
   PaymentRequestReceiveOperation,
@@ -59,6 +60,22 @@ export class PaymentRequestReceiveTransportHandlerProvider {
       );
     }
     return handler;
+  }
+
+  /** Transport cleanup runs after the wallet has committed cancellation or completion. */
+  async deactivate(operation: PaymentRequestReceiveOperation, logger?: Logger): Promise<void> {
+    if (operation.transport === 'inband') return;
+    try {
+      await this.get(operation.transport).deactivate(operation);
+    } catch (error) {
+      logger?.warn('Payment request receive transport deactivation failed', {
+        operationId: operation.id,
+        requestId: operation.requestId,
+        transport: operation.transport,
+        state: operation.state,
+        error,
+      });
+    }
   }
 
   getOptional(

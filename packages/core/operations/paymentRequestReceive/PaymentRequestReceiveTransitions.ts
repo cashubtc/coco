@@ -1,6 +1,19 @@
-import type { Amount } from '@cashu/cashu-ts';
-import { prepareReceive, cancelReceive } from '../receive/ReceiveTransitions.ts';
 import type {
+  ReceiveOperation,
+  FinalizedReceiveOperation,
+  RolledBackReceiveOperation,
+} from '../receive/ReceiveOperation.ts';
+import type { Amount } from '@cashu/cashu-ts';
+import {
+  applyReceiveResult,
+  prepareReceive,
+  cancelReceive,
+  failReceiveExecution,
+} from '../receive/ReceiveTransitions.ts';
+import type {
+  ApplyReceiveResultInput,
+  FailReceiveInput,
+  ReceiveOperationInput,
   PrepareReceiveInput,
   PrepareReceiveResult,
 } from '../receive/ReceiveTransitionTypes.ts';
@@ -268,24 +281,174 @@ export const resolvePreSubmissionFailure = defineTransition(
       (child.id !== input.childId || (child.state !== 'init' && child.state !== 'prepared'))
     )
       return;
-    const cancelled = child
-      ? await tx.perform(cancelReceive, {
-          operationId: child.id,
-          updatedAt: input.updatedAt,
-          reason: input.error,
-        })
-      : null;
+    if (child) {
+      if (child.state === 'init') await assertLinked(tx, attempt, child);
+      return cancelChild(
+        tx,
+        { operationId: child.id, updatedAt: input.updatedAt, reason: input.error },
+        attempt,
+      );
+    }
     await tx.paymentRequestReceiveAttempts.update({
       ...attempt,
-      ...(cancelled && {
-        receiveOperationId: cancelled.id,
-        ...amountsFromReceive(cancelled),
-      }),
       state: 'rejected',
       payload: undefined,
       error: input.error,
       updatedAt: input.updatedAt,
     });
-    return cancelled;
+  },
+);
+
+type TerminalChild = FinalizedReceiveOperation | RolledBackReceiveOperation;
+
+async function attemptForChild(tx: CoreTransaction, child: ReceiveOperation) {
+  return child.source?.type === 'payment-request'
+    ? tx.paymentRequestReceiveAttempts.getById(child.source.attemptId)
+    : tx.paymentRequestReceiveAttempts.getByReceiveOperationId(child.id);
+}
+
+async function assertLinked(
+  tx: CoreTransaction,
+  attempt: PaymentRequestReceiveAttempt,
+  child: ReceiveOperation,
+) {
+  const source = child.source;
+  if (
+    source?.type === 'payment-request' &&
+    (source.attemptId !== attempt.id || source.requestOperationId !== attempt.requestOperationId)
+  ) {
+    throw new PaymentRequestError('Receive child belongs to a different payment request attempt');
+  }
+  // Older wallets can retain a link to a missing row. A surviving child with the
+  // matching source can repair it, but cannot replace another live child.
+  if (
+    attempt.receiveOperationId &&
+    attempt.receiveOperationId !== child.id &&
+    (await tx.receiveOperations.getById(attempt.receiveOperationId))
+  ) {
+    throw new PaymentRequestError('Payment request attempt is linked to another Receive child');
+  }
+}
+
+async function completeSingleUse(
+  tx: CoreTransaction,
+  attempt: PaymentRequestReceiveAttempt,
+  updatedAt: number,
+) {
+  const parent = await tx.paymentRequestReceiveOperations.getById(attempt.requestOperationId);
+  if (!parent?.singleUse || parent.state === 'completed') return;
+  const completed = { ...parent, state: 'completed' as const, updatedAt, completedAt: updatedAt };
+  await tx.paymentRequestReceiveOperations.update(completed);
+  return completed;
+}
+
+/** The child is the durable result read or written in this same transaction. */
+async function recordOutcome(
+  tx: CoreTransaction,
+  attempt: PaymentRequestReceiveAttempt,
+  child: TerminalChild,
+  updatedAt: number,
+) {
+  await assertLinked(tx, attempt, child);
+  const state = child.state === 'finalized' ? 'finalized' : 'rejected';
+  if ((attempt.state === 'finalized' || attempt.state === 'rejected') && attempt.state !== state)
+    throw new PaymentRequestError(
+      'Receive child conflicts with the recorded payment request outcome',
+    );
+  const { fee, netAmount } = amountsFromReceive(child);
+  const error =
+    child.state === 'rolled_back'
+      ? (child.error ?? 'Child receive operation rolled back')
+      : undefined;
+  if (
+    attempt.state !== state ||
+    attempt.error !== error ||
+    attempt.receiveOperationId !== child.id ||
+    attempt.payload ||
+    !attempt.fee?.equals(fee) ||
+    !attempt.netAmount?.equals(netAmount)
+  ) {
+    attempt = {
+      ...attempt,
+      state,
+      receiveOperationId: child.id,
+      fee,
+      netAmount,
+      payload: undefined,
+      error,
+      updatedAt,
+    };
+    await tx.paymentRequestReceiveAttempts.update(attempt);
+  }
+  const completed =
+    state === 'finalized' ? await completeSingleUse(tx, attempt, updatedAt) : undefined;
+  return { attempt, completed };
+}
+
+/** Commit the proofs and every record describing their receipt before publishing the result. */
+export const settleReceiveResult = defineTransition(async (tx, input: ApplyReceiveResultInput) => {
+  const result = await tx.perform(applyReceiveResult, input);
+  if (!result) return null;
+  const attempt = await attemptForChild(tx, result.operation);
+  const settlement =
+    attempt && (await recordOutcome(tx, attempt, result.operation, input.updatedAt));
+  return { ...result, completedRequest: settlement?.completed };
+});
+
+export const failReceiveDelivery = defineTransition(async (tx, input: FailReceiveInput) => {
+  const child = await tx.perform(failReceiveExecution, input);
+  const attempt = await attemptForChild(tx, child);
+  if (attempt) await recordOutcome(tx, attempt, child, input.updatedAt);
+  return child;
+});
+
+type CancelChildInput = ReceiveOperationInput & { reason: string };
+
+async function cancelChild(
+  tx: CoreTransaction,
+  input: CancelChildInput,
+  attempt?: PaymentRequestReceiveAttempt | null,
+) {
+  const cancelled = await tx.perform(cancelReceive, input);
+  if (!attempt) return cancelled;
+  if (cancelled) {
+    await recordOutcome(tx, attempt, cancelled, input.updatedAt);
+  } else if (attempt.state !== 'finalized' && attempt.state !== 'rejected') {
+    // Cancelling a legacy init child deletes its row. Retire its payload in the same commit.
+    await tx.paymentRequestReceiveAttempts.update({
+      ...attempt,
+      state: 'rejected',
+      receiveOperationId: undefined,
+      payload: undefined,
+      error: input.reason,
+      updatedAt: input.updatedAt,
+    });
+  }
+  return cancelled;
+}
+
+export const cancelReceiveDelivery = defineTransition(async (tx, input: CancelChildInput) => {
+  const child = await tx.receiveOperations.getById(input.operationId);
+  const attempt = child && (await attemptForChild(tx, child));
+  if (child?.state === 'init' && attempt) await assertLinked(tx, attempt, child);
+  return cancelChild(tx, input, attempt);
+});
+
+/** Repair a historical split commit using only durable evidence, including a finalized attempt whose child is gone. */
+export const repairPaymentRequestSettlement = defineTransition(
+  async (tx, input: AttemptLookup & { updatedAt: number }) => {
+    const stored = await tx.perform(loadPaymentRequestAttempt, input);
+    if (!stored) return;
+    const { attempt, child, operation } = stored;
+    // Another session may have cancelled the parent after recovery selected this finalized attempt.
+    if (attempt.state === 'finalized' && operation?.state !== 'active')
+      return { attempt, completed: undefined };
+    if (child?.state === 'finalized' || child?.state === 'rolled_back')
+      return recordOutcome(tx, attempt, child, input.updatedAt);
+    const completed =
+      attempt.state === 'finalized'
+        ? await completeSingleUse(tx, attempt, input.updatedAt)
+        : undefined;
+    return { attempt, completed };
   },
 );

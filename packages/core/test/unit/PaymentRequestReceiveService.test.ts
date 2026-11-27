@@ -1751,11 +1751,11 @@ describe('PaymentRequestReceiveService', () => {
       updatedAt: now,
     });
     await receiveOperationRepository.create(preparedReceive);
-    (
-      receiveOperationService.getOperation as unknown as ReturnType<typeof mock>
-    ).mockResolvedValueOnce(rolledBackReceive);
-    (receiveOperationService.execute as unknown as ReturnType<typeof mock>).mockRejectedValueOnce(
-      new Error('receive failed'),
+    (receiveOperationService.execute as unknown as ReturnType<typeof mock>).mockImplementationOnce(
+      async () => {
+        await receiveOperationRepository.update(rolledBackReceive);
+        throw new Error('receive failed');
+      },
     );
 
     await service.recoverPendingAttempts();

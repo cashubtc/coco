@@ -13,6 +13,7 @@ import type { P2pkSigner } from '@core/keypairs/P2pkSigner.ts';
 import type { Logger } from '@core/logging/Logger.ts';
 import {
   MintOperationError,
+  PaymentRequestError,
   ProofValidationError,
   ReceiveOperationConflictError,
   TokenValidationError,
@@ -50,11 +51,15 @@ import {
   prepareReceive,
   beginReceiveExecution,
   claimReceiveRecovery,
-  applyReceiveResult,
-  failReceiveExecution,
-  cancelReceive,
   cleanupReceiveInit,
 } from './ReceiveTransitions.ts';
+import {
+  settleReceiveResult,
+  cancelReceiveDelivery,
+  failReceiveDelivery,
+} from '../paymentRequestReceive/PaymentRequestReceiveTransitions.ts';
+import type { PaymentRequestReceiveTransportHandlerProvider } from '@core/infra/handlers/paymentRequestReceive';
+import type { PaymentRequestReceiveOperation } from '../paymentRequestReceive/PaymentRequestReceiveOperation.ts';
 import type { ApplyReceiveResult } from './ReceiveTransitionTypes.ts';
 
 // Request-validation failures prove non-effect only on the first submission, before any recovery
@@ -72,6 +77,7 @@ export interface ReceiveOperationServiceDependencies {
   signer: { forPreparation(): P2pkSigner };
   loadSeed: () => Promise<Uint8Array>;
   remote: ReceiveRemote;
+  paymentRequestTransports: Pick<PaymentRequestReceiveTransportHandlerProvider, 'deactivate'>;
   eventBus: Pick<EventBus<CoreEvents>, 'emit'>;
   logger?: Logger;
   /** Shared across operation services to serialize same-mint preparation. Not required for correctness. */
@@ -194,7 +200,7 @@ export class ReceiveOperationService {
               error: error.message,
             };
             const failed = await this.deps.transactionRunner.run((tx) =>
-              tx.perform(failReceiveExecution, failedInput),
+              tx.perform(failReceiveDelivery, failedInput),
             );
             this.publishRolledBack(publications, failed);
             throw error;
@@ -228,7 +234,7 @@ export class ReceiveOperationService {
         updatedAt: Date.now(),
       };
       const result = await this.deps.transactionRunner.run((tx) =>
-        tx.perform(applyReceiveResult, resultInput),
+        tx.perform(settleReceiveResult, resultInput),
       );
       if (!result)
         throw new ProofValidationError('Cannot finalize receive operation: outputs not persisted');
@@ -250,7 +256,7 @@ export class ReceiveOperationService {
         updatedAt: Date.now(),
       };
       const local = await this.deps.transactionRunner.run((tx) =>
-        tx.perform(applyReceiveResult, localInput),
+        tx.perform(settleReceiveResult, localInput),
       );
       if (local) {
         this.publishApplied(publications, local);
@@ -296,7 +302,7 @@ export class ReceiveOperationService {
         updatedAt: Date.now(),
       };
       const result = await this.deps.transactionRunner.run((tx) =>
-        tx.perform(applyReceiveResult, resultInput),
+        tx.perform(settleReceiveResult, resultInput),
       );
       if (result) {
         this.publishApplied(publications, result);
@@ -310,7 +316,7 @@ export class ReceiveOperationService {
           error: 'Recovered: input proofs spent without recoverable outputs',
         };
         const failed = await this.deps.transactionRunner.run((tx) =>
-          tx.perform(failReceiveExecution, failedInput),
+          tx.perform(failReceiveDelivery, failedInput),
         );
         this.publishRolledBack(publications, failed);
       }
@@ -353,9 +359,23 @@ export class ReceiveOperationService {
         createdByOperationId: operation.id,
       }),
     };
-    const result = await this.deps.transactionRunner.run((tx) =>
-      tx.perform(applyReceiveResult, resultInput),
-    );
+    const commit = () =>
+      this.deps.transactionRunner.run((tx) => tx.perform(settleReceiveResult, resultInput));
+    let result;
+    try {
+      result = await commit();
+    } catch (error) {
+      // Preserve live claim recovery after a one-time settlement write failure.
+      // Reapply the same mint response locally, without making a second submission.
+      if (
+        operation.source?.type !== 'payment-request' ||
+        error instanceof ProofValidationError ||
+        error instanceof ReceiveOperationConflictError ||
+        error instanceof PaymentRequestError
+      )
+        throw error;
+      result = await commit();
+    }
     if (!result) throw new ProofValidationError('Receive result is incomplete');
     this.publishApplied(publications, result);
     return result.operation;
@@ -403,7 +423,7 @@ export class ReceiveOperationService {
         reason,
       };
       const result = await this.deps.transactionRunner.run((tx) =>
-        tx.perform(cancelReceive, resultInput),
+        tx.perform(cancelReceiveDelivery, resultInput),
       );
       if (result) this.publishRolledBack(publications, result);
     });
@@ -447,7 +467,13 @@ export class ReceiveOperationService {
     }
   }
 
-  private publishApplied(publications: Publications, result: ApplyReceiveResult) {
+  private publishApplied(
+    publications: Publications,
+    result: ApplyReceiveResult & { completedRequest?: PaymentRequestReceiveOperation },
+  ) {
+    const completed = result.completedRequest;
+    const transports = this.deps.paymentRequestTransports;
+    if (completed) publications.push(() => transports.deactivate(completed, this.deps.logger));
     if (!result.changed) return;
     const byKeyset = new Map<string, typeof result.savedProofs>();
     for (const proof of result.savedProofs) {

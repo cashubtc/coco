@@ -934,6 +934,8 @@ export class Manager {
 
     const tokenService = new TokenService(mintService, tokenLogger);
 
+    const paymentRequestReceiveTransportHandlerProvider =
+      new PaymentRequestReceiveTransportHandlerProvider();
     const receiveOperationLogger = this.getChildLogger('ReceiveOperationService');
     const receivePreparationDeps = {
       mintMetadataRefresh: mintService,
@@ -946,6 +948,7 @@ export class Manager {
     const receiveOperationService = new ReceiveOperationService(
       {
         ...receivePreparationDeps,
+        paymentRequestTransports: paymentRequestReceiveTransportHandlerProvider,
         operations: repositories.receiveOperationRepository,
         transactionRunner,
         mintQueries: repositories.mintRepository,
@@ -1091,8 +1094,6 @@ export class Manager {
       paymentRequestLogger,
     );
     const paymentRequestReceiveLogger = this.getChildLogger('PaymentRequestReceiveService');
-    const paymentRequestReceiveTransportHandlerProvider =
-      new PaymentRequestReceiveTransportHandlerProvider();
     const paymentRequestReceiveService = new PaymentRequestReceiveService(
       transactionRunner,
       paymentRequestReceiveOperationRepository,

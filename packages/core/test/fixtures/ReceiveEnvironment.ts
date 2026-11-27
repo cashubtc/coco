@@ -162,6 +162,7 @@ export async function createReceiveEnvironment(
   const metadataRemote = createMintMetadataRemoteDouble();
   const dependencies: ReceiveOperationServiceDependencies = {
     operations: repositories.receiveOperationRepository,
+    paymentRequestTransports: { deactivate: async () => {} },
     transactionRunner,
     mintQueries: repositories.mintRepository,
     mintMetadataRefresh: createMintServiceForMetadata(repositories, metadataRemote, eventBus),
